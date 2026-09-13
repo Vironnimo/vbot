@@ -15,6 +15,7 @@ from cli.server_management import (
     CommandResult,
     ServerInstance,
     probe_health,
+    probe_webui,
     resolve_instance,
     stop_server,
 )
@@ -77,11 +78,13 @@ def start(
         return CommandResult(
             ok=matches and not verification,
             message=(
-                "Exact application server is already running"
+                "already running"
                 if matches and not verification
                 else "Server port is occupied by another application version or startup mode"
             ),
             instance=instance,
+            health=current,
+            webui=probe_webui(instance) if matches and not verification else None,
         )
     executable = install.interpreter(version_id, "Server")
     args = [
@@ -97,24 +100,29 @@ def start(
     ]
     if verification:
         args.append("--verification-only")
-    process = subprocess.Popen(
-        args,
-        cwd=install.version(version_id) / "app",
-        env=child_environment(install),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=subprocess_creation_flags(new_process_group=True, breakaway=breakaway),
-        start_new_session=os.name != "nt",
-    )
+    startup_log = install.root / "logs" / "server-startup.log"
+    startup_log.parent.mkdir(parents=True, exist_ok=True)
+    with startup_log.open("ab") as output:
+        process = subprocess.Popen(
+            args,
+            cwd=install.version(version_id) / "app",
+            env=child_environment(install),
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            creationflags=subprocess_creation_flags(new_process_group=True, breakaway=breakaway),
+            start_new_session=os.name != "nt",
+        )
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline and process.poll() is None:
         if running_server_matches(install, version_id=version_id, verification=verification):
             return CommandResult(
                 ok=True,
-                message="Server startup verified",
+                message="started",
                 instance=instance,
                 process_id=process.pid,
+                health=probe_health(instance),
+                webui=probe_webui(instance) if not verification else None,
             )
         time.sleep(0.25)
     if process.poll() is None:
@@ -126,7 +134,10 @@ def start(
             process.wait(timeout=10)
     return CommandResult(
         ok=False,
-        message="Application server did not become ready; inspect its logs",
+        message=(
+            f"The vBot server did not become ready; inspect {startup_log} "
+            f"and {instance.data_dir / 'logs'}"
+        ),
         instance=instance,
     )
 

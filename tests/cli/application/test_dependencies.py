@@ -64,9 +64,11 @@ def test_install_uses_exact_runtime_uv_constraints_and_keeps_base_immutable(
     requirements.write_text("extension-pkg==1\n", encoding="utf-8")
     calls: list[list[str]] = []
     constraint_sets: list[str] = []
+    options: list[dict[str, object]] = []
 
     def fake_uv(arguments: list[str], **kwargs: object) -> SimpleNamespace:
         calls.append(arguments)
+        options.append(kwargs)
         constraint_sets.append(
             Path(arguments[arguments.index("--constraint") + 1]).read_text(encoding="utf-8")
         )
@@ -79,6 +81,7 @@ def test_install_uses_exact_runtime_uv_constraints_and_keeps_base_immutable(
     runtime = runtime_dependencies(install.version())
     site = Path(result["site"])
     assert calls[0][:5] == [str(install.interpreter("rel_base")), "-m", "uv", "pip", "install"]
+    assert options[0]["creationflags"] == dependencies.subprocess_creation_flags()
     assert "base-pkg==1.0" in constraint_sets[0]
     assert (site / "extension_pkg.py").is_file()
     assert not (site / "base_pkg.py").exists()

@@ -8,7 +8,10 @@ import os
 import sys
 from pathlib import Path
 
-from cli.application.state import ApplicationError, discover, exclusive
+from cli._output import print_application_update_result
+from cli._progress import ProgressPrinter
+from cli.application.state import ApplicationError, Installation, Operation, discover, exclusive
+from cli.formatting import output_mode
 
 
 def add_parsers(subparsers) -> None:
@@ -71,8 +74,40 @@ def add_parsers(subparsers) -> None:
     )
 
 
-def _print(value) -> None:
-    print(json.dumps(value, ensure_ascii=False, indent=2))
+def _print(value, *, lines: list[str] | None = None) -> None:
+    if lines is None or output_mode.get() == "plain":
+        print(json.dumps(value, ensure_ascii=False, indent=2))
+    else:
+        print("\n".join(lines))
+
+
+def _print_update_result(
+    install: Installation, operation: Operation, *, handoff: bool = False
+) -> None:
+    from cli.application.operations import public_result
+
+    if output_mode.get() == "plain":
+        _print(public_result(operation))
+    else:
+        print_application_update_result(install, operation, handoff=handoff)
+
+
+def _wait_update(install: Installation, operation: Operation) -> Operation:
+    from cli._output import print_update_command_start
+    from cli.application import operations
+    from cli.update_management import read_checkout_version
+
+    if output_mode.get() == "plain":
+        return operations.wait(install, operation.id)
+    print_update_command_start(read_checkout_version(install.version() / "app"))
+    with ProgressPrinter() as progress:
+        progress.track("Waiting for the update to start")
+
+        def report(value: Operation) -> None:
+            if not value.terminal and value.phase != "queued":
+                progress.emit("busy", value.message)
+
+        return operations.wait(install, operation.id, progress=report)
 
 
 def dispatch(args: argparse.Namespace) -> int | None:
@@ -90,7 +125,8 @@ def dispatch(args: argparse.Namespace) -> int | None:
             from_checkout=args.from_checkout,
         )
         _print(
-            {"installed": True, "root": str(installed.root), "version": installed.version().name}
+            {"installed": True, "root": str(installed.root), "version": installed.version().name},
+            lines=[f"vBot installed at {installed.root}."],
         )
         return 0
     install = discover()
@@ -121,7 +157,15 @@ def dispatch(args: argparse.Namespace) -> int | None:
                 selected = select_source(
                     install, args.source_track, from_checkout=args.from_checkout
                 )
-                _print({**selected, "next_command": "vbot update"})
+                label = (
+                    f"branch {selected.get('branch', 'main')}"
+                    if args.source_track == "main"
+                    else "published releases"
+                )
+                _print(
+                    {**selected, "next_command": "vbot update"},
+                    lines=[f"Updates now follow {label}.", "Apply an update with: vbot update"],
+                )
             return 0
         if args.command in {"removal-begin", "removal-reset"}:
             from cli.application.integration import begin_removal, reset_removal
@@ -150,7 +194,13 @@ def dispatch(args: argparse.Namespace) -> int | None:
                 with exclusive(install.root):
                     dependency_result = install_dependencies(install, args.requirements)
                 dependency_result["restart_required"] = True
-                _print(dependency_result)
+                _print(
+                    dependency_result,
+                    lines=[
+                        "Extension dependencies are prepared.",
+                        "Apply them with: vbot server restart",
+                    ],
+                )
             return 0
         if args.command == "exit":
             from cli.application.integration import request_host_exit
@@ -206,44 +256,63 @@ def dispatch(args: argparse.Namespace) -> int | None:
             raise ApplicationError(
                 "Packaged Autostart uses this installation's owned logon registration"
             )
-        _print(autostart(install, args.command))
+        registration = autostart(install, args.command)
+        _print(
+            registration,
+            lines=[f"Autostart: {'enabled' if registration['enabled'] else 'disabled'}."],
+        )
         return 0
     if args.area == "uninstall":
         from cli.application.integration import uninstall
+        from cli.uninstall_management import (
+            UninstallMode,
+            UninstallResult,
+            _choose_mode,
+            _confirm_mode,
+        )
 
-        if args.uninstall_mode is None and not sys.stdin.isatty():
-            raise ApplicationError("Select --app-only, --data-only or --all explicitly")
-        mode = args.uninstall_mode or "app-only"
+        data = Path(install.server_data_directory) if install.server_data_directory else None
+        if args.uninstall_mode is None:
+            if not sys.stdin.isatty():
+                raise ApplicationError("Select --app-only, --data-only or --all explicitly")
+            print(f"Application: {install.root}")
+            choice = _choose_mode(data, input_fn=input, output_fn=print)
+            if isinstance(choice, UninstallResult):
+                print(choice.message)
+                return 0 if choice.ok else 1
+            mode = choice.value
+        else:
+            mode = args.uninstall_mode
+        if mode in {"all", "data-only"} and data is None:
+            raise ApplicationError("This Desktop Client does not own server data")
         if not args.yes:
             if not sys.stdin.isatty():
-                raise ApplicationError(
-                    "Use --app-only --yes to remove the application, "
-                    "or --all --yes to also delete its recorded data"
-                )
-            expected = "DELETE" if mode in {"all", "data-only"} else "YES"
-            if (
-                input(
-                    (
-                        f"Reset data {install.server_data_directory} (keep application)"
-                        if mode == "data-only"
-                        else f"Remove {install.root}"
-                        + (
-                            f" and data {install.server_data_directory}"
-                            if mode == "all"
-                            else " (keep data)"
-                        )
-                    )
-                    + f"? Type {expected}: "
-                ).strip()
-                != expected
-            ):
-                print("Uninstall cancelled")
-                return 0
-        _print(uninstall(install, remove_data=mode == "all", data_only=mode == "data-only"))
+                raise ApplicationError("Use --yes to confirm the explicitly selected removal mode")
+            confirmed = _confirm_mode(UninstallMode(mode), data, input_fn=input, output_fn=print)
+            if confirmed is not None:
+                print(confirmed.message)
+                return 0 if confirmed.ok else 1
+        removal = uninstall(install, remove_data=mode == "all", data_only=mode == "data-only")
+        lines = (
+            [
+                "vBot data has been reset. The application is still installed.",
+                "Server: restarted." if removal["server_restarted"] else "Server: stopped.",
+            ]
+            if mode == "data-only"
+            else [
+                "The uninstaller has started. Application removal is not yet confirmed.",
+                "Server data was removed."
+                if removal["data_removed"]
+                else "Server data is preserved.",
+            ]
+        )
+        _print(removal, lines=lines)
         return 0
     if args.area == "server":
+        from cli._output import exit_code_for, print_command_result, print_server_command_start
+
+        print_server_command_start(args.command, processes.target(install))
         if args.command == "status":
-            from cli._output import exit_code_for, print_command_result
             from cli.server_management import get_status
 
             result = get_status(processes.target(install))
@@ -254,11 +323,11 @@ def dispatch(args: argparse.Namespace) -> int | None:
                 if args.command in {"stop", "restart"}:
                     result = processes.stop(install)
                     if not result.ok:
-                        print(result.message)
+                        print_command_result(args.command, result)
                         return 1
                 if args.command in {"start", "restart"}:
                     result = processes.start(install)
-        print(result.message)
+        print_command_result(args.command, result)
         return 0 if result.ok else 1
     if args.area == "desktop":
         from cli.application.host import ApplicationFacade
@@ -308,38 +377,50 @@ def dispatch(args: argparse.Namespace) -> int | None:
             install, package=package, restart=not args.no_restart, handoff_ticket=handoff
         )
         if args.detach or handoff:
-            _print(operations.public_result(operation))
+            _print_update_result(install, operation, handoff=bool(handoff))
             return 0
-        outcome = operations.wait(
-            install,
-            operation.id,
-            progress=lambda value: print(f"{value.phase}: {value.message}", flush=True),
-        )
-        _print(operations.public_result(outcome))
+        outcome = _wait_update(install, operation)
+        _print_update_result(install, outcome)
         return 0 if outcome.phase in {"completed", "prepared"} else 1
     if args.area == "customize":
         from cli.application import customize
 
         if args.command == "prepare":
-            _print({"source": str(customize.prepare(install, source=args.source))})
+            prepared_source = customize.prepare(install, source=args.source)
+            _print(
+                {"source": str(prepared_source)},
+                lines=[
+                    f"Development source: {prepared_source}",
+                    "After editing, run: vbot customize check --intent <description>",
+                ],
+            )
         elif args.command == "status":
             _print(customize.development_state(install) or {"message": "No local changes prepared"})
         elif args.command == "check":
-            _print(customize.check(install, intent=args.intent))
+            _print(
+                customize.check(install, intent=args.intent),
+                lines=[
+                    "Your changes passed validation. The active version has not changed.",
+                    "Test: vbot customize test",
+                    "Activate: vbot customize activate",
+                ],
+            )
         elif args.command == "rebase":
-            _print(customize.finish_rebase(install, intent=args.intent))
+            _print(
+                customize.finish_rebase(install, intent=args.intent),
+                lines=[
+                    "The resolved changes passed validation. The active version has not changed.",
+                    "Activate: vbot customize activate",
+                ],
+            )
         elif args.command == "activate":
             archive = customize.activation_archive(install)
             operation = operations.request_update(
                 install, package=archive, handoff_ticket=os.environ.get("VBOT_UPDATE_HANDOFF")
             )
             if not args.detach and not operation.handoff_ticket:
-                operation = operations.wait(
-                    install,
-                    operation.id,
-                    progress=lambda value: print(f"{value.phase}: {value.message}", flush=True),
-                )
-            _print(operations.public_result(operation))
+                operation = _wait_update(install, operation)
+            _print_update_result(install, operation, handoff=bool(operation.handoff_ticket))
             return 0 if not operation.terminal or operation.phase == "completed" else 1
         elif args.command == "test":
             customize.run_test_instance(install, port=args.port)
