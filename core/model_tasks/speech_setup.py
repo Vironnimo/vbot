@@ -84,6 +84,8 @@ class LocalSpeechSetup:
             if self.engine
             else config["project"]["optional-dependencies"]["local-speech"]
         )
+        if not self.engine and self.directory is not None:
+            recipe = {"base": config["project"]["dependencies"], "speech": recipe}
         sources = {}
         for name in ("speech_local.py", "speech_worker.py"):
             path = Path(__file__).with_name(name)
@@ -247,8 +249,14 @@ class LocalSpeechSetup:
             self._fail("install_failed")
             return
         self._phase = "installing"
+        # A previous setup may have installed the pinned source with the same
+        # version as PyPI. Resolve dependency metadata from PyPI again before
+        # restoring that source; its metadata may contain transitive Git URLs.
+        reinstall = ["--reinstall-package", "chatterbox-tts"] if recipe.get("source") else []
         if (
-            await self._command([*pip, "--only-binary=:all:", *recipe["packages"]], progress=True)
+            await self._command(
+                [*pip, "--only-binary=:all:", *reinstall, *recipe["packages"]], progress=True
+            )
             != 0
         ):
             self._fail("install_failed")
@@ -287,7 +295,14 @@ class LocalSpeechSetup:
     async def _install_stt(self) -> None:
         """Install the shipped STT recipe only inside its managed environment."""
         assert self.directory is not None
-        requirements = self._config()["project"]["optional-dependencies"]["local-speech"]
+        project = self._config()["project"]
+        # The worker imports vBot's speech engine source, which also needs the
+        # declared core dependencies. Its isolated environment must provide
+        # those itself rather than borrowing the immutable server runtime.
+        requirements = [
+            *project["dependencies"],
+            *project["optional-dependencies"]["local-speech"],
+        ]
         uv = [sys.executable, "-m", "uv"]
         self._phase = "python"
         if not self.python.exists():
