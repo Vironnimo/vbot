@@ -20,6 +20,7 @@ from core.extensions.operations import ExtensionHost
 from core.runs import RunAdmission
 from core.sessions import SessionAddress, TemporarySessionBinding
 from core.tools import ToolContext, tool_success
+from core.tools._argument_repair import normalize_call_arguments
 from core.tools.contracts import compile_tool_contract
 from core.utils.ids import new_id
 
@@ -80,6 +81,15 @@ _RUNTIME_CONTRACTS = {
         ("swarm_state", STATE_PARAMETERS, "status"),
     )
 }
+
+
+def _normalize_arguments(name: str, arguments: Json) -> Any:
+    return normalize_call_arguments(
+        _RUNTIME_CONTRACTS[name],
+        arguments,
+        enum_fields=("action",),
+        field_aliases={"limti": "limit"},
+    )
 
 
 class SwarmExtension:
@@ -170,7 +180,7 @@ class SwarmExtension:
     async def _bound_arguments(
         self, context: ToolContext, arguments: Json
     ) -> tuple[TemporarySessionBinding, Json, Json]:
-        arguments = _RUNTIME_CONTRACTS[context.tool_name].normalize_arguments(arguments)
+        arguments = _normalize_arguments(context.tool_name, arguments)
         binding, swarm = await self._participant(context)
         identities = {
             "swarm_id": binding.group_id,

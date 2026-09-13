@@ -200,14 +200,14 @@ def _normalize_schema_value(
     root_schema: JsonObject,
     root_validator: Draft202012Validator,
 ) -> Any:
-    """Return the schema-guided repair candidate closest to valid JSON input."""
+    """Repair equivalent encodings, rejecting distinct valid interpretations."""
     if not isinstance(schema, dict):
         return value
 
     validator = root_validator.evolve(schema=schema)
     resolved = _resolve_schema_reference(schema, root_schema)
-    # Open schemas can already validate a misspelled optional field. Repair
-    # declared fields and nested values before deciding that no work is needed.
+    # Repair declared value encodings without reinterpreting object keys.
+    # Open application payloads retain their supplied field names.
     if isinstance(value, dict):
         value = _normalize_object_value(
             value, resolved, root_schema=root_schema, root_validator=root_validator
@@ -273,6 +273,12 @@ def _normalize_schema_value(
         candidates.append(combined)
 
     candidates.append(value)
+    valid = [candidate for candidate in candidates if validator.is_valid(candidate)]
+    if valid:
+        first = valid[0]
+        if any(not _same_json_value(first, candidate) for candidate in valid[1:]):
+            raise ToolContractError("Ambiguous argument encoding; provide the intended JSON value.")
+        return first
     return min(candidates, key=lambda candidate: _validation_score(validator, candidate))
 
 
@@ -288,11 +294,6 @@ def _direct_normalization_candidates(
 
     if isinstance(value, str):
         text = value.strip()
-        options = schema.get("enum", [schema["const"]] if "const" in schema else [])
-        if options and all(isinstance(option, str) for option in options):
-            matched = _recognized_name(text, options)
-            if matched is not None:
-                candidates.append(matched)
         if "null" in declared_types and text.lower() == "null":
             candidates.append(None)
         if "integer" in declared_types:
@@ -328,12 +329,7 @@ def _direct_normalization_candidates(
 
     if "boolean" in declared_types and isinstance(value, (int, float)) and value in (0, 1):
         candidates.append(bool(value))
-    if (
-        "string" in declared_types
-        and isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and (isinstance(value, int) or math.isfinite(value))
-    ):
+    if "string" in declared_types and isinstance(value, int) and not isinstance(value, bool):
         candidates.append(str(value))
 
     if "array" in declared_types and isinstance(value, list):
@@ -435,6 +431,8 @@ def _normalize_array_value(
     if isinstance(value, str):
         try:
             decoded = _load_json_value(value)
+        except ToolContractError:
+            raise
         except (TypeError, ValueError):
             decoded = None
         if isinstance(decoded, list):
@@ -470,6 +468,8 @@ def _normalize_object_string(
 ) -> JsonObject | None:
     try:
         parsed = _load_json_value(value)
+    except ToolContractError:
+        raise
     except (TypeError, ValueError):
         return None
     if not isinstance(parsed, dict):
@@ -492,93 +492,39 @@ def _normalize_object_value(
     properties = schema.get("properties")
     property_schemas = properties if isinstance(properties, dict) else {}
     additional_schema = schema.get("additionalProperties")
-    required = schema.get("required", [])
-    entries = list(value.items())
-    # Recognize an old envelope only when the schema does not own that name.
-    for key, item in list(entries):
-        if key in property_schemas or not property_schemas:
-            continue
-        action_schema = property_schemas.get("action", {})
-        action = _recognized_name(str(key), action_schema.get("enum", []))
-        wrapper = str(key).strip().casefold() in {"request", "arguments"}
-        if wrapper or action is not None:
-            if isinstance(item, str):
-                try:
-                    item = _load_json_value(item)
-                except ValueError:
-                    continue
-            if isinstance(item, dict):
-                entries.remove((key, value[key]))
-                entries.extend(item.items())
-                if action is not None:
-                    entries.append(("action", action))
     normalized: JsonObject = {}
-    for key, item in entries:
-        field = key
-        if key not in property_schemas and not isinstance(additional_schema, dict):
-            field = _recognized_name(str(key), list(property_schemas)) or key
-            if str(key).strip().casefold() == "operation" and "action" in property_schemas:
-                field = "action"
-        item_schema = property_schemas.get(field)
-        if not isinstance(item_schema, dict) and isinstance(additional_schema, dict):
-            item_schema = additional_schema
-        if isinstance(item_schema, dict):
-            item_validator = root_validator.evolve(schema=item_schema)
-            # An empty payload accepted by its schema is meaningful (e.g. patch
-            # deletion). Only invalid empty optional selections mean omission.
-            if (
-                field not in required
-                and (item is None or item == "")
-                and not item_validator.is_valid(item)
-            ):
-                continue
-            item = _normalize_schema_value(
+    for key, item in value.items():
+        item_schema = property_schemas.get(key, additional_schema)
+        normalized[key] = (
+            _normalize_schema_value(
                 item, item_schema, root_schema=root_schema, root_validator=root_validator
             )
-        if field in normalized and normalized[field] != item:
-            raise ToolContractError(f"Conflicting values for {field}; provide one intended value.")
-        normalized[field] = item
+            if isinstance(item_schema, dict)
+            else item
+        )
     return normalized
 
 
-def _recognized_name(value: str, choices: list[Any]) -> str | None:
-    """Resolve spelling only when exactly one declared name matches."""
-    names = [name for name in choices if isinstance(name, str)]
-    if value in names:
-        return value
-
-    def spelling(text: str) -> str:
-        return re.sub(r"[\s_-]+", "", text.casefold())
-
-    source = spelling(value)
-    exact = [name for name in names if spelling(name) == source]
-    if len(exact) == 1:
-        return exact[0]
-    if exact or len(source) < 4:
-        return None
-    near = [name for name in names if _one_spelling_error(source, spelling(name))]
-    return near[0] if len(near) == 1 else None
-
-
-def _one_spelling_error(source: str, target: str) -> bool:
-    if abs(len(source) - len(target)) > 1:
-        return False
-    if len(source) == len(target):
-        differences = [i for i, (a, b) in enumerate(zip(source, target, strict=True)) if a != b]
-        if len(differences) == 1:
-            return True
-        return (
-            len(differences) == 2
-            and differences[1] == differences[0] + 1
-            and source[differences[0]] == target[differences[1]]
-            and source[differences[1]] == target[differences[0]]
-        )
-    shorter, longer = (source, target) if len(source) < len(target) else (target, source)
-    return any(longer[:i] + longer[i + 1 :] == shorter for i in range(len(longer)))
+def _same_json_value(left: Any, right: Any) -> bool:
+    """Compare JSON values without Python's bool/number equality shortcut."""
+    return json.dumps(left, sort_keys=True, allow_nan=False) == json.dumps(
+        right, sort_keys=True, allow_nan=False
+    )
 
 
 def _load_json_value(value: str) -> Any:
-    return json.loads(value, parse_constant=_reject_non_json_constant)
+    return json.loads(
+        value, parse_constant=_reject_non_json_constant, object_pairs_hook=_unique_json_object
+    )
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> JsonObject:
+    result: JsonObject = {}
+    for key, value in pairs:
+        if key in result:
+            raise ToolContractError(f"Duplicate JSON field {key}; provide one intended value.")
+        result[key] = value
+    return result
 
 
 def _reject_non_json_constant(value: str) -> None:

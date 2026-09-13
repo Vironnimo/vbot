@@ -138,7 +138,7 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
             enabled = "YES" if args.mcp_workflow_case == "tolerance_true" else "no"
             prompt = (
                 "Find configure_render and execute this supplied request once: "
-                + json.dumps({"request": {"Enabled": enabled, "count": "3.0", "labels": "preview"}})
+                + json.dumps({"enabled": enabled, "count": "3.0", "labels": "preview"})
                 + ". This is an argument-recovery diagnostic: preserve the supplied spellings "
                 "and types in the target's arguments. Report the actual configured state."
             )

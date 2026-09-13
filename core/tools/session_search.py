@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import inspect
-import json
 import time
 from dataclasses import replace
 from datetime import UTC, datetime
 from datetime import time as datetime_time
-from difflib import get_close_matches
 from typing import Any
 
 from core.recall import (
@@ -42,6 +40,7 @@ from core.tools._session_recall_results import (
 from core.tools._session_recall_results import (
     SESSION_SEARCH_RESULT_MAX_BYTES as SESSION_SEARCH_RESULT_MAX_BYTES,
 )
+from core.tools.contracts import _load_json_value
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -406,7 +405,7 @@ def _normalize_search_arguments(arguments: Any) -> JsonObject:
     """Recover clear search intent without dropping meaningful instructions."""
     if isinstance(arguments, str):
         try:
-            arguments = json.loads(arguments)
+            arguments = _load_json_value(arguments)
         except ValueError as error:
             raise _SessionSearchError(
                 "invalid_arguments", "Provide search arguments as an object with query text."
@@ -416,12 +415,16 @@ def _normalize_search_arguments(arguments: Any) -> JsonObject:
             "invalid_arguments", "Provide search arguments as an object with query text."
         )
     values = dict(arguments)
-    nested = values.pop("request", None)
-    entries = list(_normalize_search_arguments(nested).items()) if nested is not None else []
+    entries: list[tuple[str, Any]] = []
+    for wrapper in ("request", "search"):
+        if wrapper in values:
+            entries.extend(_normalize_search_arguments(values.pop(wrapper)).items())
     entries.extend(values.items())
     fields = ("query", "period", "agent_id", "session_id", "include_subagents", "since", "until")
     spellings = {key.replace("_", ""): key for key in fields}
-    spellings.update(q="query", searchquery="query", agent="agent_id", session="session_id")
+    spellings.update(
+        q="query", qurey="query", searchquery="query", agent="agent_id", session="session_id"
+    )
     normalized: JsonObject = {}
     for key, value in entries:
         spelling = str(key).strip().casefold().replace("_", "").replace("-", "").replace(" ", "")
@@ -435,12 +438,7 @@ def _normalize_search_arguments(arguments: Any) -> JsonObject:
             )
         field = spellings.get(spelling)
         if field is None:
-            candidates = get_close_matches(
-                spelling, [name.replace("_", "") for name in fields], n=2, cutoff=0.8
-            )
-            field = spellings[candidates[0]] if len(candidates) == 1 else str(key)
-        if field != "query" and (value is None or value == ""):
-            continue
+            field = str(key)
         if field == "include_subagents":
             if isinstance(value, str):
                 value = value.strip().casefold()
@@ -450,7 +448,7 @@ def _normalize_search_arguments(arguments: Any) -> JsonObject:
                 value = False
         if (
             field in {"query", "agent_id", "session_id"}
-            and isinstance(value, (int, float))
+            and isinstance(value, int)
             and not isinstance(value, bool)
         ):
             value = str(value)
@@ -461,6 +459,11 @@ def _normalize_search_arguments(arguments: Any) -> JsonObject:
                 "invalid_arguments", f"Conflicting values for {field}; provide one intended value."
             )
         normalized[field] = value
+    # Empty known selections have an owner-defined omission meaning, but only
+    # after every alias has been compared. Unknown effects remain present.
+    for field in fields:
+        if field != "query" and field in normalized and normalized[field] in (None, ""):
+            del normalized[field]
     if "since" in normalized or "until" in normalized:
         start, end = normalized.pop("since", ""), normalized.pop("until", "")
         if not isinstance(start, str) or not isinstance(end, str):

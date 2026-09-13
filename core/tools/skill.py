@@ -16,6 +16,7 @@ from core.skills.skills import (
     format_skill_activation_context,
     skill_origin_sort_key,
 )
+from core.tools._argument_repair import normalize_call_arguments
 from core.tools.bash import format_bash_env_usage
 from core.tools.contracts import ToolContract, compile_tool_contract
 from core.tools.tools import (
@@ -98,11 +99,19 @@ def _normalize_skill_arguments(
     arguments: Any, *, contract: ToolContract = _SKILL_RUNTIME_CONTRACT
 ) -> Any:
     """Repair package addressing before the shared schema and package-scope checks."""
-    repaired = contract.normalize_arguments(arguments)
+    repaired = normalize_call_arguments(
+        contract,
+        arguments,
+        enum_fields=("action", "scope"),
+        field_aliases={"file_pth": "file_path"},
+        empty_as_omitted=("name", "file_path"),
+    )
     if not isinstance(repaired, dict):
         return repaired
     if isinstance(repaired.get("name"), str):
         repaired["name"] = repaired["name"].strip()
+        if not repaired["name"]:
+            repaired.pop("name")
     path = repaired.get("file_path")
     if isinstance(path, str):
         text = path.strip()

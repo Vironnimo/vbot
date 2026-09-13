@@ -482,3 +482,56 @@ def test_swarm_unassisted_requires_actual_feedback_and_a_later_publication():
     complete = asyncio.run(probe_workflow_swarm._probe_swarm_tool(Adapter(True), args))
     assert complete["passed"]
     assert complete["published_after_feedback"]
+
+
+def test_mcp_workflow_recovery_preserves_both_boolean_values():
+    class Adapter:
+        def __init__(self, enabled):
+            self.enabled = enabled
+            self.step = 0
+
+        async def send(self, messages, **kwargs):
+            name = kwargs["tools"][0]["name"]
+            if self.step == 0:
+                arguments = {"action": "search", "query": "configure_render", "kind": "tool"}
+            elif self.step == 1:
+                result = json.loads(messages[-1]["content"])
+
+                def target_in(value):
+                    if isinstance(value, dict):
+                        if value.get("name") == "configure_render" and "target" in value:
+                            return value["target"]
+                        for child in value.values():
+                            if found := target_in(child):
+                                return found
+                    elif isinstance(value, list):
+                        for child in value:
+                            if found := target_in(child):
+                                return found
+                    return None
+
+                target = target_in(result)
+                assert target, result
+                arguments = {
+                    "action": "call",
+                    "target": target,
+                    "arguments": {"enabled": self.enabled, "count": "3.0", "labels": "preview"},
+                }
+            else:
+                return {"content": "Configured state verified."}
+            self.step += 1
+            return {"tool_calls": [{"id": str(self.step), "name": name, "arguments": arguments}]}
+
+        def normalize_response(self, raw, **kwargs):
+            return raw
+
+    for case, encoded, expected in [
+        ("tolerance_true", "YES", True),
+        ("tolerance_false", "no", False),
+    ]:
+        args = PROBE._parser().parse_args(
+            ["--scenario", "mcp_workflow", "--mcp-workflow-case", case]
+        )
+        result = asyncio.run(probe_workflow_mcp._probe_mcp_workflow(Adapter(encoded), args))
+        assert result["passed"], result
+        assert result["configured"] == [{"enabled": expected, "count": 3, "labels": ["preview"]}]

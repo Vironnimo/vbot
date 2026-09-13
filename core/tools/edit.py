@@ -7,6 +7,7 @@ from bisect import bisect_right
 from contextlib import nullcontext
 from pathlib import Path
 
+from core.tools._argument_repair import normalize_call_arguments
 from core.tools.arguments import (
     LINE_NUMBER_GUTTER_SEPARATOR,
     ToolArgumentError,
@@ -791,7 +792,9 @@ def _edit_batch(
     """Apply only the registered batched shape, with item-local validation."""
 
     try:
-        arguments = _EDIT_BATCH_CONTRACT.normalize_arguments(arguments)
+        arguments = normalize_call_arguments(
+            _EDIT_BATCH_CONTRACT, arguments, empty_as_omitted=("path",)
+        )
     except ToolContractError as error:
         return tool_failure("invalid_arguments", str(error))
     if isinstance(arguments, dict) and "edits" not in arguments and "old_string" in arguments:
@@ -808,7 +811,8 @@ def _edit_batch(
         effective_edit = edit
         try:
             effective_edit = _edit_with_default_path(
-                _EDIT_ITEM_CONTRACT.normalize_arguments(edit), default_path
+                normalize_call_arguments(_EDIT_ITEM_CONTRACT, edit, empty_as_omitted=("path",)),
+                default_path,
             )
             result = (
                 _edit_one(context, effective_edit, file_state=file_state)

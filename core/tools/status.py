@@ -23,6 +23,7 @@ from core.projects import AgentResolutionError, AgentResolver, ProjectStore
 from core.providers.providers import ProviderRegistry
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager, SessionAddress
+from core.tools._argument_repair import normalize_call_arguments
 from core.tools.arguments import optional_string
 from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
@@ -78,7 +79,9 @@ _STATUS_RUNTIME_CONTRACT = compile_tool_contract(
 
 
 def _normalize_status_arguments(arguments: Any) -> Any:
-    repaired = _STATUS_RUNTIME_CONTRACT.normalize_arguments(arguments)
+    repaired = normalize_call_arguments(
+        _STATUS_RUNTIME_CONTRACT, arguments, enum_fields=("action",)
+    )
     if isinstance(repaired, dict) and repaired.pop("action", "current") != "current":
         raise ValueError("status reads Session status; action must be current or omitted.")
     return repaired

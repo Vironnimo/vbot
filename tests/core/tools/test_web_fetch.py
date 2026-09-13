@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -267,3 +267,47 @@ async def test_web_fetch_handler_first_hop_blocked_is_validation_error(
 
     error = assert_failure_envelope(result, "validation_error")
     assert "blocked" in error["message"].lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"raw": True, "include_links": False},
+        {"output": "raw", "include_links": "false"},
+        {"output": "raw", "raw": False},
+        {"output": "text", "include_links": True},
+        {"output": "markdown", "include_links": False},
+        {"raw": None},
+        {"include_links": None},
+        {"output": None},
+    ],
+)
+async def test_dispatch_rejects_every_conflicting_output_constraint_before_http(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, options: dict[str, Any]
+) -> None:
+    fetch = AsyncMock()
+    monkeypatch.setattr(web_fetch_module, "_http_get", fetch)
+    registry = ToolRegistry()
+    register_web_fetch_tool(registry, attachment_store=None)
+    with pytest.raises(ValueError):
+        await registry.dispatch(make_context(tmp_path), {"url": "https://example.com", **options})
+    fetch.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "options,mode",
+    [
+        ({"raw": True, "include_links": True}, "raw"),
+        ({"raw": False, "include_links": False}, "text"),
+        ({"raw": False, "include_links": True}, "markdown"),
+        ({"output": "raw", "include_links": True}, "raw"),
+        ({"raw": False}, "markdown"),
+    ],
+)
+def test_output_aliases_preserve_all_compatible_constraints(
+    options: dict[str, Any], mode: str
+) -> None:
+    assert web_fetch_module._normalize_web_fetch_arguments(
+        {"url": "https://example.com", **options}
+    ) == {"url": "https://example.com", "output": mode}

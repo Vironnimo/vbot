@@ -213,3 +213,34 @@ async def test_recognizable_search_intent_reaches_same_session(
     data = success(await registry.dispatch(make_context(tmp_path), arguments))
     assert [hit["session_id"] for hit in data["items"]] == ["past"]
     assert arguments == original
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [{"periods": "2026-07-01/2026-07-31"}, {"limit": None}, {"roles": ""}, {"session": None}],
+)
+async def test_repair_does_not_discard_unknown_effects_or_conflicting_selection(
+    tmp_path: Path, extra: JsonObject
+) -> None:
+    from unittest.mock import AsyncMock
+
+    sessions = ChatSessionManager(tmp_path)
+    backend = CanonicalSessionRecallBackend(sessions)
+    backend.search_page = AsyncMock()  # type: ignore[method-assign]
+    registry = ToolRegistry()
+    register_session_search_tool(registry, backend)
+    result = await registry.dispatch(
+        make_context(tmp_path), {"query": "needle", "session_id": "past", **extra}
+    )
+    failure(result, "invalid_arguments")
+    backend.search_page.assert_not_awaited()
+
+
+async def test_duplicate_encoded_search_targets_are_rejected_before_search(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    result = await session_search_handler(
+        make_context(tmp_path),
+        '{"query":"needle","session_id":"one","session_id":"two"}',  # type: ignore[arg-type]
+        CanonicalSessionRecallBackend(sessions),
+    )
+    failure(result, "invalid_arguments")
