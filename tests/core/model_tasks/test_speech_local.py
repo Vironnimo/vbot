@@ -515,7 +515,8 @@ async def test_packaged_stt_setup_installs_only_in_managed_environment(
 def test_managed_stt_marker_invalidates_when_base_requirements_change(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    setup = LocalSpeechSetup(directory=tmp_path / "speech-engines" / "stt")
+    directory = tmp_path / "speech-engines" / "stt"
+    setup = LocalSpeechSetup(directory=directory)
     config = {
         "project": {
             "dependencies": ["base-package==1.0"],
@@ -525,7 +526,7 @@ def test_managed_stt_marker_invalidates_when_base_requirements_change(
     monkeypatch.setattr(setup, "_config", lambda: config)
     setup.python.parent.mkdir(parents=True)
     setup.python.touch()
-    (setup.directory / "verified.json").write_text(setup._recipe_key(), encoding="utf-8")
+    (directory / "verified.json").write_text(setup._recipe_key(), encoding="utf-8")
 
     assert setup.available()
     config["project"]["dependencies"] = ["base-package==2.0"]
