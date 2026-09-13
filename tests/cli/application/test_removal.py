@@ -20,6 +20,8 @@ def _install(root: Path) -> Installation:
     install = Installation(root, "server", "127.0.0.1", 8420, str((root / "data").resolve()))
     (root / "versions" / "rel_current").mkdir(parents=True)
     (root / "active-version").write_text("rel_current\n", encoding="ascii")
+    (root / "unins000.exe").write_bytes(b"")
+    (root / "unins000.dat").write_bytes(b"")
     return install
 
 
@@ -73,7 +75,18 @@ def test_begin_removal_claims_dispatch_and_operation_with_actual_parent_identity
         locks.append((name, timeout, allow_removal))
         yield
 
-    parent = SimpleNamespace(pid=517, create_time=lambda: 42.25)
+    first_phase = SimpleNamespace(
+        pid=516,
+        exe=lambda: str(install.root / "unins000.exe"),
+        info={"exe": str(install.root / "unins000.exe")},
+    )
+    parent = SimpleNamespace(
+        pid=517,
+        create_time=lambda: 42.25,
+        exe=lambda: str(tmp_path / "is-fixture-uninstall.tmp" / "_unins.tmp"),
+        cmdline=lambda: ["_unins.tmp", f"/SECONDPHASE={install.root / 'unins000.exe'}"],
+        parent=lambda: first_phase,
+    )
 
     class Process:
         def __init__(self, pid: int) -> None:
@@ -92,7 +105,11 @@ def test_begin_removal_claims_dispatch_and_operation_with_actual_parent_identity
     monkeypatch.setitem(
         sys.modules,
         "psutil",
-        SimpleNamespace(Process=Process, process_iter=lambda _attrs: []),
+        SimpleNamespace(
+            Error=OSError,
+            Process=Process,
+            process_iter=lambda _attrs: [first_phase],
+        ),
     )
 
     assert integration.begin_removal(install) == {"ok": True, "removal_pending": True}
@@ -111,6 +128,68 @@ def test_begin_removal_rejects_pending_update_before_writing_a_marker(
     monkeypatch.setattr(integration, "operations", lambda _install: [Operation(id="upd_busy")])
 
     with pytest.raises(ApplicationError, match="update is still pending"):
+        integration.begin_removal(install)
+    assert not (install.root / "removal-pending.json").exists()
+
+
+def test_begin_removal_rejects_an_unverified_process_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install = _install(tmp_path / "app")
+    parent = SimpleNamespace(
+        pid=517,
+        exe=lambda: str(tmp_path / "is-fixture-uninstall.tmp" / "_unins.tmp"),
+        cmdline=lambda: ["_unins.tmp", f"/SECONDPHASE={install.root / 'unins000.exe'}"],
+        parent=lambda: SimpleNamespace(pid=516, exe=lambda: str(tmp_path / "other.exe")),
+    )
+
+    monkeypatch.setattr(integration, "operations", lambda _install: [])
+    monkeypatch.setattr(integration.processes, "target", lambda _install: object())
+    monkeypatch.setattr(
+        integration, "probe_health", lambda _target: SimpleNamespace(reachable=False)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "psutil",
+        SimpleNamespace(
+            Error=OSError,
+            Process=lambda _pid: parent,
+            process_iter=lambda _attrs: [],
+        ),
+    )
+
+    with pytest.raises(ApplicationError, match="registered vBot uninstaller"):
+        integration.begin_removal(install)
+    assert not (install.root / "removal-pending.json").exists()
+
+
+def test_begin_removal_rejects_a_mismatched_second_phase_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install = _install(tmp_path / "app")
+    parent = SimpleNamespace(
+        pid=517,
+        exe=lambda: str(tmp_path / "is-fixture-uninstall.tmp" / "_unins.tmp"),
+        cmdline=lambda: ["_unins.tmp", f"/SECONDPHASE={tmp_path / 'other-unins.exe'}"],
+        parent=lambda: SimpleNamespace(pid=516, exe=lambda: str(install.root / "unins000.exe")),
+    )
+
+    monkeypatch.setattr(integration, "operations", lambda _install: [])
+    monkeypatch.setattr(integration.processes, "target", lambda _install: object())
+    monkeypatch.setattr(
+        integration, "probe_health", lambda _target: SimpleNamespace(reachable=False)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "psutil",
+        SimpleNamespace(
+            Error=OSError,
+            Process=lambda _pid: parent,
+            process_iter=lambda _attrs: [],
+        ),
+    )
+
+    with pytest.raises(ApplicationError, match="registered vBot uninstaller"):
         integration.begin_removal(install)
     assert not (install.root / "removal-pending.json").exists()
 
@@ -136,7 +215,19 @@ def test_begin_removal_rejects_a_live_owned_desktop_process(
         sys.modules,
         "psutil",
         SimpleNamespace(
-            Process=lambda _pid: SimpleNamespace(pid=777, create_time=lambda: 1.0),
+            Error=OSError,
+            Process=lambda _pid: SimpleNamespace(
+                pid=777,
+                create_time=lambda: 1.0,
+                exe=lambda: str(tmp_path / "is-fixture-uninstall.tmp" / "_unins.tmp"),
+                cmdline=lambda: [
+                    "_unins.tmp",
+                    f"/SECONDPHASE={install.root / 'unins000.exe'}",
+                ],
+                parent=lambda: SimpleNamespace(
+                    pid=776, exe=lambda: str(install.root / "unins000.exe")
+                ),
+            ),
             process_iter=lambda _attrs: [Process()],
         ),
     )

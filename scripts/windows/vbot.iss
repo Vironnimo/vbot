@@ -154,15 +154,15 @@ begin
     '" --shape {#InstallShape} --host "' + ServerHost + '" --port "' + ServerPort +
     '" --data-dir "' + ServerData + '" --public-key "{#ReleasePublicKey}"';
 #endif
-  if not Exec(ExpandConstant('{app}\vBot.exe'), Parameters, '', SW_HIDE,
-    ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then
+  if not ExecAndLogOutput(ExpandConstant('{app}\vBot.exe'), Parameters, '', SW_HIDE,
+    ewWaitUntilTerminated, ExitCode, nil) or (ExitCode <> 0) then
     RaiseException('vBot application configuration failed; setup cannot continue.');
   if not AddApplicationPath() then
     RaiseException('vBot could not register its per-user command path; setup cannot continue.');
 #if InstallShape != "desktop-client"
   if WizardIsTaskSelected('startup') then
-    if not Exec(ExpandConstant('{app}\vBot.exe'), 'autostart enable', '', SW_HIDE,
-      ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then
+    if not ExecAndLogOutput(ExpandConstant('{app}\vBot.exe'), 'autostart enable', '', SW_HIDE,
+      ewWaitUntilTerminated, ExitCode, nil) or (ExitCode <> 0) then
       RaiseException('vBot Autostart registration failed; setup cannot continue.');
 #endif
 end;
@@ -201,8 +201,8 @@ function InitializeUninstall(): Boolean;
 var
   ExitCode: Integer;
 begin
-  Result := Exec(ExpandConstant('{app}\vBot.exe'), 'application exit', '', SW_HIDE,
-    ewWaitUntilTerminated, ExitCode) and (ExitCode = 0);
+  Result := ExecAndLogOutput(ExpandConstant('{app}\vBot.exe'), 'application exit', '', SW_HIDE,
+    ewWaitUntilTerminated, ExitCode, nil) and (ExitCode = 0);
   if not Result then
   begin
     SuppressibleMsgBox('The vBot tray could not exit safely. Uninstall was cancelled.', mbError, MB_OK, IDOK);
@@ -211,15 +211,15 @@ begin
 #if InstallShape == "desktop-client"
   Result := Result;
 #else
-  Result := Exec(ExpandConstant('{app}\vBot.exe'), 'server stop', '', SW_HIDE,
-    ewWaitUntilTerminated, ExitCode) and (ExitCode = 0);
+  Result := ExecAndLogOutput(ExpandConstant('{app}\vBot.exe'), 'server stop', '', SW_HIDE,
+    ewWaitUntilTerminated, ExitCode, nil) and (ExitCode = 0);
   if not Result then
     SuppressibleMsgBox('vBot could not stop safely. Uninstall was cancelled; your application and data remain in place.', mbError, MB_OK, IDOK);
 #endif
   if Result then
   begin
-    Result := Exec(ExpandConstant('{app}\vBot.exe'), 'application removal-begin', '', SW_HIDE,
-      ewWaitUntilTerminated, ExitCode) and (ExitCode = 0);
+    Result := ExecAndLogOutput(ExpandConstant('{app}\vBot.exe'), 'application removal-begin', '', SW_HIDE,
+      ewWaitUntilTerminated, ExitCode, nil) and (ExitCode = 0);
     if not Result then
       SuppressibleMsgBox('vBot could not reserve application removal safely. Uninstall was cancelled.', mbError, MB_OK, IDOK)
     else
@@ -227,8 +227,8 @@ begin
   end;
   if Result then
   begin
-    Result := Exec(ExpandConstant('{app}\vBot.exe'), 'autostart disable', '', SW_HIDE,
-      ewWaitUntilTerminated, ExitCode) and (ExitCode = 0);
+    Result := ExecAndLogOutput(ExpandConstant('{app}\vBot.exe'), 'autostart disable', '', SW_HIDE,
+      ewWaitUntilTerminated, ExitCode, nil) and (ExitCode = 0);
     if not Result then
       SuppressibleMsgBox('vBot Autostart could not be removed safely. Uninstall was cancelled.', mbError, MB_OK, IDOK);
   end;
