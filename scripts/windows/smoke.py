@@ -20,9 +20,7 @@ def _output_text(value: str | bytes | None) -> str:
     return value or ""
 
 
-def _run(
-    command: list[str], environment: dict[str, str], cwd: Path, transcript: list[str]
-) -> str:
+def _run(command: list[str], environment: dict[str, str], cwd: Path, transcript: list[str]) -> str:
     try:
         result = subprocess.run(
             command,
@@ -115,9 +113,7 @@ def _copy_evidence_entry(source: Path, destination: Path) -> None:
 def _write_failure_evidence(temporary: Path, evidence: Path, transcript: list[str]) -> None:
     root, data = temporary / "application", temporary / "data"
     evidence.mkdir(parents=True, exist_ok=True)
-    (evidence / "command-output.txt").write_text(
-        "\n\n".join(transcript) + "\n", encoding="utf-8"
-    )
+    (evidence / "command-output.txt").write_text("\n\n".join(transcript) + "\n", encoding="utf-8")
     for source, relative in (
         (root / "application.json", "application.json"),
         (root / "active-version", "active-version"),
