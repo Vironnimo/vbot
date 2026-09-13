@@ -520,7 +520,11 @@ export function createChatViewNavigation(context) {
   };
 
   const handleNewSession = async () => {
-    if (context.chatState.loadingHistory || creatingSession) {
+    if (
+      context.chatState.loadingHistory ||
+      creatingSession ||
+      !context.target.activeSessionState
+    ) {
       return;
     }
     // "New session" means "make the chat ready for a fresh conversation."
