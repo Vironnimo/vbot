@@ -35,6 +35,8 @@ class ApplicationFacade:
     def __init__(self, install: Installation) -> None:
         self._install = install
         self._status_error = ""
+        self._display_version_id = ""
+        self._display_version = ""
 
     def state(self) -> TrayState:
         try:
@@ -49,12 +51,18 @@ class ApplicationFacade:
             server_state = (
                 "running" if health.is_vbot else "stopped" if not health.reachable else "conflict"
             )
+        active = self._install.version()
+        if active.name != self._display_version_id:
+            release = read_json(active / "release.json", limit=32 * 1024**2)
+            version = release.get("version")
+            self._display_version = version if isinstance(version, str) else ""
+            self._display_version_id = active.name
         return TrayState(
             server_state=server_state,
             install_shape=self._install.install_shape,
             update_phase=operation.phase if operation else None,
             update_message=operation.message if operation else "",
-            version=self._install.version().name,
+            version=self._display_version,
             exit_requested=_valid_exit_request(self._install.root),
             error=self._status_error,
         )

@@ -26,7 +26,7 @@ def _install(root: Path, *, shape: str = "server") -> Installation:
     version = root / "versions" / "rel_current"
     (version / "runtime").mkdir(parents=True)
     (version / "app" / "desktop").mkdir(parents=True)
-    (version / "release.json").write_text("{}", encoding="utf-8")
+    (version / "release.json").write_text('{"version":"0.4.2"}', encoding="utf-8")
     (root / "active-version").write_text("rel_current\n", encoding="ascii")
     return install
 
@@ -45,7 +45,32 @@ def test_client_state_never_resolves_a_local_server_target(
 
     state = facade.state()
     assert state.server_state == "not_applicable"
-    assert state.version == "rel_current"
+    assert state.version == "0.4.2"
+
+
+def test_tray_version_handles_full_manifest_and_refreshes_only_on_activation(tmp_path, monkeypatch):
+    install = _install(tmp_path, shape="desktop-client")
+    manifest = install.version() / "release.json"
+    manifest.write_text(json.dumps({"version": "1.0", "files": {"fixture": "x" * 1024**2}}))
+    monkeypatch.setattr(host.operations, "status", lambda _install: None)
+    read = host.read_json
+    reads = []
+
+    def observed(path, **kwargs):
+        reads.append(path)
+        return read(path, **kwargs)
+
+    monkeypatch.setattr(host, "read_json", observed)
+    facade = host.ApplicationFacade(install)
+    assert facade.state().version == "1.0"
+    assert facade.state().version == "1.0"
+    assert reads == [manifest]
+    next_version = install.version("rel_next")
+    next_version.mkdir()
+    (next_version / "release.json").write_text('{"version":"1.1"}')
+    install.activate("rel_next")
+    assert facade.state().version == "1.1"
+    assert reads == [manifest, next_version / "release.json"]
 
 
 def test_server_state_uses_actual_health_and_latest_operation(
