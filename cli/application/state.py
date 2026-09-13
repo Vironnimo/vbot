@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -26,6 +27,15 @@ PHASES = TERMINAL | {
     "activating",
     "verifying",
 }
+_NATIVE_HOST_NAMES = frozenset(
+    {
+        "vbot.exe",
+        "vbot.python.exe",
+        "vbot.server.exe",
+        "vbot.desktop.exe",
+        "vbot.update.exe",
+    }
+)
 
 
 class ApplicationError(ValueError):
@@ -149,20 +159,45 @@ def load_installation(root: Path) -> Installation:
     return Installation(root, shape, host, port, data, url, key)
 
 
+def _module_install_root(source: Path) -> Path | None:
+    """Return the recorded install containing one loaded application payload."""
+
+    app = source.resolve().parents[2]
+    if app.name != "app" or app.parent.parent.name != "versions":
+        return None
+    root = app.parent.parent.parent
+    return root if (root / "application.json").is_file() else None
+
+
+def _native_install_root(executable: Path) -> Path | None:
+    """Return the install recorded by a native vBot host path, when available."""
+
+    executable = executable.resolve()
+    if executable.name.casefold() not in _NATIVE_HOST_NAMES:
+        return None
+    candidates = (executable.parent, executable.parent.parent.parent.parent)
+    return next((path for path in candidates if (path / "application.json").is_file()), None)
+
+
 def discover(root: Path | None = None) -> Installation | None:
     if root is not None:
         return load_installation(root)
-    # Only an explicit native-bootstrap environment or actual module ancestors
-    # identify an installation. Arbitrary shell cwd never selects another app.
-    explicit = os.environ.get("VBOT_INSTALL_ROOT")
-    if explicit:
-        return load_installation(Path(explicit))
-    source = Path(__file__).resolve()
-    app = source.parents[2]
-    if app.name == "app" and app.parent.parent.name == "versions":
-        parent = app.parent.parent.parent
-        if (parent / "application.json").is_file():
-            return load_installation(parent)
+    # Loaded packaged code and its native host are stronger provenance than an
+    # inherited environment. In particular, a source CLI spawned by a packaged
+    # server must remain a source CLI even though Bash preserves server context.
+    module_root = _module_install_root(Path(__file__))
+    if module_root is not None:
+        return load_installation(module_root)
+    executable = Path(sys.executable)
+    native_root = _native_install_root(executable)
+    if native_root is not None:
+        return load_installation(native_root)
+    # Temporary native payloads used during install do not yet have a recorded
+    # ancestor, so their native host may use the explicit destination root.
+    if executable.name.casefold() in _NATIVE_HOST_NAMES:
+        explicit = os.environ.get("VBOT_INSTALL_ROOT")
+        if explicit:
+            return load_installation(Path(explicit))
     return None
 
 
