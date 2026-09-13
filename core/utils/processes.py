@@ -179,9 +179,25 @@ def subprocess_creation_flags(
     flags = int(cast(Any, subprocess).CREATE_NO_WINDOW)
     if new_process_group:
         flags |= int(cast(Any, subprocess).CREATE_NEW_PROCESS_GROUP)
-    if breakaway:
+    if breakaway and _windows_process_in_job():
         flags |= int(cast(Any, subprocess).CREATE_BREAKAWAY_FROM_JOB)
     return flags
+
+
+def _windows_process_in_job() -> bool:
+    """Return whether this process may need CREATE_BREAKAWAY_FROM_JOB."""
+    from ctypes import wintypes
+
+    windows_ctypes = cast(Any, ctypes)
+    kernel32 = windows_ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetCurrentProcess.argtypes = []
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, wintypes.LPBOOL]
+    kernel32.IsProcessInJob.restype = wintypes.BOOL
+    in_job = wintypes.BOOL()
+    if not kernel32.IsProcessInJob(kernel32.GetCurrentProcess(), None, ctypes.byref(in_job)):
+        raise windows_ctypes.WinError(windows_ctypes.get_last_error())
+    return bool(in_job.value)
 
 
 TASKKILL_TREE_TIMEOUT_SECONDS = 5

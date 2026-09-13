@@ -21,6 +21,7 @@ import {
   selectSearchableOption,
   selectSimpleOption,
   setInputValue,
+  settingsPayload,
   SettingsView,
   AgentsView,
   waitForCondition,
@@ -262,7 +263,17 @@ describe('SettingsView', () => {
   });
 
   it('renders and saves the Recall backend dropdown', async () => {
-    rpcMock.mockImplementation(createSettingsRpcMock());
+    rpcMock.mockImplementation(
+      createSettingsRpcMock({
+        settings: {
+          ...settingsPayload(),
+          recall: {
+            backend: 'vector',
+            available_backends: ['sqlite_fts', 'vector'],
+          },
+        },
+      }),
+    );
 
     mountedComponent = mount(SettingsView, { target: document.body });
     flushSync();

@@ -84,15 +84,15 @@ microphone Sessions.
 
 `LocalSpeechSetup` in `speech_setup.py`, exposed through `SpeechService.local_setup`
 and `local_setup_for(target)`, owns fixed-recipe installation jobs per Runtime.
-The shared STT job and individual TTS jobs serialize package operations. It reads the shipped
-`local-speech` extra, invokes the server interpreter's pip without reinstalling
-vBot launchers, preserves compatible working Torch or installs an official
-NVIDIA CUDA/CPU/platform build, and verifies imports plus NVIDIA execution in
-a fresh process. Status is process-local and survives browser navigation;
-duplicate requests share the job, failures permit explicit retry, shutdown
-cancels and reaps the package subprocess. Raw package output stays private.
-Local execution remains unavailable during installation, failure and the
-verified restart-required state; a fresh Runtime rechecks package metadata.
+The shared STT job and individual TTS jobs serialize package operations. In a packaged release,
+STT and TTS use managed data-directory environments and child processes; the immutable release
+runtime is not changed. The source-install STT path retains its legacy server-interpreter pip
+recipe. Fixed recipes preserve compatible Torch or install the selected CUDA/CPU build and verify
+imports plus NVIDIA execution in a fresh process. Status is process-local and survives browser
+navigation; duplicate requests share the job, failures permit explicit retry, shutdown cancels and
+reaps the package subprocess. Raw package output stays private. Local execution remains unavailable
+during installation, failure and the verified restart-required state; a fresh Runtime rechecks
+package metadata.
 See `USAGE.md` -> Local speech recognition for the user setup flow.
 
 `SpeechProgress` is a request-local, thread-safe snapshot of phase and elapsed
@@ -116,8 +116,8 @@ voices/languages, 1.7B style instructions) and `local/chatterbox` (Multilingual 
 language, expressiveness/guidance). Their incompatible SDK dependencies are
 installed into managed Python 3.12 environments under the Runtime-injected
 `DataDirectoryLayout.speech_engines` root. `local-tts` installs only uv in the
-server interpreter; shipped recipes install each SDK and matched Torch/audio
-packages separately. Verification writes a recipe marker, never loads weights,
+source-install server interpreter; packaged roles ship uv. Shipped recipes install each SDK and
+matched Torch/audio packages inside the managed environment. Verification writes a recipe marker, never loads weights,
 and makes TTS immediately available without restarting the server. A changed
 recipe or missing interpreter requires setup again. Fixed upstream revisions
 avoid accidentally selecting Chatterbox's older PyPI V2 implementation.

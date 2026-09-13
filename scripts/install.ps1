@@ -1,15 +1,16 @@
 # vBot installer for Windows.
 #
-# Installs prerequisites, selects a release or the current checkout, creates an
-# isolated virtual environment, and hands off to the internal scripts/setup.ps1.
-# Release installs fetch the matching prebuilt WebUI, so the target needs no Node.
+# Installs the official native release by default. -SourceCheckout and -Dev keep
+# the source installation workflow, which creates an isolated virtual environment
+# and hands off to the internal scripts/setup.ps1.
 #   irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1 | iex
 # To pass options, download and run as a file, or:
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -Dev
 [CmdletBinding()]
 param(
-    [string]$InstallDir = (Join-Path $HOME "vbot"),
+    [string]$InstallDir = "",
     [switch]$Dev,
+    [switch]$SourceCheckout,
     [string]$Version = "",
     [string]$DataDir = (Join-Path $HOME ".vbot"),
     [string]$HostName = "127.0.0.1",
@@ -28,6 +29,9 @@ $ErrorActionPreference = "Stop"
 
 if ($Dev -and -not [string]::IsNullOrWhiteSpace($Version)) {
     throw "-Version selects a specific release tag and cannot be combined with -Dev."
+}
+if ($Dev -and $SourceCheckout) {
+    throw "-Dev already selects the source checkout path and cannot be combined with -SourceCheckout."
 }
 if ($Desktop -and $DesktopClient) {
     throw "-Desktop and -DesktopClient are mutually exclusive."
@@ -217,6 +221,117 @@ function Get-LatestTag {
     return $release.tag_name
 }
 
+function Get-OfficialRelease {
+    param([string]$Tag)
+    $uri = if ([string]::IsNullOrWhiteSpace($Tag)) {
+        "$ApiBase/releases/latest"
+    }
+    else {
+        "$ApiBase/releases/tags/$Tag"
+    }
+    try {
+        return Invoke-RestMethod -Uri $uri -Headers $ApiHeaders
+    }
+    catch {
+        throw "Could not query the official vBot release ($($_.Exception.Message))."
+    }
+}
+
+function Install-NativeRelease {
+    param([string]$Tag, [string]$Shape)
+    $release = Get-OfficialRelease -Tag $Tag
+    if ($null -eq $release -or [string]::IsNullOrWhiteSpace([string]$release.tag_name)) {
+        throw "The official release response did not identify a version."
+    }
+    $releaseVersion = ([string]$release.tag_name) -replace '^v', ''
+    $assetName = "vBot-$releaseVersion-windows-x86_64-$Shape.exe"
+    $asset = @($release.assets | Where-Object { $_.name -ceq $assetName })
+    if ($asset.Count -ne 1) {
+        throw "The native $Shape package for release $($release.tag_name) is not yet published. Use -SourceCheckout to install that release from source."
+    }
+    $digestText = [string]$asset[0].digest
+    if ($digestText -notmatch '^sha256:([0-9a-fA-F]{64})$') {
+        throw "The native package has no valid GitHub SHA-256 digest; refusing to run it."
+    }
+    $expectedDigest = $Matches[1].ToUpperInvariant()
+    $assetUri = $null
+    if (
+        -not [System.Uri]::TryCreate([string]$asset[0].browser_download_url, [System.UriKind]::Absolute, [ref]$assetUri) -or
+        $assetUri.Scheme -cne "https" -or
+        $assetUri.Host -cne "github.com"
+    ) {
+        throw "The native package does not have an official HTTPS GitHub download URL."
+    }
+    $installer = Join-Path ([System.IO.Path]::GetTempPath()) ("vbot-{0}-{1}.exe" -f $releaseVersion, $PID)
+    try {
+        Write-Step "Downloading verified vBot $releaseVersion package"
+        $previousProgressPreference = $ProgressPreference
+        $ProgressPreference = "SilentlyContinue"
+        try {
+            Invoke-WebRequest -Uri $assetUri.AbsoluteUri -OutFile $installer -Headers $ApiHeaders
+        }
+        finally {
+            $ProgressPreference = $previousProgressPreference
+        }
+        $actualDigest = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+        if ($actualDigest -cne $expectedDigest) {
+            throw "The downloaded native package digest does not match the official release metadata."
+        }
+        $signature = Get-AuthenticodeSignature -LiteralPath $installer
+        if ($signature.Status -ne "NotSigned" -and $signature.Status -ne "Valid") {
+            throw "The native package contains an invalid Authenticode signature."
+        }
+        foreach ($value in @($InstallDir, $DataDir, $HostName)) {
+            if ($value -match '["\r\n]') {
+                throw "Native installer paths and host names cannot contain quotes or newlines."
+            }
+        }
+        $tasks = if ($NoAutostart -or $Shape -eq "desktop-client") { "" } else { "startup" }
+        $arguments = @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/DIR=`"$InstallDir`"",
+            "/VBOTDATA=`"$DataDir`"",
+            "/VBOTHOST=`"$HostName`"",
+            "/VBOTPORT=$Port",
+            "/TASKS=$tasks"
+        )
+        $process = Start-Process -FilePath $installer -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
+        if ($process.ExitCode -ne 0) {
+            throw "The native vBot installer exited with code $($process.ExitCode)."
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
+    }
+    $statePath = Join-Path $InstallDir "application.json"
+    $activePath = Join-Path $InstallDir "active-version"
+    if (-not (Test-Path -LiteralPath $statePath -PathType Leaf) -or -not (Test-Path -LiteralPath $activePath -PathType Leaf)) {
+        throw "The native installer exited successfully but did not create a complete vBot installation."
+    }
+    $state = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json
+    if ([string]$state.install_shape -cne $Shape) {
+        throw "The installed vBot shape does not match the requested native package."
+    }
+    if ($Shape -ne "desktop-client" -and -not $NoAutostart) {
+        $ready = $false
+        for ($attempt = 0; $attempt -lt 30 -and -not $ready; $attempt++) {
+            try {
+                $health = Invoke-RestMethod -Uri ("http://{0}:{1}/health" -f $state.server_host, $state.server_port) -TimeoutSec 1
+                $ready = $health.status -eq "ok"
+            }
+            catch {
+                Start-Sleep -Seconds 1
+            }
+        }
+        if (-not $ready) {
+            throw "vBot was installed, but its requested server startup could not be verified."
+        }
+    }
+    Write-Status "OK" "vBot $releaseVersion is installed."
+}
+
 function Get-WebuiAssetUrl {
     param([string]$Tag)
     $release = Invoke-RestMethod -Uri "$ApiBase/releases/tags/$Tag" -Headers $ApiHeaders
@@ -388,8 +503,17 @@ $useExistingCheckout = (
     -not $installDirWasProvided -and
     [string]::IsNullOrWhiteSpace($Version)
 )
+$useNativeInstaller = -not $useExistingCheckout -and -not $Dev -and -not $SourceCheckout
 if ($useExistingCheckout) {
     $InstallDir = $localCheckout
+}
+elseif ([string]::IsNullOrWhiteSpace($InstallDir)) {
+    $InstallDir = if ($useNativeInstaller) {
+        Join-Path $env:LOCALAPPDATA "Programs\vBot"
+    }
+    else {
+        Join-Path $HOME "vbot"
+    }
 }
 elseif ($InstallDir -eq "~") {
     $InstallDir = $HOME
@@ -416,6 +540,15 @@ elseif (Test-Path -LiteralPath $InstallDir) {
 
 if ((Test-IsElevated) -and -not $AllowElevatedInstall) {
     throw "Refusing to install from an elevated PowerShell because the checkout, virtual environment, and runtime files must belong to the normal user. Close this Administrator window and run the installer from a normal PowerShell. -AllowElevatedInstall is reserved for disposable automation."
+}
+
+if ($useNativeInstaller) {
+    $shape = if ($DesktopClient) { "desktop-client" } elseif ($Desktop) { "server-desktop" } else { "server" }
+    Install-NativeRelease -Tag $Version -Shape $shape
+    if (-not $PreserveInstallLog) {
+        Remove-Item -LiteralPath $InstallLogPath -Force -ErrorAction SilentlyContinue
+    }
+    exit 0
 }
 
 Write-Step "Checking system requirements"

@@ -225,6 +225,11 @@ def run(
     """Run the CLI and return an automation-safe process exit code."""
 
     args = command_arguments()
+    from cli.application.command import dispatch as dispatch_application
+
+    application_result = dispatch_application(args)
+    if application_result is not None:
+        return application_result
     if args.area == "home":
         config = Config(data_dir=Path(args.data_dir) if args.data_dir is not None else None)
         print(f"vbot_root: {VBOT_ROOT}")

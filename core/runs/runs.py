@@ -168,6 +168,71 @@ class ChatRunManager:
         self._waiting_work_limit = waiting_work_limit
         self._closed = False
         self._admission_validator = admission_validator
+        self._maintenance_operation_id: str | None = None
+        self._maintenance_origin: tuple[SessionAddress, str] | None = None
+
+    async def maintenance_begin(
+        self,
+        operation_id: str,
+        *,
+        origin: tuple[SessionAddress, str] | None = None,
+    ) -> dict[str, object]:
+        """Reject new admission while already accepted work drains."""
+        if not operation_id:
+            raise ValueError("maintenance operation id must not be empty")
+        async with self._lock:
+            if self._maintenance_operation_id not in {None, operation_id}:
+                raise RunAdmissionBlockedError("another maintenance operation is active")
+            self._maintenance_operation_id = operation_id
+            if origin is not None:
+                if self._maintenance_origin not in {None, origin}:
+                    raise RunAdmissionBlockedError("maintenance origin does not match")
+                self._maintenance_origin = origin
+            return self._maintenance_status_locked(operation_id)
+
+    async def maintenance_status(self, operation_id: str) -> dict[str, object]:
+        """Return drain state for the exact active maintenance operation."""
+        async with self._lock:
+            return self._maintenance_status_locked(operation_id)
+
+    async def maintenance_end(self, operation_id: str) -> dict[str, object]:
+        """Release admission for the exact operation; repeated release is safe."""
+        async with self._lock:
+            if self._maintenance_operation_id is None:
+                return {"operation_id": operation_id, "active": False}
+            if self._maintenance_operation_id != operation_id:
+                raise RunAdmissionBlockedError("another maintenance operation is active")
+            self._maintenance_operation_id = None
+            self._maintenance_origin = None
+            return {"operation_id": operation_id, "active": False}
+
+    def _maintenance_status_locked(self, operation_id: str) -> dict[str, object]:
+        if self._maintenance_operation_id != operation_id:
+            raise RunAdmissionBlockedError("maintenance operation is not active")
+        active_runs = [
+            (address, run)
+            for address, run in self._active_by_session.items()
+            if run.status == RunStatus.RUNNING
+        ]
+        queued_count = sum(len(queue) for queue in self._queues.values())
+        reservation_count = len(self._waiting_work_admissions)
+        origin_pending = False
+        blocking_active = len(active_runs)
+        if self._maintenance_origin is not None:
+            origin_address, origin_run_id = self._maintenance_origin
+            origin_pending = any(
+                address == origin_address and run.id == origin_run_id
+                for address, run in active_runs
+            )
+        return {
+            "operation_id": operation_id,
+            "active": True,
+            "active_count": len(active_runs),
+            "queued_count": queued_count,
+            "reservation_count": reservation_count,
+            "origin_pending": origin_pending,
+            "safe_to_stop": blocking_active == 0 and queued_count == 0 and reservation_count == 0,
+        }
 
     def reserve_waiting_work(
         self,
@@ -189,6 +254,8 @@ class ChatRunManager:
             raise ValueError("waiting work scope_limit must be positive")
         if self._closed:
             raise RunAdmissionBlockedError("run manager is shutting down")
+        if self._maintenance_operation_id is not None:
+            raise RunAdmissionBlockedError("run manager is draining for maintenance")
 
         waiting_count = self._waiting_work_count()
         if waiting_count >= self._waiting_work_limit:
@@ -334,6 +401,8 @@ class ChatRunManager:
         async with self._lock:
             if self._closed:
                 raise RunAdmissionBlockedError("run manager is shutting down")
+            if self._maintenance_operation_id is not None:
+                raise RunAdmissionBlockedError("run manager is draining for maintenance")
             self._ensure_run_admission_allowed_locked(address, admission)
             active_run = self._active_by_session.get(address)
             if active_run is not None and active_run.status == RunStatus.RUNNING:
@@ -385,6 +454,9 @@ class ChatRunManager:
             if self._closed:
                 item.future.cancel()
                 raise RunAdmissionBlockedError("run manager is shutting down")
+            if self._maintenance_operation_id is not None:
+                item.future.cancel()
+                raise RunAdmissionBlockedError("run manager is draining for maintenance")
             try:
                 self._ensure_run_admission_allowed_locked(address, admission)
             except RunAdmissionBlockedError:

@@ -6,6 +6,7 @@ from typing import Any
 
 from server.rpc import (
     agent_methods,
+    application_methods,
     automation_methods,
     calendar_methods,
     catalog_methods,
@@ -40,6 +41,7 @@ def build_method_handlers() -> dict[str, RpcMethodHandler]:
 
     handlers: dict[str, RpcMethodHandler] = {}
     for registry in (
+        application_methods,
         connection_methods,
         model_methods,
         catalog_methods,

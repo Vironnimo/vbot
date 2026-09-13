@@ -32,6 +32,7 @@ from cli._parser_content import (
     _add_tool_parsers,
 )
 from cli._parser_lifecycle import (
+    _add_application_parsers,
     _add_autostart_parsers,
     _add_desktop_parsers,
     _add_doctor_parsers,
@@ -157,6 +158,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_desktop_parsers(subparsers)
     _add_home_parser(subparsers)
     _add_update_parsers(subparsers)
+    _add_application_parsers(subparsers)
     _add_uninstall_parser(subparsers)
     _add_autostart_parsers(subparsers)
     _add_agent_parsers(subparsers)

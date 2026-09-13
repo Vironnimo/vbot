@@ -28,7 +28,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.tag }}
     steps:
-      - name: Validate released tag and WebUI asset
+      - name: Validate released tag and distribution assets
         run: |
           python - <<'PY'
           import os
@@ -38,7 +38,23 @@ jobs:
           if re.fullmatch(r"v\d+\.\d+\.\d+", tag) is None:
               raise SystemExit(f"Release tag must be vX.Y.Z, got {tag!r}")
           PY
-          test "$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '[.assets[].name] | index("webui-dist.tar.gz") != null')" = "true"
+          gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' > assets.txt
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          tag = os.environ["RELEASE_TAG"]
+          version = tag.removeprefix("v")
+          expected = {"webui-dist.tar.gz"}
+          for shape in ("server", "server-desktop", "desktop-client"):
+              expected.add(f"vBot-{version}-windows-x86_64-{shape}.exe")
+              archive = f"vbot-windows-x86_64-{shape}.zip"
+              expected.update({archive, f"{archive}.sig"})
+          actual = set(Path("assets.txt").read_text(encoding="utf-8").splitlines())
+          missing = sorted(expected - actual)
+          if missing:
+              raise SystemExit(f"Release {tag} is missing required assets: {', '.join(missing)}")
+          PY
 
   linux:
     name: linux (x64)
@@ -86,46 +102,80 @@ jobs:
     env:
       RELEASE_TAG: ${{ inputs.tag }}
     steps:
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
       - name: Install, start, probe, and uninstall the public release
         shell: pwsh
         run: |
-          $installDir = Join-Path $env:RUNNER_TEMP "vbot-release"
-          $dataDir = Join-Path $HOME ".vbot"
+          $installDir = Join-Path $env:RUNNER_TEMP "vbot-release-smoke"
+          $dataDir = Join-Path $env:RUNNER_TEMP "vbot-release-smoke-data"
           $installer = Join-Path $env:RUNNER_TEMP "install.ps1"
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/$env:GITHUB_SHA/scripts/install.ps1" -OutFile $installer
-          & $installer -InstallDir $installDir -Version $env:RELEASE_TAG -NoAutostart -AllowElevatedInstall
+          & $installer `
+            -InstallDir $installDir `
+            -DataDir $dataDir `
+            -HostName "127.0.0.1" `
+            -Port 8420 `
+            -Version $env:RELEASE_TAG `
+            -NoAutostart `
+            -AllowElevatedInstall
+          if ($LASTEXITCODE -ne 0) { throw "Native installer failed" }
 
-          $checkedOutTag = (& git -C $installDir describe --tags --exact-match).Trim()
-          if ($checkedOutTag -ne $env:RELEASE_TAG) { throw "Installed tag '$checkedOutTag' does not match '$env:RELEASE_TAG'" }
-          $venvPython = Join-Path $installDir ".venv\Scripts\python.exe"
-          $versionCheck = @'
-          import sys
-          import tomllib
-          from pathlib import Path
+          $statePath = Join-Path $installDir "application.json"
+          if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { throw "Native application state is missing" }
+          $state = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json
+          if ($state.schema_version -ne 1 -or [string]$state.install_shape -cne "server") {
+            throw "Native application state does not describe the requested server install"
+          }
+          $activeVersion = (Get-Content -Raw -LiteralPath (Join-Path $installDir "active-version")).Trim()
+          if ([string]::IsNullOrWhiteSpace($activeVersion)) { throw "Native active version is missing" }
+          $releasePath = Join-Path $installDir "versions\$activeVersion\release.json"
+          if (-not (Test-Path -LiteralPath $releasePath -PathType Leaf)) { throw "Active release manifest is missing" }
+          $release = Get-Content -Raw -LiteralPath $releasePath | ConvertFrom-Json
+          $releaseVersion = $env:RELEASE_TAG.Substring(1)
+          if ([string]$release.version -cne $releaseVersion) {
+            throw "Installed release version '$($release.version)' does not match tag '$env:RELEASE_TAG'"
+          }
+          if (Test-Path -LiteralPath (Join-Path $installDir ".git")) { throw "Native install contains a Git checkout" }
 
-          version = tomllib.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["project"]["version"]
-          if f"v{version}" != sys.argv[2]:
-              raise SystemExit(f"Installed version {version!r} does not match tag {sys.argv[2]!r}")
-          '@
-          & $venvPython -c $versionCheck (Join-Path $installDir "pyproject.toml") $env:RELEASE_TAG
-          if ($LASTEXITCODE -ne 0) { throw "Installed version validation failed" }
-
-          $vbot = Join-Path $installDir ".venv\Scripts\vbot.exe"
+          $vbot = Join-Path $installDir "vBot.exe"
+          if (-not (Test-Path -LiteralPath $vbot -PathType Leaf)) { throw "Native vBot executable is missing" }
           & $vbot server start
           if ($LASTEXITCODE -ne 0) { throw "Server start failed" }
+          $status = (& $vbot server status) -join [Environment]::NewLine
+          if ($LASTEXITCODE -ne 0 -or $status -notmatch '(?m)^running: yes\s*$') {
+            throw "Server status did not report a running vBot server"
+          }
           $health = Invoke-RestMethod -Uri "http://127.0.0.1:8420/health"
           if ($health.status -ne "ok") { throw "Health probe returned an unexpected response" }
-          $builtIndex = Join-Path $installDir "webui\dist\index.html"
+          $builtIndex = Join-Path $installDir "versions\$activeVersion\app\webui\dist\index.html"
           if (-not (Test-Path -LiteralPath $builtIndex -PathType Leaf)) { throw "Installed WebUI is missing" }
           $webui = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8420/"
           if ($webui.StatusCode -ne 200 -or [string]::IsNullOrWhiteSpace($webui.Content)) { throw "WebUI probe failed" }
+          & $vbot server stop
+          if ($LASTEXITCODE -ne 0) { throw "Server stop failed" }
+          New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+          $dataSentinel = Join-Path $dataDir "release-smoke-preserved.txt"
+          Set-Content -LiteralPath $dataSentinel -Value "preserve" -NoNewline
 
-          $uninstaller = Join-Path $installDir "scripts\uninstall.ps1"
-          Set-Location $env:RUNNER_TEMP
-          & $uninstaller
-          if (Test-Path -LiteralPath $installDir) { throw "Managed install directory still exists after uninstall" }
+          $uninstallers = @(
+            Get-ChildItem -LiteralPath $installDir -File | Where-Object {
+              $_.Name -match '^unins\d{3}\.exe$'
+            }
+          )
+          if ($uninstallers.Count -ne 1) { throw "Native uninstaller is missing or ambiguous" }
+          $uninstall = Start-Process `
+            -FilePath $uninstallers[0].FullName `
+            -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") `
+            -WindowStyle Hidden `
+            -Wait `
+            -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "Native uninstaller failed with code $($uninstall.ExitCode)" }
+          foreach ($path in @(
+            (Join-Path $installDir "vBot.exe"),
+            (Join-Path $installDir "application.json"),
+            (Join-Path $installDir "active-version"),
+            (Join-Path $installDir "versions")
+          )) {
+            if (Test-Path -LiteralPath $path) { throw "Native uninstall retained application path: $path" }
+          }
           if (-not (Test-Path -LiteralPath $dataDir -PathType Container)) { throw "Uninstall removed the data directory" }
+          if ((Get-Content -Raw -LiteralPath $dataSentinel) -cne "preserve") { throw "Uninstall changed data" }

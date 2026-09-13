@@ -8,6 +8,7 @@ engine does not change SpeechService, the server, or any accessor.
 from __future__ import annotations
 
 import asyncio
+import base64
 import gc
 import io
 import json
@@ -207,9 +208,14 @@ class LocalSpeechExecutor:
         *,
         engines: Sequence[SpeechEngineDefinition] | None = None,
         engines_dir: Path | None = None,
+        managed_worker: bool = False,
     ) -> None:
         install_lock = asyncio.Lock()
-        self.setup = LocalSpeechSetup(install_lock=install_lock)
+        packaged_app = None if managed_worker else _packaged_app_root()
+        self.setup = LocalSpeechSetup(
+            directory=engines_dir / "stt" if engines_dir and packaged_app else None,
+            install_lock=install_lock,
+        )
         self.tts_setups = {
             name: LocalSpeechSetup(
                 engine=name,
@@ -223,6 +229,22 @@ class LocalSpeechExecutor:
             if engines is not None
             else (*builtin_speech_engines(), *_tts_definitions(self.tts_setups))
         )
+        if engines is None and packaged_app is not None:
+            definitions = tuple(
+                replace(
+                    entry,
+                    descriptor=replace(entry.descriptor, availability=self.setup.available),
+                    create=partial(
+                        _ManagedSttEngine,
+                        self.setup,
+                        packaged_app,
+                        entry.descriptor.id,
+                    ),
+                )
+                if TASK_SPEECH_TO_TEXT in entry.descriptor.task_types
+                else entry
+                for entry in definitions
+            )
         definitions = tuple(
             replace(
                 entry,
@@ -743,6 +765,99 @@ class _TtsEngine:
             process.stdin.close()
         if process.stdout:
             process.stdout.close()
+
+
+def _packaged_app_root() -> Path | None:
+    """Locate an actual packaged release from this module, without ambient flags."""
+    source = Path(__file__).resolve()
+    for parent in source.parents:
+        app = parent / "app"
+        if (parent / "release.json").is_file() and (
+            app / "core" / "model_tasks" / "speech_local.py"
+        ).is_file():
+            return app
+    return None
+
+
+class _ManagedSttEngine:
+    """Keep the optional ML stack in a managed child interpreter."""
+
+    def __init__(
+        self,
+        setup: LocalSpeechSetup,
+        app_root: Path,
+        engine: str,
+        _options: Mapping[str, Any],
+    ) -> None:
+        from core.utils.processes import subprocess_creation_flags
+
+        self._process = subprocess.Popen(
+            [
+                str(setup.python),
+                "-I",
+                str(Path(__file__).with_name("speech_worker.py")),
+                "--stt",
+                engine,
+                str(app_root),
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            creationflags=subprocess_creation_flags(),
+            start_new_session=os.name != "nt",
+            env={**os.environ, "PYTHONUTF8": "1", "TOKENIZERS_PARALLELISM": "false"},
+        )
+
+    def transcribe(self, samples: Any, options: Mapping[str, Any]) -> SpeechTranscriptionResult:
+        process = self._process
+        assert process.stdin is not None and process.stdout is not None
+        process.stdin.write(
+            json.dumps(
+                {
+                    "samples": base64.b64encode(samples.astype("<f4").tobytes()).decode("ascii"),
+                    "options": dict(options),
+                }
+            )
+            + "\n"
+        )
+        process.stdin.flush()
+        while line := process.stdout.readline(4096):
+            event = json.loads(line)
+            if event.get("error"):
+                raise RuntimeError(event["error"])
+            if event.get("phase") and (progress := _PROGRESS.get()) is not None:
+                progress.update(event["phase"])
+            if (payload := event.get("result")) is not None:
+                return SpeechTranscriptionResult(
+                    text=payload["text"],
+                    language=payload.get("language"),
+                    segments=tuple(payload.get("segments", ())),
+                    usage=payload.get("usage"),
+                )
+        raise RuntimeError("Speech worker exited")
+
+    def close(self) -> None:
+        _close_speech_process(self._process)
+
+
+def _close_speech_process(process: subprocess.Popen[str]) -> None:
+    from core.utils.processes import windows_taskkill_tree
+
+    if process.poll() is None:
+        if os.name == "nt":
+            if not windows_taskkill_tree(process.pid):
+                with suppress(ProcessLookupError):
+                    process.kill()
+        else:
+            with suppress(ProcessLookupError):
+                cast(Any, os).killpg(process.pid, cast(Any, signal).SIGKILL)
+        process.wait()
+    if process.stdin:
+        process.stdin.close()
+    if process.stdout:
+        process.stdout.close()
 
 
 def _audio_chunks(audio: bytes) -> Iterator[tuple[int, Any]]:
