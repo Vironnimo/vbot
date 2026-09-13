@@ -14,16 +14,51 @@ import zipfile
 from pathlib import Path
 
 
-def _run(command: list[str], environment: dict[str, str], cwd: Path) -> str:
-    result = subprocess.run(
-        command,
-        cwd=cwd,
-        env=environment,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=300,
+def _output_text(value: str | bytes | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
+
+
+def _run(
+    command: list[str], environment: dict[str, str], cwd: Path, transcript: list[str]
+) -> str:
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            env=environment,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired as error:
+        transcript.append(
+            "\n".join(
+                (
+                    f"$ {subprocess.list2cmdline(command)}",
+                    "timed out after 300 seconds",
+                    "stdout:",
+                    _output_text(error.stdout),
+                    "stderr:",
+                    _output_text(error.stderr),
+                )
+            )
+        )
+        raise
+    transcript.append(
+        "\n".join(
+            (
+                f"$ {subprocess.list2cmdline(command)}",
+                f"exit code: {result.returncode}",
+                "stdout:",
+                result.stdout,
+                "stderr:",
+                result.stderr,
+            )
+        )
     )
     if result.returncode:
         raise RuntimeError(f"Native smoke command failed: {result.stdout}\n{result.stderr}")
@@ -36,6 +71,7 @@ def _contained_detached_update(
     archive: Path,
     environment: dict[str, str],
     cwd: Path,
+    transcript: list[str],
 ) -> dict[str, object]:
     parent_code = (
         "import subprocess,sys; "
@@ -44,10 +80,17 @@ def _contained_detached_update(
         "result=subprocess.run([sys.argv[1],'update','--package',sys.argv[2],'--detach']); "
         "raise SystemExit(result.returncode)"
     )
-    _run([str(python), "-c", parent_code, str(cli), str(archive)], environment, cwd)
+    _run(
+        [str(python), "-c", parent_code, str(cli), str(archive)],
+        environment,
+        cwd,
+        transcript,
+    )
     deadline = time.monotonic() + 300
     while time.monotonic() < deadline:
-        outcome_value: object = json.loads(_run([str(cli), "update", "status"], environment, cwd))
+        outcome_value: object = json.loads(
+            _run([str(cli), "update", "status"], environment, cwd, transcript)
+        )
         if not isinstance(outcome_value, dict):
             raise RuntimeError("Update status did not return an object")
         outcome = outcome_value
@@ -55,6 +98,39 @@ def _contained_detached_update(
             return outcome
         time.sleep(0.25)
     raise RuntimeError("Detached update did not reach a terminal state")
+
+
+def _copy_evidence_entry(source: Path, destination: Path) -> None:
+    if source.is_symlink() or (hasattr(source, "is_junction") and source.is_junction()):
+        return
+    if source.is_file():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+    elif source.is_dir():
+        destination.mkdir(parents=True, exist_ok=True)
+        for child in source.iterdir():
+            _copy_evidence_entry(child, destination / child.name)
+
+
+def _write_failure_evidence(temporary: Path, evidence: Path, transcript: list[str]) -> None:
+    root, data = temporary / "application", temporary / "data"
+    evidence.mkdir(parents=True, exist_ok=True)
+    (evidence / "command-output.txt").write_text(
+        "\n\n".join(transcript) + "\n", encoding="utf-8"
+    )
+    for source, relative in (
+        (root / "application.json", "application.json"),
+        (root / "active-version", "active-version"),
+        (root / "host.json", "host.json"),
+        (root / "removal-pending.json", "removal-pending.json"),
+        (root / "operations", "operations"),
+        (root / "logs", "application-logs"),
+        (data / "settings.json", "data/settings.json"),
+        (data / "session-store.json", "data/session-store.json"),
+        (data / "session-recovery.json", "data/session-recovery.json"),
+        (data / "logs", "data/logs"),
+    ):
+        _copy_evidence_entry(source, evidence / relative)
 
 
 def smoke(package: Path) -> None:
@@ -67,6 +143,7 @@ def smoke(package: Path) -> None:
     payload = versions[0]
     manifest = json.loads((payload / "release.json").read_text(encoding="utf-8"))
     shape = manifest["install_shape"]
+    evidence = package.parent.parent / "smoke-evidence" / shape
     temporary = Path(tempfile.mkdtemp(prefix="vbot-native-smoke-"))
     root, data = temporary / "application", temporary / "data"
     allowed = {
@@ -93,6 +170,7 @@ def smoke(package: Path) -> None:
     cli = root / "vBot.exe"
     completed = False
     tray: subprocess.Popen[bytes] | None = None
+    transcript: list[str] = []
     try:
         _run(
             [
@@ -114,9 +192,12 @@ def smoke(package: Path) -> None:
             ],
             environment,
             temporary,
+            transcript,
         )
         environment["VBOT_INSTALL_ROOT"] = str(root)
-        installed = json.loads(_run([str(cli), "application", "status"], environment, temporary))
+        installed = json.loads(
+            _run([str(cli), "application", "status"], environment, temporary, transcript)
+        )
         if installed["shape"] != shape or (root / ".git").exists():
             raise RuntimeError("Native installation has the wrong shape or includes a checkout")
         initial = root / "versions" / installed["version"]
@@ -129,16 +210,18 @@ def smoke(package: Path) -> None:
             ],
             environment,
             temporary,
+            transcript,
         )
         if shape != "server":
             _run(
                 [str(python), "-c", "import desktop.main, webview, pythoncom, win32api"],
                 environment,
                 temporary,
+                transcript,
             )
         if shape != "desktop-client":
-            _run([str(cli), "server", "start"], environment, temporary)
-            _run([str(cli), "server", "status"], environment, temporary)
+            _run([str(cli), "server", "start"], environment, temporary, transcript)
+            _run([str(cli), "server", "status"], environment, temporary, transcript)
         # A distinct local identity exercises the complete independent updater,
         # including snapshot/verification/normal restart for server shapes.
         candidate_id = "smoke_" + installed["version"][:110]
@@ -150,15 +233,24 @@ def smoke(package: Path) -> None:
                     bundle.write(path, path.relative_to(payload).as_posix())
             bundle.writestr("release.json", json.dumps(updated))
         if shape == "desktop-client":
-            _run([str(cli), "update", "--package", str(archive)], environment, temporary)
-            outcome = json.loads(_run([str(cli), "update", "status"], environment, temporary))
+            _run(
+                [str(cli), "update", "--package", str(archive)],
+                environment,
+                temporary,
+                transcript,
+            )
+            outcome = json.loads(
+                _run([str(cli), "update", "status"], environment, temporary, transcript)
+            )
         else:
-            outcome = _contained_detached_update(cli, python, archive, environment, temporary)
+            outcome = _contained_detached_update(
+                cli, python, archive, environment, temporary, transcript
+            )
         active = (root / "active-version").read_text(encoding="ascii").strip()
         if outcome["phase"] != "completed" or active != candidate_id:
             raise RuntimeError(f"Native update did not verify its candidate: {outcome}")
         if shape != "desktop-client":
-            _run([str(cli), "server", "stop"], environment, temporary)
+            _run([str(cli), "server", "stop"], environment, temporary, transcript)
         tray = subprocess.Popen(
             [str(cli)],
             cwd=temporary,
@@ -173,7 +265,7 @@ def smoke(package: Path) -> None:
             if tray.poll() is not None or time.monotonic() > deadline:
                 raise RuntimeError("The native tray host did not initialize")
             time.sleep(0.1)
-        _run([str(cli), "application", "exit"], environment, temporary)
+        _run([str(cli), "application", "exit"], environment, temporary, transcript)
         if tray.wait(timeout=30) != 0:
             raise RuntimeError("The native tray host did not exit cleanly")
         _run(
@@ -188,6 +280,7 @@ def smoke(package: Path) -> None:
             ],
             environment,
             temporary,
+            transcript,
         )
         completed = True
         print(f"Native {shape} install, update, tray, lifecycle and immutable inventory verified")
@@ -197,12 +290,18 @@ def smoke(package: Path) -> None:
             tray.wait(timeout=10)
         if not completed and cli.exists() and shape != "desktop-client":
             try:
-                _run([str(cli), "server", "stop"], environment, temporary)
+                _run([str(cli), "server", "stop"], environment, temporary, transcript)
             except Exception as error:
                 print(f"Disposable server cleanup needs attention: {error}")
         if completed:
             shutil.rmtree(temporary)
         else:
+            try:
+                _write_failure_evidence(temporary, evidence, transcript)
+            except OSError as error:
+                print(f"Native smoke failure evidence could not be copied: {error}")
+            else:
+                print(f"Native smoke failure evidence copied to {evidence}")
             print(f"Native smoke evidence retained at {temporary}")
 
 
