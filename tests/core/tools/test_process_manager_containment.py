@@ -53,7 +53,7 @@ def test_windows_subprocess_creation_flags_hide_console_and_keep_process_group(
     monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
     monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, raising=False)
     monkeypatch.setattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000, raising=False)
-    monkeypatch.setattr(process_utils, "_windows_process_in_job", lambda: True)
+    monkeypatch.setattr(process_utils, "_windows_explicit_breakaway_allowed", lambda: True)
 
     assert subprocess_creation_flags(platform_name="nt") == 0x08000000
     assert (
@@ -79,11 +79,111 @@ def test_windows_subprocess_creation_flags_hide_console_and_keep_process_group(
         == 0
     )
 
-    monkeypatch.setattr(process_utils, "_windows_process_in_job", lambda: False)
+    monkeypatch.setattr(process_utils, "_windows_explicit_breakaway_allowed", lambda: False)
     assert (
         subprocess_creation_flags(new_process_group=True, breakaway=True, platform_name="nt")
         == 0x08000200
     )
+
+
+class _FakeWindowsFunction:
+    def __init__(self, implementation) -> None:
+        self.implementation = implementation
+        self.argtypes = None
+        self.restype = None
+
+    def __call__(self, *args):
+        return self.implementation(*args)
+
+
+def _fake_job_kernel(*, in_job: bool, limit_flags: int, query_ok: bool = True):
+    queries = []
+
+    def inspect_job(_process, _job, result) -> int:
+        result._obj.value = int(in_job)
+        return 1
+
+    def query_job(job, info_class, limits, size, returned) -> int:
+        queries.append((job, info_class, size, returned))
+        limits._obj.LimitFlags = limit_flags
+        return int(query_ok)
+
+    kernel = SimpleNamespace(
+        GetCurrentProcess=_FakeWindowsFunction(lambda: 73),
+        IsProcessInJob=_FakeWindowsFunction(inspect_job),
+        QueryInformationJobObject=_FakeWindowsFunction(query_job),
+    )
+    return kernel, queries
+
+
+@pytest.mark.parametrize(
+    ("limit_flags", "expected"),
+    [
+        (0, False),
+        (process_utils._JOB_OBJECT_LIMIT_BREAKAWAY_OK, True),
+        (process_utils._JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK, False),
+        (
+            process_utils._JOB_OBJECT_LIMIT_BREAKAWAY_OK
+            | process_utils._JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
+            False,
+        ),
+    ],
+)
+def test_windows_breakaway_queries_immediate_job_policy(
+    monkeypatch: pytest.MonkeyPatch, limit_flags: int, expected: bool
+) -> None:
+    kernel, queries = _fake_job_kernel(in_job=True, limit_flags=limit_flags)
+    monkeypatch.setattr(
+        process_utils.ctypes,
+        "WinDLL",
+        lambda *_args, **_kwargs: kernel,
+        raising=False,
+    )
+
+    assert process_utils._windows_explicit_breakaway_allowed() is expected
+    assert len(queries) == 1
+    job, info_class, size, returned = queries[0]
+    assert job is None
+    assert info_class == process_utils._JOB_OBJECT_BASIC_LIMIT_INFORMATION_CLASS
+    assert size > 0
+    assert returned is None
+
+
+def test_windows_breakaway_skips_job_query_outside_a_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kernel, queries = _fake_job_kernel(in_job=False, limit_flags=0)
+    monkeypatch.setattr(
+        process_utils.ctypes,
+        "WinDLL",
+        lambda *_args, **_kwargs: kernel,
+        raising=False,
+    )
+
+    assert process_utils._windows_explicit_breakaway_allowed() is False
+    assert queries == []
+
+
+def test_windows_breakaway_propagates_job_query_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kernel, _queries = _fake_job_kernel(in_job=True, limit_flags=0, query_ok=False)
+    monkeypatch.setattr(
+        process_utils.ctypes,
+        "WinDLL",
+        lambda *_args, **_kwargs: kernel,
+        raising=False,
+    )
+    monkeypatch.setattr(process_utils.ctypes, "get_last_error", lambda: 5, raising=False)
+    monkeypatch.setattr(
+        process_utils.ctypes,
+        "WinError",
+        lambda code: PermissionError(code, "query denied"),
+        raising=False,
+    )
+
+    with pytest.raises(PermissionError, match="query denied"):
+        process_utils._windows_explicit_breakaway_allowed()
 
 
 def test_guarded_posix_launch_wraps_exact_argv_and_lifetime_descriptor(

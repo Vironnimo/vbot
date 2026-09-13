@@ -83,7 +83,7 @@ def test_start_server_process_is_durable_and_windowless_on_windows(
 
     monkeypatch.setattr(server_management.subprocess, "Popen", FakePopen)
     monkeypatch.setattr(server_management.sys, "platform", "win32")
-    monkeypatch.setattr(process_utils, "_windows_process_in_job", lambda: True)
+    monkeypatch.setattr(process_utils, "_windows_explicit_breakaway_allowed", lambda: True)
     monkeypatch.setattr(
         server_management.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, raising=False
     )
