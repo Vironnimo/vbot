@@ -5,11 +5,48 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 import tempfile
 from pathlib import Path
 
 from cli.application.state import discover
 from core.model_tasks.speech_setup import LocalSpeechSetup
+from core.utils.processes import kill_process_tree_async, subprocess_creation_flags
+
+
+async def _diagnose_verification(setup: LocalSpeechSetup, label: str) -> None:
+    module = sys.modules[LocalSpeechSetup.__module__]
+    module_file = getattr(module, "__file__", None)
+    if not module_file:
+        print(f"{label} standalone verification unavailable: setup module has no file")
+        return
+    worker = Path(module_file).with_name("speech_worker.py")
+    command = [str(setup.python), "-I", "-B", str(worker)]
+    if setup.engine:
+        command.extend(("--verify", setup.engine, "cpu"))
+    else:
+        command.extend(("--verify-stt", str(worker.parents[2])))
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        creationflags=subprocess_creation_flags(),
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=120)
+    except TimeoutError:
+        print(f"{label} standalone verification timed out after 120 seconds")
+        return
+    finally:
+        if process.returncode is None:
+            await kill_process_tree_async(process)
+            await process.wait()
+    detail = (stdout + stderr).decode("utf-8", errors="replace")[-6000:]
+    print(
+        f"{label} standalone verification exit code {process.returncode}\n"
+        f"{detail or '(no output)'}"
+    )
 
 
 async def _install(setup: LocalSpeechSetup, label: str) -> None:
@@ -19,6 +56,8 @@ async def _install(setup: LocalSpeechSetup, label: str) -> None:
             await asyncio.sleep(0.25)
         status = setup.status()
         if status["state"] != "ready" or not setup.available():
+            if status["phase"] == "verifying":
+                await _diagnose_verification(setup, label)
             raise RuntimeError(
                 f"{label} setup failed: state={status['state']} "
                 f"phase={status['phase']} error={status['error']}"
@@ -41,21 +80,34 @@ async def _smoke(data_dir: Path) -> None:
     ):
         raise RuntimeError("Speech smoke requires the disposable native smoke installation")
     speech_root = data_dir / "speech-engines"
-    await _install(LocalSpeechSetup(directory=speech_root / "stt"), "stt")
-    await _install(
+    failures: list[str] = []
+
+    async def attempt(setup: LocalSpeechSetup, label: str) -> bool:
+        try:
+            await _install(setup, label)
+        except Exception as error:
+            failures.append(f"{label}: {error}")
+            return False
+        return True
+
+    await attempt(LocalSpeechSetup(directory=speech_root / "stt"), "stt")
+    await attempt(
         LocalSpeechSetup(engine="qwen3-tts", directory=speech_root / "qwen3-tts"),
         "qwen3-tts",
     )
     chatterbox = speech_root / "chatterbox"
-    await _install(
+    chatterbox_ready = await attempt(
         LocalSpeechSetup(engine="chatterbox", directory=chatterbox),
         "chatterbox fresh setup",
     )
-    (chatterbox / "verified.json").unlink()
-    await _install(
-        LocalSpeechSetup(engine="chatterbox", directory=chatterbox),
-        "chatterbox repeated setup",
-    )
+    if chatterbox_ready:
+        (chatterbox / "verified.json").unlink()
+        await attempt(
+            LocalSpeechSetup(engine="chatterbox", directory=chatterbox),
+            "chatterbox repeated setup",
+        )
+    if failures:
+        raise RuntimeError("; ".join(failures))
     print(
         json.dumps(
             {
