@@ -19,6 +19,7 @@ from cli.application.state import (
 )
 from core.utils.atomic import atomic_write_text
 from core.utils.ids import new_id
+from core.utils.processes import subprocess_creation_flags
 
 CANONICAL_REPOSITORY = "https://github.com/Vironnimo/vbot.git"
 MAIN_BRANCH = "main"
@@ -37,6 +38,7 @@ def _git(checkout: Path, *args: str, check: bool = True) -> subprocess.Completed
             encoding="utf-8",
             errors="replace",
             timeout=300,
+            creationflags=subprocess_creation_flags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ApplicationError(f"Source update Git operation could not run ({args[0]})") from exc
@@ -154,6 +156,7 @@ def bind_main_source(install: Installation, checkout: Path | None = None) -> dic
             encoding="utf-8",
             errors="replace",
             timeout=600,
+            creationflags=subprocess_creation_flags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         log = contained(install.root, "development/source-update.log")
@@ -232,7 +235,11 @@ def read_binding(install: Installation) -> dict[str, Any] | None:
 def _require_clean(checkout: Path) -> None:
     status = _git(checkout, "status", "--porcelain", "--untracked-files=all").stdout
     if status.strip():
-        raise ApplicationError("Source update checkout has local changes; update was not prepared")
+        raise ApplicationError(
+            f"The source checkout has uncommitted changes: {checkout}. "
+            "Commit or resolve them before running vbot update again; "
+            "the running version is unchanged."
+        )
 
 
 def _require_head(checkout: Path, revision: str) -> None:
@@ -261,7 +268,11 @@ def prepare_update(install: Installation, operation_id: str) -> str:
         if upstream_ahead.returncode == 0:
             _git(checkout, "merge", "--ff-only", "--", upstream)
         elif local_ahead.returncode != 0:
-            raise ApplicationError("Source update branch has diverged from its upstream")
+            raise ApplicationError(
+                f"The source branch at {checkout} has diverged from {remote}/{branch}. "
+                "Reconcile the branch while preserving local changes "
+                "before running vbot update again."
+            )
     _require_clean(checkout)
     revision = _git(checkout, "rev-parse", "HEAD").stdout.strip()
     try:

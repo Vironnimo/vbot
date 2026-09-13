@@ -16,8 +16,22 @@ typedef int(__cdecl *py_bytes_main_fn)(int, char **);
 typedef void(__cdecl *py_set_path_fn)(const wchar_t *);
 typedef void(__cdecl *py_set_home_fn)(const wchar_t *);
 
+static bool show_error_dialog = false;
+static char *utf8(const wchar_t *value);
+
 static void fail(const wchar_t *message) {
-    MessageBoxW(NULL, message, L"vBot", MB_OK | MB_ICONERROR);
+    /* Background roles must exit on startup failure, never wait on a hidden
+       modal dialog. Console commands preserve their caller's error stream. */
+    wchar_t detail[2048], executable[MAX_PATH];
+    GetModuleFileNameW(NULL, executable, MAX_PATH);
+    _snwprintf_s(detail, 2048, _TRUNCATE, L"[ERROR] %ls\nApplication: %ls\n", message, executable);
+    char *bytes = utf8(detail);
+    if (bytes != NULL) {
+        DWORD written;
+        WriteFile(GetStdHandle(STD_ERROR_HANDLE), bytes, (DWORD)strlen(bytes), &written, NULL);
+        free(bytes);
+    }
+    if (show_error_dialog) MessageBoxW(NULL, message, L"vBot could not start", MB_OK | MB_ICONERROR);
 }
 
 static bool safe_basename(const wchar_t *value) {
@@ -142,6 +156,8 @@ static int vbot_main(void) {
     wchar_t **argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     wchar_t root[MAX_PATH], version[129], runtime[MAX_PATH], app[MAX_PATH];
     if (argv == NULL || !executable_directory(root, MAX_PATH)) return 111;
+    show_error_dialog = (wcscmp(VBOT_ROLE, L"host") == 0 && argc == 1) ||
+                        wcscmp(VBOT_ROLE, L"desktop") == 0;
 #ifdef VBOT_STABLE_BOOTSTRAP
     bool payload_install = argc >= 5 && wcscmp(argv[1], L"application") == 0 && wcscmp(argv[2], L"install") == 0;
     /* A no-argument bootstrap is the tray host. Detach only this child from a

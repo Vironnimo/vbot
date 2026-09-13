@@ -208,7 +208,7 @@ Run the same command from your terminal or choose Update in the packaged Windows
 vbot update
 ```
 
-For a packaged Windows application, a separate updater saves the operation and continues even if the calling terminal or vBot Run exits. A human CLI invocation normally waits for the final result and returns a failing exit code when the update fails. The tray displays the same saved state. No Agent is created for a human or tray update.
+For a packaged Windows application, a separate updater saves the operation and continues even if the calling terminal or vBot Run exits. A human CLI invocation normally waits for the final result, shows readable progress with elapsed time, and returns a failing exit code when the update fails. The final summary reports the version and verified outcome once; `--output plain` returns the structured operation record for scripts. Read-only `update status` reports the saved record. The tray displays the same saved state. No Agent is created for a human or tray update.
 
 ```bash
 vbot update --detach           # return the saved operation id immediately

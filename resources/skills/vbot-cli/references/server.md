@@ -39,7 +39,7 @@ First inspect `vbot home`. An `application_root` field identifies a packaged ins
 
 Run `vbot update` directly. It returns a saved operation id before this Run's server stops and automatically arranges a continuation in the same Session. After acceptance, end this Run; the updater may cancel it once this Tool batch is saved. Do not create an additional Bootstrap. The continuation must inspect `vbot update status <operation-id>` before reporting success; acceptance is not completion.
 
-Human terminal callers normally wait for the final outcome. `--detach` returns after acceptance. Closing the terminal or the originating Bash does not cancel the independent update. Tray updates use the same operation and do not create an Agent. The updater waits for accepted work to drain; do not stop the server manually to bypass that wait.
+Normal output uses readable progress and one outcome summary. `--output plain` returns the structured update result without progress; `vbot update status <operation-id>` is a read-only structured inspection. Human terminal callers normally wait for the final outcome. `--detach` returns after acceptance. Closing the terminal or the originating Bash does not cancel the independent update. Tray updates use the same operation and do not create an Agent. The updater waits for accepted work to drain; do not stop the server manually to bypass that wait.
 
 `vbot update --no-restart` prepares a version without changing the active one. Activate it later with `vbot update activate <operation-id>`. `--package <path>` deliberately selects a local package; official downloads require the installation's trusted signing key. `--stash` and `--discard` apply only to source checkouts. A Desktop Client update has no local server target. Open Desktop windows retain their current version until reopened.
 
@@ -75,7 +75,9 @@ Updates the installation from its git checkout and requests a server restart unl
 
 ## Local application changes in packaged installations
 
-Use `vbot customize prepare` and edit only the returned development source. Add tests for the intended behavior, run `vbot customize check --intent <description>`, then activate the checked candidate with `vbot customize activate`. If the source changes after checking, check it again before activation.
+Inspect `vbot application status` for the update source. A main installation reports its recorded checkout and branch. Use a managed Git worktree for isolated development and tests, then merge the intended commits into that recorded branch before `vbot update`. Keep the recorded checkout clean; updates retain local-ahead commits but stop on uncommitted changes or divergent history. Never edit the active version reported by `vbot home`.
+
+For a managed customization of the installed version, use `vbot customize prepare` and edit only the returned development source. Add tests for the intended behavior, run `vbot customize check --intent <description>`, then activate the checked candidate with `vbot customize activate`. If the source changes after checking, check it again before activation.
 
 The development copy starts at the exact installed source revision. Preparing and checking changes requires Git and Node.js/npm on the development machine; ordinary use and official updates do not. `customize status` reports the official base, local revision and any pending reconciliation. Tests run in a separate development environment; the release runtime is never edited in place.
 
@@ -87,7 +89,7 @@ User Extensions remain in the server data directory and keep their existing relo
 
 ## Uninstall
 
-Packaged Windows installs use their recorded target and per-user uninstaller. The default is application removal with data preserved; `--data-only` resets data while keeping the application, and `--all` removes both. Explicit target overrides must match the recorded installation. The CLI may report only that the independent uninstaller was launched; wait for removal before claiming completion. Local development copies are preserved. The following checkout-specific elevation and target-override behavior does not apply to packaged installs.
+Packaged Windows installs use their recorded target and per-user uninstaller. The interactive command offers application-only removal, data-only reset, both, or cancellation; `--data-only` resets data while keeping the application, and `--all` removes both. Explicit target overrides must match the recorded installation. The CLI may report only that the independent uninstaller was launched; wait for removal before claiming completion. Local development copies are preserved. The following checkout-specific elevation and target-override behavior does not apply to packaged installs.
 
 ```bash
 vbot uninstall
@@ -96,7 +98,7 @@ vbot uninstall (--app-only|--data-only|--all) --yes [--host <host>] [--port <por
 
 With an interactive terminal, the bare command asks whether to remove only the application, only the data directory, or both. Data removal displays the exact resolved path and requires typing `DELETE`; it permanently removes settings, credentials, Agents, Sessions, and all other runtime state. A data-only reset preserves the prior server state: running restarts fresh, stopped remains stopped. Non-interactive callers must select one mode and pass `--yes`.
 
-The target defaults to the Installer-recorded server host, port, and data directory; the target flags override it. Application removal deletes the managed environment, launchers, and Autostart. Windows requests UAC and finishes that removal in a separate PowerShell window because the running CLI cannot delete its own executable; cancelling elevation leaves both application and data in place. Pass the matching custom `--task-name` or `--service-name` only when the installation did not use the default.
+For a source-checkout installation, the target defaults to the Installer-recorded server host, port, and data directory; the target flags override it. Application removal deletes the managed environment, launchers, and Autostart. Windows requests UAC and finishes that removal in a separate PowerShell window because the running CLI cannot delete its own executable; cancelling elevation leaves both application and data in place. Pass the matching custom `--task-name` or `--service-name` only when the installation did not use the default.
 
 ## Autostart
 

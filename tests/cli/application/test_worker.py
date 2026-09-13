@@ -240,6 +240,7 @@ def test_candidate_failure_rolls_back_only_after_previous_version_verifies(
     worker.execute(install, operation)
 
     assert operation.phase == "rolled_back"
+    assert operation.error == "candidate failed"
     assert starts == [("rel_new", True), ("rel_old", True), ("rel_old", False)]
     assert install.version().name == "rel_old"
 

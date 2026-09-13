@@ -4,6 +4,8 @@ import argparse
 import base64
 import hashlib
 import json
+import shutil
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -14,6 +16,39 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from cli.application.payload import NATIVE_SOURCE_FILES
 from scripts import build_windows
+
+
+def test_build_command_preserves_failure_output() -> None:
+    with pytest.raises(build_windows.BuildError, match="build-tool-error"):
+        build_windows._run(
+            [sys.executable, "-c", "import sys; sys.stderr.write('build-tool-error'); sys.exit(7)"]
+        )
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows console allocation")
+def test_build_tool_has_no_console_when_builder_has_none(tmp_path: Path) -> None:
+    probe = tmp_path / "console_probe.py"
+    probe.write_text(
+        "import ctypes, sys\n"
+        "from pathlib import Path\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "from scripts import build_windows\n"
+        "assert not ctypes.windll.kernel32.GetConsoleWindow()\n"
+        "child = ('import ctypes, sys; '"
+        "'sys.exit(23 if ctypes.windll.kernel32.GetConsoleWindow() else 0)')\n"
+        "build_windows._run([sys.executable, '-c', child])\n"
+        "print('windowless-build-completed')\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, str(probe), str(Path(build_windows.__file__).parent.parent)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "windowless-build-completed"
 
 
 def _source(tmp_path: Path) -> Path:
@@ -382,3 +417,37 @@ def test_compile_host_constructs_msvc_abi_commands(
     commands.clear()
     build_windows.compile_host(source, tmp_path / "vBot.Python.exe", role="python", version="2.3.4")
     assert "/SUBSYSTEM:CONSOLE" in commands[2]
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32" or not shutil.which("clang-cl") or not shutil.which("llvm-rc"),
+    reason="Windows native compiler required",
+)
+@pytest.mark.parametrize("role, stable", [("host", True), ("update", False), ("server", False)])
+def test_native_startup_failure_exits_and_reports_stderr_without_a_dialog(tmp_path, role, stable):
+    root = tmp_path / "native-failure"
+    output = (
+        root / "vBot.exe"
+        if stable
+        else root / "versions" / "rel_test" / "runtime" / f"vBot.{role.title()}.exe"
+    )
+    source = Path(build_windows.__file__).parent.parent
+    build_windows.compile_host(source, output, role=role, version="0.4.3", stable=stable)
+    if stable:
+        (root / "active-version").write_text("rel_test\n", encoding="ascii")
+    process = subprocess.Popen(
+        [str(output), "--help"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=15)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=10)
+    assert process.returncode == 111
+    assert not stdout
+    assert b"[ERROR]" in stderr
+    assert str(output).encode("utf-8") in stderr

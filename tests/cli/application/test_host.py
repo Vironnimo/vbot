@@ -258,7 +258,8 @@ def test_browser_and_logs_use_only_the_owned_local_target(
     facade = host.ApplicationFacade(install)
     facade.open_browser()
     facade.open_logs()
-    assert opened == [instance.url, instance.data_dir / "logs"]
+    facade.open_server_logs()
+    assert opened == [instance.url, install.root / "logs", instance.data_dir / "logs"]
 
     client = host.ApplicationFacade(_install(tmp_path / "client", shape="desktop-client"))
     with pytest.raises(ApplicationError):

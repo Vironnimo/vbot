@@ -9,6 +9,7 @@ import pytest
 
 from cli.application import command, operations, processes
 from cli.application.state import ApplicationError, Installation, Operation
+from cli.main import run
 from cli.parser import parse_args
 from cli.server_management import CommandResult, HealthProbeResult, WebUIProbeResult
 
@@ -115,7 +116,7 @@ def test_source_selection_records_mode_without_starting_or_updating(tmp_path, mo
 
     monkeypatch.setattr("cli.application.source_updates.select_source", select)
     monkeypatch.setattr(operations, "request_update", lambda *a, **kw: pytest.fail("not an update"))
-    assert command.dispatch(parse_args(["application", "source", "main"])) == 0
+    assert run(["application", "source", "main", "--output", "plain"]) == 0
     assert selected == [(install.root, "main", None)]
     assert json.loads(capsys.readouterr().out)["next_command"] == "vbot update"
 
@@ -205,3 +206,114 @@ def test_packaged_server_status_uses_shared_output_and_exit_policy(
     assert f"log_path: {instance.log_path}" in output_lines
     for line in expected_lines:
         assert line in output_lines
+
+
+@pytest.mark.parametrize(
+    "phase, code",
+    [("completed", 0), ("prepared", 0), ("failed", 1), ("rolled_back", 1), ("needs_attention", 1)],
+)
+def test_native_update_readable_output_uses_shared_status_markers(
+    tmp_path, monkeypatch, capsys, phase, code
+):
+    install = _install(tmp_path)
+    terminal = Operation(
+        id="upd_output",
+        phase=phase,
+        previous_version="rel_current",
+        candidate_version="rel_next",
+        server_was_running=True,
+        message="terminal-test-detail",
+        error="test-error" if code else None,
+    )
+    monkeypatch.setattr(command, "discover", lambda: install)
+    monkeypatch.delenv("VBOT_UPDATE_HANDOFF", raising=False)
+    monkeypatch.setattr(operations, "request_update", lambda *a, **kw: Operation(id=terminal.id))
+    monkeypatch.setattr(
+        "cli.update_management.read_checkout_version",
+        lambda path: "1.2.3" if "rel_current" in str(path) else "1.2.4",
+    )
+
+    def wait(_install, operation_id, *, progress):
+        assert operation_id == terminal.id
+        progress(Operation(id=terminal.id, phase="preparing", message="progress-test-detail"))
+        progress(terminal)
+        return terminal
+
+    monkeypatch.setattr(operations, "wait", wait)
+    assert run(["update"]) == code
+    output = capsys.readouterr().out
+    assert "[WORK]" in output
+    assert output.count("progress-test-detail") == 1
+    assert output.count("[OK]" if phase == "completed" else "[ERROR]" if code else "[INFO]") == 1
+    assert '"operation_id"' not in output
+    assert "preparing:" not in output and "completed:" not in output
+    if phase in {"completed", "prepared"}:
+        assert "1.2.4" in output
+    if phase != "completed":
+        assert "vbot update status upd_output" in output
+    if phase == "prepared":
+        assert "vbot update activate upd_output" in output
+    if code:
+        assert "test-error" in output
+
+
+def test_native_update_plain_output_is_one_structured_result(tmp_path, monkeypatch, capsys):
+    install = _install(tmp_path)
+    terminal = Operation(id="upd_plain", phase="completed")
+    monkeypatch.setattr(command, "discover", lambda: install)
+    monkeypatch.delenv("VBOT_UPDATE_HANDOFF", raising=False)
+    monkeypatch.setattr(operations, "request_update", lambda *a, **kw: terminal)
+
+    def wait(_install, operation_id, **kwargs):
+        assert not kwargs
+        return terminal
+
+    monkeypatch.setattr(operations, "wait", wait)
+    assert run(["update", "--output", "plain"]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == operations.public_result(terminal)
+    assert not captured.err
+
+
+def test_detached_update_keeps_operation_handle_without_claiming_completion(
+    tmp_path, monkeypatch, capsys
+):
+    install = _install(tmp_path)
+    monkeypatch.setattr(command, "discover", lambda: install)
+    monkeypatch.delenv("VBOT_UPDATE_HANDOFF", raising=False)
+    monkeypatch.setattr(operations, "request_update", lambda *a, **kw: Operation(id="upd_detached"))
+    monkeypatch.setattr(operations, "wait", lambda *a, **kw: pytest.fail("must not wait"))
+    assert run(["update", "--detach"]) == 0
+    output = capsys.readouterr().out
+    assert "vbot update status upd_detached" in output
+    assert "[INFO]" in output and "[OK]" not in output
+    assert '"operation_id"' not in output
+
+
+@pytest.mark.parametrize(
+    "selection, confirm, expected",
+    [
+        ("1", "YES", "app-only"),
+        ("2", "DELETE", "data-only"),
+        ("3", "DELETE", "all"),
+        ("4", "", None),
+        ("1", "no", None),
+    ],
+)
+def test_packaged_uninstall_reuses_guided_scope_and_confirmation(
+    tmp_path, monkeypatch, selection, confirm, expected
+):
+    install = _install(tmp_path)
+    monkeypatch.setattr(command, "discover", lambda: install)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    answers = iter((selection, confirm))
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    called = []
+
+    def remove(_install, *, remove_data, data_only):
+        called.append("data-only" if data_only else "all" if remove_data else "app-only")
+        return {"data_removed": remove_data, "server_restarted": False}
+
+    monkeypatch.setattr("cli.application.integration.uninstall", remove)
+    assert run(["uninstall"]) == 0
+    assert called == ([] if expected is None else [expected])

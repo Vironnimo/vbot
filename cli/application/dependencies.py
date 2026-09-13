@@ -18,6 +18,7 @@ from core.extensions.dependencies import (
     runtime_dependencies,
 )
 from core.utils.ids import new_id
+from core.utils.processes import subprocess_creation_flags
 
 _MAX_REQUIREMENTS_BYTES = 1024 * 1024
 
@@ -228,6 +229,7 @@ def _run_uv(python: Path, requirements: Path, constraints: Path, site: Path, log
             stderr=subprocess.STDOUT,
             check=False,
             env=environment,
+            creationflags=subprocess_creation_flags(),
         )
     if result.returncode:
         raise ApplicationError(

@@ -37,6 +37,7 @@ from cli.autostart_management import (
 )
 from cli.install_state import InstallState, read_install_state
 from cli.server_management import probe_health, resolve_instance, stop_server
+from core.utils.processes import subprocess_creation_flags
 
 AUTOSTART_ACTIONS = frozenset({"status", "enable", "disable"})
 
@@ -318,6 +319,7 @@ def _git_status(checkout: Path) -> subprocess.CompletedProcess[str]:
             encoding="utf-8",
             errors="replace",
             timeout=30,
+            creationflags=subprocess_creation_flags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ApplicationError("Could not inspect the source checkout before transition") from exc
