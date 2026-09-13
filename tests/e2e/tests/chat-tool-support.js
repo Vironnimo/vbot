@@ -9,7 +9,7 @@ export async function runToolScenario(
   await expect(chat.getByText(finalText, { exact: true })).toBeVisible({
     timeout,
   });
-  await expect(chat.getByText("· Running", { exact: true })).toHaveCount(0);
+  await expect(chat.getByRole("button", { name: "Cancel run" })).toHaveCount(0);
 }
 
 export function toolRow(page, chat, name, index = 0) {
