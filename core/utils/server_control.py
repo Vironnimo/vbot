@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import math
 import os
@@ -35,7 +36,7 @@ def server_control_claim(data_dir: str | Path, port: int):
     locked = False
     try:
         if os.name == "nt":
-            import msvcrt
+            msvcrt = importlib.import_module("msvcrt")
 
             handle.seek(0, os.SEEK_END)
             if handle.tell() == 0:
@@ -73,7 +74,7 @@ def server_control_claim(data_dir: str | Path, port: int):
             with suppress(OSError):
                 handle.seek(0)
                 if os.name == "nt":
-                    import msvcrt
+                    msvcrt = importlib.import_module("msvcrt")
 
                     msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
                 else:

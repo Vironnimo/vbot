@@ -6,6 +6,7 @@ server-target defaults and no update or installation policy of its own.
 
 from __future__ import annotations
 
+import importlib
 import logging
 import queue
 import threading
@@ -240,7 +241,7 @@ class TrayController:
 def run_tray(actions: TrayActions, icon_path: Path) -> None:
     """Run the native tray loop, importing its optional GUI dependencies lazily."""
 
-    import pystray  # type: ignore[import-untyped]
+    pystray = importlib.import_module("pystray")
     from PIL import Image
 
     controller = TrayController(actions)
@@ -257,7 +258,7 @@ def run_tray(actions: TrayActions, icon_path: Path) -> None:
 def _native_menu(controller: TrayController, icon: Any) -> Any:
     """Build one pystray menu after its lazy import has happened."""
 
-    import pystray  # type: ignore[import-untyped]
+    pystray = importlib.import_module("pystray")
 
     def callback(action: str) -> Callable[[Any, Any], None]:
         def invoke(_icon: Any, _item: Any) -> None:

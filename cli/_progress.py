@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import importlib
 import os
 import sys
 import threading
 import time
 from contextvars import ContextVar
 from types import TracebackType
-from typing import Literal, TextIO
+from typing import Any, Literal, TextIO, cast
 
 from cli.formatting import output_mode
 
@@ -35,12 +36,14 @@ def _windows_color(stream: TextIO) -> bool:
     if os.name != "nt":
         return True
     import ctypes
-    import msvcrt
+
+    msvcrt = importlib.import_module("msvcrt")
+    windows_ctypes = cast(Any, ctypes)
 
     try:
         handle = ctypes.c_void_p(msvcrt.get_osfhandle(stream.fileno()))
         mode = ctypes.c_ulong()
-        kernel = ctypes.windll.kernel32
+        kernel = windows_ctypes.windll.kernel32
         return bool(
             kernel.GetConsoleMode(handle, ctypes.byref(mode))
             and kernel.SetConsoleMode(handle, mode.value | 0x0004)
