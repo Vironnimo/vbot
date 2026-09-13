@@ -32,6 +32,7 @@ from cli.server_management import (
 )
 from core.utils.atomic import atomic_write_text
 from core.utils.config import VBOT_ROOT
+from core.utils.processes import subprocess_creation_flags
 
 DEFAULT_TASK_NAME = "vBot"
 
@@ -627,6 +628,7 @@ def _default_runner(command: list[str]) -> CommandRun:
             command,
             capture_output=True,
             timeout=_COMMAND_TIMEOUT_SECONDS,
+            creationflags=subprocess_creation_flags(),
         )
     except subprocess.TimeoutExpired:
         return CommandRun(

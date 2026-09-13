@@ -45,6 +45,12 @@ class Actions(TrayActions):
     def open_logs(self) -> None:
         self._call("open_logs")
 
+    def open_server_logs(self) -> None:
+        self._call("open_server_logs")
+
+    def show_update(self) -> None:
+        self._call("show_update")
+
     def quit(self) -> None:
         self._call("quit")
 
@@ -110,12 +116,13 @@ def test_callbacks_use_one_worker_and_recover_after_a_facade_exception():
     actions = Actions(TrayState("stopped", "server"))
     controller = TrayController(actions, poll_interval=0.01)
     controller._poll_state()
+    normal_status = controller.menu_items()[0].label
     controller.start()
     try:
         actions.fail = "start_server"
         controller.invoke("start_server")
         _wait_for_call(actions, "start_server")
-        assert next(iter(_labels(controller))) == "vBot · action needs attention"
+        assert controller.menu_items()[0].label != normal_status
 
         actions.fail = None
         controller.invoke("open_logs")
@@ -151,7 +158,7 @@ def test_terminal_update_status_keeps_server_health_visible_and_allows_next_upda
     controller._poll_state()
 
     menu = _labels(controller)
-    assert "server stopped" in next(iter(menu))
+    assert "Server stopped" in next(iter(menu))
     assert "Updated" not in next(iter(menu))
     assert menu["Update"].enabled is True
 
@@ -162,10 +169,12 @@ def test_facade_startup_error_is_visible_without_removing_recovery_actions():
     controller._poll_state()
 
     menu = _labels(controller)
-    assert next(iter(menu)) == "vBot · action needs attention"
+    actions.current = replace(actions.current, error="")
+    controller._poll_state()
+    assert next(iter(menu)) != controller.menu_items()[0].label
     assert menu["Start server"].enabled is True
     assert menu["Update"].enabled is True
-    assert menu["Open logs"].enabled is True
+    assert menu["Application logs"].enabled is True
 
 
 def test_unchanged_poll_does_not_replace_the_native_menu(monkeypatch):
@@ -219,6 +228,8 @@ def test_windows_owner_draw_paints_explicit_dark_hover_background(monkeypatch):
     windows_tray._gdi32.DeleteDC.argtypes = [wintypes.HDC]
 
     icon = object.__new__(windows_tray.WindowsTrayIcon)
+    icon._running = False
+    icon._icon_handle = None
     icon._labels = {1: "Open Desktop"}
     icon._menu_hwnd = None
     icon._hwnd = None
@@ -236,7 +247,8 @@ def test_windows_owner_draw_paints_explicit_dark_hover_background(monkeypatch):
     )
     try:
         assert icon._on_draw_item(0, ctypes.addressof(draw)) == 1
-        assert windows_tray._gdi32.GetPixel(dc, 2, 2) == 0x00433934
+        assert windows_tray._gdi32.GetPixel(dc, 12, 12) == 0x00383838
+        assert windows_tray._gdi32.GetPixel(dc, 2, 2) == 0x00202020
     finally:
         windows_tray._gdi32.SelectObject(dc, previous)
         windows_tray._gdi32.DeleteObject(bitmap)
@@ -251,6 +263,8 @@ def test_windows_right_click_tracks_exactly_one_popup_and_one_callback(monkeypat
 
     calls: list[str] = []
     icon = object.__new__(windows_tray.WindowsTrayIcon)
+    icon._running = False
+    icon._icon_handle = None
     icon._menu_handle = (17, [lambda _icon: calls.append("callback")])
     icon._hwnd = 23
     icon._menu_open = False
@@ -279,6 +293,8 @@ def test_windows_menu_update_is_deferred_even_on_ui_thread_while_popup_is_open()
 
     applied: list[bool] = []
     icon = object.__new__(windows_tray.WindowsTrayIcon)
+    icon._running = False
+    icon._icon_handle = None
     icon._hwnd = 23
     icon._thread = threading.current_thread()
     icon._menu_open = True

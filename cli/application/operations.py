@@ -62,19 +62,26 @@ def spawn_worker(install: Installation, operation: Operation) -> None:
         "--operation",
         operation.id,
     ]
-    process = subprocess.Popen(
-        args,
-        cwd=install.version() / "app",
-        env=child_environment(install),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=subprocess_creation_flags(new_process_group=True, breakaway=True),
-        start_new_session=os.name != "nt",
-    )
+    startup_log = install.root / "logs" / f"{operation.id}-startup.log"
+    startup_log.parent.mkdir(parents=True, exist_ok=True)
+    with startup_log.open("ab") as output:
+        process = subprocess.Popen(
+            args,
+            cwd=install.version() / "app",
+            env=child_environment(install),
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            creationflags=subprocess_creation_flags(new_process_group=True, breakaway=True),
+            start_new_session=os.name != "nt",
+        )
     # Dispatch lock keeps the worker from claiming before this identity is saved.
-    if process.poll() is not None and process.returncode:
-        raise ApplicationError("The independent update process could not start")
+    try:
+        process.wait(timeout=0.5)
+    except subprocess.TimeoutExpired:
+        pass
+    else:
+        raise ApplicationError(f"The update process could not start. Details: {startup_log}")
     try:
         operation.worker_pid = process.pid
         operation.worker_created = psutil.Process(process.pid).create_time()

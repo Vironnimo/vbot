@@ -27,6 +27,7 @@ from cli.application.payload import (
     copy_application,
     native_source_digest,
 )
+from core.utils.processes import subprocess_creation_flags
 
 __all__ = ["APP_FILES", "BuildError", "app_paths", "copy_application"]
 
@@ -191,6 +192,7 @@ def _sign_with_packaged_runtime(
         encoding="utf-8",
         errors="replace",
         timeout=60,
+        creationflags=subprocess_creation_flags(),
     )
     if result.returncode != 0:
         raise BuildError(f"packaged release signer failed: {result.stderr.strip()}")
@@ -216,6 +218,7 @@ def verify_release_source(source: Path, revision: str) -> None:
         encoding="utf-8",
         errors="replace",
         timeout=30,
+        creationflags=subprocess_creation_flags(),
     )
     if head.returncode or revision.lower() != head.stdout.strip().lower():
         raise BuildError("release revision must equal the source checkout HEAD")
@@ -239,6 +242,7 @@ def verify_release_source(source: Path, revision: str) -> None:
         encoding="utf-8",
         errors="replace",
         timeout=30,
+        creationflags=subprocess_creation_flags(),
     )
     if status.returncode or status.stdout.strip():
         raise BuildError("release mode requires clean tracked application sources")
@@ -260,6 +264,7 @@ def _run(command: Sequence[str]) -> None:
         text=True,
         capture_output=True,
         env=environment,
+        creationflags=subprocess_creation_flags(),
     )
     if result.returncode:
         detail = (result.stderr or result.stdout).strip()

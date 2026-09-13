@@ -8,7 +8,7 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
-from typing import ParamSpec
+from typing import TYPE_CHECKING, ParamSpec
 
 from cli._progress import ProgressPrinter, Status, current_progress, status_line
 from cli._recovery import format_command, recovery_guidance
@@ -18,6 +18,9 @@ from cli.parser import parse_args
 from cli.server_management import CommandResult, ServerInstance
 from cli.update_management import UNKNOWN_VBOT_VERSION
 from core.utils.errors import ConfigError
+
+if TYPE_CHECKING:
+    from cli.application.state import Installation, Operation
 
 SUCCESS_EXIT_CODE = 0
 
@@ -230,6 +233,79 @@ def print_update_command_result(
         print(f"  WebUI: {_webui_text(result)}")
     if result.forced:
         print("  Attention: stopping the old server required forced termination.")
+
+
+def print_application_update_result(
+    install: Installation, operation: Operation, *, handoff: bool = False
+) -> None:
+    from cli.update_management import read_checkout_version
+
+    messages = {
+        "completed": (
+            "Update completed — Desktop client is current; no local server restart is needed."
+            if not install.owns_server
+            else "Update completed — server restarted and passed its health check."
+            if operation.server_was_running
+            else "Update completed — the server remains stopped."
+        ),
+        "prepared": "Update prepared. The active version has not changed.",
+        "failed": "vBot update failed.",
+        "rolled_back": "Update failed. The previous version was restored.",
+        "needs_attention": "Update needs attention. Check its status before trying again.",
+    }
+    if (
+        operation.phase == "completed"
+        and operation.candidate_version
+        and operation.candidate_version == operation.previous_version
+    ):
+        messages["completed"] = "This vBot version is already active; no restart was needed."
+    failed = operation.phase in {"failed", "rolled_back", "needs_attention"}
+    state: Status = "error" if failed else "success" if operation.phase == "completed" else "info"
+    print()
+    print(
+        status_line(
+            state, messages.get(operation.phase, "Update accepted; running in the background.")
+        )
+    )
+    if operation.phase in {"completed", "prepared"}:
+        candidate = operation.candidate_version
+        if candidate:
+            label = "Prepared version" if operation.phase == "prepared" else "Version"
+            version_after = read_checkout_version(install.version(candidate) / "app")
+            version_before = (
+                read_checkout_version(install.version(operation.previous_version) / "app")
+                if operation.previous_version
+                else "unknown"
+            )
+            print(
+                f"  {label}: {version_after}"
+                if operation.phase == "prepared"
+                else f"  Version: {version_before} -> {version_after}"
+            )
+        if install.owns_server and operation.phase == "completed":
+            from cli.application.processes import target
+
+            print(f"  Server: {target(install).url}")
+        if operation.phase == "completed" and install.install_shape in {
+            "server-desktop",
+            "desktop-client",
+        }:
+            print("  Desktop: reopen any existing window to use the updated client.")
+    if failed:
+        if operation.message:
+            print(f"  {operation.message}")
+        if operation.error:
+            print(f"  Reason: {operation.error}")
+    if operation.phase != "completed":
+        print(f"  Status: vbot update status {operation.id}")
+    if operation.phase == "prepared":
+        print(f"  Activate: vbot update activate {operation.id}")
+    if handoff and not operation.terminal:
+        print(
+            "End this Run after the Tool result is saved. The updater will arrange a continuation "
+            "in this Session before restarting the server. Do not repeat the update or create "
+            "another Bootstrap."
+        )
 
 
 def print_config_command_result(result: CommandResult) -> None:

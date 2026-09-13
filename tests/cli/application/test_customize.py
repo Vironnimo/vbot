@@ -28,6 +28,23 @@ def _git(directory: Path, *arguments: str) -> str:
     return result.stdout.strip()
 
 
+def test_development_git_runs_windowless_and_retains_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    options: dict[str, object] = {}
+
+    def run(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        options.update(kwargs)
+        return subprocess.CompletedProcess(arguments, 0, "revision\n", "")
+
+    monkeypatch.setattr(customize, "subprocess_creation_flags", lambda: 654)
+    monkeypatch.setattr(customize.subprocess, "run", run)
+
+    assert customize._git(tmp_path, "rev-parse", "HEAD") == "revision"
+    assert options["creationflags"] == 654
+    assert options["capture_output"] is True
+
+
 def _repository(path: Path) -> str:
     path.mkdir()
     _git(path, "init")
@@ -152,6 +169,31 @@ def test_candidate_copies_source_and_resolves_dependencies_only_into_new_runtime
     assert not (base_site / "fresh_dependency.txt").exists()
     assert commands
     assert Path(commands[0][commands[0].index("--target") + 1]).is_relative_to(candidate)
+
+
+def test_checked_command_runs_windowless_and_retains_failure_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    options: dict[str, object] = {}
+
+    def run(_arguments: list[str], **kwargs: object) -> SimpleNamespace:
+        options.update(kwargs)
+        output = kwargs["stdout"]
+        assert hasattr(output, "write")
+        output.write(b"preserved failure\n")
+        return SimpleNamespace(returncode=7)
+
+    monkeypatch.setattr(customize, "subprocess_creation_flags", lambda: 321)
+    monkeypatch.setattr(customize.subprocess, "run", run)
+    log = tmp_path / "validation.log"
+
+    with pytest.raises(ApplicationError) as failure:
+        customize._checked_command(tmp_path, ["failing-command"], log)
+
+    assert options["creationflags"] == 321
+    assert options["stderr"] is subprocess.STDOUT
+    assert str(log) in str(failure.value)
+    assert log.read_text(encoding="utf-8") == "preserved failure\n"
 
 
 def test_pending_rebase_promotes_only_after_its_exact_candidate_is_active(tmp_path: Path) -> None:
