@@ -25,6 +25,7 @@ from cli.application.payload import (
     PayloadError,
     app_paths,
     copy_application,
+    native_source_digest,
 )
 
 __all__ = ["APP_FILES", "BuildError", "app_paths", "copy_application"]
@@ -384,6 +385,7 @@ def build(args: argparse.Namespace) -> Path:
         "revision": args.revision,
         "platform": "windows-x86_64",
         "install_shape": args.shape,
+        "native_source_digest": native_source_digest(source),
         "files": _hashes(version_root),
     }
     (version_root / "release.json").write_text(
