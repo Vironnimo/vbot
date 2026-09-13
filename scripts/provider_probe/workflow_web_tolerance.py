@@ -25,7 +25,21 @@ def web_tolerance_cases() -> list[dict[str, Any]]:
             {"id": "links_true", "arguments": {"include-links": "yes"}, "mode": "markdown"},
             {"id": "links_false", "arguments": {"include_links": "false"}, "mode": "text"},
             {"id": "matching", "arguments": {"output": "markdown", "include_links": True}},
-            {"id": "raw_links", "arguments": {"raw": True, "include_links": False}, "mode": "raw"},
+            {
+                "id": "raw_links",
+                "arguments": {"raw": True, "include_links": False},
+                "success": False,
+            },
+            {
+                "id": "raw_links_true",
+                "arguments": {"raw": True, "include_links": True},
+                "mode": "raw",
+            },
+            {
+                "id": "raw_output_links_false",
+                "arguments": {"output": "raw", "include_links": False},
+                "success": False,
+            },
             {"id": "raw_conflict", "arguments": {"raw": True, "output": "text"}, "success": False},
             {
                 "id": "links_conflict",
@@ -90,7 +104,7 @@ async def web_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any])
                 results.append(tool_failure("invalid_arguments", str(error)))
     checks = {"one_call": len(calls) == len(results) == 1}
     if case.get("success", True):
-        content = results[0].get("data", {}).get("content", "") if results else ""
+        content = (results[0].get("data") or {}).get("content", "") if results else ""
         mode = case.get("mode") or "markdown"
         checks["content"] = "Fixture article" in content
         checks["raw"] = ("<html>" in content) == (mode == "raw")

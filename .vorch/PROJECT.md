@@ -33,7 +33,7 @@ The optional voice companion uses direct browser-to-OpenAI WebRTC media, initial
 
 **Persistence:** Canonical Session history: normalized columns in `<data-dir>/sessions.db` (SQLite `STRICT`, WAL where safe, `synchronous=FULL`; `session-store.json` authorizes creation). External-content FTS indexes searchable Messages; a second trigram index excludes Tool-role bulk. No mirrored search-text table. Verified `session-snapshots/` under the data directory provide auto-restore; only explicit operator, update, or converter workflows create them. Normal Runtime startup/operation never copies the database. `session-recovery.json` records incidents.
 
-**Tools:** Schemas, argument normalization/validation, concurrency: `tools.md`. Agent-facing definition design: `tools/designing-agent-tools.md`.
+**Tools:** Tolerate understandable Agent mistakes only while preserving operation, target, values, scope, and constraints; schema similarity alone is not intent. Schemas, argument normalization/validation, concurrency: `tools.md`. Agent-facing definition design: `tools/designing-agent-tools.md`.
 
 **Extensions:** API 6 provides owner-bound temporary Sessions/execution groups and isolated built pages. Canonical Sessions own binding, receipt and Run identity; Extension databases own domain state. The app provides a generic page bridge; Extensions own domain UI (`extensions.md`).
 

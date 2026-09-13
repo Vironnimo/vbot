@@ -44,12 +44,7 @@ def _mistakes(value: Any, schema: dict[str, Any]) -> Any:
                 break
     if isinstance(value, dict):
         fields = schema.get("properties", {})
-        return {
-            key.upper().replace("_", "-") if key in fields else key: _mistakes(
-                item, fields.get(key, {})
-            )
-            for key, item in value.items()
-        }
+        return {key: _mistakes(item, fields.get(key, {})) for key, item in value.items()}
     if isinstance(value, list):
         converted = [_mistakes(item, schema.get("items", {})) for item in value]
         return converted[0] if len(converted) == 1 else converted
@@ -57,23 +52,21 @@ def _mistakes(value: Any, schema: dict[str, Any]) -> Any:
         return "yes" if value else "no"
     if isinstance(value, int):
         return f"{value}.0"
-    if isinstance(value, str) and value in schema.get("enum", []):
-        return " " + value.upper().replace("_", "-") + " "
     return value
 
 
 @pytest.mark.parametrize(("name", "scenario"), CASES, ids=[name for name, _ in CASES])
-def test_production_definitions_recover_equivalent_shapes(name, scenario) -> None:
+def test_production_definitions_recover_equivalent_value_encodings(name, scenario) -> None:
     definition = next(tool for tool in scenario.tools if tool["name"] == scenario.primary_tool_name)
     contract = compile_tool_contract(
         name=definition["name"], input_schema=definition["parameters"], require_closed_input=False
     )
     original = copy.deepcopy(scenario.expected_arguments)
-    expected = contract.normalize_arguments(original)
+    expected = original
     if not contract.input_validator.is_valid(expected):
         # Intentional invalid-operation cases belong to owner rejection tests.
         return
-    mistaken = {"request": _mistakes(original, definition["parameters"])}
+    mistaken = _mistakes(original, definition["parameters"])
     assert contract.normalize_arguments(mistaken) == expected, name
     assert scenario.expected_arguments == original
 
@@ -295,3 +288,24 @@ def test_skill_read_probe_checks_actual_package_files() -> None:
     for case in skill_read_cases():
         row = asyncio.run(skill_read_case(Adapter(), args, case))
         assert row["passed"], row
+
+
+def test_web_probe_retains_failed_dispatch_evidence() -> None:
+    from scripts.provider_probe.workflow_web_tolerance import web_case, web_tolerance_cases
+
+    class Adapter(_Adapter):
+        async def send(self, messages, **kwargs):
+            return {
+                "tool_calls": [{"id": "fixture", "name": "web_fetch", "arguments": self.arguments}]
+            }
+
+    row = asyncio.run(
+        web_case(
+            Adapter({"url": "https://example.com/fixture", "output": "unsupported"}),
+            PROBE._parser().parse_args([]),
+            web_tolerance_cases()[0],
+        )
+    )
+    assert not row["passed"]
+    assert not row["results"][0]["ok"]
+    assert row["observed"][0]["arguments"]["output"] == "unsupported"

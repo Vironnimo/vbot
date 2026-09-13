@@ -14,6 +14,7 @@ from curl_cffi.requests import AsyncSession
 from curl_cffi.requests.exceptions import RequestException
 
 from core.attachments import AttachmentError, sniff_media_type
+from core.tools._argument_repair import normalize_call_arguments
 from core.tools._web_fetch_html import (
     extract_content as extract_content,
 )
@@ -131,30 +132,39 @@ _WEB_FETCH_RUNTIME_CONTRACT = compile_tool_contract(
 
 
 def _normalize_web_fetch_arguments(arguments: Any) -> Any:
-    repaired = _WEB_FETCH_RUNTIME_CONTRACT.normalize_arguments(arguments)
+    repaired = normalize_call_arguments(
+        _WEB_FETCH_RUNTIME_CONTRACT, arguments, enum_fields=("output",)
+    )
     if not isinstance(repaired, dict):
         return repaired
+    raw_present = "raw" in repaired
+    links_present = "include_links" in repaired
     raw = repaired.pop("raw", None)
     links = repaired.pop("include_links", None)
-    if raw is not None and not isinstance(raw, bool):
+    if raw_present and not isinstance(raw, bool):
         raise ValueError(
             "raw must indicate true or false; use output to select markdown, text, or raw."
         )
-    if links is not None and not isinstance(links, bool):
+    if links_present and not isinstance(links, bool):
         raise ValueError("include_links must indicate true or false; use output markdown or text.")
     output = repaired.get("output")
-    if raw is True:
-        if output not in (None, "raw"):
-            raise ValueError("raw and output conflict; select one intended output mode.")
-        repaired["output"] = "raw"
-    elif output == "raw":
-        if raw is False:
-            raise ValueError("raw and output conflict; select one intended output mode.")
-    elif links is not None:
-        mode = "markdown" if links else "text"
-        if output not in (None, mode):
-            raise ValueError("include_links and output conflict; select one intended output mode.")
-        repaired["output"] = mode
+    if "output" in repaired and output not in _WEB_FETCH_OUTPUTS:
+        raise ValueError("output must be markdown, text, or raw.")
+    # Intersect the meaning of every supplied option before choosing a mode.
+    # Raw HTML preserves links; it cannot also promise link-target removal.
+    modes = set(_WEB_FETCH_OUTPUTS)
+    if output is not None:
+        modes.intersection_update({output})
+    if raw_present:
+        modes.intersection_update({"raw"} if raw else {"markdown", "text"})
+    if links_present:
+        modes.intersection_update({"markdown", "raw"} if links else {"text"})
+    if not modes:
+        raise ValueError(
+            "raw, include_links, and output conflict; provide one consistent output choice."
+        )
+    if raw_present or links_present or output is not None:
+        repaired["output"] = next(mode for mode in ("markdown", "text", "raw") if mode in modes)
     return repaired
 
 

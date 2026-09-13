@@ -798,3 +798,45 @@ def test_path_repair_preserves_existing_literal_names(tmp_path: Path, name: str)
     target = tmp_path / name
     target.write_text("literal", encoding="utf-8")
     assert make_context(tmp_path).resolve_path(name) == target.resolve()
+
+
+@pytest.mark.parametrize(
+    "windows,path,expected",
+    [
+        (True, ' "folder/note.txt" ', "folder/note.txt"),
+        (True, "'literal.txt'", "'literal.txt'"),
+        (False, '"literal.txt"', '"literal.txt"'),
+        (False, "folder\\note.txt", "folder\\note.txt"),
+    ],
+)
+def test_path_representation_follows_host_grammar(windows: bool, path: str, expected: str) -> None:
+    from core.tools._tool_context import _path_argument
+
+    assert _path_argument(path, windows=windows) == expected
+
+
+def test_new_single_quoted_literal_does_not_redirect_to_an_existing_file(tmp_path: Path) -> None:
+    existing = tmp_path / "literal.txt"
+    existing.write_text("keep", encoding="utf-8")
+    quoted = "'literal.txt'"
+    context = make_context(tmp_path)
+    assert context.resolve_path(quoted) == (tmp_path / quoted).resolve()
+    result = write_handler(context, {"path": quoted, "content": "new literal"})
+    assert_success_envelope(result)
+    assert existing.read_text(encoding="utf-8") == "keep"
+    assert (tmp_path / quoted).read_text(encoding="utf-8") == "new literal"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX literal path grammar")
+@pytest.mark.parametrize(
+    "name,alternative", [('"literal.txt"', "literal.txt"), ("folder\\note.txt", "folder/note.txt")]
+)
+def test_missing_posix_literal_is_not_replaced_by_an_existing_alternative(
+    tmp_path: Path, name: str, alternative: str
+) -> None:
+    target = tmp_path / alternative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("keep", encoding="utf-8")
+    context = make_context(tmp_path)
+    assert context.resolve_path(name) == (tmp_path / name).resolve()
+    assert not context.resolve_path(name).exists()

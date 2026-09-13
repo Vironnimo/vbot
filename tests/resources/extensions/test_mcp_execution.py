@@ -181,8 +181,6 @@ async def test_old_target_cannot_call_changed_schema(context_service, host):
     "inputs,expected",
     [
         ({"value": 7}, {"value": "7"}),
-        ({"request": {"VALUE": "sentinel"}}, {"value": "sentinel"}),
-        ({"vlaue": "sentinel"}, {"value": "sentinel"}),
     ],
 )
 async def test_target_repairs_recognizable_arguments_before_remote_call(
@@ -253,7 +251,6 @@ async def test_target_conflicting_aliases_do_not_call_remote(context_service, ho
         },
     )
     assert result["error"]["code"] == "mcp_invalid_arguments"
-    assert "Conflicting" in result["error"]["message"]
     assert calls == []
 
 
@@ -270,3 +267,47 @@ async def test_protocol_operation_repairs_enum_spelling(context_service, host):
     )
     assert result["ok"], result
     assert calls == [("logging/setLevel", {"level": "debug"})]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("inputs", [{"request": {"value": "sentinel"}}, {"vlaue": "sentinel"}])
+async def test_remote_arguments_need_owner_evidence_for_field_aliases(
+    context_service, host, inputs
+):
+    service, registry, runner, calls = context_service
+    target = service._entries(runner, service._allowed(context(host)))[-1]["target"]
+    result = await registry.dispatch(
+        context(host), {"action": "call", "target": target, "arguments": inputs}
+    )
+    assert result["error"]["code"] == "mcp_invalid_arguments"
+    assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("direct", [False, True])
+async def test_remote_valid_application_payload_is_preserved(context_service, host, direct):
+    service, registry, runner, calls = context_service
+    schema = runner.catalog["tools"][0]["inputSchema"]
+    schema["additionalProperties"] = True
+    schema["properties"]["settings"] = {
+        "type": "object",
+        "properties": {"color": {"type": "string"}},
+    }
+    service._publish(runner, runner.catalog)
+    inputs = {
+        "value": "first",
+        "VALUE": "second",
+        "settings": {"colors": "blue", "color": "red"},
+        "request": {"operation": "keep"},
+    }
+    if direct:
+        result = await registry.dispatch(
+            replace(context(host), tool_name=remote_tool_name(runner.id, "inspect")), inputs
+        )
+    else:
+        target = service._entries(runner, service._allowed(context(host)))[-1]["target"]
+        result = await registry.dispatch(
+            context(host), {"action": "call", "target": target, "arguments": inputs}
+        )
+    assert result["ok"], result
+    assert calls == [("tools/call", {"name": "inspect", "arguments": inputs})]

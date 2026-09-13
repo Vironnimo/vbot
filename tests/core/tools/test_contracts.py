@@ -16,6 +16,7 @@ from core.tools import (
     compile_tool_contract,
     tool_success,
 )
+from core.tools._argument_repair import normalize_call_arguments
 
 JsonObject = dict[str, Any]
 
@@ -191,7 +192,9 @@ def test_normalization_omits_exact_empty_optional_string_properties() -> None:
     }
     contract = compile_tool_contract(name="sample", input_schema=schema)
 
-    normalized = contract.normalize_arguments({"action": "input", "optional": "", "items": [""]})
+    normalized = normalize_call_arguments(
+        contract, {"action": "input", "optional": "", "items": [""]}, empty_as_omitted=("optional",)
+    )
 
     assert normalized == {"action": "input", "items": [""]}
     with pytest.raises(ToolContractError, match=r"arguments/items\[0\]"):
@@ -212,7 +215,7 @@ def test_normalization_keeps_exact_empty_required_string_properties() -> None:
 
     normalized = contract.normalize_arguments({"value": "", "optional": ""})
 
-    assert normalized == {"value": ""}
+    assert normalized == {"value": "", "optional": ""}
     with pytest.raises(ToolContractError, match=r"arguments/value"):
         contract.validate_arguments(normalized)
 
@@ -486,7 +489,7 @@ def test_boolean_aliases_preserve_intent(value: object, expected: bool) -> None:
     [
         {"request": {"operation": " WRITE-FILE ", "filePath": "notes.txt", "content": ""}},
         {"write_file": {"file_pth": "notes.txt", "content": ""}},
-        {"action": "wirte_file", "file_path": "notes.txt", "content": ""},
+        {"action": "WRITE-FILE", "file_path": "notes.txt", "content": ""},
     ],
 )
 def test_open_contract_repairs_spelling_and_wrappers_preserving_empty_payload(
@@ -505,7 +508,9 @@ def test_open_contract_repairs_spelling_and_wrappers_preserving_empty_payload(
         },
         require_closed_input=False,
     )
-    assert contract.normalize_arguments(arguments) == {
+    assert normalize_call_arguments(
+        contract, arguments, enum_fields=("action",), field_aliases={"file_pth": "file_path"}
+    ) == {
         "action": "write_file",
         "file_path": "notes.txt",
         "content": "",
@@ -518,7 +523,7 @@ def test_repairs_optional_typo_even_when_open_schema_already_valid() -> None:
         input_schema={"type": "object", "properties": {"include_links": {"type": "boolean"}}},
         require_closed_input=False,
     )
-    assert contract.normalize_arguments({"includeLinkS": "false"}) == {"include_links": False}
+    assert normalize_call_arguments(contract, {"includeLinkS": "false"}) == {"include_links": False}
 
 
 def test_duplicate_conflicting_target_is_not_silently_overwritten() -> None:
@@ -528,8 +533,8 @@ def test_duplicate_conflicting_target_is_not_silently_overwritten() -> None:
         require_closed_input=False,
     )
     with pytest.raises(ToolContractError):
-        contract.normalize_arguments({"file_path": "one.txt", "filePath": "two.txt"})
-    assert contract.normalize_arguments({"file_path": "one.txt", "filePath": "one.txt"}) == {
+        normalize_call_arguments(contract, {"file_path": "one.txt", "filePath": "two.txt"})
+    assert normalize_call_arguments(contract, {"file_path": "one.txt", "filePath": "one.txt"}) == {
         "file_path": "one.txt"
     }
 
@@ -570,3 +575,104 @@ def test_large_integer_text_representation_does_not_overflow_float() -> None:
         require_closed_input=False,
     )
     assert contract.normalize_arguments({"content": 10**309}) == {"content": str(10**309)}
+
+
+@pytest.mark.parametrize("identifier", ["tg-team-b", "TG-TEAM-A", "tg_team_a", " tg-team-a "])
+def test_generic_repair_never_selects_a_similar_enum_identifier(identifier: str) -> None:
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema={
+            "type": "object",
+            "properties": {"target": {"type": "string", "enum": ["tg-team-a"]}},
+        },
+        require_closed_input=False,
+    )
+    original = {"target": identifier}
+    assert contract.normalize_arguments(original) == original
+    with pytest.raises(ToolContractError):
+        contract.validate_arguments(original)
+
+
+@pytest.mark.parametrize("additional", [True, {"type": "string"}])
+def test_valid_open_application_fields_and_wrappers_remain_literal(additional: Any) -> None:
+    payload = {"color": "red", "colors": "blue", "COLOR": "green", "operation": "replace"}
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "payload": {
+                    "type": "object",
+                    "properties": {"color": {"type": "string"}},
+                    "additionalProperties": additional,
+                },
+                "request": {"type": "object"},
+            },
+        },
+        require_closed_input=False,
+    )
+    original = {"payload": payload, "request": {"action": "delete"}}
+    contract.validate_arguments(original)
+    assert contract.normalize_arguments(original) == original
+    assert normalize_call_arguments(contract, original) == original
+
+
+def test_generic_repair_keeps_explicit_empty_values_for_the_owner() -> None:
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "target": {"type": "string", "minLength": 1},
+                "limit": {"type": "integer"},
+                "enabled": {"type": "boolean"},
+            },
+        },
+        require_closed_input=False,
+    )
+    original = {"target": None, "limit": "", "enabled": None}
+    assert contract.normalize_arguments(original) == original
+    with pytest.raises(ToolContractError):
+        contract.validate_arguments(original)
+
+
+def test_owner_alias_conflicts_are_checked_before_omission() -> None:
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema={"type": "object", "properties": {"file_path": {"type": "string"}}},
+        require_closed_input=False,
+    )
+    with pytest.raises(ToolContractError):
+        normalize_call_arguments(
+            contract, {"file_path": "one", "filePath": None}, empty_as_omitted=("file_path",)
+        )
+
+
+@pytest.mark.parametrize(
+    "branches",
+    [
+        [{"type": "boolean"}, {"type": "integer"}],
+        [{"type": "integer"}, {"type": "boolean"}],
+    ],
+)
+def test_ambiguous_union_repair_does_not_depend_on_branch_order(branches: list[Any]) -> None:
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema={"type": "object", "properties": {"value": {"oneOf": branches}}},
+        require_closed_input=False,
+    )
+    with pytest.raises(ToolContractError):
+        contract.normalize_arguments({"value": "1"})
+
+
+def test_encoded_duplicate_fields_cannot_silently_choose_a_target() -> None:
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema={"type": "object", "properties": {"target": {"type": "string"}}},
+        require_closed_input=False,
+    )
+    original = '{"target":"one","target":"two"}'
+    with pytest.raises(ToolContractError):
+        contract.normalize_arguments(original)
+    with pytest.raises(ToolContractError):
+        normalize_call_arguments(contract, {"request": original})

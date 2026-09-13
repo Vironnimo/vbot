@@ -29,15 +29,32 @@ if TYPE_CHECKING:
 
 
 def register(api: ExtensionAPI) -> None:
-    from .extension import SwarmExtension
+    from .extension import SwarmExtension, _normalize_arguments
 
     service = SwarmExtension(api)
     api.operations.startup.append(service.start)
     api.on_shutdown(service.close)
-    api.register_session_tool("swarm_board", BOARD_DESCRIPTION, BOARD_PARAMETERS, service.board)
-    api.register_session_tool("swarm_inbox", INBOX_DESCRIPTION, INBOX_PARAMETERS, service.inbox)
     api.register_session_tool(
-        "swarm_state", STATE_DESCRIPTION, STATE_PARAMETERS, service.state, parallel_safe=False
+        "swarm_board",
+        BOARD_DESCRIPTION,
+        BOARD_PARAMETERS,
+        service.board,
+        argument_normalizer=lambda arguments: _normalize_arguments("swarm_board", arguments),
+    )
+    api.register_session_tool(
+        "swarm_inbox",
+        INBOX_DESCRIPTION,
+        INBOX_PARAMETERS,
+        service.inbox,
+        argument_normalizer=lambda arguments: _normalize_arguments("swarm_inbox", arguments),
+    )
+    api.register_session_tool(
+        "swarm_state",
+        STATE_DESCRIPTION,
+        STATE_PARAMETERS,
+        service.state,
+        parallel_safe=False,
+        argument_normalizer=lambda arguments: _normalize_arguments("swarm_state", arguments),
     )
     api.register_session_runtime(
         before_request=service._before_request,

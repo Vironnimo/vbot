@@ -13,6 +13,7 @@ from typing import Any
 from core.skills import SkillRegistry
 from core.skills.authoring import SkillAuthoringService
 from core.tools import ToolContext, ToolRegistry, register_skill_manage_tool, tool_failure
+from core.tools._argument_repair import normalize_call_arguments
 from core.tools.skill import register_skill_tool
 from scripts.provider_probe.choices import EDIT_CASES, SKILL_MANAGE_CASES
 from scripts.provider_probe.scenario_agents import _skill_manage_scenario
@@ -261,13 +262,13 @@ async def _edit_case(
             "arguments",
             {"edits": [{"path": "notes.txt", "old_string": "old", "new_string": "new"}]},
         )
-        repaired = _EDIT_BATCH_CONTRACT.normalize_arguments(request)
+        repaired = normalize_call_arguments(_EDIT_BATCH_CONTRACT, request)
         items = repaired.get("edits", [repaired])
         before: dict[str, str] = {}
         expected: dict[str, str] = {}
         for item in items:
             try:
-                item = _EDIT_ITEM_CONTRACT.normalize_arguments(item)
+                item = normalize_call_arguments(_EDIT_ITEM_CONTRACT, item)
             except ValueError:
                 continue
             path = item.get("path", repaired.get("path"))
