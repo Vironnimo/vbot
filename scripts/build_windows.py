@@ -51,11 +51,15 @@ def _safe_version_id(version: str, revision: str) -> str:
     return value
 
 
-def _copy_tree(source: Path, destination: Path) -> None:
+def _copy_tree(
+    source: Path, destination: Path, *, excluded_root_entries: frozenset[str] = frozenset()
+) -> None:
     if source.is_symlink() or (hasattr(source, "is_junction") and source.is_junction()):
         raise BuildError(f"runtime payload contains a link: {source}")
     destination.mkdir(parents=True, exist_ok=True)
     for child in sorted(source.iterdir(), key=lambda item: item.name.casefold()):
+        if child.name in excluded_root_entries:
+            continue
         if child.is_symlink() or (hasattr(child, "is_junction") and child.is_junction()):
             raise BuildError(f"runtime payload contains a link: {child}")
         target = destination / child.name
@@ -74,7 +78,12 @@ def copy_runtime(
 ) -> None:
     if not source.is_dir():
         raise BuildError("runtime must be a prepared CPython directory")
-    _copy_tree(source, destination)
+    root_aliases = (
+        frozenset({"python3.exe", "python3.13.exe"})
+        if (source / "python.exe").is_file()
+        else frozenset()
+    )
+    _copy_tree(source, destination, excluded_root_entries=root_aliases)
     _runtime_python(destination)
     if not all(
         (destination / "Lib" / module / "__init__.py").is_file() for module in ("venv", "ensurepip")

@@ -109,6 +109,48 @@ def test_runtime_rejects_a_different_cpython_minor(tmp_path: Path) -> None:
         )
 
 
+def test_runtime_omits_root_python_alias_links(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    for alias in ("python3.exe", "python3.13.exe"):
+        try:
+            (runtime / alias).symlink_to(runtime / "python.exe")
+        except OSError:
+            pytest.skip("creating symlinks is unavailable")
+
+    destination = tmp_path / "copy"
+    build_windows.copy_runtime(
+        runtime,
+        destination,
+        provision=False,
+        app_source=_source(tmp_path),
+        shape="server",
+    )
+
+    assert (destination / "python.exe").read_bytes() == b"python"
+    assert not (destination / "python3.exe").exists()
+    assert not (destination / "python3.13.exe").exists()
+    assert all((runtime / alias).is_symlink() for alias in ("python3.exe", "python3.13.exe"))
+
+
+@pytest.mark.parametrize("relative", ("unrelated.exe", "Lib/python3.exe"))
+def test_runtime_rejects_unexcluded_links(tmp_path: Path, relative: str) -> None:
+    runtime = _runtime(tmp_path)
+    link = runtime / relative
+    try:
+        link.symlink_to(runtime / "python.exe")
+    except OSError:
+        pytest.skip("creating symlinks is unavailable")
+
+    with pytest.raises(build_windows.BuildError, match="contains a link"):
+        build_windows.copy_runtime(
+            runtime,
+            tmp_path / "copy",
+            provision=False,
+            app_source=_source(tmp_path),
+            shape="server",
+        )
+
+
 def test_runtime_provisioning_uses_shape_lock_with_hashes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
