@@ -6,9 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from cli.application import command, operations
+from cli.application import command, operations, processes
 from cli.application.state import ApplicationError, Installation, Operation
 from cli.parser import parse_args
+from cli.server_management import CommandResult, HealthProbeResult, WebUIProbeResult
 
 
 def _install(root: Path) -> Installation:
@@ -109,3 +110,69 @@ def test_packaged_lifecycle_refuses_a_target_other_than_its_recorded_server(
 
     with pytest.raises(ApplicationError, match="recorded server"):
         command.dispatch(parse_args(["server", "start", "--host", "192.0.2.1"]))
+
+
+@pytest.mark.parametrize(
+    ("result_ok", "message", "health", "expected_exit", "expected_lines"),
+    [
+        (
+            True,
+            "running",
+            HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
+            0,
+            ("running: yes", "webui: available"),
+        ),
+        (
+            True,
+            "not running",
+            HealthProbeResult(reachable=False, is_vbot=False),
+            0,
+            ("running: no", "webui: unavailable"),
+        ),
+        (
+            False,
+            "port occupied by non-vBot process",
+            HealthProbeResult(reachable=True, is_vbot=False, status_code=200),
+            0,
+            ("running: no", "conflict: port occupied by non-vBot process"),
+        ),
+    ],
+)
+def test_packaged_server_status_uses_shared_output_and_exit_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    result_ok: bool,
+    message: str,
+    health: HealthProbeResult,
+    expected_exit: int,
+    expected_lines: tuple[str, ...],
+) -> None:
+    install = _install(tmp_path)
+    instance = processes.target(install)
+    result = CommandResult(
+        ok=result_ok,
+        message=message,
+        instance=instance,
+        health=health,
+        webui=WebUIProbeResult(available=health.is_vbot),
+        log_path=instance.log_path,
+    )
+
+    def fake_get_status(resolved_instance: object) -> CommandResult:
+        assert resolved_instance == instance
+        return result
+
+    monkeypatch.setattr(command, "discover", lambda: install)
+    monkeypatch.setattr("cli.server_management.get_status", fake_get_status)
+
+    exit_code = command.dispatch(parse_args(["server", "status"]))
+
+    assert exit_code == expected_exit
+    output_lines = capsys.readouterr().out.splitlines()
+    assert "command: server status" in output_lines
+    assert f"url: {instance.url}" in output_lines
+    assert f"data_dir: {instance.data_dir}" in output_lines
+    assert f"log_path: {instance.log_path}" in output_lines
+    for line in expected_lines:
+        assert line in output_lines
