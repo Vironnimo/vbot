@@ -80,6 +80,10 @@ def test_begin_removal_claims_dispatch_and_operation_with_actual_parent_identity
         exe=lambda: str(install.root / "unins000.exe"),
         info={"exe": str(install.root / "unins000.exe")},
     )
+    pseudo_processes = [
+        SimpleNamespace(pid=132, info={"exe": "Registry"}),
+        SimpleNamespace(pid=4, info={"exe": "System"}),
+    ]
     parent = SimpleNamespace(
         pid=517,
         create_time=lambda: 42.25,
@@ -98,13 +102,14 @@ def test_begin_removal_claims_dispatch_and_operation_with_actual_parent_identity
     monkeypatch.setattr(
         integration, "probe_health", lambda _target: SimpleNamespace(reachable=False)
     )
+    monkeypatch.chdir(install.root)
     monkeypatch.setitem(
         sys.modules,
         "psutil",
         SimpleNamespace(
             Error=OSError,
             Process=process,
-            process_iter=lambda _attrs: [first_phase],
+            process_iter=lambda _attrs: [first_phase, *pseudo_processes],
         ),
     )
 
