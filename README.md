@@ -12,7 +12,7 @@
   <a href="https://github.com/Vironnimo/vbot/releases"><img src="https://img.shields.io/github/v/release/Vironnimo/vbot?style=flat-square" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License: Apache 2.0"></a>
   <img src="https://img.shields.io/badge/status-alpha-orange?style=flat-square" alt="Status: Alpha">
-  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Raspberry%20Pi-555?style=flat-square" alt="Windows, Linux, and Raspberry Pi">
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-555?style=flat-square" alt="Windows and Linux">
 </p>
 
 <p align="center">

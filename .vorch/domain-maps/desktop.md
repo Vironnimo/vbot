@@ -8,7 +8,7 @@ Packaged Windows distribution is owned by `cli/application/`, not Desktop. The n
 
 Wakeword source routing: `worker.py` retains the detection/recording/transcription lifecycle. `_audio_capture.py` owns native-frame conversion and WAV encoding; `_microphones.py` owns device selection and enumeration; `_speech_detection.py` owns neural/fallback speech detection; `_worker_support.py` holds readiness and interruptible retry helpers; `_worker_modes.py` holds explicit mock/unavailable workers. `bridge.py` retains the synchronized WebUI/worker lifecycle, with pure configuration, profile-key and calibration calculations in `_bridge_values.py`. Calibration uses the standard-library median; public Worker and Bridge imports remain available from their original files.
 
-`desktop/` owns the native window shell around the existing WebUI. It does not import core/server business logic and it does not manage vBot server processes. Desktop stays intentionally thin: it loads the same server-served WebUI a browser would load from `/`, inside a pywebview window - and because that server can be remote (e.g. a Raspberry Pi), a Pi-server + Windows-client topology is a primary intended use.
+`desktop/` owns the native window shell around the existing WebUI. It does not import core/server business logic and it does not manage vBot server processes. Desktop stays intentionally thin: it loads the same server-served WebUI a browser would load from `/`, inside a pywebview window. The server may be local or remote.
 
 Server selection lives **inside the window**: a shell-owned native connection screen (`desktop/connection.py`) handles first run and launch failures, while the connected WebUI exposes the Desktop-local remembered-server list under Settings -> Desktop app -> Connection. The last-used target auto-connects on launch; there is no silent localhost default and no dead-end error page. No native application menu is attached.
 
@@ -21,7 +21,7 @@ The Desktop also includes a local wakeword voice pipeline (`desktop/wakeword/`) 
 Domain-specific vocabulary for the Desktop accessor.
 
 ### Desktop Client
-**Definition:** A server-less Desktop install: the pywebview accessor installed alone (`.[cli,desktop]`) with no server stack, no local WebUI build, no data-dir, and no autostart, meant to connect to a *remote* vBot server (e.g. a Pi). Created by `install.ps1 -DesktopClient` / `install.sh --desktop-client`; a Desktop add-on (`-Desktop` / `--desktop`) instead bolts the same accessor onto a full server install.
+**Definition:** A server-less Desktop install: the pywebview accessor installed alone (`.[cli,desktop]`) with no server stack, no local WebUI build, no data-dir, and no autostart, meant to connect to a *remote* vBot server. Created by `install.ps1 -DesktopClient` / `install.sh --desktop-client`; a Desktop add-on (`-Desktop` / `--desktop`) instead bolts the same accessor onto a full server install.
 **Not:** A full install that happens to include the Desktop, and not the running window itself. The Desktop Client is the *install shape* - the absence of the whole server side - not the GUI process.
 
 ### Connection screen
@@ -56,7 +56,7 @@ Nested under the `wakeword` key:
     "active_model_ids": ["builtin/okay_nabu", "builtin/hey_nabu"],
     "model_sensitivities": { "builtin/okay_nabu": 0.5 },
     "server_profiles": {
-      "http://pi.lan:8420": { "target_agent_id": "main", "session_behavior": "active" }
+      "http://server.lan:8420": { "target_agent_id": "main", "session_behavior": "active" }
     }
   }
 }
@@ -116,7 +116,7 @@ All five ship in the `[desktop]` optional group (`soxr` also in `[dev]` for test
 - **sounddevice** - cross-platform PortAudio access probing device/rate support, preferring native 16 kHz, otherwise resampling from >=16 kHz captures.
 - **soxr** - stateful anti-aliasing resampling to the 16 kHz detection contract (linear interpolation aliased device noise straight into the detector spectrum). LGPL-2.1+; see `THIRD_PARTY_NOTICES.md`.
 - **webrtcvad-wheels** - legacy WebRTC VAD, now only the fail-open fallback for speech gating when the neural detector cannot load; import failure makes Voice unavailable instead of silently degrading.
-- **onnxruntime** - runs the bundled Silero VAD v5 ONNX model (2.2 MB, vendored at `desktop/wakeword/models/silero_vad.onnx`, MIT, SHA-256 pinned in `THIRD_PARTY_NOTICES.md`) for noise-robust speech endpointing and detection gating on one CPU thread (~0.1 ms per 32 ms window). Purely optional: an absent or broken onnxruntime selects the WebRTC fallback inside the real worker and never fails Voice startup. Wheels exist for Windows x64/arm64, macOS arm64, and Linux x64/aarch64 (Raspberry Pi deployment target).
+- **onnxruntime** - runs the bundled Silero VAD v5 ONNX model (2.2 MB, vendored at `desktop/wakeword/models/silero_vad.onnx`, MIT, SHA-256 pinned in `THIRD_PARTY_NOTICES.md`) for noise-robust speech endpointing and detection gating on one CPU thread (~0.1 ms per 32 ms window). Purely optional: an absent or broken onnxruntime selects the WebRTC fallback inside the real worker and never fails Voice startup. Wheels exist for Windows x64/arm64, macOS arm64, and Linux x64/aarch64.
 
 ## Constraints & Gotchas
 
