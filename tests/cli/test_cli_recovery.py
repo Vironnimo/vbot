@@ -27,6 +27,7 @@ def leaves(parser):
             yield from leaves(child)
 
 
+@pytest.mark.timeout(120)
 def test_every_published_leaf_example_has_valid_read_or_help_recovery(tmp_path, capsys):
     target = instance(tmp_path)
     count = 0
