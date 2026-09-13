@@ -443,7 +443,8 @@ def begin_removal(install: Installation) -> dict[str, Any]:
                 and Path(executable).resolve().is_relative_to(install.root.resolve())
             ):
                 raise ApplicationError(
-                    "Close remaining vBot Desktop windows and commands before removal"
+                    "Close remaining vBot Desktop windows and commands before removal: "
+                    f"{executable} (PID {process.pid})"
                 )
         write_json(
             contained(install.root, "removal-pending.json"),
