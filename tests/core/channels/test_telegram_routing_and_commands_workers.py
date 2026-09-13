@@ -30,6 +30,7 @@ from tests.core.channels.telegram_test_support import (
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
+# Readiness includes durable Session setup; these waits do not measure command latency.
 _ASYNC_COORDINATION_TIMEOUT_SECONDS = 10.0
 
 
@@ -280,7 +281,7 @@ async def test_stop_command_is_eagerly_dispatched_while_chat_worker_is_blocked(
         make_update(chat_id=12345, user_id=50, text="hello"),
         SimpleNamespace(),
     )
-    await asyncio.wait_for(relay_started.wait(), timeout=1)
+    await asyncio.wait_for(relay_started.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
 
     await adapter._handle_inbound_message(
         make_update(chat_id=12345, user_id=50, text="/stop"),
@@ -334,7 +335,7 @@ async def test_non_command_text_still_queues_while_chat_worker_is_blocked(
         make_update(chat_id=12345, user_id=50, text="hello"),
         SimpleNamespace(),
     )
-    await asyncio.wait_for(relay_started.wait(), timeout=1)
+    await asyncio.wait_for(relay_started.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
 
     await adapter._handle_inbound_message(
         make_update(chat_id=12345, user_id=50, text="still queued"),
