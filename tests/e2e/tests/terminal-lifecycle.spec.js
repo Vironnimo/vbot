@@ -51,16 +51,25 @@ async function startTerminal(page, { command, arguments: args = [] } = {}) {
   const dialog = page.getByRole("dialog", { name: "New terminal" });
   await expect(dialog).toBeVisible();
   if (command) {
-    await dialog.locator("#terminal-start-command").fill(command);
-  }
-  if (args.length > 0) {
-    await dialog.locator("#terminal-start-arguments").fill(args.join("\n"));
+    await dialog
+      .locator("#terminal-start-command")
+      .fill(formatCommandLine(command, args));
   }
   await dialog.getByRole("button", { name: "Start terminal" }).click();
   await expect(dialog).not.toBeVisible();
   await expect(
     selectedTerminal(page).getByRole("group", { name: /^Live terminal/ }),
   ).toBeVisible();
+}
+
+function formatCommandLine(command, args) {
+  return [command, ...args]
+    .map((part) =>
+      /[\s"']/.test(part)
+        ? `"${part.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
+        : part,
+    )
+    .join(" ");
 }
 
 function selectedTerminal(page) {
@@ -111,6 +120,28 @@ async function expectSelectedTerminalWithoutOutput(page, text) {
   await expect
     .poll(async () => (await readSelectedTerminalSnapshot(page)).includes(text))
     .toBe(false);
+}
+
+async function expectSelectedTerminalTitle(page) {
+  const terminalId = await selectedTerminal(page).getAttribute("data-terminal-id");
+  expect(terminalId).toBeTruthy();
+  await expect
+    .poll(async () => {
+      const result = await rpc(page.request, "terminal.list");
+      const terminal = result.terminals.find(
+        (item) => item.terminal_id === terminalId,
+      );
+      const announcedTitle = terminal?.title?.trim();
+      if (!announcedTitle) {
+        return false;
+      }
+      return (
+        (await selectedTerminal(page)
+          .locator(".terminals-view__tile-title")
+          .innerText()) === announcedTitle
+      );
+    })
+    .toBe(true);
 }
 
 async function sendToSelectedTerminal(page, text) {
@@ -186,33 +217,6 @@ function expectedDefaultShell() {
   return process.env.COMSPEC || "cmd.exe";
 }
 
-function executableName(command) {
-  return command.split(/[\\/]/).pop();
-}
-
-function expectedShellTitle(command) {
-  const executable = executableName(command).toLowerCase();
-  if (executable === "pwsh.exe" || executable === "pwsh") {
-    return "PowerShell";
-  }
-  if (executable === "powershell.exe" || executable === "powershell") {
-    return "Windows PowerShell";
-  }
-  if (executable === "cmd.exe" || executable === "cmd") {
-    return "Command Prompt";
-  }
-  if (executable === "bash.exe" || executable === "bash") {
-    return "Bash";
-  }
-  if (executable === "zsh.exe" || executable === "zsh") {
-    return "Zsh";
-  }
-  if (executable === "fish.exe" || executable === "fish") {
-    return "Fish";
-  }
-  return executableName(command);
-}
-
 function defaultShellProbe(command) {
   if (process.platform !== "win32") {
     return `printf '${DEFAULT_SHELL_MARKER}\\n'`;
@@ -237,9 +241,10 @@ test("the platform default shell starts as a native interactive terminal", async
   await startTerminal(page);
 
   const expectedCommand = expectedDefaultShell();
+  await expectSelectedTerminalTitle(page);
   await expect(
-    page.locator(".terminals-view__tile-title").first(),
-  ).toHaveText(expectedShellTitle(expectedCommand));
+    page.locator(".terminals-view__tile-target").first(),
+  ).toHaveText("Manual");
   await sendToSelectedTerminal(page, defaultShellProbe(expectedCommand));
   await expectSelectedTerminalOutput(page, DEFAULT_SHELL_MARKER);
 });
