@@ -20,7 +20,9 @@ test("speech and image Tools persist and serve fake Provider artifacts", async (
   const speech = await expectToolSucceeded(page, chat, "text_to_speech");
   await openToolRow(speech);
   await expect(speech).toContainText("E2E synthesized speech");
-  const audio = chat.locator("audio.speech-audio-player");
+  const audioPlayer = chat.getByRole("group", { name: "Speech audio" });
+  await expect(audioPlayer).toBeVisible();
+  const audio = audioPlayer.locator("audio");
   await expect(audio).toHaveCount(1);
   const audioUrl = await audio.getAttribute("src");
   expect(audioUrl).toMatch(/^\/api\/speech\/artifacts\/[^/?#\s]+$/);

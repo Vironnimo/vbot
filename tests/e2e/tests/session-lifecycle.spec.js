@@ -42,8 +42,7 @@ test("Sessions can be selected and continued without a past-session warning", as
   ).toBeVisible();
 
   await earlierSession.locator("button.session-row__select").click();
-  await expect(sessionDrawer).toBeHidden();
-  await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
+  await expect(sessionDrawer).toBeVisible();
   await expect(
     earlierSession.locator("button.session-row__select"),
   ).toHaveClass(/session-row__select--active/);

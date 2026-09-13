@@ -64,8 +64,6 @@ test("Session actions rename, override Compaction Policy, and delete a Session",
     .getByRole("button", { exact: true, name: "Delete" })
     .click();
 
-  await expect(drawer).toBeHidden();
-  await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
   await expect(drawer).toBeVisible();
   await expect(
     drawer.getByText("E2E Managed Session", { exact: true }),
