@@ -499,7 +499,8 @@ async def test_packaged_stt_setup_installs_only_in_managed_environment(
         *config["project"]["optional-dependencies"]["local-speech"],
     ]
     assert installs[-1][-len(requirements) :] == requirements
-    assert commands[-1][0] == str(setup.python) and "--verify-stt" in commands[-1]
+    assert commands[-1][:3] == [str(setup.python), "-I", "-B"]
+    assert "--verify-stt" in commands[-1]
     assert commands[0][:7] == [
         str(install.interpreter()),
         "-m",
@@ -546,7 +547,8 @@ def test_managed_stt_worker_returns_typed_result_and_forwards_progress(
         + json.dumps({"result": {"text": "hello", "language": "en"}})
         + "\n"
     )
-    monkeypatch.setattr("core.model_tasks.speech_local.subprocess.Popen", lambda *_a, **_k: process)
+    popen = MagicMock(return_value=process)
+    monkeypatch.setattr("core.model_tasks.speech_local.subprocess.Popen", popen)
     setup = LocalSpeechSetup(directory=tmp_path)
     setup.python.parent.mkdir(parents=True)
     setup.python.touch()
@@ -560,6 +562,7 @@ def test_managed_stt_worker_returns_typed_result_and_forwards_progress(
     assert isinstance(result, SpeechTranscriptionResult)
     assert (result.text, result.language) == ("hello", "en")
     assert progress.snapshot()["phase"] == "transcribing"
+    assert popen.call_args.args[0][:3] == [str(setup.python), "-I", "-B"]
     request = json.loads(process.stdin.getvalue())
     assert request["options"] == {"language": "en"}
 
