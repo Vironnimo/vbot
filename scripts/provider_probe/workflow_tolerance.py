@@ -256,7 +256,7 @@ async def _edit_case(
             return target
 
     with TemporaryDirectory(prefix="vbot-edit-tolerance-") as temporary:
-        root = Path(temporary)
+        root = Path(temporary).resolve()
         request = case.get(
             "arguments",
             {"edits": [{"path": "notes.txt", "old_string": "old", "new_string": "new"}]},
