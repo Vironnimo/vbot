@@ -83,6 +83,7 @@ class TrayController:
         self._closed = threading.Event()
         self._icon: Any | None = None
         self._state_lock = threading.Lock()
+        self._published_menu: tuple[TrayMenuItem, ...] | None = None
         self._worker = threading.Thread(target=self._run_worker, name="vbot-tray", daemon=True)
 
     def start(self) -> None:
@@ -102,7 +103,7 @@ class TrayController:
         """Attach the native icon after lazy backend initialization."""
 
         self._icon = icon
-        self._refresh_native_menu()
+        self._refresh_native_menu(force=True)
 
     def menu_items(self) -> tuple[TrayMenuItem, ...]:
         """Return the currently available menu without importing a GUI library."""
@@ -214,7 +215,7 @@ class TrayController:
         with self._state_lock:
             error = self._status_error
         if error or state.error:
-            return error or state.error
+            return "vBot · action needs attention"
         parts = ["vBot"]
         if state.version:
             parts.append(state.version)
@@ -222,17 +223,21 @@ class TrayController:
             parts.append(f"server {state.server_state}")
         else:
             parts.append("Desktop Client")
-        if state.update_phase is not None:
-            detail = state.update_message or state.update_phase.replace("_", " ")
-            parts.append(detail)
+        if state.update_phase is not None and state.update_phase not in _FINISHED_UPDATE_PHASES:
+            parts.append("updating")
         return " · ".join(parts)
 
-    def _refresh_native_menu(self) -> None:
+    def _refresh_native_menu(self, *, force: bool = False) -> None:
         icon = self._icon
         if icon is None:
             return
+        projection = self.menu_items()
+        with self._state_lock:
+            if not force and projection == self._published_menu:
+                return
+            self._published_menu = projection
         try:
-            icon.menu = _native_menu(self, icon)
+            icon.menu = _native_menu(self, icon, projection)
             icon.update_menu()
         except Exception:
             _LOGGER.exception("Could not refresh the vBot tray menu")
@@ -246,7 +251,12 @@ def run_tray(actions: TrayActions, icon_path: Path) -> None:
 
     controller = TrayController(actions)
     image = Image.open(icon_path)
-    icon = pystray.Icon("vbot", image, "vBot")
+    if __import__("os").name == "nt":
+        from cli.application.windows_tray import WindowsTrayIcon
+
+        icon = WindowsTrayIcon("vbot", image, "vBot")
+    else:
+        icon = pystray.Icon("vbot", image, "vBot")
     controller.attach_icon(icon)
     controller.start()
     try:
@@ -255,7 +265,11 @@ def run_tray(actions: TrayActions, icon_path: Path) -> None:
         controller.close()
 
 
-def _native_menu(controller: TrayController, icon: Any) -> Any:
+def _native_menu(
+    controller: TrayController,
+    icon: Any,
+    items: tuple[TrayMenuItem, ...] | None = None,
+) -> Any:
     """Build one pystray menu after its lazy import has happened."""
 
     pystray = importlib.import_module("pystray")
@@ -267,7 +281,7 @@ def _native_menu(controller: TrayController, icon: Any) -> Any:
         return invoke
 
     entries = []
-    for item in controller.menu_items():
+    for item in items if items is not None else controller.menu_items():
         if item.action is None:
             entries.append(pystray.MenuItem(item.label, None, enabled=False))
         else:

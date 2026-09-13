@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 from pathlib import Path
 
@@ -11,10 +12,36 @@ APP_SERVER = ("server", "resources", "webui/dist")
 APP_DESKTOP = ("desktop",)
 APP_FILES = ("pyproject.toml", "LICENSE", "THIRD_PARTY_NOTICES.md")
 IGNORED_NAMES = {"__pycache__", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
+NATIVE_SOURCE_FILES = (
+    "scripts/windows/launcher.c",
+    "scripts/windows/launcher.rc",
+    "scripts/windows/launcher.manifest",
+    "scripts/windows/desktop.manifest",
+    "desktop/icon.ico",
+    "scripts/build_windows.py",
+)
 
 
 class PayloadError(RuntimeError):
     """Application source cannot form a safe, complete payload."""
+
+
+def native_source_digest(source: Path) -> str:
+    """Fingerprint every source input that can change a compiled native host."""
+
+    source = source.resolve()
+    value = hashlib.sha256()
+    for relative in NATIVE_SOURCE_FILES:
+        path = source / relative
+        if not path.is_file():
+            raise PayloadError(f"required native host source is missing: {relative}")
+        value.update(relative.encode("utf-8"))
+        value.update(b"\0")
+        contents = path.read_bytes()
+        if path.suffix != ".ico":
+            contents = contents.replace(b"\r\n", b"\n")
+        value.update(hashlib.sha256(contents).digest())
+    return value.hexdigest()
 
 
 def app_paths(shape: str) -> tuple[str, ...]:

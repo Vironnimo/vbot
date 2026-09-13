@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import threading
 import time
 from dataclasses import replace
 
@@ -113,7 +115,7 @@ def test_callbacks_use_one_worker_and_recover_after_a_facade_exception():
         actions.fail = "start_server"
         controller.invoke("start_server")
         _wait_for_call(actions, "start_server")
-        assert "Could not start server: test failure" in next(iter(_labels(controller)))
+        assert next(iter(_labels(controller))) == "vBot · action needs attention"
 
         actions.fail = None
         controller.invoke("open_logs")
@@ -150,7 +152,7 @@ def test_terminal_update_status_keeps_server_health_visible_and_allows_next_upda
 
     menu = _labels(controller)
     assert "server stopped" in next(iter(menu))
-    assert "Updated" in next(iter(menu))
+    assert "Updated" not in next(iter(menu))
     assert menu["Update"].enabled is True
 
 
@@ -160,10 +162,132 @@ def test_facade_startup_error_is_visible_without_removing_recovery_actions():
     controller._poll_state()
 
     menu = _labels(controller)
-    assert "Startup failed: port is occupied" in next(iter(menu))
+    assert next(iter(menu)) == "vBot · action needs attention"
     assert menu["Start server"].enabled is True
     assert menu["Update"].enabled is True
     assert menu["Open logs"].enabled is True
+
+
+def test_unchanged_poll_does_not_replace_the_native_menu():
+    class Icon:
+        menu = None
+        updates = 0
+
+        def update_menu(self) -> None:
+            self.updates += 1
+
+    actions = Actions(TrayState("running", "server", version="0.4.2"))
+    controller = TrayController(actions)
+    icon = Icon()
+    controller.attach_icon(icon)
+    initial_updates = icon.updates
+
+    controller._poll_state()
+    controller._poll_state()
+
+    assert icon.updates == initial_updates + 1
+
+
+def test_windows_menu_metrics_scale_for_per_monitor_dpi():
+    if os.name != "nt":
+        return
+    from cli.application.windows_tray import _scale
+
+    assert _scale(28, 96) == 28
+    assert _scale(28, 144) == 42
+    assert _scale(28, 192) == 56
+
+
+def test_windows_owner_draw_paints_explicit_dark_hover_background(monkeypatch):
+    if os.name != "nt":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    from cli.application import windows_tray
+
+    windows_tray._gdi32.CreateCompatibleDC.restype = wintypes.HDC
+    windows_tray._gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
+    windows_tray._gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+    windows_tray._gdi32.CreateCompatibleBitmap.argtypes = [
+        wintypes.HDC,
+        ctypes.c_int,
+        ctypes.c_int,
+    ]
+    windows_tray._gdi32.GetPixel.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
+    windows_tray._gdi32.DeleteDC.argtypes = [wintypes.HDC]
+
+    icon = object.__new__(windows_tray.WindowsTrayIcon)
+    icon._labels = {1: "Open Desktop"}
+    icon._menu_hwnd = None
+    icon._hwnd = None
+    icon._dpi = lambda: 96
+    monkeypatch.setattr(windows_tray, "_apps_use_dark_theme", lambda: True)
+    screen = windows_tray._user32.GetDC(None)
+    dc = windows_tray._gdi32.CreateCompatibleDC(screen)
+    bitmap = windows_tray._gdi32.CreateCompatibleBitmap(screen, 240, 32)
+    previous = windows_tray._gdi32.SelectObject(dc, bitmap)
+    draw = windows_tray._DrawItem(
+        itemID=1,
+        itemState=windows_tray._ODS_SELECTED,
+        hDC=dc,
+        rcItem=wintypes.RECT(0, 0, 240, 32),
+    )
+    try:
+        assert icon._on_draw_item(0, ctypes.addressof(draw)) == 1
+        assert windows_tray._gdi32.GetPixel(dc, 2, 2) == 0x00433934
+    finally:
+        windows_tray._gdi32.SelectObject(dc, previous)
+        windows_tray._gdi32.DeleteObject(bitmap)
+        windows_tray._gdi32.DeleteDC(dc)
+        windows_tray._user32.ReleaseDC(None, screen)
+
+
+def test_windows_right_click_tracks_exactly_one_popup_and_one_callback(monkeypatch):
+    if os.name != "nt":
+        return
+    from cli.application import windows_tray
+
+    calls: list[str] = []
+    icon = object.__new__(windows_tray.WindowsTrayIcon)
+    icon._menu_handle = (17, [lambda _icon: calls.append("callback")])
+    icon._hwnd = 23
+    icon._menu_open = False
+    icon._menu_pending = False
+    monkeypatch.setattr(windows_tray._win32.win32, "SetForegroundWindow", lambda _hwnd: None)
+    monkeypatch.setattr(windows_tray._win32.win32, "GetCursorPos", lambda _point: True)
+    monkeypatch.setattr(
+        windows_tray._win32.win32,
+        "TrackPopupMenuEx",
+        lambda *_args: calls.append("popup") or 1,
+    )
+    monkeypatch.setattr(
+        windows_tray._win32.Icon,
+        "_on_notify",
+        lambda *_args: calls.append("base"),
+    )
+
+    assert icon._on_notify(0, windows_tray._win32.win32.WM_RBUTTONUP) is None
+    assert calls == ["popup", "callback"]
+
+
+def test_windows_menu_update_is_deferred_even_on_ui_thread_while_popup_is_open():
+    if os.name != "nt":
+        return
+    from cli.application import windows_tray
+
+    applied: list[bool] = []
+    icon = object.__new__(windows_tray.WindowsTrayIcon)
+    icon._hwnd = 23
+    icon._thread = threading.current_thread()
+    icon._menu_open = True
+    icon._menu_pending = False
+    icon._apply_menu = lambda: applied.append(True)
+
+    icon._update_menu()
+
+    assert icon._menu_pending is True
+    assert applied == []
 
 
 def test_exit_request_queues_quit_and_stops_the_icon_only_after_success():
