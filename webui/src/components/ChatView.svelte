@@ -712,7 +712,7 @@
             class="chat-view__new-session-fab"
             ariaLabel={t('chat.newSession', 'New session')}
             tooltip={t('chat.newSession', 'New session')}
-            disabled={chatState.loadingHistory}
+            disabled={chatState.loadingHistory || !target.activeSessionState}
             loading={navigation.creatingSession}
             onClick={navigation.handleNewSession}
           >

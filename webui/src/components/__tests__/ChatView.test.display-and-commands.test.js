@@ -181,6 +181,48 @@ describe('ChatView', () => {
     expect(onAgentSelected).toHaveBeenCalledWith('alpha');
   });
 
+  it('blocks New session before the selected Agent has an active Session projection', async () => {
+    const beta = createAgent({
+      id: 'beta',
+      name: 'Beta',
+      current_session_id: 'session-beta',
+    });
+    rpcMock.mockImplementation(
+      createChatRpcMock({ agents: [createAgent(), beta] }),
+    );
+    const props = reactiveProps({
+      active: true,
+      sharedAgents: [createAgent(), beta],
+      sharedSelectedAgentId: 'alpha',
+    });
+
+    chatViewTest.mount({ target: document.body, props });
+    flushSync();
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    props.sharedSelectedAgentId = 'beta';
+    const chatState = testChatStateRefs.at(-1);
+    chatState.selectedAgentId = 'beta';
+    chatState.loadingHistory = false;
+    flushSync();
+
+    const newSessionButton = document.querySelector(
+      'button[aria-label="New session"]',
+    );
+    expect(newSessionButton.disabled).toBe(true);
+    // Exercise the handler guard as well as the rendered disabled state by
+    // simulating a stale/programmatic click that bypasses native disabling.
+    newSessionButton.disabled = false;
+    newSessionButton.click();
+    await Promise.resolve();
+    expect(
+      rpcMock.mock.calls.some(([method]) => method === 'session.create'),
+    ).toBe(false);
+  });
+
   it('requests command suggestions scoped to the active agent address', async () => {
     rpcMock.mockImplementation(createChatRpcMock());
 
