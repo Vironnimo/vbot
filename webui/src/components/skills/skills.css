@@ -1,4 +1,4 @@
-.skills-view {
+.skills-view.view {
   display: flex;
   flex-direction: row;
   height: 100%;
@@ -458,7 +458,7 @@
   }
 }
 @media (max-width: 960px) {
-  .skills-nav {
+  .skills-view .skills-nav {
     display: none;
   }
   .skills-mobile-nav {
