@@ -59,7 +59,7 @@ The Windows Installer downloads the matching native package, checks the release 
 
 The three packages are Server, Server with Desktop, and Desktop Client. Desktop is independently opened from the tray or `vbot desktop`; closing it never stops the server. Open Desktop windows keep their version until reopened after an update. WebView may still use several Windows processes.
 
-Fresh installs require a published matching Windows binary asset. If the selected release has none, the installer stops with an explanation; it does not silently clone the repository. Use `-SourceCheckout` for an explicit legacy source installation. `-Dev` and installation from an existing checkout retain their source-development workflow.
+Fresh installs require a published matching Windows binary asset. If the selected release has none, the installer stops with an explanation; it does not silently clone the repository. On Windows, `-Dev` selects the native main installation: it prepares updates from a separate Git checkout and uses the same application lifecycle as release installations. Use `-SourceCheckout` for an explicit source installation; setup from an existing checkout without `-Dev` retains the source-development workflow.
 
 ### Fresh Debian-like Linux install
 
