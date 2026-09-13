@@ -44,8 +44,7 @@ async def _diagnose_verification(setup: LocalSpeechSetup, label: str) -> None:
             await process.wait()
     detail = (stdout + stderr).decode("utf-8", errors="replace")[-6000:]
     print(
-        f"{label} standalone verification exit code {process.returncode}\n"
-        f"{detail or '(no output)'}"
+        f"{label} standalone verification exit code {process.returncode}\n{detail or '(no output)'}"
     )
 
 
