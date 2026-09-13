@@ -24,7 +24,9 @@ _LOGGER = get_logger("processes")
 
 HARD_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
 _JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800
+_JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK = 0x00001000
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+_JOB_OBJECT_BASIC_LIMIT_INFORMATION_CLASS = 2
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
 _WINDOWS_SERVER_JOB_HANDLE: int | None = None
 _POSIX_LIFETIME_READ_FD: int | None = None
@@ -179,25 +181,61 @@ def subprocess_creation_flags(
     flags = int(cast(Any, subprocess).CREATE_NO_WINDOW)
     if new_process_group:
         flags |= int(cast(Any, subprocess).CREATE_NEW_PROCESS_GROUP)
-    if breakaway and _windows_process_in_job():
+    if breakaway and _windows_explicit_breakaway_allowed():
         flags |= int(cast(Any, subprocess).CREATE_BREAKAWAY_FROM_JOB)
     return flags
 
 
-def _windows_process_in_job() -> bool:
-    """Return whether this process may need CREATE_BREAKAWAY_FROM_JOB."""
+def _windows_explicit_breakaway_allowed() -> bool:
+    """Return whether the immediate Windows Job permits explicit breakaway."""
     from ctypes import wintypes
 
     windows_ctypes = cast(Any, ctypes)
+
+    class BasicLimitInformation(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_longlong),
+            ("PerJobUserTimeLimit", ctypes.c_longlong),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
     kernel32 = windows_ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.GetCurrentProcess.argtypes = []
     kernel32.GetCurrentProcess.restype = wintypes.HANDLE
     kernel32.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, wintypes.LPBOOL]
     kernel32.IsProcessInJob.restype = wintypes.BOOL
+    kernel32.QueryInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    kernel32.QueryInformationJobObject.restype = wintypes.BOOL
     in_job = wintypes.BOOL()
     if not kernel32.IsProcessInJob(kernel32.GetCurrentProcess(), None, ctypes.byref(in_job)):
         raise windows_ctypes.WinError(windows_ctypes.get_last_error())
-    return bool(in_job.value)
+    if not in_job.value:
+        return False
+    limits = BasicLimitInformation()
+    if not kernel32.QueryInformationJobObject(
+        None,
+        _JOB_OBJECT_BASIC_LIMIT_INFORMATION_CLASS,
+        ctypes.byref(limits),
+        ctypes.sizeof(limits),
+        None,
+    ):
+        raise windows_ctypes.WinError(windows_ctypes.get_last_error())
+    limit_flags = int(limits.LimitFlags)
+    if limit_flags & _JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK:
+        return False
+    return bool(limit_flags & _JOB_OBJECT_LIMIT_BREAKAWAY_OK)
 
 
 TASKKILL_TREE_TIMEOUT_SECONDS = 5
