@@ -135,6 +135,38 @@ def test_copy_application_rejects_source_links(tmp_path: Path) -> None:
         build_windows.copy_application(source, tmp_path / "app", "server")
 
 
+def test_reused_assets_replace_generated_pages_without_overwriting_extension_source(tmp_path):
+    from cli.application.payload import copy_application
+
+    source = _source(tmp_path)
+    assets = tmp_path / "verified-app"
+    page = "resources/extensions/demo"
+    for relative, value in {
+        "webui/dist/index.html": "verified UI",
+        f"{page}/web/page.html": "verified Extension page",
+    }.items():
+        target = assets / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(value, encoding="utf-8")
+    for relative, value in {
+        f"{page}/ui/page.html": "unchanged UI source",
+        f"{page}/backend.py": "new backend",
+        f"{page}/web/stale.js": "stale generated file",
+    }.items():
+        target = source / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(value, encoding="utf-8")
+    shutil.rmtree(source / "webui" / "dist")
+    destination = tmp_path / "candidate"
+    copy_application(source, destination, "server", assets=assets)
+    assert (destination / "webui/dist/index.html").read_text(encoding="utf-8") == "verified UI"
+    assert (destination / page / "web/page.html").read_text(
+        encoding="utf-8"
+    ) == "verified Extension page"
+    assert not (destination / page / "web/stale.js").exists()
+    assert (destination / page / "backend.py").read_text(encoding="utf-8") == "new backend"
+
+
 def test_runtime_with_unowned_site_packages_is_rejected(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path)
     (runtime / "Lib" / "site-packages" / "ambient_package").mkdir()

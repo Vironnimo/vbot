@@ -65,3 +65,39 @@ def test_info_preserves_active_phase_and_completion_clears_it():
         progress.emit("success", "done")
         assert progress._active is None
     assert progress.messages == {"phase", "detail", "continuation", "done"}
+
+
+@pytest.mark.parametrize("terminal", [True, False])
+def test_live_progress_rewrites_only_terminal_and_finishes_before_result(terminal, monkeypatch):
+    monkeypatch.setattr(_progress, "_windows_color", lambda stream: True)
+    monkeypatch.setenv("TERM", "xterm")
+    monkeypatch.setenv("NO_COLOR", "1")
+    heartbeat = threading.Event()
+
+    class Output(Terminal if terminal else io.StringIO):
+        def flush(self):
+            if "elapsed" in self.getvalue():
+                heartbeat.set()
+
+    stream = Output()
+    with ProgressPrinter(live=True, stream=stream, interval=0.01) as progress:
+        progress.emit("busy", "preparing")
+        assert heartbeat.wait(2)
+    print("finished", file=stream)
+    output = stream.getvalue()
+    assert ("\r\033[2K" in output) is terminal
+    assert output.endswith("\nfinished\n")
+    assert not progress._thread.is_alive()
+
+
+def test_recent_phase_does_not_inherit_previous_phase_heartbeat(monkeypatch):
+    stream = io.StringIO()
+    progress = ProgressPrinter(interval=10, stream=stream)
+    clock = iter((0.0, 9.9, 10.0))
+    monkeypatch.setattr(_progress.time, "monotonic", lambda: next(clock))
+    progress.emit("busy", "old")
+    progress.emit("busy", "new")
+    waits = iter((False, True))
+    monkeypatch.setattr(progress._stop, "wait", lambda interval: next(waits))
+    progress._heartbeat()
+    assert "elapsed" not in stream.getvalue()

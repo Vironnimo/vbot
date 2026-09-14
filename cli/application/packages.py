@@ -8,6 +8,7 @@ import os
 import shutil
 import stat
 import zipfile
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -18,6 +19,21 @@ from cli.application.state import ApplicationError, Installation, contained, rea
 MAX_ARCHIVE_BYTES = 4 * 1024**3
 MAX_PAYLOAD_BYTES = 12 * 1024**3
 MAX_FILES = 100_000
+
+
+def version_label(manifest: dict[str, Any]) -> str:
+    """Distinguish source builds sharing a release version without internal IDs."""
+    version = manifest.get("version")
+    label = version if isinstance(version, str) and version else "unknown version"
+    label = "".join(character for character in label[:100] if character.isprintable())
+    revision = manifest.get("revision")
+    if (
+        isinstance(revision, str)
+        and len(revision) == 40
+        and all(character in "0123456789abcdef" for character in revision)
+    ):
+        label += f" ({revision[:8]})"
+    return label
 
 
 def digest(path: Path) -> str:
@@ -67,6 +83,7 @@ def verify_signature(archive: Path, signature: bytes, public_key: str) -> None:
 def validate_release(
     root: Path, *, shape: str | None = None, platform: str | None = None
 ) -> dict[str, Any]:
+    contained(root, "release.json")
     release = read_json(root / "release.json", limit=32 * 1024**2)
     if release.get("schema_version") != 1 or type(release.get("bootstrap_protocol")) is not int:
         raise ApplicationError("Unsupported release manifest")
@@ -80,12 +97,25 @@ def validate_release(
     files = release.get("files")
     if not isinstance(files, dict) or not files or len(files) > MAX_FILES:
         raise ApplicationError("Release file inventory is missing or invalid")
-    actual = set()
-    for path in root.rglob("*"):
-        contained(root, path.relative_to(root).as_posix())
-        if path.is_file():
-            actual.add(path.relative_to(root).as_posix())
-    if actual != set(files) | {"release.json"}:
+    actual: dict[str, Path] = {}
+    pending = [root]
+    # Inspect each entry once without following links. Re-resolving every ancestor
+    # for every file dominated verification time on Windows; hashes remain mandatory.
+    while pending:
+        directory = pending.pop()
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                info = entry.stat(follow_symlinks=False)
+                if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+                    raise ApplicationError("Release payload contains a link or reparse point")
+                path = Path(entry.path)
+                if stat.S_ISDIR(info.st_mode):
+                    pending.append(path)
+                elif stat.S_ISREG(info.st_mode):
+                    actual[path.relative_to(root).as_posix()] = path
+                else:
+                    raise ApplicationError("Release payload contains special files")
+    if set(actual) != set(files) | {"release.json"}:
         raise ApplicationError("Release file inventory does not match its payload")
     folded: set[str] = set()
     for name, expected in files.items():
@@ -95,11 +125,7 @@ def validate_release(
         if name.casefold() in folded:
             raise ApplicationError("Case-colliding release filenames")
         folded.add(name.casefold())
-        if (
-            not isinstance(expected, str)
-            or len(expected) != 64
-            or digest(contained(root, name)) != expected
-        ):
+        if not isinstance(expected, str) or len(expected) != 64 or digest(actual[name]) != expected:
             raise ApplicationError(f"Release file verification failed: {name}")
     required = {"app/cli/main.py", "app/pyproject.toml"}
     if release.get("install_shape") != "desktop-client":
@@ -175,7 +201,12 @@ def stage_package(install: Installation, archive: Path, *, local: bool = False) 
             shutil.rmtree(temporary)
 
 
-def download_release(install: Installation, operation_id: str) -> Path:
+def download_release(
+    install: Installation,
+    operation_id: str,
+    *,
+    progress: Callable[[str, str | None], None] | None = None,
+) -> Path:
     if not install.release_public_key:
         raise ApplicationError("Official updates require a configured release signing key")
     directory = contained(install.root, f"downloads/{safe_id(operation_id)}")
@@ -187,6 +218,11 @@ def download_release(install: Installation, operation_id: str) -> Path:
         )
         response.raise_for_status()
         release = response.json()
+        if progress:
+            progress(
+                "Downloading the application package",
+                version_label({"version": release.get("tag_name")}),
+            )
         assets = {item["name"]: item["browser_download_url"] for item in release.get("assets", [])}
         for name in (expected, expected + ".sig"):
             url = assets.get(name)

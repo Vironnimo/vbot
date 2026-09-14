@@ -99,6 +99,18 @@ def test_operation_round_trip_and_invalid_phase_or_boolean_rejection(tmp_path: P
         load_operation(install, operation.id)
 
 
+def test_version_labels_round_trip_without_changing_protocol_one_fields(tmp_path):
+    install = _server_install(tmp_path)
+    operation = Operation(
+        id="upd_labels", previous_label="1.0 (aaaaaaaa)", target_label="1.1 (bbbbbbbb)"
+    )
+    operation.save(install)
+    saved = json.loads((tmp_path / "operations" / "upd_labels.json").read_text(encoding="utf-8"))
+    assert "previous_label" not in saved and "target_label" not in saved
+    assert load_operation(install, operation.id) == operation
+    assert len(state.operations(install)) == 1
+
+
 def test_os_lock_rejects_an_overlapping_operation(tmp_path: Path):
     entered = threading.Event()
     release = threading.Event()

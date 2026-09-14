@@ -8,6 +8,7 @@ import shutil
 import socket
 import subprocess
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -287,6 +288,8 @@ def _candidate(
     rebuild_native_hosts: bool = False,
     source_version: str | None = None,
     native_source_digest: str | None = None,
+    build_inputs: dict[str, str] | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> str:
     """Build application sources over a fresh copy of the exact selected runtime."""
     from cli.application.payload import copy_application
@@ -297,12 +300,28 @@ def _candidate(
     candidate = install.version(candidate_id)
     candidate.mkdir(parents=True)
     try:
-        shutil.copytree(base / "runtime", candidate / "runtime")
-        copy_application(source, candidate / "app", install.install_shape)
+        previous_inputs = old.get("build_inputs", {})
+        reuse_runtime = (
+            build_inputs is not None
+            and previous_inputs.get("dependencies") == build_inputs["dependencies"]
+        )
+        if progress:
+            progress(
+                "Copying the verified runtime"
+                if reuse_runtime
+                else "Installing the application dependencies"
+            )
+        shutil.copytree(
+            base / "runtime",
+            candidate / "runtime",
+            ignore=None if reuse_runtime else shutil.ignore_patterns("site-packages"),
+        )
+        if build_inputs is not None and previous_inputs.get("web") == build_inputs["web"]:
+            copy_application(source, candidate / "app", install.install_shape, assets=base / "app")
+        else:
+            copy_application(source, candidate / "app", install.install_shape)
         # Resolve this source's requirements into the candidate, never the base.
         site = candidate / "runtime" / "Lib" / "site-packages"
-        if site.exists():
-            shutil.rmtree(site)
         python = contained(install.root, "development/environment") / (
             "Scripts/python.exe" if os.name == "nt" else "bin/python"
         )
@@ -311,21 +330,33 @@ def _candidate(
             "server-desktop": "server,windows-app,desktop",
             "desktop-client": "cli,windows-app,desktop",
         }[install.install_shape]
-        _checked_command(
-            source,
+        requirements = (
             [
-                str(python),
-                "-m",
-                "pip",
-                "install",
-                "--no-input",
-                "--no-compile",
-                "--target",
-                str(site),
-                f"{source}[{extras}]",
-            ],
-            contained(install.root, "development/check.log"),
+                "--require-hashes",
+                "--only-binary=:all:",
+                "--no-binary=proxy-tools",
+                "-r",
+                str(source / "scripts" / "windows" / f"requirements-{install.install_shape}.lock"),
+            ]
+            if build_inputs is not None
+            else [f"{source}[{extras}]"]
         )
+        if not reuse_runtime:
+            _checked_command(
+                source,
+                [
+                    str(python),
+                    "-m",
+                    "pip",
+                    "install",
+                    "--no-input",
+                    "--no-compile",
+                    "--target",
+                    str(site),
+                    *requirements,
+                ],
+                contained(install.root, "development/check.log"),
+            )
         for package in ("core", "server", "cli", "desktop"):
             if (site / package).exists():
                 shutil.rmtree(site / package)
@@ -345,6 +376,8 @@ def _candidate(
             {"schema_version": 1, "packages": inventory},
         )
         if rebuild_native_hosts:
+            if progress:
+                progress("Building the Windows launchers")
             if source_version is None:
                 raise ApplicationError("Native source candidates require a source version")
             native_script = (
@@ -368,8 +401,14 @@ def _candidate(
                 ],
                 contained(install.root, "development/source-update.log"),
             )
-        manifest = {key: value for key, value in old.items() if key != "files"}
+        if progress:
+            progress("Verifying the prepared application")
+        manifest = {
+            key: value for key, value in old.items() if key not in {"files", "build_inputs"}
+        }
         manifest.update(version_id=candidate_id, revision=revision, official_base=base_version)
+        if build_inputs is not None:
+            manifest["build_inputs"] = build_inputs
         if source_version is not None:
             manifest["version"] = source_version
         if native_source_digest is not None:
