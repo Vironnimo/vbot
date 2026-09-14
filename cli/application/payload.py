@@ -6,9 +6,6 @@ import hashlib
 import shutil
 from pathlib import Path
 
-from cli.search_runtime import provision_search_runtime
-from core.tools._search_binary import binary_spec
-
 SHAPES = ("server", "server-desktop", "desktop-client")
 APP_COMMON = ("core", "cli")
 APP_SERVER = ("server", "resources", "webui/dist")
@@ -114,6 +111,11 @@ def copy_application(
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(item, target)
     if shape != "desktop-client":
+        # Native-host compilation imports this module from a stdlib-only build
+        # environment. Load application dependencies only when assembling assets.
+        from cli.search_runtime import provision_search_runtime
+        from core.tools._search_binary import binary_spec
+
         native_target = "x86_64-pc-windows-msvc"
         output, _ = binary_spec(destination / "resources", native_target)
         for native_origin in (source, assets):
