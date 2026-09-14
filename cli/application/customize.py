@@ -387,7 +387,7 @@ def _candidate(
                 "source, runtime, version = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]\n"
                 "for filename, role in HOSTS.items():\n"
                 "    compile_host(source, runtime / filename, role=role, version=version, "
-                "stable=filename == 'vBot.exe')\n"
+                "stable=role in {'host', 'gui'})\n"
             )
             _checked_command(
                 source,
