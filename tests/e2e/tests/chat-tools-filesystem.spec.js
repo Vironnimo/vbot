@@ -19,7 +19,7 @@ test("filesystem tools create, inspect, edit, and search a workspace file", asyn
 
   await expectToolSucceeded(page, chat, "write");
   await expectToolSucceeded(page, chat, "read", 0);
-  await expectToolSucceeded(page, chat, "edit");
+  await expectToolSucceeded(page, chat, "apply_patch");
   await expectToolSucceeded(page, chat, "glob");
   await expectToolSucceeded(page, chat, "grep");
   const finalRead = await expectToolSucceeded(page, chat, "read", 1);

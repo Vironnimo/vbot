@@ -1,7 +1,7 @@
 # Apply Patch Tool
 
-Applies ordered V4A file operations while retaining the existing `edit` Tool.
-`core/tools/apply_patch.py` owns the in-memory plan, filesystem execution, results, and display metadata. Its internal `_patch_syntax.py` owns V4A parsing and parsed operation values.
+Applies ordered V4A file operations. It replaces the archived `edit` Tool (see `edit.md`).
+`core/tools/apply_patch.py` owns the in-memory plan, filesystem execution, results, and display metadata. Its internal `_patch_syntax.py` owns V4A parsing and parsed operation values; `_change_preview.py` owns bounded before/after previews.
 
 ## Contract
 
@@ -66,7 +66,7 @@ Applies ordered V4A file operations while retaining the existing `edit` Tool.
   tolerance.
 - `fuzzy_match.replace_fuzzy` remains the matching owner. Patch-only options
   require whole-line matches, permit precise-only retry checks, and constrain
-  EOF. Existing `edit` defaults and behavior remain intact. Precise matches win;
+  EOF. The matcher retains its default substring mode for direct callers. Precise matches win;
   ambiguity at a winning strategy never falls through to a looser strategy.
 - Newline/Unicode/whitespace/indentation differences and the existing bounded
   block/context similarity strategies are supported. Only changed lines are
@@ -127,7 +127,7 @@ Applies ordered V4A file operations while retaining the existing `edit` Tool.
   read stamps, statistics, syntax warnings, and display metadata;
   `test_apply_patch_transactions.py` covers partial effects, failure containment,
   locking, cancellation, and guarded retries.
-- Existing fuzzy-match, edit, write, file-state, Runtime and Provider-schema
+- Existing fuzzy-match, write, file-state, Runtime and Provider-schema
   tests cover the shared boundaries.
 - `python -m scripts.probe_provider_tool_call --scenario apply_patch` uses the
   production registry and disposable files. Its matrix separates natural batching tasks

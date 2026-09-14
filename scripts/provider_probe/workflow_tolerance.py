@@ -13,11 +13,9 @@ from typing import Any
 from core.skills import SkillRegistry
 from core.skills.authoring import SkillAuthoringService
 from core.tools import ToolContext, ToolRegistry, register_skill_manage_tool, tool_failure
-from core.tools._argument_repair import normalize_call_arguments
 from core.tools.skill import register_skill_tool
-from scripts.provider_probe.choices import EDIT_CASES, SKILL_MANAGE_CASES
+from scripts.provider_probe.choices import SKILL_MANAGE_CASES
 from scripts.provider_probe.scenario_agents import _skill_manage_scenario
-from scripts.provider_probe.scenario_files import _edit_scenario
 
 
 def skill_tolerance_cases() -> list[dict[str, Any]]:
@@ -214,131 +212,6 @@ async def _skill_case(
         }
 
 
-def edit_tolerance_cases() -> list[dict[str, Any]]:
-    cases = [
-        {"id": name, "arguments": _edit_scenario(name).expected_arguments} for name in EDIT_CASES
-    ]
-    item = {"path": "notes.txt", "old_string": "old", "new_string": "new"}
-    cases.extend(
-        [
-            {"id": "flat", "arguments": item},
-            {"id": "encoded", "arguments": {"request": {"edits": {**item, "replace-all": "yes"}}}},
-            {
-                "id": "partial",
-                "arguments": {
-                    "path": "notes.txt",
-                    "edits": [
-                        {"old_string": "old", "new_string": "wrong", "new-string": "conflict"},
-                        {"old-string": "old", "new-string": "new"},
-                    ],
-                },
-            },
-            {"id": "natural", "task": "In notes.txt steht 'old'. Ersetze das durch 'new'."},
-        ]
-    )
-    return cases
-
-
-async def _edit_case(
-    adapter: Any, args: argparse.Namespace, case: dict[str, Any]
-) -> dict[str, Any]:
-    from core.tools.edit import (
-        _EDIT_BATCH_CONTRACT,
-        _EDIT_ITEM_CONTRACT,
-        register_edit_tool,
-    )
-    from core.tools.file_state import FileReadState
-
-    class FixtureContext(ToolContext):
-        def resolve_path(self, path: str | Path) -> Path:
-            target = super().resolve_path(path)
-            if not target.is_relative_to(self.workspace):
-                raise ValueError("Only the disposable fixture directory is in scope")
-            return target
-
-    with TemporaryDirectory(prefix="vbot-edit-tolerance-") as temporary:
-        root = Path(temporary).resolve()
-        request = case.get(
-            "arguments",
-            {"edits": [{"path": "notes.txt", "old_string": "old", "new_string": "new"}]},
-        )
-        repaired = normalize_call_arguments(_EDIT_BATCH_CONTRACT, request)
-        items = repaired.get("edits", [repaired])
-        before: dict[str, str] = {}
-        expected: dict[str, str] = {}
-        for item in items:
-            try:
-                item = normalize_call_arguments(_EDIT_ITEM_CONTRACT, item)
-            except ValueError:
-                continue
-            path = item.get("path", repaired.get("path"))
-            if path not in before:
-                before[path] = item["old_string"] * (2 if item.get("replace_all") else 1)
-                expected[path] = before[path]
-            expected[path] = expected[path].replace(
-                item["old_string"], item["new_string"], -1 if item.get("replace_all") else 1
-            )
-        for path, content in before.items():
-            target = root / path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
-        registry = ToolRegistry()
-        register_edit_tool(registry, file_state=FileReadState())
-        task = case.get("task") or (
-            "Execute this diagnostic edit request once. Copy every supplied field. "
-            "If both new_string and new-string appear, keep both fields and their "
-            "different values exactly; neither may be omitted or replaced. "
-            "Equivalent type representations are fine: " + json.dumps(request)
-        )
-        raw = await adapter.send(
-            [
-                {
-                    "role": "system",
-                    "content": "Use the available Tool to perform the task. "
-                    "Only the disposable working directory is in scope.",
-                },
-                {"role": "user", "content": task},
-            ],
-            tools=registry.provider_definitions(),
-            model_id=args.model,
-            thinking_effort=args.thinking_effort,
-            max_tokens=args.max_tokens or 3000,
-        )
-        response = adapter.normalize_response(raw, model_id=args.model)
-        calls = response.get("tool_calls") or []
-        results = []
-        for call in calls:
-            if call.get("name") != "edit":
-                continue
-            context = FixtureContext(
-                agent_id="probe",
-                session_id="probe",
-                run_id="probe",
-                tool_call_id=call["id"],
-                tool_name="edit",
-                tool_call_index=0,
-                workspace=root,
-                vbot_root=root,
-                data_root=root,
-            )
-            results.append(await registry.dispatch(context, call["arguments"], ["edit"]))
-        files = {
-            p.relative_to(root).as_posix(): p.read_text(encoding="utf-8")
-            for p in root.rglob("*")
-            if p.is_file()
-        }
-        passed = len(calls) == len(results) == 1 and results[0]["ok"] and files == expected
-        if case["id"] == "partial":
-            passed = passed and results[0]["data"]["status"] == "partial"
-        return {
-            "case": case["id"],
-            "passed": bool(passed),
-            "observed": calls,
-            "results": results,
-            "files": files,
-        }
-
-
 async def _probe_tool_tolerance(adapter: Any, args: argparse.Namespace) -> dict[str, Any]:
     if args.tolerance_tool == "cron":
         from scripts.provider_probe.workflow_cron_tolerance import probe_cron_tolerance
@@ -389,8 +262,6 @@ async def _probe_tool_tolerance(adapter: Any, args: argparse.Namespace) -> dict[
         )
 
         runner, cases = channel_case, channel_tolerance_cases()
-    elif args.tolerance_tool == "edit":
-        runner, cases = _edit_case, edit_tolerance_cases()
     else:
         runner, cases = _skill_case, skill_tolerance_cases()
     rows = []

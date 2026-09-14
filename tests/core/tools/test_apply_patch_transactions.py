@@ -54,8 +54,9 @@ async def test_registration_policy_display_and_cancellation_settlement(tmp_path,
     assert state.check_stale("session-test", tmp_path / "new.txt") is None
 
 
-def test_locking_prevents_interleaving_with_edit(tmp_path):
-    from core.tools.edit import make_edit_handler
+@pytest.mark.asyncio
+async def test_locking_and_read_stamp_are_shared_with_write(tmp_path):
+    from core.tools.write import make_write_handler
 
     path = tmp_path / "file.txt"
     path.write_bytes(b"old\n")
@@ -76,12 +77,12 @@ def test_locking_prevents_interleaving_with_edit(tmp_path):
     thread.join(5)
     assert not thread.is_alive() and result[0]["ok"]
     assert path.read_bytes() == b"final\n"
-    edited = make_edit_handler(state)(
+    written = await make_write_handler(state)(
         context(tmp_path),
-        {"edits": [{"path": "file.txt", "old_string": "final", "new_string": "edit still works"}]},
+        {"path": "file.txt", "content": "write still works\n"},
     )
-    assert edited["ok"]
-    assert path.read_bytes() == b"edit still works\n"
+    assert written["ok"]
+    assert path.read_bytes() == b"write still works\n"
 
 
 @pytest.mark.parametrize("bad_index", [0, 3, 6])

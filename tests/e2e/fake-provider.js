@@ -286,17 +286,12 @@ function plannedToolResponse(prompt, results, offeredTools) {
         calls: [toolCall("read", { path: "tool-e2e/workflow.txt" })],
       };
     }
-    if (resultsFor(results, "edit").length === 0) {
+    if (resultsFor(results, "apply_patch").length === 0) {
       return {
         calls: [
-          toolCall("edit", {
-            edits: [
-              {
-                path: "tool-e2e/workflow.txt",
-                old_string: "needle before",
-                new_string: "needle after",
-              },
-            ],
+          toolCall("apply_patch", {
+            patch:
+              "*** Begin Patch\n*** Update File: tool-e2e/workflow.txt\n@@\n-needle before\n+needle after\n*** End Patch",
           }),
         ],
       };

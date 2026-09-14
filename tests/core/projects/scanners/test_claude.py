@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from core.projects.scanners.claude import (
     CLAUDE_AGENTS_SUBPATH,
     CLAUDE_FORMAT_KEY,
@@ -179,7 +181,7 @@ def test_denied_tools_disallowed_tools_deny_their_mapping(tmp_path: Path) -> Non
 
 def test_denied_tools_disallowed_accepts_yaml_list(tmp_path: Path) -> None:
     front_matter = "disallowedTools:\n  - Write\n  - Edit\n"
-    assert _denied_tools_for(tmp_path, front_matter) == frozenset({"write", "edit"})
+    assert _denied_tools_for(tmp_path, front_matter) == frozenset({"write", "apply_patch"})
 
 
 def test_denied_tools_allow_list_inverts_to_denials(tmp_path: Path) -> None:
@@ -187,7 +189,7 @@ def test_denied_tools_allow_list_inverts_to_denials(tmp_path: Path) -> None:
     denied = _denied_tools_for(tmp_path, "tools: Read, Grep, Glob\n")
 
     assert denied == frozenset(
-        {"write", "edit", "bash", "process", "web_fetch", "web_search", "subagent", "skill"}
+        {"write", "apply_patch", "bash", "process", "web_fetch", "web_search", "subagent", "skill"}
     )
 
 
@@ -218,7 +220,7 @@ def test_denied_tools_unknown_allow_list_entries_do_not_widen(tmp_path: Path) ->
         {
             "read",
             "write",
-            "edit",
+            "apply_patch",
             "glob",
             "grep",
             "bash",
@@ -240,7 +242,7 @@ def test_denied_tools_unions_allow_list_and_disallowed(tmp_path: Path) -> None:
     assert "write" in denied
     assert "read" not in denied
     assert "bash" not in denied
-    assert "edit" in denied
+    assert "apply_patch" in denied
 
 
 def test_denied_tools_malformed_shapes_fail_open(tmp_path: Path) -> None:
@@ -287,3 +289,15 @@ def test_scoped_agent_denial_does_not_disable_other_targets(tmp_path: Path) -> N
     assert [(rule.pattern, rule.allowed) for rule in agent.agent_target_rules] == [
         ("worker", False)
     ]
+
+
+@pytest.mark.parametrize("denied_tool", ["Edit", "Write"])
+def test_each_file_mutation_denial_blocks_patch(tmp_path: Path, denied_tool: str) -> None:
+    denied = _denied_tools_for(tmp_path, f"disallowedTools: {denied_tool}\n")
+    assert "apply_patch" in denied
+    assert ("write" in denied) == (denied_tool == "Write")
+
+
+def test_allowing_both_file_mutation_tools_allows_patch(tmp_path: Path) -> None:
+    denied = _denied_tools_for(tmp_path, "tools: Read, Edit, Write\n")
+    assert not {"read", "write", "apply_patch"} & denied

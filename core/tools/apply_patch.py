@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 from difflib import SequenceMatcher
 from pathlib import Path
 
+from core.tools._change_preview import _change_preview
 from core.tools._patch_syntax import (
     _MESSAGES,
     _Hunk,
@@ -18,7 +19,6 @@ from core.tools._patch_syntax import (
     _PatchError,
 )
 from core.tools.arguments import line_number_gutter_candidates, strip_line_number_gutters
-from core.tools.edit import _change_preview
 from core.tools.file_state import FileReadState, StaleReason, atomic_write_bytes
 from core.tools.fuzzy_match import (
     AmbiguousFuzzyMatch,
@@ -203,8 +203,8 @@ def _normalize_gutters(hunk: _Hunk) -> _Hunk | None:
     old = "\n".join(old_lines)
     if strip_line_number_gutters(old) is None:
         return None
-    # Locators may mix raw lines with copied gutters, as edit allows. Only a
-    # unique whole-line match against the current file authorizes this recovery.
+    # Locators may mix raw lines with copied gutters. Only a unique whole-line
+    # match against the current file authorizes this recovery.
     lines = []
     for prefix, text in hunk.lines:
         stripped = strip_line_number_gutters(text)
@@ -231,7 +231,7 @@ def _unescape(text: str, *, replacement_for: str | None = None) -> str:
 
 def _clean_additions(hunk: _Hunk, path: str, index: int) -> tuple[_Hunk, list[str]]:
     # Existing literal gutter-shaped context is authoritative. New standalone
-    # additions use the same complete-block recovery as edit's new_string.
+    # additions require complete-block gutter recovery.
     if any(_GUTTER.match(text) for prefix, text in hunk.lines if prefix in " -"):
         return hunk, []
     lines = list(hunk.lines)
