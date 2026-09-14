@@ -169,7 +169,7 @@ async def test_editor_catalog_delivers_default_without_replacing_saved_instructi
 async def test_state_guidance_reaches_native_model_definition(board):
     from resources.extensions.swarm.agent_text import STATE_DESCRIPTION
 
-    names = ("swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki")
+    names = ("swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki", "swarm_decisions")
     definitions = board.tools.provider_definitions(names, session_grants=names)
     state = next(tool for tool in definitions if tool["name"] == "swarm_state")
     assert state["description"] == STATE_DESCRIPTION

@@ -27,7 +27,9 @@
   import { createSwarmPageActivity } from './pageActivity.svelte.js';
   import './swarmPage.css';
   import WikiPanel from './WikiPanel.svelte';
+  import DecisionsPanel from './DecisionsPanel.svelte';
   let wikiPanel = $state(null);
+  let decisionsPanel = $state(null);
 
   let { bridgeClient = null } = $props();
   const model = createSwarmPageModel({
@@ -36,6 +38,9 @@
     },
     get wiki() {
       return wikiPanel;
+    },
+    get decisions() {
+      return decisionsPanel;
     },
     get activity() {
       return activity;
@@ -426,6 +431,13 @@
                     >{t('swarm.board.more', 'Load earlier messages')}</Button
                   >{/if}{/if}
             </section>
+          {:else if model.activeTab === 'decisions'}
+            {#key model.selectedSwarm.id}<DecisionsPanel
+                bind:this={decisionsPanel}
+                swarmId={model.selectedSwarm.id}
+                client={model.client}
+                contentLinks={model.contentLinks}
+              />{/key}
           {:else if model.activeTab === 'wiki'}
             {#key model.selectedSwarm.id}<WikiPanel
                 bind:this={wikiPanel}
@@ -653,7 +665,7 @@
             <p>
               {t(
                 'swarm.startHelp',
-                'The request is pinned on the Board. Participants begin by discussing it together.',
+                'The request is pinned on the Board. Participants use the collaboration Tools enabled in this Swarm; if Board access is disabled, they receive the request directly.',
               )}
             </p>
             <div class="start-profile">
@@ -801,7 +813,7 @@
         <p>
           {t(
             'swarm.deleteRun.body',
-            'Permanently delete this Run, its Board and participant Sessions? The Swarm will be kept. This cannot be undone.',
+            'Permanently delete this Run, its Board, Wiki, decisions and participant Sessions? The Swarm will be kept. This cannot be undone.',
           )}
         </p>
         {#if model.deleteError}<Banner variant="error"

@@ -6,15 +6,18 @@ Read only the section relevant to the requested operation: [Swarm](#swarm), [MCP
 
 The bundled Swarm Extension contributes the **Swarms** page. Create a profile,
 select configured Models and participant counts, choose an explicit Project or
-working directory, and select ordinary Tools. An empty ordinary Tool selection
-still allows the four private Swarm Tools in participant Sessions.
+working directory, and select Tools. The Swarm section of Tools & Skills exposes
+Board, Inbox, State, Wiki and Decisions individually. These private Tools start
+enabled; an empty ordinary Tool selection does not disable them. Use their
+switches or None to disable them. Changes apply to future Runs.
 Enter a goal and start from the page, or use `/swarm <profile-slug> "goal"`.
 The Command supplies only the entered goal; it does not import source Session
 history or attachments.
 
 The original request is pinned on the Board. Participants first receive a message
 asking them to read it and discuss the request together before implementation;
-they decide together when to start the work.
+they decide together when to start the work. If Board access is disabled, the
+initial message carries the original request directly.
 
 The shared Wiki is available through `swarm_wiki` in participant Sessions and the
 Wiki tab on each Run. Create, search, read and edit free Markdown pages; view their
@@ -23,6 +26,14 @@ pages require the revision you read, so concurrent edits cannot silently overwri
 one another. Share page links on the Board when others should notice them. Wiki
 edits themselves do not send messages or wake participants. CLI users can inspect
 the equivalent `wiki` management operation with per-operation help.
+
+The optional `swarm_decisions` Tool and Decisions tab collect questions, alternatives
+and each participant's current position with reasons. Add or revise options during
+work; participants can move or withdraw their own support. Earlier positions remain
+visible as needing review when the question changes. Counts do not declare a winner,
+and archiving does not assert agreement. History and revision checks preserve changes.
+Share returned question links when attention is useful; edits do not send messages
+or wake Agents. The `decisions` management operation provides the same capability.
 
 Participants use separate durable Sessions and coordinate as peers on a public
 Board. Pings are public posts addressed to participant ids. Delivery mode and
@@ -46,7 +57,7 @@ canonical Statistics. Disable/reload retains history; interrupted execution neve
 restarts itself.
 
 After Stop, **Delete Swarm** opens a confirmation and permanently removes that
-Swarm's Board, Wiki history and participant Sessions. Its profile remains available for new
+Swarm's Board, Wiki, decision history and participant Sessions. Its profile remains available for new
 Swarms. Failed deletion can be retried; a partially deleted Swarm cannot Resume.
 
 ## MCP

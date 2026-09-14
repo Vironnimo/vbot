@@ -174,6 +174,10 @@ CREATE TABLE IF NOT EXISTS delivery_batches(receipt_id TEXT PRIMARY KEY,particip
 CREATE TABLE IF NOT EXISTS delivery_batch_entries(receipt_id TEXT NOT NULL REFERENCES delivery_batches(receipt_id),post_id TEXT NOT NULL REFERENCES posts(id),participant_id TEXT NOT NULL REFERENCES participants(id),PRIMARY KEY(receipt_id,post_id,participant_id)) STRICT;
 CREATE TABLE IF NOT EXISTS requests(scope TEXT NOT NULL,request_id TEXT NOT NULL,payload_hash TEXT NOT NULL,outcome TEXT NOT NULL,PRIMARY KEY(scope,request_id)) STRICT;
 CREATE TABLE IF NOT EXISTS swarm_goals(swarm_id TEXT PRIMARY KEY REFERENCES swarms(id),post_id TEXT NOT NULL REFERENCES posts(id)) STRICT;
+CREATE TABLE IF NOT EXISTS decision_questions(id TEXT PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),document TEXT NOT NULL) STRICT;
+CREATE TABLE IF NOT EXISTS decision_positions(question_id TEXT NOT NULL REFERENCES decision_questions(id),actor_id TEXT NOT NULL,document TEXT NOT NULL,PRIMARY KEY(question_id,actor_id)) STRICT;
+CREATE TABLE IF NOT EXISTS decision_events(id INTEGER PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),question_id TEXT NOT NULL REFERENCES decision_questions(id),kind TEXT NOT NULL,actor_id TEXT NOT NULL,author TEXT NOT NULL,created_at TEXT NOT NULL,document TEXT NOT NULL) STRICT;
+CREATE INDEX IF NOT EXISTS decision_event_page ON decision_events(swarm_id,question_id,id DESC);
 CREATE TABLE IF NOT EXISTS wiki_pages(id TEXT PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),revision INTEGER NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS wiki_revisions(id INTEGER PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),page_id TEXT NOT NULL REFERENCES wiki_pages(id),revision INTEGER NOT NULL,title TEXT NOT NULL,content TEXT NOT NULL,deleted INTEGER NOT NULL CHECK(deleted IN(0,1)),author_id TEXT NOT NULL,author_name TEXT NOT NULL,author_kind TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(page_id,revision)) STRICT;
 CREATE INDEX IF NOT EXISTS wiki_revision_page ON wiki_revisions(swarm_id,page_id,id DESC);
