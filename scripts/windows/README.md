@@ -4,7 +4,10 @@
 `server-desktop`, and `desktop-client`. The application uses readable Python
 sources and a private CPython 3.13 runtime. Native hosts load CPython in-process;
 the stable root `vBot.exe` starts the tray with no arguments and the CLI with
-arguments. Desktop is independently launched and does not own server lifetime.
+arguments. Its stable `vBot.GUI.exe` companion uses the Windows GUI subsystem;
+the Desktop shortcut invokes it with `desktop` and follows `active-version`.
+Install/update integration adds the companion and repairs the owned default
+Desktop shortcut while preserving customized targets. Desktop is independently launched and does not own server lifetime.
 No Windows service is installed.
 
 ## Build inputs and outputs

@@ -21,6 +21,7 @@ def _payload(root: Path, shape: str = "server") -> Path:
         "app/pyproject.toml": b"project",
         "runtime/vBot.Python.exe": b"python",
         "runtime/vBot.exe": b"bootstrap",
+        "runtime/vBot.GUI.exe": b"gui-bootstrap",
     }
     if shape != "desktop-client":
         files["app/server/main.py"] = b"server"
@@ -61,6 +62,7 @@ def test_install_accepts_inno_registration_files_and_persists_actual_public_key(
         public_key=public_key,
     )
 
+    assert (root / "vBot.GUI.exe").read_bytes() == b"gui-bootstrap"
     saved = json.loads((root / "application.json").read_text(encoding="utf-8"))
     assert saved["release_public_key"] == public_key
     assert install.version().name == "v1_test"

@@ -11,6 +11,7 @@ from pathlib import Path
 import psutil  # type: ignore[import-untyped]
 
 from cli.application import processes
+from cli.application.integration import refresh_gui_entrypoints
 from cli.application.packages import (
     download_release,
     stage_package,
@@ -126,6 +127,7 @@ def recover_interrupted(install: Installation, operation: Operation) -> bool:
         from cli.application.customize import finalize_activation
 
         finalize_activation(install, candidate)
+        refresh_gui_entrypoints(install)
         operation.transition(
             install, "completed", "Recovered the verified active application update"
         )
@@ -206,6 +208,7 @@ def execute(install: Installation, operation: Operation) -> None:
     )
     operation.save(install)
     if install.version().name == candidate:
+        refresh_gui_entrypoints(install)
         operation.transition(
             install, "completed", "vBot is already up to date; no restart was needed"
         )
@@ -276,6 +279,7 @@ def execute(install: Installation, operation: Operation) -> None:
     from cli.application.customize import finalize_activation
 
     finalize_activation(install, candidate)
+    refresh_gui_entrypoints(install)
     operation.transition(
         install,
         "completed",

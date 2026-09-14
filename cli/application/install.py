@@ -72,7 +72,7 @@ def install_payload(
             raise ApplicationError(
                 "Release public key must be base64 raw Ed25519 public key"
             ) from exc
-    allowed = {"vBot.exe", ".operation.lock"}
+    allowed = {"vBot.exe", "vBot.GUI.exe", ".operation.lock"}
     if root.exists() and any(
         path.name not in allowed
         and not (
@@ -136,6 +136,9 @@ def install_payload(
             bind_checkout(install, from_checkout)
         install.save()
         install.activate(manifest["version_id"])
+        from cli.application.integration import refresh_gui_entrypoints
+
+        refresh_gui_entrypoints(install)
     if transition is not None:
         from cli.application.integration import finish_checkout_transition
 
