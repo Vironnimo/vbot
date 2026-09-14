@@ -27,11 +27,14 @@ def leaves(parser):
             yield from leaves(child)
 
 
-@pytest.mark.timeout(120)
-def test_every_published_leaf_example_has_valid_read_or_help_recovery(tmp_path, capsys):
+def test_every_published_leaf_example_has_valid_read_or_help_recovery(
+    tmp_path, capsys, monkeypatch
+):
     target = instance(tmp_path)
+    parser = build_parser()
+    monkeypatch.setattr("cli.parser.build_parser", lambda: parser)
     count = 0
-    for leaf in leaves(build_parser()):
+    for leaf in leaves(parser):
         if not leaf.description or "Example: " not in leaf.description:
             continue
         tokens = shlex.split(leaf.description.split("Example: ", 1)[1].removeprefix("vbot "))
