@@ -6,6 +6,7 @@
   import {
     invokeExtensionPageOperation,
     openExtensionPageRun,
+    cancelExtensionPageToolCall,
     readExtensionPageHistory,
     subscribeRunEvents,
   } from '$lib/api.js';
@@ -23,6 +24,7 @@
     'toast',
     'run.subscribe',
     'run.unsubscribe',
+    'run.cancel_tool',
   ]);
 
   let {
@@ -363,6 +365,19 @@
           runSubscriptions.set(data.id, subscription);
           result = { live: true, subscription_id: data.id };
         } else result = { live: false };
+      } else if (
+        data.method === 'run.cancel_tool' &&
+        validRunSubscription(data.params) &&
+        typeof data.params.tool_call_id === 'string' &&
+        data.params.tool_call_id.length > 0
+      ) {
+        result = await cancelExtensionPageToolCall(
+          context.descriptor.owner,
+          { id: context.descriptor.page, epoch: context.descriptor.epoch },
+          data.params.group_id,
+          data.params.run_id,
+          data.params.tool_call_id,
+        );
       } else if (
         data.method === 'run.unsubscribe' &&
         typeof data.params.id === 'string'

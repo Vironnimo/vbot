@@ -254,6 +254,12 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
         after_sequence: afterSequence,
       }),
     unsubscribeRun: (id) => call('run.unsubscribe', { id }),
+    cancelToolCall: (groupId, runId, toolCallId) =>
+      call('run.cancel_tool', {
+        group_id: groupId,
+        run_id: runId,
+        tool_call_id: toolCallId,
+      }),
     onContext(listener) {
       contextListeners.add(listener);
       return () => contextListeners.delete(listener);

@@ -49,6 +49,7 @@ export {
   listExtensionPages,
   invokeExtensionPageOperation,
   openExtensionPageRun,
+  cancelExtensionPageToolCall,
   readExtensionPageHistory,
   getSessionStoreStatus,
   createSessionStoreSnapshot,
