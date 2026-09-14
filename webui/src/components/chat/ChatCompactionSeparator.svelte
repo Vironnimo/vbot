@@ -18,7 +18,7 @@
     class="date-sep compaction-sep"
     class:run-compaction-sep={inRun}
     class:compaction-sep--running={running}
-    role={running ? 'status' : undefined}
+    role={item?.status === 'failed' ? 'alert' : running ? 'status' : undefined}
     aria-busy={running || undefined}
   >
     {compactionSeparatorLabel(item)}

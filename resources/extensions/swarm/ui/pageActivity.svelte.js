@@ -35,9 +35,9 @@ export function createSwarmPageActivity(host) {
           messages: history.data.messages ?? [],
           runEvents: live,
           streamingRunEvents: [],
-          status:
-            history.data.status ??
-            (history.participant.run_active ? 'running' : 'completed'),
+          status: history.participant.run_active
+            ? 'running'
+            : (history.data.status ?? 'completed'),
           currentRun: { runId: history.participant.lifecycle_run_id },
         })
       : [],

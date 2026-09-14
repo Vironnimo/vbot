@@ -25,6 +25,8 @@ Blocking in-process work crosses named `BoundedWorkerPool` boundaries from `core
 
 `safe_startup_mode` is only `verification` or `test`. It constructs the core graph but suppresses Extension dependency activation and Extension loading, plus Bootstrap, Channel, Cron, Calendar, and Provider-usage producers. Normal startup alone activates managed Extension dependencies before Extension discovery.
 
+Extension-owned temporary execution groups receive `streaming_chat_loop` through the existing host operations seam, so their Runs expose the same in-flight output and request diagnostics as interactive Chat (`test_runtime_extension_host.py`).
+
 ## Shutdown
 
 - `stop()` stops producers (Channels/Cron/Bootstrap), usage collector, Process/Terminal managers (killing every tracked process and Terminal tree), the temp-file sweeper, clears service references, closes logging. Safe pre-start.
