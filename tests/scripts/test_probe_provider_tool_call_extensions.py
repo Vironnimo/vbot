@@ -23,6 +23,7 @@ def test_swarm_workflow_rejects_a_claim_without_coordination():
                 "swarm_board",
                 "swarm_inbox",
                 "swarm_state",
+                "swarm_wiki",
             }
             return {"content": "Everything is complete."}
 
@@ -159,6 +160,10 @@ def test_swarm_probe_uses_registered_handlers_and_canonical_receipts():
     assert {"status_default", "status_cursor", "name_rejected", "name_field_rejected"} <= {
         row["case"] for row in state["cases"]
     }
+    args.swarm_tool = "swarm_wiki"
+    wiki = asyncio.run(probe_workflow_swarm._probe_swarm_tool(Adapter(), args))
+    assert wiki["passed"]
+    assert {"create", "update_patch", "delete", "restore"} <= {row["case"] for row in wiki["cases"]}
 
 
 def test_mcp_workflow_probe_rejects_an_unsupported_completion_claim():
@@ -444,8 +449,9 @@ def test_swarm_unassisted_requires_actual_feedback_and_a_later_publication():
 
         async def send(self, messages, **_kwargs):
             prompt = next(row["content"] for row in messages if row["role"] == "user")
-            assert "swarm_board" not in prompt and "swarm_state" not in prompt
+            goal_id = prompt.split("Board post ", 1)[1].split()[0]
             calls = [
+                ("swarm_board", {"action": "read", "message_id": goal_id}),
                 ("swarm_inbox", {}),
                 ("swarm_board", {"action": "post", "text": "Draft", "request_id": "draft"}),
                 ("swarm_inbox", {}),

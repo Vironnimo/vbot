@@ -23,6 +23,7 @@ from .agent_text import (
     STATE_DESCRIPTION,
     STATE_PARAMETERS,
 )
+from .wiki_text import WIKI_DESCRIPTION, WIKI_PARAMETERS
 
 if TYPE_CHECKING:
     from .extension import SwarmExtension
@@ -56,6 +57,13 @@ def register(api: ExtensionAPI) -> None:
         parallel_safe=False,
         argument_normalizer=lambda arguments: _normalize_arguments("swarm_state", arguments),
     )
+    api.register_session_tool(
+        "swarm_wiki",
+        WIKI_DESCRIPTION,
+        WIKI_PARAMETERS,
+        service.wiki,
+        argument_normalizer=lambda arguments: _normalize_arguments("swarm_wiki", arguments),
+    )
     api.register_session_runtime(
         before_request=service._before_request,
         run_finished=service._run_finished,
@@ -72,6 +80,10 @@ def register(api: ExtensionAPI) -> None:
         execution_mode="immediate",
     )
     descriptions = {
+        "wiki": (
+            "Read and collaboratively edit this Run's Wiki; mutations require "
+            "request_id and existing-page changes require expected_revision."
+        ),
         "catalog": "Read selectable Models, Tools, Skills, Projects, and prompt defaults.",
         "profiles.preview": "Preview an unsaved profile's complete prompt without starting a Run.",
         "profiles.list": "List saved profiles with pagination; use profiles.get for full content.",

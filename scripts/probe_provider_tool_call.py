@@ -116,7 +116,9 @@ def _parser() -> argparse.ArgumentParser:
         "--reflection-scope", choices=("all", "memory", "skill", "combined", "learn"), default="all"
     )
     parser.add_argument(
-        "--swarm-tool", choices=("swarm_board", "swarm_inbox", "swarm_state"), default="swarm_board"
+        "--swarm-tool",
+        choices=("swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki"),
+        default="swarm_board",
     )
     parser.add_argument(
         "--computer-case", choices=tuple(COMPUTER_CASE_ARGUMENTS), default="windows"

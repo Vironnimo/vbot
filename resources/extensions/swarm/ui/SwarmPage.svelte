@@ -26,11 +26,16 @@
   import { createSwarmPageModel } from './pageModel.svelte.js';
   import { createSwarmPageActivity } from './pageActivity.svelte.js';
   import './swarmPage.css';
+  import WikiPanel from './WikiPanel.svelte';
+  let wikiPanel = $state(null);
 
   let { bridgeClient = null } = $props();
   const model = createSwarmPageModel({
     get bridgeClient() {
       return bridgeClient;
+    },
+    get wiki() {
+      return wikiPanel;
     },
     get activity() {
       return activity;
@@ -264,7 +269,8 @@
               items={model.tabs}
               value={model.activeTab}
               ariaLabel={t('swarm.details', 'Swarm details')}
-              onChange={(next) => (model.activeTab = next)}
+              onChange={(next) =>
+                model.navigate(() => (model.activeTab = next))}
             /><StatusChip
               variant={canStop(model.selectedSwarm.state) ? 'warn' : 'neutral'}
               >{t(
@@ -314,6 +320,19 @@
                     )}</Button
                   >{/if}
               </div>
+              {#if model.selectedSwarm.goal_post_id}<details
+                  class="swarm-goal-post"
+                  use:model.contentLinks
+                >
+                  <summary
+                    >{t('swarm.board.goal', 'Pinned user request')}</summary
+                  >
+                  <MarkdownContent
+                    source={model.selectedSwarm.prompt}
+                    class="msg-markdown"
+                  />
+                  <small>{model.selectedSwarm.goal_post_id}</small>
+                </details>{/if}
               <section
                 class="participant-pane"
                 aria-label={t('swarm.participants', 'Participants')}
@@ -407,6 +426,13 @@
                     >{t('swarm.board.more', 'Load earlier messages')}</Button
                   >{/if}{/if}
             </section>
+          {:else if model.activeTab === 'wiki'}
+            {#key model.selectedSwarm.id}<WikiPanel
+                bind:this={wikiPanel}
+                swarmId={model.selectedSwarm.id}
+                client={model.client}
+                contentLinks={model.contentLinks}
+              />{/key}
           {:else if model.activeTab === 'participants'}<section
               class="panel"
               role="tabpanel"
@@ -627,7 +653,7 @@
             <p>
               {t(
                 'swarm.startHelp',
-                'Every participant starts with this same goal and the selected Swarm configuration.',
+                'The request is pinned on the Board. Participants begin by discussing it together.',
               )}
             </p>
             <div class="start-profile">
