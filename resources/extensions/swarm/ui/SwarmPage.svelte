@@ -540,6 +540,7 @@
                   {#each activity.activityTimeline as item (item.id)}
                     {#if item.type === 'assistant_run'}<ChatAssistantRun
                         {item}
+                        onCancelToolCall={activity.cancelToolCall}
                         agentName={activity.history.participant.display_name}
                       />{:else}<ChatTimelineEntry
                         {item}
