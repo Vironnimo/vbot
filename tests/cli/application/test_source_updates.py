@@ -414,3 +414,23 @@ def test_backend_update_reuses_web_assets_and_announces_target_before_build(
         )
         == "local_new"
     )
+
+
+@pytest.mark.parametrize(
+    "group, changes_server_runtime",
+    [("dev", False), ("desktop", False), ("server", True), ("windows-app", True)],
+)
+def test_uninstalled_dependency_groups_do_not_invalidate_runtime(
+    tracked_checkout, group, changes_server_runtime
+):
+    checkout, _ = tracked_checkout
+    before = source_updates.build_inputs(checkout, "server")
+    project = checkout / "pyproject.toml"
+    project.write_text(
+        project.read_text(encoding="utf-8")
+        + f'\n[project.optional-dependencies]\n{group} = ["test-owned-dependency==1.0"]\n',
+        encoding="utf-8",
+    )
+    after = source_updates.build_inputs(checkout, "server")
+    assert (before["dependencies"] != after["dependencies"]) is changes_server_runtime
+    assert before["web"] == after["web"]

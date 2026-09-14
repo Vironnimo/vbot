@@ -256,8 +256,14 @@ def build_inputs(checkout: Path, shape: str) -> dict[str, str]:
     if not lock.is_file():
         raise ApplicationError(f"The Windows runtime dependency lock is missing: {lock}")
     project = tomllib.loads((checkout / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    groups = {
+        "server": ("server", "windows-app"),
+        "server-desktop": ("server", "windows-app", "desktop"),
+        "desktop-client": ("cli", "windows-app", "desktop"),
+    }[shape]
+    optional = project.get("optional-dependencies", {})
     requirements = json.dumps(
-        [project.get("dependencies", []), project.get("optional-dependencies", {})],
+        [project.get("dependencies", []), {group: optional.get(group, []) for group in groups}],
         sort_keys=True,
     )
     dependencies = hashlib.sha256(
