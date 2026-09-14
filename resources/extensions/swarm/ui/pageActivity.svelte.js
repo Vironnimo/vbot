@@ -330,7 +330,21 @@ export function createSwarmPageActivity(host) {
     currentSubscription?.();
   }
 
+  async function cancelToolCall({ runId, toolCallId }) {
+    const groupId = host.model.selectedSwarm?.id;
+    if (!groupId || !history || runId !== history.participant.lifecycle_run_id)
+      return;
+    const request = activityRequest;
+    try {
+      await host.model.client.cancelToolCall(groupId, runId, toolCallId);
+    } catch (cause) {
+      if (!host.model.disposed && request === activityRequest)
+        host.model.error = cause.message;
+    }
+  }
+
   return {
+    cancelToolCall,
     destroy,
     get history() {
       return history;

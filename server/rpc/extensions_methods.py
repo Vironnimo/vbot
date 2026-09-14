@@ -411,6 +411,40 @@ async def _extension_page_run(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(error) from error
 
 
+async def _extension_page_cancel_tool(state: Any, params: JsonObject) -> JsonObject:
+    """Cancel one Tool Call through the page's existing owned-Run boundary."""
+    _reject_unsupported(
+        params,
+        {"name", "page", "group_id", "run_id", "tool_call_id"},
+        "extensions.page_cancel_tool",
+    )
+    name = _required_str(params, "name")
+    group_id = _required_str(params, "group_id")
+    run_id = _required_str(params, "run_id")
+    tool_call_id = _required_str(params, "tool_call_id")
+    registry = state.runtime.extensions
+    if registry is None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Extension page is unavailable; refresh the page")
+    try:
+        await _validate_page_context(state.runtime, registry, name, params.get("page"))
+        identity = ExtensionRegistrationIdentity(name, params["page"]["epoch"])
+        temporary_agents = registry.host_for(identity).temporary_agents
+        if temporary_agents is None:
+            raise ValueError("Extension page is unavailable; refresh the page")
+        inspection = await temporary_agents.owned_run(group_id, run_id)
+        if state.runtime.extensions is not registry or not registry.is_registration_current(
+            identity
+        ):
+            raise ValueError("Extension page is unavailable; refresh the page")
+        if inspection.run is None or not inspection.run.cancel_tool_call(tool_call_id):
+            raise ValueError("Tool Call is no longer active; refresh the Session")
+        return {"ok": True}
+    except ValueError as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+    except Exception as error:
+        raise _map_expected_error(error) from error
+
+
 async def _extension_page_history(state: Any, params: JsonObject) -> JsonObject:
     """Project one owner-bound temporary Session history for a registered page."""
     _reject_unsupported(
@@ -567,6 +601,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "extensions.operation": _extension_operation,
         "extensions.page_history": _extension_page_history,
         "extensions.page_run": _extension_page_run,
+        "extensions.page_cancel_tool": _extension_page_cancel_tool,
         "extensions.pages": _extension_pages,
         "extensions.requests": _extension_requests,
         "extensions.reload": _reload_extensions,
