@@ -104,6 +104,30 @@ def test_signed_complete_release_stages_for_the_matching_installation(tmp_path: 
     ).is_file()
 
 
+@pytest.mark.parametrize("change", ["tamper", "extra", "missing", "link"])
+def test_revalidation_checks_payload_bytes_and_rejects_links(tmp_path, change):
+    install = _install(tmp_path / "install")
+    stage_package(install, _archive(tmp_path / "release.zip"), local=True)
+    root = install.version(_VERSION)
+    target = root / "app" / "cli" / "main.py"
+    if change == "tamper":
+        target.write_bytes(b"changed")
+    elif change == "extra":
+        (root / "app" / "extra.py").write_bytes(b"extra")
+    elif change == "missing":
+        target.unlink()
+    else:
+        outside = tmp_path / "outside.py"
+        outside.write_bytes(target.read_bytes())
+        target.unlink()
+        try:
+            target.symlink_to(outside)
+        except OSError:
+            pytest.skip("symlink privilege unavailable")
+    with pytest.raises(ApplicationError):
+        validate_release(root, shape="server")
+
+
 def test_remote_archives_require_a_valid_signature(tmp_path: Path):
     archive = _archive(tmp_path / "release.zip")
     install = _install(tmp_path / "install", public_key=base64.b64encode(b"x" * 32).decode())

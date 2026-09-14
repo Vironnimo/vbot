@@ -260,6 +260,8 @@ class Operation:
     updated_at: str = field(default_factory=timestamp)
     previous_version: str | None = None
     candidate_version: str | None = None
+    previous_label: str | None = None
+    target_label: str | None = None
     package: str | None = None
     local_package: bool = False
     restart: bool = True
@@ -276,6 +278,13 @@ class Operation:
     def save(self, install: Installation) -> None:
         self.updated_at = timestamp()
         value = asdict(self)
+        # Display metadata is additive: a still-running tray/server from the
+        # previous version must continue reading the protocol-1 operation record.
+        labels = {name: value.pop(name) for name in ("previous_label", "target_label")}
+        if any(labels.values()):
+            write_json(
+                contained(install.root, f"operations/details/{safe_id(self.id)}.json"), labels
+            )
         value["schema_version"] = 1
         write_json(contained(install.root, f"operations/{safe_id(self.id)}.json"), value)
 
@@ -301,7 +310,7 @@ def load_operation(install: Installation, operation_id: str) -> Operation:
     for name in ("message", "created_at", "updated_at"):
         if not isinstance(value.get(name), str):
             raise ApplicationError("Invalid update operation metadata")
-    for name in ("package", "handoff_ticket", "error"):
+    for name in ("package", "handoff_ticket", "error", "previous_label", "target_label"):
         if value.get(name) is not None and not isinstance(value[name], str):
             raise ApplicationError("Invalid update operation reference")
     if value.get("worker_pid") is not None and (
@@ -312,6 +321,16 @@ def load_operation(install: Installation, operation_id: str) -> Operation:
         type(value["worker_created"]) not in {int, float} or value["worker_created"] <= 0
     ):
         raise ApplicationError("Invalid update worker creation time")
+    details = contained(install.root, f"operations/details/{safe_id(operation_id)}.json")
+    if details.is_file():
+        labels = read_json(details, limit=4096)
+        for name in ("previous_label", "target_label"):
+            label = labels.get(name)
+            if label is not None and (
+                not isinstance(label, str) or len(label) > 200 or not label.isprintable()
+            ):
+                raise ApplicationError("Invalid update version label")
+            value[name] = label
     try:
         return Operation(**value)
     except TypeError as exc:

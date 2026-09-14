@@ -93,17 +93,29 @@ def _print_update_result(
 
 
 def _wait_update(install: Installation, operation: Operation) -> Operation:
-    from cli._output import print_update_command_start
+    from cli._progress import status_line
     from cli.application import operations
-    from cli.update_management import read_checkout_version
+    from cli.application.packages import version_label
+    from cli.application.state import read_json
 
     if output_mode.get() == "plain":
         return operations.wait(install, operation.id)
-    print_update_command_start(read_checkout_version(install.version() / "app"))
-    with ProgressPrinter() as progress:
+    installed = version_label(read_json(install.version() / "release.json", limit=32 * 1024**2))
+    print(status_line("busy", f"Checking for updates. Installed: {installed}"), flush=True)
+    with ProgressPrinter(live=True) as progress:
         progress.track("Waiting for the update to start")
+        announced: str | None = None
 
         def report(value: Operation) -> None:
+            nonlocal announced
+            if value.target_label and value.target_label != announced:
+                announced = value.target_label
+                if value.target_label != installed:
+                    progress.emit(
+                        "info",
+                        f"Updating vBot: {value.previous_label or installed} "
+                        f"-> {value.target_label}",
+                    )
             if not value.terminal and value.phase != "queued":
                 progress.emit("busy", value.message)
 
