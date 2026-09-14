@@ -18,12 +18,13 @@ from core.extensions import (
     ToolBatchDecision,
 )
 from core.extensions.operations import ExtensionHost
-from core.runs import RunAdmission
+from core.runs import RunAdmission, RunNotFoundError
 from core.sessions import SessionAddress, TemporarySessionBinding
 from core.tools import ToolContext, tool_success
 from core.tools._argument_repair import normalize_call_arguments
 from core.tools.contracts import compile_tool_contract
 from core.utils.ids import new_id
+from core.utils.logging import get_logger
 
 from ._extension_values import (
     Json,
@@ -66,6 +67,8 @@ from .store import SwarmStore, SwarmStoreError
 from .wiki_text import WIKI_ERRORS, WIKI_PARAMETERS
 
 __all__ = ["Json", "SwarmExtension", "register"]
+
+_LOGGER = get_logger("extensions.swarm")
 
 
 _RUNTIME_CONTRACTS = {
@@ -560,7 +563,7 @@ class SwarmExtension:
                 return False
             try:
                 inspection = await groups.owned_run(swarm["id"], run_id)
-            except Exception:
+            except RunNotFoundError:
                 return False
             return inspection.run is not None and inspection.run.status.value == "running"
 
@@ -1044,6 +1047,12 @@ class SwarmExtension:
                 )
                 admissions.append({"participant_id": participant_id, "run_id": admission.run_id})
             except Exception as error:
+                _LOGGER.warning(
+                    "Swarm participant resume failed (swarm=%s participant=%s)",
+                    swarm_id,
+                    participant_id,
+                    exc_info=True,
+                )
                 await self._store().set_participant_state(swarm_id, participant_id, "failed")
                 admissions.append({"participant_id": participant_id, "error": type(error).__name__})
         self._changed(swarm_id, snapshot["settings_revision"])
@@ -1151,13 +1160,20 @@ class SwarmExtension:
             return
         snapshot = await self._store().get_swarm(binding.group_id)
         terminal_outcome = {"success": "completed", "error": "failed"}.get(outcome, outcome)
-        await self._store().reconcile_run_finished(
-            binding.group_id,
-            binding.participant_id,
-            run_id=context.run_id,
-            expected_epoch=snapshot["epoch"],
-            outcome=terminal_outcome,
-        )
+        try:
+            await self._store().reconcile_run_finished(
+                binding.group_id,
+                binding.participant_id,
+                run_id=context.run_id,
+                expected_epoch=snapshot["epoch"],
+                outcome=terminal_outcome,
+            )
+        except SwarmStoreError as error:
+            # Stop and newer Runs already own the retained outcome. Their late
+            # completion callbacks must neither overwrite it nor fail cleanup.
+            if error.code in {"swarm_closed", "stale_epoch", "stale_run"}:
+                return
+            raise
         if terminal_outcome == "completed":
             self._enqueue_wakes(binding.group_id)
         self._changed(binding.group_id, snapshot["settings_revision"])

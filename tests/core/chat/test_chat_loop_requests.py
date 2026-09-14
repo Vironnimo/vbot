@@ -71,7 +71,7 @@ async def test_send_appends_user_and_final_assistant_without_tools(tmp_path: Pat
     }
     assert [message["role"] for message in adapter.requests[0]["messages"]] == ["system", "user"]
     run = next(iter(runtime.chat_runs._runs.values()))
-    assert [event.type for event in run.events] == [
+    assert [event.type for event in run.events if event.type != "provider_request_status"] == [
         "run_started",
         "user_message_persisted",
         MODEL_STEP_USAGE_EVENT,
@@ -79,7 +79,12 @@ async def test_send_appends_user_and_final_assistant_without_tools(tmp_path: Pat
         "run_completed",
     ]
     assert run.events[1].payload["message"]["content"] == "Hi"
-    assert run.events[3].payload["message"]["content"] == "Hello"
+    assert (
+        next(event for event in run.events if event.type == "assistant_output").payload["message"][
+            "content"
+        ]
+        == "Hello"
+    )
 
 
 @pytest.mark.asyncio
@@ -377,7 +382,7 @@ async def test_internal_start_run_embeds_content_without_visible_user_message(
     request_messages = adapter.requests[0]["messages"]
     assert persisted_roles(messages) == ["note", "assistant"]
     assert messages[0].content == content
-    assert [event.type for event in run.events] == [
+    assert [event.type for event in run.events if event.type != "provider_request_status"] == [
         "run_started",
         MODEL_STEP_USAGE_EVENT,
         "assistant_output",

@@ -988,3 +988,62 @@ async def test_disabled_swarm_tools_stay_unavailable_on_start_and_resume(
         {tool["name"] for tool in request["kwargs"].get("tools", [])} == names - set(denied)
         for request in lifecycle.runtime.adapter.requests
     )
+
+
+@pytest.mark.asyncio
+async def test_stop_does_not_report_expected_late_completion_as_failure(
+    lifecycle, tmp_path, caplog
+):
+    adapter = PausedSwarmAdapter(pause_at=1)
+    lifecycle.runtime.adapter = adapter
+    profile = await lifecycle.service.store.save_profile(
+        {
+            "schema_version": 1,
+            "slug": "stop-feedback",
+            "name": "Stop feedback",
+            "participants": [{"model": "fixture/model", "count": 1}],
+            "working_directory": {"kind": "directory", "path": str(tmp_path)},
+            "tool_access": {"mode": "selected", "allowed": []},
+        },
+        expected_revision=None,
+    )
+    started = await lifecycle.service.operation(
+        "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
+    )
+    run = lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"])
+    async with asyncio.timeout(5):
+        while not adapter.requests:
+            await asyncio.sleep(0.01)
+    await lifecycle.service.operation(
+        "swarms.stop", {"swarm_id": started["swarm_id"], "request_id": "stop"}
+    )
+    assert run.status.value == "cancelled"
+    assert not [record for record in caplog.records if record.exc_info]
+
+
+@pytest.mark.asyncio
+async def test_participant_inspection_failure_is_not_reported_as_idle(
+    lifecycle, tmp_path, monkeypatch
+):
+    profile = await lifecycle.service.store.save_profile(
+        {
+            "schema_version": 1,
+            "slug": "inspect-feedback",
+            "name": "Inspect feedback",
+            "participants": [{"model": "fixture/model", "count": 1}],
+            "working_directory": {"kind": "directory", "path": str(tmp_path)},
+            "tool_access": {"mode": "selected", "allowed": []},
+        },
+        expected_revision=None,
+    )
+    started = await lifecycle.service.operation(
+        "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
+    )
+    await lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"]).wait()
+
+    async def broken(*_args):
+        raise RuntimeError("inspection sentinel")
+
+    monkeypatch.setattr(lifecycle.groups, "owned_run", broken)
+    with pytest.raises(RuntimeError):
+        await lifecycle.service.operation("swarms.get", {"swarm_id": started["swarm_id"]})

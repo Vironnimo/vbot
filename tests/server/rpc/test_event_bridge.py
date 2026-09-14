@@ -592,3 +592,27 @@ async def test_publish_run_events_forwards_source_session_to_lifecycle_payloads(
     lifecycle_events = [event for event in event_bus.events if event["type"].startswith("run_")]
     assert lifecycle_events
     assert all(event["payload"]["source_session_id"] == "source-uuid" for event in lifecycle_events)
+
+
+def test_provider_retry_progress_reaches_observers_without_becoming_a_failure():
+    payload = {
+        "state": "retrying",
+        "model": "fixture/model",
+        "attempt": 2,
+        "max_attempts": 4,
+        "error_kind": "timeout",
+        "delay_seconds": 1.0,
+    }
+    event = RunEvent(
+        sequence=2,
+        run_id="run-retry",
+        agent_id="builder",
+        session_id="sess-retry",
+        type="provider_request_status",
+        payload=payload,
+    )
+    summary = _server_event_from_run_event(event)
+    assert summary["type"] == "run_output"
+    assert summary["payload"]["run_event_type"] == "provider_request_status"
+    assert summary["payload"]["output"] == payload
+    assert "error" not in summary["payload"]

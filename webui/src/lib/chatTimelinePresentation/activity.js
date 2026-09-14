@@ -118,6 +118,32 @@ const PROVIDER_IDLE_NOTICE_THRESHOLD_SECONDS = 10;
 // Transient problem/liveness notice for an assistant run, rendered on its own
 // line below the footer. Returns '' when there is nothing to report.
 export const runFooterNotice = (assistantRun) => {
+  const request = assistantRun.providerRequestStatus;
+  if (assistantRun.status === 'running' && request) {
+    const reason =
+      request.error_kind === 'timeout'
+        ? t('chat.requestTimeout', 'Provider request timed out.')
+        : request.error_kind === 'rate_limit'
+          ? t('chat.requestRateLimit', 'Provider rate limit reached.')
+          : request.error_kind === 'network_error'
+            ? t('chat.requestNetwork', 'Connection to the Provider failed.')
+            : request.error_kind
+              ? t('chat.requestFailed', 'Provider request failed.')
+              : '';
+    const status =
+      request.state === 'retrying'
+        ? t('chat.requestRetrying', 'Retrying the Provider request.')
+        : t('chat.requestWaiting', 'Waiting for the Provider response.');
+    const attempt =
+      Number.isInteger(request.attempt) &&
+      Number.isInteger(request.max_attempts)
+        ? t('chat.requestAttempt', 'Attempt {attempt} of {total}.', {
+            attempt: request.attempt,
+            total: request.max_attempts,
+          })
+        : '';
+    return [reason, status, attempt].filter(Boolean).join(' ');
+  }
   const idleSeconds = assistantRun.providerHeartbeat?.idleSeconds;
   if (
     assistantRun.status === 'running' &&

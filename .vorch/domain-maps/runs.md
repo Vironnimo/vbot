@@ -45,6 +45,8 @@ Every emitted event increments the Run-local `sequence`, including transient del
 
 `core/event_stream.py` owns the shared replay/live handoff, sequence de-duplication, bounded subscriber queues, and lag eviction used by both Run timelines and the server event bus. Run remains the owner of event creation, Run-local sequencing, cancellation suppression, and terminal-event semantics; do not move those domain rules into the generic stream.
 
+`provider_request_status` is transient Chat activity, bridged as `run_output`: `state` is `waiting`, `retrying`, or `finished`, with the request `model` and optional normalized `error_kind`, next one-based `attempt`, `max_attempts`, and `delay_seconds`. It reports request/retry progress without exposing raw exception details or adding Session history. It does not count as a Model Iteration or evidence of Provider output.
+
 Run event payload ownership stays with the domain that emits the event. `core/chat/` owns ChatMessage, tool-call, fallback, compaction, and error-message payloads; `core/subagents/` owns `subagent_session_started`; `server/` only maps Run events to SSE/WebSocket/RPC payloads and strips opaque provider metadata.
 
 ## Interfaces

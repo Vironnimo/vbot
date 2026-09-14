@@ -79,7 +79,11 @@ def test_http_session_create_send_sse_and_sqlite_persistence(tmp_path: Path) -> 
     assert send_response.json()["ok"] is True
     assert send_result["status"] == "completed"
     assert send_result["message"]["content"] == "Lookup complete."
-    assert [event["type"] for event in send_result["events"]] == [
+    assert [
+        event["type"]
+        for event in send_result["events"]
+        if event["type"] != "provider_request_status"
+    ] == [
         "run_started",
         "user_message_persisted",
         "model_step_usage",
@@ -92,7 +96,11 @@ def test_http_session_create_send_sse_and_sqlite_persistence(tmp_path: Path) -> 
     ]
     assert "reasoning_meta" not in json.dumps(send_result)
     assert "reasoning_meta" not in sse_response.text
-    assert [event["event"] for event in _parse_sse(sse_response.text)] == [
+    assert [
+        event["event"]
+        for event in _parse_sse(sse_response.text)
+        if event["event"] != "provider_request_status"
+    ] == [
         "run_started",
         "user_message_persisted",
         "model_step_usage",
@@ -168,7 +176,11 @@ def test_http_stream_sse_replays_visible_running_timeline(tmp_path: Path) -> Non
 
     assert stream_response.json()["ok"] is True
     assert stream_result["status"] == "running"
-    events = _parse_sse(sse_response.text)
+    events = [
+        event
+        for event in _parse_sse(sse_response.text)
+        if event["event"] != "provider_request_status"
+    ]
     assert [event["event"] for event in events] == [
         "run_started",
         "user_message_persisted",
@@ -240,7 +252,7 @@ async def test_cancel_suppresses_late_output_and_prevents_new_tool_steps(tmp_pat
 
     assert cancel_response["ok"] is True
     assert cancel_response["result"]["status"] == "cancelled"
-    assert [event.type for event in run.events] == [
+    assert [event.type for event in run.events if event.type != "provider_request_status"] == [
         "run_started",
         "user_message_persisted",
         "reasoning_delta",

@@ -183,6 +183,15 @@ class RunExecution:
                 if run.compaction_state == "pending":
                     run.emit("compaction_aborted", {"reason": "run_finished"})
         except BaseException as exc:
+            if (
+                isinstance(exc, Exception)
+                and not isinstance(exc, RunInterruptedError)
+                and not run.cancel_requested
+            ):
+                try:
+                    await _persist_run_error(run, session, exc)
+                except Exception:
+                    _LOGGER.warning("Failed to persist error for run %s", run.id, exc_info=True)
             if continuation_tracker is not None and not continuation_tracker.closed:
                 cause: ContinuationCause = (
                     "user"
@@ -451,6 +460,21 @@ class RunExecution:
                 _run_succeeded = False
                 run_error = exc
                 raise
+        except BaseException as exc:
+            # Preparation can fail before Provider progression installs its own
+            # handlers. Completion hooks and durable summaries need that failure too.
+            _run_succeeded = False
+            run_error = exc
+            if (
+                isinstance(exc, Exception)
+                and not isinstance(exc, RunInterruptedError)
+                and not run.cancel_requested
+            ):
+                try:
+                    await _persist_run_error(run, session, exc)
+                except Exception:
+                    _LOGGER.warning("Failed to persist error for run %s", run.id, exc_info=True)
+            raise
         finally:
             outcome: Literal["success", "error", "cancelled"]
             if run.cancel_requested:

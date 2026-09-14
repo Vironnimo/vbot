@@ -284,6 +284,22 @@
               )}</StatusChip
             >
           </div>
+          {#if model.selectedSwarm.participants?.some( (participant) => ['failed', 'interrupted'].includes(participant.state) )}
+            <Banner variant="error" role="alert">
+              {t(
+                'swarm.participants.failed',
+                'Participants need attention: {names}. Open their Activity for details; Resume retries their work.',
+                {
+                  names: model.selectedSwarm.participants
+                    .filter((participant) =>
+                      ['failed', 'interrupted'].includes(participant.state),
+                    )
+                    .map((participant) => participant.display_name)
+                    .join(', '),
+                },
+              )}
+            </Banner>
+          {/if}
           {#if model.activeTab === 'board'}<section
               class="panel"
               role="tabpanel"

@@ -24,15 +24,19 @@ from tests.server.test_rpc import StubAdapter, StubRuntime
 EXPECTED_SSE_EVENT_NAMES = [
     "run_started",
     "user_message_persisted",
+    "provider_request_status",
     "reasoning_delta",
     "tool_call_delta",
     "reasoning",
     "assistant_output",
+    "provider_request_status",
     "model_step_usage",
     "tool_call_started",
     "tool_call_result",
+    "provider_request_status",
     "assistant_output_delta",
     "assistant_output",
+    "provider_request_status",
     "model_step_usage",
     "run_completed",
 ]
@@ -80,15 +84,37 @@ def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_p
 
     assert response.headers["content-type"].startswith("text/event-stream")
     events = _parse_sse(response.text)
-    assert [event["id"] for event in events] == [str(index) for index in range(1, 14)]
+    assert [event["id"] for event in events] == [
+        str(index) for index in range(1, len(EXPECTED_SSE_EVENT_NAMES) + 1)
+    ]
     assert [event["event"] for event in events] == EXPECTED_SSE_EVENT_NAMES
-    reasoning_delta_data = cast(dict[str, Any], events[2]["data"])
-    tool_delta_data = cast(dict[str, Any], events[3]["data"])
-    reasoning_data = cast(dict[str, Any], events[4]["data"])
-    tool_started_data = cast(dict[str, Any], events[7]["data"])
-    tool_result_data = cast(dict[str, Any], events[8]["data"])
-    assistant_delta_data = cast(dict[str, Any], events[9]["data"])
-    assistant_data = cast(dict[str, Any], events[10]["data"])
+    reasoning_delta_data = cast(
+        dict[str, Any],
+        next(event for event in events if event["event"] == "reasoning_delta")["data"],
+    )
+    tool_delta_data = cast(
+        dict[str, Any],
+        next(event for event in events if event["event"] == "tool_call_delta")["data"],
+    )
+    reasoning_data = cast(
+        dict[str, Any], next(event for event in events if event["event"] == "reasoning")["data"]
+    )
+    tool_started_data = cast(
+        dict[str, Any],
+        next(event for event in events if event["event"] == "tool_call_started")["data"],
+    )
+    tool_result_data = cast(
+        dict[str, Any],
+        next(event for event in events if event["event"] == "tool_call_result")["data"],
+    )
+    assistant_delta_data = cast(
+        dict[str, Any],
+        next(event for event in events if event["event"] == "assistant_output_delta")["data"],
+    )
+    assistant_data = cast(
+        dict[str, Any],
+        next(event for event in reversed(events) if event["event"] == "assistant_output")["data"],
+    )
     fingerprint = runtime.tools.schema_fingerprint("read")
     assert reasoning_delta_data["payload"]["reasoning_delta"] == "Thinking clearly"
     assert tool_delta_data["payload"]["name_delta"] == "read"
@@ -211,34 +237,13 @@ def test_streaming_chat_projects_completed_path_line_in_stable_event(tmp_path: P
 def test_sse_endpoint_replays_after_explicit_sequence(tmp_path: Path) -> None:
     response = _stream_test_run(tmp_path, sse_url_suffix="?after_sequence=3")
 
-    assert _event_names(response.text) == [
-        "tool_call_delta",
-        "reasoning",
-        "assistant_output",
-        "model_step_usage",
-        "tool_call_started",
-        "tool_call_result",
-        "assistant_output_delta",
-        "assistant_output",
-        "model_step_usage",
-        "run_completed",
-    ]
+    assert _event_names(response.text) == EXPECTED_SSE_EVENT_NAMES[3:]
 
 
 def test_sse_endpoint_replays_after_last_event_id_header(tmp_path: Path) -> None:
     response = _stream_test_run(tmp_path, headers={"Last-Event-ID": "4"})
 
-    assert _event_names(response.text) == [
-        "reasoning",
-        "assistant_output",
-        "model_step_usage",
-        "tool_call_started",
-        "tool_call_result",
-        "assistant_output_delta",
-        "assistant_output",
-        "model_step_usage",
-        "run_completed",
-    ]
+    assert _event_names(response.text) == EXPECTED_SSE_EVENT_NAMES[4:]
 
 
 def test_sse_endpoint_prefers_explicit_after_sequence_over_last_event_id(
@@ -250,19 +255,7 @@ def test_sse_endpoint_prefers_explicit_after_sequence_over_last_event_id(
         headers={"Last-Event-ID": "5"},
     )
 
-    assert _event_names(response.text) == [
-        "reasoning_delta",
-        "tool_call_delta",
-        "reasoning",
-        "assistant_output",
-        "model_step_usage",
-        "tool_call_started",
-        "tool_call_result",
-        "assistant_output_delta",
-        "assistant_output",
-        "model_step_usage",
-        "run_completed",
-    ]
+    assert _event_names(response.text) == EXPECTED_SSE_EVENT_NAMES[2:]
 
 
 def test_sse_endpoint_clamps_malformed_sequence_controls(tmp_path: Path) -> None:

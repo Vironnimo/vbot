@@ -221,41 +221,44 @@ describe('ChatTimeline', () => {
     ).toBeTruthy();
   });
 
-  it('renders the running Compaction state before a checkpoint exists', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-running-compaction',
-    );
-    appendRunEvent(sessionState, {
-      type: 'compaction_started',
-      run_id: 'run-compaction',
-      sequence: 1,
-      payload: {
-        context_tokens_before: 250_000,
-      },
-    });
-
-    suite.mountedComponent = mount(ChatTimeline, {
-      target: document.body,
-      props: {
-        sessionState,
-        agentName: 'Alpha',
-      },
-    });
-    flushSync();
-
-    // A run whose only child is the Compaction divider renders the divider
-    // bare - no run header or footer around it.
-    const divider = document.querySelector('.compaction-sep');
-    expect(divider?.textContent.trim()).toBe(
-      'Compacting current conversation…',
-    );
-    expect(divider?.classList.contains('compaction-sep--running')).toBe(true);
-    expect(divider?.getAttribute('aria-busy')).toBe('true');
-    expect(document.querySelector('.compaction-disclosure')).toBeNull();
-    expect(document.querySelector('.assistant-run')).toBeNull();
-  });
+  it.each([false, true])(
+    'renders Compaction progress or failure (failed=%s)',
+    (failed) => {
+      const sessionState = ensureSessionState(
+        createChatState(),
+        'alpha',
+        'session-compaction',
+      );
+      appendRunEvent(sessionState, {
+        type: 'compaction_started',
+        run_id: 'run-compaction',
+        sequence: 1,
+        payload: { context_tokens_before: 250_000 },
+      });
+      if (failed) {
+        appendRunEvent(sessionState, {
+          type: 'compaction_aborted',
+          run_id: 'run-compaction',
+          sequence: 2,
+          payload: { reason: 'failed' },
+        });
+      }
+      suite.mountedComponent = mount(ChatTimeline, {
+        target: document.body,
+        props: { sessionState, agentName: 'Alpha' },
+      });
+      flushSync();
+      const divider = document.querySelector('.compaction-sep');
+      expect(divider?.getAttribute('role')).toBe(failed ? 'alert' : 'status');
+      expect(divider?.textContent.trim()).toBeTruthy();
+      expect(divider?.classList.contains('compaction-sep--running')).toBe(
+        !failed,
+      );
+      expect(divider?.getAttribute('aria-busy')).toBe(failed ? null : 'true');
+      expect(document.querySelector('.compaction-disclosure')).toBeNull();
+      expect(document.querySelector('.assistant-run')).toBeNull();
+    },
+  );
 
   it('keeps persisted Compaction token counts after History reload', () => {
     const summaryText =
