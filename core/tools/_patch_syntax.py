@@ -10,7 +10,7 @@ from core.tools.tools import (
 )
 
 _MESSAGES = {
-    "invalid_arguments": "Pass only a non-empty patch string.",
+    "invalid_arguments": 'Pass {"patch": "..."} with non-empty patch text and no other fields.',
     "invalid_patch": "Invalid patch syntax at line {line}: {text}. Correct this line and retry.",
     "no_changes": "Patch contains no changes. Include an Add, Update, Delete, or Move operation.",
     "invalid_path": "Cannot use path {path}: {reason}.",
@@ -40,6 +40,20 @@ _MESSAGES = {
     "line_numbered_content": (
         "Hunk {hunk} in {path} contains incomplete line-number gutters. "
         "Supply complete raw lines without read-output prefixes."
+    ),
+    "context_not_found": (
+        "Context hint {hint!r} in {path} was not found. After @@, use a complete existing "
+        "line, or use bare @@ with unchanged neighboring lines in the hunk."
+    ),
+    "ambiguous_context": (
+        "Context hint {hint!r} in {path} matches multiple lines. Use a unique full line "
+        "after @@, or use bare @@ with enough unchanged neighboring lines to identify "
+        "one location."
+    ),
+    "conflicting_move": (
+        "Conflicting move destinations at patch line {line}: {first!r} and {second!r}. "
+        "Keep one destination for this operation; use separate Move File operations "
+        "for successive moves."
     ),
     "file_changed": (
         "{path} changed unexpectedly during this patch. Inspect its current content and retry."
@@ -116,10 +130,17 @@ def _parse(patch: str) -> list[_Operation]:
             operations.append(current)
             hunk = None
             continue
-        if line.startswith("*** Move to: ") and current and current.action == "update":
-            if current.destination is not None or current.hunks or not line[13:].strip():
+        if line.startswith("*** Move to: ") and current and current.action in {"update", "move"}:
+            destination = line[13:].strip()
+            if not destination or "\x00" in destination:
                 raise _PatchError("invalid_patch", line=number, text=line[:200])
-            current.destination = line[13:].strip()
+            if current.destination is not None and current.destination != destination:
+                raise _PatchError(
+                    "conflicting_move", line=number, first=current.destination, second=destination
+                )
+            # This is operation metadata, even when it follows a hunk. Repeating
+            # the same destination adds no effect; conflicting targets never win.
+            current.destination = destination
             continue
         if line == "*** End of File" and hunk is not None:
             hunk.eof = True
