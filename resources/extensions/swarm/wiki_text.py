@@ -6,7 +6,8 @@ WIKI_DESCRIPTION = (
     "Create, find, and collaboratively edit your group's shared Markdown Wiki pages. "
     "Use list with query to search titles and contents, or omit query for recently changed pages. "
     "Read current or historical versions and restore earlier content, including deleted pages. "
-    "Pages are public within your group. Share page links through swarm_board when you want "
+    "Pages are public within your group. Share page links in your group's"
+    " discussions when you want "
     "others to notice them; Wiki edits do not send Board messages or wake participants."
 )
 

@@ -203,9 +203,13 @@ describe('Swarm Wiki', () => {
     );
     expect(document.querySelector('.wiki-content script')).toBeNull();
     fill('wiki-search', 'findings');
-    document
-      .querySelector('.wiki-index form')
-      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    document.getElementById('wiki-search').dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
     await vi.waitFor(() =>
       expect(fixture.operation).toHaveBeenCalledWith(
         'wiki',

@@ -141,7 +141,31 @@ def _participant_config(profile: Json, participant: Json, cwd: Path) -> Temporar
 
 def _reminder(swarm: Json, event: str) -> str:
     enabled = swarm["profile_snapshot"]["reminders"][event]
+    if (
+        enabled
+        and event == "delivery"
+        and "swarm_inbox" in swarm["profile_snapshot"]["tool_access"].get("denied", [])
+    ):
+        return "New Board messages from the authors listed below."
     return REMINDER_TEXTS[event] if enabled else ""
+
+
+def _initial_message(swarm: Json) -> str:
+    from .agent_text import INITIAL_MESSAGE
+
+    denied = swarm["profile_snapshot"]["tool_access"].get("denied", [])
+    if "swarm_board" not in denied:
+        return INITIAL_MESSAGE.format(goal_post_id=swarm["goal_post_id"])
+    guidance = (
+        "Use your available shared collaboration Tools to discuss and examine the request "
+        "with your peers before implementation. Decide together when you are ready to work."
+        if any(name not in denied for name in ("swarm_wiki", "swarm_decisions"))
+        else (
+            "Work toward the request with the Tools available to you. Other "
+            "participants may be working in parallel."
+        )
+    )
+    return f"{guidance}\n\nUser request:\n{swarm['prompt']}"
 
 
 def _swarm_command_argument(argument: str) -> tuple[str, str]:
