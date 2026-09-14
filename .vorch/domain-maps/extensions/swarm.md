@@ -7,12 +7,14 @@ Private Session Tools use owner-selected call repair before scoped execution, in
 
 ## Owners
 
-- `extension.py` owns registration, management operations, the three Tool handlers,
+- `extension.py` owns registration, management operations, the four Tool handlers,
   and coordination with owner-bound temporary execution groups.
-- `store.py` owns the SQLite profile, Board, audience, delivery, lifecycle and audit
+- `store.py` owns the SQLite profile, Board, Wiki, audience, delivery, lifecycle and audit
   transactions. It receives canonical receipt lookups; it must
   not open the Session database directly.
-- `agent_text.py` owns the scoped Tool definitions and reviewed runtime wording.
+- `agent_text.py` and `wiki_text.py` own the scoped Tool definitions and reviewed
+  runtime wording. `_store_wiki.py` implements Wiki transactions within the existing
+  Swarm database owner.
 - `ui/SwarmPage.svelte` and `ui/ProfileEditor.svelte` own the domain page. The app
   shell and page bridge remain generic; built assets live in generated `web/`.
 - Retained-list refreshes read profiles and Swarms. Model, Tool, Skill and
@@ -63,6 +65,36 @@ Saving without a command shortcut generates a unique name-based shortcut inside
 the profile transaction; omission on an update retains the existing shortcut.
 Explicit shortcuts remain validated and collision-checked (`store.py`).
 
+New Swarms atomically retain the original user request as an immutable user-authored
+Board post at sequence zero. `goal_post_id` identifies it in the Swarm snapshot and
+Board results. The page pins it separately; chronological discussion pages exclude
+it, while exact-message reads return it. It creates no delivery audience: the initial
+participant message points to this post and asks Agents to read and discuss the
+request together before implementation. The Agents decide when they are ready to
+act; no fixed roles, discussion rounds, plan template or approval phase are imposed.
+Resume preserves admitted Session history and supplies the same initial message to
+participants not yet admitted. Existing profiles and historical messages are not
+rewritten. New profile defaults describe peer discussion and the shared Wiki.
+Evidence: `agent_text.py`, `test_swarm_lifecycle.py`, `test_swarm_wiki.py`.
+
+`swarm_wiki` is available only to bound participant Sessions of the owning Swarm.
+The human page and CLI use the equivalent `wiki` management operation. Pages are
+free Markdown with stable `page_id` values and `#wiki/<page_id>` links that navigate
+inside the Swarm page. Agents choose how to organize them. List/search returns
+recent changes and excerpts; content and history reads are bounded. List/history
+continuations bind their query and revision watermark; content continuations pin
+the requested revision. Search matches Unicode-casefolded titles and content.
+
+Create, update, delete and restore preserve full versions with author and timestamp.
+Update supports title/content replacement or one exact `old_text`/`new_text` edit.
+Writes require payload-bound request ids; changes to existing pages also require
+`expected_revision`. Stale writes fail without overwriting the newer revision;
+recovery reads the current page and reconciles the edit. Delete retains history,
+and restore creates a new live revision from the chosen historical content.
+Wiki edits invalidate the human page but create no Board messages or participant
+wakes. Agents share page links on the Board when they want attention.
+Evidence: `_store_wiki.py`, `test_swarm_wiki.py`, `swarm_wiki_cases.py`.
+
 Board posts are immutable and public within one Swarm. `swarm_board` can ping
 participants on a discussion's opening message without joining those recipients;
 creation, opening-message audience and the main-discussion announcement commit
@@ -77,7 +109,7 @@ open through the same host bridge handler as Activity. Discussion announcements
 retain their dedicated navigation action (`SwarmPage.test.js`).
 Coverage: `test_swarm_board.py` and the production `swarm_tool` probe.
 
-The default System Prompt and Board Tool description guide participants toward
+The Board Tool description guides participants toward
 the main discussion for shared conversation and coordination; additional discussions
 are for several Agents working through a specific problem. New announcements carry
 readable text, exact discussion/opening-post IDs and read/join guidance. Human Board
@@ -135,7 +167,7 @@ formation rows. Larger Swarms use numbered suffixes after the pool is exhausted.
 Saved names survive request replay, restart and Resume; participant ids remain
 the addressing contract (`test_swarm_store.py`). Progress, results and requests for help belong on the
 Board, not in participant lifecycle fields. There is no participant-owned wait, blocked, finishing or done state,
-completion reservation, summary store or automatic group completion.
+completion reservation, structured participant summary field or automatic group completion.
 
 Participant status is an execution projection: `idle`, `running`, `failed`,
 `cancelled` or `interrupted`. A successful Run returns to idle and leaves the
@@ -193,11 +225,15 @@ Internal Extension source routing: `extension.py` owns the live Swarm service an
 - Production-definition Model probes and independent first-use evaluation:
   `scripts/probe_provider_tool_call.py` (`swarm_tool` scenario), with probe tests
   under `tests/scripts/test_probe_provider_tool_call_extensions.py`. The `unassisted` case
-  supplies the goal without prescribing Tools; success requires receiving peer
+  supplies the production initial message pointing to the original goal post, with
+  all four private Tools available. Success requires reading that goal, receiving peer
   feedback, a later public contribution, and a normal final response. It evaluates
   coordination effects, not the semantic quality of the generated checklist.
+  The `swarm_wiki` matrix exercises every action, repair and conflict handling, and
+  checks durable effects independently of the Model's emitted arguments.
   The probe purges cached Extension modules before loading its own checkout.
-- Rendered business controls: `webui/src/components/__tests__/SwarmPage.test.js`;
+- Rendered business controls: `webui/src/components/__tests__/SwarmPage.test.js`
+  and `SwarmWiki.test.js`;
   generic iframe isolation is tested by ExtensionPage and server asset tests.
 
 Use the Sessions, Runs, Chat and Statistics maps before changing their owning
@@ -258,11 +294,14 @@ input defaults are resolved when a profile is saved or previewed.
 
 The page offers confirmed deletion after Stop. `swarms.delete` marks a closed
 Swarm `deleting`, removes its bound participant Sessions through the host, then
-transactionally removes its Board, participants, events and request receipts.
+transactionally removes its Board, Wiki pages and revisions, participants, events
+and request receipts.
 The profile and other Swarms remain. Start/Stop/Resume/Delete are serialized; the durable
 deletion marker blocks Resume, including request replay, and survives restart so
 a failed deletion can be retried. Tests: `test_swarm_board.py`, `SwarmPage.test.js`.
 
 Management operation descriptions state each action and its continuation or revision requirements. The CLI lists compact descriptions first and exposes the complete argument schema through per-operation help. Profile save/preview help includes a validator-checked creation example, optional fields, and revision guidance. Source: `_registration.py` registration and `cli/extensions_management.py`; tests: `tests/resources/extensions/test_mcp.py` and `tests/cli/test_extensions_operations.py`.
 
-Private UI routing: `ui/SwarmPage.svelte` composes the page; `pageModel.svelte.js` retains its management state, request generations, Board/Usage loading, mutations, and bridge lifetime, while `pageActivity.svelte.js` owns participant History/replay subscriptions and context projection. `pagePresentation.js` holds display-only count/avatar helpers. `ProfileEditor.svelte` retains profile drafts, validation, and autosave; `profilePromptPreview.svelte.js` owns preview request ordering and freshness. Adjacent `swarmPage.css` and `profileEditor.css` scope styles to their page/editor surfaces, including portaled dialogs. The Extension-page bridge interface and management operations are unchanged; regression coverage remains `webui/src/components/__tests__/SwarmPage.test.js` plus the bundled-page build test.
+Private UI routing: `ui/SwarmPage.svelte` composes the page; `pageModel.svelte.js` retains its management state, request generations, Board/Usage loading, mutations, and bridge lifetime, while `pageActivity.svelte.js` owns participant History/replay subscriptions and context projection. `pagePresentation.js` holds display-only count/avatar helpers. `ProfileEditor.svelte` retains profile drafts, validation, and autosave; `profilePromptPreview.svelte.js` owns preview request ordering and freshness. Adjacent `swarmPage.css` and `profileEditor.css` scope styles to their page/editor surfaces, including portaled dialogs.
+
+WikiPanel.svelte owns free page drafts, bounded content loading, search, version history and restore. Existing pages autosave and flush before local or shell navigation; new pages save explicitly. Conflicts retain the draft and block navigation until it is saved or explicitly discarded. Invalidation refreshes discovery without replacing an open edit. The Extension-page bridge remains generic; the Wiki adds one management operation. Regression coverage includes SwarmWiki.test.js and `webui/src/components/__tests__/SwarmPage.test.js` plus the bundled-page build test.

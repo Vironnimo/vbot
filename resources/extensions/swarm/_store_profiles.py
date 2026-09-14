@@ -180,6 +180,14 @@ def _create_swarm(
             "INSERT INTO discussions(id,swarm_id,title,sequence,is_main,created_at) VALUES(?,?,?,?,1,?)",
             (main_id, swarm_id, "Main", 1, now),
         )
+        goal_id = new_id("pst")
+        connection.execute(
+            "INSERT INTO posts(id,swarm_id,discussion_id,sequence,author_kind,author_id,author_name,text,reply_to,recipients_json,created_at) VALUES(?,?,?,0,'user','user','User',?,NULL,'[]',?)",
+            (goal_id, swarm_id, main_id, prompt, now),
+        )
+        connection.execute(
+            "INSERT INTO swarm_goals(swarm_id,post_id) VALUES(?,?)", (swarm_id, goal_id)
+        )
         names = list(_PARTICIPANT_NAMES)
         secrets.SystemRandom().shuffle(names)
         ordinal = 0
@@ -199,7 +207,12 @@ def _create_swarm(
                     "INSERT INTO memberships(discussion_id,participant_id) VALUES(?,?)",
                     (main_id, participant_id),
                 )
-        result = {"swarm_id": swarm_id, "main_discussion_id": main_id, "state": "preparing"}
+        result = {
+            "swarm_id": swarm_id,
+            "main_discussion_id": main_id,
+            "goal_post_id": goal_id,
+            "state": "preparing",
+        }
         connection.execute(
             "INSERT INTO requests(scope,request_id,payload_hash,outcome) VALUES('start',?,?,?)",
             (request_id, payload_hash, _dump(result)),
@@ -251,6 +264,9 @@ def _delete_swarm(db: SwarmDatabase, swarm_id: str) -> None:
                 (swarm_id,),
             )
         for table in (
+            "wiki_revisions",
+            "wiki_pages",
+            "swarm_goals",
             "posts",
             "discussions",
             "participants",
@@ -275,6 +291,10 @@ def _delete_swarm(db: SwarmDatabase, swarm_id: str) -> None:
                 f"create:{swarm_id}:",
                 swarm_id,
             ),
+        )
+        connection.execute(
+            "DELETE FROM requests WHERE substr(scope,1,?)=?",
+            (len(f"wiki:{swarm_id}:"), f"wiki:{swarm_id}:"),
         )
         connection.execute("DELETE FROM swarms WHERE id=?", (swarm_id,))
 
@@ -313,6 +333,11 @@ def _get_swarm(db: SwarmDatabase, swarm_id: str) -> Json:
             ).fetchone()[0]
         ),
         "main_discussion_id": main["id"],
+        "goal_post_id": (lambda goal: goal[0] if goal else None)(
+            connection.execute(
+                "SELECT post_id FROM swarm_goals WHERE swarm_id=?", (swarm_id,)
+            ).fetchone()
+        ),
         "epoch": int(
             connection.execute(
                 "SELECT epoch FROM swarm_epochs WHERE swarm_id=?", (swarm_id,)
