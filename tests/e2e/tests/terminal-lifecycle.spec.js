@@ -135,7 +135,10 @@ async function expectSelectedTerminalTitle(page, expectedTitle) {
         (item) => item.terminal_id === terminalId,
       );
       const announcedTitle = terminal?.title?.trim();
-      if (announcedTitle !== expectedTitle) {
+      if (
+        !announcedTitle ||
+        (expectedTitle && announcedTitle !== expectedTitle)
+      ) {
         return false;
       }
       return (
@@ -229,10 +232,7 @@ function defaultShellProbe(command) {
     : `Write-Output ${DEFAULT_SHELL_MARKER}`;
 }
 
-function defaultShellTitleProbe(command, title) {
-  if (process.platform !== "win32") {
-    return `printf '\\033]0;${title}\\007'`;
-  }
+function windowsShellTitleProbe(command, title) {
   return command.toLowerCase().endsWith("cmd.exe")
     ? `title ${title}`
     : `$Host.UI.RawUI.WindowTitle = '${title}'`;
@@ -253,12 +253,14 @@ test("the platform default shell starts as a native interactive terminal", async
   await startTerminal(page);
 
   const expectedCommand = expectedDefaultShell();
-  // A clean shell need not announce a title until explicitly asked to do so.
-  const title = "E2E-DEFAULT-SHELL";
-  await sendToSelectedTerminal(
-    page,
-    defaultShellTitleProbe(expectedCommand, title),
-  );
+  // Windows shells may need an explicit title; Bash's prompt owns its own title.
+  const title = process.platform === "win32" ? "E2E-DEFAULT-SHELL" : undefined;
+  if (title) {
+    await sendToSelectedTerminal(
+      page,
+      windowsShellTitleProbe(expectedCommand, title),
+    );
+  }
   await expectSelectedTerminalTitle(page, title);
   await expect(page.locator(".terminals-view__tile-target").first()).toHaveText(
     "Manual",
