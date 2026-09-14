@@ -91,8 +91,13 @@ exit $code
 
 def test_linux_setup_progress_preserves_diagnostics_and_failed_exit(tmp_path):
     shell = shutil.which("bash")
+    if os.name == "nt":
+        # The System32 bash launcher starts WSL, not a shell in this Windows cwd.
+        git = shutil.which("git")
+        git_bash = Path(git).resolve().parent.parent / "bin/bash.exe" if git else None
+        shell = str(git_bash) if git_bash and git_bash.is_file() else None
     if shell is None:
-        pytest.skip("Bash is unavailable")
+        pytest.skip("Bash (Git Bash on Windows) is unavailable")
     source = (ROOT / "scripts/install.sh").read_text(encoding="utf-8")
     functions = source[source.index("status_line() {") : source.index('INSTALL_LOG=""')]
     script = tmp_path / "progress.sh"
