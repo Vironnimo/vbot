@@ -109,6 +109,7 @@ export function createSwarmPageModel(host) {
   function navigate(action) {
     if (profileEditor) return profileEditor.requestTransition(action);
     if (host.wiki) return host.wiki.requestTransition(action);
+    if (host.decisions) return host.decisions.requestTransition(action);
     return action();
   }
 
@@ -183,6 +184,7 @@ export function createSwarmPageModel(host) {
   const tabs = $derived([
     { id: 'board', label: t('swarm.tabs.board', 'Board') },
     { id: 'wiki', label: t('swarm.tabs.wiki', 'Wiki') },
+    { id: 'decisions', label: t('swarm.tabs.decisions', 'Decisions') },
     { id: 'participants', label: t('swarm.tabs.activity', 'Activity') },
     { id: 'usage', label: t('swarm.tabs.usage', 'Usage') },
     { id: 'audit', label: t('swarm.tabs.audit', 'Delivery audit') },
@@ -709,6 +711,17 @@ export function createSwarmPageModel(host) {
     const link = event.target.closest('a[href]');
     if (!link || !client) return;
     event.preventDefault();
+    const decision = /^#decision\/([^/]+)(?:\/\d+)?$/.exec(
+      link.getAttribute('href') ?? '',
+    );
+    if (decision) {
+      void navigate(async () => {
+        activeTab = 'decisions';
+        await tick();
+        await host.decisions?.openQuestion(decision[1]);
+      });
+      return;
+    }
     const wiki = /^#wiki\/([^/]+)$/.exec(link.getAttribute('href') ?? '');
     if (wiki) {
       void navigate(async () => {

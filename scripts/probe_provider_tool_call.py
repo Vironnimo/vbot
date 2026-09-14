@@ -117,7 +117,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--swarm-tool",
-        choices=("swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki"),
+        choices=("swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki", "swarm_decisions"),
         default="swarm_board",
     )
     parser.add_argument(

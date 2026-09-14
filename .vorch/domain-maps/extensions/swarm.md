@@ -7,12 +7,12 @@ Private Session Tools use owner-selected call repair before scoped execution, in
 
 ## Owners
 
-- `extension.py` owns registration, management operations, the four Tool handlers,
+- `extension.py` owns registration, management operations, the five Tool handlers,
   and coordination with owner-bound temporary execution groups.
-- `store.py` owns the SQLite profile, Board, Wiki, audience, delivery, lifecycle and audit
+- `store.py` owns the SQLite profile, Board, Wiki, decision, audience, delivery, lifecycle and audit
   transactions. It receives canonical receipt lookups; it must
   not open the Session database directly.
-- `agent_text.py` and `wiki_text.py` own the scoped Tool definitions and reviewed
+- `agent_text.py`, `wiki_text.py` and `decision_text.py` own the scoped Tool definitions and reviewed
   runtime wording. `_store_wiki.py` implements Wiki transactions within the existing
   Swarm database owner.
 - `ui/SwarmPage.svelte` and `ui/ProfileEditor.svelte` own the domain page. The app
@@ -53,6 +53,8 @@ continuation receipts add no Model-visible reminder. Existing Session history is
 not rewritten. Evidence: `extension.py`, `test_swarm_store.py`,
 `test_swarm_lifecycle.py`.
 
+Profiles expose all five private Swarm Tools under Tools & Skills, using the existing `tool_access.denied` policy for individual switches. All/None also enables/disables the current private set. The public Tool catalog remains unchanged; the Swarm editor appends owner-private catalog entries. Choices apply to future executions, while Resume retains the saved snapshot. Disabling a Tool does not remove its human tab or stored content and does not change independently configured Board delivery/wakes. Preview and actual Model definitions respect the same denials (`test_runtime_extension_host.py`, `test_swarm_lifecycle.py`, `SwarmPage.test.profiles.test.js`).
+
 ## Invariants that affect changes
 
 The human UI calls reusable profiles "Swarms" and their executions "Runs";
@@ -74,7 +76,7 @@ request together before implementation. The Agents decide when they are ready to
 act; no fixed roles, discussion rounds, plan template or approval phase are imposed.
 Resume preserves admitted Session history and supplies the same initial message to
 participants not yet admitted. Existing profiles and historical messages are not
-rewritten. New profile defaults describe peer discussion and the shared Wiki.
+rewritten. New profile defaults orient participants toward the shared collaboration Tools available to them. When Board is disabled, the initial message carries the exact original request directly. With Wiki or Decisions available it retains peer discussion guidance; with both disabled it avoids requiring inaccessible collaboration. Disabling Inbox also removes Inbox-specific delivery guidance.
 Evidence: `agent_text.py`, `test_swarm_lifecycle.py`, `test_swarm_wiki.py`.
 
 `swarm_wiki` is available only to bound participant Sessions of the owning Swarm.
@@ -226,7 +228,7 @@ Internal Extension source routing: `extension.py` owns the live Swarm service an
   `scripts/probe_provider_tool_call.py` (`swarm_tool` scenario), with probe tests
   under `tests/scripts/test_probe_provider_tool_call_extensions.py`. The `unassisted` case
   supplies the production initial message pointing to the original goal post, with
-  all four private Tools available. Success requires reading that goal, receiving peer
+  all five private Tools available. Success requires reading that goal, receiving peer
   feedback, a later public contribution, and a normal final response. It evaluates
   coordination effects, not the semantic quality of the generated checklist.
   The `swarm_wiki` matrix exercises every action, repair and conflict handling, and
@@ -294,7 +296,7 @@ input defaults are resolved when a profile is saved or previewed.
 
 The page offers confirmed deletion after Stop. `swarms.delete` marks a closed
 Swarm `deleting`, removes its bound participant Sessions through the host, then
-transactionally removes its Board, Wiki pages and revisions, participants, events
+transactionally removes its Board, Wiki pages and revisions, decision questions/positions/history, participants, events
 and request receipts.
 The profile and other Swarms remain. Start/Stop/Resume/Delete are serialized; the durable
 deletion marker blocks Resume, including request replay, and survives restart so
@@ -305,3 +307,10 @@ Management operation descriptions state each action and its continuation or revi
 Private UI routing: `ui/SwarmPage.svelte` composes the page; `pageModel.svelte.js` retains its management state, request generations, Board/Usage loading, mutations, and bridge lifetime, while `pageActivity.svelte.js` owns participant History/replay subscriptions and context projection. `pagePresentation.js` holds display-only count/avatar helpers. `ProfileEditor.svelte` retains profile drafts, validation, and autosave; `profilePromptPreview.svelte.js` owns preview request ordering and freshness. Adjacent `swarmPage.css` and `profileEditor.css` scope styles to their page/editor surfaces, including portaled dialogs.
 
 WikiPanel.svelte owns free page drafts, bounded content loading, search, version history and restore. Existing pages autosave and flush before local or shell navigation; new pages save explicitly. Conflicts retain the draft and block navigation until it is saved or explicitly discarded. Invalidation refreshes discovery without replacing an open edit. The Extension-page bridge remains generic; the Wiki adds one management operation. Regression coverage includes SwarmWiki.test.js and `webui/src/components/__tests__/SwarmPage.test.js` plus the bundled-page build test.
+
+
+`swarm_decisions` and the equivalent `decisions` management operation provide optional shared questions, editable alternatives and participant-owned positions. `_store_decisions.py` operates within the existing Swarm database owner. Question/option edits require the observed question revision; positions additionally guard only their author's position revision. Concurrent positions from different participants do not advance the question revision. New/changed alternatives or explicit reconsideration mark existing positions as needing review without erasing them. Support counts distinguish total from confirmed-current support; absence is not agreement and no majority, quorum, deadline or automatic winner is imposed. Options can be withdrawn/restored, questions archived/reopened, and reasons can link to Wiki evidence. Archiving records no collective agreement.
+
+Mutations are payload-bound and idempotent. History retains structural snapshots and each author's position changes; list/read/history cursors bind query and event watermark. Reads include current/snapshot revisions, own position, participation and bounded alternatives/reasons. Changes invalidate the human page without messaging or waking Agents. Versioned `#decision/<question_id>/<revision>` links open the current question; Board/Inbox/automatic delivery attach bounded current summaries for linked questions when Decisions is enabled, so an old post exposes changed context. `DecisionsPanel.svelte` submits operational edits explicitly and protects drafts across navigation and conflicts. Tests: `test_swarm_decisions.py`, `SwarmDecisions.test.js`, and `swarm_decision_cases.py` through the production Luna probe.
+
+Wiki search and decision submissions use explicit button callbacks and Enter handlers because the isolated page sandbox blocks native form submission. The page does not require `allow-forms`. Component tests cover these callbacks; built-browser checks cover the sandbox behavior.

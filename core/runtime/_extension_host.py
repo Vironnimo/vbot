@@ -255,13 +255,29 @@ class ExtensionHostFactory:
             for tool in self.tools.list_tools(include_internal=False)
             if not tool.session_scoped
         }
-        _validate_temporary_tool_configuration(config, ordinary_tools)
+        # Private capabilities are granted by the owner; profiles may only deny
+        # them. Keep ordinary selection and Project ceilings independently strict.
+        assert self._extensions is not None
+        record = next(
+            item for item in self._extensions.records() if item.name == binding.owner_name
+        )
+        private_names = {tool.name for tool in record.declarations.tools if tool.session_scoped}
+        ordinary_config = replace(
+            config,
+            tool_access=replace(
+                config.tool_access,
+                denied=tuple(
+                    name for name in config.tool_access.denied if name not in private_names
+                ),
+            ),
+        )
+        _validate_temporary_tool_configuration(ordinary_config, ordinary_tools)
         project_id = getattr(binding.address, "project_id", None)
         if project_id is not None:
             project = self.projects.get(project_id)
             if config.cwd.resolve() != Path(project.cwd).resolve():
                 raise RuntimeError("temporary working directory is outside its Project")
-            _validate_temporary_project_ceiling(config, set(project.allowed_tools))
+            _validate_temporary_project_ceiling(ordinary_config, set(project.allowed_tools))
 
         resolved = self.agent_resolver.resolve_temporary_agent(
             binding.address,
@@ -338,7 +354,11 @@ class ExtensionHostFactory:
             self.agent_resolver.preview_temporary_agent, config, project_id
         )
         record = next(item for item in self._extensions.records() if item.name == identity.name)
-        grants = tuple(tool.name for tool in record.declarations.tools if tool.session_scoped)
+        grants = tuple(
+            tool.name
+            for tool in record.declarations.tools
+            if tool.session_scoped and tool.name not in config.tool_access.denied
+        )
         definitions = await self.chat_loop.preview_tool_definitions(
             agent, session_tool_grants=grants
         )
