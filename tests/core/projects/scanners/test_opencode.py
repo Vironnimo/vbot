@@ -245,7 +245,7 @@ def test_denied_tools_maps_each_permission_key(tmp_path: Path) -> None:
         "  websearch: deny\n"
     )
     assert _denied_tools_for(tmp_path, front_matter) == frozenset(
-        {"read", "grep", "glob", "web_fetch", "web_search"}
+        {"read", "search_files", "web_fetch", "web_search"}
     )
 
 
