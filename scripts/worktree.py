@@ -529,6 +529,20 @@ def cmd_create(args: argparse.Namespace) -> int:
         return 1
 
     npm_command = shutil.which("npm") or "npm"
+    print("installing the verified search engine...", flush=True)
+    return_code, stderr = _run_command(
+        [sys.executable, "-m", "cli.search_runtime"], cwd=worktree_path
+    )
+    if return_code != 0:
+        cleanup_failed_create(
+            name,
+            worktree_path,
+            data_dir,
+            managed_branch=managed_branch,
+            remove_data_dir=not data_dir_preexisting,
+        )
+        print_error(f"search engine installation failed: {stderr}")
+        return 1
     print(
         "installing webui dependencies (cold npm cache: several minutes, no output until done)...",
         flush=True,

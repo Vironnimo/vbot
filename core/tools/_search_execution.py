@@ -1,0 +1,255 @@
+"""Bounded, cancellable native execution for the file-search owner."""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import queue
+import subprocess
+import threading
+from collections.abc import Generator, Iterator
+from pathlib import Path
+from typing import Any
+
+import psutil  # type: ignore[import-untyped]
+
+from core.tools._search_options import SearchOptions
+from core.tools.search import SearchBudget
+from core.tools.tools import ToolContext
+from core.utils.processes import subprocess_creation_flags
+
+MAX_PROTOCOL_LINE = 8 * 1024 * 1024
+
+
+def native_lines(
+    binary: Path,
+    arguments: list[str],
+    context: ToolContext,
+    budget: SearchBudget,
+) -> Generator[bytes, None, None]:
+    """Drain both pipes with bounded storage and interrupt even a silent process."""
+    process = subprocess.Popen(
+        [str(binary), "--no-config", *arguments],
+        cwd=context.effective_cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        creationflags=subprocess_creation_flags(),
+    )
+    stopped = threading.Event()
+    messages: queue.Queue[tuple[str, bytes]] = queue.Queue(maxsize=8)
+    diagnostics = bytearray()
+
+    def kill() -> None:
+        with contextlib.suppress(OSError):
+            if process.poll() is None:
+                process.kill()
+
+    context.on_cancel(kill)
+    monitored = psutil.Process(process.pid)
+
+    def put(kind: str, data: bytes) -> None:
+        while not stopped.is_set():
+            try:
+                messages.put((kind, data), timeout=0.05)
+                return
+            except queue.Full:
+                continue
+
+    def output() -> None:
+        assert process.stdout is not None
+        try:
+            while not stopped.is_set():
+                line = process.stdout.readline(MAX_PROTOCOL_LINE + 1)
+                if not line:
+                    break
+                if len(line) > MAX_PROTOCOL_LINE:
+                    put(
+                        "error",
+                        (
+                            b"A source record exceeds the 8 MiB processing bound; narrow the se"
+                            b"arch or use a file/count output mode."
+                        ),
+                    )
+                    kill()
+                    break
+                put("line", line)
+        finally:
+            put("end", b"")
+
+    def errors() -> None:
+        assert process.stderr is not None
+        while chunk := process.stderr.read(4096):
+            if len(diagnostics) < 8192:
+                diagnostics.extend(chunk[: 8192 - len(diagnostics)])
+
+    threads = [
+        threading.Thread(target=output, daemon=True),
+        threading.Thread(target=errors, daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+    try:
+        while budget.keep_going():
+            with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+                if monitored.memory_info().rss > 512 * 1024 * 1024:
+                    raise RuntimeError(
+                        "Search exceeded its memory bound; narrow files or patterns."
+                    )
+            try:
+                kind, line = messages.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            if kind == "end":
+                break
+            if kind == "error":
+                raise RuntimeError(line.decode())
+            yield line
+        if budget.stopped:
+            kill()
+        try:
+            process.wait(timeout=max(0.1, budget.remaining_seconds()))
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError("Search timed out; narrow paths or filters and retry.") from error
+        threads[1].join(timeout=1)
+        if process.returncode not in (0, 1) and not budget.stopped:
+            raise RuntimeError(
+                diagnostics.decode("utf-8", errors="backslashreplace").strip()
+                or f"Search engine exited with code {process.returncode}."
+            )
+        if diagnostics and not budget.stopped:
+            raise RuntimeError(diagnostics.decode("utf-8", errors="backslashreplace").strip())
+    finally:
+        stopped.set()
+        kill()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=2)
+        for thread in threads:
+            thread.join(timeout=2)
+        if process.stdout:
+            process.stdout.close()
+        if process.stderr:
+            process.stderr.close()
+
+
+def file_types(
+    binary: Path, options: SearchOptions, context: ToolContext, budget: SearchBudget
+) -> dict[str, list[str]]:
+    args = ["--type-list"]
+    for option, value in options.entries:
+        if option.key in {"type_add", "type_clear"}:
+            args.extend([option.names[0], value])
+    result = {}
+    for line in native_lines(binary, args, context, budget):
+        name, _, patterns = line.decode("utf-8").strip().partition(": ")
+        result[name] = patterns.split(", ") if patterns else []
+    return result
+
+
+def validate_patterns(
+    binary: Path,
+    patterns: list[str],
+    options: SearchOptions,
+    context: ToolContext,
+    budget: SearchBudget,
+    empty_file: Path,
+) -> None:
+    args = ["--json", *options.native_arguments()]
+    for pattern in patterns:
+        args.extend(["-e", pattern])
+    args.extend(["--", str(empty_file)])
+    for _ in native_lines(binary, args, context, budget):
+        pass
+
+
+def content_events(
+    binary: Path,
+    paths: Iterator[tuple[Path, bool]],
+    patterns: list[str],
+    options: SearchOptions,
+    context: ToolContext,
+    budget: SearchBudget,
+    window: int,
+) -> Generator[dict[str, Any], None, None]:
+    mode = "files" if options.enabled("quiet") else options.get("output")
+    base = [
+        "--threads",
+        "1",
+        "--no-mmap",
+        "--no-ignore",
+        "--hidden",
+        *options.native_arguments(),
+    ]
+    if mode:
+        selectors = {
+            "files": "-l",
+            "without": "--files-without-match",
+            "lines": "-c",
+            "counts": "--count-matches",
+        }
+        base.extend(["--null", "--with-filename", "--color=never", selectors[mode]])
+        if options.enabled("zero"):
+            base.append("--include-zero")
+        if options.enabled("only"):
+            base.append("--only-matching")
+    else:
+        base.append("--json")
+    if not options.get("output") and not options.enabled("quiet") and not options.get("max_count"):
+        base.extend(["--max-count", str(window + 1)])
+    for pattern in patterns:
+        base.extend(["-e", pattern])
+    length = sum(len(p) + 3 for p in base) + len(str(binary))
+    if length > 20000:
+        raise ValueError(
+            "Search patterns/options exceed the process argument budget; split"
+            " the pattern collection."
+        )
+    batch: list[str] = []
+    size = length
+    cwd = Path(os.path.abspath(context.effective_cwd.expanduser()))
+
+    def execute() -> Generator[dict[str, Any], None, None]:
+        buffer = b""
+        with contextlib.closing(
+            native_lines(binary, [*base, "--", *batch], context, budget)
+        ) as lines:
+            for line in lines:
+                if not mode:
+                    yield json.loads(line)
+                    continue
+                buffer += line
+                while b"\0" in buffer:
+                    path_bytes, _, remainder = buffer.partition(b"\0")
+                    count = None
+                    if mode in {"lines", "counts"}:
+                        if b"\n" not in remainder:
+                            break
+                        number, _, remainder = remainder.partition(b"\n")
+                        count = int(number)
+                    yield {
+                        "type": "row",
+                        "data": {"path": path_bytes.decode("utf-8"), "count": count},
+                    }
+                    buffer = remainder
+            if buffer and not budget.stopped:
+                raise RuntimeError("Search returned an incomplete result record.")
+
+    for path, _ in paths:
+        if not budget.keep_going():
+            return
+        try:
+            argument = str(path.relative_to(cwd))
+        except ValueError:
+            argument = str(path)
+        argument_size = len(argument.encode("utf-8")) + 3
+        if argument_size + length > 28000:
+            raise ValueError(f"Search path exceeds the native argument budget: {argument}")
+        if batch and size + argument_size > 28000:
+            yield from execute()
+            batch.clear()
+            size = length
+        batch.append(argument)
+        size += argument_size
+    if batch:
+        yield from execute()

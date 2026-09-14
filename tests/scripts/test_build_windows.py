@@ -70,6 +70,17 @@ def _source(tmp_path: Path) -> Path:
     (source / "docs").mkdir()
     for filename in build_windows.APP_FILES:
         (source / filename).write_text(filename, encoding="utf-8")
+    native = source / "resources/native/ripgrep/fixture/x86_64-pc-windows-msvc/rg.exe"
+    native.parent.mkdir(parents=True)
+    native.write_bytes(b"verified fixture executable")
+    artifact = {
+        "binary_sha256": hashlib.sha256(native.read_bytes()).hexdigest(),
+        "sha256": "0" * 64,
+        "url": "https://example.invalid/never-download.zip",
+    }
+    (source / "resources/ripgrep.lock.json").write_text(
+        json.dumps({"version": "fixture", "artifacts": {"x86_64-pc-windows-msvc": artifact}})
+    )
     return source
 
 

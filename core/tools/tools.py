@@ -505,7 +505,8 @@ class ToolRegistry:
         if not tool_is_ready(tool):
             return tool_failure(
                 "tool_not_ready",
-                f"tool '{context.tool_name}' is not available: its extension is not configured",
+                tool.readiness_hint
+                or f"tool '{context.tool_name}' is not available: its extension is not configured",
                 retryable=False,
             )
         input_contract = context.input_contract or tool.contract

@@ -1,5 +1,13 @@
 # Third-Party Notices
 
+## File search engine
+
+Server installations include the unmodified ripgrep 15.1.0 executable from
+[BurntSushi/ripgrep](https://github.com/BurntSushi/ripgrep/releases/tag/15.1.0),
+including PCRE2 10.45. Exact archives and executable digests are recorded in
+`resources/ripgrep.lock.json`. The accompanying MIT and PCRE2 license notices
+are distributed in `resources/licenses/ripgrep.txt` and `resources/licenses/pcre2.txt`.
+
 ## Local speech models
 
 Optional local speech recognition downloads unmodified pretrained model weights

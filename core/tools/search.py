@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import fnmatch
 import os
 import time
-from functools import cache
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pathspec import PathSpec
@@ -21,11 +19,6 @@ if TYPE_CHECKING:
 
 SEARCH_TIMEOUT_SECONDS = 30.0
 MAX_OUTPUT_BYTES = 50 * 1024
-OUTPUT_TRUNCATED_MARKER = "[... output truncated ...]"
-RESULTS_LIMITED_MARKER = "[Results limited to {limit} matches.]"
-SEARCH_TIMEOUT_MARKER = "[Search timed out; results may be incomplete.]"
-SEARCH_CANCELLED_FAILURE_CODE = "cancelled_by_user"
-SEARCH_CANCELLED_FAILURE_MESSAGE = "Search aborted by the user"
 
 
 class SearchBudget:
@@ -212,108 +205,6 @@ def display_search_path(path: Path, *, cwd: Path) -> str:
         return model_path(path)
 
 
-def cap_output_bytes(content: str, *, trailing_lines: list[str] | None = None) -> str:
-    """Cap rendered output at ``MAX_OUTPUT_BYTES``, keeping trailing marker lines."""
-    encoded = content.encode("utf-8")
-    suffix = "".join(f"\n{line}" for line in (trailing_lines or []) if line)
-    suffix_bytes = suffix.encode("utf-8")
-    if len(encoded) + len(suffix_bytes) <= MAX_OUTPUT_BYTES:
-        return content + suffix
-
-    marker = f"\n{OUTPUT_TRUNCATED_MARKER}{suffix}"
-    marker_bytes = marker.encode("utf-8")
-    keep_bytes = max(MAX_OUTPUT_BYTES - len(marker_bytes), 0)
-    clipped = encoded[:keep_bytes].decode("utf-8", errors="ignore")
-    return clipped + marker
-
-
-def render_limited_results(
-    lines: list[str],
-    *,
-    observed_results: int,
-    limit: int,
-    timed_out: bool = False,
-) -> str:
-    """Join result lines, appending explicit limit/timeout markers within the byte cap."""
-    if not lines:
-        return ""
-    trailing_lines: list[str] = []
-    if observed_results > limit:
-        trailing_lines.append(RESULTS_LIMITED_MARKER.format(limit=limit))
-    if timed_out:
-        trailing_lines.append(SEARCH_TIMEOUT_MARKER)
-    return cap_output_bytes("\n".join(lines), trailing_lines=trailing_lines)
-
-
-def resolve_search_path(context: ToolContext, path: str | None) -> Path:
-    """Resolve an optional tool path against the tool working directory.
-
-    Search tools default to the working directory (``ToolContext.effective_cwd``:
-    the project repo in a project session, otherwise the agent workspace).
-    Supplied paths may be absolute or relative to that directory, and ``~`` is
-    expanded before resolution.
-    """
-    if path is None:
-        return context.effective_cwd.expanduser().resolve()
-    if not isinstance(path, str) or not path.strip():
-        raise ValueError("path must be a non-empty string")
-
-    return context.resolve_path(path)
-
-
-def normalize_file_filter_pattern(
-    pattern: str,
-    *,
-    field_name: str = "glob",
-    allow_empty: bool = False,
-) -> str:
-    """Normalize a glob-style file filter to a forward-slash relative pattern."""
-    if not isinstance(pattern, str):
-        raise ValueError(f"{field_name} must be a string")
-
-    normalized = pattern.strip().replace("\\", "/")
-    if not normalized:
-        if allow_empty:
-            return ""
-        raise ValueError(f"{field_name} must not be empty")
-
-    if _is_absolute_or_user_rooted(normalized):
-        raise ValueError(f"{field_name} must be a relative file pattern")
-
-    parts: list[str] = []
-    for segment in normalized.split("/"):
-        if segment in {"", "."}:
-            continue
-        if segment == "..":
-            raise ValueError(f"{field_name} must not contain '..' segments")
-        parts.append(segment)
-
-    if not parts:
-        if allow_empty:
-            return ""
-        raise ValueError(f"{field_name} must not be empty")
-
-    return "/".join(parts)
-
-
-def relative_forward_path(path: Path, *, base: Path) -> str:
-    """Return ``path`` relative to ``base`` using forward slashes."""
-    return path.relative_to(base).as_posix()
-
-
-def _relative_path_segments(relative_path: str) -> tuple[str, ...]:
-    """Split a relative path into segments without pattern validation.
-
-    Result paths are data, not patterns: a file legitimately named ``~lock``
-    or ``..data`` must not trip the pattern-side validation rules.
-    """
-    return tuple(
-        segment
-        for segment in relative_path.replace("\\", "/").split("/")
-        if segment not in {"", "."}
-    )
-
-
 def _character_class_end(pattern: str, start: int) -> int | None:
     """Return the index just past a character class at ``start``, or ``None``.
 
@@ -419,179 +310,10 @@ def _expand_brace_alternations(pattern: str) -> list[str]:
                 for candidate in _expand_brace_alternations(prefix + alternative + suffix):
                     if candidate not in expanded:
                         expanded.append(candidate)
+                        if len(expanded) > 1024:
+                            raise ValueError(
+                                "Glob expands to more than 1024 alternatives; split patterns."
+                            )
             return expanded
         index += 1
     return [pattern]
-
-
-def file_filter_matches(relative_path: str, pattern: str) -> bool:
-    """Return whether a relative path matches a file filter pattern.
-
-    A pattern without ``/`` matches the file name at any depth (rg ``--glob``
-    semantics); matching is case-insensitive on every platform. ``{a,b}``
-    alternations expand like rg ``--glob``. A leading ``!`` negates the whole
-    filter (``!*.py`` keeps every file that is not ``*.py``), mirroring
-    ripgrep's exclusion globs; the negation applies after brace expansion. A
-    trailing-slash glob names a directory (rg semantics): positively it never
-    matches a file candidate, while ``!build/`` excludes the whole subtree.
-    """
-    if pattern.startswith("!"):
-        excluded_pattern = pattern[1:]
-        if not excluded_pattern:
-            return True
-        if excluded_pattern.endswith("/"):
-            return not _file_lies_under_directory_glob(relative_path, excluded_pattern)
-        return not any(
-            _file_filter_matches_with_directories(relative_path, expanded)
-            for expanded in _expand_brace_alternations(excluded_pattern)
-        )
-    if pattern.endswith("/"):
-        # A trailing-slash glob matches directories only; no file candidate
-        # ever matches it positively (rg --glob semantics).
-        return False
-    return any(
-        _file_filter_matches_single(relative_path, expanded)
-        for expanded in _expand_brace_alternations(pattern)
-    )
-
-
-def _file_filter_matches_with_directories(relative_path: str, pattern: str) -> bool:
-    """Match a file filter against the file *or* any directory on its path.
-
-    ripgrep evaluates a negative ``--glob`` against directory candidates too
-    and prunes an excluded directory's whole subtree, so ``!build`` removes
-    ``build/x.txt`` just like a file named ``build``. Positive filters still
-    match file names only (rg lists no directories), which is why this helper
-    is used exclusively for exclusions.
-    """
-    path_segments = _relative_path_segments(relative_path)
-    for length in range(1, len(path_segments) + 1):
-        if _file_filter_matches_single("/".join(path_segments[:length]), pattern):
-            return True
-    return False
-
-
-def _file_lies_under_directory_glob(relative_path: str, pattern: str) -> bool:
-    """Return whether a file path lies *under* a trailing-slash directory glob.
-
-    rg semantics: ``build/`` names the directory itself, so excluding it
-    removes the whole subtree while a file candidate is never the directory
-    (a file named ``build`` stays included). The prefix comparison reuses the
-    segment matcher, so ``**`` and ``{a,b}`` alternations behave like rg
-    (``!**/build/`` excludes every ``build`` directory at any depth).
-    """
-    path_segments = _relative_path_segments(relative_path)
-    for expanded in _expand_brace_alternations(pattern):
-        normalized = normalize_file_filter_pattern(expanded, allow_empty=True)
-        pattern_segments = tuple(segment for segment in normalized.split("/") if segment)
-        if not pattern_segments:
-            continue
-        # Only strict prefixes: the candidate lies below the named directory.
-        # A path equal to the pattern is a file with the directory's name and
-        # stays included.
-        for prefix_length in range(1, len(path_segments)):
-            if _match_glob_path_segments(path_segments[:prefix_length], pattern_segments):
-                return True
-    return False
-
-
-def _file_filter_matches_single(relative_path: str, pattern: str) -> bool:
-    path_segments = _relative_path_segments(relative_path)
-    normalized_pattern = normalize_file_filter_pattern(pattern)
-
-    if "/" not in normalized_pattern:
-        if normalized_pattern == "**":
-            return True
-        name = path_segments[-1] if path_segments else ""
-        return fnmatch.fnmatchcase(name.casefold(), normalized_pattern.casefold())
-
-    pattern_segments = tuple(segment for segment in normalized_pattern.split("/") if segment)
-    return _match_glob_path_segments(path_segments, pattern_segments)
-
-
-def glob_path_matches(relative_path: str, pattern: str) -> bool:
-    """Return whether a relative path matches an anchored glob pattern.
-
-    Unlike ``file_filter_matches`` there is no bare-name shortcut: ``*.py``
-    matches top-level entries only, ``**/*.py`` matches at any depth —
-    standard glob semantics. Case-insensitive on every platform. ``{a,b}``
-    alternations expand like rg ``--glob``.
-    """
-    return any(
-        _glob_path_matches_single(relative_path, expanded)
-        for expanded in _expand_brace_alternations(pattern)
-    )
-
-
-def _glob_path_matches_single(relative_path: str, pattern: str) -> bool:
-    path_segments = _relative_path_segments(relative_path)
-    normalized_pattern = normalize_file_filter_pattern(pattern)
-    pattern_segments = tuple(segment for segment in normalized_pattern.split("/") if segment)
-    return _match_glob_path_segments(path_segments, pattern_segments)
-
-
-def _is_absolute_or_user_rooted(pattern: str) -> bool:
-    if pattern.startswith("~"):
-        return True
-    if PurePosixPath(pattern).is_absolute():
-        return True
-
-    windows_path = PureWindowsPath(pattern)
-    return windows_path.is_absolute() or bool(windows_path.drive)
-
-
-def _match_glob_path_segments(
-    path_segments: tuple[str, ...], pattern_segments: tuple[str, ...]
-) -> bool:
-    @cache
-    def matches(path_index: int, pattern_index: int) -> bool:
-        if pattern_index == len(pattern_segments):
-            return path_index == len(path_segments)
-
-        pattern_segment = pattern_segments[pattern_index]
-        if pattern_segment == "**":
-            next_pattern_index = pattern_index
-            while (
-                next_pattern_index < len(pattern_segments)
-                and pattern_segments[next_pattern_index] == "**"
-            ):
-                next_pattern_index += 1
-            if next_pattern_index == len(pattern_segments):
-                return True
-            return any(
-                matches(next_path_index, next_pattern_index)
-                for next_path_index in range(path_index, len(path_segments) + 1)
-            )
-
-        if path_index >= len(path_segments):
-            return False
-        if not fnmatch.fnmatchcase(
-            path_segments[path_index].casefold(), pattern_segment.casefold()
-        ):
-            return False
-        return matches(path_index + 1, pattern_index + 1)
-
-    return matches(0, 0)
-
-
-__all__ = [
-    "MAX_OUTPUT_BYTES",
-    "OUTPUT_TRUNCATED_MARKER",
-    "RESULTS_LIMITED_MARKER",
-    "SEARCH_CANCELLED_FAILURE_CODE",
-    "SEARCH_CANCELLED_FAILURE_MESSAGE",
-    "SEARCH_TIMEOUT_MARKER",
-    "SEARCH_TIMEOUT_SECONDS",
-    "GitIgnoreFilter",
-    "SearchBudget",
-    "cap_output_bytes",
-    "display_search_path",
-    "file_filter_matches",
-    "glob_path_matches",
-    "ignore_rules_apply",
-    "iter_search_entries",
-    "normalize_file_filter_pattern",
-    "relative_forward_path",
-    "render_limited_results",
-    "resolve_search_path",
-]

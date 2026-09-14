@@ -329,6 +329,10 @@ GROUP_LIST="$(IFS=,; echo "${INSTALL_GROUPS[*]}")"
 EXTRA=".[${GROUP_LIST}]"
 step "Installing Python package in editable mode: ${EXTRA}"
 (cd "$PROJECT_ROOT" && "$PYTHON" -m pip install -e "$EXTRA")
+if [ "$DESKTOP_CLIENT" -ne 1 ]; then
+    step "Installing the verified search engine"
+    (cd "$PROJECT_ROOT" && "$PYTHON" -m cli.search_runtime)
+fi
 
 # The desktop-client mode loads the WebUI from a remote server, so it builds no
 # local WebUI bundle.

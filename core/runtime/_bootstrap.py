@@ -86,14 +86,13 @@ from core.tools import (
     register_bash_tool,
     register_generate_music_tool,
     register_generate_video_tool,
-    register_glob_tool,
-    register_grep_tool,
     register_history_tool,
     register_image_generation_tool,
     register_memory_tool,
     register_process_tool,
     register_project_tool,
     register_read_tool,
+    register_search_files_tool,
     register_skill_manage_tool,
     register_skill_tool,
     register_terminal_tool,
@@ -259,8 +258,7 @@ def bootstrap(runtime: Runtime) -> None:
             speech_max_size_bytes=runtime._speech_upload_max_size_bytes,
         )
         register_apply_patch_tool(runtime._tools, file_state=runtime._file_state)
-        register_glob_tool(runtime._tools)
-        register_grep_tool(runtime._tools)
+        register_search_files_tool(runtime._tools)
         register_memory_tool(runtime._tools, runtime._memory_service)
         register_web_fetch_tool(runtime._tools, attachment_store=runtime._attachment_store)
         register_web_search_tool(

@@ -33,8 +33,6 @@ from scripts.provider_probe.scenario_extensions import (
     _word_count_scenario,
 )
 from scripts.provider_probe.scenario_files import (
-    _glob_scenario,
-    _grep_scenario,
     _read_scenario,
 )
 from scripts.provider_probe.scenario_history import (
@@ -262,10 +260,6 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _channel_send_scenario(str(args.channel_send_case))
     if name == "cron":
         return _cron_scenario(str(args.cron_case))
-    if name == "glob":
-        return _glob_scenario(str(args.glob_case))
-    if name == "grep":
-        return _grep_scenario(str(args.grep_case))
     if name == "ha_call_service":
         return _ha_call_service_scenario(str(args.ha_call_service_case))
     if name == "ha_get_state":
