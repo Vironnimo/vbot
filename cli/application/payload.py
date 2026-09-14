@@ -112,9 +112,10 @@ def copy_application(
             shutil.copy2(item, target)
     if shape != "desktop-client":
         # Native-host compilation imports this module from a stdlib-only build
-        # environment. Load application dependencies only when assembling assets.
+        # environment. Load search provisioning only when assembling assets;
+        # it must also work without installed application dependencies.
         from cli.search_runtime import provision_search_runtime
-        from core.tools._search_binary import binary_spec
+        from core.utils.search_binary import binary_spec
 
         native_target = "x86_64-pc-windows-msvc"
         output, _ = binary_spec(destination / "resources", native_target)
