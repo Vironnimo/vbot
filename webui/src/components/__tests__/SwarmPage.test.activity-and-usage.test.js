@@ -9,6 +9,59 @@ import {
 } from './SwarmPage.support.js';
 
 describe('SwarmPage', () => {
+  it.each([false, true])(
+    'cancels the exact running Bash call (failure: %s)',
+    async (fails) => {
+      const { bridge } = createBridge();
+      if (fails)
+        bridge.cancelToolCall.mockRejectedValue(
+          new Error('test-owned cancellation failure'),
+        );
+      const previous = swarm.participants[0].lifecycle_run_id;
+      swarm.participants[0].lifecycle_run_id = 'run-bash';
+      bridge.readHistory.mockResolvedValue({ messages: [], status: 'running' });
+      bridge.subscribeRun.mockResolvedValue({ subscription_id: 'stream-bash' });
+      try {
+        await render(bridge);
+        button('Investigate').click();
+        await vi.waitFor(() => expect(button('Alpha')).toBeDefined());
+        button('Alpha').click();
+        await vi.waitFor(() => expect(bridge.subscribeRun).toHaveBeenCalled());
+        bridge.emitRun('stream-bash', {
+          type: 'tool_call_started',
+          run_id: 'run-bash',
+          sequence: 1,
+          payload: {
+            tool_call: {
+              id: 'call-bash',
+              name: 'bash',
+              arguments: { command: 'test-command' },
+            },
+          },
+        });
+        await vi.waitFor(() =>
+          expect(button('Cancel running tool call')).toBeDefined(),
+        );
+        button('Cancel running tool call').click();
+        await vi.waitFor(() =>
+          expect(bridge.cancelToolCall).toHaveBeenCalledWith(
+            'swr-a',
+            'run-bash',
+            'call-bash',
+          ),
+        );
+        if (fails)
+          await vi.waitFor(() =>
+            expect(document.body.textContent).toContain(
+              'test-owned cancellation failure',
+            ),
+          );
+      } finally {
+        swarm.participants[0].lifecycle_run_id = previous;
+      }
+    },
+  );
+
   it('opens participant Activity directly from the Board and detaches its Run when leaving', async () => {
     const { bridge } = createBridge();
     const previousRun = swarm.participants[0].lifecycle_run_id;

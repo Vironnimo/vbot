@@ -54,6 +54,22 @@ export function openExtensionPageRun(
   );
 }
 
+export function cancelExtensionPageToolCall(
+  name,
+  page,
+  groupId,
+  runId,
+  toolCallId,
+) {
+  return rpc('extensions.page_cancel_tool', {
+    name,
+    page,
+    group_id: groupId,
+    run_id: runId,
+    tool_call_id: toolCallId,
+  });
+}
+
 export function readExtensionPageHistory(
   name,
   page,

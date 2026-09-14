@@ -254,6 +254,7 @@ Start validates the effective directory and catalog before creating Sessions.
 The stored profile and profile snapshot stay unchanged; `effective_configuration`
 records the Run directory and Project selection for Resume and request replay.
 Evidence: `SwarmPage.test.js` and `test_swarm_lifecycle.py`.
+Activity forwards running Tool Call cancellation through the generic page bridge with the exact Swarm group, Run and Tool Call ids. The host verifies current page registration and canonical Run ownership before requesting call-local cancellation; failures stay visible and the Run continues (`SwarmPage.test.activity-and-usage.test.js`, `test_extensions_methods.py`).
 Participant selection opens Activity and disposes the previous Run subscription;
 late history/subscription replies cannot replace a newer participant selection.
 Terminal Run events reload canonical history so non-streamed final output appears

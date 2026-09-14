@@ -896,3 +896,49 @@ async def test_extension_operation_error_boundary(kind: str) -> None:
         assert result["error"]["code"] == (
             "session_capability_expired" if kind == "expired" else "domain_error"
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scenario", ["active", "foreign", "stale", "reloaded", "finished", "unknown"]
+)
+async def test_extension_page_cancel_tool_is_owner_scoped_and_call_local(scenario):
+    from unittest.mock import Mock
+
+    from core.runs import Run
+
+    run = Run(run_id="run-a", agent_id="agent-a", session_id="session-a")
+    callback = Mock()
+    run.begin_tool_call("call-a")
+    run.register_tool_cancel("call-a", callback)
+
+    class Groups:
+        async def owned_run(self, group_id, run_id):
+            assert (group_id, run_id) == ("group-a", "run-a")
+            if scenario == "foreign":
+                raise ValueError("test-owned foreign Run")
+            if scenario == "reloaded":
+                registry.current = False
+            return SimpleNamespace(run=None if scenario == "finished" else run)
+
+    registry = _PageRegistry(SimpleNamespace(temporary_agents=Groups()))
+    registry.current = scenario != "stale"
+    state = _state_with_records([])
+    state.runtime.extensions = registry
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": "extensions.page_cancel_tool",
+            "params": {
+                "name": "alpha",
+                "page": {"id": "main", "epoch": "epoch-a"},
+                "group_id": "group-a",
+                "run_id": "run-a",
+                "tool_call_id": "missing" if scenario == "unknown" else "call-a",
+            },
+        },
+    )
+    assert result["ok"] is (scenario == "active")
+    assert run.tool_call_cancelled("call-a") is (scenario == "active")
+    assert not run.cancel_requested
+    assert callback.call_count == (1 if scenario == "active" else 0)
