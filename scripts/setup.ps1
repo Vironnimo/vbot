@@ -605,6 +605,10 @@ if (-not $DesktopClient) {
         -SyncPortIntoSettings ($PSBoundParameters.ContainsKey("Port"))
 }
 Install-PythonPackage -Python $python -Groups $installGroups
+if (-not $DesktopClient) {
+    Write-Step "Installing the verified search engine"
+    Invoke-External $python @("-m", "cli.search_runtime")
+}
 if ($DesktopClient) {
     Write-Step "Skipping WebUI build (desktop-client install has no local server)"
 }

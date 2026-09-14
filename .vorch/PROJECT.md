@@ -100,9 +100,10 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 **Setup:** Python >= 3.11, Node.js for WebUI; editable install with dev extras:
 ```bash
 pip install -e ".[dev]"
+python -m cli.search_runtime
 ```
 Use the current interpreter; do not assume a virtual environment for installs, gates, or runtime commands. Before editing installer/uninstall scripts in `scripts/`, read [USAGE.md](../USAGE.md#installation) for end-user installation/update/removal.
-The development extra includes the native tray dependency on Windows so fresh local and CI environments can run its platform-specific tests.
+The development extra includes the native tray dependency on Windows so fresh local and CI environments can run its platform-specific tests. `cli.search_runtime` provisions the private, digest-locked ripgrep/PCRE2 executable; setup, update, worktree creation, CI, and server application packaging perform this step. Tool calls never download an executable or fall back to a host-installed search engine.
 
 **Worktrees:** `python scripts/worktree.py create|list|merge|delete <task-name>`; also `repair-start|repair-finish`. `create` reports path, ports, data dir, URL. Non-force `delete` fails closed on Git removal errors unless `git worktree list` confirms deregistration; `delete --force` discards uncommitted work. `merge` lands the task branch on `main` and removes the worktree, with a merge lock and protected conflict-repair window. The agent must pass quality gates before merging; this tool never runs them. On failure/unexpected behavior, read `scripts/README-worktree.md`.
 

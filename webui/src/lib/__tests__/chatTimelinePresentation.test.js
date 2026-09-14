@@ -19,6 +19,29 @@ import { setupChatTimelinePresentationSuite } from './chatTimelinePresentation.s
 describe('chatTimelinePresentation', () => {
   setupChatTimelinePresentationSuite();
 
+  it('summarizes search pattern arrays and retains continuation metadata', () => {
+    expect(
+      toolArgumentSummary({
+        name: 'search_files',
+        arguments: { action: 'content', patterns: ['alpha', 'beta'] },
+      }),
+    ).toBe('alpha, beta');
+    const result = compactToolValue(
+      {
+        ok: true,
+        data: {
+          content: 'src/a.py:1:alpha',
+          next_offset: 1,
+          complete: false,
+          warnings: ['Search timed out'],
+        },
+      },
+      { preferPayload: true, toolName: 'search_files' },
+    );
+    expect(result).toContain('next_offset');
+    expect(result).toContain('Search timed out');
+  });
+
   it('uses the durable image reference as the attachment display label', () => {
     expect(
       imageReferenceLabel({

@@ -220,8 +220,7 @@ def test_denied_tools_unknown_allow_list_entries_do_not_widen(tmp_path: Path) ->
         {
             "read",
             "apply_patch",
-            "glob",
-            "grep",
+            "search_files",
             "bash",
             "process",
             "web_fetch",
