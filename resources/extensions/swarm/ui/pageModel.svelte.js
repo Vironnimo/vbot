@@ -6,7 +6,7 @@ import {
   requestId,
 } from './pagePresentation.js';
 import { setApplicationTimeZone } from '../../../../webui/src/lib/dateTimePrefs.svelte.js';
-import { onMount } from 'svelte';
+import { onMount, tick } from 'svelte';
 import { createExtensionPageClient } from '$lib/extensionPageClient.js';
 
 export function createSwarmPageModel(host) {
@@ -108,6 +108,7 @@ export function createSwarmPageModel(host) {
 
   function navigate(action) {
     if (profileEditor) return profileEditor.requestTransition(action);
+    if (host.wiki) return host.wiki.requestTransition(action);
     return action();
   }
 
@@ -181,6 +182,7 @@ export function createSwarmPageModel(host) {
 
   const tabs = $derived([
     { id: 'board', label: t('swarm.tabs.board', 'Board') },
+    { id: 'wiki', label: t('swarm.tabs.wiki', 'Wiki') },
     { id: 'participants', label: t('swarm.tabs.activity', 'Activity') },
     { id: 'usage', label: t('swarm.tabs.usage', 'Usage') },
     { id: 'audit', label: t('swarm.tabs.audit', 'Delivery audit') },
@@ -707,6 +709,15 @@ export function createSwarmPageModel(host) {
     const link = event.target.closest('a[href]');
     if (!link || !client) return;
     event.preventDefault();
+    const wiki = /^#wiki\/([^/]+)$/.exec(link.getAttribute('href') ?? '');
+    if (wiki) {
+      void navigate(async () => {
+        activeTab = 'wiki';
+        await tick();
+        await host.wiki?.openPage(wiki[1]);
+      });
+      return;
+    }
     const url = link.href;
     if (!url) return;
     const isMedia =

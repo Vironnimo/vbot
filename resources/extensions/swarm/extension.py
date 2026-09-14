@@ -45,6 +45,7 @@ from ._extension_values import (
 )
 from ._registration import register as register
 from ._store_values import _validate_profile
+from ._store_wiki import MUTATIONS
 from .agent_text import (
     BOARD_PARAMETERS,
     DEFAULT_INSTRUCTIONS,
@@ -52,12 +53,14 @@ from .agent_text import (
     DEFAULT_REMINDERS,
     EMPTY_INBOX,
     INBOX_PARAMETERS,
+    INITIAL_MESSAGE,
     POST_SAVED,
     REMINDER_TEXTS,
     REPLAYED,
     STATE_PARAMETERS,
 )
 from .store import SwarmStore, SwarmStoreError
+from .wiki_text import WIKI_ERRORS, WIKI_PARAMETERS
 
 __all__ = ["Json", "SwarmExtension", "register"]
 
@@ -79,6 +82,7 @@ _RUNTIME_CONTRACTS = {
         ("swarm_board", BOARD_PARAMETERS, None),
         ("swarm_inbox", INBOX_PARAMETERS, "receive"),
         ("swarm_state", STATE_PARAMETERS, "status"),
+        ("swarm_wiki", WIKI_PARAMETERS, None),
     )
 }
 
@@ -251,6 +255,7 @@ class SwarmExtension:
                 self._changed(sid, swarm["settings_revision"])
             if action in {"post", "create"}:
                 self._enqueue_wakes(sid)
+            data["goal_post_id"] = swarm["goal_post_id"]
             return tool_success(data)
         except SwarmStoreError as error:
             return _failure(error, arguments, BOARD_PARAMETERS)
@@ -320,6 +325,36 @@ class SwarmExtension:
         except SwarmStoreError as error:
             return _failure(error, arguments, STATE_PARAMETERS)
 
+    async def wiki(self, context: ToolContext, arguments: Json) -> Json:
+        try:
+            binding, swarm, arguments = await self._bound_arguments(context, arguments)
+            data = await self._store().wiki(
+                binding.group_id, binding.participant_id, arguments, expected_epoch=swarm["epoch"]
+            )
+            if arguments["action"] in MUTATIONS and not data.get("replayed"):
+                self._changed(binding.group_id, swarm["settings_revision"])
+            return tool_success(data)
+        except SwarmStoreError as error:
+            from core.tools import tool_failure
+
+            if error.code in WIKI_ERRORS:
+                return tool_failure(error.code, WIKI_ERRORS[error.code])
+            return _failure(error, arguments, WIKI_PARAMETERS)
+
+    async def _wiki_operation(self, arguments: Json) -> Json:
+        sid = _string(arguments, "swarm_id")
+        values = {key: value for key, value in arguments.items() if key != "swarm_id"}
+        try:
+            data = await self._store().wiki(sid, None, values)
+        except SwarmStoreError as error:
+            if error.code in WIKI_ERRORS:
+                raise ValueError(WIKI_ERRORS[error.code]) from error
+            raise
+        if values["action"] in MUTATIONS and not data.get("replayed"):
+            swarm = await self._store().get_swarm(sid)
+            self._changed(sid, swarm["settings_revision"])
+        return data
+
     def _changed(self, swarm_id: str, revision: int) -> None:
         if self.host is not None and self.host.publish_change is not None:
             self.host.publish_change("swarms", [swarm_id], revision)
@@ -347,6 +382,7 @@ class SwarmExtension:
                 "board.list": self._board_list,
                 "board.read": self._board_read,
                 "board.post": self._board_post,
+                "wiki": self._wiki_operation,
             }
             if name in {"swarms.start", "swarms.stop", "swarms.resume", "swarms.delete"}:
                 async with self._control_lock:
@@ -788,7 +824,7 @@ class SwarmExtension:
     ) -> Json:
         """Prepare every bound participant before admitting any initial Run.
 
-        This is intentionally private until the complete three-Tool grant set is
+        This is intentionally private until the complete private Tool grant set is
         registered. Keeping it here makes the eventual operation use the same
         all-or-stop path as Resume rather than a UI-specific shortcut.
         """
@@ -836,7 +872,7 @@ class SwarmExtension:
                 snapshot["id"], expected_epoch=snapshot["epoch"], execution_epoch=handle.epoch
             )
             await self._store().set_swarm_state(snapshot["id"], "running")
-            admissions = await self._admit_initial(snapshot, handle, prompt, request_id)
+            admissions = await self._admit_initial(snapshot, handle, request_id)
         except BaseException:
             await group.close_group(snapshot["id"])
             await self._store().fail_startup(snapshot["id"], expected_epoch=snapshot["epoch"])
@@ -905,7 +941,11 @@ class SwarmExtension:
                     f"initial:{binding.generation_id}",
                 )
                 input = (
-                    TemporaryRunInput("initial", snapshot["prompt"], request_id)
+                    TemporaryRunInput(
+                        "initial",
+                        INITIAL_MESSAGE.format(goal_post_id=snapshot["goal_post_id"]),
+                        request_id,
+                    )
                     if initial is None
                     else TemporaryRunInput(
                         "continuation", _reminder(snapshot, "resume"), request_id
@@ -931,16 +971,18 @@ class SwarmExtension:
             swarm_id, request_id=request_id, kind="resume", runs=admissions
         )
 
-    async def _admit_initial(
-        self, swarm: Json, handle: Any, prompt: str, request_id: str
-    ) -> list[Json]:
+    async def _admit_initial(self, swarm: Json, handle: Any, request_id: str) -> list[Json]:
         assert self.host is not None and self.host.temporary_agents is not None
         admissions: list[Json] = []
         for participant in swarm["participants"]:
             admission = await self.host.temporary_agents.start(
                 handle,
                 participant["id"],
-                TemporaryRunInput("initial", prompt, request_id),
+                TemporaryRunInput(
+                    "initial",
+                    INITIAL_MESSAGE.format(goal_post_id=swarm["goal_post_id"]),
+                    request_id,
+                ),
             )
             await self._store().record_run_started(
                 swarm["id"],

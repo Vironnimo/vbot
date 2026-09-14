@@ -565,5 +565,17 @@ class SwarmStore:
             _membership, swarm_id, participant_id, discussion_id, False, expected_epoch
         )
 
+    async def wiki(
+        self,
+        swarm_id: str,
+        actor_id: str | None,
+        arguments: Json,
+        *,
+        expected_epoch: int | None = None,
+    ) -> Json:
+        from ._store_wiki import wiki
+
+        return await self._run(wiki, swarm_id, actor_id, arguments, expected_epoch)
+
     async def _run(self, function: Callable[..., Any], *arguments: Any) -> Any:
         return await self._workers.run(self._database.call, function, *arguments)
