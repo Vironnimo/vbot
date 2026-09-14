@@ -80,6 +80,7 @@ def refresh_gui_entrypoints(install: Installation) -> None:
                         link.Save()
                         changed.append("desktop_shortcut")
                 finally:
+                    link = None  # Release the COM interface before uninitializing its apartment.
                     pythoncom.CoUninitialize()
     if changed:
         logging.getLogger("vbot.application.integration").info(
