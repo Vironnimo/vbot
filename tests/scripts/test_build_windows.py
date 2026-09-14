@@ -474,6 +474,37 @@ def test_compile_host_constructs_msvc_abi_commands(
     sys.platform != "win32" or not shutil.which("clang-cl") or not shutil.which("llvm-rc"),
     reason="Windows native compiler required",
 )
+def test_source_update_compiles_all_hosts_without_application_dependencies(tmp_path):
+    source = Path(build_windows.__file__).parent.parent
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-E",
+            "-S",
+            "-c",
+            "import sys\n"
+            "from pathlib import Path\n"
+            "from scripts.build_windows import HOSTS, compile_host\n"
+            "for filename, role in HOSTS.items():\n"
+            "    compile_host(Path.cwd(), Path(sys.argv[1]) / filename, "
+            "role=role, version='0.4.3', stable=filename == 'vBot.exe')\n",
+            str(tmp_path / "native hosts"),
+        ],
+        cwd=source,
+        capture_output=True,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+    assert {path.name for path in (tmp_path / "native hosts").glob("*.exe")} == set(
+        build_windows.HOSTS
+    )
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32" or not shutil.which("clang-cl") or not shutil.which("llvm-rc"),
+    reason="Windows native compiler required",
+)
 @pytest.mark.parametrize("role, stable", [("host", True), ("update", False), ("server", False)])
 def test_native_startup_failure_exits_and_reports_stderr_without_a_dialog(tmp_path, role, stable):
     root = tmp_path / "native-failure"
