@@ -41,6 +41,8 @@ jobs:
           cache: pip
       - name: Install backend development dependencies
         run: python -m pip install -e ".[dev]"
+      - name: Provision the pinned search engine
+        run: python -m cli.search_runtime
       - name: Run backend quality gate
         run: python scripts/quality.py --check
 

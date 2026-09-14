@@ -65,6 +65,7 @@ MCP_CASE_ARGUMENTS: dict[str, dict[str, Any]] = {
 
 
 PROBE_SCENARIOS = (
+    "search_files",
     "tool_tolerance",
     "recall_workflow",
     "terminal",
@@ -89,8 +90,6 @@ PROBE_SCENARIOS = (
     "calendar",
     "channel_send",
     "cron",
-    "glob",
-    "grep",
     "ha_call_service",
     "ha_get_state",
     "ha_list_entities",
@@ -242,44 +241,6 @@ MEMORY_CASES = (
     "replace_agent",
     "remove_user",
     "remove_agent",
-)
-
-
-GLOB_CASES = (
-    "default",
-    "path",
-    "limit",
-    "offset",
-    "page",
-    "include_false",
-    "include_true",
-    "all",
-)
-
-
-GREP_CASES = (
-    "default",
-    "content",
-    "files",
-    "count",
-    "path",
-    "glob",
-    "ignore_case_false",
-    "ignore_case_true",
-    "literal_false",
-    "literal_true",
-    "multiline_false",
-    "multiline_true",
-    "context_zero",
-    "context_positive",
-    "limit",
-    "offset",
-    "page",
-    "include_ignored_false",
-    "include_ignored_true",
-    "all_content",
-    "all_files",
-    "all_count",
 )
 
 

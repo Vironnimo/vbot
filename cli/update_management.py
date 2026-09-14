@@ -363,6 +363,13 @@ def run_update(
     if not deps.ok:
         return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
     announce("success", "Python dependencies are current")
+    if state.install_shape != "desktop-client":
+        announce("busy", "Checking the bundled search engine")
+        native = run([state.python_executable, "-m", "cli.search_runtime"], repo)
+        if native.returncode:
+            record(f"search engine installation failed: {native.stderr or native.stdout}", False)
+            return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
+        announce("success", "Search engine is current")
     current_digest = file_digest(repo / "pyproject.toml")
     if state.dependency_digest != current_digest:
         state = replace(state, dependency_digest=current_digest)

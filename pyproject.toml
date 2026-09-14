@@ -52,6 +52,9 @@ exclude = ["/archive"]
 [tool.hatch.build.targets.wheel]
 packages = ["core", "server", "cli", "desktop"]
 
+[tool.vbot.native-dependencies]
+ripgrep = "resources/ripgrep.lock.json"
+
 [tool.pytest.ini_options]
 addopts = "-n auto --dist=worksteal --timeout=30 --import-mode=importlib"
 testpaths = ["tests"]

@@ -46,14 +46,14 @@ def test_set_changes_whitelist_fields(tmp_path: Path) -> None:
         state,
         {
             "project_id": "vbot",
-            "allowed_tools": ["read", "grep"],
+            "allowed_tools": ["read", "search_files"],
             "skills_bundled_enabled": ["frontend-design"],
             "skills_global_enabled": ["pdf"],
             "skills_project_disabled": ["debugging"],
         },
     )
 
-    assert result["project"]["allowed_tools"] == ["read", "grep"]
+    assert result["project"]["allowed_tools"] == ["read", "search_files"]
     assert result["project"]["skills_bundled_enabled"] == ["frontend-design"]
     assert result["project"]["skills_global_enabled"] == ["pdf"]
     assert result["project"]["skills_project_disabled"] == ["debugging"]
@@ -135,13 +135,13 @@ def test_set_preserves_existing_unavailable_tool_while_editing_known_tools(tmp_p
         state,
         {
             "project_id": "vbot",
-            "allowed_tools": ["read", "grep", "disabled_extension_tool"],
+            "allowed_tools": ["read", "search_files", "disabled_extension_tool"],
         },
     )
 
     assert result["project"]["allowed_tools"] == [
         "read",
-        "grep",
+        "search_files",
         "disabled_extension_tool",
     ]
 
