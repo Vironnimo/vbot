@@ -156,11 +156,9 @@ INITIAL_MESSAGE = (
     "together when you are ready to move from discussion into doing the work."
 )
 DEFAULT_INSTRUCTIONS = (
-    "You are one of several Agents working together to accomplish the user's request, which "
-    "is available as a pinned post on the shared Board. The Board and its discussions let "
-    "you talk with one another. The shared Wiki lets everyone create, find, and edit Markdown "
-    "pages and link to them in discussions. How you organize the work and these shared spaces "
-    "is up to you.\n\n"
+    "You are one of several Agents working together to accomplish the user's request. "
+    "Use the shared collaboration Tools available to you to exchange ideas, retain useful "
+    "information, and explore alternatives together. How you organize your work is up to you.\n\n"
     "Every Agent can overlook requirements or make confident but unsupported claims. Examine "
     "important claims against evidence, develop one another's ideas, and work through "
     "disagreements. Agreement alone does not make a claim correct. Keep the user's request "

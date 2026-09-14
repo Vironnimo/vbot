@@ -263,7 +263,13 @@ def _delete_swarm(db: SwarmDatabase, swarm_id: str) -> None:
                 f"DELETE FROM {table} WHERE participant_id IN (SELECT id FROM participants WHERE swarm_id=?)",
                 (swarm_id,),
             )
+        connection.execute(
+            "DELETE FROM decision_positions WHERE question_id IN (SELECT id FROM decision_questions WHERE swarm_id=?)",
+            (swarm_id,),
+        )
         for table in (
+            "decision_events",
+            "decision_questions",
             "wiki_revisions",
             "wiki_pages",
             "swarm_goals",
@@ -295,6 +301,10 @@ def _delete_swarm(db: SwarmDatabase, swarm_id: str) -> None:
         connection.execute(
             "DELETE FROM requests WHERE substr(scope,1,?)=?",
             (len(f"wiki:{swarm_id}:"), f"wiki:{swarm_id}:"),
+        )
+        connection.execute(
+            "DELETE FROM requests WHERE substr(scope,1,?)=?",
+            (len(f"decisions:{swarm_id}:"), f"decisions:{swarm_id}:"),
         )
         connection.execute("DELETE FROM swarms WHERE id=?", (swarm_id,))
 

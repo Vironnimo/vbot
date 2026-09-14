@@ -271,6 +271,12 @@
   <div class="wiki-columns">
     <aside class="wiki-index">
       <form
+        onkeydown={(event) => {
+          if (event.key === 'Enter' && event.target.tagName === 'INPUT') {
+            event.preventDefault();
+            void refresh();
+          }
+        }}
         onsubmit={(event) => {
           event.preventDefault();
           void refresh();
@@ -286,7 +292,7 @@
             onInput={(value) => (query = value)}
           />
         </FormField>
-        <Button type="submit" variant="tertiary"
+        <Button onClick={() => refresh()} variant="tertiary"
           >{t('common.search', 'Search')}</Button
         >
       </form>

@@ -5,6 +5,7 @@ from __future__ import annotations
 from ._extension_values import (
     Json,
 )
+from .decision_text import DECISION_PARAMETERS
 from .wiki_text import WIKI_PARAMETERS
 
 _PAGE = {
@@ -191,6 +192,12 @@ _OPERATION_SCHEMAS: dict[str, Json] = {
 _OPERATION_SCHEMAS["wiki"] = {
     **WIKI_PARAMETERS,
     "properties": {**WIKI_PARAMETERS["properties"], "swarm_id": {"type": "string"}},
+    "required": ["action", "swarm_id"],
+    "additionalProperties": False,
+}
+_OPERATION_SCHEMAS["decisions"] = {
+    **DECISION_PARAMETERS,
+    "properties": {**DECISION_PARAMETERS["properties"], "swarm_id": {"type": "string"}},
     "required": ["action", "swarm_id"],
     "additionalProperties": False,
 }
