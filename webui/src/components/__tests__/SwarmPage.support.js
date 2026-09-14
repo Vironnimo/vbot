@@ -219,6 +219,7 @@ function createBridge(initialProfile = profile) {
           ],
         }),
       ),
+      cancelToolCall: vi.fn().mockResolvedValue({ ok: true }),
       subscribeRun: vi.fn(),
       unsubscribeRun: vi.fn().mockResolvedValue({}),
       onContext(callback) {
