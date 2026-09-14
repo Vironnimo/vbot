@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 from core.tools._argument_repair import normalize_call_arguments
-from core.tools._search_binary import require_binary
 from core.tools._search_execution import content_events, file_types, validate_patterns
 from core.tools._search_options import BY_NAME, help_text, parse_options
 from core.tools._search_results import ResultPage, path_label, render_events
@@ -29,6 +28,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.search_binary import require_binary
 
 SEARCH_FILES_TOOL_NAME = "search_files"
 
