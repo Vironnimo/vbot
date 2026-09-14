@@ -84,7 +84,6 @@ from core.tools import (
     register_analyze_image_tool,
     register_apply_patch_tool,
     register_bash_tool,
-    register_edit_tool,
     register_generate_music_tool,
     register_generate_video_tool,
     register_glob_tool,
@@ -247,11 +246,11 @@ def bootstrap(runtime: Runtime) -> None:
         # manager without importing tool classes into the prompt domain.
         runtime._tool_prompt_blocks = ToolPromptBlockRegistry()
         runtime._memory_service = MemoryService()
-        # One read-before-write guard shared by read/write/edit: read stamps each
-        # file, write/edit refuse an unread or externally-changed file (file_state.py).
+        # Read stamps protect full-file writes; apply_patch uses the same state
+        # for mutation locks and post-success drift warnings (file_state.py).
         runtime._file_state = FileReadState()
         # Session-scoped file-content tracker for git-style change statistics
-        # (change_tracker.py). Shared by read/write/edit and the chat loop.
+        # (change_tracker.py). Shared by write/apply_patch and the chat loop.
         runtime._change_tracker = ChangeTracker()
         register_read_tool(
             runtime._tools,
@@ -260,7 +259,6 @@ def bootstrap(runtime: Runtime) -> None:
             file_state=runtime._file_state,
             speech_max_size_bytes=runtime._speech_upload_max_size_bytes,
         )
-        register_edit_tool(runtime._tools, file_state=runtime._file_state)
         register_apply_patch_tool(runtime._tools, file_state=runtime._file_state)
         register_glob_tool(runtime._tools)
         register_grep_tool(runtime._tools)

@@ -55,14 +55,16 @@ CLAUDE_FORMAT_KEY = "claude"
 _AGENT_FILE_GLOB = "*.md"
 
 # Claude tool name (normalized: trimmed, lowercased) → the vBot tools it maps to.
-# ``Bash`` covers both bash and process (shell access grants both in vBot); every
-# other mapped tool is 1:1. Claude tools without a vBot counterpart and vBot tools
+# ``Bash`` covers both bash and process. File mutation mapping denies
+# apply_patch on either Edit or Write denial,
+# because patches can both update and create files. Other mappings are 1:1.
+# Claude tools without a vBot counterpart and vBot tools
 # without a Claude counterpart (e.g. ``status``) are simply absent — an allow-list
 # inversion can therefore never deny an unmappable vBot tool.
 _CLAUDE_TOOL_MAP: dict[str, frozenset[str]] = {
     "read": frozenset({"read"}),
-    "write": frozenset({"write"}),
-    "edit": frozenset({"edit"}),
+    "write": frozenset({"write", "apply_patch"}),
+    "edit": frozenset({"apply_patch"}),
     "glob": frozenset({"glob"}),
     "grep": frozenset({"grep"}),
     "bash": frozenset({"bash", "process"}),

@@ -11,7 +11,7 @@ a Run count once against the first mutation's pre-state, matching how
 ``git diff --stat`` reports a working-tree delta. No git repository or
 external process is involved.
 
-The tracker is a single runtime-owned instance injected into the read/write/edit
+The tracker is a single runtime-owned instance injected into the read/write/apply_patch
 tools and the chat loop (constructor injection, like ``FileReadState``) — not a
 module singleton. It is deliberately best-effort: files that cannot be compared
 as UTF-8 text (too large, undecodable) simply fall back to the client-side
