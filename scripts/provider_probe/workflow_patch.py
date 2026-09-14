@@ -154,6 +154,62 @@ def _apply_patch_cases() -> list[dict[str, Any]]:
             "expected": {"moved.txt": "new\n"},
         },
         {
+            "id": "late_move",
+            "before": {"one.txt": "old\n"},
+            "arguments": patch(
+                "*** Update File: one.txt\n@@\n-old\n+new\n"
+                "*** Move to: moved.txt\n*** Move to: moved.txt"
+            ),
+            "expected": {"moved.txt": "new\n"},
+        },
+        {
+            "id": "conflicting_move",
+            "before": {"one.txt": "old\n"},
+            "arguments": patch(
+                "*** Add File: pending.txt\n+pending\n"
+                "*** Update File: one.txt\n*** Move to: first.txt\n"
+                "@@\n-old\n+new\n*** Move to: second.txt"
+            ),
+            "error": "conflicting_move",
+        },
+        {
+            "id": "literal_move_text",
+            "before": {"one.txt": "old\n"},
+            "arguments": patch(
+                "*** Update File: one.txt\n@@\n-old\n"
+                "+*** Move to: literal.txt\n*** Move to: moved.txt"
+            ),
+            "expected": {"moved.txt": "*** Move to: literal.txt\n"},
+        },
+        {
+            "id": "recover_short_hint",
+            "before": {"one.txt": "timeout=10\nretries=1\n"},
+            "task": "Change timeout to 20 in one.txt and preserve retries.",
+            "seed": patch("*** Update File: one.txt\n@@ timeout\n-timeout=10\n+timeout=20"),
+            "expected": {"one.txt": "timeout=20\nretries=1\n"},
+            "only_paths": ["one.txt"],
+        },
+        {
+            "id": "recover_ambiguous_hint",
+            "before": {"one.txt": "first\nmarker\nvalue=1\nsecond\nmarker\nvalue=2\n"},
+            "task": "Change value to 3 in the second section of one.txt; preserve the first.",
+            "seed": patch("*** Update File: one.txt\n@@ marker\n-value=2\n+value=3"),
+            "expected": {"one.txt": "first\nmarker\nvalue=1\nsecond\nmarker\nvalue=3\n"},
+            "only_paths": ["one.txt"],
+        },
+        {
+            "id": "natural_insert",
+            "before": {"one.txt": "first\nlast\n"},
+            "task": "Insert the line middle between first and last in one.txt.",
+            "expected": {"one.txt": "first\nmiddle\nlast\n"},
+        },
+        {
+            "id": "natural_eof",
+            "before": {"one.txt": "old\nold\nold\n"},
+            "task": "Change only the final line of one.txt to new, preserving the newline.",
+            "expected": {"one.txt": "old\nold\nnew\n"},
+        },
+        {
             "id": "sequence",
             "before": {},
             "arguments": patch(
