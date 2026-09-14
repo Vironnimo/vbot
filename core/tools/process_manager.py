@@ -36,6 +36,7 @@ PROCESS_BUFFER_CAP_BYTES = 500 * 1024
 PROCESS_TERMINAL_OUTPUT_CAP_CHARS = 30_000
 FINISHED_PROCESS_TTL = timedelta(minutes=30)
 SWEEP_INTERVAL_SECONDS = 60.0
+PROCESS_OUTPUT_DRAIN_SECONDS = 1.0
 
 ProcessStatus = Literal["running", "completed", "failed", "killed"]
 OutputStreamName = Literal["stdout", "stderr"]
@@ -633,7 +634,12 @@ class ProcessManager:
             tracked.output_event.set()
 
     async def _watch_process(self, tracked: TrackedProcess) -> None:
-        return_code = await tracked.proc.wait()
+        # Process.wait() may wait for pipe EOF even after OS exit. A descendant
+        # can inherit those pipes (for example a browser CLI's daemon), so observe
+        # the child exit independently before imposing the output-drain budget.
+        while tracked.proc.returncode is None:
+            await asyncio.sleep(0.05)
+        return_code = tracked.proc.returncode
         await self._await_reader_tasks(tracked)
         self._release_process_pipe_references(tracked)
         async with tracked.kill_lock, tracked.lock:
@@ -683,6 +689,19 @@ class ProcessManager:
     async def _await_reader_tasks(self, tracked: TrackedProcess) -> None:
         tasks = [task for task in (tracked.stdout_task, tracked.stderr_task) if task is not None]
         if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=PROCESS_OUTPUT_DRAIN_SECONDS)
+            if pending:
+                _LOGGER.warning(
+                    "Process output pipes remained open after exit for process=%s; closing readers",
+                    tracked.process_id,
+                )
+                transport = getattr(tracked.proc, "_transport", None)
+                for descriptor in (1, 2):
+                    pipe = transport.get_pipe_transport(descriptor) if transport else None
+                    if pipe is not None:
+                        pipe.close()
+                for task in pending:
+                    task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
 
     def _append_output(
@@ -787,7 +806,7 @@ class ProcessManager:
                     self._begin_kill(tracked, cancelled_by_user=cancelled_by_user)
         tracked.output_event.set()
         if tracked.wait_task is not None:
-            await asyncio.gather(tracked.wait_task, return_exceptions=True)
+            await asyncio.shield(asyncio.gather(tracked.wait_task, return_exceptions=True))
         if tracked.status == "killed" and tracked.finished_at is None:
             tracked.finished_at = _utc_now()
             self._close_log_file(tracked)

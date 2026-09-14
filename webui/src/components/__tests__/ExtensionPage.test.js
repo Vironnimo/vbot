@@ -13,6 +13,7 @@ const history = vi.fn();
 vi.mock('$lib/api.js', () => ({
   invokeExtensionPageOperation: (...args) => operation(...args),
   openExtensionPageRun: vi.fn(),
+  cancelExtensionPageToolCall: vi.fn().mockResolvedValue({ ok: true }),
   readExtensionPageHistory: (...args) => history(...args),
   subscribeRunEvents: vi.fn(),
 }));
@@ -548,4 +549,42 @@ it('keeps file links from every loaded history page and rejects stale participan
     'after-switch-oldest',
     'after-switch-stale',
   ]);
+});
+
+it('forwards Tool cancellation only from the current page frame', async () => {
+  const api = await import('$lib/api.js');
+  component = mount(ExtensionPageHost, {
+    target: document.body,
+    props: { initialDescriptor: descriptor },
+  });
+  flushSync();
+  const { child, init, sent } = loadFrame();
+  message(child, { ...init, type: 'vbot.extension.ready' });
+  const request = {
+    ...init,
+    type: 'vbot.extension.call',
+    id: 'cancel-a',
+    method: 'run.cancel_tool',
+    params: { group_id: 'group-a', run_id: 'run-a', tool_call_id: 'call-a' },
+  };
+  message(window, request);
+  message(child, { ...request, nonce: 'stale' });
+  expect(api.cancelExtensionPageToolCall).not.toHaveBeenCalled();
+  message(child, request);
+  await vi.waitFor(() =>
+    expect(api.cancelExtensionPageToolCall).toHaveBeenCalledWith(
+      'alpha',
+      { id: 'main', epoch: 'epoch-a' },
+      'group-a',
+      'run-a',
+      'call-a',
+    ),
+  );
+  await vi.waitFor(() =>
+    expect(
+      sent.mock.calls.some(
+        ([data]) => data.id === 'cancel-a' && data.result?.ok === true,
+      ),
+    ).toBe(true),
+  );
 });

@@ -555,7 +555,7 @@ async def _watch_background_process(
         tracked = process_manager.get_process(process_id, agent_id, project_id=project_id)
         wait_task = tracked.wait_task
         if wait_task is not None:
-            await wait_task
+            await asyncio.shield(wait_task)
         else:
             while (
                 process_manager.get_process(process_id, agent_id, project_id=project_id).status
