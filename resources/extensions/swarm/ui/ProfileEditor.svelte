@@ -23,6 +23,7 @@
   import ToggleChipList from '../../../../webui/src/components/ui/ToggleChipList.svelte';
   import Modal from '../../../../webui/src/components/ui/Modal.svelte';
   import { onDestroy, tick, untrack } from 'svelte';
+  import { SvelteSet } from 'svelte/reactivity';
   import { createDebouncedAutosave } from '../../../../webui/src/lib/autosave.js';
   import { changeToolAccessMode } from '../../../../webui/src/lib/toolAccess.js';
   import { createProfilePromptPreview } from './profilePromptPreview.svelte.js';
@@ -268,6 +269,15 @@
     // Profiles pin the current selection. Materialize All/None through the
     // shared policy owner instead of relabeling an incompatible policy shape.
     draft.tool_access = changeToolAccessMode(next, 'selected', tools);
+    if (next.mode === 'none' || next.mode === 'all') {
+      const denied = new SvelteSet(draft.tool_access.denied ?? []);
+      for (const tool of tools.filter((item) => item.family === 'swarm')) {
+        if (next.mode === 'none') denied.add(tool.name);
+        else denied.delete(tool.name);
+      }
+      if (denied.size) draft.tool_access.denied = [...denied];
+      else delete draft.tool_access.denied;
+    }
   }
   function setDirectoryKind(kind) {
     draft.working_directory =

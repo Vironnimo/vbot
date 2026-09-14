@@ -24,6 +24,7 @@ def test_swarm_workflow_rejects_a_claim_without_coordination():
                 "swarm_inbox",
                 "swarm_state",
                 "swarm_wiki",
+                "swarm_decisions",
             }
             return {"content": "Everything is complete."}
 
@@ -164,6 +165,11 @@ def test_swarm_probe_uses_registered_handlers_and_canonical_receipts():
     wiki = asyncio.run(probe_workflow_swarm._probe_swarm_tool(Adapter(), args))
     assert wiki["passed"]
     assert {"create", "update_patch", "delete", "restore"} <= {row["case"] for row in wiki["cases"]}
+
+    args.swarm_tool = "swarm_decisions"
+    decisions = asyncio.run(probe_workflow_swarm._probe_swarm_tool(Adapter(), args))
+    assert decisions["passed"]
+    assert len(decisions["cases"]) >= 37
 
 
 def test_mcp_workflow_probe_rejects_an_unsupported_completion_claim():

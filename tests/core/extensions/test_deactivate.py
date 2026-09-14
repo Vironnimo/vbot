@@ -409,7 +409,9 @@ async def test_retired_session_before_request_cannot_return_stale_delivery(tmp_p
         )
     )
     registry.apply_tools(tools)
-    binding = type("Binding", (), {"owner_name": "owned"})()
+    binding = type(
+        "Binding", (), {"owner_name": "owned", "config": {"tool_access": {"mode": "all"}}}
+    )()
     context = SessionRequestContext(binding, "run", "agent", "session")
     pending = asyncio.create_task(registry.dispatch_session_before_request(binding, tools, context))
     await entered.wait()

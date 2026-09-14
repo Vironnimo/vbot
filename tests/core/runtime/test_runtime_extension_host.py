@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -182,12 +183,27 @@ def test_extension_prompt_inspection_uses_selected_blocks_and_owner_tools(tmp_pa
             "swarm_inbox",
             "swarm_state",
             "swarm_wiki",
+            "swarm_decisions",
         }
         blocks = {block["id"]: block for block in preview["blocks"]}
         assert blocks["core:runtime"]["enabled"] is False
         assert blocks["core:runtime"]["text"]
         assert blocks["core:agent_body"]["included"] is True
         assert not any(key.startswith("extension_session:") for key in blocks)
+        selected = replace(
+            config,
+            tool_access=ToolAccess(
+                mode="selected", allowed=(), denied=("swarm_decisions", "swarm_board")
+            ),
+        )
+        preview = asyncio.run(
+            runtime._host_operations()._inspect_extension_prompt(identity, selected, None)
+        )
+        assert {tool["name"] for tool in preview["tools"]} == {
+            "swarm_inbox",
+            "swarm_state",
+            "swarm_wiki",
+        }
     finally:
         runtime.stop()
 
@@ -400,3 +416,35 @@ def test_temporary_preflight_rechecks_owner_after_blocking_validation(
 
     with pytest.raises(RuntimeError, match="temporary execution is unavailable"):
         asyncio.run(runtime._host_operations()._validate_extension_session_binding(binding))
+
+
+@pytest.mark.parametrize(
+    "denied",
+    [
+        ("swarm_decisions",),
+        ("swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki", "swarm_decisions"),
+    ],
+)
+def test_real_owner_preflight_accepts_explicit_private_tool_denials(tmp_path, monkeypatch, denied):
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+    try:
+        monkeypatch.setattr(runtime.agent_resolver, "require_model_configured", lambda _model: None)
+        config = TemporaryAgentConfig(
+            model="fixture/model",
+            cwd=tmp_path,
+            tool_access=ToolAccess(mode="selected", allowed=(), denied=denied),
+            allowed_skills=[],
+            tools={},
+            name="Selective",
+        )
+        registry = TemporaryAgentRegistry(runtime.chat_sessions)
+        binding = registry.create(
+            owner_name="swarm", group_id="group", participant_id="peer", config=config
+        )
+        capability = runtime.extensions.session_capability(binding, runtime.tools)
+        assert capability is not None
+        assert not set(denied).intersection(capability.tool_names)
+        asyncio.run(runtime._host_operations()._validate_extension_session_binding(binding))
+    finally:
+        runtime.stop()

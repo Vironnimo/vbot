@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from ._extension_values import (
     _board_page,
     _exact,
     _failure,
+    _initial_message,
     _integer,
     _management_page,
     _page_arguments,
@@ -44,6 +46,7 @@ from ._extension_values import (
     _validate_state,
 )
 from ._registration import register as register
+from ._registration import session_tool_catalog
 from ._store_values import _validate_profile
 from ._store_wiki import MUTATIONS
 from .agent_text import (
@@ -53,12 +56,12 @@ from .agent_text import (
     DEFAULT_REMINDERS,
     EMPTY_INBOX,
     INBOX_PARAMETERS,
-    INITIAL_MESSAGE,
     POST_SAVED,
     REMINDER_TEXTS,
     REPLAYED,
     STATE_PARAMETERS,
 )
+from .decision_text import DECISION_ERRORS, DECISION_PARAMETERS
 from .store import SwarmStore, SwarmStoreError
 from .wiki_text import WIKI_ERRORS, WIKI_PARAMETERS
 
@@ -83,6 +86,7 @@ _RUNTIME_CONTRACTS = {
         ("swarm_inbox", INBOX_PARAMETERS, "receive"),
         ("swarm_state", STATE_PARAMETERS, "status"),
         ("swarm_wiki", WIKI_PARAMETERS, None),
+        ("swarm_decisions", DECISION_PARAMETERS, None),
     )
 }
 
@@ -256,6 +260,9 @@ class SwarmExtension:
             if action in {"post", "create"}:
                 self._enqueue_wakes(sid)
             data["goal_post_id"] = swarm["goal_post_id"]
+            data["linked_decisions"] = await self._decision_updates(
+                swarm, [*data.get("entries", []), *data.get("recent", {}).get("entries", [])]
+            )
             return tool_success(data)
         except SwarmStoreError as error:
             return _failure(error, arguments, BOARD_PARAMETERS)
@@ -292,6 +299,7 @@ class SwarmExtension:
             data: Json = {
                 "entries": prepared["entries"],
                 "pending_remaining": prepared["pending_remaining"],
+                "linked_decisions": await self._decision_updates(_swarm, prepared["entries"]),
             }
             if not prepared["entries"]:
                 data["guidance"] = EMPTY_INBOX
@@ -341,6 +349,76 @@ class SwarmExtension:
                 return tool_failure(error.code, WIKI_ERRORS[error.code])
             return _failure(error, arguments, WIKI_PARAMETERS)
 
+    async def _decision_updates(self, swarm: Json, entries: list[Json]) -> list[Json]:
+        if "swarm_decisions" in swarm["profile_snapshot"]["tool_access"].get("denied", []):
+            return []
+        links: dict[str, set[int]] = {}
+        for entry in entries:
+            for qid, version in re.findall(
+                r"#decision/([A-Za-z0-9_-]+)(?:/(\d{1,12}))?", entry.get("text", "")
+            ):
+                if qid not in links and len(links) >= 5:
+                    continue
+                links.setdefault(qid, set())
+                if version:
+                    links[qid].add(int(version))
+        result = []
+        for qid, versions in links.items():
+            try:
+                current = await self._store().decisions(
+                    swarm["id"], None, {"action": "read", "question_id": qid, "limit": 1}
+                )
+            except SwarmStoreError as error:
+                if error.code == "decision_not_found":
+                    continue
+                raise
+            question = current["question"]
+            result.append(
+                {
+                    "question_id": qid,
+                    "title": question["title"],
+                    "revision": question["revision"],
+                    "archived": question["archived"],
+                    "referenced_revisions": sorted(versions),
+                    "changed": any(version != question["revision"] for version in versions),
+                    "next_call": {
+                        "tool": "swarm_decisions",
+                        "arguments": {"action": "read", "question_id": qid},
+                    },
+                }
+            )
+        return result
+
+    async def decisions(self, context: ToolContext, arguments: Json) -> Json:
+        try:
+            binding, swarm, arguments = await self._bound_arguments(context, arguments)
+            data = await self._store().decisions(
+                binding.group_id, binding.participant_id, arguments, expected_epoch=swarm["epoch"]
+            )
+            if arguments["action"] not in {"list", "read", "history"} and not data.get("replayed"):
+                self._changed(binding.group_id, swarm["settings_revision"])
+            return tool_success(data)
+        except SwarmStoreError as error:
+            from core.tools import tool_failure
+
+            if error.code in DECISION_ERRORS:
+                return tool_failure(error.code, DECISION_ERRORS[error.code])
+            return _failure(error, arguments, DECISION_PARAMETERS)
+
+    async def _decisions_operation(self, arguments: Json) -> Json:
+        sid = _string(arguments, "swarm_id")
+        values = {key: value for key, value in arguments.items() if key != "swarm_id"}
+        try:
+            data = await self._store().decisions(sid, None, values)
+        except SwarmStoreError as error:
+            if error.code in DECISION_ERRORS:
+                raise ValueError(DECISION_ERRORS[error.code]) from error
+            raise
+        if values["action"] not in {"list", "read", "history"} and not data.get("replayed"):
+            swarm = await self._store().get_swarm(sid)
+            self._changed(sid, swarm["settings_revision"])
+        return data
+
     async def _wiki_operation(self, arguments: Json) -> Json:
         sid = _string(arguments, "swarm_id")
         values = {key: value for key, value in arguments.items() if key != "swarm_id"}
@@ -383,6 +461,7 @@ class SwarmExtension:
                 "board.read": self._board_read,
                 "board.post": self._board_post,
                 "wiki": self._wiki_operation,
+                "decisions": self._decisions_operation,
             }
             if name in {"swarms.start", "swarms.stop", "swarms.resume", "swarms.delete"}:
                 async with self._control_lock:
@@ -400,6 +479,7 @@ class SwarmExtension:
             "reminders": DEFAULT_REMINDERS,
         }
         catalog["reminder_texts"] = REMINDER_TEXTS
+        catalog["tools"] = [*catalog.get("tools", []), *session_tool_catalog()]
         return {"catalog": catalog}
 
     async def _profiles_preview(self, arguments: Json) -> Json:
@@ -943,7 +1023,7 @@ class SwarmExtension:
                 input = (
                     TemporaryRunInput(
                         "initial",
-                        INITIAL_MESSAGE.format(goal_post_id=snapshot["goal_post_id"]),
+                        _initial_message(snapshot),
                         request_id,
                     )
                     if initial is None
@@ -980,7 +1060,7 @@ class SwarmExtension:
                 participant["id"],
                 TemporaryRunInput(
                     "initial",
-                    INITIAL_MESSAGE.format(goal_post_id=swarm["goal_post_id"]),
+                    _initial_message(swarm),
                     request_id,
                 ),
             )
@@ -1021,6 +1101,9 @@ class SwarmExtension:
                     {
                         "entries": prepared["entries"],
                         "pending_remaining": prepared["pending_remaining"],
+                        "linked_decisions": await self._decision_updates(
+                            swarm, prepared["entries"]
+                        ),
                         "settings_revision": prepared["settings_revision"],
                     },
                     ensure_ascii=False,

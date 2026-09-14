@@ -505,3 +505,54 @@ describe('SwarmPage', () => {
     );
   });
 });
+
+it('shows and saves each private Swarm Tool independently', async () => {
+  const { bridge, operation } = createBridge();
+  const original = operation.getMockImplementation();
+  const names = [
+    'swarm_board',
+    'swarm_inbox',
+    'swarm_state',
+    'swarm_wiki',
+    'swarm_decisions',
+  ];
+  operation.mockImplementation(async (name, args) => {
+    const result = await original(name, args);
+    if (name === 'catalog')
+      result.catalog.tools.push(
+        ...names.map((name) => ({
+          name,
+          family: 'swarm',
+          family_label: 'Swarm',
+          activation: 'session_grant',
+        })),
+      );
+    return result;
+  });
+  await render(bridge);
+  button('Edit').click();
+  await vi.waitFor(() => expect(button('Tools & Skills')).toBeDefined());
+  button('Tools & Skills').click();
+  await tick();
+  for (const name of names)
+    expect(
+      document.querySelector(`[aria-label="Turn off ${name}"]`),
+    ).not.toBeNull();
+  document.querySelector('[aria-label="Turn off swarm_decisions"]').click();
+  await tick();
+  document.querySelector('[aria-label="Turn off swarm_board"]').click();
+  await tick();
+  button('Save changes').click();
+  await vi.waitFor(() =>
+    expect(operation).toHaveBeenCalledWith(
+      'profiles.save',
+      expect.objectContaining({
+        profile: expect.objectContaining({
+          tool_access: expect.objectContaining({
+            denied: ['swarm_decisions', 'swarm_board'],
+          }),
+        }),
+      }),
+    ),
+  );
+});
