@@ -181,6 +181,7 @@ def test_extension_prompt_inspection_uses_selected_blocks_and_owner_tools(tmp_pa
             "swarm_board",
             "swarm_inbox",
             "swarm_state",
+            "swarm_wiki",
         }
         blocks = {block["id"]: block for block in preview["blocks"]}
         assert blocks["core:runtime"]["enabled"] is False

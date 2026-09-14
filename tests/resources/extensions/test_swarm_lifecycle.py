@@ -368,6 +368,7 @@ async def test_forty_participants_become_idle_without_closing_the_swarm(lifecycl
         "swarm_board",
         "swarm_inbox",
         "swarm_state",
+        "swarm_wiki",
     }
     for run_id in run_ids:
         assert (
@@ -509,9 +510,14 @@ async def test_profile_prompt_selection_reaches_model_without_hidden_orientation
     assert [message["content"] for message in messages if message["role"] == "system"] == [
         "runtime-sentinel\n\nprofile-body-sentinel" if selected else "profile-body-sentinel"
     ]
-    assert [message["content"] for message in messages if message["role"] == "user"] == [
-        "goal-sentinel"
-    ]
+    inputs = [message["content"] for message in messages if message["role"] == "user"]
+    swarm = await lifecycle.service.store.get_swarm(started["swarm_id"])
+    assert len(inputs) == 1 and swarm["goal_post_id"] in inputs[0]
+    assert "goal-sentinel" not in str(messages)
+    goal = await lifecycle.service.store.read_human_posts(
+        swarm["id"], message_id=swarm["goal_post_id"]
+    )
+    assert goal.entries[0]["text"] == "goal-sentinel"
     assert not lifecycle.runtime.extensions.records()[0].declarations.session_prompt_blocks
 
 
@@ -559,7 +565,10 @@ async def test_stop_resume_preserves_one_initial_input_for_unfinished_participan
     await lifecycle.runtime.chat_run_manager.get(resumed_run_id).wait()
     binding = (await lifecycle.groups.list(started["swarm_id"]))[0]
     history = lifecycle.runtime.chat_sessions.get(binding.address).load()
-    assert [message.content for message in history if message.role == "user"] == ["shared goal"]
+    inputs = [message.content for message in history if message.role == "user"]
+    snapshot = await lifecycle.service.store.get_swarm(started["swarm_id"])
+    assert len(inputs) == 1 and snapshot["goal_post_id"] in inputs[0]
+    assert "shared goal" not in inputs[0]
     resumed_messages = lifecycle.runtime.adapter.requests[-1]["messages"]
     assert (
         any(
