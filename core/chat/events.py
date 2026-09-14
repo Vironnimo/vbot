@@ -122,9 +122,18 @@ async def _persist_run_error(run: Run, session: ChatSession, exc: Exception) -> 
     # Persists the user-visible error message only. The failure itself is logged
     # centrally by Run.mark_failed once the re-raised exception reaches the run
     # executor, so logging here would duplicate that entry.
-    kind = _exception_to_error_kind(exc)
-    error_message = ChatMessage.error(error_kind=kind, content=str(exc))
+    if run.terminal_payload_extras.get("error_message_id"):
+        return
+    expected = isinstance(exc, VBotError)
+    kind = _exception_to_error_kind(exc) if expected else "internal_error"
+    content = (
+        str(exc)
+        if expected
+        else "An internal error stopped this Run. Check the application logs for details."
+    )
+    error_message = ChatMessage.error(error_kind=kind, content=content)
     await session.append_async(error_message)
+    run.terminal_payload_extras["error_message_id"] = error_message.id
     _emit_message_event(run, ERROR_MESSAGE_PERSISTED_EVENT, error_message)
 
 

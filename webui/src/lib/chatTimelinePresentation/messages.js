@@ -450,6 +450,12 @@ const formatCompactTokens = (value) => {
 };
 
 export const compactionSeparatorLabel = (item) => {
+  if (item?.status === 'failed') {
+    return t(
+      'chat.compactionFailed',
+      'Compaction failed. Context unchanged. Check application logs for details.',
+    );
+  }
   if (item?.status === 'running') {
     return t(
       'chat.compactingCurrentConversation',

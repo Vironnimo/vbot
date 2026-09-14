@@ -448,3 +448,18 @@ def test_real_owner_preflight_accepts_explicit_private_tool_denials(tmp_path, mo
         asyncio.run(runtime._host_operations()._validate_extension_session_binding(binding))
     finally:
         runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_extension_owned_work_uses_the_observable_chat_loop(tmp_path):
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+    try:
+        identity = runtime.extensions.registration_identity("swarm")
+        assert identity is not None
+        host = runtime._host_operations().make_host().for_owner(identity)
+        # The two public loops differ in whether a pending Provider response
+        # exposes live Model deltas. Extension pages subscribe to those Runs.
+        assert host.temporary_agents._chat is runtime.streaming_chat_loop
+    finally:
+        await runtime.aclose()

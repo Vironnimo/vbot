@@ -217,7 +217,7 @@ class Runtime:
                 ),
                 ensure_started=self._ensure_started,
                 agent_resolver=self.agent_resolver,
-                chat_loop=self.chat_loop,
+                chat_loop=self.streaming_chat_loop,
                 chat_run_manager=self.chat_run_manager,
                 temporary_agents=self._temporary_agents,
                 projects=self.projects,

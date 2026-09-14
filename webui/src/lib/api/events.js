@@ -35,6 +35,7 @@ export const RUN_EVENT_TOOL_CALL_STDOUT = 'tool_call_stdout';
 export const RUN_EVENT_TOOL_CALL_STDERR = 'tool_call_stderr';
 
 export const RUN_EVENT_PROVIDER_HEARTBEAT = 'provider_heartbeat';
+export const RUN_EVENT_PROVIDER_REQUEST_STATUS = 'provider_request_status';
 
 export const RUN_EVENT_CHANGE_STATS = 'run_change_stats';
 
@@ -64,6 +65,7 @@ export const RUN_EVENT_TYPES = [
   'model_step_usage',
   RUN_EVENT_CHANGE_STATS,
   RUN_EVENT_PROVIDER_HEARTBEAT,
+  RUN_EVENT_PROVIDER_REQUEST_STATUS,
   'run_completed',
   'run_cancelled',
   'run_failed',

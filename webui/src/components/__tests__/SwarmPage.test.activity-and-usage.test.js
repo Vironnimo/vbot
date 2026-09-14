@@ -311,3 +311,103 @@ describe('SwarmPage', () => {
     });
   });
 });
+
+describe('Swarm failure feedback', () => {
+  it('shows partial Resume failure even when the operation envelope succeeds', async () => {
+    const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    operation.mockImplementation((name, args) =>
+      name === 'swarms.resume'
+        ? Promise.resolve({
+            runs: [{ participant_id: 'prt-b', error: 'RuntimeError' }],
+          })
+        : original(name, args),
+    );
+    await render(bridge);
+    button('Investigate').click();
+    await vi.waitFor(() => expect(button('Resume')).toBeDefined());
+    button('Resume').click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+        'Beta',
+      ),
+    );
+  });
+
+  it('keeps failed participants visible while their peers are running', async () => {
+    const previous = swarm.participants[1].state;
+    swarm.participants[1].state = 'failed';
+    try {
+      const { bridge } = createBridge();
+      await render(bridge);
+      button('Investigate').click();
+      await vi.waitFor(() =>
+        expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+          'Beta',
+        ),
+      );
+    } finally {
+      swarm.participants[1].state = previous;
+    }
+  });
+
+  it('renders Provider retries in an empty active participant Session', async () => {
+    const previous = { ...swarm.participants[0] };
+    Object.assign(swarm.participants[0], {
+      lifecycle_run_id: 'run-retry',
+      run_active: true,
+    });
+    try {
+      const { bridge } = createBridge();
+      bridge.readHistory.mockResolvedValue({
+        messages: [],
+        status: 'completed',
+      });
+      bridge.subscribeRun.mockResolvedValue({ subscription_id: 'retry-sub' });
+      await render(bridge);
+      button('Investigate').click();
+      await vi.waitFor(() => expect(button('Alpha')).toBeDefined());
+      button('Alpha').click();
+      await vi.waitFor(() => expect(bridge.subscribeRun).toHaveBeenCalled());
+      bridge.emitRun('retry-sub', {
+        type: 'run_started',
+        run_id: 'run-retry',
+        sequence: 1,
+        payload: { status: 'running' },
+      });
+      bridge.emitRun('retry-sub', {
+        type: 'provider_request_status',
+        run_id: 'run-retry',
+        sequence: 2,
+        payload: {
+          state: 'retrying',
+          error_kind: 'timeout',
+          attempt: 2,
+          max_attempts: 4,
+        },
+      });
+      await vi.waitFor(() =>
+        expect(document.querySelector('.run-footer__notice')).not.toBeNull(),
+      );
+      expect(
+        document.querySelector('.run-footer__notice').textContent,
+      ).toContain('2');
+      expect(
+        document.querySelector('.run-footer__notice').textContent,
+      ).toContain('4');
+      bridge.emitRun('retry-sub', {
+        type: 'assistant_output_delta',
+        run_id: 'run-retry',
+        sequence: 3,
+        payload: { content_delta: 'progress sentinel' },
+      });
+      await vi.waitFor(() =>
+        expect(document.querySelector('.run-footer__notice')).toBeNull(),
+      );
+    } finally {
+      for (const key of Object.keys(swarm.participants[0]))
+        delete swarm.participants[0][key];
+      Object.assign(swarm.participants[0], previous);
+    }
+  });
+});

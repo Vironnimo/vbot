@@ -108,9 +108,9 @@ function buildVisibleTimelineItems(sessionState, runEvents) {
 // A standalone Compaction Run emits nothing but Compaction events, so its run
 // block would wrap the exact separator the automatic in-run Compaction renders
 // bare. Dissolving it at the render boundary makes both triggers look
-// identical. A failed or cancelled run keeps its block (the aborted
-// placeholder is removed, leaving an empty block that carries the failure
-// status), and an in-run auto Compaction never qualifies because its Run
+// identical. A failed or cancelled run keeps its block and terminal status.
+// Failed attempts retain their warning separator; harmless skipped attempts
+// remove the placeholder. An in-run auto Compaction never qualifies because its Run
 // carries reasoning/output/tool children besides the separator.
 function isCompactionOnlyRunItem(item) {
   return (

@@ -18,7 +18,11 @@ from core.chat._step_outcomes import (
 )
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.continuation import normalize_interruption_cause
-from core.chat.events import _emit_assistant_events, _emit_streaming_assistant_events
+from core.chat.events import (
+    _emit_assistant_events,
+    _emit_streaming_assistant_events,
+    _exception_to_error_kind,
+)
 from core.chat.messages import JsonObject
 from core.chat.model_resolution import resolve_request_temperature, resolve_request_top_p
 from core.chat.streaming import (
@@ -44,10 +48,12 @@ from core.providers.adapter import (
 from core.providers.errors import NetworkError, ProviderError
 from core.runs import (
     PROVIDER_HEARTBEAT_EVENT,
+    PROVIDER_REQUEST_STATUS_EVENT,
     STREAM_ATTEMPT_RESTARTED_EVENT,
     RunInterruptedError,
 )
 from core.utils.logging import get_logger
+from core.utils.retry import RetryNotice, observe_retries
 
 if TYPE_CHECKING:
     from core.chat.continuation import ContinuationCause, ContinuationTracker
@@ -275,34 +281,62 @@ class WireRequestRunner:
             provider_id,
             model_id,
         )
-        if self._streaming:
-            return await self._send_streaming_assistant_request(
-                agent,
-                adapter,
-                model_id,
-                response_model,
-                messages,
-                tools,
-                run,
-                chunk_timeout_seconds=chunk_timeout_seconds,
-                request_context=request_context,
-                continuation_tracker=continuation_tracker,
-                output_cwd=output_cwd,
-                temperature=temperature,
-                top_p=top_p,
-            )
 
-        return await self._send_non_streaming_assistant_request(
-            agent,
-            adapter,
-            model_id,
-            response_model,
-            messages,
-            tools,
-            request_context=request_context,
-            temperature=temperature,
-            top_p=top_p,
-        )
+        def retry_notice(notice: RetryNotice) -> None:
+            run.emit(
+                PROVIDER_REQUEST_STATUS_EVENT,
+                {
+                    "state": "retrying" if notice.waiting else "waiting",
+                    "model": response_model,
+                    "attempt": notice.attempt,
+                    "max_attempts": notice.max_attempts,
+                    "delay_seconds": notice.delay_seconds,
+                    "error_kind": _exception_to_error_kind(notice.error),
+                },
+            )
+            if notice.waiting:
+                _LOGGER.warning(
+                    "Provider request retry scheduled (run=%s model=%s attempt=%d/%d cause=%s)",
+                    run.id,
+                    response_model,
+                    notice.attempt,
+                    notice.max_attempts,
+                    type(notice.error).__name__,
+                )
+
+        run.emit(PROVIDER_REQUEST_STATUS_EVENT, {"state": "waiting", "model": response_model})
+        with observe_retries(retry_notice):
+            try:
+                if self._streaming:
+                    return await self._send_streaming_assistant_request(
+                        agent,
+                        adapter,
+                        model_id,
+                        response_model,
+                        messages,
+                        tools,
+                        run,
+                        chunk_timeout_seconds=chunk_timeout_seconds,
+                        request_context=request_context,
+                        continuation_tracker=continuation_tracker,
+                        output_cwd=output_cwd,
+                        temperature=temperature,
+                        top_p=top_p,
+                    )
+
+                return await self._send_non_streaming_assistant_request(
+                    agent,
+                    adapter,
+                    model_id,
+                    response_model,
+                    messages,
+                    tools,
+                    request_context=request_context,
+                    temperature=temperature,
+                    top_p=top_p,
+                )
+            finally:
+                run.emit(PROVIDER_REQUEST_STATUS_EVENT, {"state": "finished"})
 
     async def _send_non_streaming_assistant_request(
         self,
@@ -527,6 +561,14 @@ class WireRequestRunner:
                 if continuation_tracker is not None:
                     await continuation_tracker.discard_stream_attempt()
                 run.emit(STREAM_ATTEMPT_RESTARTED_EVENT)
+                run.emit(
+                    PROVIDER_REQUEST_STATUS_EVENT,
+                    {
+                        "state": "retrying",
+                        "model": response_model,
+                        "error_kind": _exception_to_error_kind(exc),
+                    },
+                )
                 raise _StreamRestartNeeded(exc) from exc
             elif action is StreamRecoveryAction.PRESERVE_PARTIAL:
                 interruption_cause = normalize_interruption_cause(exc)

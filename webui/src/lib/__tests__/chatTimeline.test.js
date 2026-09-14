@@ -342,44 +342,53 @@ describe('live compaction timeline projection', () => {
     ).toBe(false);
   });
 
-  it('shows an in-progress checkpoint immediately and removes it when the attempt aborts', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-compaction-progress',
-    );
-    appendRunEvent(sessionState, {
-      type: 'compaction_started',
-      run_id: 'run-progress',
-      sequence: 1,
-      payload: { context_tokens_before: 250_000 },
-    });
+  it.each(['failed', 'stale_context', 'insufficient_reclaim'])(
+    'settles a Compaction attempt with reason %s',
+    (reason) => {
+      const sessionState = ensureSessionState(
+        createChatState(),
+        'alpha',
+        'session-compaction-progress',
+      );
+      appendRunEvent(sessionState, {
+        type: 'compaction_started',
+        run_id: 'run-progress',
+        sequence: 1,
+        payload: { context_tokens_before: 250_000 },
+      });
 
-    // A run whose only child is the compaction divider renders the divider
-    // bare instead of wrapped in a run block.
-    const running = visibleTimelineItemsForRender(sessionState).find(
-      (item) => item.type === 'compaction_separator',
-    );
-    expect(running).toMatchObject({
-      type: 'compaction_separator',
-      status: CHAT_STATUS_RUNNING,
-      contextTokensBefore: 250_000,
-    });
+      // A run whose only child is the compaction divider renders the divider
+      // bare instead of wrapped in a run block.
+      const running = visibleTimelineItemsForRender(sessionState).find(
+        (item) => item.type === 'compaction_separator',
+      );
+      expect(running).toMatchObject({
+        type: 'compaction_separator',
+        status: CHAT_STATUS_RUNNING,
+        contextTokensBefore: 250_000,
+      });
 
-    appendRunEvent(sessionState, {
-      type: 'compaction_aborted',
-      run_id: 'run-progress',
-      sequence: 2,
-      payload: { reason: 'failed' },
-    });
+      appendRunEvent(sessionState, {
+        type: 'compaction_aborted',
+        run_id: 'run-progress',
+        sequence: 2,
+        payload: { reason },
+      });
 
-    const items = visibleTimelineItemsForRender(sessionState);
-    expect(
-      items.filter((item) => item.type === 'compaction_separator'),
-    ).toEqual([]);
-    const aborted = items.find((item) => item.type === 'assistant_run');
-    expect(aborted?.items ?? []).toEqual([]);
-  });
+      const items = visibleTimelineItemsForRender(sessionState);
+      const separators = items.filter(
+        (item) => item.type === 'compaction_separator',
+      );
+      if (reason === 'failed') {
+        expect(separators).toHaveLength(1);
+        expect(separators[0].status).toBe('failed');
+      } else {
+        expect(separators).toEqual([]);
+      }
+      const aborted = items.find((item) => item.type === 'assistant_run');
+      expect(aborted?.items ?? []).toEqual([]);
+    },
+  );
 });
 
 describe('interrupted assistant turn projection', () => {

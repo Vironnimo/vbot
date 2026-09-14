@@ -102,7 +102,7 @@ async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
     assert assistant.content == "Hello world"
     assert assistant.reasoning == "Think"
     assert persisted_roles(messages) == ["user", "assistant"]
-    assert [event.type for event in run.events] == [
+    assert [event.type for event in run.events if event.type != "provider_request_status"] == [
         "run_started",
         "user_message_persisted",
         REASONING_DELTA_EVENT,
@@ -112,11 +112,30 @@ async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
         MODEL_STEP_USAGE_EVENT,
         "run_completed",
     ]
-    assert run.events[2].payload == {"reasoning_delta": "Think"}
-    assert run.events[3].payload == {"content_delta": "Hello world"}
-    assert run.events[5].payload["message"]["content"] == "Hello world"
-    assert "reasoning_meta" not in run.events[5].payload["message"]
-    assert "reasoning_scope" not in run.events[5].payload["message"]
+    assert next(event for event in run.events if event.type == "reasoning_delta").payload == {
+        "reasoning_delta": "Think"
+    }
+    assert next(
+        event for event in run.events if event.type == "assistant_output_delta"
+    ).payload == {"content_delta": "Hello world"}
+    assert (
+        next(event for event in run.events if event.type == "assistant_output").payload["message"][
+            "content"
+        ]
+        == "Hello world"
+    )
+    assert (
+        "reasoning_meta"
+        not in next(event for event in run.events if event.type == "assistant_output").payload[
+            "message"
+        ]
+    )
+    assert (
+        "reasoning_scope"
+        not in next(event for event in run.events if event.type == "assistant_output").payload[
+            "message"
+        ]
+    )
     assert adapter.requests == []
     assert adapter.stream_requests[0]["kwargs"]["thinking_effort"] == "high"
 
@@ -357,7 +376,7 @@ async def test_streaming_mode_missing_finish_delta_continues_after_visible_parti
     assert run.status == RunStatus.COMPLETED
     assert persisted_roles(messages) == ["user", "assistant", "note", "assistant"]
     assert messages[1].interrupted is True
-    assert [event.type for event in run.events] == [
+    assert [event.type for event in run.events if event.type != "provider_request_status"] == [
         "run_started",
         "user_message_persisted",
         ASSISTANT_OUTPUT_DELTA_EVENT,
