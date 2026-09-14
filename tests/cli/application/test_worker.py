@@ -30,6 +30,8 @@ def _install(root: Path, *, shape: str = "server") -> Installation:
         version = root / "versions" / version_id
         version.mkdir(parents=True)
         (version / "release.json").write_text("{}", encoding="utf-8")
+        (version / "runtime").mkdir()
+        (version / "runtime" / "vBot.GUI.exe").write_bytes(version_id.encode())
     (root / "active-version").write_text("rel_old\n", encoding="ascii")
     return install
 
@@ -87,6 +89,7 @@ def test_client_only_execution_never_targets_snapshots_or_starts_servers(
     assert operation.phase == "completed"
     assert install.version().name == "rel_new"
     assert calls == ["validate"]
+    assert (install.root / "vBot.GUI.exe").read_bytes() == b"rel_new"
 
 
 def test_no_restart_prepares_without_changing_the_active_pointer_or_server(
@@ -108,6 +111,7 @@ def test_no_restart_prepares_without_changing_the_active_pointer_or_server(
 
     assert operation.phase == "prepared"
     assert install.version().name == "rel_old"
+    assert not (install.root / "vBot.GUI.exe").exists()
 
 
 @pytest.mark.parametrize("restart", [True, False])
@@ -129,6 +133,7 @@ def test_current_version_finishes_without_maintenance_snapshot_or_handoff(
     worker.execute(install, operation)
     assert operation.phase == "completed"
     assert operation.previous_version == operation.candidate_version == install.version().name
+    assert (install.root / "vBot.GUI.exe").read_bytes() == b"rel_old"
 
 
 def test_bound_source_update_replaces_download_route(
