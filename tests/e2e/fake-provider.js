@@ -133,6 +133,16 @@ function toolCall(name, args) {
   return { args, name };
 }
 
+function addFileCall(path, content) {
+  return toolCall("apply_patch", {
+    patch: `*** Begin Patch\n*** Add File: ${path}\n${content
+      .replace(/\n$/, "")
+      .split("\n")
+      .map((line) => `+${line}`)
+      .join("\n")}\n*** End Patch`,
+  });
+}
+
 function skillManageCall(action, args) {
   return toolCall("skill_manage", { action, ...args });
 }
@@ -142,16 +152,14 @@ function plannedToolResponse(prompt, results, offeredTools) {
     prompt.includes("E2E_HTML_PREVIEW") ||
     prompt.includes("Create a small website for the preview demo.")
   ) {
-    const written = resultsFor(results, "write").filter((result) =>
-      result.envelope?.data?.path?.includes("preview-demo-"),
-    );
+    const written = resultsFor(results, "apply_patch")
+      .flatMap((result) => result.envelope?.data?.files ?? [])
+      .filter((file) => file.path.includes("preview-demo-"));
     if (written.length > 0) {
-      const entry = written.find((result) =>
-        result.envelope.data.path.endsWith("/index.html"),
-      );
+      const entry = written.find((file) => file.path.endsWith("/index.html"));
       return {
         text: entry
-          ? `Your website is ready. Open it here:\n\nfile:${entry.envelope.data.path}`
+          ? `Your website is ready. Open it here:\n\nfile:${entry.path}`
           : "The website files could not be completed.",
       };
     }
@@ -170,7 +178,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
     };
     return {
       calls: Object.entries(files).map(([name, content]) =>
-        toolCall("write", { path: `${directory}/${name}`, content }),
+        addFileCall(`${directory}/${name}`, content),
       ),
     };
   }
@@ -223,7 +231,8 @@ function plannedToolResponse(prompt, results, offeredTools) {
     const catalogIsRestricted =
       offeredTools.includes("status") &&
       !offeredTools.includes("bash") &&
-      !offeredTools.includes("write") &&
+      !offeredTools.includes("apply_patch") &&
+      !offeredTools.includes("search_files") &&
       !offeredTools.includes("skill_manage");
     if (!catalogIsRestricted) {
       return { text: "Unexpected Tool catalog." };
@@ -271,13 +280,11 @@ function plannedToolResponse(prompt, results, offeredTools) {
 
   if (prompt.includes("E2E_TOOL_FILESYSTEM")) {
     const reads = resultsFor(results, "read");
-    if (resultsFor(results, "write").length === 0) {
+    const patches = resultsFor(results, "apply_patch");
+    if (patches.length === 0) {
       return {
         calls: [
-          toolCall("write", {
-            path: "tool-e2e/workflow.txt",
-            content: "alpha\nneedle before\nomega\n",
-          }),
+          addFileCall("tool-e2e/workflow.txt", "alpha\nneedle before\nomega\n"),
         ],
       };
     }
@@ -286,7 +293,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
         calls: [toolCall("read", { path: "tool-e2e/workflow.txt" })],
       };
     }
-    if (resultsFor(results, "apply_patch").length === 0) {
+    if (patches.length === 1) {
       return {
         calls: [
           toolCall("apply_patch", {
@@ -296,14 +303,20 @@ function plannedToolResponse(prompt, results, offeredTools) {
         ],
       };
     }
-    if (resultsFor(results, "glob").length === 0) {
+    if (resultsFor(results, "search_files").length === 0) {
       return {
         calls: [
-          toolCall("glob", { path: "tool-e2e", pattern: "**/*.txt" }),
-          toolCall("grep", {
-            path: "tool-e2e",
-            pattern: "needle after",
-            literal: true,
+          toolCall("search_files", {
+            action: "paths",
+            paths: ["tool-e2e"],
+            patterns: ["**/*.txt"],
+            kind: "files",
+          }),
+          toolCall("search_files", {
+            action: "content",
+            paths: ["tool-e2e"],
+            patterns: ["needle after"],
+            options: ["-F"],
           }),
         ],
       };
