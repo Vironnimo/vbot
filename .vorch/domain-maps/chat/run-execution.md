@@ -2,6 +2,8 @@
 
 Task-gated reference for Chat admission, provider/Tool progression, streaming recovery, interruption, Continuation, cancellation, and Run-local Model fallback. Read this when changing those behaviors; Run storage, queue state, and lifecycle types themselves remain owned by `runs.md`.
 
+`request_runner.py` emits request waiting/finished activity and observes `core.utils.retry` only within that asynchronous Model request. Concurrent Runs have independent observers; callback failure cannot change retry behavior. Retry warnings include Run/Model correlation. Final expected failures and unexpected executor exceptions persist exactly one error message per Run, including failures before the first user message; unexpected errors use a generic `internal_error` description and keep details in the central Run log. Failures during pre-Model preparation also mark the durable summary and completion observers unsuccessful. Cancellation and `RunInterruptedError` retain their existing semantics (`test_chat_loop_lifecycle.py`, `test_chat_prompt.py`).
+
 ## Entry points and admission
 
 `ChatLoop` exposes `send`, `start_run`, `queue_run`, `build_queue_update`, and `compact_session`. `run_executor(content, agent_overrides=None)` is the public seam handed to `ChatRunManager`; its optional frozen `AgentRunOverrides` captures only a Run-local primary Model and thinking effort for Sub-Agent execution. `child_loop(nesting_depth=...)` shares the explicit `ChatLoopDependencies`, attachment resolution, Compaction, reflection, and title notification but carries no ambient override state. The server-facing paths require an existing Session; the legacy direct `send()` path may still create one when no `session_id` is supplied.

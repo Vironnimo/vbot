@@ -616,12 +616,26 @@ export function createSwarmPageModel(host) {
     pending = operation;
     error = '';
     try {
-      await call(`swarms.${operation}`, {
+      const result = await call(`swarms.${operation}`, {
         swarm_id: selectedSwarm.id,
         ...(participantId ? { participant_id: participantId } : {}),
         request_id: requestId(),
       });
       await refresh();
+      const failed = (result.runs ?? []).filter((run) => run.error);
+      if (failed.length) {
+        const names = failed.map(
+          (run) =>
+            selectedSwarm?.participants?.find(
+              (participant) => participant.id === run.participant_id,
+            )?.display_name ?? run.participant_id,
+        );
+        error = t(
+          'swarm.resume.failed',
+          'Could not resume: {names}. Open their Activity and check the application logs for details.',
+          { names: names.join(', ') },
+        );
+      }
     } catch (cause) {
       error = cause.message;
     } finally {

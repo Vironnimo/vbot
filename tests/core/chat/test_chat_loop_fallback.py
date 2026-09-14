@@ -237,14 +237,24 @@ async def test_provider_rate_limit_error_is_persisted_and_run_fails(tmp_path: Pa
     assert run.events[-1].payload["iteration_count"] == 0
     assert messages[1].error_kind == "rate_limit"
     assert messages[1].content == "too many requests"
-    assert [event.type for event in run.events] == [
+    assert [event.type for event in run.events if event.type != "provider_request_status"] == [
         "run_started",
         "user_message_persisted",
         ERROR_MESSAGE_PERSISTED_EVENT,
         "run_failed",
     ]
-    assert run.events[2].payload["message"]["role"] == "error"
-    assert run.events[2].payload["message"]["error_kind"] == "rate_limit"
+    assert (
+        next(event for event in run.events if event.type == ERROR_MESSAGE_PERSISTED_EVENT).payload[
+            "message"
+        ]["role"]
+        == "error"
+    )
+    assert (
+        next(event for event in run.events if event.type == ERROR_MESSAGE_PERSISTED_EVENT).payload[
+            "message"
+        ]["error_kind"]
+        == "rate_limit"
+    )
 
 
 @pytest.mark.asyncio

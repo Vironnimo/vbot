@@ -331,7 +331,9 @@ async def test_chat_send_returns_collected_run_timeline_without_reasoning_meta(
     assert result["status"] == "completed"
     assert result["message"]["content"] == "Hello"
     assert "reasoning_meta" not in result["message"]
-    assert [event["type"] for event in result["events"]] == [
+    assert [
+        event["type"] for event in result["events"] if event["type"] != "provider_request_status"
+    ] == [
         "run_started",
         "user_message_persisted",
         "model_step_usage",

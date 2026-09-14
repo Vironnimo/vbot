@@ -601,7 +601,7 @@ async def test_rooted_identity_missing_repository_fails_before_user_message(
     with pytest.raises(ChatError):
         await build_chat_loop(runtime).send("coder", "must not persist", session_id="s1")
 
-    assert session.load() == []
+    assert [message.role for message in session.load()] == ["error"]
 
 
 @pytest.mark.asyncio
@@ -624,4 +624,4 @@ async def test_rooted_identity_missing_project_fails_before_user_message(tmp_pat
     with pytest.raises(KeyError, match="missing"):
         await build_chat_loop(runtime).send("coder", "must not persist", session_id="s1")
 
-    assert session.load() == []
+    assert [message.role for message in session.load()] == ["error"]

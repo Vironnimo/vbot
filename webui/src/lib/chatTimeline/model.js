@@ -115,6 +115,7 @@ export function createAssistantRunItem({
     timing: null,
     durationMs: null,
     providerHeartbeat: null,
+    providerRequestStatus: null,
     iterationCount: source === 'live' ? 0 : null,
     items: [],
     reasoning: [],
