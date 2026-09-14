@@ -10,6 +10,7 @@ from pathlib import Path
 import psutil  # type: ignore[import-untyped]
 import pytest
 
+from core.utils.processes import kill_process_tree, subprocess_creation_flags
 from core.utils.server_control import (
     control_record_path,
     create_server_control,
@@ -110,6 +111,8 @@ def test_process_exit_releases_claim_without_replacing_record(tmp_path: Path) ->
         cwd=Path(__file__).resolve().parents[3],
         stdout=subprocess.PIPE,
         text=True,
+        start_new_session=True,
+        creationflags=subprocess_creation_flags(),
     )
     try:
         assert child.stdout is not None and child.stdout.readline().strip() == "ready"
@@ -122,7 +125,8 @@ def test_process_exit_releases_claim_without_replacing_record(tmp_path: Path) ->
             raise AssertionError("unreachable")
         assert read_server_control(tmp_path, 8420) == original
     finally:
-        child.kill()
+        # A Windows venv interpreter may be a launcher with a Python child.
+        kill_process_tree(child)
         child.wait(timeout=10)
     with server_control_claim(tmp_path, 8420):
         replacement = create_server_control(tmp_path, 8420, token="replacement")
@@ -130,7 +134,11 @@ def test_process_exit_releases_claim_without_replacing_record(tmp_path: Path) ->
 
 
 def test_claim_refuses_live_legacy_control_owner(tmp_path: Path) -> None:
-    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        start_new_session=True,
+        creationflags=subprocess_creation_flags(),
+    )
     try:
         create_server_control(
             tmp_path,
@@ -146,5 +154,5 @@ def test_claim_refuses_live_legacy_control_owner(tmp_path: Path) -> None:
             raise AssertionError("unreachable")
         assert read_server_control(tmp_path, 8420).token == "legacy"  # type: ignore[union-attr]
     finally:
-        child.kill()
+        kill_process_tree(child)
         child.wait(timeout=10)
