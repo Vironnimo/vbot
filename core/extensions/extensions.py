@@ -417,8 +417,16 @@ class ExtensionRegistry:
                 or registered.catalog_visible
             ):
                 return None
+        from core.tools.availability import normalize_tool_access
+
+        try:
+            denied = normalize_tool_access(binding.config.get("tool_access")).denied
+        except (AttributeError, TypeError, ValueError):
+            return None
         return SessionCapability(
-            tool_names=tuple(declaration.name for declaration in declarations),
+            tool_names=tuple(
+                declaration.name for declaration in declarations if declaration.name not in denied
+            ),
             prompt_blocks=tuple(record.declarations.session_prompt_blocks),
             runtime=record.declarations.session_runtime,
             identity=ExtensionRegistrationIdentity(owner_name, self._epoch),

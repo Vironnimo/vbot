@@ -369,6 +369,7 @@ async def test_forty_participants_become_idle_without_closing_the_swarm(lifecycl
         "swarm_inbox",
         "swarm_state",
         "swarm_wiki",
+        "swarm_decisions",
     }
     for run_id in run_ids:
         assert (
@@ -934,4 +935,56 @@ async def test_old_stop_retry_preserves_a_new_resume(lifecycle, tmp_path):
             )
         )
         == 3
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "denied",
+    [
+        ["swarm_decisions"],
+        ["swarm_board", "swarm_inbox"],
+        ["swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki", "swarm_decisions"],
+    ],
+)
+async def test_disabled_swarm_tools_stay_unavailable_on_start_and_resume(
+    lifecycle, tmp_path, denied
+):
+    names = {"swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki", "swarm_decisions"}
+    profile = await lifecycle.service.store.save_profile(
+        {
+            "schema_version": 1,
+            "name": "Selective",
+            "participants": [{"model": "fixture/model", "count": 1}],
+            "working_directory": {"kind": "directory", "path": str(tmp_path)},
+            "tool_access": {"mode": "selected", "allowed": [], "denied": denied},
+        },
+        expected_revision=None,
+    )
+    started = await lifecycle.service.operation(
+        "swarms.start",
+        {
+            "profile_id": profile["id"],
+            "prompt": "original-request-sentinel",
+            "request_id": "start-selective",
+        },
+    )
+    for run in started["runs"]:
+        await lifecycle.runtime.chat_run_manager.get(run["run_id"]).wait()
+    await wait_idle(lifecycle.service, started["swarm_id"])
+    first = lifecycle.runtime.adapter.requests[0]
+    assert {tool["name"] for tool in first["kwargs"].get("tools", [])} == names - set(denied)
+    if "swarm_board" in denied:
+        assert "original-request-sentinel" in json.dumps(first["messages"])
+    await lifecycle.service.operation(
+        "swarms.stop", {"swarm_id": started["swarm_id"], "request_id": "stop-selective"}
+    )
+    resumed = await lifecycle.service.operation(
+        "swarms.resume", {"swarm_id": started["swarm_id"], "request_id": "resume-selective"}
+    )
+    for run in resumed["runs"]:
+        await lifecycle.runtime.chat_run_manager.get(run["run_id"]).wait()
+    assert all(
+        {tool["name"] for tool in request["kwargs"].get("tools", [])} == names - set(denied)
+        for request in lifecycle.runtime.adapter.requests
     )
