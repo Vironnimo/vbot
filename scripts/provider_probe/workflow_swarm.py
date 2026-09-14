@@ -98,7 +98,10 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
             )
             started = await store.create_swarm(
                 profile["id"],
-                "probe goal",
+                "Work with your peers on a three-step checklist for reviewing a short text report. "
+                "Keep the checklist in the conversation; no files are needed."
+                if args.swarm_case == "unassisted"
+                else "probe goal",
                 {"cwd": directory},
                 request_id="start",
                 expected_profile_revision=1,
@@ -429,6 +432,10 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                         ]
                     )
                 )
+            if tool_name == "swarm_wiki":
+                from scripts.provider_probe.swarm_wiki_cases import wiki_cases
+
+                cases = await wiki_cases(store, sid, pid)
             if args.swarm_case in {"workflow", "unassisted"}:
                 return await _probe_swarm_workflow(
                     adapter, args, extensions, registry, service, sessions, context, binding, peer
@@ -501,6 +508,10 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                             "artifacts": [],
                         }
                         actual_code = "invalid_arguments"
+                    if tool_name == "swarm_wiki":
+                        from scripts.provider_probe.swarm_wiki_cases import verify_wiki_effect
+
+                        durable = await verify_wiki_effect(store, sid, pid, name, result)
                     receipts = call_context._delivery_receipts
                     if success and receipts:
                         durable = all(
@@ -567,9 +578,9 @@ async def _probe_swarm_workflow(
     """
     from core.chat import ChatMessage
     from core.chat.wire_shaping import _notes_to_request_messages
-    from resources.extensions.swarm.agent_text import RESUME_REMINDER
+    from resources.extensions.swarm.agent_text import INITIAL_MESSAGE, RESUME_REMINDER
 
-    names = ("swarm_board", "swarm_inbox", "swarm_state")
+    names = ("swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki")
     definitions = registry.provider_definitions(names, session_grants=names)
     if {tool["name"] for tool in definitions} != set(names):
         raise RuntimeError("Fresh-participant evaluation requires the complete production Tool set")
@@ -593,10 +604,8 @@ async def _probe_swarm_workflow(
         {"role": "system", "content": profile["instructions"]},
         {
             "role": "user",
-            "content": (
-                "Work with your peers to agree on a three-step checklist for reviewing a "
-                "short text report. Incorporate their feedback and finish your contribution. "
-                "Keep the checklist in this conversation; no files are needed."
+            "content": INITIAL_MESSAGE.format(
+                goal_post_id=(await store.get_swarm(sid))["goal_post_id"]
             )
             if unassisted
             else "Prepare a three-step checklist for reviewing a short text report with "
@@ -679,7 +688,7 @@ async def _probe_swarm_workflow(
             )
             if result["ok"]:
                 data = result["data"]
-                received = {entry["id"] for entry in data.get("entries", [])}
+                received = {entry["id"] for entry in data.get("entries", []) if "id" in entry}
                 received.update(entry["id"] for entry in data.get("recent", {}).get("entries", []))
                 received_ids.update(received)
                 if feedback_ids and feedback_ids.issubset(received_ids):
@@ -744,13 +753,17 @@ async def _probe_swarm_workflow(
     }
     if unassisted:
         required = set()
-    coordinated = feedback_received and published_after_feedback if unassisted else resumed
+    goal_read = (await store.get_swarm(sid))["goal_post_id"] in received_ids
+    coordinated = (
+        (goal_read and feedback_received and published_after_feedback) if unassisted else resumed
+    )
     strict_count = sum(
         item.get("strict") is True
         for item in render_tool_definitions(definitions, profile=_expected_profile(args))
     )
     return {
         "scenario": "swarm_unassisted" if unassisted else "swarm_workflow",
+        "goal_read": goal_read,
         "feedback_received": feedback_received,
         "published_after_feedback": published_after_feedback,
         "model": args.model,
