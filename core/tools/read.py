@@ -607,7 +607,7 @@ def make_read_handler(
     Closes over the services so the text path stays dependency-free while images
     are passed in memory and audio is transcribed via speech-to-text.
     Mirrors the image-generation tool's factory pattern. ``file_state`` records
-    each read so the write/edit guard can detect unread or externally-changed
+    each read so the write guard can detect unread or externally-changed
     files (see ``file_state.py``). Reads take no part in change statistics:
     the tracker diffs every mutation against actual on-disk content.
     """
@@ -642,7 +642,7 @@ def make_read_handler(
 
         # Stamp before reading bytes: if an external write lands in the tiny window
         # before the read, the stamp stays older than the new content, so the next
-        # write/edit errs toward a (harmless) re-read rather than missing the change.
+        # full-file write errs toward a (harmless) re-read rather than missing the change.
         file_state.record_read(context.session_id, resolved)
 
         try:

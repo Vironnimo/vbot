@@ -112,30 +112,6 @@ def test_skill_probe_checks_real_files_and_not_just_model_claims() -> None:
     assert not row["passed"]
 
 
-def test_edit_probe_executes_mistakes_and_checks_file_effects() -> None:
-    from scripts.provider_probe.workflow_tolerance import _edit_case, edit_tolerance_cases
-
-    class Adapter(_Adapter):
-        async def send(self, messages, **kwargs):
-            result = await super().send(messages, **kwargs)
-            for call in result.get("tool_calls", []):
-                call["name"] = "edit"
-            return result
-
-    args = PROBE._parser().parse_args([])
-    for case in edit_tolerance_cases():
-        if "arguments" in case:
-            row = asyncio.run(_edit_case(Adapter(case["arguments"]), args, case))
-            assert row["passed"], row
-    case = edit_tolerance_cases()[0]
-    wrong = {
-        "edits": [
-            {"path": "src/provider_tool_probe.py", "old_string": "value = 1", "new_string": "wrong"}
-        ]
-    }
-    assert not asyncio.run(_edit_case(Adapter(wrong), args, case))["passed"]
-
-
 def test_cron_probe_verifies_persisted_effects_for_every_case() -> None:
     from scripts.provider_probe.workflow_cron_tolerance import cron_case, cron_tolerance_cases
 

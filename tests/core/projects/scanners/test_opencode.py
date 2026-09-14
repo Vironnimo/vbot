@@ -219,10 +219,10 @@ def test_denied_tools_empty_when_no_permission_or_tools(tmp_path: Path) -> None:
     assert _denied_tools_for(tmp_path, "description: x\n") == frozenset()
 
 
-def test_denied_tools_permission_edit_denies_edit_and_write(tmp_path: Path) -> None:
+def test_denied_tools_permission_edit_denies_patch_and_write(tmp_path: Path) -> None:
     # The edit permission key has no separate write counterpart, so it covers both.
     assert _denied_tools_for(tmp_path, "permission:\n  edit: deny\n") == frozenset(
-        {"edit", "write"}
+        {"apply_patch", "write"}
     )
 
 
@@ -297,11 +297,11 @@ def test_denied_tools_from_tools_map_false_denies(tmp_path: Path) -> None:
     # tools is deny-by-exception: only an explicit false turns a tool off, and
     # tools.write / tools.edit are separate names (unlike permission.edit).
     front_matter = "tools:\n  write: false\n  read: false\n"
-    assert _denied_tools_for(tmp_path, front_matter) == frozenset({"write", "read"})
+    assert _denied_tools_for(tmp_path, front_matter) == frozenset({"write", "apply_patch", "read"})
 
 
-def test_denied_tools_tools_edit_denies_edit_only(tmp_path: Path) -> None:
-    assert _denied_tools_for(tmp_path, "tools:\n  edit: false\n") == frozenset({"edit"})
+def test_denied_tools_tools_edit_denies_patch_only(tmp_path: Path) -> None:
+    assert _denied_tools_for(tmp_path, "tools:\n  edit: false\n") == frozenset({"apply_patch"})
 
 
 def test_denied_tools_tools_true_keeps_tool_on(tmp_path: Path) -> None:

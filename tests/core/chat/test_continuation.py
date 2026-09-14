@@ -309,7 +309,8 @@ def test_prompt_warns_before_repeating_unknown_write_edit_or_bash() -> None:
     assert "read (read-1): unknown" in reminder
 
 
-def test_fold_references_ten_completed_tools_and_keeps_one_dangling_unknown() -> None:
+@pytest.mark.parametrize("tool_name", ["apply_patch", "edit"])
+def test_fold_references_ten_completed_tools_and_keeps_one_dangling_unknown(tool_name) -> None:
     records = [
         _record(
             "run_started",
@@ -336,7 +337,7 @@ def test_fold_references_ten_completed_tools_and_keeps_one_dangling_unknown() ->
         )
     records.extend(
         [
-            _record("tool_started", tool_call_id="edit-dangling", name="edit"),
+            _record("tool_started", tool_call_id="mutation-dangling", name=tool_name),
             _record("run_interrupted", cause="process_restart"),
         ]
     )
@@ -346,7 +347,7 @@ def test_fold_references_ten_completed_tools_and_keeps_one_dangling_unknown() ->
     assert state is not None
     assert len(state.operations) == 11
     assert sum(operation["status"] == "completed" for operation in state.operations.values()) == 10
-    assert state.operations["edit-dangling"]["status"] == "unknown"
+    assert state.operations["mutation-dangling"]["status"] == "unknown"
     assert (
         "Their actual filesystem or process effects may be uncertain."
         in render_continuation_reminder(

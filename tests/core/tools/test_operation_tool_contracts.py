@@ -11,7 +11,6 @@ from core.tools.apply_patch import APPLY_PATCH_TOOL_PARAMETERS
 from core.tools.bash import BASH_TOOL_PARAMETERS
 from core.tools.channel import CHANNEL_SEND_TOOL_PARAMETERS
 from core.tools.cron import CRON_TOOL_PARAMETERS
-from core.tools.edit import EDIT_TOOL_PARAMETERS
 from core.tools.glob import GLOB_TOOL_PARAMETERS
 from core.tools.grep import GREP_TOOL_PARAMETERS
 from core.tools.history import HISTORY_TOOL_PARAMETERS
@@ -43,7 +42,6 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
     ("bash", BASH_TOOL_PARAMETERS),
     ("channel_send", CHANNEL_SEND_TOOL_PARAMETERS),
     ("cron", CRON_TOOL_PARAMETERS),
-    ("edit", EDIT_TOOL_PARAMETERS),
     ("glob", GLOB_TOOL_PARAMETERS),
     ("grep", GREP_TOOL_PARAMETERS),
     ("history", HISTORY_TOOL_PARAMETERS),
@@ -105,7 +103,6 @@ def test_direct_tool_schema_is_flat_and_declares_required_properties(
         "bash",
         "channel_send",
         "cron",
-        "edit",
         "glob",
         "grep",
         "history",
