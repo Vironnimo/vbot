@@ -8,8 +8,10 @@ from typing import Any
 import pytest
 
 from core.chat.continuation import ContinuationTracker
+from core.providers.errors import ProviderTimeoutError
 from core.runs import RunAdmission, RunExecutionOwner, RunStatus
 from core.sessions import ChatSession
+from core.utils.retry import retry_async
 from tests.core.chat.chat_loop_support import (
     RecordingReflection,
     StubAdapter,
@@ -294,3 +296,95 @@ async def test_child_loop_shares_the_reflection_service(tmp_path: Path) -> None:
     child = parent.child_loop(nesting_depth=1)
 
     assert child._reflection_service is reflection
+
+
+@pytest.mark.asyncio
+async def test_provider_retry_is_visible_before_answer_without_leaking_error(tmp_path):
+    class RetryingAdapter(StubAdapter):
+        async def send(self, messages, *, model_id, **kwargs):
+            attempts = 0
+
+            async def request():
+                nonlocal attempts
+                attempts += 1
+                if attempts == 1:
+                    raise ProviderTimeoutError("private-provider-detail")
+                return await super(RetryingAdapter, self).send(
+                    messages, model_id=model_id, **kwargs
+                )
+
+            return await retry_async(request, initial_delay=0)
+
+    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4")
+    runtime = StubRuntime(
+        data_dir=tmp_path, agent=agent, adapter=RetryingAdapter([{"content": "done"}])
+    )
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    run = await build_chat_loop(runtime).start_run("coder", "Hi", session_id="session-one")
+    await run.wait()
+    status = [event.payload for event in run.events if event.type == "provider_request_status"]
+    assert [item["state"] for item in status] == ["waiting", "retrying", "waiting", "finished"]
+    assert status[1]["error_kind"] == "timeout"
+    assert status[1]["attempt"] == 2
+    assert status[1]["max_attempts"] == 4
+    assert "private-provider-detail" not in str(status)
+    assert run.iteration_count == 1
+    assert not any(
+        message.role == "error"
+        for message in runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expected", [False, True])
+async def test_run_failures_remain_visible_in_history_once(tmp_path, expected):
+    failure = (
+        ProviderTimeoutError("timeout sentinel")
+        if expected
+        else RuntimeError("private-internal-detail")
+    )
+
+    class FailingAdapter(StubAdapter):
+        async def send(self, *_args, **_kwargs):
+            raise failure
+
+    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4")
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=FailingAdapter([]))
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    run = await build_chat_loop(runtime).start_run("coder", "Hi", session_id="session-one")
+    with pytest.raises(type(failure)) as raised:
+        await run.wait()
+    assert raised.value is failure
+    errors = [
+        message
+        for message in runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+        if message.role == "error"
+    ]
+    assert len(errors) == 1
+    assert errors[0].error_kind == ("timeout" if expected else "internal_error")
+    assert "private-internal-detail" not in errors[0].content
+    assert run.events[-1].payload["error_message_id"] == errors[0].id
+
+
+@pytest.mark.asyncio
+async def test_preparation_failure_reaches_summary_and_completion_observers(tmp_path):
+    class BrokenTitles:
+        def notify_user_message(self, **kwargs):
+            raise RuntimeError("preparation sentinel")
+
+    agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4")
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    reflection = RecordingReflection()
+    loop = build_chat_loop(runtime, reflection_service=reflection, session_title_service=BrokenTitles())
+    run = await loop.start_run("coder", "Hi", session_id="session-one")
+    with pytest.raises(RuntimeError):
+        await run.wait()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    assert messages[-1].role == "run_summary"
+    assert messages[-1].status == "failed"
+    assert messages[-2].role == "error"
+    assert messages[-2].error_kind == "internal_error"
+    assert reflection.calls[0]["outcome"] == "error"
+    assert run.status is RunStatus.FAILED
+    assert run.iteration_count == 0

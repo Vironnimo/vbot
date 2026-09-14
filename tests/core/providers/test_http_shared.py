@@ -707,3 +707,12 @@ def test_format_http_error_detail_prefers_body_and_falls_back_to_status() -> Non
     assert format_http_error_detail(502, "gateway boom") == "502 gateway boom"
     assert format_http_error_detail(502, "") == "502"
     assert format_http_error_detail(502, None) == "502"
+
+
+@pytest.mark.parametrize(
+    "error_type", [httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout, httpx.PoolTimeout]
+)
+def test_empty_timeout_retains_diagnostic_type(error_type):
+    error = wrap_network_error(error_type(""))
+    assert isinstance(error, ProviderTimeoutError)
+    assert error_type.__name__ in str(error)

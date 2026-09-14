@@ -53,7 +53,7 @@ async def test_streaming_mode_falls_back_before_usable_streamed_output(tmp_path:
 
     run = next(iter(runtime.chat_runs._runs.values()))
     assert assistant.content == "Fallback answer"
-    assert [event.type for event in run.events] == [
+    assert [event.type for event in run.events if event.type != "provider_request_status"] == [
         "run_started",
         "user_message_persisted",
         "assistant_output",
@@ -116,7 +116,7 @@ async def test_streaming_mode_preserves_partial_instead_of_fallback_after_visibl
     assert run.status == RunStatus.COMPLETED
     assert persisted_roles(messages) == ["user", "assistant", "note", "assistant"]
     assert messages[1].interrupted is True
-    assert [event.type for event in run.events] == [
+    assert [event.type for event in run.events if event.type != "provider_request_status"] == [
         "run_started",
         "user_message_persisted",
         ASSISTANT_OUTPUT_DELTA_EVENT,
@@ -300,7 +300,7 @@ async def test_streaming_mode_chunk_timeout_preserves_partial_after_visible_outp
     assert persisted_roles(messages) == ["user", "assistant", "note", "assistant"]
     assert messages[1].interrupted is True
     assert messages[1].interruption_cause == "timeout"
-    assert [event.type for event in run.events] == [
+    assert [event.type for event in run.events if event.type != "provider_request_status"] == [
         "run_started",
         "user_message_persisted",
         ASSISTANT_OUTPUT_DELTA_EVENT,
@@ -342,7 +342,7 @@ async def test_streaming_mode_cancellation_closes_adapter_and_preserves_visible_
     assert messages[1].interrupted is True
     summaries = [message for message in messages if message.role == "run_summary"]
     assert summaries[-1].status == "cancelled"
-    assert [event.type for event in run.events] == [
+    assert [event.type for event in run.events if event.type != "provider_request_status"] == [
         "run_started",
         "user_message_persisted",
         ASSISTANT_OUTPUT_DELTA_EVENT,

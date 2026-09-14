@@ -348,12 +348,13 @@ def wrap_network_error(error: Exception) -> NetworkError | ProviderTimeoutError:
     so it never triggers model fallback (see ``.vorch/domain-maps/providers.md`` gotchas).
     """
     if isinstance(error, httpx.TimeoutException):
-        return ProviderTimeoutError(f"Request failed: {error}")
+        detail = str(error).strip() or "No response received within the request timeout."
+        return ProviderTimeoutError(f"Request timed out ({type(error).__name__}): {detail}")
     if isinstance(error, httpx.TransportError):
-        return NetworkError(f"Connection failed: {error}")
+        return NetworkError(f"Connection failed: {str(error).strip() or type(error).__name__}")
     # Anything else (shouldn't happen at request-submission sites): surface as
     # a transport failure so retry semantics match.
-    return NetworkError(f"Connection failed: {error}")
+    return NetworkError(f"Connection failed: {str(error).strip() or type(error).__name__}")
 
 
 # ---------------------------------------------------------------------------
