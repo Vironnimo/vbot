@@ -189,7 +189,8 @@ def search_cases() -> list[dict[str, Any]]:
 
 async def _case(adapter: Any, args: argparse.Namespace, case: dict) -> dict:
     with TemporaryDirectory(prefix="vbot-search-probe-") as directory:
-        root = Path(directory)
+        # Compare canonical paths on both sides (Windows Temp may use 8.3 names).
+        root = Path(directory).resolve()
         for name, content in {
             "src/a.py": "alpha alpha\nbeta\nUPPER\n",
             "tests/b.PY": "alpha\n",

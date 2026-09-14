@@ -6,6 +6,8 @@ import asyncio
 import json
 from argparse import Namespace
 
+import pytest
+
 import scripts.provider_probe.choices as probe_choices
 import scripts.provider_probe.computer_cases as probe_computer_cases
 import scripts.provider_probe.measurements as probe_measurements
@@ -126,11 +128,32 @@ def test_swarm_workflow_persists_failed_calls_and_resumes_from_feedback():
     assert result["durable_receipts"] > 0
 
 
-def test_swarm_probe_uses_registered_handlers_and_canonical_receipts():
+@pytest.mark.parametrize(
+    ("tool", "case", "minimum", "expected_names"),
+    [
+        ("swarm_board", "all", 50, set()),
+        ("swarm_board", "bounds", 8, set()),
+        ("swarm_inbox", "all", 15, set()),
+        (
+            "swarm_state",
+            "all",
+            4,
+            {"status_default", "status_cursor", "name_rejected", "name_field_rejected"},
+        ),
+        ("swarm_wiki", "all", 4, {"create", "update_patch", "delete", "restore"}),
+        ("swarm_decisions", "all", 37, set()),
+    ],
+    ids=["board", "bounds", "inbox", "state", "wiki", "decisions"],
+)
+def test_swarm_probe_uses_registered_handlers_and_canonical_receipts(
+    tool, case, minimum, expected_names
+):
+    # Each independent fixture gets the normal per-test budget and scheduling;
+    # do not accumulate six durable Session/store probes under one timeout.
     class Adapter:
         async def send(self, messages, **kwargs):
             tool_name = messages[-1]["content"].split()[1]
-            assert tool_name in {tool["name"] for tool in kwargs["tools"]}
+            assert tool_name in {item["name"] for item in kwargs["tools"]}
             arguments = json.loads(messages[-1]["content"].split(": ", 1)[1])
             return {
                 "tool_calls": [{"id": "fixture-call", "name": tool_name, "arguments": arguments}]
@@ -140,36 +163,24 @@ def test_swarm_probe_uses_registered_handlers_and_canonical_receipts():
             return raw
 
     args = PROBE._parser().parse_args(
-        ["--scenario", "swarm_tool", "--profile", "explicit_non_strict"]
+        [
+            "--scenario",
+            "swarm_tool",
+            "--profile",
+            "explicit_non_strict",
+            "--swarm-tool",
+            tool,
+            "--swarm-case",
+            case,
+        ]
     )
     result = asyncio.run(probe_workflow_swarm._probe_swarm_tool(Adapter(), args))
     assert result["passed"]
-    assert len(result["cases"]) >= 50
+    assert len(result["cases"]) >= minimum
+    if case == "bounds":
+        assert len(result["cases"]) == minimum
     assert result["strict_true_tool_count"] == 0
-    args.swarm_case = "bounds"
-    bounds = asyncio.run(probe_workflow_swarm._probe_swarm_tool(Adapter(), args))
-    assert bounds["passed"]
-    assert len(bounds["cases"]) == 8
-    args.swarm_case = "all"
-    args.swarm_tool = "swarm_inbox"
-    inbox = asyncio.run(probe_workflow_swarm._probe_swarm_tool(Adapter(), args))
-    assert inbox["passed"]
-    assert len(inbox["cases"]) >= 15
-    args.swarm_tool = "swarm_state"
-    state = asyncio.run(probe_workflow_swarm._probe_swarm_tool(Adapter(), args))
-    assert state["passed"]
-    assert {"status_default", "status_cursor", "name_rejected", "name_field_rejected"} <= {
-        row["case"] for row in state["cases"]
-    }
-    args.swarm_tool = "swarm_wiki"
-    wiki = asyncio.run(probe_workflow_swarm._probe_swarm_tool(Adapter(), args))
-    assert wiki["passed"]
-    assert {"create", "update_patch", "delete", "restore"} <= {row["case"] for row in wiki["cases"]}
-
-    args.swarm_tool = "swarm_decisions"
-    decisions = asyncio.run(probe_workflow_swarm._probe_swarm_tool(Adapter(), args))
-    assert decisions["passed"]
-    assert len(decisions["cases"]) >= 37
+    assert expected_names <= {row["case"] for row in result["cases"]}
 
 
 def test_mcp_workflow_probe_rejects_an_unsupported_completion_claim():
