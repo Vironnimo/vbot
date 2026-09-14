@@ -90,10 +90,13 @@ a result-count fact; detail views retain warnings and continuation metadata.
 ## Native Dependency and Permissions
 
 `resources/ripgrep.lock.json` pins ripgrep 15.1.0 with PCRE2, per-platform archive
-and executable SHA-256 digests. `_search_binary.py` resolves only private assets
+and executable SHA-256 digests. `core/utils/search_binary.py` resolves only private assets
 under `resources/native/ripgrep/`; no PATH search or Python regex fallback exists.
 `cli/search_runtime.py` provisions at install/update/build time with bounded
 download/extraction, integrity checks, executable validation, and atomic replace.
+Provisioning uses only the Python standard library so clean package builders can
+download missing assets without installing application dependencies. The shared
+locator lives in `core/utils/` to avoid importing the Tool registry in builders.
 A verified existing asset works offline. Missing/corrupt assets make the Tool
 not ready with an installation-repair hint; Tool invocation never provisions it.
 Server packaging includes the executable and notices; desktop-client excludes it.

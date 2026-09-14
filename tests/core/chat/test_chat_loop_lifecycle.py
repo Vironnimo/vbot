@@ -376,7 +376,9 @@ async def test_preparation_failure_reaches_summary_and_completion_observers(tmp_
     runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
     runtime.chat_sessions.create("coder", session_id="session-one")
     reflection = RecordingReflection()
-    loop = build_chat_loop(runtime, reflection_service=reflection, session_title_service=BrokenTitles())
+    loop = build_chat_loop(
+        runtime, reflection_service=reflection, session_title_service=BrokenTitles()
+    )
     run = await loop.start_run("coder", "Hi", session_id="session-one")
     with pytest.raises(RuntimeError):
         await run.wait()
