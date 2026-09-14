@@ -1,7 +1,7 @@
 # Archived Edit Tool
 
-The built-in `edit` Tool is retired. Use `apply_patch` for targeted file changes;
-`write` remains available for full-file creation and replacement. There is no
+The built-in `edit` Tool is retired. Use `apply_patch` for targeted file changes
+and Add File for full-file creation and replacement. There is no
 `replace_all` argument in `apply_patch`; repeated replacements require explicit
 hunks or a script.
 
