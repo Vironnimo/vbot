@@ -238,7 +238,17 @@ def print_update_command_result(
 def print_application_update_result(
     install: Installation, operation: Operation, *, handoff: bool = False
 ) -> None:
+    from cli.application.packages import version_label
+    from cli.application.state import read_json
     from cli.update_management import read_checkout_version
+
+    def installed_label(version_id: str | None) -> str:
+        if version_id is None:
+            return "unknown"
+        root = install.version(version_id)
+        if (root / "release.json").is_file():
+            return version_label(read_json(root / "release.json", limit=32 * 1024**2))
+        return read_checkout_version(root / "app")
 
     messages = {
         "completed": (
@@ -253,12 +263,13 @@ def print_application_update_result(
         "rolled_back": "Update failed. The previous version was restored.",
         "needs_attention": "Update needs attention. Check its status before trying again.",
     }
-    if (
+    unchanged = (
         operation.phase == "completed"
         and operation.candidate_version
         and operation.candidate_version == operation.previous_version
-    ):
-        messages["completed"] = "This vBot version is already active; no restart was needed."
+    )
+    if unchanged:
+        messages["completed"] = "vBot is already up to date; no restart was needed."
     failed = operation.phase in {"failed", "rolled_back", "needs_attention"}
     state: Status = "error" if failed else "success" if operation.phase == "completed" else "info"
     print()
@@ -271,25 +282,26 @@ def print_application_update_result(
         candidate = operation.candidate_version
         if candidate:
             label = "Prepared version" if operation.phase == "prepared" else "Version"
-            version_after = read_checkout_version(install.version(candidate) / "app")
-            version_before = (
-                read_checkout_version(install.version(operation.previous_version) / "app")
-                if operation.previous_version
-                else "unknown"
-            )
+            version_after = operation.target_label or installed_label(candidate)
+            version_before = operation.previous_label or installed_label(operation.previous_version)
             print(
                 f"  {label}: {version_after}"
-                if operation.phase == "prepared"
+                if operation.phase == "prepared" or unchanged
                 else f"  Version: {version_before} -> {version_after}"
             )
         if install.owns_server and operation.phase == "completed":
             from cli.application.processes import target
 
             print(f"  Server: {target(install).url}")
-        if operation.phase == "completed" and install.install_shape in {
-            "server-desktop",
-            "desktop-client",
-        }:
+        if (
+            operation.phase == "completed"
+            and not unchanged
+            and install.install_shape
+            in {
+                "server-desktop",
+                "desktop-client",
+            }
+        ):
             print("  Desktop: reopen any existing window to use the updated client.")
     if failed:
         if operation.message:

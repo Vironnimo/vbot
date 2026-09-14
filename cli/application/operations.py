@@ -193,6 +193,8 @@ def public_result(operation: Operation) -> dict[str, Any]:
         "successful": operation.phase == "completed",
         "previous_version": operation.previous_version,
         "candidate_version": operation.candidate_version,
+        "previous_label": operation.previous_label,
+        "target_label": operation.target_label,
         "error": operation.error,
         "status_command": f"vbot update status {operation.id}",
     }
@@ -202,7 +204,7 @@ def wait(install: Installation, operation_id: str, *, progress=None) -> Operatio
     last = None
     while True:
         operation = load_operation(install, operation_id)
-        current = (operation.phase, operation.message)
+        current = (operation.phase, operation.message, operation.target_label)
         if current != last and progress is not None:
             progress(operation)
         last = current
