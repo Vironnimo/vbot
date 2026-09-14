@@ -37,6 +37,7 @@ HOSTS = {
     "vBot.Update.exe": "update",
     "vBot.Python.exe": "python",
     "vBot.exe": "host",
+    "vBot.GUI.exe": "gui",
 }
 INVENTORY_NAME = "vbot-runtime-inventory.json"
 RUNTIME_DLL = "python313.dll"
@@ -280,6 +281,9 @@ def _version_resource_values(version: str) -> tuple[str, str]:
 def compile_host(
     source: Path, output: Path, *, role: str, version: str, stable: bool = False
 ) -> None:
+    # The GUI companion always resolves the installation pointer, including
+    # when an older source updater invokes this compiler without the new flag.
+    stable = stable or role == "gui"
     windows = source / "scripts" / "windows"
     icon = (source / "desktop" / "icon.ico").resolve()
     manifest = (
@@ -379,9 +383,10 @@ def build(args: argparse.Namespace) -> Path:
             version_root / "runtime" / filename,
             role=role,
             version=args.version,
-            stable=filename == "vBot.exe",
+            stable=role in {"host", "gui"},
         )
-    shutil.copy2(version_root / "runtime" / "vBot.exe", package / "vBot.exe")
+    for filename in ("vBot.exe", "vBot.GUI.exe"):
+        shutil.copy2(version_root / "runtime" / filename, package / filename)
     manifest = {
         "schema_version": 1,
         "bootstrap_protocol": 1,
@@ -397,7 +402,7 @@ def build(args: argparse.Namespace) -> Path:
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )
     if args.authenticode_command:
-        for executable in [package / "vBot.exe", *version_root.glob("runtime/*.exe")]:
+        for executable in [*package.glob("*.exe"), *version_root.glob("runtime/*.exe")]:
             _run([part.replace("{file}", str(executable)) for part in args.authenticode_command])
         manifest["files"] = _hashes(version_root)
         (version_root / "release.json").write_text(

@@ -332,6 +332,10 @@ def test_build_writes_complete_hashed_manifest_and_rooted_archive(
     archive = tmp_path / "build" / "artifacts" / "vbot-windows-x86_64-server.zip"
     with zipfile.ZipFile(archive) as bundle:
         names = set(bundle.namelist())
+    assert (package / "vBot.GUI.exe").read_bytes() == (
+        version_root / "runtime/vBot.GUI.exe"
+    ).read_bytes()
+    assert "runtime/vBot.GUI.exe" in names
     assert "release.json" in names
     assert "app/core/included.txt" in names
     assert "runtime/vBot.Server.exe" in names
@@ -396,6 +400,10 @@ def test_installer_bootstraps_application_and_stops_before_uninstall() -> None:
         encoding="utf-8"
     )
 
+    assert (
+        'Name: "{group}\\vBot Desktop"; Filename: "{app}\\vBot.GUI.exe"; Parameters: "desktop"'
+        in script
+    )
     assert "application install --root" in script
     assert "DefaultDirName={localappdata}\\Programs\\vBot" in script
     assert "{param:VBOTDATA|{%USERPROFILE}\\.vbot}" in script
@@ -500,8 +508,8 @@ def test_native_startup_failure_exits_and_reports_stderr_without_a_dialog(tmp_pa
     sys.platform != "win32" or not shutil.which("clang-cl") or not shutil.which("llvm-rc"),
     reason="Windows native compiler required",
 )
-@pytest.mark.parametrize("stable", [True, False])
-def test_native_redirected_output_preserves_unicode(tmp_path, stable):
+@pytest.mark.parametrize("role, stable", [("host", True), ("update", False), ("gui", True)])
+def test_native_redirected_output_preserves_unicode(tmp_path, role, stable):
     import sysconfig
 
     root = tmp_path / "native-encoding"
@@ -524,9 +532,9 @@ def test_native_redirected_output_preserves_unicode(tmp_path, stable):
     build_windows.compile_host(
         Path(build_windows.__file__).parent.parent,
         output,
-        role="host" if stable else "update",
+        role=role,
         version="0.4.3",
-        stable=stable,
+        stable=stable and role != "gui",
     )
     expected = "caf\u00e9 \u2014 \u65e5\u672c"
     result = subprocess.run(
@@ -537,3 +545,38 @@ def test_native_redirected_output_preserves_unicode(tmp_path, stable):
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.decode("utf-8").splitlines() == ["1", expected]
+
+    if role == "gui":
+        import struct
+
+        shutil.copytree(python_root / "DLLs", runtime / "DLLs")
+        executable = output.read_bytes()
+        pe = struct.unpack_from("<I", executable, 0x3C)[0]
+        assert struct.unpack_from("<H", executable, pe + 24 + 68)[0] == 2
+        app = runtime.parent / "app" / "cli"
+        app.mkdir(parents=True)
+        (app / "__init__.py").write_text("", encoding="utf-8")
+        (app / "main.py").write_text(
+            "import ctypes, json, sys\n"
+            "from pathlib import Path\n"
+            "Path(sys.argv[-1]).write_text(json.dumps({"
+            "'args': sys.argv[1:-1], 'console': ctypes.windll.kernel32.GetConsoleWindow(), "
+            "'module': __file__}), encoding='utf-8')\n",
+            encoding="utf-8",
+        )
+        for version in ("rel_test", "rel_next"):
+            if version == "rel_next":
+                runtime.parent.rename(root / "versions" / version)
+                (root / "active-version").write_text(version + "\n", encoding="ascii")
+            report = tmp_path / f"desktop report {version}.json"
+            result = subprocess.run(
+                [str(output), "desktop", "--host", "example.test", str(report)],
+                cwd=tmp_path,
+                capture_output=True,
+                timeout=15,
+            )
+            assert result.returncode == 0, result.stderr
+            observed = json.loads(report.read_text(encoding="utf-8"))
+            assert observed["args"] == ["desktop", "--host", "example.test"]
+            assert observed["console"] == 0
+            assert version in Path(observed["module"]).parts
