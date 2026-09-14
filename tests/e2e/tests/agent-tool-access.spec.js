@@ -46,7 +46,7 @@ test("an Agent Tool allowlist constrains the Provider catalog", async ({
     toolAccess.getByRole("switch", { name: "Turn on bash" }),
   ).toBeVisible();
   await expect(
-    toolAccess.getByRole("switch", { name: "Turn on write" }),
+    toolAccess.getByRole("switch", { name: "Turn on apply_patch" }),
   ).toBeVisible();
   await agents.getByRole("button", { name: "Save changes" }).click();
   // Navigation flushes autosave; the Provider/scope assertions below verify the saved policy.
@@ -57,7 +57,7 @@ test("an Agent Tool allowlist constrains the Provider catalog", async ({
     finalText: "Restricted Tool catalog verified.",
   });
   await expectToolSucceeded(page, chat, "status");
-  await expect(toolRow(page, chat, "write")).toHaveCount(0);
+  await expect(toolRow(page, chat, "apply_patch")).toHaveCount(0);
   await expect(toolRow(page, chat, "bash")).toHaveCount(0);
 
   await page.goto("/#agents");
