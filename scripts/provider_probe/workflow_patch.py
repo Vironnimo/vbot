@@ -24,6 +24,40 @@ def _apply_patch_cases() -> list[dict[str, Any]]:
             "expected": {"new.txt": "hello\n"},
         },
         {
+            "id": "overwrite",
+            "before": {"one.txt": "old\ndiscard\n"},
+            "read_paths": ["one.txt"],
+            "task": "Replace all of one.txt with exactly new followed by a newline.",
+            "expected": {"one.txt": "new\n"},
+        },
+        {
+            "id": "empty_existing",
+            "before": {"one.txt": "old\n"},
+            "read_paths": ["one.txt"],
+            "task": "Make one.txt completely empty, keeping the file itself.",
+            "expected": {"one.txt": ""},
+        },
+        {
+            "id": "overwrite_exact",
+            "before": {"one.txt": "old\r\ndiscard\r\n"},
+            "read_paths": ["one.txt"],
+            "arguments": patch("*** Add File: one.txt\n+new"),
+            "expected": {"one.txt": "new\r\n"},
+        },
+        {
+            "id": "empty_exact",
+            "before": {"one.txt": "old\n"},
+            "read_paths": ["one.txt"],
+            "arguments": patch("*** Add File: one.txt"),
+            "expected": {"one.txt": ""},
+        },
+        {
+            "id": "no_final_newline",
+            "before": {},
+            "arguments": patch("*** Add File: new.txt\n+false\n\\ No newline at end of file"),
+            "expected": {"new.txt": "false"},
+        },
+        {
             "id": "batch_locations",
             "before": {
                 "settings.txt": "timeout=10\nseparator\nretries=1\n",
@@ -254,10 +288,10 @@ def _apply_patch_cases() -> list[dict[str, Any]]:
             "error": "file_not_found",
         },
         {
-            "id": "collision",
+            "id": "unread_overwrite",
             "before": {"one.txt": "keep\n"},
             "arguments": patch("*** Add File: one.txt\n+clobber"),
-            "error": "destination_exists",
+            "error": "file_not_read",
         },
         {
             "id": "malformed",
@@ -280,6 +314,7 @@ async def _probe_apply_patch_case(
     from core.tools._patch_syntax import _parse
     from core.tools.apply_patch import register_apply_patch_tool
     from core.tools.file_state import FileReadState
+    from core.tools.read import register_read_tool
     from core.tools.tools import ToolContext, ToolRegistry
 
     with TemporaryDirectory(prefix="vbot-patch-probe-") as directory:
@@ -289,7 +324,15 @@ async def _probe_apply_patch_case(
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content.encode("utf-8"))
         registry = ToolRegistry()
-        register_apply_patch_tool(registry, file_state=FileReadState())
+        state = FileReadState()
+        register_apply_patch_tool(registry, file_state=state)
+        register_read_tool(
+            registry,
+            attachment_store=None,
+            speech_service=None,
+            file_state=state,
+            speech_max_size_bytes=1024,
+        )
         definitions = registry.provider_definitions(allowed_tools=["apply_patch"])
         if "arguments" in case:
             task = (
@@ -317,6 +360,37 @@ async def _probe_apply_patch_case(
             if "arguments" in case
             else [{"role": "user", "content": instruction}]
         )
+        for index, name in enumerate(case.get("read_paths", [])):
+            read_context = ToolContext(
+                agent_id="probe",
+                session_id="probe-session",
+                run_id="probe-run",
+                tool_call_id=f"read-{index}",
+                tool_name="read",
+                tool_call_index=index,
+                workspace=root,
+                cwd=root,
+                vbot_root=root,
+                data_root=root,
+            )
+            read_result = await registry.dispatch(read_context, {"path": name}, ["read"])
+            assert read_result["ok"]
+            messages.extend(
+                [
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {"id": f"read-{index}", "name": "read", "arguments": {"path": name}}
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "tool_call_id": f"read-{index}",
+                        "content": json.dumps(read_result),
+                    },
+                ]
+            )
         if "seed" in case:
             seed_context = ToolContext(
                 agent_id="probe",

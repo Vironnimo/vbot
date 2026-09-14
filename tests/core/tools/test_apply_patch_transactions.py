@@ -55,9 +55,7 @@ async def test_registration_policy_display_and_cancellation_settlement(tmp_path,
 
 
 @pytest.mark.asyncio
-async def test_locking_and_read_stamp_are_shared_with_write(tmp_path):
-    from core.tools.write import make_write_handler
-
+async def test_locking_and_read_stamp_are_shared_with_replacement(tmp_path):
     path = tmp_path / "file.txt"
     path.write_bytes(b"old\n")
     state = FileReadState()
@@ -77,12 +75,9 @@ async def test_locking_and_read_stamp_are_shared_with_write(tmp_path):
     thread.join(5)
     assert not thread.is_alive() and result[0]["ok"]
     assert path.read_bytes() == b"final\n"
-    written = await make_write_handler(state)(
-        context(tmp_path),
-        {"path": "file.txt", "content": "write still works\n"},
-    )
+    written = apply(tmp_path, "*** Add File: file.txt\n+replacement works", state=state)
     assert written["ok"]
-    assert path.read_bytes() == b"write still works\n"
+    assert path.read_bytes() == b"replacement works\n"
 
 
 @pytest.mark.parametrize("bad_index", [0, 3, 6])

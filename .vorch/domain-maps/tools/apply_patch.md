@@ -1,6 +1,7 @@
 # Apply Patch Tool
 
-Applies ordered V4A file operations. It replaces the archived `edit` Tool (see `edit.md`).
+Applies ordered V4A file operations. It replaces the archived `edit` and `write` Tools (see `edit.md` and `write.md`).
+Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 `core/tools/apply_patch.py` owns the in-memory plan, filesystem execution, results, and display metadata. Its internal `_patch_syntax.py` owns V4A parsing and parsed operation values; `_change_preview.py` owns bounded before/after previews.
 
 ## Contract
@@ -22,7 +23,12 @@ Applies ordered V4A file operations. It replaces the archived `edit` Tool (see `
   bytes. A failed hunk does not prevent later matching hunks, even in the same
   file. Add -> Update and Move -> Update observe completed earlier effects.
   Parent/file overlaps reject the affected entries, not unrelated files. Add
-  never overwrites different existing bytes; an identical Add is a verified no-op.
+  creates or fully replaces files. Existing targets require a current Session read
+  stamp; missing/stale stamps fail with `file_not_read`/`file_modified_since_read`.
+  An identical Add is a verified no-op and does not require a prior read.
+  Empty Add bodies produce empty files; `\ No newline at end of file` suppresses
+  the trailing newline. Replacement preserves existing line endings, UTF-8 BOM,
+  and permission bits. Move destinations still reject different existing files.
 - Failed creates/moves and uncertain writes block later entries touching those
   paths for this call. A failed hunk in Update plus Move leaves successful hunks
   applied at the source and skips that operation's move. Other files continue.
@@ -37,7 +43,8 @@ Applies ordered V4A file operations. It replaces the archived `edit` Tool (see `
   windows around changed characters, and omission metadata. Moves appear as
   destination addition and source deletion; the entry outcome retains the move
   relationship. Syntax warnings compare the initial and final Tool-written text,
-  avoiding warnings caused only by intermediate hunks.
+  avoiding warnings caused only by intermediate hunks. A created or fully replaced
+  file reports any final syntax error, even when the original was already invalid.
 - `no_change` means zero net file effects, including cancelling edits.
   `already_applied` is emitted only when every entry was a verified already-present
   no-op. It never substitutes for failed or uncertain operations.
@@ -122,7 +129,7 @@ Applies ordered V4A file operations. It replaces the archived `edit` Tool (see `
 - Successful surviving files, including verified no-ops, receive Session read
   stamps. Metadata drift can produce a post-success warning. Text mutations
   feed the existing ChangeTracker with actual before/after contents and publish
-  presentation-only line/file counts. Existing syntax-delta warnings are reused.
+  presentation-only line/file counts. Updates reuse syntax-delta warnings; Add uses full-file syntax warnings.
 - The handler uses the shared cancellation-shielded Tool worker boundary so
   an in-flight mutation settles before cancellation returns.
 
@@ -132,8 +139,10 @@ Applies ordered V4A file operations. It replaces the archived `edit` Tool (see `
   `test_apply_patch_operations.py` covers byte preservation, ordered plans,
   read stamps, statistics, syntax warnings, and display metadata;
   `test_apply_patch_transactions.py` covers partial effects, failure containment,
-  locking, cancellation, and guarded retries.
-- Existing fuzzy-match, write, file-state, Runtime and Provider-schema
+  locking, cancellation, and guarded retries;
+  `test_apply_patch_overwrite.py` covers creation/replacement, read guards,
+  empty contents, format preservation, and concurrent drift.
+- Existing fuzzy-match, file-state, Runtime and Provider-schema
   tests cover the shared boundaries.
 - `python -m scripts.probe_provider_tool_call --scenario apply_patch` uses the
   production registry and disposable files. Its matrix separates natural batching tasks
