@@ -269,6 +269,8 @@ def test_windows_update_migrates_installer_command_shim_to_python_module(
             return _ok("")
         if command[:2] == ["git", "pull"]:
             return _ok("")
+        if command[1:] == ["-m", "cli.search_runtime"]:
+            return _ok("")
         raise AssertionError(f"unexpected command: {command}")
 
     result = run_update(

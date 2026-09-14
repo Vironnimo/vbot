@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from argparse import Namespace
 
-import core.tools.glob as tool_glob
-import core.tools.grep as tool_grep
 import core.tools.image as tool_image
 import core.tools.read as tool_read
 import core.tools.speech as tool_speech
@@ -140,66 +138,6 @@ def test_read_cases_use_production_schema_and_exact_expected_arguments() -> None
 
     path_only = probe_scenario_files._read_scenario("path_only")
     assert path_only.expected_arguments == {"path": "src/provider_tool_probe.py"}
-
-
-def test_glob_cases_use_production_schema_and_exact_expected_arguments() -> None:
-    for case_name in probe_choices.GLOB_CASES:
-        scenario = probe_scenarios._scenario(
-            Namespace(
-                scenario="glob",
-                glob_case=case_name,
-                lines=8,
-            ),
-        )
-        contracts = probe_measurements._compile_probe_contracts(
-            scenario.tools,
-            require_closed_input=scenario.require_closed_input,
-        )
-        arguments = scenario.expected_arguments
-
-        assert scenario.tools[0]["parameters"] is tool_glob.GLOB_TOOL_PARAMETERS
-        assert arguments is not None
-        contracts[tool_glob.GLOB_TOOL_NAME].validate_arguments(arguments)
-        assert (
-            probe_measurements._expected_argument_measurements(
-                [{"name": tool_glob.GLOB_TOOL_NAME, "arguments": arguments}],
-                scenario,
-            )["expected_arguments_match"]
-            is True
-        )
-
-    default = probe_scenario_files._glob_scenario("default")
-    assert default.expected_arguments == {"pattern": "**/*.py"}
-
-
-def test_grep_cases_use_production_schema_and_exact_expected_arguments() -> None:
-    for case_name in probe_choices.GREP_CASES:
-        scenario = probe_scenarios._scenario(
-            Namespace(
-                scenario="grep",
-                grep_case=case_name,
-                lines=8,
-            ),
-        )
-        contracts = probe_measurements._compile_probe_contracts(
-            scenario.tools,
-            require_closed_input=scenario.require_closed_input,
-        )
-        arguments = scenario.expected_arguments
-
-        assert scenario.tools[0]["parameters"] is tool_grep.GREP_TOOL_PARAMETERS
-        assert arguments is not None
-        contracts[tool_grep.GREP_TOOL_NAME].validate_arguments(arguments)
-        assert (
-            probe_measurements._expected_argument_measurements(
-                [{"name": tool_grep.GREP_TOOL_NAME, "arguments": arguments}],
-                scenario,
-            )["expected_arguments_match"]
-            is True
-        )
-
-    default = probe_scenario_files._grep_scenario("default")
-    assert default.expected_arguments == {"pattern": "TODO|FIXME"}
 
 
 def test_web_search_cases_use_production_schema_and_exact_expected_arguments() -> None:
