@@ -112,8 +112,9 @@ def test_activation_archive_rejects_a_source_changed_after_check(
         customize.activation_archive(install)
 
 
+@pytest.mark.parametrize("mode", ["custom", "locked_changed", "locked_unchanged"])
 def test_candidate_copies_source_and_resolves_dependencies_only_into_new_runtime(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
 ) -> None:
     install = _server_install(tmp_path / "install")
     base = install.version()
@@ -133,7 +134,7 @@ def test_candidate_copies_source_and_resolves_dependencies_only_into_new_runtime
     python.write_text("", encoding="utf-8")
     commands: list[list[str]] = []
 
-    def copy_application(source_root: Path, destination: Path, _shape: str) -> None:
+    def copy_application(source_root: Path, destination: Path, _shape: str, **kwargs) -> None:
         destination.mkdir(parents=True)
         (destination / "custom_source.txt").write_text(
             (source_root / "custom_source.txt").read_text(encoding="utf-8"), encoding="utf-8"
@@ -156,19 +157,37 @@ def test_candidate_copies_source_and_resolves_dependencies_only_into_new_runtime
             "version_id": path.name,
             "install_shape": shape,
             "platform": "windows-x86_64",
+            "build_inputs": {"dependencies": "old", "web": "web"},
             "files": {"runtime/placeholder": "0" * 64},
         },
     )
 
-    candidate_id = customize._candidate(install, source, "rel_base", "c" * 40)
+    inputs = (
+        None
+        if mode == "custom"
+        else {"dependencies": "old" if mode == "locked_unchanged" else "new", "web": "web"}
+    )
+    candidate_id = customize._candidate(install, source, "rel_base", "c" * 40, build_inputs=inputs)
     candidate = install.version(candidate_id)
 
     assert (candidate / "app" / "custom_source.txt").read_text(encoding="utf-8") == "custom"
-    assert (candidate / "runtime" / "Lib" / "site-packages" / "fresh_dependency.txt").is_file()
+    candidate_site = candidate / "runtime" / "Lib" / "site-packages"
+    assert (candidate_site / "fresh_dependency.txt").is_file() is (mode != "locked_unchanged")
     assert (base_site / "base_dependency.txt").is_file()
     assert not (base_site / "fresh_dependency.txt").exists()
-    assert commands
-    assert Path(commands[0][commands[0].index("--target") + 1]).is_relative_to(candidate)
+    if mode == "locked_unchanged":
+        assert not commands
+        (candidate_site / "base_dependency.txt").write_text("candidate change", encoding="utf-8")
+        assert (base_site / "base_dependency.txt").read_text(encoding="utf-8") == "base"
+    else:
+        assert commands
+        assert Path(commands[0][commands[0].index("--target") + 1]).is_relative_to(candidate)
+        assert not (candidate_site / "base_dependency.txt").exists()
+        if mode == "locked_changed":
+            assert "--require-hashes" in commands[0]
+            assert Path(commands[0][-1]).name == "requirements-server.lock"
+    manifest = json.loads((candidate / "release.json").read_text(encoding="utf-8"))
+    assert manifest.get("build_inputs") == inputs
 
 
 def test_checked_command_runs_windowless_and_retains_failure_log(

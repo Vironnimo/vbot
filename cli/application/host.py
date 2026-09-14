@@ -142,6 +142,11 @@ class ApplicationFacade:
             message = "No update has been requested."
         else:
             message = operation.message
+            if operation.target_label:
+                message += (
+                    f"\n\nVersion: {operation.previous_label or 'unknown'} "
+                    f"-> {operation.target_label}"
+                )
             if operation.error:
                 message += f"\n\n{operation.error}"
             message += f"\n\nDetails in the terminal:\nvbot update status {operation.id}"
