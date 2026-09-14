@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import argparse
 import shlex
-from typing import Any
 
 import pytest
 
 from cli import main as cli_main
+from cli.parser import build_parser
 
 
 @pytest.mark.parametrize(
@@ -104,17 +104,9 @@ def test_cli_area_and_subcommand_help_is_informative(
 
 
 def test_published_help_examples_parse_without_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    roots: list[argparse.ArgumentParser] = []
-
-    def capture_parser(
-        self: argparse.ArgumentParser, *args: Any, **kwargs: Any
-    ) -> argparse.Namespace:
-        roots.append(self)
-        return argparse.Namespace()
-
-    with monkeypatch.context() as capture:
-        capture.setattr(argparse.ArgumentParser, "parse_args", capture_parser)
-        cli_main.parse_args([])
+    root = build_parser()
+    # Validate every example through the real parsing path using one grammar.
+    monkeypatch.setattr("cli.parser.build_parser", lambda: root)
 
     def check_examples(parser: argparse.ArgumentParser) -> None:
         description = parser.description or ""
@@ -127,10 +119,10 @@ def test_published_help_examples_parse_without_dispatch(monkeypatch: pytest.Monk
             cli_main.parse_args(tokens)
         for action in parser._actions:
             if isinstance(action, argparse._SubParsersAction):
-                for child in action.choices.values():
+                for child in {id(child): child for child in action.choices.values()}.values():
                     check_examples(child)
 
-    check_examples(roots[0])
+    check_examples(root)
 
 
 def test_parse_args_supports_server_command_options() -> None:
