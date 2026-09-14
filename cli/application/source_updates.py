@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import subprocess
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -247,10 +250,51 @@ def _require_head(checkout: Path, revision: str) -> None:
         raise ApplicationError("Source update checkout changed while its candidate was prepared")
 
 
-def prepare_update(install: Installation, operation_id: str) -> str:
+def build_inputs(checkout: Path, shape: str) -> dict[str, str]:
+    """Record the locked runtime recipe and all tracked WebUI build inputs."""
+    lock = checkout / "scripts" / "windows" / f"requirements-{shape}.lock"
+    if not lock.is_file():
+        raise ApplicationError(f"The Windows runtime dependency lock is missing: {lock}")
+    project = tomllib.loads((checkout / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    requirements = json.dumps(
+        [project.get("dependencies", []), project.get("optional-dependencies", {})],
+        sort_keys=True,
+    )
+    dependencies = hashlib.sha256(
+        b"windows-runtime-recipe-1\0"
+        + shape.encode()
+        + b"\0"
+        + lock.read_bytes().replace(b"\r\n", b"\n")
+        + requirements.encode()
+    ).hexdigest()
+    assets = _git(
+        checkout,
+        "ls-files",
+        "--stage",
+        "-z",
+        "--",
+        "webui",
+        ":(glob)resources/extensions/*/ui/**",
+        ":(glob)tests/fixtures/extension-pages/*/ui/**",
+    ).stdout
+    return {"dependencies": dependencies, "web": hashlib.sha256(assets.encode()).hexdigest()}
+
+
+def prepare_update(
+    install: Installation,
+    operation_id: str,
+    *,
+    progress: Callable[[str, str | None], None] | None = None,
+) -> str:
     """Fast-forward a bound checkout and build an immutable version candidate."""
 
     safe_id(operation_id)
+
+    def report(message: str, target: str | None = None) -> None:
+        if progress is not None:
+            progress(message, target)
+
+    report("Checking the source branch for updates")
     binding = read_binding(install)
     if binding is None:
         raise ApplicationError("This installation has no bound source update checkout")
@@ -288,17 +332,38 @@ def prepare_update(install: Installation, operation_id: str) -> str:
         _build_web_assets,
         _candidate,
         _ensure_candidate_environment,
+        development_state,
     )
+    from cli.application.packages import validate_release, version_label
     from cli.application.payload import native_source_digest
 
+    native_digest = native_source_digest(checkout)
+    inputs = build_inputs(checkout, install.install_shape)
+    base_manifest = read_json(install.version() / "release.json", limit=32 * 1024**2)
+    report(
+        "Checking which components need updating",
+        version_label({"version": source_version, "revision": revision}),
+    )
+    if (
+        base_manifest.get("revision") == revision
+        and base_manifest.get("build_inputs") == inputs
+        and base_manifest.get("native_source_digest") == native_digest
+        and development_state(install) is None
+    ):
+        report("Verifying the installed version")
+        validate_release(install.version(), shape=install.install_shape)
+        _require_head(checkout, revision)
+        _require_clean(checkout)
+        return install.version().name
     _ensure_candidate_environment(install, checkout)
-    if install.install_shape != "desktop-client":
+    reuse_web = base_manifest.get("build_inputs", {}).get("web") == inputs["web"]
+    if install.install_shape != "desktop-client" and not reuse_web:
+        report("Building the WebUI and Extension pages")
         _build_web_assets(install, checkout)
     _require_head(checkout, revision)
     _require_clean(checkout)
-    native_digest = native_source_digest(checkout)
-    base_manifest = read_json(install.version() / "release.json", limit=32 * 1024**2)
     rebuild_native_hosts = base_manifest.get("native_source_digest") != native_digest
+    report("Preparing the application and its runtime")
     candidate = _candidate(
         install,
         checkout,
@@ -307,6 +372,8 @@ def prepare_update(install: Installation, operation_id: str) -> str:
         rebuild_native_hosts=rebuild_native_hosts,
         source_version=source_version,
         native_source_digest=native_digest,
+        build_inputs=inputs,
+        progress=lambda message: report(message),
     )
     _require_head(checkout, revision)
     _require_clean(checkout)

@@ -110,6 +110,27 @@ def test_no_restart_prepares_without_changing_the_active_pointer_or_server(
     assert install.version().name == "rel_old"
 
 
+@pytest.mark.parametrize("restart", [True, False])
+def test_current_version_finishes_without_maintenance_snapshot_or_handoff(
+    tmp_path, monkeypatch, restart
+):
+    install = _install(tmp_path)
+    operation = Operation(
+        id="upd_current",
+        previous_version="rel_old",
+        package="same.zip",
+        restart=restart,
+        handoff_ticket="ticket.json",
+    )
+    _patch_carry_forward(monkeypatch)
+    monkeypatch.setattr(worker, "stage_package", lambda *a, **kw: "rel_old")
+    monkeypatch.setattr(worker, "quiesce", lambda *a: pytest.fail("no maintenance or continuation"))
+    monkeypatch.setattr(worker.processes, "target", lambda *a: pytest.fail("no server action"))
+    worker.execute(install, operation)
+    assert operation.phase == "completed"
+    assert operation.previous_version == operation.candidate_version == install.version().name
+
+
 def test_bound_source_update_replaces_download_route(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -121,7 +142,9 @@ def test_bound_source_update_replaces_download_route(
     )
     monkeypatch.setattr(
         "cli.application.source_updates.prepare_update",
-        lambda _install, operation_id: "rel_new" if operation_id == "upd_source" else "wrong",
+        lambda _install, operation_id, **kwargs: (
+            "rel_new" if operation_id == "upd_source" else "wrong"
+        ),
     )
     monkeypatch.setattr(worker, "download_release", lambda *_args: pytest.fail("must not download"))
     monkeypatch.setattr(
