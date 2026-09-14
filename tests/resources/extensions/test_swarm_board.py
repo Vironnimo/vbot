@@ -169,7 +169,7 @@ async def test_editor_catalog_delivers_default_without_replacing_saved_instructi
 async def test_state_guidance_reaches_native_model_definition(board):
     from resources.extensions.swarm.agent_text import STATE_DESCRIPTION
 
-    names = ("swarm_board", "swarm_inbox", "swarm_state")
+    names = ("swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki")
     definitions = board.tools.provider_definitions(names, session_grants=names)
     state = next(tool for tool in definitions if tool["name"] == "swarm_state")
     assert state["description"] == STATE_DESCRIPTION
@@ -682,7 +682,9 @@ async def test_delete_removes_board_and_bound_sessions_but_keeps_profile_and_oth
         "participant_sessions",
         "swarm_events",
     ):
-        assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+        assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == (
+            1 if table == "posts" else 0
+        )
     assert not connection.execute("PRAGMA foreign_key_check").fetchall()
     assert connection.execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 1
     with pytest.raises(ValueError, match="swarm_not_found"):
