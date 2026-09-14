@@ -9,13 +9,12 @@ import os
 import subprocess
 import tarfile
 import tempfile
+import urllib.request
 import zipfile
 from pathlib import Path
 
-import httpx
-
-from core.tools._search_binary import RESOURCE_ROOT, binary_spec, target_platform
 from core.utils.processes import subprocess_creation_flags
+from core.utils.search_binary import RESOURCE_ROOT, binary_spec, target_platform
 
 
 def provision_search_runtime(root: Path = RESOURCE_ROOT, *, target: str | None = None) -> Path:
@@ -26,13 +25,12 @@ def provision_search_runtime(root: Path = RESOURCE_ROOT, *, target: str | None =
         with destination.open("rb") as stream:
             if hashlib.file_digest(stream, "sha256").hexdigest() == artifact["binary_sha256"]:
                 return destination
-    with (
-        httpx.Client(follow_redirects=True, trust_env=False, timeout=60) as client,
-        client.stream("GET", artifact["url"]) as response,
-    ):
-        response.raise_for_status()
+    # Packaging also runs in a stdlib-only interpreter. Disable ambient proxies,
+    # retain normal TLS verification/redirects, and bound the streamed archive.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(artifact["url"], timeout=60) as response:
         data = bytearray()
-        for chunk in response.iter_bytes():
+        while chunk := response.read(64 * 1024):
             data.extend(chunk)
             if len(data) > 32 * 1024 * 1024:
                 raise ValueError("The search engine archive exceeds its allowed size.")
