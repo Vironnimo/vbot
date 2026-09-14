@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import shutil
 import sys
 import threading
 import time
@@ -72,14 +73,25 @@ def status_line(status: Status, message: str, *, stream: TextIO | None = None) -
 class ProgressPrinter:
     """Print phase transitions immediately and elapsed time while a phase is busy.
 
-    No cursor movement: the same output remains readable in Agent captures and logs.
+    Live updates are opt-in and restricted to capable terminals. Captures stay append-only.
     The caller owns the scope so the heartbeat always stops before final output.
     """
 
-    def __init__(self, *, interval: float = 10.0, stream: TextIO | None = None) -> None:
+    def __init__(
+        self, *, interval: float = 10.0, stream: TextIO | None = None, live: bool = False
+    ) -> None:
         self.messages: set[str] = set()
         self._plain = output_mode.get() == "plain"
         self._stream = stream or sys.stdout
+        self._live = (
+            live
+            and not self._plain
+            and self._stream.isatty()
+            and os.environ.get("TERM") != "dumb"
+            and _windows_color(self._stream)
+        )
+        self._line_open = False
+        self._last_heartbeat = 0.0
         self._interval = interval
         self._stop = threading.Event()
         self._lock = threading.Lock()
@@ -98,17 +110,47 @@ class ProgressPrinter:
     ) -> None:
         self._stop.set()
         self._thread.join()
+        with self._lock:
+            self._finish_line()
+
+    def _finish_line(self) -> None:
+        if self._line_open:
+            print(file=self._stream, flush=True)
+            self._line_open = False
+
+    def _write_busy(self, message: str) -> None:
+        if self._live:
+            # Keep the transient line within one console row, including its marker.
+            width = max(12, shutil.get_terminal_size().columns - 10)
+            message = message.replace("\n", " ")
+            message = message if len(message) <= width else message[: width - 3] + "..."
+            print(
+                "\r\033[2K" + status_line("busy", message, stream=self._stream),
+                end="",
+                file=self._stream,
+                flush=True,
+            )
+            self._line_open = True
+        else:
+            print(status_line("busy", message, stream=self._stream), file=self._stream, flush=True)
 
     def emit(self, status: Status, message: str) -> None:
         if self._plain:
             return
         with self._lock:
+            self._finish_line()
             self.messages.update(message.splitlines())
             if status == "busy":
                 self._active = (message, time.monotonic())
+                self._last_heartbeat = self._active[1]
             elif status != "info":
                 self._active = None
-            print(status_line(status, message, stream=self._stream), file=self._stream, flush=True)
+            if status == "busy":
+                self._write_busy(message)
+            else:
+                print(
+                    status_line(status, message, stream=self._stream), file=self._stream, flush=True
+                )
 
     def track(self, message: str) -> None:
         """Track work silently until the first heartbeat; fast reads stay quiet."""
@@ -116,6 +158,7 @@ class ProgressPrinter:
             return
         with self._lock:
             self._active = (message, time.monotonic())
+            self._last_heartbeat = self._active[1]
 
     def _heartbeat(self) -> None:
         while not self._stop.wait(self._interval):
@@ -123,9 +166,9 @@ class ProgressPrinter:
                 if self._active is None:
                     continue
                 message, started = self._active
-                elapsed = int(time.monotonic() - started)
-                print(
-                    status_line("busy", f"{message} ({elapsed}s elapsed)", stream=self._stream),
-                    file=self._stream,
-                    flush=True,
-                )
+                now = time.monotonic()
+                if now - self._last_heartbeat < self._interval:
+                    continue
+                self._last_heartbeat = now
+                elapsed = int(now - started)
+                self._write_busy(f"{message} ({elapsed}s elapsed)")

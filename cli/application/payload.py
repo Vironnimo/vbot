@@ -64,7 +64,9 @@ def _reject_link(path: Path, source: Path) -> None:
         raise PayloadError(f"source payload contains a link: {path.relative_to(source)}")
 
 
-def _copy_tree(source: Path, destination: Path, payload_root: Path) -> None:
+def _copy_tree(
+    source: Path, destination: Path, payload_root: Path, *, assets: Path | None = None
+) -> None:
     _reject_link(source, payload_root)
     destination.mkdir(parents=True, exist_ok=True)
     for child in sorted(source.iterdir(), key=lambda item: item.name.casefold()):
@@ -72,23 +74,44 @@ def _copy_tree(source: Path, destination: Path, payload_root: Path) -> None:
         if child.name in IGNORED_NAMES or child.suffix in {".pyc", ".pyo"}:
             continue
         target = destination / child.name
+        relative = child.relative_to(payload_root)
+        if (
+            assets is not None
+            and relative.parts[:2] == ("resources", "extensions")
+            and (
+                len(relative.parts) == 4
+                and child.name == "web"
+                and (child.parent / "ui" / "page.html").is_file()
+            )
+        ):
+            continue
         if child.is_dir():
-            _copy_tree(child, target, payload_root)
+            _copy_tree(child, target, payload_root, assets=assets)
         elif child.is_file():
             shutil.copy2(child, target)
 
 
-def copy_application(source: Path, destination: Path, shape: str) -> None:
+def copy_application(
+    source: Path, destination: Path, shape: str, *, assets: Path | None = None
+) -> None:
     """Copy the safe runtime source surface while preserving repository-relative paths."""
     source = source.resolve()
     for relative in app_paths(shape):
-        item = source / relative
+        origin = assets if assets is not None and relative == "webui/dist" else source
+        item = origin / relative
         if not item.exists():
             raise PayloadError(f"required application payload is missing: {relative}")
-        _reject_link(item, source)
+        _reject_link(item, origin)
         target = destination / relative
         if item.is_dir():
-            _copy_tree(item, target, source)
+            _copy_tree(item, target, origin, assets=assets)
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(item, target)
+    if assets is not None and shape != "desktop-client":
+        for page in (source / "resources" / "extensions").glob("*/ui/page.html"):
+            page_assets = page.parent.parent.relative_to(source) / "web"
+            cached = assets / page_assets
+            if not (cached / "page.html").is_file():
+                raise PayloadError(f"required Extension page payload is missing: {page_assets}")
+            _copy_tree(cached, destination / page_assets, assets)

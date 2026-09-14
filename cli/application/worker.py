@@ -11,7 +11,12 @@ from pathlib import Path
 import psutil  # type: ignore[import-untyped]
 
 from cli.application import processes
-from cli.application.packages import download_release, stage_package, validate_release
+from cli.application.packages import (
+    download_release,
+    stage_package,
+    validate_release,
+    version_label,
+)
 from cli.application.state import (
     ApplicationError,
     Installation,
@@ -19,6 +24,7 @@ from cli.application.state import (
     exclusive,
     load_installation,
     load_operation,
+    read_json,
 )
 from cli.rpc_client import rpc_call
 from cli.server_management import probe_health
@@ -158,18 +164,33 @@ def execute(install: Installation, operation: Operation) -> None:
         return
     if recover_interrupted(install, operation):
         return
-    operation.transition(install, "preparing", "Preparing and verifying the application package")
+    operation.previous_label = version_label(
+        read_json(install.version() / "release.json", limit=32 * 1024**2)
+    )
+
+    def progress(message: str, target: str | None = None) -> None:
+        if target is not None:
+            operation.target_label = target
+        operation.transition(install, "preparing", message)
+
+    progress("Checking for updates")
     if operation.package:
+        progress("Unpacking and verifying the selected package")
         candidate = stage_package(install, Path(operation.package), local=operation.local_package)
     else:
         from cli.application.source_updates import prepare_update, read_binding
 
         binding = read_binding(install)
         if binding is None:
-            candidate = stage_package(install, download_release(install, operation.id), local=False)
+            archive = download_release(install, operation.id, progress=progress)
+            progress("Unpacking and verifying the downloaded package")
+            candidate = stage_package(install, archive, local=False)
         else:
-            candidate = prepare_update(install, operation.id)
+            candidate = prepare_update(install, operation.id, progress=progress)
     operation.candidate_version = candidate
+    operation.target_label = version_label(
+        read_json(install.version(candidate) / "release.json", limit=32 * 1024**2)
+    )
     operation.save(install)
     # Local changes are reconciled before touching the running installation.
     from cli.application.customize import carry_forward
@@ -177,16 +198,22 @@ def execute(install: Installation, operation: Operation) -> None:
     candidate = carry_forward(install, candidate)
     from cli.application.dependencies import prepare_for_version
 
+    progress("Checking Extension dependencies")
     prepare_for_version(install, candidate)
     operation.candidate_version = candidate
+    operation.target_label = version_label(
+        read_json(install.version(candidate) / "release.json", limit=32 * 1024**2)
+    )
     operation.save(install)
+    if install.version().name == candidate:
+        operation.transition(
+            install, "completed", "vBot is already up to date; no restart was needed"
+        )
+        return
     if not operation.restart:
         operation.transition(
             install, "prepared", "New version prepared; the active version has not changed"
         )
-        return
-    if install.version().name == candidate:
-        operation.transition(install, "completed", "This application version is already active")
         return
     if install.owns_server:
         current_health = probe_health(processes.target(install))
@@ -200,6 +227,7 @@ def execute(install: Installation, operation: Operation) -> None:
         operation.save(install)
         if operation.server_was_running:
             quiesce(install, operation)
+        operation.transition(install, "waiting_for_idle", "Saving a recovery snapshot of Sessions")
         snapshot = _ensure_update_session_snapshot(processes.target(install))
         if not snapshot.ok:
             raise ApplicationError(snapshot.message)

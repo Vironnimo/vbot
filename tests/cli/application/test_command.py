@@ -17,6 +17,9 @@ from cli.server_management import CommandResult, HealthProbeResult, WebUIProbeRe
 def _install(root: Path) -> Installation:
     install = Installation(root, "server", "127.0.0.1", 8420, str((root / "data").resolve()))
     (root / "versions" / "rel_current").mkdir(parents=True)
+    (root / "versions" / "rel_current" / "release.json").write_text(
+        '{"version":"1.2.3"}', encoding="utf-8"
+    )
     (root / "active-version").write_text("rel_current\n", encoding="ascii")
     return install
 
@@ -273,6 +276,43 @@ def test_native_update_plain_output_is_one_structured_result(tmp_path, monkeypat
     captured = capsys.readouterr()
     assert json.loads(captured.out) == operations.public_result(terminal)
     assert not captured.err
+
+
+def test_target_commit_is_shown_before_waiting_for_preparation(tmp_path, monkeypatch, capsys):
+    install = _install(tmp_path)
+    operation = Operation(
+        id="upd_target",
+        previous_label="1.2.3 (aaaaaaaa)",
+        target_label="1.2.3 (bbbbbbbb)",
+        phase="preparing",
+        message="Building assets",
+    )
+
+    def wait(_install, operation_id, *, progress):
+        progress(operation)
+        output = capsys.readouterr().out
+        assert output.index("aaaaaaaa") < output.index("bbbbbbbb") < output.index("Building assets")
+        operation.phase = "completed"
+        return operation
+
+    monkeypatch.setattr(operations, "wait", wait)
+    command._wait_update(install, operation)
+
+
+def test_current_version_output_has_no_restart_or_reopen_instruction(tmp_path, capsys):
+    install = _install(tmp_path)
+    operation = Operation(
+        id="upd_current",
+        phase="completed",
+        previous_version="rel_current",
+        candidate_version="rel_current",
+        target_label="1.2.3 (aaaaaaaa)",
+    )
+    command._print_update_result(install, operation)
+    output = capsys.readouterr().out
+    assert "already up to date" in output
+    assert "1.2.3 (aaaaaaaa)" in output
+    assert "->" not in output and "reopen" not in output and "server restarted" not in output
 
 
 def test_detached_update_keeps_operation_handle_without_claiming_completion(
