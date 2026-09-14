@@ -68,14 +68,35 @@
       for (const link of target.querySelectorAll('a')) {
         const href = link.getAttribute('href') || '';
         const filename = link.textContent.trim();
+        let url;
+        try {
+          url = new URL(href, window.location.href);
+        } catch {
+          continue;
+        }
         if (
-          !/^\/api\/files\/[A-Za-z0-9_.-]+$/.test(href) ||
-          !/\.html?$/i.test(filename)
+          url.origin !== window.location.origin ||
+          !/^\/api\/files\/[A-Za-z0-9_.-]+$/.test(url.pathname)
         )
           continue;
-        link.dataset.previewFile = href;
+        const path = link.getAttribute('title') || '';
+        link.dataset.deliveredFile = href;
         link.dataset.fileName = filename;
+        link.dataset.filePath = path;
         link.setAttribute('aria-haspopup', 'menu');
+        link.removeAttribute('title');
+        const pathHint = path ? tooltip(link, path) : null;
+        fileActions.push(() => {
+          pathHint?.destroy();
+          if (path) link.setAttribute('title', path);
+          delete link.dataset.deliveredFile;
+          delete link.dataset.fileName;
+          delete link.dataset.filePath;
+          link.removeAttribute('aria-haspopup');
+          link.removeAttribute('aria-expanded');
+        });
+        if (!/\.html?$/i.test(filename)) continue;
+        link.dataset.previewFile = href;
         const external = document.createElement('a');
         const externalLabel = t(
           'preview.openExternal',
@@ -87,7 +108,9 @@
         external.rel = 'noopener noreferrer';
         external.dataset.fileExternal = '';
         external.dataset.previewFile = href;
+        external.dataset.deliveredFile = href;
         external.dataset.fileName = filename;
+        external.dataset.filePath = path;
         external.setAttribute('aria-label', externalLabel);
         external.textContent = '↗';
         link.after(external);
