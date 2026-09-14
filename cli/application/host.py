@@ -154,7 +154,7 @@ class ApplicationFacade:
                 message += (
                     f"\n\nActivate this prepared version:\nvbot update activate {operation.id}"
                 )
-        if os.name == "nt":
+        if sys.platform == "win32":
             import ctypes
 
             ctypes.windll.user32.MessageBoxW(None, message, "vBot update", 0x40)
