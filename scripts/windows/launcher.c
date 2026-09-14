@@ -127,7 +127,7 @@ static int run_python(const wchar_t *runtime, const wchar_t *app, int argc, wcha
         if (wcscmp(VBOT_ROLE, L"server") == 0) module = L"server.main";
         else if (wcscmp(VBOT_ROLE, L"desktop") == 0) module = L"desktop.main";
         else if (wcscmp(VBOT_ROLE, L"update") == 0) module = L"cli.application.worker";
-        else if (wcscmp(VBOT_ROLE, L"host") == 0) module = argc == 1 ? L"cli.application.host" : L"cli.main";
+        else if (wcscmp(VBOT_ROLE, L"host") == 0 || wcscmp(VBOT_ROLE, L"gui") == 0) module = argc == 1 ? L"cli.application.host" : L"cli.main";
     }
     int extra = (module != NULL ? 2 : 0) + 5;
     char **bytes = (char **)calloc((size_t)argc + (size_t)extra + 1, sizeof(char *));
@@ -159,7 +159,7 @@ static int vbot_main(void) {
     wchar_t root[MAX_PATH], version[129], runtime[MAX_PATH], app[MAX_PATH];
     if (argv == NULL || !executable_directory(root, MAX_PATH)) return 111;
     show_error_dialog = (wcscmp(VBOT_ROLE, L"host") == 0 && argc == 1) ||
-                        wcscmp(VBOT_ROLE, L"desktop") == 0;
+                        wcscmp(VBOT_ROLE, L"desktop") == 0 || wcscmp(VBOT_ROLE, L"gui") == 0;
 #ifdef VBOT_STABLE_BOOTSTRAP
     bool payload_install = argc >= 5 && wcscmp(argv[1], L"application") == 0 && wcscmp(argv[2], L"install") == 0;
     /* A no-argument bootstrap is the tray host. Detach only this child from a
