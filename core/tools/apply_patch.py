@@ -43,12 +43,8 @@ from core.utils.paths import model_path
 
 APPLY_PATCH_TOOL_NAME = "apply_patch"
 APPLY_PATCH_TOOL_DESCRIPTION = (
-    "Create, update, delete, or move files with a text patch. Batch known changes into one "
-    "call: use multiple hunks for different locations in a file and multiple file operations "
-    "for different files. Each hunk is a block of context, removed lines, and added lines. "
-    "Changes run in order against current content. A failed hunk leaves its target unchanged "
-    "while other applicable changes continue. Results identify applied, already-applied, "
-    "failed, and skipped entries; successful changes remain applied."
+    "Create, edit, delete, or move files. Combine known changes in one patch; "
+    "operations run in order and successful changes survive failures."
 )
 APPLY_PATCH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -56,20 +52,13 @@ APPLY_PATCH_TOOL_PARAMETERS: JsonObject = {
         "patch": {
             "type": "string",
             "description": (
-                "Patch text. Paths are relative to the working directory or absolute. "
-                "Use `*** Begin Patch` and `*** End Patch` around file operations: "
-                "`*** Add File: path` with `+` content lines; `*** Update File: path` "
-                "with `@@` hunks containing space-prefixed context, `-` removals, and "
-                "`+` additions; `*** Delete File: path`; or "
-                "`*** Move File: source -> destination`. An Update may use "
-                "`*** Move to: destination`. Use `@@ context` to locate a section and "
-                "`*** End of File` to anchor the final hunk. Addition-only hunks insert "
-                "after their context hint, or append when no hint is given. Include "
-                "enough context to identify one location. Repeat `@@` for another location "
-                "in the same file, or start another file operation for a different file. "
-                "For example:\n*** Begin Patch\n*** Update File: settings.txt\n@@\n"
-                "-timeout=10\n+timeout=20\n@@\n-retries=1\n+retries=3\n"
-                "*** Update File: notes.txt\n@@\n-Status: draft\n+Status: ready\n*** End Patch"
+                "Patch text; paths are relative to the working directory or absolute.\n"
+                "*** Begin Patch\n*** Update File: path\n@@\n context\n-old\n+new\n*** End Patch\n"
+                "Use unchanged context to identify one location. Repeat @@ blocks or file "
+                "headers for more edits. Also supports `*** Add File: path` with + lines, "
+                "`*** Delete File: path`, and `*** Move File: source -> destination`. "
+                "A block of + lines appends; `@@ existing full line` inserts it after that line."
+                " End a block with `*** End of File` to match only at EOF."
             ),
         },
     },
@@ -265,14 +254,14 @@ def _apply_hunk(content: str, hunk: _Hunk, path: str, index: int) -> tuple[str, 
         found = _match(content[offset:], hint, hint, precise=True)
         if isinstance(found, AmbiguousFuzzyMatch):
             raise _PatchError(
-                "ambiguous_match",
+                "ambiguous_context",
                 path=path,
-                hunk=index,
+                hint=hint,
                 details=_ambiguous_candidates(content, found, offset),
             )
         if found is None:
             raise _PatchError(
-                "text_not_found", path=path, hunk=index, details=_candidates(content, hint)
+                "context_not_found", path=path, hint=hint, details=_candidates(content, hint)
             )
         hint_start = offset + found.before_spans[0][0]
         offset += found.before_spans[0][1]
