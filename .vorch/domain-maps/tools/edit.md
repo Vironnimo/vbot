@@ -1,39 +1,23 @@
-# Edit Tool
+# Archived Edit Tool
 
-Applies one or more ordered text replacements across existing UTF-8 text files, matching each `old_string` with controlled fuzziness against current on-disk content while preserving every unmatched byte.
+The built-in `edit` Tool is retired. Use `apply_patch` for targeted file changes;
+`write` remains available for full-file creation and replacement. There is no
+`replace_all` argument in `apply_patch`; repeated replacements require explicit
+hunks or a script.
 
-## Interfaces
+`archive/edit.zip` preserves the implementation, focused tests, prior domain map,
+and original shared integration/probe files at their repository paths. Its
+manifest records the source commit and SHA-256 hashes. The archive is outside
+runtime discovery and excluded from source distributions. Restore only in a
+worktree and reconcile shared files with current source; the archived Tool is
+not a supported runtime capability.
 
-- Tool name: `edit`
-- Registration: `register_edit_tool(registry, *, file_state)` - the `FileReadState` guard registry is injected (factory `make_edit_handler(file_state)`), and registration wraps that synchronous filesystem/matching/syntax-check handler with the cancellation-safe Tool worker boundary.
-- Model-facing schema: one required non-empty `edits` array. Each item requires `old_string` and `new_string`, and uses its own `path` or the top-level default, with optional boolean `replace_all`; omission means one unique match, an empty `new_string` deletes the match, and the Tool description states that every item is attempted even when another fails. Registration keeps that precise Provider schema but defers runtime argument validation to the handler so a malformed item becomes an indexed `invalid_arguments` result without rejecting valid siblings; malformed roots still fail the whole call.
-- Items execute sequentially and independently. Each later item sees prior successful changes, including changes to the same file; any item-local validation, path, read, match, or write failure leaves that item unchanged and does not prevent later items from running.
-- A batch with at least one success returns success data with `status` (`success` or `partial`), `total`, `succeeded`, `failed`, and indexed `results`. Mutating item results include resolved `path`, `first_changed_line`, `last_changed_line`, `replacements`, a bounded `preview`, and warnings. Each preview region carries before/after arrays with read-compatible `N| ` or long-line `N:C| ` gutters and one context line; one edit returns at most the first and last replacement regions, at most eight lines per side, with numeric omission metadata when content was bounded. Safe retry no-ops include `already_applied: true` and `replacements: 0` but no change preview. Failed item results include the existing error code/message and the supplied path when available. A batch with zero successes returns a failure envelope.
-- Display: primary path from the first item; hides the complete `edits` argument plus legacy `old_string` and `new_string` keys from argument details. Multi-item calls add edit/file/failure count facts, and successful mutations emit one aggregate pair of presentation-only `line_change` facts in `added`, then `removed` order.
+`core/tools/fuzzy_match.py` remains the active matching owner. Bounded change
+previews now live in `core/tools/_change_preview.py`; `apply_patch` imports no
+archived implementation. See `apply_patch.md` for the active behavior.
 
-## Conventions
-
-- Use `edit` for one or more surgical changes to existing files; batch independent known replacements into one call to reduce Agent roundtrips. Use `write` for full-file replacement or creation.
-- `old_string` must be non-empty and different from `new_string`.
-- Without `replace_all: true`, `old_string` must match uniquely (the winning strategy's own ambiguity is terminal - it does not fall through to a looser one). The model-facing contract tells callers to include an unchanged neighboring line or heading when a line may repeat.
-
-## Matching (fuzzy)
-
-- Matching lives in `core/tools/fuzzy_match.py` (`replace_fuzzy`), a chain tried in order; the first strategy that finds any match wins: **exact** (literal substring) -> **normalized** (CR/CRLF->LF plus a small 1:1 Unicode fold - curly quotes, non-breaking space, en-dash -> ASCII; character-level, so it matches within a line) -> **line_trimmed** (whole-line match after stripping each line's leading/trailing whitespace) -> **whitespace_normalized** (character-level match after collapsing each horizontal Space/Tab run while preserving line boundaries) -> **block_anchor** (a >=3-line block with exact non-blank first/last lines and a sufficiently similar middle) -> **context_aware** (aligned blocks whose non-blank lines, including both boundaries, each reach 80% similarity). Line/block strategies re-indent the replacement to the file's actual indentation. The similarity strategies remain uniqueness-gated and are skipped entirely for `replace_all`; exact and deterministic normalization therefore always win, one uniquely similar target may be edited, multiple similar targets return `ambiguous_match`, and approximate mass replacement is impossible.
-- `old_string` first runs through that chain exactly as supplied. Only after a complete miss, `line_number_gutter_candidates` may derive current-spaced and reproduced-compact raw candidates from a block whose every physical line carries a positive, consecutive `N|`/`N:C|` gutter; each candidate then runs through the same chain in order. The first candidate with any match is terminal, so ambiguity and `replace_all` retain the normal matcher semantics. Raw-first ordering preserves literal edits of files that genuinely contain gutter-shaped text.
-- Non-exact strategies search a normalized copy and map the match back to the original content via a per-character span map, so the file's exact characters and CRLF endings are preserved. On every strategy (including exact), standard CRLF/CR/LF separators authored in `new_string` adopt the detected file style; explicit read-visible exotic separators (`VT`, `FF`, `FS`, `GS`, `RS`, `NEL`, `U+2028`, `U+2029`) remain literal replacement content, including in mixed-ending files, while LF-authored new lines still adopt an exotic-only file's style.
-- `find_closest_candidates` remains a diagnostic-only similarity path after every destructive strategy and gutter candidate has missed; its candidates never become replacement spans. Unlike the bounded destructive strategies, it may rank weaker excerpts solely to help the Agent retry.
-
-## Constraints & Gotchas
-
-- **Fail-closed text boundary:** under the path's mutation lock, `edit` reads the complete byte payload, rejects any NUL byte as `binary_file`, and then decodes strictly as UTF-8. Invalid UTF-8 returns `unsupported_encoding`. Both failures occur before matching or atomic replacement and leave the original bytes untouched; tolerant decoding must never be used on this write path.
-- **Current-content optimistic edit:** `edit` does not require a prior `read` and does not block when the file changed since the Session last read it. Under the path's mutation lock it reads the current bytes, applies the unique `old_string` match to those bytes, and preserves every unmatched byte; a changed file whose target no longer matches still fails without writing through the normal `text_not_found` / `ambiguous_match` boundary. A successful edit restamps the file for later full-file `write` checks, and a successful edit after detected metadata drift includes `data.stale_warning` explaining that it merged against newer on-disk content.
-- **Serialized atomic mutation** (shared with `write`, see `file_state.md`): one Runtime serializes mutations of the same resolved path while different paths remain independent. The replacement is written to a same-directory temporary file, flushed, permission-matched to an existing target, and installed with atomic `os.replace`; a failed write removes the temporary file and leaves the original intact.
-- A recognizable flat single-edit call is treated as a one-item batch.
-- Owner-selected call repair runs inside the handler, separately for the batch envelope and each item; nested text remains payload. Conflicting aliases fail only their item; later understandable edits still execute.
-- Missing text, ambiguous matches, validation failures, and expected filesystem errors become item failures inside a batch; they become the Tool failure envelope only when no item succeeds.
-- After `old_string` misses, an already-applied retry succeeds without writing only when non-empty `new_string` has a unique precise no-op match (or all precise matches under `replace_all`) and old/new share at least four non-whitespace prefix/suffix context characters. Empty deletions, ambiguous matches, similarity-only matches, and unrelated replacement strings retain `text_not_found`; the no-op records no line-change facts.
-- A genuine `text_not_found` may append up to three closest raw excerpts, ordered by diagnostic similarity and labeled with their starting file line. Candidate discovery normalizes the same newline/Unicode/horizontal-whitespace differences for scoring, examines at most 50,000 content lines through bounded anchor pools, suppresses candidates below the diagnostic threshold, and emits at most eight lines/1,200 characters per candidate. A truncated candidate is a literal reusable raw prefix without an invented ellipsis. This path cannot write and a weak/no candidate preserves the short failure.
-- An `ambiguous_match` remains a hard no-write result and reports the occurrence count plus at most three raw candidate contexts. Matches on distinct lines include the matched line and one neighboring line on either side, omit read's line-number gutter so the text can be reused safely, and truncate individual context lines at 160 characters. When every occurrence is on one physical line, the summary deduplicates that line and each candidate instead reports its 1-based character position plus a distinct bounded window centered on that occurrence. Additional candidates are summarized rather than emitted without bound.
-- A complete consecutive `N| ` gutter block in `new_string` is stripped to its canonical raw text before matching/writing, and that item returns `normalization_warning`; line-change facts use the stripped text. Partial, damaged, or nonconsecutive gutter shapes remain `line_numbered_content` failures, as does a complete `N:C| ` continuation block because it may be only a long-line fragment. An incomplete/damaged gutter block in a still-unmatched `old_string` is not stripped speculatively; the `text_not_found` message points at the gutter rather than generic whitespace advice. Shared recovery/detection lives in `core/tools/arguments.py`.
-- After a successful edit, the result is syntax-checked in-process by extension (`.py`/`.json`/`.yaml`/`.yml`/`.toml`). It is non-blocking (the edit is already written) and surfaced as `data.syntax_warning`. The file is parsed both before and after, so a pre-existing syntax error is never blamed on the edit - the message then says the file "was already syntactically invalid". Logic in `core/tools/syntax_check.py`.
+Runtime inventory and Provider-definition tests in
+`tests/core/runtime/test_runtime.py` verify that startup exposes `apply_patch`
+and excludes `edit`. A server restart is required to remove an already loaded
+built-in Tool. Existing Session history and persisted Tool grants are not
+rewritten; removing `edit` does not automatically grant `apply_patch`.

@@ -41,6 +41,8 @@ def test_build_project_minimal_just_cwd_defaults_optionals(tmp_path: Path) -> No
     assert project.auto_load == []
     # An unspecified Tool Whitelist falls back to the base list; skill lists empty.
     assert project.allowed_tools == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
+    assert "apply_patch" in project.allowed_tools
+    assert "edit" not in project.allowed_tools
     assert project.skills_bundled_enabled == []
     assert project.skills_project_disabled == []
     assert project.overrides == {}
@@ -416,6 +418,8 @@ def test_project_from_dict_defaults_optional_fields() -> None:
     # An old project.json without the whitelist fields loads at the same defaults a
     # new project is seeded with: base tool list, empty skill lists (decision 10).
     assert project.allowed_tools == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
+    assert "apply_patch" in project.allowed_tools
+    assert "edit" not in project.allowed_tools
     assert project.skills_bundled_enabled == []
     assert project.skills_project_disabled == []
     # An old project.json without overrides loads at the empty map.

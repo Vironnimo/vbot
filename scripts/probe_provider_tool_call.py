@@ -46,7 +46,6 @@ from scripts.provider_probe.choices import (  # noqa: E402
     DEFAULT_MODEL,
     DEFAULT_PROVIDER,
     DEFAULT_TOTAL_TIMEOUT_SECONDS,
-    EDIT_CASES,
     GLOB_CASES,
     GREP_CASES,
     HA_CALL_SERVICE_CASES,
@@ -163,12 +162,6 @@ def _parser() -> argparse.ArgumentParser:
         choices=CRON_CASES,
         default="create_cron",
         help="Exact cron action and argument shape requested by the scenario.",
-    )
-    parser.add_argument(
-        "--edit-case",
-        choices=EDIT_CASES,
-        default="default",
-        help="Exact edit argument shape requested by the edit scenario.",
     )
     parser.add_argument(
         "--image-generation-case",
@@ -329,7 +322,6 @@ def _parser() -> argparse.ArgumentParser:
         "--tolerance-tool",
         choices=(
             "skill_manage",
-            "edit",
             "cron",
             "channel_send",
             "web_fetch",
@@ -479,7 +471,6 @@ async def _run(args: argparse.Namespace) -> int:
                 args.channel_send_case if scenario.name == "channel_send" else None
             ),
             "cron_case": args.cron_case if scenario.name == "cron" else None,
-            "edit_case": args.edit_case if scenario.name == "edit" else None,
             "glob_case": args.glob_case if scenario.name == "glob" else None,
             "grep_case": args.grep_case if scenario.name == "grep" else None,
             "image_generation_case": (

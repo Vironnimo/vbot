@@ -203,7 +203,7 @@ def display_search_path(path: Path, *, cwd: Path) -> str:
     """Render a result path relative to the working directory, absolute outside it.
 
     Relative tool paths resolve against the working directory, so a result
-    rendered this way always round-trips into a follow-up read/edit call —
+    rendered this way always round-trips into a follow-up read/apply_patch call —
     regardless of which search root produced it.
     """
     try:

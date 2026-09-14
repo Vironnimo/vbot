@@ -36,7 +36,7 @@ A Tool definition exists to make the Model choose the right Tool and emit the ri
 Use this decision order:
 
 1. **One behavior:** expose its arguments directly in one open flat object. A Tool named `channel_send` that only sends should accept delivery fields directly; `action: "send"` would repeat the Tool name.
-2. **One repeatable independent behavior:** use one required plural array of compact operation objects when batching materially reduces Agent roundtrips. State ordering semantics in the array description, preserve input order, keep per-operation options on each item, and report indexed outcomes; `edit(edits[])` is the reference shape.
+2. **One repeatable independent behavior:** use one required plural array of compact operation objects when batching materially reduces Agent roundtrips. State ordering semantics in the array description, preserve input order, keep per-operation options on each item, and report indexed outcomes.
 3. **One behavior with optional targeting or selection:** keep direct optional target fields and validate their dependencies. `status()` checks the current Session, `status(session_id)` checks another Session for the same Agent, and `status(agent_id, session_id)` changes the owner and Session; these are target variants, not actions.
 4. **Several genuinely different behaviors:** require one top-level `action` enum and place every action argument beside it. CRUD, lifecycle transitions, and read-versus-mutate behavior normally qualify. `memory(action, scope, content?, entry_id?)` and `history(action, ...)` are the reference shape.
 
