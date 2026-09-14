@@ -38,7 +38,7 @@ from core.utils.paths import model_path
 MAX_FILE_BYTES = 50 * 1024
 DEFAULT_LINE_LIMIT = 2000
 # UTF-8 BOM that some Windows editors prepend; stripped on read so the model sees
-# clean content (the write tool preserves it on the round-trip).
+# clean content (apply_patch preserves it on the round-trip).
 _UTF8_BOM_BYTES = b"\xef\xbb\xbf"
 # A NUL byte within this leading window marks a file as binary (the classic
 # heuristic): text — even non-UTF-8 text shown with replacement chars — has none.

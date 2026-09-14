@@ -226,7 +226,7 @@ def test_effective_tools_drop_explorer_denials(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
     # An explorer-shaped agent (edit/webfetch/websearch/task all denied) resolves
-    # without write+edit (permission.edit covers both), web_fetch, web_search, and
+    # without apply_patch (permission.edit covers file mutation), web_fetch, web_search, and
     # subagent — everything else in the project ceiling stays.
     _write_agent(
         repo,
@@ -239,7 +239,7 @@ def test_effective_tools_drop_explorer_denials(
 
     runtime_agent = resolver.resolve_agent(project.project_id, "explorer")
 
-    denied = {"write", "apply_patch", "web_fetch", "web_search", "subagent"}
+    denied = {"apply_patch", "web_fetch", "web_search", "subagent"}
     assert set(runtime_agent.tool_access.allowed).isdisjoint(denied)
     assert runtime_agent.tool_access.allowed == tuple(
         tool for tool in PROJECT_DEFAULT_ALLOWED_TOOLS if tool not in denied
