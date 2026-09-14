@@ -89,7 +89,6 @@ PROBE_SCENARIOS = (
     "calendar",
     "channel_send",
     "cron",
-    "edit",
     "glob",
     "grep",
     "ha_call_service",
@@ -216,17 +215,6 @@ CRON_CASES = (
     "delete",
     "enable",
     "disable",
-)
-
-
-EDIT_CASES = (
-    "default",
-    "replace_false",
-    "replace_true",
-    "multiline",
-    "delete",
-    "multi_file",
-    "same_file_sequence",
 )
 
 

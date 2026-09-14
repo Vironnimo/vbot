@@ -30,7 +30,8 @@ ContinuationCause = Literal[
 CONTINUATION_RECORD_VERSION = 1
 CONTINUATION_FLUSH_INTERVAL_SECONDS = 2.0
 CONTINUATION_REMINDER_MARKER = "<continuation-checkpoint"
-UNCERTAIN_EFFECT_TOOLS = frozenset({"write", "edit", "bash"})
+# Retain edit for interrupted Calls already stored in Session history.
+UNCERTAIN_EFFECT_TOOLS = frozenset({"write", "apply_patch", "edit", "bash"})
 _PROMPT_MIN_CHARS = 4_000
 _PROMPT_MAX_CHARS = 50_000
 
@@ -508,7 +509,7 @@ def render_continuation_reminder(
             f"{operation.get('name')} ({operation.get('tool_call_id')})" for operation in uncertain
         )
         warning = (
-            "\nSAFETY: Results are missing or unknown for these write/edit/bash operations: "
+            "\nSAFETY: Results are missing or unknown for these file or shell operations: "
             f"{names}. Their actual filesystem or process effects may be uncertain."
         )
     header = (

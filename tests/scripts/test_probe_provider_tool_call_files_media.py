@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from argparse import Namespace
 
-import core.tools.edit as tool_edit
 import core.tools.glob as tool_glob
 import core.tools.grep as tool_grep
 import core.tools.image as tool_image
@@ -18,7 +17,6 @@ import scripts.provider_probe.measurements as probe_measurements
 import scripts.provider_probe.scenario_files as probe_scenario_files
 import scripts.provider_probe.scenario_web as probe_scenario_web
 import scripts.provider_probe.scenarios as probe_scenarios
-from tests.scripts.provider_probe_helpers import expected_arguments
 
 
 def test_web_fetch_cases_use_production_schema_and_exact_expected_arguments() -> None:
@@ -72,53 +70,6 @@ def test_write_scenario_uses_production_schema_and_exact_arguments() -> None:
         )["expected_arguments_match"]
         is True
     )
-
-
-def test_edit_cases_use_production_schema_and_exact_expected_arguments() -> None:
-    for case_name in probe_choices.EDIT_CASES:
-        scenario = probe_scenarios._scenario(
-            Namespace(
-                scenario="edit",
-                edit_case=case_name,
-                lines=8,
-            ),
-        )
-        contracts = probe_measurements._compile_probe_contracts(
-            scenario.tools,
-            require_closed_input=scenario.require_closed_input,
-        )
-        arguments = scenario.expected_arguments
-
-        assert scenario.tools[0]["parameters"] is tool_edit.EDIT_TOOL_PARAMETERS
-        assert arguments is not None
-        contracts[tool_edit.EDIT_TOOL_NAME].validate_arguments(arguments)
-        assert (
-            probe_measurements._expected_argument_measurements(
-                [{"name": tool_edit.EDIT_TOOL_NAME, "arguments": arguments}],
-                scenario,
-            )["expected_arguments_match"]
-            is True
-        )
-
-    default = probe_scenario_files._edit_scenario("default")
-    assert default.expected_arguments == {
-        "edits": [
-            {
-                "path": "src/provider_tool_probe.py",
-                "old_string": "value = 1",
-                "new_string": "value = 2",
-            }
-        ]
-    }
-    assert len(expected_arguments(probe_scenario_files._edit_scenario("multi_file"))["edits"]) == 2
-    same_file_edits = expected_arguments(probe_scenario_files._edit_scenario("same_file_sequence"))[
-        "edits"
-    ]
-    assert [edit["path"] for edit in same_file_edits] == [
-        "src/provider_tool_probe.py",
-        "src/provider_tool_probe.py",
-    ]
-    assert same_file_edits[1]["old_string"] == same_file_edits[0]["new_string"]
 
 
 def test_analyze_image_cases_use_production_schema_and_exact_arguments() -> None:

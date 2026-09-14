@@ -1,4 +1,4 @@
-"""In-process syntax checks for files just written by ``write``/``edit``.
+"""In-process syntax checks for files just written by ``write``/``apply_patch``.
 
 After a successful write or edit, a fast whole-file parse catches the corruption
 class — mashed quotes, truncated content, broken brackets or indentation — at the
@@ -12,7 +12,7 @@ Two entry points mirror the two tools:
 
 - ``warning_for_written_file`` — ``write`` replaces the whole file, so any parse
   error is attributable to this write; no baseline is needed.
-- ``warning_for_edited_file`` — ``edit`` is surgical, so the file is parsed both
+- ``warning_for_edited_file`` — ``apply_patch`` is surgical, so the file is parsed both
   before and after and a pre-existing break is never blamed on the edit. The
   comparison is binary (parseable before / after), which sidesteps fragile
   error-message line-number diffing: if the file was already invalid it stays a

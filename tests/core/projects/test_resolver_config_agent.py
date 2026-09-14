@@ -239,7 +239,7 @@ def test_effective_tools_drop_explorer_denials(
 
     runtime_agent = resolver.resolve_agent(project.project_id, "explorer")
 
-    denied = {"write", "edit", "web_fetch", "web_search", "subagent"}
+    denied = {"write", "apply_patch", "web_fetch", "web_search", "subagent"}
     assert set(runtime_agent.tool_access.allowed).isdisjoint(denied)
     assert runtime_agent.tool_access.allowed == tuple(
         tool for tool in PROJECT_DEFAULT_ALLOWED_TOOLS if tool not in denied
