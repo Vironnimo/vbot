@@ -163,12 +163,115 @@ def test_ambiguous_hint_reports_actual_locations_including_offset(tmp_path):
     path = tmp_path / "file.txt"
     path.write_bytes(b"intro\nsection\nrepeated\nleft\nrepeated\nright\n")
     result = apply(tmp_path, update("@@ section\n@@ repeated\n-left\n+changed"))
-    assert result["error"]["code"] == "ambiguous_match"
+    assert result["error"]["code"] == "ambiguous_context"
     details = json.loads(result["error"]["message"].split("\n")[-1])
     assert details["occurrences"] == 2
     assert [c["line"] for c in details["candidates"]] == [2, 4]
     assert details["candidates"][0]["text"] == "section\nrepeated\nleft"
     assert path.read_bytes() == b"intro\nsection\nrepeated\nleft\nrepeated\nright\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("positions", [(0,), (1,), (2,), (0, 2)])
+async def test_move_metadata_position_preserves_operation_through_dispatch(tmp_path, positions):
+    registry = ToolRegistry()
+    register_apply_patch_tool(registry, file_state=FileReadState())
+    (tmp_path / "file.txt").write_bytes(b"old\nsecond\n")
+    parts = ["@@\n-old\n+new", "@@\n-second\n+last"]
+    for position in reversed(positions):
+        parts.insert(position, "*** Move to: moved.txt")
+    result = await registry.dispatch(
+        context(tmp_path), {"patch": update("\n".join(parts))}, ["apply_patch"]
+    )
+    assert result["data"]["status"] == "success"
+    assert [r["status"] for r in result["data"]["results"]] == ["applied"] * 3
+    assert not (tmp_path / "file.txt").exists()
+    assert (tmp_path / "moved.txt").read_bytes() == b"new\nlast\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("hint", "code"), [("value", "context_not_found"), ("marker", "ambiguous_context")]
+)
+async def test_context_failure_returns_candidates_without_substituting_target(tmp_path, hint, code):
+    registry = ToolRegistry()
+    register_apply_patch_tool(registry, file_state=FileReadState())
+    path = tmp_path / "file.txt"
+    before = b"first\nmarker\nvalue=1\nsecond\nmarker\nvalue=2\n"
+    path.write_bytes(before)
+    result = await registry.dispatch(
+        context(tmp_path),
+        {"patch": update(f"@@ {hint}\n-value=2\n+value=3")},
+        ["apply_patch"],
+    )
+    assert result["error"]["code"] == code
+    details = json.loads(result["error"]["message"].split("\n")[-1])
+    assert details["candidates"]
+    assert path.read_bytes() == before
+    corrected = await registry.dispatch(
+        context(tmp_path),
+        {"patch": update("@@ second\n marker\n-value=2\n+value=3")},
+        ["apply_patch"],
+    )
+    assert corrected["data"]["status"] == "success"
+    assert path.read_bytes() == b"first\nmarker\nvalue=1\nsecond\nmarker\nvalue=3\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "*** Update File: file.txt\n*** Move to: first.txt\n@@\n-old\n+new\n"
+        "*** Move to: second.txt",
+        "*** Move File: file.txt -> first.txt\n*** Move to: second.txt",
+    ],
+)
+async def test_conflicting_moves_reject_before_any_dispatch_effect(tmp_path, operation):
+    registry = ToolRegistry()
+    register_apply_patch_tool(registry, file_state=FileReadState())
+    (tmp_path / "file.txt").write_bytes(b"old\n")
+    result = await registry.dispatch(
+        context(tmp_path),
+        {"patch": "*** Add File: unrelated.txt\n+pending\n" + operation},
+        ["apply_patch"],
+    )
+    assert result["error"]["code"] == "conflicting_move"
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == {"file.txt": b"old\n"}
+
+
+@pytest.mark.asyncio
+async def test_late_move_after_failed_hunk_keeps_success_at_source(tmp_path):
+    registry = ToolRegistry()
+    register_apply_patch_tool(registry, file_state=FileReadState())
+    (tmp_path / "file.txt").write_bytes(b"old\n")
+    result = await registry.dispatch(
+        context(tmp_path),
+        {
+            "patch": update(
+                "@@\n-old\n+new\n@@\n-missing precondition\n+unused\n*** Move to: moved.txt"
+            )
+        },
+        ["apply_patch"],
+    )
+    assert [r["status"] for r in result["data"]["results"]] == ["applied", "failed", "skipped"]
+    assert (tmp_path / "file.txt").read_bytes() == b"new\n"
+    assert not (tmp_path / "moved.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_move_shaped_added_content_remains_literal_through_dispatch(tmp_path):
+    registry = ToolRegistry()
+    register_apply_patch_tool(registry, file_state=FileReadState())
+    (tmp_path / "file.txt").write_bytes(b"old\n")
+    result = await registry.dispatch(
+        context(tmp_path),
+        {"patch": update("@@\n-old\n+*** Move to: literal.txt\n*** Move to: moved.txt")},
+        ["apply_patch"],
+    )
+    assert result["data"]["status"] == "success"
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == {
+        "moved.txt": b"*** Move to: literal.txt\n"
+    }
 
 
 def test_long_line_preview_shows_change_and_surrounding_lines(tmp_path):

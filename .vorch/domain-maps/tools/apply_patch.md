@@ -9,6 +9,9 @@ Applies ordered V4A file operations. It replaces the archived `edit` Tool (see `
   in the `files` family with one required `patch` string. It is an ordinary
   Provider-neutral function Tool, not a Provider-native patch operation. The
   open model-facing schema is backed by handler-owned unknown-field validation.
+- The definition teaches one compact Update template plus Add/Delete/Move headers,
+  batching, insertion and EOF targeting. Detailed continuation guidance belongs in
+  results; matching errors distinguish missing/ambiguous context hints from hunk text.
 - Add, Update, Delete, standalone `Move File: source -> destination`, and
   Update plus `Move to: destination` are supported. Paths use ordinary
   `ToolContext.resolve_path` semantics: cwd-relative or absolute, with resolved
@@ -48,6 +51,9 @@ Applies ordered V4A file operations. It replaces the archived `edit` Tool (see `
   Missing context prefixes and omitted `@@` are accepted; unknown operation
   headers, unframed prose, and non-empty text after End Patch are rejected.
   Explicit `@@` hunks following Move File use Update-plus-Move semantics.
+- `Move to` is operation metadata and may precede, separate, or follow Update
+  hunks. Repeated identical destinations are harmless, including after Move File;
+  conflicting destinations fail before any writes. Prefixed content remains literal.
 - `@@ context` hints select successive unique whole lines at the hunk's section.
   The final hint may also appear as the first context/removal line. Multiple
   hints can narrow a section. Numeric unified-diff headers are advisory;
@@ -134,4 +140,7 @@ Applies ordered V4A file operations. It replaces the archived `edit` Tool (see `
   (no imposed call count or prebuilt arguments), exact edge/invalid requests,
   and continuation from an actual partial Tool Result with candidate excerpts.
   It rejects imports from a different checkout, checks file effects and entry
-  statuses, and verifies that recovery avoids replaying a completed append. Probe tests reject scope escapes and false completion.
+  statuses, and verifies that recovery avoids replaying a completed append. Natural
+  tasks also cover insertion, EOF targeting, and recovery from missing/ambiguous
+  hints. Exact cases pair move-metadata recovery with conflicting destinations and
+  literal move-shaped text. Probe tests reject scope escapes and false completion.
