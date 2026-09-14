@@ -78,7 +78,8 @@ function selectedTerminal(page) {
 }
 
 async function readSelectedTerminalSnapshot(page) {
-  const terminalId = await selectedTerminal(page).getAttribute("data-terminal-id");
+  const terminalId =
+    await selectedTerminal(page).getAttribute("data-terminal-id");
   if (!terminalId) {
     throw new Error("No selected terminal is available");
   }
@@ -123,8 +124,9 @@ async function expectSelectedTerminalWithoutOutput(page, text) {
     .toBe(false);
 }
 
-async function expectSelectedTerminalTitle(page) {
-  const terminalId = await selectedTerminal(page).getAttribute("data-terminal-id");
+async function expectSelectedTerminalTitle(page, expectedTitle) {
+  const terminalId =
+    await selectedTerminal(page).getAttribute("data-terminal-id");
   expect(terminalId).toBeTruthy();
   await expect
     .poll(async () => {
@@ -133,7 +135,7 @@ async function expectSelectedTerminalTitle(page) {
         (item) => item.terminal_id === terminalId,
       );
       const announcedTitle = terminal?.title?.trim();
-      if (!announcedTitle) {
+      if (announcedTitle !== expectedTitle) {
         return false;
       }
       return (
@@ -180,9 +182,9 @@ async function closeSelectedTerminal(page) {
     await expect(response.json()).resolves.toMatchObject({ ok: true });
   };
   await tile.getByRole("button", { name: "Close terminal" }).click();
-  await expect(
-    page.locator(`[data-terminal-id="${terminalId}"]`),
-  ).toHaveCount(0);
+  await expect(page.locator(`[data-terminal-id="${terminalId}"]`)).toHaveCount(
+    0,
+  );
   await expectSuccessfulRpc(killResponse);
   await expectSuccessfulRpc(forgetResponse);
 }
@@ -227,6 +229,15 @@ function defaultShellProbe(command) {
     : `Write-Output ${DEFAULT_SHELL_MARKER}`;
 }
 
+function defaultShellTitleProbe(command, title) {
+  if (process.platform !== "win32") {
+    return `printf '\\033]0;${title}\\007'`;
+  }
+  return command.toLowerCase().endsWith("cmd.exe")
+    ? `title ${title}`
+    : `$Host.UI.RawUI.WindowTitle = '${title}'`;
+}
+
 test.beforeEach(async ({ request }) => {
   await cleanupTerminals(request);
 });
@@ -242,10 +253,16 @@ test("the platform default shell starts as a native interactive terminal", async
   await startTerminal(page);
 
   const expectedCommand = expectedDefaultShell();
-  await expectSelectedTerminalTitle(page);
-  await expect(
-    page.locator(".terminals-view__tile-target").first(),
-  ).toHaveText("Manual");
+  // A clean shell need not announce a title until explicitly asked to do so.
+  const title = "E2E-DEFAULT-SHELL";
+  await sendToSelectedTerminal(
+    page,
+    defaultShellTitleProbe(expectedCommand, title),
+  );
+  await expectSelectedTerminalTitle(page, title);
+  await expect(page.locator(".terminals-view__tile-target").first()).toHaveText(
+    "Manual",
+  );
   await sendToSelectedTerminal(page, defaultShellProbe(expectedCommand));
   await expectSelectedTerminalOutput(page, DEFAULT_SHELL_MARKER);
 });
@@ -259,9 +276,9 @@ test("a started command runs inside the shell and the terminal stays usable", as
     arguments: ["-u", "-c", pythonHarness("INNER")],
   });
   await expectSelectedTerminalOutput(page, "READY-INNER");
-  await expect(
-    page.locator(".terminals-view__tile-target").first(),
-  ).toHaveText("Manual");
+  await expect(page.locator(".terminals-view__tile-target").first()).toHaveText(
+    "Manual",
+  );
 
   await sendToSelectedTerminal(page, "message-for-inner");
   await expectSelectedTerminalOutput(page, "INNER:message-for-inner");
