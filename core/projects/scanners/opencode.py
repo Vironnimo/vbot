@@ -57,13 +57,13 @@ _OPENCODE_ALLOW = "allow"
 _OPENCODE_TARGET_ACTIONS = frozenset({_OPENCODE_ALLOW, _OPENCODE_DENY, "ask"})
 
 # OpenCode ``permission`` key → the vBot tools a full deny on that key turns off.
-# ``edit`` covers both apply_patch and write (no ``write`` permission key exists); ``bash``
+# ``edit`` covers apply_patch (no ``write`` permission key exists); ``bash``
 # covers bash and process (OpenCode ``bash`` maps to both, grant/deny together);
 # ``task`` governs the subagent tool. Keys without a vBot counterpart (``list``,
 # ``lsp``, ``todowrite``, ``question``, ``external_directory``, ``doom_loop``,
 # ``skill``) are absent here and therefore ignored.
 _PERMISSION_DENY_MAP: dict[str, frozenset[str]] = {
-    "edit": frozenset({"apply_patch", "write"}),
+    "edit": frozenset({"apply_patch"}),
     "bash": frozenset({"bash", "process"}),
     "read": frozenset({"read"}),
     "grep": frozenset({"grep"}),
@@ -81,7 +81,7 @@ _PERMISSION_DENY_MAP: dict[str, frozenset[str]] = {
 # ``external_directory``) are ignored.
 _TOOLS_DENY_MAP: dict[str, frozenset[str]] = {
     "edit": frozenset({"apply_patch"}),
-    "write": frozenset({"write", "apply_patch"}),
+    "write": frozenset({"apply_patch"}),
     "bash": frozenset({"bash", "process"}),
     "read": frozenset({"read"}),
     "grep": frozenset({"grep"}),

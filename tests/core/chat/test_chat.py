@@ -18,8 +18,8 @@ from core.tools import (
     FileReadState,
     ToolContext,
     ToolRegistry,
+    register_apply_patch_tool,
     register_history_tool,
-    register_write_tool,
     tool_success,
 )
 from tests.core.chat.chat_loop_support import build_chat_loop, session_address
@@ -445,8 +445,10 @@ async def test_project_session_tool_resolves_relative_path_against_project_cwd(
                 "tool_calls": [
                     {
                         "id": "call_1",
-                        "name": "write",
-                        "arguments": {"path": "out.txt", "content": "in-repo"},
+                        "name": "apply_patch",
+                        "arguments": {
+                            "patch": "*** Add File: out.txt\n+in-repo\n\\ No newline at end of file"
+                        },
                     }
                 ],
             },
@@ -454,7 +456,7 @@ async def test_project_session_tool_resolves_relative_path_against_project_cwd(
         ]
     )
     tools = ToolRegistry()
-    register_write_tool(tools, file_state=FileReadState())
+    register_apply_patch_tool(tools, file_state=FileReadState())
     runtime = _project_runtime(tmp_path, agent=agent, adapter=adapter, tools=tools)
     project = runtime.projects.create("acme", "Acme", repo_dir)
 
@@ -520,8 +522,12 @@ async def test_identity_session_unchanged_path_and_workspace_cwd(tmp_path: Path)
                 "tool_calls": [
                     {
                         "id": "call_1",
-                        "name": "write",
-                        "arguments": {"path": "out.txt", "content": "in-workspace"},
+                        "name": "apply_patch",
+                        "arguments": {
+                            "patch": (
+                                "*** Add File: out.txt\n+in-workspace\n\\ No newline at end of file"
+                            )
+                        },
                     }
                 ],
             },
@@ -529,7 +535,7 @@ async def test_identity_session_unchanged_path_and_workspace_cwd(tmp_path: Path)
         ]
     )
     tools = ToolRegistry()
-    register_write_tool(tools, file_state=FileReadState())
+    register_apply_patch_tool(tools, file_state=FileReadState())
     runtime = _project_runtime(tmp_path, agent=agent, adapter=adapter, tools=tools)
     runtime.projects.create("acme", "Acme", tmp_path / "repo-unused")
 

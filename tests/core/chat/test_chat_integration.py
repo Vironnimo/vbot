@@ -211,8 +211,8 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
                 "tool_calls": [
                     {
                         "id": "call_write_a",
-                        "name": "write",
-                        "arguments": {"path": "a.txt", "content": "one\ntwo\n"},
+                        "name": "apply_patch",
+                        "arguments": {"patch": "*** Add File: a.txt\n+one\n+two"},
                     }
                 ],
             },
@@ -221,8 +221,8 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
                 "tool_calls": [
                     {
                         "id": "call_write_b",
-                        "name": "write",
-                        "arguments": {"path": "b.txt", "content": "x\n"},
+                        "name": "apply_patch",
+                        "arguments": {"patch": "*** Add File: b.txt\n+x"},
                     }
                 ],
             },

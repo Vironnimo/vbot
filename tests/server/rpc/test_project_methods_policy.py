@@ -236,7 +236,7 @@ def test_team_member_reports_denied_tools(tmp_path: Path) -> None:
     result = _show_project(state, {"project_id": "vbot"})
 
     member = next(m for m in result["scan"]["team"] if m["agent_id"] == "explorer")
-    assert member["denied_tools"] == ["apply_patch", "subagent", "write"]
+    assert member["denied_tools"] == ["apply_patch", "subagent"]
 
 
 def test_team_member_reports_effective_repo_owned_agent_targets(tmp_path: Path) -> None:
