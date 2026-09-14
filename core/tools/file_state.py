@@ -1,14 +1,14 @@
-"""Shared file-mutation coordination for the write and edit tools.
+"""Shared file-mutation coordination for the write and apply_patch tools.
 
 Tracks, per session, the ``(mtime, size)`` of every file a session has read, so
 ``write`` can refuse to clobber a file the session never read or that changed on
-disk since it was last read. ``edit`` uses the same state only to report that it
+disk since it was last read. ``apply_patch`` uses the same state only to report that it
 merged against newer on-disk content. Per-path locks serialize in-process
 mutations, and atomic same-directory replacement prevents partial files on write
 failure. Modeled on OpenCode's (since-removed) ``FileTimeService`` for the
 session-scoped ``(mtime, size)`` stamps, with no content hashing.
 
-The registry is a single runtime-owned instance injected into the read/write/edit
+The registry is a single runtime-owned instance injected into the read/write/apply_patch
 tools (constructor injection, like ``ProcessManager`` for ``bash``) — not a module
 singleton.
 """
@@ -55,9 +55,9 @@ class FileReadState:
     def record_read(self, session_id: str, resolved: Path) -> None:
         """Stamp a file's current ``(mtime, size)`` for a session.
 
-        Called by ``read`` after resolving a file, and by ``write``/``edit`` after
+        Called by ``read`` after resolving a file, and by ``write``/``apply_patch`` after
         a successful write — the tool's own write is an implicit read, so the next
-        edit in the same session is not flagged as stale and needs no re-read.
+        full-file write in the same session needs no re-read.
         """
         if not FILE_STATE_GUARD_ENABLED:
             return
@@ -73,7 +73,7 @@ class FileReadState:
                 del self._stamps[next(iter(self._stamps))]
 
     def check_stale(self, session_id: str, resolved: Path) -> StaleReason | None:
-        """Return why a write/edit on ``resolved`` is stale, or ``None`` if safe.
+        """Return why a write/apply_patch on ``resolved`` is stale, or ``None`` if safe.
 
         Only meaningful for a file that exists — the caller skips a non-existent
         write target (a new file is never stale). ``NEVER_READ`` means the session

@@ -33,7 +33,6 @@ from scripts.provider_probe.scenario_extensions import (
     _word_count_scenario,
 )
 from scripts.provider_probe.scenario_files import (
-    _edit_scenario,
     _glob_scenario,
     _grep_scenario,
     _read_scenario,
@@ -264,8 +263,6 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _channel_send_scenario(str(args.channel_send_case))
     if name == "cron":
         return _cron_scenario(str(args.cron_case))
-    if name == "edit":
-        return _edit_scenario(str(args.edit_case))
     if name == "glob":
         return _glob_scenario(str(args.glob_case))
     if name == "grep":

@@ -34,14 +34,6 @@ from core.tools.contracts import (
     ToolContractError,
     compile_tool_contract,
 )
-from core.tools.edit import (
-    EDIT_TOOL_DESCRIPTION,
-    EDIT_TOOL_NAME,
-    EDIT_TOOL_PARAMETERS,
-    edit_handler,
-    make_edit_handler,
-    register_edit_tool,
-)
 from core.tools.file_state import (
     FileReadState,
     StaleReason,
@@ -247,9 +239,6 @@ __all__ = [
     "ANALYZE_IMAGE_TOOL_PARAMETERS",
     "DEFAULT_TOOL_CONCURRENCY_LIMIT",
     "DuplicateToolError",
-    "EDIT_TOOL_DESCRIPTION",
-    "EDIT_TOOL_NAME",
-    "EDIT_TOOL_PARAMETERS",
     "FileReadState",
     "StaleReason",
     "ChangeTracker",
@@ -353,7 +342,6 @@ __all__ = [
     "WRITE_TOOL_NAME",
     "WRITE_TOOL_PARAMETERS",
     "bash_handler",
-    "edit_handler",
     "glob_handler",
     "grep_handler",
     "READ_MEDIA_ARTIFACT_KIND",
@@ -364,7 +352,6 @@ __all__ = [
     "make_analyze_image_handler",
     "read_media_artifact",
     "result_count_fact_builder",
-    "make_edit_handler",
     "make_memory_handler",
     "make_process_handler",
     "make_project_handler",
@@ -377,7 +364,6 @@ __all__ = [
     "make_session_search_handler",
     "make_web_fetch_handler",
     "make_write_handler",
-    "register_edit_tool",
     "register_analyze_image_tool",
     "register_glob_tool",
     "register_bash_tool",

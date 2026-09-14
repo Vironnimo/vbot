@@ -18,6 +18,13 @@ A `ScannedAgent` carries the normalized Agent id and display metadata plus the r
 
 `core/projects/scanners/claude.py` recursively reads `.claude/agents/**/*.md`. It maps Claude Tool allow/deny metadata into the common denial representation, maps scoped `Agent(...)`/`Task(...)` entries into ordered `agent_target_rules`, and intentionally drops Claude's model field instead of treating it as a vBot model id. A scoped target denial narrows the Project Team but does not by itself disable the entire Sub-Agent capability.
 
+File-mutation denials target active Tools: OpenCode `permission.edit` denies both
+`write` and `apply_patch`; OpenCode `tools.edit: false` and Claude `Edit` denials
+deny `apply_patch`. A `Write`/`tools.write` denial also denies `apply_patch` because
+patches can create files as well as update them. Claude allow-list inversion uses
+the same mapping, so allowing patches requires both Edit and Write. These scanner
+mappings do not rewrite explicit persisted vBot Tool selections.
+
 Keep source-specific parsing inside the detector. Downstream Team and resolver code should consume the common `ScannedAgent` shape and must not branch on repository file syntax.
 
 ## Format Detection

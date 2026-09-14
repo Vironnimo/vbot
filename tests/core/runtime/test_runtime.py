@@ -41,7 +41,6 @@ CANONICAL_BUILTIN_TOOLS = [
     "bash",
     "calendar",
     "cron",
-    "edit",
     "generate_music",
     "generate_video",
     "glob",

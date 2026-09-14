@@ -57,13 +57,13 @@ _OPENCODE_ALLOW = "allow"
 _OPENCODE_TARGET_ACTIONS = frozenset({_OPENCODE_ALLOW, _OPENCODE_DENY, "ask"})
 
 # OpenCode ``permission`` key → the vBot tools a full deny on that key turns off.
-# ``edit`` covers both edit and write (no ``write`` permission key exists); ``bash``
+# ``edit`` covers both apply_patch and write (no ``write`` permission key exists); ``bash``
 # covers bash and process (OpenCode ``bash`` maps to both, grant/deny together);
 # ``task`` governs the subagent tool. Keys without a vBot counterpart (``list``,
 # ``lsp``, ``todowrite``, ``question``, ``external_directory``, ``doom_loop``,
 # ``skill``) are absent here and therefore ignored.
 _PERMISSION_DENY_MAP: dict[str, frozenset[str]] = {
-    "edit": frozenset({"edit", "write"}),
+    "edit": frozenset({"apply_patch", "write"}),
     "bash": frozenset({"bash", "process"}),
     "read": frozenset({"read"}),
     "grep": frozenset({"grep"}),
@@ -75,12 +75,13 @@ _PERMISSION_DENY_MAP: dict[str, frozenset[str]] = {
 
 # OpenCode ``tools`` map name → the vBot tools a ``false`` entry turns off. Differs
 # from the permission map only on edit/write: ``tools.edit`` and ``tools.write`` are
-# separate names, so each denies its own vBot tool, whereas ``permission.edit``
-# covers both. Unmapped tool names (``list``, ``lsp``, ``todowrite``,
+# separate names; either denial blocks apply_patch because it can update and
+# create files. Only tools.write also denies write. ``permission.edit`` covers both.
+# Unmapped tool names (``list``, ``lsp``, ``todowrite``,
 # ``external_directory``) are ignored.
 _TOOLS_DENY_MAP: dict[str, frozenset[str]] = {
-    "edit": frozenset({"edit"}),
-    "write": frozenset({"write"}),
+    "edit": frozenset({"apply_patch"}),
+    "write": frozenset({"write", "apply_patch"}),
     "bash": frozenset({"bash", "process"}),
     "read": frozenset({"read"}),
     "grep": frozenset({"grep"}),

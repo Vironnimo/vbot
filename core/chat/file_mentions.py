@@ -182,7 +182,7 @@ def _snapshot_mention(
 def _resolve_mention_path(root: Path, mention: str) -> Path:
     # Same rule as tool path resolution: absolute paths stand alone, relative
     # paths resolve against the cwd — so the stamped path is byte-identical to
-    # what a read/edit call on the same mention string resolves to.
+    # what a file Tool call on the same mention string resolves to.
     candidate = Path(mention).expanduser()
     if candidate.is_absolute():
         return candidate.resolve()

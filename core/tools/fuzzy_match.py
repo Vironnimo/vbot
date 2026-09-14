@@ -1,4 +1,4 @@
-"""Fuzzy find-and-replace for the edit tool.
+"""Fuzzy text matching and replacement for file patches.
 
 The exact text an edit targets is frequently *almost* right: the model sends
 straight quotes where the file has curly ones, a bare ``\\n`` where the file uses
@@ -68,7 +68,7 @@ _UNICODE_NORMALIZATION = {
     "–": "-",  # en dash
 }
 
-# Patch-only typography folds may expand a glyph. Existing edit defaults keep
+# Patch-only typography folds may expand a glyph. Default substring calls keep
 # their established normalization and replacement semantics.
 _TYPOGRAPHIC_NORMALIZATION = {
     **_UNICODE_NORMALIZATION,
@@ -151,7 +151,7 @@ def replace_fuzzy(
 
     Patch callers can require whole-line spans, restrict matching to precise
     strategies for retry evidence, or anchor a hunk at EOF. Defaults retain
-    edit's existing substring and fuzzy-matching behavior.
+    the default substring and fuzzy-matching behavior.
     """
     replacement_text = _normalize_replacement_newlines(new_string)
     old_lf = _normalize_newlines(old_string)
