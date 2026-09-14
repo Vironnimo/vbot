@@ -13,6 +13,7 @@
   import {
     isDesktopAccessor,
     openDesktopExternalUrl,
+    setDesktopClipboardText,
   } from '$lib/desktopBridge.js';
 
   let { active = true, onToast = () => {}, ...chatProps } = $props();
@@ -219,15 +220,13 @@
         event.altKey
       )
         return;
-      const anchor = event.target.closest?.('.msg-markdown a');
-      if (!anchor || !/\.html?$/i.test(anchor.textContent.trim())) return;
-      const href = anchor.getAttribute('href') || '';
-      if (!/^\/api\/files\/[A-Za-z0-9_.-]+$/.test(href)) return;
+      const anchor = event.target.closest?.('a[data-preview-file]');
+      if (!anchor) return;
       event.preventDefault();
-      openPreview(index, href);
+      openPreview(index, anchor.dataset.previewFile);
     };
     const handleContext = (event) => {
-      const link = event.target.closest?.('a[data-preview-file]');
+      const link = event.target.closest?.('a[data-delivered-file]');
       if (!link) return;
       event.preventDefault();
       event.stopPropagation();
@@ -235,8 +234,10 @@
         index,
         link,
         {
-          source: link.dataset.previewFile,
+          source: link.dataset.deliveredFile,
           filename: link.dataset.fileName,
+          path: link.dataset.filePath,
+          preview: Boolean(link.dataset.previewFile),
         },
         event.type === 'contextmenu' && (event.clientX || event.clientY)
           ? { x: event.clientX, y: event.clientY }
@@ -273,6 +274,30 @@
         });
       },
     );
+  }
+
+  async function copyFilePath() {
+    const path = menuFile.path;
+    closeMenu(true);
+    try {
+      if (isDesktopAccessor()) await setDesktopClipboardText(path);
+      else await navigator.clipboard.writeText(path);
+      onToast({
+        title: t('files.pathCopied', 'File path copied'),
+        variant: 'success',
+      });
+    } catch {
+      onToast({
+        title: t('files.pathCopyFailed', 'Could not copy the file path'),
+        variant: 'error',
+      });
+    }
+  }
+
+  function downloadUrl(source) {
+    const url = new URL(source, window.location.href);
+    url.searchParams.set('download', 'true');
+    return `${url.pathname}${url.search}${url.hash}`;
   }
 
   function moveDivider(event) {
@@ -455,12 +480,18 @@
     style={menuStyle}
     onkeydown={menuKeydown}
   >
-    <Button
-      variant="tertiary"
-      role="menuitem"
-      onClick={() => openPreview(menuPane, menuFile.source)}
-      >{t('split.showPreview', 'Show preview')}</Button
-    >
+    {#if menuFile.preview}
+      <Button
+        variant="tertiary"
+        role="menuitem"
+        onClick={() => openPreview(menuPane, menuFile.source)}
+        >{t('split.showPreview', 'Show preview')}</Button
+      >{/if}
+    {#if menuFile.path}
+      <Button variant="tertiary" role="menuitem" onClick={copyFilePath}>
+        {t('files.copyPath', 'Copy file path')}
+      </Button>
+    {/if}
     <a
       role="menuitem"
       href={menuFile.source}
@@ -473,12 +504,12 @@
     >
     <a
       role="menuitem"
-      href={`${menuFile.source}?download=true`}
+      href={downloadUrl(menuFile.source)}
       target="_blank"
       rel="noopener noreferrer"
       download={menuFile.filename}
       onclick={(event) => {
-        openExternal(event, `${menuFile.source}?download=true`);
+        openExternal(event, downloadUrl(menuFile.source));
         closeMenu(true);
       }}>{t('preview.download', 'Download')}</a
     >

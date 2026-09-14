@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../../lib/i18n.js';
+import { TOOLTIP_SHOW_DELAY_MS } from '../../../lib/tooltip.js';
 
 vi.mock('svelte', async () => {
   return import('../../../../node_modules/svelte/src/index-client.js');
@@ -33,6 +34,7 @@ describe('MarkdownContent', () => {
     }
     document.body.innerHTML = '';
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it('renders a fenced code header and copies only the code', async () => {
@@ -112,6 +114,67 @@ describe('MarkdownContent', () => {
     await unmount(mountedComponent);
     mountedComponent = null;
     expect(document.querySelector('[data-file-external]')).toBeNull();
+  });
+
+  it.each([
+    [
+      '/api/files/report-token',
+      String.raw`C:\Users\Viro\Überblick &quot; [final] (1).md`,
+    ],
+    [
+      `${window.location.origin}/api/files/report-token?download=true`,
+      '/home/user/Reports/quote " & < >.pdf',
+    ],
+  ])(
+    'shows the original path on hover and focus for %s',
+    async (href, path) => {
+      vi.useFakeTimers();
+      const title = path
+        .replaceAll('\\', '\\\\')
+        .replaceAll('&', '&amp;')
+        .replaceAll('"', '&quot;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+      mountedComponent = mount(MarkdownContent, {
+        target: document.body,
+        props: {
+          source: `[report](${href} "${title}")`,
+          class: 'msg-markdown',
+        },
+      });
+      flushSync();
+      const link = document.querySelector('a');
+      expect(link.getAttribute('href')).toBe(href);
+      expect(link.dataset.filePath).toBe(path);
+      expect(link.hasAttribute('title')).toBe(false);
+      expect(link.getAttribute('aria-haspopup')).toBe('menu');
+      expect(link.dataset.previewFile).toBeUndefined();
+      expect(document.querySelector('[data-file-external]')).toBeNull();
+      link.dispatchEvent(new Event('pointerenter'));
+      vi.advanceTimersByTime(TOOLTIP_SHOW_DELAY_MS);
+      expect(document.querySelector('[role="tooltip"]').textContent).toBe(path);
+      link.dispatchEvent(new Event('pointerleave'));
+      link.focus();
+      vi.advanceTimersByTime(TOOLTIP_SHOW_DELAY_MS);
+      expect(link.getAttribute('aria-describedby')).toBe('app-tooltip');
+      await unmount(mountedComponent);
+      mountedComponent = null;
+      expect(document.querySelector('.app-tooltip--visible')).toBeNull();
+    },
+  );
+
+  it('leaves ordinary and foreign file-shaped links with their browser behavior', () => {
+    mountedComponent = mount(MarkdownContent, {
+      target: document.body,
+      props: {
+        source:
+          '[web](https://example.com/report "Web title") [foreign](https://example.com/api/files/token "not local")',
+        class: 'msg-markdown',
+      },
+    });
+    flushSync();
+    expect(document.querySelector('[data-delivered-file]')).toBeNull();
+    expect(document.querySelector('a').title).toBe('Web title');
   });
 });
 

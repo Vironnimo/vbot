@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import html
 import json
 import os
 import secrets
@@ -592,10 +593,12 @@ class FileDelivery:
                 continue
             token = self._mint_token(presentation.path)
             label = _escape_markdown_label(presentation.path.name)
+            title = html.escape(str(presentation.path).replace("\\", "\\\\"), quote=True)
+            title = title.replace("\r", "&#13;").replace("\n", "&#10;")
             markdown = (
                 f"![{label}]({FILE_URL_PREFIX}{token})"
                 if presentation.media_type in CHAT_IMAGE_MEDIA_TYPES
-                else f"[{label}]({FILE_URL_PREFIX}{token})"
+                else f'[{label}]({FILE_URL_PREFIX}{token} "{title}")'
             )
             replacements_by_line.setdefault(line_index, []).append(
                 (
