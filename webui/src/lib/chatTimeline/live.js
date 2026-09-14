@@ -4,6 +4,7 @@ import {
   RUN_EVENT_TOOL_CALL_DELTA,
   RUN_EVENT_CHANGE_STATS,
   RUN_EVENT_PROVIDER_HEARTBEAT,
+  RUN_EVENT_PROVIDER_REQUEST_STATUS,
   RUN_EVENT_TOOL_CALL_STDERR,
   RUN_EVENT_TOOL_CALL_STDOUT,
 } from '../api.js';
@@ -207,6 +208,7 @@ export function appendLiveRunEvent(assistantRun, event) {
 
   if (
     event.type !== RUN_EVENT_REASONING_DELTA &&
+    event.type !== RUN_EVENT_PROVIDER_REQUEST_STATUS &&
     event.type !== RUN_EVENT_PROVIDER_HEARTBEAT
   ) {
     freezeStreamingReasoningEstimates(assistantRun, event.timestamp);
@@ -252,7 +254,13 @@ export function appendLiveRunEvent(assistantRun, event) {
         item.status === CHAT_STATUS_RUNNING,
     );
     if (runningIndex >= 0) {
-      assistantRun.items.splice(runningIndex, 1);
+      if (event.payload?.reason === 'failed') {
+        const item = assistantRun.items[runningIndex];
+        item.status = 'failed';
+        item.events.push(event);
+      } else {
+        assistantRun.items.splice(runningIndex, 1);
+      }
       syncAssistantRunCollections(assistantRun);
     }
     return;
@@ -300,7 +308,16 @@ export function appendLiveRunEvent(assistantRun, event) {
     return;
   }
 
+  if (event.type === RUN_EVENT_PROVIDER_REQUEST_STATUS) {
+    assistantRun.providerRequestStatus =
+      event.payload?.state === 'finished'
+        ? null
+        : { ...event.payload, timestamp: event.timestamp };
+    assistantRun.providerHeartbeat = null;
+    return;
+  }
   if (event.type === RUN_EVENT_PROVIDER_HEARTBEAT) {
+    assistantRun.providerRequestStatus = null;
     assistantRun.providerHeartbeat = {
       idleSeconds: Number.isFinite(event.payload?.idle_seconds)
         ? event.payload.idle_seconds
@@ -312,6 +329,7 @@ export function appendLiveRunEvent(assistantRun, event) {
 
   if (PROVIDER_PROGRESS_RUN_EVENTS.has(event.type)) {
     assistantRun.providerHeartbeat = null;
+    assistantRun.providerRequestStatus = null;
   }
 
   if (event.type === 'model_step_usage') {
@@ -465,6 +483,7 @@ function isAssistantRunEvent(event) {
     RUN_EVENT_CHANGE_STATS,
     'model_fallback_activated',
     RUN_EVENT_PROVIDER_HEARTBEAT,
+    RUN_EVENT_PROVIDER_REQUEST_STATUS,
     RUN_EVENT_REASONING_DELTA,
     'reasoning',
     RUN_EVENT_TOOL_CALL_DELTA,

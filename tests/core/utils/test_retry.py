@@ -5,6 +5,7 @@ enforcement, fatal-error propagation, first-attempt success, and
 retry/exhaustion logging.
 """
 
+import asyncio
 import logging
 from unittest.mock import AsyncMock, patch
 
@@ -23,6 +24,7 @@ from core.utils.retry import (
     MAX_RETRIES,
     MAX_RETRY_AFTER_SECONDS,
     compute_retry_delay,
+    observe_retries,
     retry_async,
 )
 
@@ -431,3 +433,43 @@ async def test_retry_does_not_log_on_success_path(
 
     # Assert
     assert [record for record in caplog.records if record.name == "vbot.utils.retry"] == []
+
+
+@pytest.mark.asyncio
+async def test_retry_observers_are_isolated_and_reset_after_failure():
+    notices = [[], []]
+
+    async def request(index):
+        failure = ProviderTimeoutError(f"request-{index}")
+        operation = AsyncMock(side_effect=[failure, "done"])
+        with observe_retries(notices[index].append):
+            assert await retry_async(operation, initial_delay=0) == "done"
+        return failure
+
+    failures = await asyncio.gather(request(0), request(1))
+    for index, entries in enumerate(notices):
+        assert len(entries) == 2
+        assert all(entry.error is failures[index] for entry in entries)
+        assert [(entry.attempt, entry.max_attempts, entry.waiting) for entry in entries] == [
+            (2, 4, True),
+            (2, 4, False),
+        ]
+    with pytest.raises(ProviderAuthError), observe_retries(notices[0].append):
+        await retry_async(AsyncMock(side_effect=ProviderAuthError("rejected")))
+    await retry_async(AsyncMock(side_effect=[ProviderTimeoutError(), "done"]), initial_delay=0)
+    assert len(notices[0]) == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_observer_failure_does_not_change_request_outcome(caplog):
+    def broken(_notice):
+        raise RuntimeError("observer sentinel")
+
+    with observe_retries(broken):
+        assert (
+            await retry_async(
+                AsyncMock(side_effect=[ProviderTimeoutError(), "done"]), initial_delay=0
+            )
+            == "done"
+        )
+    assert any(record.exc_info for record in caplog.records)

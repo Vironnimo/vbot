@@ -95,6 +95,8 @@ Reflection reviews surface as a "Reflections" subsection inside both Activity-pa
   state; teardown invalidates late progress/results. Coverage: composer/API tests.
 - Composer focus follows deliberate navigation only (New Session always; user-driven selections after destination history settles, desktop only; mobile stays in reading mode with `preventScroll`) - passive changes (reconnects, invalidations, mount restoration) never steal focus.
 
+Request status is footer metadata on a running Assistant Run: waiting, retry cause, and available attempt counts. Actual Provider progress replaces the notice; terminal Runs hide it. This projection is shared by Chat and embedded Swarm Activity. Failed Compaction attempts keep a visible warning separator without marking an otherwise continuing Agentic Run failed; harmless stale/insufficient-reclaim attempts remove their placeholder. These diagnostics remain live-event projections, not persisted checkpoints (`chatTimeline/live.js`, `chatTimelinePresentation/activity.js`, `ChatTimeline.test.layout-history-attachments.test.js`).
+
 ## Usage and errors
 
 Speech Tool artifacts in `ChatAssistantRun.svelte` and `ChatTimelineEntry.svelte`

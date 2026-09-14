@@ -193,7 +193,17 @@ def test_websocket_receives_run_lifecycle_events_without_provider_metadata(tmp_p
             # First frame is the connection_ready hello; skip it.
             hello = websocket.receive_json()
             assert hello["type"] == "connection_ready"
-            events = [websocket.receive_json() for _ in range(7)]
+            events = [websocket.receive_json() for _ in range(9)]
+            status_events = [
+                event
+                for event in events
+                if event["payload"].get("run_event_type") == "provider_request_status"
+            ]
+            assert [event["payload"]["output"]["state"] for event in status_events] == [
+                "waiting",
+                "finished",
+            ]
+            events = [event for event in events if event not in status_events]
 
     assert [event["type"] for event in events] == [
         "resource_changed",
@@ -242,7 +252,17 @@ def test_websocket_excludes_streaming_delta_events(tmp_path: Path) -> None:
             # First frame is the connection_ready hello; skip it.
             hello = websocket.receive_json()
             assert hello["type"] == "connection_ready"
-            events = [websocket.receive_json() for _ in range(7)]
+            events = [websocket.receive_json() for _ in range(9)]
+            status_events = [
+                event
+                for event in events
+                if event["payload"].get("run_event_type") == "provider_request_status"
+            ]
+            assert [event["payload"]["output"]["state"] for event in status_events] == [
+                "waiting",
+                "finished",
+            ]
+            events = [event for event in events if event not in status_events]
 
     assert [event["type"] for event in events] == [
         "resource_changed",

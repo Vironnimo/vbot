@@ -21,7 +21,10 @@ provider asked tends to earn another 429, so we never wait less than the hint.
 
 import asyncio
 import random
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any, TypeVar
 
 from core.utils.errors import VBotError
@@ -38,6 +41,41 @@ JITTER_FACTOR = 0.5
 # Upper bound on the server-supplied floor before bounded jitter is added. This
 # keeps malformed hints bounded without collapsing every client onto one delay.
 MAX_RETRY_AFTER_SECONDS = 60.0
+
+
+@dataclass(frozen=True)
+class RetryNotice:
+    """One scheduled retry, before or after its backoff wait."""
+
+    error: Exception
+    attempt: int
+    max_attempts: int
+    delay_seconds: float
+    waiting: bool
+
+
+_retry_observer: ContextVar[Callable[[RetryNotice], None] | None] = ContextVar(
+    "retry_observer", default=None
+)
+
+
+@contextmanager
+def observe_retries(observer: Callable[[RetryNotice], None]) -> Iterator[None]:
+    """Observe retries in this async request scope without changing retry policy."""
+    token = _retry_observer.set(observer)
+    try:
+        yield
+    finally:
+        _retry_observer.reset(token)
+
+
+def _notify_retry(notice: RetryNotice) -> None:
+    observer = _retry_observer.get()
+    if observer is not None:
+        try:
+            observer(notice)
+        except Exception:
+            _LOGGER.warning("Retry observer failed", exc_info=True)
 
 
 def compute_retry_delay(
@@ -131,7 +169,9 @@ async def retry_async(
                     delay,
                     " (honoring server Retry-After)" if honored_retry_after else "",
                 )
+                _notify_retry(RetryNotice(error, attempt + 2, max_retries + 1, delay, True))
                 await asyncio.sleep(delay)
+                _notify_retry(RetryNotice(error, attempt + 2, max_retries + 1, 0, False))
 
     # Should be unreachable when max_retries >= 0, but satisfies type checkers.
     assert last_error is not None
