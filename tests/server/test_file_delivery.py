@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from html import unescape
 from pathlib import Path
 from typing import Any, cast
 
@@ -23,7 +24,7 @@ from server.file_delivery import (
 from server.rpc.payloads import _visible_message
 from tests.server.test_rpc import StubAdapter, StubRuntime
 
-_FILE_URL_PATTERN = re.compile(r"\(/api/files/([^\s)]+)\)")
+_FILE_URL_PATTERN = re.compile(r"\(/api/files/([^\s)]+)(?=[\s)])")
 
 
 def test_browser_and_embedded_preview_share_website_and_download_original(tmp_path: Path) -> None:
@@ -343,11 +344,30 @@ def test_text_file_is_projected_as_link_and_opens_inline(tmp_path: Path) -> None
         response = client.get(_only_file_url(content))
 
     assert content.startswith(r"[report \[final\].txt]")
+    assert _file_link_title(content) == str(report.resolve())
     assert response.status_code == 200
     assert response.text == "current report"
     assert response.headers["content-type"].startswith("text/plain")
     assert response.headers["content-disposition"].startswith("inline;")
     assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def _file_link_title(content: str) -> str:
+    title = re.search(r' "([^"\n]*)"\)$', content)
+    assert title is not None
+    return unescape(title[1].replace("\\\\", "\\"))
+
+
+def test_file_link_title_preserves_special_characters(tmp_path: Path) -> None:
+    report = tmp_path / "Übersicht [final] &quot; (1).md"
+    report.write_text("# Report", encoding="utf-8")
+    delivery = FileDelivery()
+    projected = delivery.project_message(_assistant_payload(report))
+    assert _file_link_title(projected["content"]) == str(report.resolve())
+    token = _only_file_url(projected["content"]).removeprefix(FILE_URL_PREFIX)
+    delivered = delivery.resolve_token(token)
+    assert delivered is not None
+    assert delivered.path == report.resolve()
 
 
 @pytest.mark.parametrize(

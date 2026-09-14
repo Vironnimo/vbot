@@ -61,7 +61,11 @@ describe('ChatWorkspace', () => {
     );
   }
 
-  async function start(split = true) {
+  async function start(
+    split = true,
+    content = 'Hello! Your website: [index.html](/api/files/file-token)',
+    onToast = () => {},
+  ) {
     rpcMock.mockImplementation(
       createChatRpcMock({
         sessionMessages: {
@@ -69,8 +73,7 @@ describe('ChatWorkspace', () => {
             {
               id: 'website-answer',
               role: 'assistant',
-              content:
-                'Hello! Your website: [index.html](/api/files/file-token)',
+              content,
             },
           ],
           'session-2': [
@@ -99,6 +102,7 @@ describe('ChatWorkspace', () => {
         props: {
           sharedAgents: [createAgent()],
           sharedSelectedAgentId: 'alpha',
+          onToast,
         },
       },
       ChatWorkspace,
@@ -538,6 +542,76 @@ describe('ChatWorkspace', () => {
       rpcMock.mock.calls.some(([method]) => method === 'file.preview_open'),
     ).toBe(false);
   });
+
+  it.each(['browser', 'desktop', 'failure'])(
+    'copies a report path through the %s clipboard and restores focus',
+    async (accessor) => {
+      const path = String.raw`C:\Users\Viro\Berichte\Übersicht (final).md`;
+      const title = path.replaceAll('\\', '\\\\');
+      const onToast = vi.fn();
+      await start(
+        false,
+        `Hello! [report.md](/api/files/report-token "${title}")`,
+        onToast,
+      );
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { writeText },
+        configurable: true,
+      });
+      const setClipboardText = vi.fn().mockResolvedValue(undefined);
+      if (accessor === 'desktop') {
+        window.history.replaceState({}, '', '/?accessor=desktop');
+        window.pywebview = { api: { setClipboardText } };
+      }
+      if (accessor === 'failure')
+        writeText.mockRejectedValue(new Error('denied'));
+      const link = pane(0).querySelector('.msg-markdown a');
+      const event =
+        accessor === 'desktop'
+          ? new KeyboardEvent('keydown', {
+              key: 'F10',
+              shiftKey: true,
+              bubbles: true,
+              cancelable: true,
+            })
+          : new MouseEvent('contextmenu', {
+              bubbles: true,
+              cancelable: true,
+              clientX: 90,
+              clientY: 120,
+            });
+      link.dispatchEvent(event);
+      await waitForCondition(
+        () => document.activeElement?.getAttribute('role') === 'menuitem',
+        100,
+      );
+      expect(event.defaultPrevented).toBe(true);
+      const items = [...document.querySelectorAll('[role="menuitem"]')];
+      expect(items.map((item) => item.textContent.trim())).toEqual([
+        'Copy file path',
+        'Open in browser',
+        'Download',
+      ]);
+      items[0].click();
+      await waitForCondition(() => onToast.mock.calls.length > 0, 100);
+      expect(
+        accessor === 'desktop' ? setClipboardText : writeText,
+      ).toHaveBeenCalledWith(path);
+      if (accessor === 'desktop') expect(writeText).not.toHaveBeenCalled();
+      expect(onToast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variant: accessor === 'failure' ? 'error' : 'success',
+        }),
+      );
+      expect(document.querySelector('[role="menu"]')).toBeNull();
+      expect(document.activeElement).toBe(link);
+      expect(document.querySelector('[role="separator"]')).toBeNull();
+      expect(
+        rpcMock.mock.calls.some(([method]) => method === 'file.preview_open'),
+      ).toBe(false);
+    },
+  );
 
   it('supports file menu keyboard navigation across buttons and links, and its preview action', async () => {
     await start(false);
