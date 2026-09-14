@@ -6,6 +6,9 @@ import hashlib
 import shutil
 from pathlib import Path
 
+from cli.search_runtime import provision_search_runtime
+from core.tools._search_binary import binary_spec
+
 SHAPES = ("server", "server-desktop", "desktop-client")
 APP_COMMON = ("core", "cli")
 APP_SERVER = ("server", "resources", "webui/dist")
@@ -75,6 +78,8 @@ def _copy_tree(
             continue
         target = destination / child.name
         relative = child.relative_to(payload_root)
+        if relative.parts == ("resources", "native"):
+            continue
         if (
             assets is not None
             and relative.parts[:2] == ("resources", "extensions")
@@ -108,6 +113,21 @@ def copy_application(
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(item, target)
+    if shape != "desktop-client":
+        native_target = "x86_64-pc-windows-msvc"
+        output, _ = binary_spec(destination / "resources", native_target)
+        for native_origin in (source, assets):
+            if (
+                native_origin is None
+                or not (native_origin / "resources/ripgrep.lock.json").is_file()
+            ):
+                continue
+            candidate, _ = binary_spec(native_origin / "resources", native_target)
+            if candidate.is_file() and not candidate.is_symlink():
+                output.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(candidate, output)
+                break
+        provision_search_runtime(destination / "resources", target=native_target)
     if assets is not None and shape != "desktop-client":
         for page in (source / "resources" / "extensions").glob("*/ui/page.html"):
             page_assets = page.parent.parent.relative_to(source) / "web"

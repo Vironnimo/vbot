@@ -39,20 +39,6 @@ from core.tools.file_state import (
     StaleReason,
     stale_failure_text,
 )
-from core.tools.glob import (
-    GLOB_TOOL_DESCRIPTION,
-    GLOB_TOOL_NAME,
-    GLOB_TOOL_PARAMETERS,
-    glob_handler,
-    register_glob_tool,
-)
-from core.tools.grep import (
-    GREP_TOOL_DESCRIPTION,
-    GREP_TOOL_NAME,
-    GREP_TOOL_PARAMETERS,
-    grep_handler,
-    register_grep_tool,
-)
 from core.tools.history import (
     HISTORY_ACTIONS,
     HISTORY_DEFAULT_ROLES,
@@ -115,6 +101,13 @@ from core.tools.read import (
     READ_TOOL_PARAMETERS,
     make_read_handler,
     register_read_tool,
+)
+from core.tools.search_files import (
+    SEARCH_FILES_TOOL_DESCRIPTION,
+    SEARCH_FILES_TOOL_NAME,
+    SEARCH_FILES_TOOL_PARAMETERS,
+    register_search_files_tool,
+    search_files_handler,
 )
 from core.tools.session_search import (
     SESSION_SEARCH_TOOL_DESCRIPTION,
@@ -220,6 +213,11 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
+    "SEARCH_FILES_TOOL_DESCRIPTION",
+    "SEARCH_FILES_TOOL_NAME",
+    "SEARCH_FILES_TOOL_PARAMETERS",
+    "search_files_handler",
+    "register_search_files_tool",
     "register_apply_patch_tool",
     "BASH_SUBAGENT_TOOL_DESCRIPTION",
     "BASH_SUBAGENT_TOOL_PARAMETERS",
@@ -234,12 +232,6 @@ __all__ = [
     "FileReadState",
     "StaleReason",
     "ChangeTracker",
-    "GLOB_TOOL_DESCRIPTION",
-    "GLOB_TOOL_NAME",
-    "GLOB_TOOL_PARAMETERS",
-    "GREP_TOOL_DESCRIPTION",
-    "GREP_TOOL_NAME",
-    "GREP_TOOL_PARAMETERS",
     "HISTORY_ACTIONS",
     "HISTORY_DEFAULT_ROLES",
     "HISTORY_RESULT_MAX_BYTES",
@@ -331,8 +323,6 @@ __all__ = [
     "WEB_SEARCH_TOOL_NAME",
     "WEB_SEARCH_TOOL_PARAMETERS",
     "bash_handler",
-    "glob_handler",
-    "grep_handler",
     "READ_MEDIA_ARTIFACT_KIND",
     "is_tool_result_envelope",
     "make_history_handler",
@@ -353,10 +343,8 @@ __all__ = [
     "make_session_search_handler",
     "make_web_fetch_handler",
     "register_analyze_image_tool",
-    "register_glob_tool",
     "register_bash_tool",
     "register_cron_tool",
-    "register_grep_tool",
     "register_history_tool",
     "register_generate_music_tool",
     "register_generate_video_tool",

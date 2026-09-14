@@ -48,7 +48,7 @@ Chains: identity agents keep model -> global -> empty. Config agents resolve ove
 
 - Agent IDs: filesystem-safe slugs, letter/digit start, letters/digits/hyphen/underscore, max 64 chars. Writes use temp-file atomic replace; relative persisted Workspaces resolve only against the active data directory, never cwd.
 - The only seeded template is `SOUL.md`; USER.md/MEMORY.md belong to the memory system and create lazily on first write - a memory-off agent has neither, and deletion does not resurrect them.
-- `scripts/converters/agent_tool_access.py` is the sole legacy migration path; the loader contains none.
+- `scripts/converters/agent_tool_access.py` converts the retired root allowed_tools shape; the loader contains none.
 - Mutable-field validation lives server/core-side: effort vocabulary `null|""|none|minimal|low|medium|high|xhigh|max` (null inherits, "" = provider default), temperature null or 0.0-2.0 (0.0 real), strict policy shape, shell-portable env names. Enabling custom prompts seeds the agent prompt directory once; re-enabling preserves existing files.
 - Run-local model fallback never mutates persisted model/fallback fields. The `::connection[:account]` suffix stores the provider-local slug, reconstructed to full runtime form at resolution; Account semantics in `providers/connections.md`.
 
@@ -60,6 +60,8 @@ Chains: identity agents keep model -> global -> empty. Config agents resolve ove
 - `rename` atomically moves the whole tree, rebasing an in-tree Workspace while preserving external paths (case-only Windows renames go through a temporary sibling), retargeting exact bare-id references in every `allowed_agents` list (never qualified addresses), and exposing compensation snapshots. `delete` archives under `archive/agents/<id>/` - deliberately a subtree, because flat `archive/<agent-id>` would collide with the sibling `sessions`/`projects` roots and delete's replace-archive rmtree would wipe them.
 - `exists` is the validity-aware, never-raising probe behind identity-only gates such as private-skill layering and the skill RPC write scope. `reset_current_after_session_removed` re-homes the current pointer bypassing read-time normalization (otherwise `get` would replace the dangling pointer before landing logic runs).
 - `update_with_metadata` owns transactional Workspace relocation with copied/backed-up metadata; `agents_rooted_in`/`restore_update` support Project removal compensation.
+
+Manual search permission consolidation is owned by `scripts/converters/search_files_access.py`; both old capabilities must permit consolidation, otherwise an explicit choice is required. See `tools/search_files.md`.
 
 ## Constraints & Gotchas
 

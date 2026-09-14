@@ -17,8 +17,7 @@ from core.tools import JsonObject as ToolJsonObject
 from core.tools import (
     ToolContext,
     ToolRegistry,
-    register_glob_tool,
-    register_grep_tool,
+    register_search_files_tool,
     tool_failure,
     tool_success,
 )
@@ -76,7 +75,6 @@ async def test_registered_search_tools_execute_and_persist_envelopes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("core.tools.grep.shutil.which", lambda _command: None)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "notes.txt").write_text("alpha\nbeta\n", encoding="utf-8")
@@ -85,7 +83,7 @@ async def test_registered_search_tools_execute_and_persist_envelopes(
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
-        allowed_tools=["glob", "grep"],
+        allowed_tools=["search_files"],
         workspace=workspace,
     )
     adapter = StubAdapter(
@@ -93,16 +91,23 @@ async def test_registered_search_tools_execute_and_persist_envelopes(
             {
                 "content": None,
                 "tool_calls": [
-                    {"id": "call_glob", "name": "glob", "arguments": {"pattern": "**/*.txt"}},
-                    {"id": "call_grep", "name": "grep", "arguments": {"pattern": "alpha"}},
+                    {
+                        "id": "call_paths",
+                        "name": "search_files",
+                        "arguments": {"action": "paths", "patterns": ["**/*.txt"]},
+                    },
+                    {
+                        "id": "call_content",
+                        "name": "search_files",
+                        "arguments": {"action": "content", "patterns": ["alpha"]},
+                    },
                 ],
             },
             {"content": "Search complete", "tool_calls": None},
         ]
     )
     tools = ToolRegistry()
-    register_glob_tool(tools)
-    register_grep_tool(tools)
+    register_search_files_tool(tools)
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     assistant = await build_chat_loop(runtime).send(
@@ -119,27 +124,27 @@ async def test_registered_search_tools_execute_and_persist_envelopes(
     glob_result = json.loads(glob_content)
     grep_result = json.loads(grep_content)
     assert assistant.content == "Search complete"
-    assert [message.name for message in tool_messages] == ["glob", "grep"]
-    assert glob_result == tool_success({"content": "notes.txt"})
+    assert [message.name for message in tool_messages] == ["search_files", "search_files"]
+    assert glob_result == tool_success({"content": "notes.txt", "complete": True})
     assert grep_result == tool_success(
-        {"content": "notes.txt:1: alpha\nsrc/code.py:1: print('alpha')"}
+        {"content": "notes.txt:1:alpha\nsrc/code.py:1:print('alpha')", "complete": True}
     )
     assert [
         event.payload["tool_call"]["name"]
         for event in run.events
         if event.type == TOOL_CALL_STARTED_EVENT
-    ] == ["glob", "grep"]
+    ] == ["search_files", "search_files"]
     for event in run.events:
         if event.type not in {TOOL_CALL_STARTED_EVENT, TOOL_CALL_RESULT_EVENT}:
             continue
         tool_name = event.payload["tool_call"]["name"]
         assert event.payload["schema_fingerprint"] == tools.schema_fingerprint(tool_name)
     results_by_tool = {
-        event.payload["tool_call"]["name"]: event.payload["result"]
+        event.payload["tool_call"]["id"]: event.payload["result"]
         for event in run.events
         if event.type == TOOL_CALL_RESULT_EVENT
     }
-    assert results_by_tool == {"glob": glob_result, "grep": grep_result}
+    assert results_by_tool == {"call_paths": glob_result, "call_content": grep_result}
 
 
 @pytest.mark.asyncio
@@ -158,29 +163,32 @@ async def test_registered_search_tools_respect_agent_allowlist(tmp_path: Path) -
             {
                 "content": None,
                 "tool_calls": [
-                    {"id": "call_grep", "name": "grep", "arguments": {"pattern": "alpha"}}
+                    {
+                        "id": "call_content",
+                        "name": "search_files",
+                        "arguments": {"action": "content", "patterns": ["alpha"]},
+                    }
                 ],
             },
             {"content": "Recovered", "tool_calls": None},
         ]
     )
     tools = ToolRegistry()
-    register_glob_tool(tools)
-    register_grep_tool(tools)
+    register_search_files_tool(tools)
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     await build_chat_loop(runtime).send("coder", "Search files", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    failure = tool_failure("tool_not_allowed", "Tool not allowed: grep")
+    failure = tool_failure("tool_not_allowed", "Tool not allowed: search_files")
     tool_message_content = messages[2].content
     assert isinstance(tool_message_content, str)
     assert json.loads(tool_message_content) == failure
     result_payload = next(
         event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT
     ).payload
-    assert result_payload["tool_call"] == {"id": "call_grep", "index": 0, "name": "grep"}
+    assert result_payload["tool_call"] == {"id": "call_content", "index": 0, "name": "search_files"}
     assert result_payload["result"] == failure
     assert result_payload["timing"]["duration_ms"] >= 0
 

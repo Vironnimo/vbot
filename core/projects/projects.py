@@ -75,8 +75,7 @@ DEFAULT_DEFAULT_THINKING_EFFORT: str | None = None
 PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
     "read",
     "apply_patch",
-    "glob",
-    "grep",
+    "search_files",
     "bash",
     "process",
     "terminal",

@@ -11,13 +11,17 @@ Only `project_id` and `cwd` are required in a hand-edited persisted file: they i
 - Identity and location: stable `project_id`, normalized repository `cwd`, optional user-facing `display_name` (missing, `null`, or blank falls back to `project_id`), and optional `created_at` / `updated_at` (missing values default to the current UTC timestamp).
 - Runtime defaults: `default_agent`, `default_model`, `default_temperature`, and `default_thinking_effort`.
 - Discovery: one `source_format` (`opencode` or `claude`) and `auto_load`.
-- Tool ceiling: `allowed_tools`, seeded from `PROJECT_DEFAULT_ALLOWED_TOOLS` (`read`, `write`, `apply_patch`, `glob`, `grep`, `bash`, `process`, `terminal`, `web_fetch`, `web_search`, `status`, `subagent`, and `skill`). A Project requires explicit names: the all-tools wildcard `"*"` is invalid. A persisted name that is not currently a registered Project Tool remains loadable so disabled Extension permissions survive; `project.show` reports it as `UNAVAILABLE_TOOL`, and the WebUI keeps it visible and removable.
+- Tool ceiling: `allowed_tools`, seeded from `PROJECT_DEFAULT_ALLOWED_TOOLS` (`read`, `apply_patch`, `search_files`, `bash`, `process`, `terminal`, `web_fetch`, `web_search`, `status`, `subagent`, and `skill`). A Project requires explicit names: the all-tools wildcard `"*"` is invalid. A persisted name that is not currently a registered Project Tool remains loadable so disabled Extension permissions survive; `project.show` reports it as `UNAVAILABLE_TOOL`, and the WebUI keeps it visible and removable.
 - Skill ceiling: `skills_bundled_enabled`, `skills_global_enabled`, and `skills_project_disabled`.
 - Per-Agent overrides: an `overrides` object keyed by Project Agent id. Supported override fields are exactly `model`, `temperature`, `thinking_effort`, `compaction_policy`, and `tool_access`. Tool access uses the same strict policy shape as Identity Agents; an override's `allowed` and explicit `granted` names must be subsets of the Project Tool Whitelist.
 
 The default Tool ceiling uses `apply_patch` instead of the archived `edit`. Explicit
 persisted ceilings remain unchanged; an unavailable `edit` entry remains removable
 and does not automatically grant `apply_patch`.
+
+The default search capability is `search_files`. Explicit retired grep/glob
+ceilings and overrides use the manual `scripts/converters/search_files_access.py`
+converter; mixed permissions require an explicit choice rather than widening.
 
 Project defaults are fallback inputs shared by its Agents. Overrides target one current Team member and take precedence during resolution; they are not edits to the repository Agent file.
 

@@ -25,6 +25,10 @@ patches can create, fully replace, or update files. Claude allow-list inversion 
 the same mapping, so allowing patches requires both Edit and Write. These scanner
 mappings do not rewrite explicit persisted vBot Tool selections.
 
+Search denials for either Grep or Glob map to the union `search_files` Tool in
+both scanners. Claude allow-list inversion therefore requires both capabilities
+before the common search Tool remains available.
+
 Keep source-specific parsing inside the detector. Downstream Team and resolver code should consume the common `ScannedAgent` shape and must not branch on repository file syntax.
 
 ## Format Detection
