@@ -63,7 +63,7 @@ _AGENT_FILE_GLOB = "*.md"
 # inversion can therefore never deny an unmappable vBot tool.
 _CLAUDE_TOOL_MAP: dict[str, frozenset[str]] = {
     "read": frozenset({"read"}),
-    "write": frozenset({"write", "apply_patch"}),
+    "write": frozenset({"apply_patch"}),
     "edit": frozenset({"apply_patch"}),
     "glob": frozenset({"glob"}),
     "grep": frozenset({"grep"}),

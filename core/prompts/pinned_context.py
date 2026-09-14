@@ -67,7 +67,7 @@ def stamp_prompt_files_read(
     Files whose content the System Prompt places into the model's context — SOUL,
     pinned-memory files, a Project's auto-load files, and workspace includes —
     are treated as already read, so the agent can edit one directly with
-    full-file ``write`` without a redundant ``read`` call.
+    full-file replacement without a redundant ``read`` call.
     The guard still forces a re-read if such a file changes on disk afterwards
     (its ``(mtime, size)`` no longer matches), so the "only while unchanged"
     contract holds. ``paths`` is the resolved-absolute-path list the prompt build

@@ -74,7 +74,6 @@ DEFAULT_DEFAULT_THINKING_EFFORT: str | None = None
 # configurable Project Tools; ``skill`` itself is directly configurable and default-on.
 PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
     "read",
-    "write",
     "apply_patch",
     "glob",
     "grep",

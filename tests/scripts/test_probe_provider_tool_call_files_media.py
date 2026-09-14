@@ -11,7 +11,6 @@ import core.tools.read as tool_read
 import core.tools.speech as tool_speech
 import core.tools.web_fetch as tool_web_fetch
 import core.tools.web_search as tool_web_search
-import core.tools.write as tool_write
 import scripts.provider_probe.choices as probe_choices
 import scripts.provider_probe.measurements as probe_measurements
 import scripts.provider_probe.scenario_files as probe_scenario_files
@@ -47,29 +46,6 @@ def test_web_fetch_cases_use_production_schema_and_exact_expected_arguments() ->
 
     default = probe_scenario_web._web_fetch_scenario("default")
     assert default.expected_arguments == {"url": "https://example.com/provider-tool-probe"}
-
-
-def test_write_scenario_uses_production_schema_and_exact_arguments() -> None:
-    scenario = probe_scenarios._scenario(Namespace(scenario="write", lines=8))
-    contracts = probe_measurements._compile_probe_contracts(
-        scenario.tools,
-        require_closed_input=scenario.require_closed_input,
-    )
-    arguments = scenario.expected_arguments
-
-    assert scenario.tools[0]["parameters"] is tool_write.WRITE_TOOL_PARAMETERS
-    assert arguments == {
-        "path": "notes/provider-tool-probe.txt",
-        "content": "first line\nsecond line\n",
-    }
-    contracts[tool_write.WRITE_TOOL_NAME].validate_arguments(arguments)
-    assert (
-        probe_measurements._expected_argument_measurements(
-            [{"name": tool_write.WRITE_TOOL_NAME, "arguments": arguments}],
-            scenario,
-        )["expected_arguments_match"]
-        is True
-    )
 
 
 def test_analyze_image_cases_use_production_schema_and_exact_arguments() -> None:

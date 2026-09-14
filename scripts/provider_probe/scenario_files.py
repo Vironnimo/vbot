@@ -8,7 +8,6 @@ from typing import Any
 from core.tools.glob import GLOB_TOOL_DESCRIPTION, GLOB_TOOL_NAME, GLOB_TOOL_PARAMETERS
 from core.tools.grep import GREP_TOOL_DESCRIPTION, GREP_TOOL_NAME, GREP_TOOL_PARAMETERS
 from core.tools.read import READ_TOOL_DESCRIPTION, READ_TOOL_NAME, READ_TOOL_PARAMETERS
-from core.tools.write import WRITE_TOOL_DESCRIPTION, WRITE_TOOL_NAME, WRITE_TOOL_PARAMETERS
 from scripts.provider_probe.common import ProbeScenario, _probe_messages
 
 
@@ -145,32 +144,6 @@ def _read_scenario(case_name: str) -> ProbeScenario:
         ],
         _probe_messages(instruction),
         READ_TOOL_NAME,
-        require_closed_input=False,
-        expected_arguments=expected_arguments,
-    )
-
-
-def _write_scenario() -> ProbeScenario:
-    expected_arguments = {
-        "path": "notes/provider-tool-probe.txt",
-        "content": "first line\nsecond line\n",
-    }
-    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
-    instruction = (
-        f"Call {WRITE_TOOL_NAME} exactly once with exactly this JSON object as its "
-        f"arguments: {rendered_arguments}. Preserve every value and do not add any field."
-    )
-    return ProbeScenario(
-        "write",
-        [
-            {
-                "name": WRITE_TOOL_NAME,
-                "description": WRITE_TOOL_DESCRIPTION,
-                "parameters": WRITE_TOOL_PARAMETERS,
-            }
-        ],
-        _probe_messages(instruction),
-        WRITE_TOOL_NAME,
         require_closed_input=False,
         expected_arguments=expected_arguments,
     )
