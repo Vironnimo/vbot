@@ -30,6 +30,7 @@ PHASES = TERMINAL | {
 _NATIVE_HOST_NAMES = frozenset(
     {
         "vbot.exe",
+        "vbot.gui.exe",
         "vbot.python.exe",
         "vbot.server.exe",
         "vbot.desktop.exe",

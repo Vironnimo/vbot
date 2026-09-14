@@ -37,6 +37,7 @@ ChangesEnvironment=yes
 
 [Files]
 Source: "{#PayloadDir}\vBot.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\vBot.GUI.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\versions\{#VersionId}\*"; DestDir: "{tmp}\vbot-payload"; Flags: recursesubdirs createallsubdirs deleteafterinstall
 
 [Tasks]
@@ -47,10 +48,11 @@ Name: "startup"; Description: "Start vBot when I sign in"
 [Icons]
 Name: "{group}\vBot"; Filename: "{app}\vBot.exe"
 #if InstallShape != "server"
-Name: "{group}\vBot Desktop"; Filename: "{app}\vBot.exe"; Parameters: "desktop"
+Name: "{group}\vBot Desktop"; Filename: "{app}\vBot.GUI.exe"; Parameters: "desktop"
 #endif
 
 [UninstallDelete]
+Type: files; Name: "{app}\vBot.GUI.exe"
 Type: files; Name: "{app}\application.json"
 Type: files; Name: "{app}\active-version"
 Type: files; Name: "{app}\source-update.json"
