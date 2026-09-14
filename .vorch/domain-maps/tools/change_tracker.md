@@ -20,7 +20,7 @@ blocks where git reports a minimal diff).
 
 ## Data flow
 
-1. `write`/`apply_patch` -> capture the pre-mutation on-disk content, then `ChangeTracker.record_write(session_id, resolved, before, after)` stores the pair per `(session, path)`. The capture must happen **inside the mutation lock before the atomic write** - reading afterwards would record the new content as its own baseline (past failure mode: every write netted to zero). `apply_patch` already has the decoded old text in hand; `write` reads the existing bytes bounded by `MAX_TRACKED_BYTES` and BOM-stripped. A brand-new file records `before=""`.
+1. `apply_patch` -> capture the pre-mutation on-disk content, then `ChangeTracker.record_write(session_id, resolved, before, after)` stores the pair per `(session, path)`. The capture must happen **inside the mutation lock before the atomic write** - reading afterwards would record the new content as its own baseline (past failure mode: every write netted to zero). `apply_patch` already has the decoded old text in hand. A brand-new file records `before=""`.
 2. Chat loop after each dispatched Tool round -> `ChangeTracker.peek_run_stats(session_id)` computes the same totals **without consuming** them and emits them as the transient `run_change_stats` Run event (`{change_stats: {files, added, removed, paths}}`) whenever they differ from the previously emitted value. An all-zero object (edits reverted within the run) retires an earlier nonzero total; `None` (nothing tracked) emits nothing. This is what the WebUI displays while the Run is still executing.
 3. Chat loop run end (`_execute_run_impl` finally block) -> peek first so an all-zero outcome persists explicitly, then `take_run_stats(session_id)` consumes the per-run deltas. Stats land in `run.terminal_payload_extras["change_stats"]` (live terminal event) and on the persisted `run_summary` message (`change_stats` field, validated by `_validate_change_stats` in `core/chat/messages.py`), so reloads keep the server-computed values - identical to the last live value by construction.
 
@@ -35,7 +35,7 @@ records only completed paths. Binary moves/deletions remain untracked.
 
 - One runtime-owned instance (`Runtime._change_tracker`), exposed as `Runtime.change_tracker`, injected into `ChatLoopDependencies.change_tracker`.
 - The chat loop threads it through `ToolDispatchContext.change_tracker` -> `ToolExecutionConfig.change_tracker` -> `ToolContext.change_tracker`.
-- `ToolContext.change_tracker` is `None` for direct/legacy callers that do not execute inside Chat - those simply skip tracking. The write/apply_patch handlers read it from the context; no tool registration signature carries the tracker.
+- `ToolContext.change_tracker` is `None` for direct/legacy callers that do not execute inside Chat - those simply skip tracking. The apply_patch handler reads it from the context; no tool registration signature carries the tracker.
 
 ## Best-effort semantics
 

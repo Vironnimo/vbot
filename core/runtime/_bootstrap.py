@@ -100,7 +100,6 @@ from core.tools import (
     register_text_to_speech_tool,
     register_web_fetch_tool,
     register_web_search_tool,
-    register_write_tool,
 )
 from core.tools.calendar import register_calendar_tool
 from core.tools.cron import register_cron_tool
@@ -250,7 +249,7 @@ def bootstrap(runtime: Runtime) -> None:
         # for mutation locks and post-success drift warnings (file_state.py).
         runtime._file_state = FileReadState()
         # Session-scoped file-content tracker for git-style change statistics
-        # (change_tracker.py). Shared by write/apply_patch and the chat loop.
+        # (change_tracker.py). Shared by apply_patch and the chat loop.
         runtime._change_tracker = ChangeTracker()
         register_read_tool(
             runtime._tools,
@@ -262,7 +261,6 @@ def bootstrap(runtime: Runtime) -> None:
         register_apply_patch_tool(runtime._tools, file_state=runtime._file_state)
         register_glob_tool(runtime._tools)
         register_grep_tool(runtime._tools)
-        register_write_tool(runtime._tools, file_state=runtime._file_state)
         register_memory_tool(runtime._tools, runtime._memory_service)
         register_web_fetch_tool(runtime._tools, attachment_store=runtime._attachment_store)
         register_web_search_tool(

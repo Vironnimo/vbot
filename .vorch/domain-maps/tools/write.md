@@ -1,30 +1,17 @@
-# Write Tool
+# Archived Write Tool
 
-Creates or replaces a complete UTF-8 text file.
+The built-in `write` Tool is retired. Use `apply_patch` with `*** Add File: path`
+and `+` content lines to create or fully replace a file. An existing file must
+have been read in the current Session and remain unchanged since that read;
+identical content is a verified no-op. See `apply_patch.md` and `file_state.md`.
 
-## Interfaces
+`archive/write.zip` preserves the implementation, focused tests, prior domain map,
+and original shared integration/probe files at their repository paths. Its
+manifest records the source commit and SHA-256 hashes. The archive is outside
+runtime discovery and excluded from source distributions. Restore only in a
+worktree and reconcile shared files with current source.
 
-- Tool name: `write`
-- Registration: `register_write_tool(registry, *, file_state)` - the `FileReadState` guard registry is injected (factory `make_write_handler(file_state)`, mirrors the read tool).
-- Schema: required `path` and `content`; the model-facing schema omits `additionalProperties`, while the handler rejects unknown arguments.
-- Success data includes the resolved `path` and written byte count; the returned path and the same path inside vBot-authored failure text use the shared forward-slash Model presentation.
-- Display: primary `path`; hides `content` from argument details. After a successful mutation it emits presentation-only `line_change` facts in `added`, then `removed` order: the new content's logical line count and the complete previous target's streamed line count. A new or empty previous file reports `removed: 0`; the counts never enter the Agent-visible Result.
-
-## Conventions
-
-- Use `write` for full-file replacement or new files.
-- Use `apply_patch` for partial edits or append-like changes.
-- Path interpretation follows the host grammar in `tools.md`: only Windows double-quote wrapping is repaired. Legal literal quotes/backslashes are preserved for existing and new paths; an existing alternative never redirects a missing literal.
-- Relative paths resolve from `ToolContext.effective_cwd` (the working directory); absolute paths are allowed.
-
-## Constraints & Gotchas
-
-- Parent directories are created automatically.
-- Content is written as UTF-8 text.
-- Previous-line counting is bounded-memory binary streaming under the same path mutation lock and recognizes CRLF, LF, and CR without counting the second byte of CRLF twice. The new UTF-8 content uses the same logical-line rule; an empty value has zero lines and a final line ending does not invent an additional empty line.
-- A UTF-8 BOM the existing file already had is preserved: if the target starts with a BOM and the supplied content does not, the BOM is re-prepended (never doubled). This keeps the round-trip with the BOM-stripping `read` tool from silently dropping the marker. New files get no BOM. The syntax check (below) still runs on the BOM-free content.
-- Validation and expected filesystem errors return failure envelopes.
-- Content dominated by read's `N| ` line-number gutter (>=2 consecutive numbered lines) is rejected with a `line_numbered_content` failure, so a model cannot corrupt a file by pasting read output back in. Shared detector: `looks_like_line_numbered_content` in `core/tools/arguments.py`; it tolerates a reproduced gutter whose separator space was dropped.
-- After a successful write, the file is syntax-checked in-process by extension (`.py` via `ast`, `.json`, `.yaml`/`.yml`, `.toml` - all dependency-free). A parse error is **not** blocking (the file is already written) but is surfaced as a `data.syntax_warning` string so the model can fix it next turn. The whole file is new on a write, so any parse error is attributed to this write. Logic lives in `core/tools/syntax_check.py`.
-- **Read-before-write guard** (see `file_state.md`): overwriting an **existing** file is **blocked** (failure envelope) when it was not read in this Session (`file_not_read`) or its `(mtime, size)` changed on disk since the read (`file_modified_since_read`). A **non-existent** target (new file) is exempt - the check only runs when `resolved.exists()`. A successful write restamps the file, so the same Session can write again without re-reading. Unlike targeted `apply_patch`, a full-file replacement has no match precondition that can safely merge against current content.
-- **Serialized atomic mutation** (shared with `apply_patch`, see `file_state.md`): the existing-target check, BOM preservation, write, and restamp run under the resolved path's Runtime-local lock. Bytes are flushed through a same-directory temporary file whose permission bits match an existing target, then installed with atomic `os.replace`; failure removes the temporary file and leaves the original target intact.
+Runtime inventory and Provider-definition tests verify that startup exposes
+`apply_patch` and excludes `write`. Restart the server to remove an already
+loaded Tool. Existing Session history and persisted Tool grants are not
+rewritten; retiring `write` does not automatically grant `apply_patch`.

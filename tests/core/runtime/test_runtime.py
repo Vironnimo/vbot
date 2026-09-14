@@ -60,7 +60,6 @@ CANONICAL_BUILTIN_TOOLS = [
     "text_to_speech",
     "web_fetch",
     "web_search",
-    "write",
 ]
 
 

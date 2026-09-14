@@ -36,7 +36,6 @@ from scripts.provider_probe.scenario_files import (
     _glob_scenario,
     _grep_scenario,
     _read_scenario,
-    _write_scenario,
 )
 from scripts.provider_probe.scenario_history import (
     _history_scenario,
@@ -305,8 +304,6 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _web_fetch_scenario(str(args.web_fetch_case))
     if name == "web_search":
         return _web_search_scenario(str(args.web_search_case))
-    if name == "write":
-        return _write_scenario()
     if name == "word_count":
         return _word_count_scenario(str(args.word_count_case))
     raise AssertionError(f"unsupported probe scenario: {name}")

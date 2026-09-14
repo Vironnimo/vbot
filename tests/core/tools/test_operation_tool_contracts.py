@@ -32,7 +32,6 @@ from core.tools.status import STATUS_TOOL_PARAMETERS
 from core.tools.subagent import SUBAGENT_TOOL_PARAMETERS
 from core.tools.web_fetch import WEB_FETCH_TOOL_PARAMETERS
 from core.tools.web_search import WEB_SEARCH_TOOL_PARAMETERS
-from core.tools.write import WRITE_TOOL_PARAMETERS
 
 JsonObject = dict[str, Any]
 
@@ -58,7 +57,6 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
     ("text_to_speech", TEXT_TO_SPEECH_TOOL_PARAMETERS),
     ("web_fetch", WEB_FETCH_TOOL_PARAMETERS),
     ("web_search", WEB_SEARCH_TOOL_PARAMETERS),
-    ("write", WRITE_TOOL_PARAMETERS),
 )
 
 
@@ -119,7 +117,6 @@ def test_direct_tool_schema_is_flat_and_declares_required_properties(
         "text_to_speech",
         "web_fetch",
         "web_search",
-        "write",
     }:
         assert "oneOf" not in schema
         assert "additionalProperties" not in schema

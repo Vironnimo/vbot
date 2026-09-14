@@ -19,7 +19,7 @@ from core.tools._patch_syntax import (
     _PatchError,
 )
 from core.tools.arguments import line_number_gutter_candidates, strip_line_number_gutters
-from core.tools.file_state import FileReadState, StaleReason, atomic_write_bytes
+from core.tools.file_state import FileReadState, StaleReason, atomic_write_bytes, stale_failure_text
 from core.tools.fuzzy_match import (
     AmbiguousFuzzyMatch,
     FuzzyReplacement,
@@ -27,7 +27,7 @@ from core.tools.fuzzy_match import (
     preserve_typography,
     replace_fuzzy,
 )
-from core.tools.syntax_check import warning_for_edited_file
+from core.tools.syntax_check import warning_for_edited_file, warning_for_written_file
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -55,9 +55,11 @@ APPLY_PATCH_TOOL_PARAMETERS: JsonObject = {
                 "Patch text; paths are relative to the working directory or absolute.\n"
                 "*** Begin Patch\n*** Update File: path\n@@\n context\n-old\n+new\n*** End Patch\n"
                 "Use unchanged context to identify one location. Repeat @@ blocks or file "
-                "headers for more edits. Also supports `*** Add File: path` with + lines, "
+                "headers for more edits. `*** Add File: path` with + lines creates or "
+                "overwrites the file; read existing files first. Also supports "
                 "`*** Delete File: path`, and `*** Move File: source -> destination`. "
-                "A block of + lines appends; `@@ existing full line` inserts it after that line."
+                "In Update File, a block of + lines appends; `@@ existing full line` inserts "
+                "it after that line."
                 " End a block with `*** End of File` to match only at EOF."
             ),
         },
@@ -475,11 +477,13 @@ def _plan(
             content = "\n".join(t for h in operation.hunks for _, t in h.lines)
             if operation.hunks and not operation.hunks[-1].no_newline:
                 content += "\n"
+            if source.payload is not None:
+                content = content.replace("\n", _ending(source.payload.decode("utf-8", "replace")))
+                if source.payload.startswith(b"\xef\xbb\xbf"):
+                    content = "\ufeff" + content.removeprefix("\ufeff")
             payload = content.encode("utf-8")
             if b"\x00" in payload:
                 raise _PatchError("binary_file", path=displayed)
-            if source.payload is not None and source.payload != payload:
-                raise _PatchError("destination_exists", path=displayed)
             pending[path] = _Snapshot(payload, source.mode)
             continue
         if payload is None:
@@ -507,15 +511,19 @@ def _plan(
 
 
 def _change_details(
-    path: Path, before: bytes | None, after: bytes | None
+    path: Path, before: bytes | None, after: bytes | None, *, replaced: bool = False
 ) -> tuple[JsonObject, int, int]:
     result: JsonObject = {
         "path": model_path(path),
         "action": "add" if before is None else "delete" if after is None else "update",
     }
     try:
-        old = _decode(before or b"", model_path(path))
         new = _decode(after or b"", model_path(path))
+        if replaced and after is not None:
+            warning = warning_for_written_file(path, new)
+            if warning:
+                result["syntax_warning"] = warning
+        old = _decode(before or b"", model_path(path))
     except _PatchError:
         return result, 0, 0
     old_lines, new_lines = old.splitlines(keepends=True), new.splitlines(keepends=True)
@@ -547,7 +555,7 @@ def _change_details(
     result["preview"] = preview
     if omitted:
         result["preview_omitted_regions"] = omitted
-    if after is not None:
+    if after is not None and not replaced:
         warning = warning_for_edited_file(path, old, new)
         if warning:
             result["syntax_warning"] = warning
@@ -563,6 +571,7 @@ class _Batch:
     warnings: dict[Path, list[str]] = field(default_factory=dict)
     blocked: set[Path] = field(default_factory=set)
     failed_text: set[Path] = field(default_factory=set)
+    replaced: set[Path] = field(default_factory=set)
     results: list[JsonObject] = field(default_factory=list)
 
 
@@ -668,11 +677,26 @@ def _run_step(
                 operation, hunks=[replace(h, precise_only=True) for h in operation.hunks]
             )
         pending, warnings = _plan([operation], paths, before)
+        if (
+            operation.action == "add"
+            and before[source].payload is not None
+            and pending[source] != before[source]
+        ):
+            stale = state.check_stale(context.session_id, source)
+            if stale is not None:
+                code, message = stale_failure_text(stale, source)
+                outcome.update(status="failed", error={"code": code, "message": message})
+                batch.blocked.update(resolved)
+                return
         for path in resolved:
             if _snapshot(path) != before[path]:
                 batch.blocked.update(resolved)
                 raise _PatchError("file_changed", path=model_path(path))
         completed, failure = _commit(context, state, batch, before, pending, warnings)
+        if operation.action == "add" and completed:
+            batch.replaced.add(source)
+        elif operation.destination and source in batch.replaced:
+            batch.replaced.add(paths[operation.destination])
         if failure:
             outcome.update(status="partial" if completed else "failed", error=failure)
             if completed:
@@ -711,7 +735,9 @@ def _batch_result(context: ToolContext, batch: _Batch) -> JsonObject:
         after = batch.after[path]
         if before == after:
             continue
-        details, plus, minus = _change_details(path, before.payload, after.payload)
+        details, plus, minus = _change_details(
+            path, before.payload, after.payload, replaced=path in batch.replaced
+        )
         added += plus
         removed += minus
         notes = list(dict.fromkeys(batch.warnings.get(path, [])))

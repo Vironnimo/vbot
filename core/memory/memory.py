@@ -290,7 +290,7 @@ def memory_prompt_file_paths(workspace: Path, mode: MemoryPromptMode) -> list[Pa
 
     The prompt renders every scope a mode selects — an empty one via its placeholder
     — but only an on-disk file can be stamped as read-before-write: a still-absent
-    file has nothing whose ``(mtime, size)`` to record, and a later ``write`` to it is
+    file has nothing whose ``(mtime, size)`` to record, and a later Add to it is
     a new-file write (exempt) anyway. So this returns just the existing selected files,
     resolved the same way the backend reads them (``workspace / the scope's file``),
     for the chat loop to stamp. ``off`` mode selects no scope, so it returns ``[]``.

@@ -181,7 +181,7 @@ def test_denied_tools_disallowed_tools_deny_their_mapping(tmp_path: Path) -> Non
 
 def test_denied_tools_disallowed_accepts_yaml_list(tmp_path: Path) -> None:
     front_matter = "disallowedTools:\n  - Write\n  - Edit\n"
-    assert _denied_tools_for(tmp_path, front_matter) == frozenset({"write", "apply_patch"})
+    assert _denied_tools_for(tmp_path, front_matter) == frozenset({"apply_patch"})
 
 
 def test_denied_tools_allow_list_inverts_to_denials(tmp_path: Path) -> None:
@@ -189,7 +189,7 @@ def test_denied_tools_allow_list_inverts_to_denials(tmp_path: Path) -> None:
     denied = _denied_tools_for(tmp_path, "tools: Read, Grep, Glob\n")
 
     assert denied == frozenset(
-        {"write", "apply_patch", "bash", "process", "web_fetch", "web_search", "subagent", "skill"}
+        {"apply_patch", "bash", "process", "web_fetch", "web_search", "subagent", "skill"}
     )
 
 
@@ -219,7 +219,6 @@ def test_denied_tools_unknown_allow_list_entries_do_not_widen(tmp_path: Path) ->
     assert denied == frozenset(
         {
             "read",
-            "write",
             "apply_patch",
             "glob",
             "grep",
@@ -239,7 +238,6 @@ def test_denied_tools_unions_allow_list_and_disallowed(tmp_path: Path) -> None:
 
     # Write is denied explicitly even though the allow-list names it; everything
     # mappable outside the allow-list is denied by inversion.
-    assert "write" in denied
     assert "read" not in denied
     assert "bash" not in denied
     assert "apply_patch" in denied
@@ -295,9 +293,9 @@ def test_scoped_agent_denial_does_not_disable_other_targets(tmp_path: Path) -> N
 def test_each_file_mutation_denial_blocks_patch(tmp_path: Path, denied_tool: str) -> None:
     denied = _denied_tools_for(tmp_path, f"disallowedTools: {denied_tool}\n")
     assert "apply_patch" in denied
-    assert ("write" in denied) == (denied_tool == "Write")
+    assert "write" not in denied
 
 
 def test_allowing_both_file_mutation_tools_allows_patch(tmp_path: Path) -> None:
     denied = _denied_tools_for(tmp_path, "tools: Read, Edit, Write\n")
-    assert not {"read", "write", "apply_patch"} & denied
+    assert not {"read", "apply_patch"} & denied

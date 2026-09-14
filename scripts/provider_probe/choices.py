@@ -109,7 +109,6 @@ PROBE_SCENARIOS = (
     "text_to_speech",
     "web_fetch",
     "web_search",
-    "write",
     "word_count",
 )
 
