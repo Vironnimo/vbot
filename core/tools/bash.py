@@ -64,13 +64,8 @@ from core.utils.logging import get_logger
 
 CredentialResolver = Callable[[str], str]
 
-DEFAULT_BACKGROUND_AFTER_SECONDS = 30.0
+FOREGROUND_HANDOFF_SECONDS = 90.0
 DEFAULT_TIMEOUT_SECONDS = 180.0
-# Inside a Sub-Agent auto mode cannot hand off, so its background_after_seconds
-# threshold doubles as the kill deadline. Default it generously there: a 30s
-# handoff would kill a normal pytest/build. Explicit background_after_seconds
-# or timeout still wins, and the Sub-Agent Run timeout is the outer bound.
-DEFAULT_SUBAGENT_BACKGROUND_AFTER_SECONDS = 1800.0
 
 
 def _shell_syntax_notes() -> str:
@@ -90,27 +85,19 @@ def _shell_syntax_notes() -> str:
 
 
 BASH_TOOL_DESCRIPTION = (
-    "Run an unattended shell command on the host through pipes when no interactive terminal "
-    "input or live screen is needed, such as scripts, builds, non-interactive Git, file "
-    "operations, and servers. Provide required input through files or pipelines in the "
-    "command; no input can be sent after launch. Use foreground when this Run needs the result, "
-    "auto to wait before handing off a still-running command, and background for known "
-    "long-lived commands. "
-    "Handed-off commands are monitored automatically: continue independent work or end the Run "
-    "instead of polling or starting another copy. Never manually detach or daemonize a command "
-    "because that bypasses vBot's process ownership." + _shell_syntax_notes()
+    "Run an unattended shell command and capture its output, such as scripts, builds, "
+    "non-interactive Git, file operations, and servers. No interactive input or live screen "
+    "is available; provide input through files or pipelines. Never manually detach or "
+    "daemonize commands." + _shell_syntax_notes()
 )
 BASH_SUBAGENT_TOOL_DESCRIPTION = (
-    "Run an unattended shell command inside this Sub-Agent through pipes when no interactive "
-    "terminal input or live screen is needed, such as scripts, builds, non-interactive Git, and "
-    "file operations; process handoff is unavailable. Provide required input through files or "
-    "pipelines in the command; no input can be sent after launch. Use foreground to wait for "
-    "completion and auto only for bounded work; auto kills a command still running after "
-    "background_after_seconds. Never "
-    "manually detach or daemonize a command." + _shell_syntax_notes()
+    "Run an unattended shell command and wait for its output, such as scripts, builds, "
+    "non-interactive Git, and file operations. Background execution is unavailable. "
+    "No interactive input or live screen is available; provide input through files or "
+    "pipelines. Never manually detach or daemonize commands." + _shell_syntax_notes()
 )
 DEFAULT_EXECUTION_MODE = "foreground"
-BASH_EXECUTION_MODES = (DEFAULT_EXECUTION_MODE, "auto", "background")
+BASH_EXECUTION_MODES = (DEFAULT_EXECUTION_MODE, "background")
 VBOT_RUN_AGENT_ID_ENV = "VBOT_RUN_AGENT_ID"
 VBOT_RUN_SESSION_ID_ENV = "VBOT_RUN_SESSION_ID"
 VBOT_RUN_PROJECT_ID_ENV = "VBOT_RUN_PROJECT_ID"
@@ -136,9 +123,8 @@ _BASH_TIMEOUT_PARAMETER: JsonObject = {
     "minimum": 0,
     "default": DEFAULT_TIMEOUT_SECONDS,
     "description": (
-        "Total runtime limit in seconds, including time after handoff. Omit for 180 seconds. "
-        "Set a longer limit for slow work, or 0 for intentionally unbounded work. "
-        "Output does not reset this limit; it does not extend background_after_seconds."
+        "Total runtime limit in seconds, including time in background. Omit for 180 seconds; "
+        "use a longer limit for slow work or 0 for no limit."
     ),
 }
 _BASH_ENV_KEYS_PARAMETER: JsonObject = {
@@ -154,52 +140,24 @@ _BASH_ENV_KEYS_PARAMETER: JsonObject = {
 
 
 def _bash_tool_parameters(*, subagent: bool) -> JsonObject:
-    background_after_default = (
-        DEFAULT_SUBAGENT_BACKGROUND_AFTER_SECONDS if subagent else DEFAULT_BACKGROUND_AFTER_SECONDS
-    )
-    mode_description = (
-        "Execution behavior. Omit for foreground, which waits for completion; auto waits until "
-        "background_after_seconds, "
-        "then kills a still-running command because handoff is unavailable — "
-        "background_after_seconds applies only to auto."
-        if subagent
-        else "Execution behavior. Omit for foreground, which waits for completion; auto waits "
-        "until background_after_seconds, then hands a still-running command off to vBot; "
-        "background hands off immediately. background_after_seconds applies only to auto."
-    )
-    background_after_description = (
-        'Only valid when mode is "auto". Seconds auto waits before the command is killed '
-        "because process handoff is unavailable. Omit for the default (30 minutes); "
-        "independent of timeout."
-        if subagent
-        else 'Only valid when mode is "auto". Seconds auto waits before a still-running '
-        "command is handed to vBot. The command keeps running past this point — this is "
-        "not a timeout; it only ends the synchronous wait. Omit for the default "
-        "(30 seconds); independent of timeout."
-    )
-    modes = BASH_EXECUTION_MODES[:2] if subagent else BASH_EXECUTION_MODES
-    return {
-        "type": "object",
-        "properties": {
-            "mode": {
-                "type": "string",
-                "enum": list(modes),
-                "description": mode_description,
-            },
-            "command": _BASH_COMMAND_PARAMETER,
-            "description": _BASH_DESCRIPTION_PARAMETER,
-            "workdir": _BASH_WORKDIR_PARAMETER,
-            "background_after_seconds": {
-                "type": "number",
-                "minimum": 0,
-                "description": background_after_description,
-                "default": background_after_default,
-            },
-            "timeout": _BASH_TIMEOUT_PARAMETER,
-            "env_keys": _BASH_ENV_KEYS_PARAMETER,
-        },
-        "required": ["command"],
+    properties = {
+        "command": _BASH_COMMAND_PARAMETER,
+        "description": _BASH_DESCRIPTION_PARAMETER,
+        "workdir": _BASH_WORKDIR_PARAMETER,
+        "timeout": _BASH_TIMEOUT_PARAMETER,
+        "env_keys": _BASH_ENV_KEYS_PARAMETER,
     }
+    if not subagent:
+        properties["mode"] = {
+            "type": "string",
+            "enum": list(BASH_EXECUTION_MODES),
+            "description": (
+                "Start in foreground and hand off a still-running command after 90 seconds, "
+                "or start in background immediately. Background results arrive automatically. "
+                "Omit for foreground."
+            ),
+        }
+    return {"type": "object", "properties": properties, "required": ["command"]}
 
 
 BASH_TOOL_PARAMETERS = _bash_tool_parameters(subagent=False)
@@ -209,18 +167,10 @@ FOREGROUND_POLL_INTERVAL_SECONDS = 0.05
 RUN_CANCELLED_FAILURE_CODE = "run_cancelled"
 RUN_CANCELLED_FAILURE_MESSAGE = "Command stopped because the owning Run was cancelled"
 
-# Handoff-at-depth block: a Sub-Agent (nesting depth >= 1) runs in an ephemeral
-# Session that nobody reads once it returns its single result, so a handed-off
-# process there could not report back. Background mode is rejected before spawn;
-# auto mode kills and reports failure if it reaches background_after_seconds. No process is
-# left running and no completion watcher is spawned. Top level is unaffected.
-# FLIP-BACK: set BLOCK_BACKGROUND_AT_DEPTH = False to allow background bash at depth.
-BLOCK_BACKGROUND_AT_DEPTH = True
+# Sub-Agent Sessions cannot receive completion after their Run ends.
 BACKGROUND_AT_DEPTH_FAILURE_CODE = "background_unavailable_in_subagent"
 BACKGROUND_AT_DEPTH_EXPLICIT_MESSAGE = (
-    "Background mode is not available inside a Sub-Agent: its Session ends with this Run, "
-    "so a handed-off process could not report back. Use foreground mode, or auto mode with "
-    "a sufficient background_after_seconds and optional timeout."
+    "Background execution is unavailable inside a Sub-Agent. Use foreground or omit mode."
 )
 
 _LOGGER = get_logger("tools.bash")
@@ -237,7 +187,7 @@ def project_bash_tool_definitions(
     nesting_depth: int,
 ) -> list[JsonObject]:
     """Narrow Bash's Provider definition to the execution modes valid at this depth."""
-    if nesting_depth < 1 or not BLOCK_BACKGROUND_AT_DEPTH:
+    if nesting_depth < 1:
         return definitions
 
     projected: list[JsonObject] = []
@@ -254,33 +204,7 @@ def project_bash_tool_definitions(
 
 def _background_blocked_at_depth(context: ToolContext) -> bool:
     """Return whether process handoff is blocked for this Sub-Agent call."""
-    return BLOCK_BACKGROUND_AT_DEPTH and context.nesting_depth >= 1
-
-
-def _background_at_depth_timeout_message(background_after_seconds: float) -> str:
-    """Build the failure message for Sub-Agent auto mode reaching the threshold."""
-    return (
-        f"Auto waited the full background_after_seconds window ({background_after_seconds:g} s) "
-        "and the command was still running, but process handoff is not "
-        "available inside a Sub-Agent. The process was stopped. Use foreground mode when "
-        "the next action needs this result, or choose a sufficient "
-        "background_after_seconds and timeout "
-        "for bounded independent work."
-    )
-
-
-def _resolve_background_after_seconds(context: ToolContext, explicit: float | None) -> float:
-    """Resolve auto mode's inline wait: explicit wins, else a per-context default.
-
-    Inside a Sub-Agent the command cannot be handed off, so the window is the max
-    runtime before a kill; default it generously there. Top level keeps the short
-    handoff default.
-    """
-    if explicit is not None:
-        return explicit
-    if _background_blocked_at_depth(context):
-        return DEFAULT_SUBAGENT_BACKGROUND_AFTER_SECONDS
-    return DEFAULT_BACKGROUND_AFTER_SECONDS
+    return context.nesting_depth >= 1
 
 
 async def bash_handler(
@@ -400,7 +324,6 @@ async def bash_handler(
             process_manager,
             context,
             process_id,
-            mode=mode,
             handoff_after=None,
         )
         _maybe_spawn_completion_watcher(
@@ -412,17 +335,10 @@ async def bash_handler(
         )
         return result
 
-    background_after_seconds = (
-        _resolve_background_after_seconds(context, parsed["background_after_seconds"])
-        if mode == "auto"
-        else None
-    )
     result = await _run_foreground_phase(
         process_manager,
         context,
         process_id,
-        background_after_seconds,
-        mode=mode,
         command=command,
     )
 
@@ -438,19 +354,6 @@ async def bash_handler(
         return tool_failure(RUN_CANCELLED_FAILURE_CODE, RUN_CANCELLED_FAILURE_MESSAGE)
 
     if result["data"] is not None and result["data"].get("status") == "running":
-        # At depth auto mode outran background_after_seconds but a Sub-Agent cannot hand off
-        # the process: kill and fail instead of spawning a watcher.
-        if _background_blocked_at_depth(context):
-            if timeout_task is not None:
-                timeout_task.cancel()
-            await process_manager.kill(process_id, context.agent_id, project_id=context.project_id)
-            suffix = await _failure_output_suffix(process_manager, context, process_id)
-            if background_after_seconds is None:
-                raise RuntimeError("only auto mode may reach the Sub-Agent handoff boundary")
-            return tool_failure(
-                BACKGROUND_AT_DEPTH_FAILURE_CODE,
-                _background_at_depth_timeout_message(background_after_seconds) + suffix,
-            )
         _maybe_spawn_completion_watcher(
             process_manager,
             context,
@@ -725,7 +628,6 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
         "description",
         "mode",
         "workdir",
-        "background_after_seconds",
         "timeout",
         "env_keys",
     }
@@ -739,19 +641,11 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
 
     mode = arguments.get("mode", DEFAULT_EXECUTION_MODE)
     if not isinstance(mode, str) or mode not in BASH_EXECUTION_MODES:
-        return "mode must be one of: foreground, auto, background"
-    if mode != "auto" and "background_after_seconds" in arguments:
-        return "background_after_seconds is only valid when mode is auto"
+        return "mode must be foreground or background"
 
     try:
         workdir = optional_string(arguments.get("workdir"), field_name="workdir")
         optional_string(arguments.get("description"), field_name="description")
-        background_after_seconds = optional_number(
-            arguments.get("background_after_seconds"),
-            field_name="background_after_seconds",
-            default=None,
-            minimum=0,
-        )
         timeout = optional_number(
             arguments.get("timeout"),
             field_name="timeout",
@@ -769,7 +663,6 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
         "command": command,
         "mode": mode,
         "workdir": workdir,
-        "background_after_seconds": background_after_seconds,
         "timeout": None if timeout == 0 else timeout,
         "env_keys": env_keys,
     }
@@ -848,14 +741,12 @@ async def _run_foreground_phase(
     process_manager: ProcessManager,
     context: ToolContext,
     process_id: str,
-    background_after_seconds: float | None,
     *,
-    mode: str,
     command: str,
 ) -> JsonObject:
     deadline = (
-        asyncio.get_running_loop().time() + background_after_seconds
-        if background_after_seconds is not None
+        asyncio.get_running_loop().time() + FOREGROUND_HANDOFF_SECONDS
+        if not _background_blocked_at_depth(context)
         else None
     )
     background_requested = False
@@ -910,7 +801,6 @@ async def _run_foreground_phase(
                 process_manager,
                 context,
                 process_id,
-                mode=mode,
                 requested_by_user=background_requested,
                 handoff_after=(
                     (
@@ -920,7 +810,7 @@ async def _run_foreground_phase(
                         ).started_at
                     ).total_seconds()
                     if background_requested
-                    else background_after_seconds
+                    else FOREGROUND_HANDOFF_SECONDS
                 ),
             )
 

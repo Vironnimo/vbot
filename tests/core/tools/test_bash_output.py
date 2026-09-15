@@ -61,7 +61,7 @@ def test_handoff_snapshot_character_budget_and_upstream_truncation(output, alrea
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["foreground", "auto", "background"])
+@pytest.mark.parametrize("mode", ["foreground", "background"])
 async def test_every_handoff_mode_uses_snapshot(manager, tmp_path, monkeypatch, mode):
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     output = "".join(f"activity-{index}\n" for index in range(40))
@@ -74,8 +74,6 @@ async def test_every_handoff_mode_uses_snapshot(manager, tmp_path, monkeypatch, 
     if mode == "foreground":
         context = replace(context, background_registration_hook=lambda callback: callback())
     arguments = {"command": "import sys; sys.stdin.readline()", "mode": mode}
-    if mode == "auto":
-        arguments["background_after_seconds"] = 0
     result = await bash_handler(context, arguments, manager)
     try:
         data = result["data"]
@@ -236,9 +234,8 @@ async def test_timeout_failure_carries_output_tail_and_log_pointer(
             context,
             {
                 "command": f"print({output!r}, flush=True); import time; time.sleep(30)",
-                "mode": "auto",
+                "mode": "foreground",
                 "timeout": 1.5,
-                "background_after_seconds": 10,
             },
             spool_manager,
         )
@@ -255,7 +252,7 @@ async def test_timeout_failure_carries_output_tail_and_log_pointer(
 
 
 @pytest.mark.asyncio
-async def test_subagent_kill_failure_carries_output_tail(
+async def test_subagent_timeout_carries_output_tail(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -268,14 +265,14 @@ async def test_subagent_kill_failure_carries_output_tail(
             context,
             {
                 "command": ("print('diag-marker', flush=True); import time; time.sleep(30)"),
-                "mode": "auto",
-                "background_after_seconds": 1.5,
+                "mode": "foreground",
+                "timeout": 1.5,
             },
             spool_manager,
         )
 
         assert result["ok"] is False
-        assert result["error"]["code"] == bash_module.BACKGROUND_AT_DEPTH_FAILURE_CODE
+        assert result["error"]["code"] == "process_timeout"
         message = result["error"]["message"]
         assert "diag-marker" in message
     finally:

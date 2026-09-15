@@ -57,7 +57,6 @@ def test_register_bash_tool() -> None:
         "command",
         "description",
         "workdir",
-        "background_after_seconds",
         "timeout",
         "env_keys",
     }
@@ -67,7 +66,6 @@ def test_register_bash_tool() -> None:
     assert "maxLength" not in tool.parameters["properties"]["description"]
     assert tool.parameters["properties"]["mode"]["enum"] == [
         "foreground",
-        "auto",
         "background",
     ]
     env_keys = properties["env_keys"]
@@ -89,7 +87,6 @@ def test_register_bash_tool() -> None:
     )
     assert display["primary"][0]["value"] == "Run the frontend tests"
     assert display["primary"][0]["kind"] == "description"
-    assert tool.parameters["properties"]["background_after_seconds"]["default"] == 30
     assert tool.parallel_safe is True
 
 
@@ -119,8 +116,7 @@ def test_subagent_projection_exposes_only_non_handoff_bash_modes() -> None:
     assert "oneOf" not in parameters
     assert "additionalProperties" not in parameters
     assert parameters["required"] == ["command"]
-    assert parameters["properties"]["mode"]["enum"] == ["foreground", "auto"]
-    assert parameters["properties"]["background_after_seconds"]["default"] == 1800
+    assert "mode" not in parameters["properties"]
     assert projected[1] is definitions[1]
     assert definitions[0]["description"] == BASH_TOOL_DESCRIPTION
     assert definitions[0]["parameters"] == BASH_TOOL_PARAMETERS

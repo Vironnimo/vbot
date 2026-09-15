@@ -17,7 +17,7 @@ from tests.core.tools.bash_helpers import shell_env_cache as shell_env_cache
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["foreground", "auto", "background"])
+@pytest.mark.parametrize("mode", ["foreground", "background"])
 @pytest.mark.parametrize("exit_code", [0, 7])
 async def test_descendant_pipe_does_not_hide_exit_or_block_timeout(
     manager, tmp_path, monkeypatch, mode, exit_code
@@ -38,9 +38,8 @@ async def test_descendant_pipe_does_not_hide_exit_or_block_timeout(
             context,
             {
                 "command": command,
-                "mode": mode,
+                **({"mode": mode} if mode is not None else {}),
                 "timeout": 0.5,
-                **({"background_after_seconds": 10} if mode == "auto" else {}),
             },
             manager,
         )

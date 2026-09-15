@@ -93,7 +93,7 @@ def test_shell_env_probe_requests_windowless_process_group(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["foreground", "auto", "background"])
+@pytest.mark.parametrize("mode", ["foreground", "background"])
 async def test_all_modes_use_managed_windowless_process_group_spawn(
     mode: str,
     manager: ProcessManager,
@@ -121,10 +121,8 @@ async def test_all_modes_use_managed_windowless_process_group_spawn(
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     arguments: dict[str, Any] = {
         "command": ("print('done')" if mode == "foreground" else "import time; time.sleep(30)"),
-        "mode": mode,
+        **({"mode": mode} if mode is not None else {}),
     }
-    if mode == "auto":
-        arguments["background_after_seconds"] = 0.01
 
     result: dict[str, Any] | None = None
     try:

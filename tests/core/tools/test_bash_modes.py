@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,6 @@ import pytest
 
 import core.tools.bash as bash_module
 from core.tools.bash import (
-    _resolve_background_after_seconds,
     _resolve_workdir,
     bash_handler,
 )
@@ -37,11 +37,15 @@ from tests.core.tools.bash_helpers import (
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [None, "foreground"])
 async def test_background_after_expiry_backgrounds_running_process(
     manager: ProcessManager,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    mode: str | None,
 ) -> None:
+    assert bash_module.FOREGROUND_HANDOFF_SECONDS == 90
+    monkeypatch.setattr(bash_module, "FOREGROUND_HANDOFF_SECONDS", 0.01)
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     context = make_context(tmp_path)
 
@@ -49,8 +53,7 @@ async def test_background_after_expiry_backgrounds_running_process(
         context,
         {
             "command": "import time; time.sleep(30)",
-            "mode": "auto",
-            "background_after_seconds": 0.01,
+            **({"mode": mode} if mode is not None else {}),
         },
         manager,
     )
@@ -65,10 +68,11 @@ async def test_background_after_expiry_backgrounds_running_process(
 
 
 @pytest.mark.asyncio
-async def test_auto_handoff_includes_capped_output_and_usable_process(
+async def test_automatic_handoff_includes_capped_output_and_usable_process(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(bash_module, "FOREGROUND_HANDOFF_SECONDS", 0.5)
     spool_manager = make_spool_manager(tmp_path)
     try:
         monkeypatch.setattr(bash_module, "_shell_argv", python_command)
@@ -80,8 +84,7 @@ async def test_auto_handoff_includes_capped_output_and_usable_process(
                 "command": (
                     "print('x' * 5000 + 'HANDOFF-END', flush=True); import time; time.sleep(30)"
                 ),
-                "mode": "auto",
-                "background_after_seconds": 0.5,
+                "mode": "foreground",
             },
             spool_manager,
         )
@@ -133,7 +136,7 @@ async def test_auto_handoff_includes_capped_output_and_usable_process(
 
 
 @pytest.mark.asyncio
-async def test_foreground_mode_never_hands_off(
+async def test_short_foreground_command_finishes_inline(
     manager: ProcessManager,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -164,9 +167,11 @@ async def test_foreground_mode_never_hands_off(
 
 
 @pytest.mark.asyncio
-async def test_background_after_is_rejected_outside_auto_mode(
+@pytest.mark.parametrize("mode", ["foreground", "background"])
+async def test_removed_handoff_parameter_is_rejected(
     manager: ProcessManager,
     tmp_path: Path,
+    mode: str,
 ) -> None:
     context = make_context(tmp_path)
 
@@ -174,7 +179,7 @@ async def test_background_after_is_rejected_outside_auto_mode(
         context,
         {
             "command": "print('never runs')",
-            "mode": "foreground",
+            "mode": mode,
             "background_after_seconds": 1,
         },
         manager,
@@ -182,6 +187,7 @@ async def test_background_after_is_rejected_outside_auto_mode(
 
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_arguments"
+    assert manager.list_processes(AGENT_ID) == []
 
 
 @pytest.mark.asyncio
@@ -208,13 +214,15 @@ async def test_omitted_execution_mode_defaults_to_foreground(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["front", "auto"])
 async def test_invalid_execution_mode_is_rejected_before_spawn(
     manager: ProcessManager,
     tmp_path: Path,
+    mode: str,
 ) -> None:
     result = await bash_handler(
         make_context(tmp_path),
-        {"command": "print('never runs')", "mode": "front"},
+        {"command": "print('never runs')", "mode": mode},
         manager,
     )
 
@@ -260,45 +268,31 @@ async def test_explicit_background_at_depth_is_rejected_without_spawning(
 
 
 @pytest.mark.asyncio
-async def test_automatic_background_at_depth_kills_process_and_fails(
-    manager: ProcessManager,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """At depth auto mode is killed at background_after_seconds instead of being handed off."""
-    watcher_calls: list[Any] = []
-    kill_calls: list[tuple[str, str]] = []
-
-    def record_watcher(*args: Any, **kwargs: Any) -> None:
-        watcher_calls.append((args, kwargs))
-
-    original_kill = manager.kill
-
-    async def tracking_kill(
-        process_id: str, agent_id: str, *, project_id: str | None = None
-    ) -> None:
-        kill_calls.append((process_id, agent_id))
-        await original_kill(process_id, agent_id, project_id=project_id)
-
-    monkeypatch.setattr(bash_module, "_maybe_spawn_completion_watcher", record_watcher)
-    monkeypatch.setattr(manager, "kill", tracking_kill)
+@pytest.mark.parametrize("depth", [1, 3])
+async def test_subagent_waits_past_handoff_window_without_registering_background(
+    manager, tmp_path, monkeypatch, depth
+):
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
-    context = make_context(tmp_path, nesting_depth=1)
-
-    result = await bash_handler(
-        context,
-        {
-            "command": "import time; time.sleep(30)",
-            "mode": "auto",
-            "background_after_seconds": 0.01,
-        },
-        manager,
+    monkeypatch.setattr(bash_module, "FOREGROUND_HANDOFF_SECONDS", 0.01)
+    background_hooks = []
+    context = replace(
+        make_context(tmp_path, nesting_depth=depth),
+        background_registration_hook=background_hooks.append,
     )
-
-    assert result["ok"] is False
-    assert result["error"]["code"] == bash_module.BACKGROUND_AT_DEPTH_FAILURE_CODE
-    assert watcher_calls == []
-    assert kill_calls, "the still-running process should have been killed"
+    result = await asyncio.wait_for(
+        bash_handler(
+            context,
+            {"command": "import time; time.sleep(0.1); print('finished')", "timeout": 0},
+            manager,
+        ),
+        5,
+    )
+    assert result["ok"]
+    assert result["data"]["status"] == "completed"
+    assert result["data"]["output"].strip() == "finished"
+    assert "delivery" not in result["data"]
+    assert background_hooks == []
+    assert not manager.list_processes(AGENT_ID)[0].backgrounded
 
 
 @pytest.mark.asyncio
@@ -307,7 +301,7 @@ async def test_fast_foreground_command_at_depth_succeeds(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A sub-agent command finishing within background_after_seconds succeeds."""
+    """A short Sub-Agent command finishes inline."""
     watcher_calls: list[Any] = []
 
     def record_watcher(*args: Any, **kwargs: Any) -> None:
@@ -484,32 +478,6 @@ def test_resolve_workdir_defaults_to_workspace_without_cwd(tmp_path: Path) -> No
     context = make_context(workspace)
 
     assert _resolve_workdir(context, None) == workspace.resolve()
-
-
-def test_resolve_background_after_seconds_uses_generous_default_inside_subagent(
-    tmp_path: Path,
-) -> None:
-    # Top level: an omitted background_after_seconds keeps the short background-hand-off default.
-    top = make_context(tmp_path, nesting_depth=0)
-    assert (
-        _resolve_background_after_seconds(top, None) == bash_module.DEFAULT_BACKGROUND_AFTER_SECONDS
-    )
-    # Sub-agent: an omitted background_after_seconds gets the generous foreground window instead of
-    # the 30s default, so a normal pytest/build is not killed before it finishes.
-    sub = make_context(tmp_path, nesting_depth=1)
-    assert (
-        _resolve_background_after_seconds(sub, None)
-        == bash_module.DEFAULT_SUBAGENT_BACKGROUND_AFTER_SECONDS
-    )
-    assert bash_module.DEFAULT_SUBAGENT_BACKGROUND_AFTER_SECONDS >= 600.0
-
-
-def test_resolve_background_after_seconds_honors_explicit_value_at_any_depth(
-    tmp_path: Path,
-) -> None:
-    # An explicit background_after_seconds wins at both levels; the caller can still bound tighter.
-    assert _resolve_background_after_seconds(make_context(tmp_path, nesting_depth=0), 5.0) == 5.0
-    assert _resolve_background_after_seconds(make_context(tmp_path, nesting_depth=1), 5.0) == 5.0
 
 
 def test_resolve_workdir_resolves_relative_workdir_against_cwd(tmp_path: Path) -> None:
