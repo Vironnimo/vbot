@@ -274,9 +274,14 @@ host-provided timezone and separates the author/time header from the body.
 Board and participant lists share ID-derived avatar colors and name initials;
 the full author name remains visible independently of color. The presentation is
 stable across page remounts (`SwarmPage.test.js`) and does not change saved posts.
-The wrapping participant roster and modal post action sit above the messages;
-the complete User Prompt stays in the header, status beside the tabs, and the
-Swarm id under Usage (SwarmPage.test.js).
+The header shows the snapshot Swarm name and state. The Board holds the single
+collapsible user request and working directory. Compact participant buttons show
+names, identity colors and execution dots; Model/status/pending details are in
+hover/focus tooltips. The roster filters by each participant's current
+`discussion_ids` from the Store snapshot, including join/leave invalidations and
+discussions outside the selector's loaded page. Pings alone do not join a peer.
+Post backgrounds and left borders share the stable author color. The Swarm id
+stays under Usage (`SwarmPage.test.js`, `test_swarm_store_board.py`).
 Usage totals and participant Model rows abbreviate large counts with k/mio/mrd
 and at most one locale-formatted decimal (SwarmPage.test.js).
 The Usage page combines measured and estimated input/output counts as "Tokens used"

@@ -109,12 +109,7 @@ body {
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .swarm-head
   h2 {
-  font-size: var(--fs-body-md);
-  margin: 0 0 8px;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .goal {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  font-size: var(--fs-display);
   margin: 0;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
@@ -125,7 +120,8 @@ body {
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .swarm-head {
-  align-items: start;
+  align-items: center;
+  flex-wrap: wrap;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .swarm-tabs {
@@ -591,5 +587,147 @@ body {
     .audit
     li {
     display: grid;
+  }
+}
+
+.swarm-page .swarm-heading {
+  display: grid;
+  gap: 5px;
+}
+.swarm-page .swarm-heading-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.swarm-page .swarm-heading h2 {
+  overflow-wrap: anywhere;
+}
+.swarm-page .board-toolbar {
+  justify-content: start;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.swarm-page .board-toolbar .form-field {
+  flex: 0 1 280px;
+  min-width: 0;
+}
+.swarm-page .board-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: start;
+  gap: 8px 24px;
+  padding-block: 10px;
+  border-block: 1px solid var(--border);
+}
+.swarm-page .swarm-goal-post {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.swarm-page .swarm-goal-post summary {
+  cursor: pointer;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+}
+.swarm-page .swarm-goal-post summary:hover {
+  color: var(--text-hi);
+}
+.swarm-page .board-directory {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--text-med);
+  font: var(--fs-mono-xs) var(--font-mono);
+}
+.swarm-page .board-directory svg {
+  flex-shrink: 0;
+}
+.swarm-page .board-directory span {
+  overflow-wrap: anywhere;
+}
+.swarm-page .participant-pane {
+  gap: 7px;
+}
+.swarm-page .participant-pane .eyebrow span {
+  margin-left: 5px;
+}
+.swarm-page .participant-row {
+  gap: 4px 6px;
+}
+.swarm-page .participant-chip {
+  min-height: 32px;
+  padding: 3px 7px 3px 3px;
+  gap: 7px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--participant-color) 4%, var(--bg));
+}
+.swarm-page .participant-chip:hover {
+  background: color-mix(in srgb, var(--participant-color) 10%, var(--bg));
+  border-color: color-mix(in srgb, var(--participant-color) 24%, transparent);
+}
+.swarm-page .participant-chip strong {
+  font-size: var(--fs-body-sm);
+  font-weight: 500;
+}
+.swarm-page .participant-chip .participant-avatar {
+  min-width: 22px;
+  height: 22px;
+  padding-inline: 3px;
+  font-size: var(--fs-mono-xs);
+  border: 0;
+  background: transparent;
+}
+.swarm-page .participant-status {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--text-med);
+}
+.swarm-page .participant-status[data-state='running'] {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-10);
+}
+.swarm-page .participant-status[data-state='failed'],
+.swarm-page .participant-status[data-state='interrupted'] {
+  background: var(--red);
+}
+.swarm-page .participant-status[data-state='cancelled'] {
+  background: var(--amber);
+}
+.swarm-page .board > li {
+  border-left: 2px solid
+    color-mix(in srgb, var(--participant-color) 55%, var(--border));
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--participant-color) 5%, var(--bg));
+  padding: 14px 16px;
+  overflow-anchor: auto;
+}
+.swarm-page .board .post-header {
+  border-bottom-color: color-mix(
+    in srgb,
+    var(--participant-color) 14%,
+    transparent
+  );
+}
+.swarm-page .board .participant-avatar {
+  min-width: 26px;
+  height: 26px;
+  border-color: color-mix(in srgb, var(--participant-color) 35%, transparent);
+  background: transparent;
+}
+@media (max-width: 640px) {
+  .swarm-page .participant-chip {
+    min-height: 40px;
+  }
+  .swarm-page .board-toolbar .form-field {
+    flex-grow: 1;
+  }
+  .swarm-page .board > li {
+    padding: 12px;
   }
 }
