@@ -43,8 +43,9 @@ from core.utils.paths import model_path
 
 APPLY_PATCH_TOOL_NAME = "apply_patch"
 APPLY_PATCH_TOOL_DESCRIPTION = (
-    "Create, edit, delete, or move files. Combine known changes in one patch; "
-    "operations run in order and successful changes survive failures."
+    "Edit files with V4A patches: replace, insert, or remove text; create, delete, "
+    "or move files. Combine multiple edits in one patch. Changes run in order; "
+    "successful changes remain applied if another change fails."
 )
 APPLY_PATCH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -52,15 +53,21 @@ APPLY_PATCH_TOOL_PARAMETERS: JsonObject = {
         "patch": {
             "type": "string",
             "description": (
-                "Patch text; paths are relative to the working directory or absolute.\n"
-                "*** Begin Patch\n*** Update File: path\n@@\n context\n-old\n+new\n*** End Patch\n"
-                "Use unchanged context to identify one location. Repeat @@ blocks or file "
-                "headers for more edits. `*** Add File: path` with + lines creates or "
-                "overwrites the file; read existing files first. Also supports "
-                "`*** Delete File: path`, and `*** Move File: source -> destination`. "
-                "In Update File, a block of + lines appends; `@@ existing full line` inserts "
-                "it after that line."
-                " End a block with `*** End of File` to match only at EOF."
+                "The complete V4A patch to apply. For text edits, include the lines to "
+                "add (+) or remove (-); prefix unchanged neighboring lines with a space. "
+                "Paths are relative to the working directory or absolute.\n"
+                "Replace text:\n"
+                "*** Begin Patch\n*** Update File: path\n@@\n-old line\n+new line\n*** End Patch\n"
+                "Insert text before an existing line:\n"
+                "*** Begin Patch\n*** Update File: path\n@@\n"
+                "+new line\n existing line\n*** End Patch\n"
+                "Repeat @@ blocks or file headers for more edits in the same patch. "
+                "`*** Add File: path` followed by + lines creates or fully overwrites "
+                "a file with that content. `*** Delete File: path` deletes a file. "
+                "`*** Move File: source -> destination` moves a file.\n"
+                "An Update block containing only + lines appends to the file. "
+                "With `@@ existing full line`, those + lines are inserted after that line. "
+                "End an Update block with `*** End of File` to restrict the edit to EOF."
             ),
         },
     },
@@ -591,26 +598,36 @@ def _commit(
 ) -> tuple[list[str], JsonObject | None]:
     completed: list[str] = []
     expected = before.copy()
+
+    def check_expected() -> None:
+        for checked, snapshot in expected.items():
+            if _snapshot(checked) != snapshot:
+                raise _PatchError("file_changed", path=model_path(checked))
+
     changed = [path for path in pending if pending[path] != before[path]]
     # A move first materializes its destination; a failure never silently loses its source.
     for path in sorted(changed, key=lambda p: pending[p].payload is None):
         target = pending[path]
         try:
-            for checked, snapshot in expected.items():
-                if _snapshot(checked) != snapshot:
-                    raise _PatchError("file_changed", path=model_path(checked))
+            check_expected()
             stale = state.check_stale(context.session_id, path) is StaleReason.MODIFIED
             if target.payload is None:
                 path.unlink()
             else:
                 path.parent.mkdir(parents=True, exist_ok=True)
-                atomic_write_bytes(path, target.payload, mode=target.mode)
+                atomic_write_bytes(
+                    path, target.payload, mode=target.mode, before_replace=check_expected
+                )
         except (OSError, _PatchError) as error:
             batch.blocked.update(before)
-            return completed, {
+            failure: JsonObject = {
                 "code": error.code if isinstance(error, _PatchError) else "file_write_error",
                 "message": _WRITE_FAILED.format(path=model_path(path), reason=str(error)),
             }
+            attempts = getattr(error, "attempts_made", None)
+            if attempts is not None:
+                failure.update(retryable=True, attempts_made=attempts)
+            return completed, failure
         batch.before.setdefault(path, before[path])
         batch.after[path] = batch.observed[path] = target
         completed.append(model_path(path))
@@ -755,7 +772,12 @@ def _batch_result(context: ToolContext, batch: _Batch) -> JsonObject:
             details = {k: v for k, v in error.items() if k not in {"code", "message"}}
             if details:
                 message += "\n" + json.dumps(details, ensure_ascii=False)
-            return tool_failure(error["code"], message)
+            return tool_failure(
+                error["code"],
+                message,
+                retryable=error.get("retryable"),
+                attempts_made=error.get("attempts_made"),
+            )
         return tool_failure(
             "all_changes_failed",
             _ALL_FAILED.format(count=failed) + "\n" + json.dumps(batch.results, ensure_ascii=False),

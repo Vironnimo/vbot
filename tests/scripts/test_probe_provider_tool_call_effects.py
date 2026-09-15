@@ -16,10 +16,16 @@ class _PatchAdapter:
     def __init__(self, arguments):
         self.arguments = arguments
 
+    def request_context_kwargs(self, *, agent_id, session_id):
+        assert agent_id == "patch-probe"
+        assert session_id
+        return {"probe_routing": session_id}
+
     async def send(self, messages, **kwargs):
         from core.tools.apply_patch import APPLY_PATCH_TOOL_PARAMETERS
 
         self.messages = list(messages)
+        assert kwargs["probe_routing"]
         assert kwargs["tools"][0]["parameters"] == APPLY_PATCH_TOOL_PARAMETERS
         return {
             "content": "",

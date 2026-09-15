@@ -238,6 +238,62 @@ def _apply_patch_cases() -> list[dict[str, Any]]:
             "expected": {"one.txt": "first\nmiddle\nlast\n"},
         },
         {
+            "id": "natural_insert_before",
+            "before": {"one.txt": "start();\nsummary();\n"},
+            "task": "Insert check(); on its own line immediately before summary(); in one.txt.",
+            "expected": {"one.txt": "start();\ncheck();\nsummary();\n"},
+        },
+        {
+            "id": "recover_context_only",
+            "before": {"one.txt": "start();\nsummary();\n"},
+            "task": "Insert check(); on its own line immediately before summary(); in one.txt.",
+            "seed": patch("*** Update File: one.txt\n@@\n summary();"),
+            "expected": {"one.txt": "start();\ncheck();\nsummary();\n"},
+            "only_paths": ["one.txt"],
+        },
+        {
+            "id": "context_only_is_not_success",
+            "before": {"one.txt": "summary();\n"},
+            "arguments": patch("*** Update File: one.txt\n@@\n summary();"),
+            "error": "no_changes",
+        },
+        {
+            "id": "add_missing_prefixes",
+            "before": {},
+            "arguments": patch("*** Add File: new.txt\n+first\n\n  indented\n+last"),
+            "expected": {"new.txt": "first\n\n  indented\nlast\n"},
+        },
+        {
+            "id": "add_raw_body",
+            "before": {},
+            "arguments": patch('*** Add File: new.txt\n{\n  "enabled": true\n}'),
+            "expected": {"new.txt": '{\n  "enabled": true\n}\n'},
+        },
+        {
+            "id": "add_opening_delimiter",
+            "before": {},
+            "arguments": patch("*** Add File: new.txt\n@@\n+first\n+last"),
+            "expected": {"new.txt": "first\nlast\n"},
+        },
+        {
+            "id": "add_removal_is_ambiguous",
+            "before": {},
+            "arguments": patch("*** Add File: new.txt\n-old\n+new"),
+            "error": "invalid_patch",
+        },
+        {
+            "id": "add_context_hint_is_not_discarded",
+            "before": {},
+            "arguments": patch("*** Add File: new.txt\n@@ section\n+new"),
+            "error": "invalid_patch",
+        },
+        {
+            "id": "add_literal_syntax",
+            "before": {},
+            "arguments": patch("*** Add File: new.txt\n+-literal\n+@@\n+*** End Patch\n++literal"),
+            "expected": {"new.txt": "-literal\n@@\n*** End Patch\n+literal\n"},
+        },
+        {
             "id": "natural_eof",
             "before": {"one.txt": "old\nold\nold\n"},
             "task": "Change only the final line of one.txt to new, preserving the newline.",
@@ -423,6 +479,7 @@ async def _probe_apply_patch_case(
             tools=definitions,
             thinking_effort=args.thinking_effort,
             max_tokens=args.max_tokens or 4000,
+            **adapter.request_context_kwargs(agent_id="patch-probe", session_id=root.name),
         )
         response = adapter.normalize_response(raw, model_id=args.model)
         calls = response.get("tool_calls") or []
