@@ -180,7 +180,7 @@ class StatisticsService:
         ):
             raise ValueError("participant_id must be a non-empty string")
         records = self._owned_run_page(owner_name, group_id, participant_id)
-        report = self._group_report(records)
+        report, participant_reports = self._group_report(records)
         participants = {record.owner.participant_id for record in records}
         return {
             "group_id": group_id,
@@ -191,6 +191,16 @@ class StatisticsService:
             "tools": asdict(report.tools),
             "compactions": asdict(report.compactions),
             "runs": asdict(report.runs),
+            "participants": [
+                {
+                    "participant_id": peer_id,
+                    "usage": asdict(peer_report.usage),
+                    "tools": asdict(peer_report.tools),
+                    "compactions": asdict(peer_report.compactions),
+                    "runs": asdict(peer_report.runs),
+                }
+                for peer_id, peer_report in participant_reports.items()
+            ],
         }
 
     def _owned_run_page(
@@ -211,13 +221,16 @@ class StatisticsService:
                 return result
             after = page[-1].record_key
 
-    def _group_report(self, records: list[OwnedRunRecord]) -> StatisticsReport:
+    def _group_report(
+        self, records: list[OwnedRunRecord]
+    ) -> tuple[StatisticsReport, dict[str, StatisticsReport]]:
         scopes = _owner_scopes(records)
-        snapshot = self._index.snapshot(self._sessions, scopes, prune=False)
+        snapshot = self._index.snapshot(self._sessions, scopes, prune=False, scope_only=True)
         by_address: dict[SessionAddress, list[OwnedRunRecord]] = {}
         for record in records:
             by_address.setdefault(record.address, []).append(record)
         aggregator = _Aggregator(since=None, until=None)
+        participant_aggregators: dict[str, _Aggregator] = {}
         addresses = tuple(by_address)
         boundaries = [
             boundary
@@ -244,12 +257,18 @@ class StatisticsService:
                 if not sliced:
                     continue
                 display_key = record.owner.participant_id
-                aggregator.register_agent(display_key, [{"id": address.session_id}])
-                aggregator.register_scope(agent_id=address.agent_id, project_id=address.project_id)
-                aggregator.process_session(
-                    display_key, address.session_id, sliced, {"id": address.session_id}
+                peer = participant_aggregators.setdefault(
+                    display_key, _Aggregator(since=None, until=None)
                 )
-        return aggregator.build(None)
+                for target in (aggregator, peer):
+                    target.register_agent(display_key, [{"id": address.session_id}])
+                    target.register_scope(agent_id=address.agent_id, project_id=address.project_id)
+                    target.process_session(
+                        display_key, address.session_id, sliced, {"id": address.session_id}
+                    )
+        return aggregator.build(None), {
+            peer_id: target.build(None) for peer_id, target in participant_aggregators.items()
+        }
 
     def _project_scopes(self) -> list[tuple[str, str]]:
         """Return ``(project_id, agent_id)`` for every session-owning project agent."""

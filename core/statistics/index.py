@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -90,6 +90,7 @@ class StatisticsIndex:
         scopes: tuple[StatisticsScope, ...],
         *,
         prune: bool = True,
+        scope_only: bool = False,
     ) -> dict[tuple[str, str, str], IndexedStatisticsSession]:
         """Reconcile canonical sources and return one consistent compact snapshot."""
         with self._lock:
@@ -120,7 +121,15 @@ class StatisticsIndex:
                     and self._snapshot_cache is not None
                     and self._snapshot_generation == generation
                 ):
+                    if scope_only:
+                        return {
+                            key: self._snapshot_cache[key]
+                            for key in current_keys
+                            if key in self._snapshot_cache
+                        }
                     return self._snapshot_cache
+                if scope_only:
+                    return self._load_snapshot(connection, keys=current_keys)
                 snapshot = self._load_snapshot(connection)
                 self._snapshot_cache = snapshot
                 self._snapshot_generation = generation
@@ -460,14 +469,28 @@ class StatisticsIndex:
     @staticmethod
     def _load_snapshot(
         connection: sqlite3.Connection,
+        *,
+        keys: set[tuple[str, str, str]] | None = None,
     ) -> dict[tuple[str, str, str], IndexedStatisticsSession]:
+        def rows(table: str, columns: str, order: str = "") -> Iterator[sqlite3.Row]:
+            if keys is None:
+                yield from connection.execute(f"SELECT {columns} FROM {table} {order}")
+                return
+            selected = sorted(keys)
+            for offset in range(0, len(selected), 200):
+                batch = selected[offset : offset + 200]
+                placeholders = ",".join("(?,?,?)" for _ in batch)
+                yield from connection.execute(
+                    f"SELECT {columns} FROM {table} "
+                    "WHERE (project_id,agent_id,session_id) IN "
+                    f"(VALUES {placeholders}) {order}",
+                    [value for key in batch for value in key],
+                )
+
         summaries: dict[tuple[str, str, str], JsonObject] = {}
         messages: dict[tuple[str, str, str], list[ChatMessage]] = {}
-        for row in connection.execute(
-            """
-            SELECT project_id, agent_id, session_id, generation_id, summary_json
-            FROM statistics_sessions
-            """
+        for row in rows(
+            "statistics_sessions", "project_id, agent_id, session_id, generation_id, summary_json"
         ):
             key = (str(row["project_id"]), str(row["agent_id"]), str(row["session_id"]))
             summaries[key] = {
@@ -475,12 +498,10 @@ class StatisticsIndex:
                 "summary": _json_object(str(row["summary_json"])),
             }
             messages[key] = []
-        for row in connection.execute(
-            """
-            SELECT project_id, agent_id, session_id, ordinal, payload_json
-            FROM statistics_records
-            ORDER BY project_id, agent_id, session_id, ordinal
-            """
+        for row in rows(
+            "statistics_records",
+            "project_id, agent_id, session_id, ordinal, payload_json",
+            "ORDER BY project_id, agent_id, session_id, ordinal",
         ):
             key = (str(row["project_id"]), str(row["agent_id"]), str(row["session_id"]))
             payload = _json_object(str(row["payload_json"]))
