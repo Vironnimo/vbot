@@ -218,8 +218,7 @@ body {
   align-items: end;
   gap: 8px;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .board,
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .audit {
+:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .board {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -330,27 +329,6 @@ body {
   text-align: left;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .audit-change {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin: 8px 0 0;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .audit-change
-  dt {
-  color: var(--text-med);
-  font: var(--fs-mono-xs) var(--font-mono);
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .audit-change
-  dd {
-  margin: 3px 0 0;
-  overflow-wrap: anywhere;
-  color: var(--text-hi);
-  font: var(--fs-mono-xs) var(--font-mono);
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .participant-pane {
   display: grid;
   gap: 10px;
@@ -414,15 +392,6 @@ body {
   background: var(--bg);
   padding: 10px;
   color: var(--text-hi);
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .audit
-  li {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 8px;
-  border-bottom: 1px solid var(--border-2);
 }
 .swarm-page-modal-copy,
 .swarm-page-communication {
@@ -548,10 +517,7 @@ body {
     padding: 15px;
   }
   :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-    .swarm-head,
-  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-    .audit
-    li {
+    .swarm-head {
     display: grid;
   }
 }

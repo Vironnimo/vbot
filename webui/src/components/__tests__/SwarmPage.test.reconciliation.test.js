@@ -289,7 +289,7 @@ it('ignores old Swarm detail replies after selecting a new Swarm', async () => {
   expect(document.getElementById('swarm-discussion').value).toBe('dsc-b');
 });
 
-it.each(['swarms.events', 'swarms.usage'])(
+it.each(['swarms.usage'])(
   'ignores late %s from the previously selected Swarm',
   async (method) => {
     const { bridge, operation } = createBridge();
@@ -300,23 +300,20 @@ it.each(['swarms.events', 'swarms.usage'])(
       prompt: 'Second swarm',
     };
     const pending = [];
-    const result = (id) =>
-      method === 'swarms.events'
-        ? { entries: [{ id, kind: `${id}-event-sentinel`, actor: 'user' }] }
-        : {
-            usage: {
-              usage: {
-                totals: {
-                  measured_input_tokens: id === 'swr-a' ? 111 : 222,
-                  measured_output_tokens: 0,
-                  estimated_input_tokens: 0,
-                  estimated_output_tokens: 0,
-                },
-                models: [],
-              },
-              tools: { total_calls: 0 },
-            },
-          };
+    const result = (id) => ({
+      usage: {
+        usage: {
+          totals: {
+            measured_input_tokens: id === 'swr-a' ? 111 : 222,
+            measured_output_tokens: 0,
+            estimated_input_tokens: 0,
+            estimated_output_tokens: 0,
+          },
+          models: [],
+        },
+        tools: { total_calls: 0 },
+      },
+    });
     operation.mockImplementation((name, args) => {
       if (name === 'swarms.list')
         return Promise.resolve({ entries: [swarm, other] });
@@ -334,16 +331,16 @@ it.each(['swarms.events', 'swarms.usage'])(
     await render(bridge);
     button('Investigate').click();
     await vi.waitFor(() => expect(button('Usage')).toBeDefined());
-    button(method === 'swarms.events' ? 'Delivery audit' : 'Usage').click();
+    button('Usage').click();
     await vi.waitFor(() => expect(pending.length).toBeGreaterThan(0));
     button('Second swarm').click();
     await vi.waitFor(() =>
       expect(bridge.replaceRoute).toHaveBeenLastCalledWith('/swarms/swr-b'),
     );
-    button(method === 'swarms.events' ? 'Delivery audit' : 'Usage').click();
+    button('Usage').click();
     await tick();
-    const selector = method === 'swarms.events' ? '.audit' : '.usage-summary';
-    const current = method === 'swarms.events' ? 'swr-b-event-sentinel' : '222';
+    const selector = '.usage-summary';
+    const current = '222';
     await vi.waitFor(() =>
       expect(document.querySelector(selector).textContent).toContain(current),
     );
