@@ -65,6 +65,7 @@ from core.utils.logging import get_logger
 CredentialResolver = Callable[[str], str]
 
 DEFAULT_BACKGROUND_AFTER_SECONDS = 30.0
+DEFAULT_TIMEOUT_SECONDS = 180.0
 # Inside a Sub-Agent auto mode cannot hand off, so its background_after_seconds
 # threshold doubles as the kill deadline. Default it generously there: a 30s
 # handoff would kill a normal pytest/build. Explicit background_after_seconds
@@ -132,10 +133,12 @@ _BASH_WORKDIR_PARAMETER: JsonObject = {
 }
 _BASH_TIMEOUT_PARAMETER: JsonObject = {
     "type": "number",
-    "exclusiveMinimum": 0,
+    "minimum": 0,
+    "default": DEFAULT_TIMEOUT_SECONDS,
     "description": (
-        "Hard kill deadline in seconds. Omit for no Tool-level timeout; in auto mode it does "
-        "not extend background_after_seconds."
+        "Total runtime limit in seconds, including time after handoff. Omit for 180 seconds. "
+        "Set a longer limit for slow work, or 0 for intentionally unbounded work. "
+        "Output does not reset this limit; it does not extend background_after_seconds."
     ),
 }
 _BASH_ENV_KEYS_PARAMETER: JsonObject = {
@@ -466,7 +469,8 @@ async def bash_handler(
         suffix = await _failure_output_suffix(process_manager, context, process_id)
         return tool_failure(
             "process_timeout",
-            f"process timed out after {parsed['timeout']} seconds" + suffix,
+            f"process timed out after {parsed['timeout']} seconds. Inspect the output before "
+            "retrying; set a longer timeout if the command legitimately needs more time." + suffix,
         )
 
     return result
@@ -751,8 +755,8 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
         timeout = optional_number(
             arguments.get("timeout"),
             field_name="timeout",
+            default=DEFAULT_TIMEOUT_SECONDS,
             minimum=0,
-            minimum_exclusive=True,
         )
         env_keys = normalize_env_keys(
             arguments.get("env_keys", []),
@@ -766,7 +770,7 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
         "mode": mode,
         "workdir": workdir,
         "background_after_seconds": background_after_seconds,
-        "timeout": timeout,
+        "timeout": None if timeout == 0 else timeout,
         "env_keys": env_keys,
     }
 
@@ -797,7 +801,18 @@ def _schedule_timeout(
         return None, state
 
     async def kill_after_timeout() -> None:
-        await asyncio.sleep(timeout)
+        tracked = process_manager.get_process(
+            process_id, context.agent_id, project_id=context.project_id
+        )
+        if tracked.wait_task is not None:
+            # Observe the manager-owned finalizer without cancelling it. A
+            # completed background command must not leave a sleeping deadline
+            # task holding its Run context until the original timeout expires.
+            done, _ = await asyncio.wait([tracked.wait_task], timeout=timeout)
+            if done:
+                return
+        else:
+            await asyncio.sleep(timeout)
         state["timed_out"] = True
         try:
             await process_manager.kill(process_id, context.agent_id, project_id=context.project_id)

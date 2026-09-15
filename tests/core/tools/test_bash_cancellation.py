@@ -158,10 +158,12 @@ async def test_large_foreground_stdout_is_bounded_and_truncated(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("timeout_arguments", [{}, {"timeout": 0}])
 async def test_run_cancellation_stops_auto_mode_without_handoff(
     manager: ProcessManager,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    timeout_arguments: dict[str, Any],
 ) -> None:
     watcher_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
@@ -179,6 +181,7 @@ async def test_run_cancellation_stops_auto_mode_without_handoff(
             "command": "import time; time.sleep(30)",
             "mode": "auto",
             "background_after_seconds": 30,
+            **timeout_arguments,
         },
         manager,
     )
@@ -186,6 +189,7 @@ async def test_run_cancellation_stops_auto_mode_without_handoff(
     assert result["ok"] is False
     assert result["error"]["code"] == bash_module.RUN_CANCELLED_FAILURE_CODE
     assert watcher_calls == []
+    assert all(process.proc.returncode is not None for process in manager.list_processes(AGENT_ID))
 
 
 @pytest.mark.asyncio
