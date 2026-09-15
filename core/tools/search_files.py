@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import tempfile
 from functools import cache
 from pathlib import Path
@@ -16,7 +17,7 @@ from core.tools._search_results import ResultPage, path_label, render_events
 from core.tools._search_selection import FileSelection
 from core.tools._tool_context import _path_argument
 from core.tools.arguments import optional_bool, optional_int
-from core.tools.contracts import compile_tool_contract
+from core.tools.contracts import _load_json_value, compile_tool_contract
 from core.tools.search import SearchBudget
 from core.tools.tools import (
     JsonObject,
@@ -31,6 +32,42 @@ from core.tools.tools import (
 from core.utils.search_binary import require_binary
 
 SEARCH_FILES_TOOL_NAME = "search_files"
+
+
+def _repair_pattern_array(value: Any) -> Any:
+    """Decode list syntax without turning a malformed list into a regex class."""
+    if not isinstance(value, str) or not re.match(r'^\s*\[\s*"', value):
+        return value
+    try:
+        return _load_json_value(value)
+    except ValueError:
+        pass
+
+    # In encoded regex lists, \( and \w often omit the JSON escape for the
+    # backslash. Preserve that backslash; never change members of real arrays.
+    # Mixed JSON control/unicode escapes could mean text or regex instructions,
+    # so a malformed list containing them needs clarification.
+    ambiguous = False
+
+    def escape(match: re.Match[str]) -> str:
+        nonlocal ambiguous
+        character = match[1]
+        if character in "bfnrtu":
+            ambiguous = True
+        if character in '"\\/bfnrtu':
+            return match[0]
+        return "\\" + match[0]
+
+    repaired = re.sub(r"\\(.)", escape, value, flags=re.DOTALL)
+    if not ambiguous:
+        try:
+            return _load_json_value(repaired)
+        except ValueError:
+            pass
+    raise ValueError(
+        "patterns contains a malformed encoded list. Send a JSON array of strings, "
+        'for example ["TODO"]. For literal text, add options ["-F"].'
+    )
 
 
 @cache
@@ -61,6 +98,7 @@ def normalize_search_arguments(arguments: Any) -> Any:
             "head": "limit",
             "head_limit": "limit",
         },
+        field_normalizers={"patterns": _repair_pattern_array},
     )
     if not isinstance(value, dict):
         return value
@@ -226,12 +264,13 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
                 if not root.exists():
                     return tool_failure(
                         "path_not_found",
-                        f"Search root not found: {root}. Correct paths; no roots were searched.",
+                        f"Search root not found: {root.as_posix()}. "
+                        "Correct paths; no roots were searched.",
                     )
                 if not root.is_file() and not root.is_dir():
                     return tool_failure(
                         "invalid_arguments",
-                        f"Search root is not a regular file or directory: {root}",
+                        f"Search root is not a regular file or directory: {root.as_posix()}",
                     )
         binary = require_binary()
     except (OSError, RuntimeError, ValueError) as error:
@@ -330,6 +369,9 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
             "nly to the searched portions."
         )
     data = page.data(complete=complete, warnings=warnings, quiet=options.enabled("quiet"))
+    if not page.observed and not page.matched:
+        data["searched_paths"] = [root.as_posix() for root in roots]
+        data["patterns"] = patterns
     if options.enabled("stats"):
         data["stats"] = locals().get("stats", {"results_observed": page.observed})
     context.add_display_count(page.returned, "results", at_least=page.more or not complete)
@@ -405,7 +447,9 @@ SEARCH_FILES_TOOL_PARAMETERS: JsonObject = {
             "type": "array",
             "items": {"type": "string"},
             "description": (
-                "Patterns to match; any one may match. Required for content. Omit "
+                'Search patterns, e.g. ["TODO", "FIXME"]; any one may match. '
+                'For literal text such as "computeDamage(", add options ["-F"]. '
+                "Required for content. Omit "
                 "for paths to list all entries."
             ),
         },
