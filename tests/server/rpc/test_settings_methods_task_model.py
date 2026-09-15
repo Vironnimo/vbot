@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -15,6 +16,7 @@ from core.model_tasks import (
     TaskModelOptionField,
     TaskModelOptionSchema,
 )
+from core.model_tasks.speech_setup import LocalSpeechSetup
 from server.rpc.methods import dispatch_rpc
 
 
@@ -213,6 +215,49 @@ async def test_task_model_status_reports_live_binding_readiness(
     }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("task_type", "target", "engine"),
+    [
+        ("speech_to_text", "local/nemotron3.5-asr", ""),
+        ("text_to_speech", "local/qwen3-tts", "qwen3-tts"),
+    ],
+)
+async def test_local_speech_readiness_preserves_setup_and_logs_missing_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task_type: str, target: str, engine: str
+) -> None:
+    logger = MagicMock()
+    monkeypatch.setattr("core.model_tasks.speech_setup._LOGGER", logger)
+    setup = LocalSpeechSetup(engine=engine, directory=tmp_path)
+    setup.python.parent.mkdir(parents=True)
+    setup.python.touch()
+    # A receipt from an earlier application release is still a completed setup.
+    receipt = tmp_path / "verified.json"
+    receipt.write_text('{"recipe": "previous", "sources": {}}', encoding="utf-8")
+    lookup = MagicMock(return_value=setup)
+    state = SimpleNamespace(
+        runtime=SimpleNamespace(
+            model_tasks=SimpleNamespace(
+                binding_for=lambda _: TaskModelBinding(task_type=task_type, target=target),
+                binding_is_usable=lambda _: setup.available(),
+            ),
+            speech=SimpleNamespace(local_setup_for=lookup),
+        )
+    )
+    request = {"method": "task_model.status", "params": {"task_type": task_type}}
+    result = await dispatch_rpc(state, request)
+    assert result["result"]["usable"] is True
+    lookup.assert_called_once_with(target)
+    logger.warning.assert_not_called()
+    setup.python.unlink()
+    for _ in range(3):
+        result = await dispatch_rpc(state, request)
+        assert result["result"] == {"task_type": task_type, "configured": True, "usable": False}
+    assert logger.warning.call_count == 1
+    assert logger.warning.call_args.args[1:3] == (engine or "stt", "python_missing")
+    assert receipt.read_text(encoding="utf-8") == '{"recipe": "previous", "sources": {}}'
+
+
 class _Target:
     def to_dict(self) -> dict[str, object]:
         return {
@@ -304,7 +349,10 @@ class _StatusModelTasks:
     def binding_for(self, _task_type: str) -> object:
         if not self._configured:
             raise TaskModelError("No task model configured")
-        return object()
+        return TaskModelBinding(
+            task_type=_task_type,
+            target="openrouter/openai/gpt-4o-transcribe::api-key",
+        )
 
     def binding_is_usable(self, _task_type: str) -> bool:
         return self._usable
