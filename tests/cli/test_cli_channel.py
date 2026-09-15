@@ -16,6 +16,57 @@ from tests.cli.cli_channel_test_support import (
 )
 
 
+def test_whatsapp_cli_omits_private_qr_and_reports_setup_attention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def post(*args: Any, **kwargs: Any) -> httpx.Response:
+        assert kwargs["json"]["method"] == "channel.whatsapp.status"
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "id": "wa",
+                    "installed": False,
+                    "setup": "failed",
+                    "error": "Install Node.js",
+                    "qr_image": "private-qr",
+                },
+            },
+        )
+
+    monkeypatch.setattr(channel_management.httpx, "post", post)
+    result = channel_management.channel_whatsapp(make_instance(tmp_path), "wa", "status")
+    assert result.ok and result.attention
+    assert "private-qr" not in result.message
+    assert "Install Node.js" in result.message
+
+
+def test_slack_add_can_save_before_credentials_are_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def post(*args: Any, **kwargs: Any) -> httpx.Response:
+        params = kwargs["json"]["params"]
+        assert params["app_token_env_var"] == "APP"
+        assert params["enabled"] is False
+        return httpx.Response(200, json={"ok": True, "result": params})
+
+    monkeypatch.setattr(channel_management.httpx, "post", post)
+    result = channel_management.channel_add(
+        make_instance(tmp_path),
+        "slack",
+        "slack",
+        "assistant",
+        "BOT",
+        "per_conversation",
+        [],
+        app_token_env="APP",
+        disabled=True,
+    )
+    assert result.ok
+    assert "app_token_env_var=APP" in result.message
+
+
 def test_channel_add_posts_create_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []

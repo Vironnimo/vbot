@@ -15,7 +15,7 @@ A new installation takes three steps:
 | Install vBot or choose a Desktop/remote-client shape | [Installation](#installation) |
 | Connect a Provider and start chatting | [First-run setup](#first-run-setup) |
 | Understand Agents, Projects, and Sessions | [Agents, Projects, and Sessions](#agents-projects-and-sessions) |
-| Reach an Agent through Telegram or Discord | [Channels](#channels) |
+| Reach an Agent through a messaging Channel | [Channels](#channels) |
 | Schedule work | [Cron](#cron) and [Bootstrap](#bootstrap) |
 | Diagnose or automate vBot | [CLI reference](#cli-reference), [Server API](#server-api), and [Operational notes](#operational-notes) |
 | Develop vBot itself | [Development and verification](#development-and-verification) |
@@ -638,7 +638,7 @@ One Session admits one active Run. New messages sent while it is busy enter its 
 
 The composer accepts plain text, uploaded attachments, `@` file mentions, Built-in Commands, and Skill triggers. Image, audio, video, and text/file inputs are normalized into content blocks; Provider adapters receive only formats they support. Audio transcription is cached on the attachment after its first successful transcription.
 
-Built-in Commands are owned by Chat and work in the WebUI; Telegram and Discord support the same set except `/agent`:
+Built-in Commands are owned by Chat and work in the WebUI; Channels support the same set except `/agent`:
 
 | Command | Behavior |
 |---|---|
@@ -861,7 +861,7 @@ See [Third-party notices](THIRD_PARTY_NOTICES.md#local-speech-models).
 
 ## Channels
 
-Telegram and Discord Channels route inbound messages to one Identity Agent. Project Agents cannot own a Channel. Add bot credentials to the process environment or `<data-dir>/.env`, then configure the token variable name rather than the token itself:
+Telegram, Discord, Slack, Mattermost and WhatsApp Channels route inbound messages to one Identity Agent. Project Agents cannot own a Channel. Add bot credentials to the process environment or `<data-dir>/.env`, then configure the token variable name rather than the token itself:
 
 ```dotenv
 TELEGRAM_BOT_TOKEN_MAIN=...
@@ -885,7 +885,7 @@ vbot channel disable tg-main
 vbot channel remove tg-main
 ```
 
-An empty allowlist means deny all inbound chats, not allow everyone. To discover an id safely, message the bot once and inspect `vbot channel status <channel-id>` or Settings; each active adapter keeps the 20 most recent denied chats in memory. Allowing a chat restarts the adapter and clears that observation list. The allowlist gates inbound traffic only; an Agent using `channel_send` with an explicit platform target can send to any chat the bot account can reach.
+An empty allowlist means deny all inbound chats, not allow everyone. To discover an id safely, message the bot once and inspect `vbot channel status <channel-id>` or Settings; each active adapter keeps the 20 most recent denied chats in memory. Allowing a chat restarts the adapter and clears that observation list. The allowlist gates inbound traffic only; an Agent using `channel_send` with an explicit platform target can send to any supported chat the bot account can reach. WhatsApp is limited to your self chat in both directions.
 
 Group behavior is configurable from the CLI with `--response-mode mention|all`, list-replacing `--mention-pattern`, and `--observe-unaddressed true|false`. `channel identity` shows or sets the Channel account's own identity from previously seen participants; that identity is an admin in every group and cannot be demoted. `channel access` lists durable participants and roles for one group. `admin grant` and `admin revoke` are additive, idempotent one-user actions scoped to that group. Channel create/update/enable/disable output returns the saved config; `channel status` separately reports listener health and denied chats.
 
@@ -893,9 +893,75 @@ Direct-message Session routing is controlled by `dm_scope`: `per_conversation` i
 
 Groups respond only when addressed by default: a platform mention, a reply to the bot, or a configured case-insensitive mention regex. Telegram also derives an exact case-insensitive wake name from the bot's current visible Telegram name at Channel start; BotFather privacy mode must be disabled for Telegram to deliver these plain name-addressed group messages. `response_mode: all` responds to every allowed group message. With `observe_unaddressed` enabled, otherwise-unaddressed group messages become untrusted background notes without starting a Run. Every seen group participant is assigned `admin` or `member` by stable platform user id: admins retain the Agent's full Tool access, while members may authorize only `web_search` and `web_fetch`. Group Built-in Commands and reserved `run:` button taps require `admin`. Role enforcement is dispatch-only, so grants/revokes do not alter the System Prompt or provider Tool definitions; a grant affects new ingress only, while a revoke applies before the next Tool call of an active admin Run. DMs remain governed by the chat allowlist.
 
-Both adapters ingest supported media and files, preserve Channel Session context, show activity, and reply to the triggering group message. Telegram supports outbound inline buttons and deterministic Extension tap handlers; Discord rejects button payloads. A reserved `run:<payload>` Telegram button wakes the Agent with the complete keyboard state instead of invoking an Extension handler.
+All adapters ingest supported media and files and preserve Channel Session context. Telegram and Discord show activity and reply to the triggering group message. Telegram supports outbound inline buttons and deterministic Extension tap handlers; the other adapters reject button payloads. A reserved `run:<payload>` Telegram button wakes the Agent with the complete keyboard state instead of invoking an Extension handler.
 
 Channels serialize work per conversation and share bounded Queue capacity. Only the final Assistant text from a completed Run is relayed; reasoning, Tool events, and intermediate output remain available in the vBot Session and server event streams.
+
+
+### WhatsApp: use your existing account
+
+This Channel links vBot as a device to your existing WhatsApp account using [Baileys](https://github.com/WhiskeySockets/Baileys). You keep your number and phone app; no second SIM is required. This is an unofficial connection, not a WhatsApp Business bot. Account restrictions and upstream protocol changes are possible.
+
+1. Install Node.js **22 or newer** with npm on the machine running the vBot server. A packaged vBot installation also needs this optional prerequisite.
+2. In **Settings > Channels**, create a WhatsApp Channel for your Agent. Keep the allowed chat ID `self`. It starts disabled until setup/pairing.
+3. Select **Install WhatsApp support**. This downloads pinned dependencies into the Channel's data directory; wait until installation finishes.
+4. Select **Connect WhatsApp**, then scan the QR from your phone's **Settings > Linked devices > Link a device**.
+5. Open your WhatsApp self chat (message yourself) and send a new message. Only messages you write there can start Runs; other conversations and vBot's own replies are ignored.
+
+The same server operations are available through the CLI. QR codes remain in Settings, never terminal output:
+
+```bash
+vbot channel add wa-main --platform whatsapp --agent assistant --allow self
+vbot channel whatsapp setup wa-main
+vbot channel whatsapp status wa-main
+vbot channel whatsapp pair wa-main
+```
+
+Setup is asynchronous: inspect status until `installed: True`, then pair. No token flag is accepted. `self` is also the only supported `channel_send` target. An empty allowlist disables inbound messages. The connection restores saved pairing after server restarts. After logging out the linked device, use **Link again with a new QR code** or `vbot channel whatsapp pair wa-main --reset`. Re-pairing keeps the old auth files in a `revoked_*` directory; remove old linked devices in WhatsApp itself. Protect `<data-dir>/channels/<id>/whatsapp/` like account credentials. If a vBot update requires newer bridge files, disable the Channel and run setup again.
+
+### Slack
+
+Slack uses its official [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/) connection, so the vBot server needs no public webhook URL. Create a Slack app, enable Socket Mode and create an **app-level token** (`xapp-…`) with `connections:write`. Separately install the app to your workspace to obtain its **bot token** (`xoxb-…`). These are different credentials and require different variable names.
+
+Configure these bot scopes before installation (reinstall the app after changing scopes):
+
+- `chat:write`, `files:read`, `files:write`
+- `channels:read`, `channels:history`, `groups:read`, `groups:history`
+- `im:read`, `im:history`, `mpim:read`, `mpim:history`
+
+Under Event Subscriptions, subscribe to bot events `message.channels`, `message.groups`, `message.im` and `message.mpim`. Enable the App Home Messages tab and allow users to send messages. Invite the bot to each channel it should use, including private channels. An `app_mention` subscription alone does not supply the message events this adapter consumes.
+
+In vBot Settings choose Slack and enter the bot-token and app-token variable names. Both must already resolve in the server's environment or data-dir `.env`. Alternatively, save the Channel disabled, then supply each secret separately through UTF-8 stdin:
+
+```bash
+vbot channel add slack-main --platform slack --agent assistant --token-env SLACK_BOT_TOKEN --app-token-env SLACK_APP_TOKEN --disabled
+vbot channel token set slack-main --stdin
+vbot channel token set slack-main --slot app --stdin
+vbot channel enable slack-main
+vbot channel status slack-main
+```
+
+The `token set` commands read their respective secret from stdin; never put a token in an argument. Send the bot a DM or a channel message, inspect denied chats in Settings/status, then allow the exact conversation ID (`D…`, `C…` or `G…`). IDs are strings, not numbers. In mention-only groups, mention the bot or use a configured wake regex, including inside threads. Messages in threads share the parent conversation's Session; responses return to the thread. File upload uses Slack's current external-upload flow.
+
+### Mattermost
+
+Use an existing Mattermost server and create a [bot account](https://developers.mattermost.com/integrate/reference/bot-accounts/) with a token. The server administrator may need to enable bot accounts. Add the bot to the relevant team/channels and grant the permissions needed to read messages, post and share files. vBot connects to the server's REST API and WebSocket; no public vBot webhook is required.
+
+In Settings choose Mattermost, enter the server URL (for example `https://chat.example.org`, including a deployment subpath if present) and the bot-token variable name. Do not include `/api/v4` or credentials in the URL. Managed-token setup is also available:
+
+```bash
+vbot channel add mm-main --platform mattermost --agent assistant --server-url https://chat.example.org --token-stdin
+vbot channel status mm-main
+vbot channel update mm-main --allow <conversation-id>
+```
+
+Send a DM or channel message to discover its ID through denied chats. Allowlist entries are Mattermost conversation IDs, not team IDs or usernames. Group mention policy and thread behavior match the Slack behavior described above.
+
+### Initial integration coverage
+
+WhatsApp, Slack and Mattermost support incoming text/media, outgoing text/files, shared Commands, Session routing and Queue/access enforcement. Slack and Mattermost currently have no typing indicator, inline buttons, fetched quoted-message content, or offline history backfill. Mention-only group threads still need an explicit mention or wake regex. Recent received IDs are retained across restarts to suppress replays; this does not guarantee exactly-once processing after a crash.
+
+Connection handshakes, routing, file APIs, access rejection, WhatsApp self-chat/echo filtering, credential handling and QR setup are covered by local automated tests. Pairing and end-to-end delivery with real accounts still need a live smoke test.
 
 ## Cron
 
@@ -997,7 +1063,7 @@ Installed commands use `vbot`. From a source checkout, `python cli/main.py` and 
 | Projects | `project add`, `project list`, `project show`, `project set`, `project override set`, `project override clear`, `project detect`, `project remove` |
 | Sessions | `session list`, `session create`, `session fork`, `session rename`, `session policy set`, `session delete`, `session channel link` |
 | Session store | `session-store status`, `session-store snapshot list|create|verify|restore`, `session-store incident acknowledge` |
-| Channels | `channel add`, `channel list`, `channel update`, `channel token set`, `channel enable`, `channel disable`, `channel status`, `channel identity`, `channel access`, `channel admin grant`, `channel admin revoke`, `channel remove` |
+| Channels | `channel add`, `channel list`, `channel update`, `channel token set`, `channel enable`, `channel disable`, `channel status`, `channel identity`, `channel access`, `channel admin grant`, `channel admin revoke`, `channel whatsapp setup/status/pair`, `channel remove` |
 | Tools and Skills | `tool list`, `skill list`, `skill inventory`, `skill inspect`, `skill read`, `skill enable`, `skill disable`, `skill share`, `skill unshare`, `skill create`, `skill update`, `skill delete`, `skill file write`, `skill file remove` |
 | Memory | `memory list`, `memory add`, `memory replace`, `memory remove` |
 | System Prompt | `prompt list`, `prompt show`, `prompt update`, `prompt reset`, `prompt create`, `prompt remove`, `prompt layout set`, `prompt layout reset`, `prompt preview` |
