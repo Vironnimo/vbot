@@ -15,6 +15,312 @@ async def invoke(fixture, arguments, peer=0):
 
 
 @pytest.mark.asyncio
+async def test_wiki_parallel_disjoint_edits_rebase_and_replay_after_restart(board):
+    created = await invoke(
+        board,
+        {
+            "action": "create",
+            "title": "Notes",
+            "content": "First finding\nSecond finding",
+            "request_id": "create",
+        },
+    )
+    page_id = created["data"]["page_id"]
+    common = {"action": "update", "page_id": page_id, "expected_revision": 1}
+    edits = [
+        {
+            **common,
+            "old_text": "First finding",
+            "new_text": "First verified",
+            "request_id": "first",
+        },
+        {
+            **common,
+            "old_text": "Second finding",
+            "new_text": "Second verified",
+            "request_id": "second",
+        },
+    ]
+    results = await asyncio.gather(*(invoke(board, edit, peer) for peer, edit in enumerate(edits)))
+    assert all(result["ok"] for result in results), results
+    assert sorted(result["data"]["revision"] for result in results) == [2, 3]
+    await board.store.close()
+    await board.store.open()
+    for peer, edit in enumerate(edits):
+        replay = await invoke(board, edit, peer)
+        assert replay["data"] == {**results[peer]["data"], "replayed": True}
+    current = (await invoke(board, {"action": "read", "page_id": page_id}))["data"]
+    assert current["content"] == "First verified\nSecond verified"
+    assert current["revision"] == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stale", [False, True])
+@pytest.mark.parametrize(
+    ("content", "old", "new", "expected"),
+    [
+        (
+            "Before\r\nFirst\r\nSecond\r\nAfter",
+            "First\nSecond",
+            "Changed\nSecond",
+            "Before\r\nChanged\r\nSecond\r\nAfter",
+        ),
+        ("Before\n“Ready” — wait…\nAfter", '"Ready" -- wait...', "Done", "Before\nDone\nAfter"),
+        (
+            "Before\n    First\n    Second\nAfter",
+            "First\nSecond",
+            "Changed\nSecond",
+            "Before\n    Changed\n    Second\nAfter",
+        ),
+        (
+            "Before\nFirst   finding\nAfter",
+            "First finding",
+            "Verified finding",
+            "Before\nVerified finding\nAfter",
+        ),
+        ('"Ready" and “Ready”', '"Ready"', "Done", "Done and “Ready”"),
+        ("Before\nDelete this\nAfter", "Delete this\n", "", "Before\nAfter"),
+    ],
+)
+async def test_wiki_tolerant_matching_preserves_surrounding_content(
+    board, stale, content, old, new, expected
+):
+    created = await invoke(
+        board,
+        {
+            "action": "create",
+            "title": "Notes",
+            "content": content,
+            "request_id": "create",
+        },
+    )
+    page_id = created["data"]["page_id"]
+    if stale:
+        renamed = await board.service.operation(
+            "wiki",
+            {
+                "swarm_id": board.swarm["id"],
+                "action": "update",
+                "page_id": page_id,
+                "expected_revision": 1,
+                "title": "Peer title",
+                "request_id": "rename",
+            },
+        )
+        assert renamed["revision"] == 2
+    result = await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": page_id,
+            "expected_revision": 1,
+            "old_text": old,
+            "new_text": new,
+            "request_id": "edit",
+        },
+    )
+    assert result["ok"], result
+    current = (await invoke(board, {"action": "read", "page_id": page_id}))["data"]
+    assert current["content"] == expected
+    assert current["title"] == ("Peer title" if stale else "Notes")
+    assert current["revision"] == (3 if stale else 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"content": "replacement"},
+        {"title": "replacement"},
+        {"old_text": "First finding", "new_text": "Verified", "title": "replacement"},
+        {"action": "delete"},
+        {"action": "restore", "revision": 1},
+        {"old_text": "First finding", "new_text": "Verified", "expected_revision": 99},
+        {"old_text": "Missing", "new_text": "Verified"},
+    ],
+)
+async def test_wiki_stale_or_future_unsafe_changes_remain_atomic(board, change):
+    created = await invoke(
+        board,
+        {
+            "action": "create",
+            "title": "Notes",
+            "content": "First finding",
+            "request_id": "create",
+        },
+    )
+    page_id = created["data"]["page_id"]
+    await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": page_id,
+            "expected_revision": 1,
+            "title": "Peer title",
+            "request_id": "rename",
+        },
+        1,
+    )
+    read = {"action": "read", "page_id": page_id}
+    before = await invoke(board, read)
+    result = await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": page_id,
+            "expected_revision": 1,
+            "request_id": "unsafe",
+            **change,
+        },
+    )
+    assert result["error"]["code"] == "wiki_revision_conflict"
+    assert await invoke(board, read) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stale", [False, True])
+@pytest.mark.parametrize(
+    ("content", "old"),
+    [
+        ("same same", "same"),
+        ("“Ready” and “Ready”", '"Ready"'),
+        ("  First\n  Second\n    First\n    Second", "First\nSecond"),
+    ],
+)
+async def test_wiki_ambiguous_matches_never_fall_through(board, stale, content, old):
+    created = await invoke(
+        board,
+        {
+            "action": "create",
+            "title": "Notes",
+            "content": content,
+            "request_id": "create",
+        },
+    )
+    page_id = created["data"]["page_id"]
+    if stale:
+        await invoke(
+            board,
+            {
+                "action": "update",
+                "page_id": page_id,
+                "expected_revision": 1,
+                "title": "Peer title",
+                "request_id": "rename",
+            },
+            1,
+        )
+    read = {"action": "read", "page_id": page_id}
+    before = await invoke(board, read)
+    result = await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": page_id,
+            "expected_revision": 1,
+            "old_text": old,
+            "new_text": "Changed",
+            "request_id": "edit",
+        },
+    )
+    assert not result["ok"]
+    assert await invoke(board, read) == before
+
+
+@pytest.mark.asyncio
+async def test_wiki_similarity_requires_current_revision(board):
+    created = await invoke(
+        board,
+        {
+            "action": "create",
+            "title": "Notes",
+            "content": "Start\nThe result is pending.\nEnd",
+            "request_id": "create",
+        },
+    )
+    page_id = created["data"]["page_id"]
+    peer_content = "Start\nThe result is verified.\nEnd"
+    await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": page_id,
+            "expected_revision": 1,
+            "content": peer_content,
+            "request_id": "peer",
+        },
+        1,
+    )
+    edit = {
+        "action": "update",
+        "page_id": page_id,
+        "expected_revision": 1,
+        "old_text": "Start\nThe result is pending.\nEnd",
+        "new_text": "Start\nThe result is complete.\nEnd",
+        "request_id": "edit",
+    }
+    assert (await invoke(board, edit))["error"]["code"] == "wiki_revision_conflict"
+    assert (await invoke(board, {"action": "read", "page_id": page_id}))["data"][
+        "content"
+    ] == peer_content
+    result = await invoke(board, {**edit, "expected_revision": 2, "request_id": "current"})
+    assert result["ok"], result
+    assert (await invoke(board, {"action": "read", "page_id": page_id}))["data"]["content"] == edit[
+        "new_text"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_wiki_stale_edit_cannot_revive_deleted_page_or_exceed_size_limit(board):
+    created = await invoke(
+        board,
+        {
+            "action": "create",
+            "title": "Notes",
+            "content": "First\n" + "x" * 199990,
+            "request_id": "create",
+        },
+    )
+    page_id = created["data"]["page_id"]
+    edit = {
+        "action": "update",
+        "page_id": page_id,
+        "expected_revision": 1,
+        "old_text": "First",
+        "new_text": "replacement" * 10,
+        "request_id": "edit",
+    }
+    await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": page_id,
+            "expected_revision": 1,
+            "title": "Peer title",
+            "request_id": "rename",
+        },
+        1,
+    )
+    assert (await invoke(board, edit))["error"]["code"] == "invalid_arguments"
+    assert (await invoke(board, {"action": "read", "page_id": page_id}))["data"]["revision"] == 2
+    deleted = await invoke(
+        board,
+        {
+            "action": "delete",
+            "page_id": page_id,
+            "expected_revision": 2,
+            "request_id": "delete",
+        },
+        1,
+    )
+    assert deleted["ok"]
+    assert (await invoke(board, {**edit, "new_text": "Done"}))["error"]["code"] == "wiki_deleted"
+    current = (await invoke(board, {"action": "read", "page_id": page_id}))["data"]
+    assert current["deleted"]
+    assert current["revision"] == 3
+
+
+@pytest.mark.asyncio
 async def test_wiki_collaboration_conflicts_history_delete_restore_and_replay(board):
     create = {
         "action": "create",
