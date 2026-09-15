@@ -77,11 +77,11 @@ def test_swarm_workflow_persists_failed_calls_and_resumes_from_feedback():
                 ),
                 (
                     "swarm_board",
-                    {"action": "post", "text": "I will review clarity", "request_id": "intro"},
+                    {"action": "post", "text": "I will review clarity"},
                 ),
                 (
                     "swarm_board",
-                    {"action": "post", "text": "I will review clarity", "request_id": "intro"},
+                    {"action": "post", "text": "I will review clarity"},
                 ),
                 ("swarm_board", {"action": "join", "discussion_id": topic}),
                 (
@@ -90,7 +90,6 @@ def test_swarm_workflow_persists_failed_calls_and_resumes_from_feedback():
                         "action": "create",
                         "title": "Review",
                         "text": "Check facts, clarity, completeness",
-                        "request_id": "review",
                     },
                 ),
                 (
@@ -99,7 +98,6 @@ def test_swarm_workflow_persists_failed_calls_and_resumes_from_feedback():
                         "action": "post",
                         "text": "Please review",
                         "recipients": [peer],
-                        "request_id": "ping",
                     },
                 ),
                 ("swarm_inbox", {}),
@@ -131,8 +129,8 @@ def test_swarm_workflow_persists_failed_calls_and_resumes_from_feedback():
 @pytest.mark.parametrize(
     ("tool", "case", "minimum", "expected_names"),
     [
-        ("swarm_board", "all", 50, set()),
-        ("swarm_board", "bounds", 8, set()),
+        ("swarm_board", "all", 49, {"post_repeat", "post_changed", "create_repeat"}),
+        ("swarm_board", "bounds", 5, set()),
         ("swarm_inbox", "all", 15, set()),
         (
             "swarm_state",
@@ -470,14 +468,14 @@ def test_swarm_unassisted_requires_actual_feedback_and_a_later_publication():
             calls = [
                 ("swarm_board", {"action": "read", "message_id": goal_id}),
                 ("swarm_inbox", {}),
-                ("swarm_board", {"action": "post", "text": "Draft", "request_id": "draft"}),
+                ("swarm_board", {"action": "post", "text": "Draft"}),
                 ("swarm_inbox", {}),
             ]
             if self.revise:
                 calls.append(
                     (
                         "swarm_board",
-                        {"action": "post", "text": "Revised checklist", "request_id": "revision"},
+                        {"action": "post", "text": "Revised checklist"},
                     )
                 )
             if self.step >= len(calls):

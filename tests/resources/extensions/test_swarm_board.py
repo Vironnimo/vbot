@@ -20,6 +20,7 @@ from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.format import write_bootstrap_marker
 from core.tools import ToolContext, ToolRegistry
 from core.tools.availability import ToolAccess
+from core.utils.ids import new_id
 from resources.extensions.swarm.extension import register
 
 
@@ -141,8 +142,8 @@ async def board(tmp_path):
         sessions.close()
 
 
-async def call(board, arguments, peer=0):
-    context = replace(board.contexts[peer])
+async def call(board, arguments, peer=0, *, tool_call_id=None):
+    context = replace(board.contexts[peer], tool_call_id=tool_call_id or new_id("call"))
     result = await board.tools.get("swarm_board").handler(context, arguments)
     return result, context
 
@@ -206,14 +207,15 @@ async def test_registered_board_public_posts_pages_and_durable_read_receipt(boar
     main = result["data"]["main_discussion_id"]
     assert result["data"]["entries"][0]["id"] == main
     peer = board.bindings[1].participant_id
-    posted, _ = await call(
+    posted, posted_context = await call(
         board,
-        {"action": "post", "text": "full text", "request_id": "one", "recipients": [peer, peer]},
+        {"action": "post", "text": "full text", "recipients": [peer, peer]},
     )
     assert posted["ok"]
     replay, _ = await call(
         board,
-        {"action": "post", "text": "full text", "request_id": "one", "recipients": [peer, peer]},
+        {"action": "post", "text": "full text", "recipients": [peer, peer]},
+        tool_call_id=posted_context.tool_call_id,
     )
     assert replay["data"]["replayed"]
     read, context = await call(board, {"action": "read"}, peer=1)
@@ -243,7 +245,7 @@ async def test_registered_board_public_posts_pages_and_durable_read_receipt(boar
 @pytest.mark.asyncio
 async def test_board_discussion_join_leave_reply_and_exact_pagination(board):
     created, _ = await call(
-        board, {"action": "create", "title": "Topic", "text": "opening", "request_id": "create"}
+        board, {"action": "create", "title": "Topic", "text": "opening"}
     )
     discussion = created["data"]["discussion_id"]
     first, _ = await call(board, {"action": "list", "limit": 1})
@@ -258,7 +260,6 @@ async def test_board_discussion_join_leave_reply_and_exact_pagination(board):
             "discussion_id": discussion,
             "text": "answer",
             "reply_to": opening["id"],
-            "request_id": "reply",
         },
         peer=1,
     )
@@ -285,10 +286,10 @@ async def test_board_discussion_join_leave_reply_and_exact_pagination(board):
         {"action": "list", "swarm_id": "foreign"},
         {"action": "read", "message_id": "foreign", "limit": 20},
         {"action": "read", "text": "wrong"},
-        {"action": "post", "text": "x"},
-        {"action": "post", "text": "", "request_id": "id"},
-        {"action": "post", "text": "x" * 16001, "request_id": "id"},
-        {"action": "create", "text": "x", "request_id": "id"},
+        {"action": "post"},
+        {"action": "post", "text": ""},
+        {"action": "post", "text": "x" * 16001},
+        {"action": "create", "text": "x"},
         {"action": "join"},
         {"action": "leave"},
     ],
@@ -302,15 +303,16 @@ async def test_invalid_board_calls_have_no_effect(board, arguments):
 
 
 @pytest.mark.asyncio
-async def test_board_rejects_forged_context_and_conflicting_idempotence(board):
+async def test_board_rejects_forged_context_and_preserves_separate_identical_posts(board):
     foreign = replace(board.contexts[0], session_id=board.contexts[1].session_id)
     result = await board.service.board(foreign, {"action": "list"})
     assert not result["ok"]
-    assert (await call(board, {"action": "post", "text": "first", "request_id": "same"}))[0]["ok"]
-    conflict, _ = await call(board, {"action": "post", "text": "changed", "request_id": "same"})
-    assert conflict["error"]["code"] == "request_conflict"
+    assert (await call(board, {"action": "post", "text": "first"}))[0]["ok"]
+    repeated, _ = await call(board, {"action": "post", "text": "first"})
+    assert repeated["ok"]
     page = await board.store.read_posts(board.swarm["id"], board.bindings[0].participant_id)
-    assert len(page.entries) == 1
+    assert len(page.entries) == 2
+    assert {entry["text"] for entry in page.entries} == {"first"}
 
 
 @pytest.mark.asyncio
@@ -383,9 +385,8 @@ async def test_create_pings_opening_atomically_without_joining_recipients(board)
         "title": "Review",
         "text": "Please review this draft",
         "recipients": [peer, peer],
-        "request_id": "create-ping",
     }
-    created, _ = await call(board, arguments)
+    created, created_context = await call(board, arguments)
     assert created["ok"]
     data = created["data"]
     inbox = await board.store.prepare_inbox_delivery(board.swarm["id"], peer)
@@ -397,12 +398,14 @@ async def test_create_pings_opening_atomically_without_joining_recipients(board)
     assert not next(row for row in discussions.entries if row["id"] == data["discussion_id"])[
         "joined"
     ]
-    replay, _ = await call(board, arguments)
+    replay, _ = await call(board, arguments, tool_call_id=created_context.tool_call_id)
     assert replay["data"]["replayed"]
-    conflict, _ = await call(board, {**arguments, "recipients": []})
+    conflict, _ = await call(
+        board, {**arguments, "recipients": []}, tool_call_id=created_context.tool_call_id
+    )
     assert conflict["error"]["code"] == "request_conflict"
     invalid, _ = await call(
-        board, {**arguments, "recipients": [peer, "foreign"], "request_id": "bad"}
+        board, {**arguments, "recipients": [peer, "foreign"]}
     )
     assert invalid["error"]["code"] == "invalid_recipient"
     assert (
@@ -416,27 +419,31 @@ async def test_create_pings_opening_atomically_without_joining_recipients(board)
 @pytest.mark.asyncio
 async def test_reply_uses_owned_message_discussion_and_rejects_contradiction(board):
     created, _ = await call(
-        board, {"action": "create", "title": "Topic", "text": "Opening", "request_id": "topic"}
+        board, {"action": "create", "title": "Topic", "text": "Opening"}
     )
     topic = created["data"]
     arguments = {
         "action": "post",
         "text": "Answer",
         "reply_to": topic["opening_post_id"],
-        "request_id": "answer",
     }
-    reply, _ = await call(board, arguments, peer=1)
+    reply, reply_context = await call(board, arguments, peer=1)
     assert reply["data"]["discussion_id"] == topic["discussion_id"]
-    replay, _ = await call(board, {**arguments, "discussion_id": topic["discussion_id"]}, peer=1)
+    replay, _ = await call(
+        board,
+        {**arguments, "discussion_id": topic["discussion_id"]},
+        peer=1,
+        tool_call_id=reply_context.tool_call_id,
+    )
     assert replay["data"]["replayed"]
     mismatch, _ = await call(
         board,
-        {**arguments, "discussion_id": board.swarm["main_discussion_id"], "request_id": "mismatch"},
+        {**arguments, "discussion_id": board.swarm["main_discussion_id"]},
         peer=1,
     )
     assert mismatch["error"]["code"] == "reply_discussion_mismatch"
     missing, _ = await call(
-        board, {**arguments, "reply_to": "foreign", "request_id": "foreign"}, peer=1
+        board, {**arguments, "reply_to": "foreign"}, peer=1
     )
     assert missing["error"]["code"] == "message_not_found"
     assert (
@@ -461,7 +468,7 @@ async def test_board_validation_identifies_the_field_before_any_effect(board):
     from resources.extensions.swarm.store import SwarmStoreError
 
     for arguments, field in [
-        ({"action": "post", "text": "missing request"}, "request_id"),
+        ({"action": "post"}, "text"),
         ({"action": "list", "text": "inapplicable"}, "text"),
         ({"action": "join"}, "discussion_id"),
         ({"action": "list", "unavailable_feature": 1}, "unavailable_feature"),
@@ -489,7 +496,6 @@ async def test_create_retains_opening_and_announcement_for_inactive_peers(board)
             "title": "Review",
             "text": "Opening",
             "recipients": [peer],
-            "request_id": "inactive-create",
         },
     )
     assert created["ok"]

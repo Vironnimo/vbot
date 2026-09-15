@@ -48,7 +48,7 @@ from ._extension_values import (
 )
 from ._registration import register as register
 from ._registration import session_tool_catalog
-from ._store_values import _validate_profile
+from ._store_values import _hash, _validate_profile
 from ._store_wiki import MUTATIONS
 from .agent_text import (
     BOARD_PARAMETERS,
@@ -209,6 +209,15 @@ class SwarmExtension:
             action = _validate_board(arguments)
             store = self._store()
             sid, pid = binding.group_id, binding.participant_id
+            if action in {"post", "create"}:
+                request_id = _hash(
+                    [
+                        context.session_id,
+                        context.run_id,
+                        context.iteration_number,
+                        context.tool_call_id,
+                    ]
+                )
             if action == "list":
                 page = await store.list_discussions(
                     sid, pid, cursor=arguments.get("cursor"), limit=arguments.get("limit", 20)
@@ -225,6 +234,7 @@ class SwarmExtension:
                 data = await store.post(
                     sid,
                     pid,
+                    request_id=request_id,
                     expected_epoch=swarm["epoch"],
                     **{key: value for key, value in arguments.items() if key != "action"},
                 )
@@ -233,6 +243,7 @@ class SwarmExtension:
                 data = await store.create_discussion(
                     sid,
                     pid,
+                    request_id=request_id,
                     expected_epoch=swarm["epoch"],
                     **{key: value for key, value in arguments.items() if key != "action"},
                 )

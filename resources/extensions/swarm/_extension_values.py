@@ -234,8 +234,8 @@ def _validate_board(arguments: Json) -> str:
     fields = {
         "list": {"cursor", "limit"},
         "read": {"discussion_id", "message_id", "cursor", "limit"},
-        "post": {"discussion_id", "text", "reply_to", "recipients", "request_id"},
-        "create": {"title", "text", "request_id", "recipients"},
+        "post": {"discussion_id", "text", "reply_to", "recipients"},
+        "create": {"title", "text", "recipients"},
         "join": {"discussion_id"},
         "leave": {"discussion_id"},
     }
@@ -246,8 +246,8 @@ def _validate_board(arguments: Json) -> str:
     if unexpected:
         raise SwarmStoreError("inapplicable_field", field=unexpected[0])
     required = {
-        "post": {"text", "request_id"},
-        "create": {"title", "text", "request_id"},
+        "post": {"text"},
+        "create": {"title", "text"},
         "join": {"discussion_id"},
         "leave": {"discussion_id"},
     }
@@ -262,7 +262,7 @@ def _validate_board(arguments: Json) -> str:
                 isinstance(item, str) and item for item in value
             )
         else:
-            maximum = {"text": 16000, "title": 120, "request_id": 128}.get(key)
+            maximum = {"text": 16000, "title": 120}.get(key)
             valid = (
                 isinstance(value, str)
                 and bool(value.strip())
