@@ -97,6 +97,10 @@ class MCPService:
             self._startup_error = str(error)
             self.api.logger.warning("MCP configuration could not be loaded: %s", error)
             return
+        for issue in self.store.issues:
+            self.api.logger.warning(
+                "MCP configuration issue: %s", json.dumps(issue, ensure_ascii=True)
+            )
         for config in self.connections.values():
             self._runner(config)
             if config["enabled"]:
@@ -573,7 +577,10 @@ class MCPService:
         if self._startup_error is not None:
             raise ValueError(self._startup_error)
         if operation == "list":
-            return {"connections": [self._status(identifier) for identifier in self.connections]}
+            return {
+                "connections": [self._status(identifier) for identifier in self.connections],
+                "configuration_issues": copy.deepcopy(self.store.issues) if self.store else [],
+            }
         if operation == "requests":
             return {"requests": self.inputs.list()}
         if operation == "respond":
