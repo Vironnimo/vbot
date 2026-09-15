@@ -22,6 +22,7 @@ class ExtensionHost:
     data_dir: Path
     sample: Callable[[ToolContext, JsonObject], Awaitable[JsonObject]]
     resolve_agent: Callable[[str | None, str], Any]
+    resolve_tool_agent: Callable[[ToolContext], Any]
     store_attachment: Callable[[str, bytes], Any]
     resolve_credential: Callable[[str], str]
     set_credential: Callable[[str, str], None]

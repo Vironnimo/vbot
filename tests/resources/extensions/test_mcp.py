@@ -19,7 +19,7 @@ from mcp.server import Server
 from core.attachments import AttachmentTooLargeError
 from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
 from core.tools.availability import ToolAccess, resolve_tool_access
-from core.tools.tools import ToolDefinitionProfileContext, ToolRegistry
+from core.tools.tools import ToolRegistry
 from resources.extensions.mcp.client import ConnectionRunner, sampling_messages
 from resources.extensions.mcp.config import ConnectionStore, validate_connection
 from resources.extensions.mcp.content import ContentStore
@@ -238,25 +238,6 @@ def test_remote_names_are_stable_unique_and_provider_safe():
     assert remote_tool_name("example", "a/b") != remote_tool_name("example", "a_b")
 
 
-@pytest.mark.asyncio
-async def test_connection_grant_does_not_leak_between_projects(host):
-    api = ExtensionAPI("mcp", ExtensionDeclarations(), config={}, logger=logging.getLogger("test"))
-    registry = ToolRegistry()
-    api.operations.bind(registry)
-    service = MCPService(api)
-    await service.start(host)
-    service.connections["example"] = validate_connection(
-        {"id": "example", "transport": "stdio", "command": "python", "agents": ["alice"]}
-    )
-    runner = service._runner(service.connections["example"])
-    runner.state = "connected"
-    service._publish(runner, {"tools": []})
-    profile = registry.get("mcp_example").definition_profile_resolver
-    assert profile(ToolDefinitionProfileContext(agent_id="alice")) is not None
-    assert profile(ToolDefinitionProfileContext(agent_id="alice", project_id="other")) is None
-    await service.close()
-
-
 def test_sampling_rejects_unknown_content_instead_of_losing_it():
     with pytest.raises(ValueError):
         sampling_messages({"messages": [{"role": "user", "content": {"type": "future-data"}}]})
@@ -425,13 +406,15 @@ async def test_future_tools_follow_connection_grant_and_explicit_denials_win(hos
     service = MCPService(api)
     await service.start(host)
     service.connections["example"] = validate_connection(
-        {"id": "example", "transport": "stdio", "command": "python", "agents": ["alice"]}
+        {"id": "example", "transport": "stdio", "command": "python"}
     )
     runner = service._runner(service.connections["example"])
     runner.state = "connected"
     service._publish(runner, {"tools": [{"name": "original", "inputSchema": {"type": "object"}}]})
     denied = remote_tool_name("example", "denied")
-    policy = ToolAccess(mode="selected", allowed=("mcp_example",), denied=(denied,))
+    policy = ToolAccess(
+        mode="selected", allowed=("mcp_example",), granted=("mcp_example",), denied=(denied,)
+    )
     service._publish(
         runner,
         {
@@ -519,7 +502,7 @@ async def test_bundled_package_entrypoint_registers_management(tmp_path):
 
     names = {operation["name"] for operation in registry.management("mcp").describe()}
 
-    assert {"save", "grant", "test", "invoke", "respond", "cancel-job"} <= names
+    assert {"save", "test", "invoke", "respond", "cancel-job"} <= names
 
     for extension in ("mcp", "swarm"):
         descriptions = registry.management(extension).describe()

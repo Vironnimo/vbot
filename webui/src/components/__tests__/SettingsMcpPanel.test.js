@@ -54,7 +54,7 @@ const original = {
   transport: 'stdio',
   command: 'python',
   args: ['a b', ''],
-  agents: ['alice'],
+
   enabled: true,
   timeout: 120,
   credential_environment: { TOKEN: 'TEST_KEY' },
@@ -135,15 +135,13 @@ afterEach(async () => {
 });
 
 describe('MCP management surface', () => {
-  it('opens capabilities, shows blocked grants, and searches without calling remote Tools', async () => {
-    const access = [{ agent: 'alice', access: 'blocked', tool_count: 0 }];
+  it('opens capabilities and searches without calling remote Tools', async () => {
     records = [
       {
         id: 'example',
         configuration: structuredClone(original),
         state: 'connected',
         counts: { tools: 1 },
-        agent_access: access,
       },
     ];
     const handler = rpc.getMockImplementation();
@@ -180,7 +178,7 @@ describe('MCP management surface', () => {
     fullDescription.querySelector('summary').click();
     expect(fullDescription.open).toBe(true);
     expect(fullDescription.textContent).toContain('test-owned-tail');
-    expect(dialog.textContent).toContain('alice');
+    expect(dialog.querySelector('[aria-label^="Allow "]')).toBeNull();
     expect(dialog.querySelector('script')).toBeNull();
     const search = dialog.querySelector('input[aria-label="Search Tools"]');
     search.value = 'scene';
@@ -207,7 +205,7 @@ describe('MCP management surface', () => {
     expect(button('Add MCP connection')).toBeTruthy();
     expect(document.body.textContent).not.toContain('test-owned-internal-tool');
   });
-  it('creates a local connection with an exact Project Agent grant and reads it back', async () => {
+  it('creates a local connection without a second Agent permission list', async () => {
     component = mount(Panel, { target: document.body });
     await settle();
     button('Add MCP connection').click();
@@ -220,7 +218,6 @@ describe('MCP management surface', () => {
     button('Add argument').click();
     flushSync();
     input('Argument 1', 'blender-mcp');
-    document.querySelector('[aria-label="Allow artist@studio"]').click();
     flushSync();
     submit();
     await settle();
@@ -232,7 +229,6 @@ describe('MCP management surface', () => {
           id: 'blender',
           command: 'uvx',
           args: ['blender-mcp'],
-          agents: ['artist@studio'],
         }),
       },
     });
@@ -241,7 +237,7 @@ describe('MCP management surface', () => {
       document.querySelector('article[aria-label="blender"]'),
     ).toBeTruthy();
   });
-  it('preserves exact arguments and credentials when editing and allows grant removal', async () => {
+  it('preserves exact arguments and credentials when editing', async () => {
     records = [
       {
         id: 'example',
@@ -254,14 +250,13 @@ describe('MCP management surface', () => {
     button('Edit').click();
     await settle();
     input('Program', 'python3');
-    document.querySelector('[aria-label="Allow alice"]').click();
     flushSync();
     submit();
     await settle();
     expect(records[0].configuration).toMatchObject({
       command: 'python3',
       args: ['a b', ''],
-      agents: [],
+
       credential_environment: { TOKEN: 'TEST_KEY' },
     });
   });

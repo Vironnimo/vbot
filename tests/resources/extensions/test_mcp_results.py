@@ -114,10 +114,10 @@ async def test_revoke_prevents_reading_a_saved_remote_result(context_service, ho
         {"sentinel": True}, context(host), "example", source="inspect"
     )
     host.resolve_agent(None, "alice").tool_access = ToolAccess(
-        denied=(remote_tool_name("example", "inspect"),)
+        granted=("mcp_example",), denied=(remote_tool_name("example", "inspect"),)
     )
 
-    result = await registry.dispatch(context(host), receipt["read"])
+    result = await registry.dispatch(context(host), receipt["read"], allowed_tools=["mcp_example"])
 
     assert not result["ok"]
 
@@ -126,11 +126,14 @@ async def test_revoke_prevents_reading_a_saved_remote_result(context_service, ho
 async def test_connection_disconnect_keeps_the_fixed_model_definition(context_service):
     service, registry, runner, calls = context_service
     profile = ToolDefinitionProfileContext(agent_id="alice")
-    before = registry.provider_definitions(profile_context=profile)
+    before = registry.provider_definitions(profile_context=profile, allowed_tools=["mcp_example"])
 
     await service.manage("disconnect", {"id": "example"})
 
-    assert registry.provider_definitions(profile_context=profile) == before
+    assert (
+        registry.provider_definitions(profile_context=profile, allowed_tools=["mcp_example"])
+        == before
+    )
 
 
 @pytest.mark.asyncio

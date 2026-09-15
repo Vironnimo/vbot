@@ -80,7 +80,9 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
     with TemporaryDirectory(prefix="vbot-mcp-probe-") as directory:
         root = Path(directory)
         agent = SimpleNamespace(
-            tool_access=ToolAccess(), memory_prompt_mode="off", workspace=directory
+            tool_access=ToolAccess(granted=("mcp_blender",)),
+            memory_prompt_mode="off",
+            workspace=directory,
         )
 
         async def sample(*_: Any) -> dict[str, Any]:
@@ -90,6 +92,7 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
             data_dir=root,
             sample=sample,
             resolve_agent=lambda *_: agent,
+            resolve_tool_agent=lambda context: agent,
             store_attachment=lambda *_: None,
             resolve_credential=lambda _: "",
             set_credential=lambda *_: None,
@@ -102,7 +105,7 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
         service = MCPService(api)
         await service.start(host)
         service.connections["blender"] = validate_connection(
-            {"id": "blender", "transport": "stdio", "command": "unused", "agents": ["probe"]}
+            {"id": "blender", "transport": "stdio", "command": "unused"}
         )
 
         class FixtureRunner(ConnectionRunner):
@@ -126,7 +129,8 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
             data_root=root,
         )
         definitions = registry.provider_definitions(
-            profile_context=ToolDefinitionProfileContext(agent_id="probe")
+            allowed_tools=["mcp_blender"],
+            profile_context=ToolDefinitionProfileContext(agent_id="probe"),
         )
         prompt = (
             "Lies den Renderbericht und nenne mir den abschliessenden Status "
@@ -162,7 +166,9 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
             call_context = replace(context, tool_call_id=call["id"], tool_name=call["name"])
             actions.append(str(inputs.get("action")))
             try:
-                result = await registry.dispatch(call_context, inputs)
+                result = await registry.dispatch(
+                    call_context, inputs, service._allowed(call_context)
+                )
             except (ValueError, ToolContractError):
                 invalid += 1
                 result = {

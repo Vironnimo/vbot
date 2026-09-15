@@ -5,18 +5,12 @@ export default Object.freeze({
   'computerControl.noHotkey':
     'Global shortcut unavailable. Click to stop computer control.',
   'computerControl.stop': 'Stop computer control',
-  'mcp.accessAllowed': 'Tool access allowed: {count} Tools',
-  'mcp.accessBlocked': 'Blocked by Agent Tool settings',
-  'mcp.accessUnresolved': 'Agent unavailable',
-  'mcp.assigned': 'Granted to: {agents}',
   'mcp.catalogCounts':
     'Tools: {tools} · Resources: {resources} · Prompts: {prompts}',
   'mcp.capabilities': 'Capabilities & access',
   'mcp.inspectTitle': 'Capabilities & access: {name}',
   'mcp.searchTools': 'Search Tools',
   'mcp.showAll': 'Show all',
-  'mcp.accessExplanation':
-    'A grant and the Agent’s Tool settings must both allow access. Connection tests verify the server; they do not change Agent permissions.',
   'mcp.catalogMissing': 'No catalog discovered yet',
   'mcp.catalogMissingHint':
     'Close this view and test the connection to load its capabilities.',
@@ -30,13 +24,11 @@ export default Object.freeze({
   'mcp.serverPrompts': 'Server prompts',
   'mcp.fullDescription': 'Full description',
   'mcp.accessHelp':
-    'Select who may use this connection. Existing Tool restrictions and Project limits still apply.',
+    'Enable this connection in the Agent or Swarm Tool settings. It is off by default, including in All Tools mode.',
   'mcp.add': 'Add MCP connection',
   'mcp.addArgument': 'Add argument',
   'mcp.addEntry': 'Add {group}',
   'mcp.advanced': 'Advanced settings',
-  'mcp.agentAccess': 'Agent access',
-  'mcp.allowAgent': 'Allow {agent}',
   'mcp.argument': 'Argument {number}',
   'mcp.arguments': 'Arguments',
   'mcp.cancelTest': 'Cancel test',
@@ -67,7 +59,6 @@ export default Object.freeze({
   'mcp.entryName': 'Name',
   'mcp.environment': 'Environment variables',
   'mcp.failed': 'Connection failed',
-  'mcp.granted': 'Agents: {agents}',
   'mcp.host':
     'Programs and application add-ons run on the machine hosting vBot.',
   'mcp.http': 'Server URL (HTTP)',
@@ -76,8 +67,6 @@ export default Object.freeze({
   'mcp.name': 'Connection name',
   'mcp.nameHelp':
     'Lowercase letters, numbers and underscores; start with a letter.',
-  'mcp.noAgents': 'No Agents available yet. You can grant access later.',
-  'mcp.noGrants': 'No Agents have access.',
   'mcp.oauth': 'Sign in with OAuth',
   'mcp.program': 'Program',
   'mcp.programHelp':
@@ -93,15 +82,12 @@ export default Object.freeze({
   'mcp.saveHelp':
     'Saving applies the connection on the vBot host. Editing its settings interrupts the current connection.',
   'mcp.saved': 'Connection saved. Test it to verify access to the server.',
-  'mcp.savedGrant': 'Saved grant',
   'mcp.secretHelp':
     'Saved values are never displayed. This named credential may also be used by other connections.',
   'mcp.secretValue': 'New secret value',
   'mcp.secretsHelp':
     'Use credential names here, not secret values. After saving, open Credentials to set their values.',
   'mcp.sse': 'Server URL (legacy SSE)',
-  'mcp.targetsPartial':
-    'Some Project Agents could not be loaded. Existing grants are preserved.',
   'mcp.test': 'Test connection',
   'mcp.testCancelled': 'Connection test cancelled.',
   'mcp.testFailed': 'Connection test failed.',
