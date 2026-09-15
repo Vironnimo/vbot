@@ -27,12 +27,15 @@ def host(tmp_path):
 
     credentials = {}
     agent = SimpleNamespace(
-        tool_access=ToolAccess(), memory_prompt_mode="off", workspace=str(tmp_path)
+        tool_access=ToolAccess(granted=("mcp_example",)),
+        memory_prompt_mode="off",
+        workspace=str(tmp_path),
     )
     return ExtensionHost(
         data_dir=tmp_path,
         sample=sample,
         resolve_agent=lambda project, name: agent,
+        resolve_tool_agent=lambda context: agent,
         store_attachment=lambda name, data: SimpleNamespace(
             id="blob", file_path=tmp_path / name, filename=name, media_type="image/png"
         ),
@@ -81,9 +84,7 @@ def server():
 
 def runner_for(host, server, monkeypatch):
     runner = ConnectionRunner(
-        validate_connection(
-            {"id": "example", "transport": "stdio", "command": sys.executable, "agents": ["alice"]}
-        ),
+        validate_connection({"id": "example", "transport": "stdio", "command": sys.executable}),
         host,
         InputRequests(),
         lambda *args: None,
@@ -104,7 +105,7 @@ async def context_service(host, monkeypatch):
     service = MCPService(api)
     await service.start(host)
     service.connections["example"] = validate_connection(
-        {"id": "example", "transport": "stdio", "command": "unused", "agents": ["alice"]}
+        {"id": "example", "transport": "stdio", "command": "unused"}
     )
     runner = service._runner(service.connections["example"])
     runner.state = "connected"

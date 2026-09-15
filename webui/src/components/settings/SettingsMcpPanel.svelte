@@ -7,7 +7,6 @@
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import FormField from '../ui/FormField.svelte';
-  import InfoHint from '../ui/InfoHint.svelte';
   import Modal from '../ui/Modal.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
@@ -22,11 +21,9 @@
   const componentId = $props.id();
   let state = $state({
     connections: [],
-    targets: [],
     loading: true,
     busy: false,
     error: '',
-    targetError: '',
     notice: '',
     job: null,
     inspector: null,
@@ -44,18 +41,6 @@
     },
   });
   let blocked = $derived(state.busy || Boolean(state.job));
-  let targets = $derived([
-    ...state.targets,
-    ...(draft?.agents ?? [])
-      .filter(
-        (address) => !state.targets.some((target) => target.value === address),
-      )
-      .map((address) => ({
-        value: address,
-        label: address,
-        secondaryLabel: t('mcp.savedGrant', 'Saved grant'),
-      })),
-  ]);
   let transportOptions = $derived([
     { value: 'stdio', label: t('mcp.local', 'Local program') },
     { value: 'http', label: t('mcp.http', 'Server URL (HTTP)') },
@@ -92,18 +77,9 @@
       ? JSON.parse(JSON.stringify(connection.configuration))
       : null;
     draft = mcpDraft(original);
-    void controller.loadTargets();
   }
   function set(field, value) {
     draft = { ...draft, [field]: value };
-  }
-  function grant(address, enabled) {
-    set(
-      'agents',
-      enabled
-        ? [...draft.agents, address]
-        : draft.agents.filter((item) => item !== address),
-    );
   }
   function setMapping(field, index, part, value) {
     set(
@@ -157,17 +133,6 @@
         variant: 'neutral',
       }
     );
-  }
-
-  function accessLabel(access) {
-    if (access.access === 'allowed')
-      return t('mcp.accessAllowed', 'Tool access allowed: {count} Tools', {
-        count: access.tool_count,
-      });
-    if (access.access === 'blocked')
-      return t('mcp.accessBlocked', 'Blocked by Agent Tool settings');
-    if (access.access === 'disabled') return t('mcp.disabled', 'Disabled');
-    return t('mcp.accessUnresolved', 'Agent unavailable');
   }
 </script>
 
@@ -256,13 +221,6 @@
               ? connection.configuration.command
               : connection.configuration.url}
           </p>
-          <p>
-            {connection.configuration.agents.length
-              ? t('mcp.assigned', 'Granted to: {agents}', {
-                  agents: connection.configuration.agents.join(', '),
-                })
-              : t('mcp.noGrants', 'No Agents have access.')}
-          </p>
           {#if connection.counts}
             <p class="mcp-catalog-counts">
               {t(
@@ -278,13 +236,6 @@
               )}
             </p>
           {/if}
-          {#each connection.agent_access ?? [] as access (access.agent)}
-            {#if access.access === 'blocked' || access.access === 'unresolved'}
-              <Banner variant="warn"
-                >{access.agent}: {accessLabel(access)}</Banner
-              >
-            {/if}
-          {/each}
           {#if connection.error}<Banner variant="error"
               >{connection.error}</Banner
             >{/if}
@@ -386,32 +337,16 @@
         {:else if state.inspector.data}
           {@const catalog = state.inspector.data}
           <div class="mcp-heading">
-            <div class="mcp-access-heading">
-              <h4>{t('mcp.agentAccess', 'Agent access')}</h4>
-              <InfoHint
-                text={t(
-                  'mcp.accessExplanation',
-                  'A grant and the Agent’s Tool settings must both allow access. Connection tests verify the server; they do not change Agent permissions.',
-                )}
-              />
-            </div>
+            <p>
+              {t(
+                'mcp.accessHelp',
+                'Enable this connection in the Agent or Swarm Tool settings. It is off by default, including in All Tools mode.',
+              )}
+            </p>
             <StatusChip variant={status(catalog).variant}
               >{status(catalog).label}</StatusChip
             >
           </div>
-          {#if catalog.agent_access?.length}
-            <ul class="mcp-access-list">
-              {#each catalog.agent_access as access (access.agent)}
-                <li>
-                  <strong>{access.agent}</strong><span
-                    >{accessLabel(access)}</span
-                  >
-                </li>
-              {/each}
-            </ul>
-          {:else}
-            <p>{t('mcp.noGrants', 'No Agents have access.')}</p>
-          {/if}
           {#if !catalog.catalog_available}
             <EmptyState
               density="compact"
@@ -661,48 +596,12 @@
               />{/snippet}
           </FormField>
         {/if}
-        <div class="mcp-group">
-          <h4>{t('mcp.agentAccess', 'Agent access')}</h4>
-          <p>
-            {t(
-              'mcp.accessHelp',
-              'Select who may use this connection. Existing Tool restrictions and Project limits still apply.',
-            )}
-          </p>
-          {#if state.targetError}<Banner variant="warn"
-              >{state.targetError}<Button
-                variant="secondary"
-                onClick={controller.loadTargets}
-                >{t('common.retry', 'Retry')}</Button
-              ></Banner
-            >{/if}
-          <div class="mcp-grants">
-            {#each targets as target (target.value)}
-              <div class="mcp-grant">
-                <span
-                  >{target.label}<small
-                    >{target.secondaryLabel !== target.label
-                      ? target.secondaryLabel
-                      : ''}</small
-                  ></span
-                ><Toggle
-                  checked={draft.agents.includes(target.value)}
-                  disabled={state.busy}
-                  ariaLabel={t('mcp.allowAgent', 'Allow {agent}', {
-                    agent: target.value,
-                  })}
-                  onChange={(enabled) => grant(target.value, enabled)}
-                />
-              </div>
-            {/each}
-          </div>
-          {#if !targets.length && !state.targetError}<p>
-              {t(
-                'mcp.noAgents',
-                'No Agents available yet. You can grant access later.',
-              )}
-            </p>{/if}
-        </div>
+        <p>
+          {t(
+            'mcp.accessHelp',
+            'Enable this connection in the Agent or Swarm Tool settings. It is off by default, including in All Tools mode.',
+          )}
+        </p>
         <details class="mcp-advanced">
           <summary>{t('mcp.advanced', 'Advanced settings')}</summary>
           <div class="mcp-editor">
