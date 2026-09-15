@@ -10,6 +10,7 @@ import os
 import random
 import threading
 from collections import deque
+from collections.abc import Callable
 from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
@@ -35,8 +36,8 @@ from mcp.shared.dispatcher import CallOptions
 from mcp.shared.exceptions import MCPError
 
 from core.extensions.operations import ExtensionHost
-from core.projects.address import format_agent_address
 from core.tools.tools import ToolContext
+from core.utils.errors import VBotError
 
 from .interactions import InputRequests
 
@@ -145,12 +146,19 @@ class ConnectionRunner:
     """
 
     def __init__(
-        self, config: dict[str, Any], host: ExtensionHost, inputs: InputRequests, publish: Any
+        self,
+        config: dict[str, Any],
+        host: ExtensionHost,
+        inputs: InputRequests,
+        publish: Any,
+        *,
+        authorize: Callable[[ToolContext], None] | None = None,
     ) -> None:
         self.config = config
         self.host = host
         self.inputs = inputs
         self.publish = publish
+        self._authorize = authorize
         self.id = config["id"]
         self.state = "disconnected"
         self.error: str | None = None
@@ -362,12 +370,11 @@ class ConnectionRunner:
                 return
             if invocation.result.cancelled():
                 continue
-            if invocation.context is not None:
-                address = format_agent_address(
-                    invocation.context.agent_id, invocation.context.project_id
-                )
-                if address not in self.config["agents"]:
-                    invocation.result.set_exception(ValueError("MCP connection access was revoked"))
+            if invocation.context is not None and self._authorize is not None:
+                try:
+                    self._authorize(invocation.context)
+                except (ValueError, VBotError) as error:
+                    invocation.result.set_exception(error)
                     continue
             self.context = invocation.context
             self._active = asyncio.create_task(
