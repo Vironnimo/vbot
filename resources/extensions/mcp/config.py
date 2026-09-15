@@ -6,6 +6,7 @@ import json
 import os
 import re
 import tempfile
+from collections import Counter
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -73,28 +74,101 @@ def validate_connection(value: Any) -> dict[str, Any]:
 
 
 class ConnectionStore:
-    """One strict current-format document; corrupt state is never overwritten."""
+    """Load connections independently and preserve unrecognized persisted data."""
 
     def __init__(self, directory: Path) -> None:
         self.directory = directory
         self.path = directory / "connections.json"
+        self.issues: list[dict[str, Any]] = []
 
-    def load(self) -> dict[str, dict[str, Any]]:
+    def _read(self) -> list[Any]:
         if not self.path.exists():
-            return {}
+            return []
         data = json.loads(self.path.read_text(encoding="utf-8"))
         if not isinstance(data, list):
             raise ValueError("MCP connections document must be an array")
-        records = [validate_connection(item) for item in data]
-        by_id = {record["id"]: record for record in records}
-        if len(by_id) != len(records):
-            raise ValueError("MCP connection ids must be unique")
-        return by_id
+        return data
+
+    def _parse(self, data: list[Any]) -> dict[str, dict[str, Any]]:
+        self.issues = []
+        identifiers = Counter(
+            item["id"]
+            for item in data
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        )
+        records = {}
+        for index, item in enumerate(data):
+            location: dict[str, Any] = {"index": index}
+            if isinstance(item, dict):
+                identifier = item.get("id")
+                if isinstance(identifier, str) and re.fullmatch(CONNECTION_ID_PATTERN, identifier):
+                    location["connection_id"] = identifier
+                if isinstance(identifier, str) and identifiers[identifier] > 1:
+                    self.issues.append(
+                        {
+                            **location,
+                            "code": "duplicate_id",
+                            "message": "Duplicate connection id; connection skipped",
+                        }
+                    )
+                    continue
+                unknown = sorted(set(item) - CONNECTION_SCHEMA["properties"].keys())
+                if unknown:
+                    self.issues.append(
+                        {
+                            **location,
+                            "code": "unknown_fields",
+                            "fields": unknown,
+                            "message": "Unrecognized fields ignored",
+                        }
+                    )
+                item = {
+                    key: value
+                    for key, value in item.items()
+                    if key in CONNECTION_SCHEMA["properties"]
+                }
+            try:
+                record = validate_connection(item)
+            except ValueError as error:
+                self.issues.append(
+                    {**location, "code": "invalid_connection", "message": str(error)}
+                )
+                continue
+            records[record["id"]] = record
+        return records
+
+    def load(self) -> dict[str, dict[str, Any]]:
+        return self._parse(self._read())
 
     def save(self, records: dict[str, dict[str, Any]]) -> None:
-        self.load()
-        values = [validate_connection(record) for record in records.values()]
+        data = self._read()
+        previous = self._parse(data)
+        normalized = {
+            identifier: validate_connection(record) for identifier, record in records.items()
+        }
+        if any(identifier != record["id"] for identifier, record in normalized.items()):
+            raise ValueError("MCP connection ids must match their record keys")
+        values: list[Any] = []
+        written: set[str] = set()
+        for item in data:
+            identifier = item.get("id") if isinstance(item, dict) else None
+            if isinstance(identifier, str) and identifier in normalized:
+                if identifier not in written:
+                    extras = {
+                        key: value
+                        for key, value in item.items()
+                        if key not in CONNECTION_SCHEMA["properties"]
+                    }
+                    values.append({**extras, **normalized[identifier]})
+                    written.add(identifier)
+            elif not isinstance(identifier, str) or identifier not in previous:
+                # An unrelated save must not erase a rejected connection.
+                values.append(item)
+        values.extend(
+            record for identifier, record in normalized.items() if identifier not in written
+        )
         atomic_json(self.path, values)
+        self._parse(values)
 
 
 def atomic_json(path: Path, data: Any) -> None:

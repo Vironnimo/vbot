@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
+import core.extensions._callbacks as extension_callbacks
 import core.extensions._loading as extension_loading
 from core.extensions import API_VERSION, ExtensionRegistry, HookContext
 from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
@@ -482,7 +484,9 @@ async def test_aload_register_timeout_fails_only_that_extension(
     assert await asyncio.to_thread(module.finished.wait, 1)
 
 
-def test_startup_and_shutdown_fire_in_load_order(tmp_path: Path) -> None:
+def test_startup_and_shutdown_fire_in_load_order(tmp_path: Path, monkeypatch, caplog) -> None:
+    monkeypatch.setattr(extension_callbacks, "_SLOW_EXTENSION_HANDLER_SECONDS", 0)
+    caplog.set_level(logging.WARNING, logger="vbot.extensions")
     root = tmp_path / "extensions"
     marker = tmp_path / "lifecycle.txt"
     _write_single_file(root, "alpha", _lifecycle_source("alpha", marker))
@@ -498,9 +502,10 @@ def test_startup_and_shutdown_fire_in_load_order(tmp_path: Path) -> None:
         "alpha:shutdown",
         "zeta:shutdown",
     ]
+    assert not [record for record in caplog.records if record.name == "vbot.extensions"]
 
 
-def test_startup_handler_failure_is_isolated(tmp_path: Path) -> None:
+def test_startup_handler_failure_is_isolated(tmp_path: Path, caplog) -> None:
     root = tmp_path / "extensions"
     marker = tmp_path / "lifecycle.txt"
     _write_single_file(root, "alpha", _lifecycle_source("alpha", marker, startup_boom=True))
@@ -511,6 +516,10 @@ def test_startup_handler_failure_is_isolated(tmp_path: Path) -> None:
 
     # alpha's startup raised after writing nothing useful; zeta still fired
     assert "zeta:startup" in _marker_lines(marker)
+    errors = [record for record in caplog.records if record.name == "vbot.extensions"]
+    assert len(errors) == 1
+    assert errors[0].levelno == logging.ERROR
+    assert errors[0].exc_info is not None
 
 
 def test_fire_shutdown_blocking_runs_handlers(tmp_path: Path) -> None:
