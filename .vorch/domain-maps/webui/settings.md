@@ -120,3 +120,10 @@ unloads permit retry, and unmount clears polling. Coverage:
 `SettingsSpecializedModelsPanel.test.js` and `lib/__tests__/api.test.js`.
 
 Specialized Models displays schema defaults without inserting them into stored option drafts and submits only changed bindings. Each configured row with stored options offers Reset options, including when those options are absent from the live schema; it clears the options while preserving the target. Coverage: `SettingsSpecializedModelsPanel.test.js` exercises unrelated stale bindings, displayed defaults, and reset after schema drift.
+
+
+## Channel connection setup
+
+`SettingsChannelsPanel.svelte` supports Telegram, Discord, Slack, Mattermost and WhatsApp. The existing Channel autosave owner also persists Slack app-token variable names and Mattermost server URLs. IDs stay strings, preserving opaque IDs and integers beyond JavaScript's safe range. Create saves WhatsApp disabled with the literal `self` allowlist by default.
+
+`WhatsAppSetup.svelte` owns explicit install/connect/re-pair actions and disposable three-second status polling. Only `channel.whatsapp.status` and the dedicated setup/pair responses expose the transient QR; the component clears it after connection and ignores stale responses after unmount. Server-owned installation continues across navigation. Normal Channel status additionally exposes actual `connected` state for the new transports. Coverage: `WhatsAppSetup.test.js`, `SettingsView.test.channels.test.js`, and `channelSettings.test.js`.

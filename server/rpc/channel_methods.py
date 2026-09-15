@@ -57,6 +57,9 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
         "response_mode",
         "mention_patterns",
         "observe_unaddressed",
+        "app_token_env_var",
+        "app_token",
+        "server_url",
     }
     _reject_unsupported(params, supported_fields, "channel.create")
 
@@ -69,16 +72,26 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
         dm_scope=_optional_channel_dm_scope(params, "dm_scope", default="per_conversation"),
         allowed_chat_ids=_optional_platform_id_list(params, "allowed_chat_ids", default=[]),
         token_env_var=token_env_var,
-        enabled=_optional_bool(params, "enabled", default=True),
+        enabled=_optional_bool(params, "enabled", default=params.get("platform") != "whatsapp"),
         response_mode=_optional_channel_response_mode(params, "response_mode"),
         mention_patterns=_optional_string_list(params, "mention_patterns", default=[]),
         observe_unaddressed=_optional_bool(params, "observe_unaddressed", default=False),
+        app_token_env_var=_channel_app_token_key(params, channel_id),
+        server_url=_channel_optional_text(params, "server_url"),
     )
 
     credential_result: JsonObject | None = None
+    app_key = config.app_token_env_var
+    previous_app_value = None
+    app_written = False
     try:
         async with _agent_reference_lock(state):
             _validate_channel_agent_exists(state, config.agent_id)
+            config.validate()
+            if "app_token" in params:
+                previous_app_value = state.runtime.storage.load_environment().get(app_key)
+                _store_channel_token(state.runtime, app_key, _required_string(params, "app_token"))
+                app_written = True
             if managed_token is None:
                 state.runtime.channel_service.create_channel(config)
             else:
@@ -95,6 +108,8 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
                     raise
             state.runtime.reload_channel_tool()
     except Exception as exc:
+        if app_written:
+            _restore_channel_token(state.runtime, app_key, previous_app_value)
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
     _LOGGER.info(
@@ -122,11 +137,16 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
         "response_mode",
         "mention_patterns",
         "observe_unaddressed",
+        "app_token_env_var",
+        "server_url",
     }
     _reject_unsupported(params, supported_fields, "channel.update")
 
     channel_id = _required_string(params, "id")
     updates: JsonObject = {}
+    for key in ("app_token_env_var", "server_url"):
+        if key in params:
+            updates[key] = _channel_optional_text(params, key)
     if "platform" in params:
         updates["platform"] = _required_channel_platform(params, "platform")
     if "agent_id" in params:
@@ -136,7 +156,7 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
     if "allowed_chat_ids" in params:
         updates["allowed_chat_ids"] = _required_platform_id_list(params, "allowed_chat_ids")
     if "token_env_var" in params:
-        updates["token_env_var"] = _required_string(params, "token_env_var")
+        updates["token_env_var"] = _channel_optional_text(params, "token_env_var")
     if "enabled" in params:
         updates["enabled"] = _required_bool(params, "enabled")
     if "response_mode" in params:
@@ -225,13 +245,23 @@ def _disable_channel(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _set_channel_token(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"id", "token"}, "channel.set_token")
+    _reject_unsupported(params, {"id", "token", "slot"}, "channel.set_token")
 
     channel_id = _required_string(params, "id")
     token = _required_string(params, "token")
     channel_service = state.runtime.channel_service
     config = _channel_config_by_id(channel_service, channel_id)
-    credential_key = config.token_env_var
+    slot = params.get("slot", "bot")
+    if (
+        not isinstance(slot, str)
+        or slot not in {"bot", "app"}
+        or config.platform == "whatsapp"
+        or (slot == "app" and config.platform != "slack")
+    ):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST, "This Channel does not support the requested token slot"
+        )
+    credential_key = config.app_token_env_var if slot == "app" else config.token_env_var
     previous_value = state.runtime.storage.load_environment().get(credential_key)
     previous_effective_value = state.runtime.resolve_environment_credential(credential_key)
     credential_result: JsonObject
@@ -328,6 +358,11 @@ def _channel_status(state: Any, params: JsonObject) -> JsonObject:
         "id": config.id,
         **health,
         "denied_chats": denied_chats,
+        **(
+            channel_service.connection_status(channel_id)
+            if config.platform in {"slack", "mattermost", "whatsapp"}
+            else {}
+        ),
     }
 
 
@@ -408,6 +443,10 @@ def _channel_admin_revoke(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _channel_token_input(params: JsonObject, channel_id: str) -> tuple[str, str | None]:
+    if params.get("platform") == "whatsapp":
+        if params.get("token_env_var") or "token" in params or "app_token" in params:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, "WhatsApp uses QR pairing instead of tokens")
+        return "", None
     has_env_var = "token_env_var" in params
     has_managed_token = "token" in params
     if has_env_var == has_managed_token:
@@ -418,6 +457,56 @@ def _channel_token_input(params: JsonObject, channel_id: str) -> tuple[str, str 
     if has_managed_token:
         return managed_channel_token_env_var(channel_id), _required_string(params, "token")
     return _required_string(params, "token_env_var"), None
+
+
+def _channel_optional_text(params: JsonObject, key: str) -> str:
+    value = params.get(key, "")
+    if not isinstance(value, str):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a string")
+    return value.strip()
+
+
+def _channel_app_token_key(params: JsonObject, channel_id: str) -> str:
+    if "app_token" in params:
+        if params.get("platform") != "slack" or "app_token_env_var" in params:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, "Use one app token source for Slack")
+        return managed_channel_token_env_var(channel_id) + "__APP"
+    return _channel_optional_text(params, "app_token_env_var")
+
+
+async def _whatsapp_status(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"id"}, "channel.whatsapp.status")
+    try:
+        return cast(
+            JsonObject,
+            await state.runtime.channel_service.whatsapp_status(_required_string(params, "id")),
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
+async def _whatsapp_setup(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"id"}, "channel.whatsapp.setup")
+    try:
+        return cast(
+            JsonObject,
+            await state.runtime.channel_service.setup_whatsapp(_required_string(params, "id")),
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
+async def _whatsapp_pair(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"id", "reset"}, "channel.whatsapp.pair")
+    try:
+        result = await state.runtime.channel_service.pair_whatsapp(
+            _required_string(params, "id"), reset=_optional_bool(params, "reset", default=False)
+        )
+        state.runtime.reload_channel_tool()
+        publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
+        return cast(JsonObject, result)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
 
 
 def _store_channel_token(runtime: Any, credential_key: str, token: str) -> JsonObject:
@@ -556,6 +645,9 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
 
     return {
         "channel.list": _list_channels,
+        "channel.whatsapp.status": _whatsapp_status,
+        "channel.whatsapp.setup": _whatsapp_setup,
+        "channel.whatsapp.pair": _whatsapp_pair,
         "channel.create": _create_channel,
         "channel.update": _update_channel,
         "channel.delete": _delete_channel,

@@ -38,7 +38,7 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     add_parser.add_argument(
         "--agent", required=True, metavar="<agent-id>", help="Agent that handles channel messages"
     )
-    token_group = add_parser.add_mutually_exclusive_group(required=True)
+    token_group = add_parser.add_mutually_exclusive_group()
     token_group.add_argument(
         "--token-env",
         metavar="<env-var>",
@@ -50,6 +50,11 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         help="Read and manage the bot token from UTF-8 stdin",
     )
     add_parser.add_argument("--dm-scope", default="per_conversation", choices=CHANNEL_DM_SCOPES)
+    add_parser.add_argument("--app-token-env", help="Slack Socket Mode app-token variable name")
+    add_parser.add_argument("--server-url", help="Mattermost server URL")
+    add_parser.add_argument(
+        "--disabled", action="store_true", help="Save without starting the connection"
+    )
     add_parser.add_argument(
         "--allow",
         type=str,
@@ -77,6 +82,8 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     update_parser.add_argument("--platform", choices=CHANNEL_PLATFORMS)
     update_parser.add_argument("--agent", metavar="<agent-id>")
     update_parser.add_argument("--token-env", metavar="<env-var>")
+    update_parser.add_argument("--app-token-env", metavar="<env-var>")
+    update_parser.add_argument("--server-url", metavar="<url>")
     update_parser.add_argument("--dm-scope", choices=CHANNEL_DM_SCOPES)
     update_parser.add_argument(
         "--allow",
@@ -96,6 +103,12 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     )
     set_token_parser.add_argument("id", metavar="<channel-id>", help="Channel id to update")
     set_token_parser.add_argument(
+        "--slot",
+        choices=("bot", "app"),
+        default="bot",
+        help="Credential to rotate; app is Slack's Socket Mode token",
+    )
+    set_token_parser.add_argument(
         "--stdin",
         action="store_true",
         required=True,
@@ -110,6 +123,21 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
             example=f"channel {command} tg-main",
         )
         command_parser.add_argument("id", metavar="<channel-id>", help=f"Channel id to {command}")
+
+    for action in ("setup", "status", "pair"):
+        whatsapp = _add_command_parser(
+            channel_subparsers,
+            f"whatsapp-{action}",
+            f"WhatsApp {action}; scan pairing QR codes in Settings > Channels",
+            example=f"channel whatsapp-{action} wa-main",
+        )
+        whatsapp.add_argument("id", metavar="<channel-id>")
+        if action == "pair":
+            whatsapp.add_argument(
+                "--reset",
+                action="store_true",
+                help="Replace the linked device credentials and show a new QR code",
+            )
 
     identity_parser = _add_command_parser(
         channel_subparsers,

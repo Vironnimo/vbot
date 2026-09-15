@@ -83,6 +83,10 @@ class ChannelService:
         self._command_dispatcher = command_dispatcher
         self._interaction_dispatcher = interaction_dispatcher
         self._storage = ChannelStorage(Path(data_root))
+        self._channel_root = Path(data_root) / "channels"
+        self._whatsapp_setup_tasks: dict[str, asyncio.Task[None]] = {}
+        self._whatsapp_setup_states: dict[str, dict[str, Any]] = {}
+        self._whatsapp_operations: dict[str, asyncio.Lock] = {}
         self._adapters: dict[str, ChannelAdapter] = {}
         self._adapter_tasks: dict[str, asyncio.Task[None]] = {}
         self._adapter_task_created: dict[str, float] = {}
@@ -117,6 +121,8 @@ class ChannelService:
 
     def stop(self) -> None:
         """Stop all active channel adapter tasks. Idempotent."""
+        for setup_task in self._whatsapp_setup_tasks.values():
+            setup_task.cancel()
         if (
             not self._started
             and not self._adapter_tasks
@@ -139,6 +145,7 @@ class ChannelService:
     async def aclose(self) -> None:
         """Stop all channel tasks and await their cancellation/shutdown paths."""
         tasks = [*self._adapter_stop_tasks.values(), *self._adapter_restart_tasks.values()]
+        tasks.extend(self._whatsapp_setup_tasks.values())
         self.stop()
         tasks.extend(self._adapter_stop_tasks.values())
 
@@ -364,6 +371,12 @@ class ChannelService:
             raise ChannelConfigError(f"Unsupported channel fields: {joined}")
         if not fields:
             return
+        operation = self._whatsapp_operations.get(normalized_id)
+        if operation is not None and operation.locked():
+            raise ChannelError("Wait for the WhatsApp connection operation to finish")
+        setup = self._whatsapp_setup_tasks.get(normalized_id)
+        if setup is not None and not setup.done():
+            raise ChannelError("Wait for WhatsApp setup to finish before changing this Channel")
 
         had_enabled_channels = self.has_enabled_channels()
         updated = replace(config, **fields)
@@ -390,10 +403,26 @@ class ChannelService:
     def delete_channel(self, channel_id: str) -> None:
         """Delete one channel config and stop any active adapter task."""
         normalized_id = _normalize_channel_id(channel_id)
+        config = self._storage.get(normalized_id)
+        operation = self._whatsapp_operations.get(normalized_id)
+        if operation is not None and operation.locked():
+            raise ChannelError("Wait for the WhatsApp connection operation to finish")
+        setup = self._whatsapp_setup_tasks.get(normalized_id)
+        if config.platform in {"whatsapp", "slack", "mattermost"} and (
+            self._is_running(normalized_id)
+            or self._is_stop_in_progress(normalized_id)
+            or (setup is not None and not setup.done())
+        ):
+            raise ChannelError(
+                "Disable the Channel and wait for shutdown or setup to finish before removing it"
+            )
         had_enabled_channels = self.has_enabled_channels()
         self.stop_channel(normalized_id)
         self._pending_start_requests.pop(normalized_id, None)
         self._storage.delete(normalized_id)
+        self._whatsapp_setup_states.pop(normalized_id, None)
+        self._whatsapp_setup_tasks.pop(normalized_id, None)
+        self._whatsapp_operations.pop(normalized_id, None)
         self._notify_tool_registration_if_changed(had_enabled_channels)
 
     def enable_channel(self, channel_id: str) -> None:
@@ -513,6 +542,27 @@ class ChannelService:
         self._notify_tool_registration_changed()
 
     def _create_adapter(self, config: ChannelConfig) -> ChannelAdapter:
+        if config.platform in {"slack", "mattermost", "whatsapp"}:
+            from core.channels.mattermost import MattermostChannelAdapter
+            from core.channels.slack import SlackChannelAdapter
+            from core.channels.whatsapp import WhatsAppChannelAdapter
+
+            adapter_type: Any = {
+                "slack": SlackChannelAdapter,
+                "mattermost": MattermostChannelAdapter,
+                "whatsapp": WhatsAppChannelAdapter,
+            }[config.platform]
+            adapter: ChannelAdapter = adapter_type(
+                config,
+                self._trigger_service,
+                self._chat_sessions,
+                self._credential_resolver,
+                attachment_store=self._attachment_store,
+                command_dispatcher=self._command_dispatcher,
+                access_registry=self._storage,
+                state_dir=self._channel_root / config.id,
+            )
+            return adapter
         if config.platform == "discord":
             from core.channels.discord import DiscordChannelAdapter
 
@@ -544,6 +594,88 @@ class ChannelService:
             )
 
         raise ChannelConfigError(f"Unsupported channel platform: {config.platform}")
+
+    def connection_status(self, channel_id: str) -> dict[str, Any]:
+        from core.channels._network_adapter import NetworkChannelAdapter
+
+        adapter = self._adapters.get(_normalize_channel_id(channel_id))
+        return adapter.connection_status() if isinstance(adapter, NetworkChannelAdapter) else {}
+
+    async def whatsapp_status(self, channel_id: str) -> dict[str, Any]:
+        from core.channels._network_adapter import channel_io
+        from core.channels._whatsapp_setup import bridge_ready
+        from core.channels.whatsapp import WhatsAppChannelAdapter
+
+        config = self._storage.get(channel_id)
+        if config.platform != "whatsapp":
+            raise ChannelConfigError("This operation requires a WhatsApp Channel")
+        adapter = self._adapters.get(config.id)
+        return {
+            "id": config.id,
+            "installed": await channel_io(bridge_ready, self._channel_root / config.id),
+            **self._whatsapp_setup_states.get(config.id, {}),
+            **(
+                adapter.pairing_status()
+                if isinstance(adapter, WhatsAppChannelAdapter)
+                else {"state": "disconnected", "qr_image": None}
+            ),
+        }
+
+    async def setup_whatsapp(self, channel_id: str) -> dict[str, Any]:
+        from core.channels._whatsapp_setup import install_bridge
+
+        channel_id = _normalize_channel_id(channel_id)
+        operation = self._whatsapp_operations.setdefault(channel_id, asyncio.Lock())
+        async with operation:
+            status = await self.whatsapp_status(channel_id)
+            existing = self._whatsapp_setup_tasks.get(channel_id)
+            if existing is not None and not existing.done():
+                return status
+            if self._is_running(channel_id) or self._is_stop_in_progress(channel_id):
+                raise ChannelConfigError("Disable this WhatsApp Channel before installing support")
+            self._whatsapp_setup_states[channel_id] = {"setup": "installing", "error": None}
+
+            async def install() -> None:
+                try:
+                    await install_bridge(self._channel_root / channel_id)
+                    self._whatsapp_setup_states[channel_id] = {"setup": "ready", "error": None}
+                    _LOGGER.info("WhatsApp support installed (channel=%s)", channel_id)
+                except asyncio.CancelledError:
+                    self._whatsapp_setup_states[channel_id] = {"setup": "cancelled", "error": None}
+                    raise
+                except Exception as error:
+                    reason = (
+                        str(error) if isinstance(error, ChannelError) else "WhatsApp setup failed"
+                    )
+                    self._whatsapp_setup_states[channel_id] = {"setup": "failed", "error": reason}
+                    _LOGGER.warning("WhatsApp support installation failed (channel=%s)", channel_id)
+
+            self._whatsapp_setup_tasks[channel_id] = asyncio.create_task(
+                install(), name=f"channel:{channel_id}:setup"
+            )
+            return await self.whatsapp_status(channel_id)
+
+    async def pair_whatsapp(self, channel_id: str, *, reset: bool = False) -> dict[str, Any]:
+        channel_id = _normalize_channel_id(channel_id)
+        operation = self._whatsapp_operations.setdefault(channel_id, asyncio.Lock())
+        async with operation:
+            status = await self.whatsapp_status(channel_id)
+            if not status["installed"]:
+                raise ChannelConfigError("Install WhatsApp support first")
+            if status.get("setup") == "installing":
+                raise ChannelConfigError("Wait for WhatsApp support installation to finish")
+            if reset or status["state"] == "logged_out":
+                from core.channels._network_adapter import channel_io
+                from core.channels._whatsapp_setup import reset_pairing
+
+                self.stop_channel(channel_id)
+                stopping = self._adapter_stop_tasks.get(channel_id)
+                if stopping is not None:
+                    await asyncio.shield(stopping)
+                await channel_io(reset_pairing, self._channel_root / channel_id)
+            self.enable_channel(channel_id)
+            _LOGGER.info("WhatsApp pairing requested (channel=%s reset=%s)", channel_id, reset)
+            return await self.whatsapp_status(channel_id)
 
     def _preflight_adapter_start(self, config: ChannelConfig) -> None:
         if not config.enabled:

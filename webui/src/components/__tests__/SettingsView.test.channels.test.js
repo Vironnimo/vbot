@@ -310,7 +310,7 @@ describe('SettingsView', () => {
           call[1]?.dm_scope === 'main' &&
           call[1]?.token_env_var === 'TELEGRAM_BOT_TOKEN_TG_NEW' &&
           JSON.stringify(call[1]?.allowed_chat_ids) ===
-            JSON.stringify([12345, -100123]),
+            JSON.stringify(['12345', '-100123']),
       ),
     ).toBe(true);
   });

@@ -46,8 +46,10 @@ Local command-line accessor for server lifecycle and RPC-backed management areas
 
 **Channel area**
 
-- Add requires exactly one token source: recommended `--token-stdin` sends the UTF-8 value as a write-only managed token; `--token-env` references an externally managed variable name. `set-token <id> --stdin` rotates the credential and prints non-secret source/applied state, targeted-adapter restart decision, immediate health, and a verification command. Tokens are never command-line arguments or output (see Gotchas).
-- `--platform` accepts `telegram` or `discord`; `--response-mode`/`--observe-unaddressed` expose the Channels-owned group-gating policy. `channel identity/access/grant-admin/revoke-admin` manage the Channel account identity and saved group roles (additive, idempotent mutations). `channel status` prints enabled/running/failed plus failure reason and denied inbound chats with an allowlist suggestion. Group-policy semantics live in `channels.md`.
+- Slack adds `--app-token-env` and `channel token set --slot app --stdin`; Mattermost adds `--server-url`. `channel add --disabled` saves credentials/configuration before starting a connection. WhatsApp add always starts disabled without a token; `channel whatsapp setup|status|pair <id>` uses service-owned asynchronous setup and pairing. The private QR is visible only in Settings > Channels, never CLI output. Setup failure or revoked pairing is an attention result. Platform setup instructions: `USAGE.md` -> Channels and bundled `vbot-cli/references/channels.md`.
+
+- Except WhatsApp, add requires exactly one bot-token source: recommended `--token-stdin` sends the UTF-8 value as a write-only managed token; `--token-env` references an externally managed variable name. `set-token <id> --stdin` rotates the credential and prints non-secret source/applied state, targeted-adapter restart decision, immediate health, and a verification command. Tokens are never command-line arguments or output (see Gotchas).
+- `--platform` accepts `telegram`, `discord`, `slack`, `mattermost`, or `whatsapp`; `--response-mode`/`--observe-unaddressed` expose the Channels-owned group-gating policy. `channel identity/access/grant-admin/revoke-admin` manage the Channel account identity and saved group roles (additive, idempotent mutations). `channel status` prints enabled/running/failed plus failure reason and denied inbound chats with an allowlist suggestion. Group-policy semantics live in `channels.md`.
 
 **Provider area**
 

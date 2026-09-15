@@ -26,6 +26,9 @@ COMMAND_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
     "session": {"set-compaction-policy": ("policy", "set"), "link-channel": ("channel", "link")},
     "channel": {
         "set-token": ("token", "set"),
+        "whatsapp-setup": ("whatsapp", "setup"),
+        "whatsapp-status": ("whatsapp", "status"),
+        "whatsapp-pair": ("whatsapp", "pair"),
         "grant-admin": ("admin", "grant"),
         "revoke-admin": ("admin", "revoke"),
     },

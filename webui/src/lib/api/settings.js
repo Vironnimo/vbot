@@ -245,6 +245,16 @@ export function listChannels(options = {}) {
   return rpc('channel.list', {}, options);
 }
 
+export function getWhatsAppStatus(id, options = {}) {
+  return rpc('channel.whatsapp.status', { id }, options);
+}
+export function setupWhatsApp(id, options = {}) {
+  return rpc('channel.whatsapp.setup', { id }, options);
+}
+export function pairWhatsApp(id, reset = false, options = {}) {
+  return rpc('channel.whatsapp.pair', { id, reset }, options);
+}
+
 export function getChannelStatus(id, options = {}) {
   requireNonEmptyString(
     id,

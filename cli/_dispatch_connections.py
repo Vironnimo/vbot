@@ -9,6 +9,7 @@ from typing import Any
 from cli._input import (
     _read_stdin_utf8,
 )
+from cli.channel_management import channel_set_app_token, channel_whatsapp
 from cli.extensions_management import extensions_operation
 from cli.provider_management import (
     provider_connect,
@@ -39,22 +40,7 @@ def dispatch_channel_command(
     args: argparse.Namespace,
     instance: ServerInstance,
     *,
-    add_channel: Callable[
-        [
-            ServerInstance,
-            str,
-            str,
-            str,
-            str,
-            str,
-            Sequence[str],
-            str,
-            Sequence[str],
-            bool,
-            str | None,
-        ],
-        CommandResult,
-    ],
+    add_channel: Callable[..., CommandResult],
     list_channels: Callable[[ServerInstance], CommandResult],
     remove_channel: Callable[[ServerInstance, str], CommandResult],
     update_channel: Callable[[ServerInstance, str, dict[str, Any]], CommandResult],
@@ -80,6 +66,13 @@ def dispatch_channel_command(
                     message=f"cannot read --token-stdin value as UTF-8: {exc}",
                     instance=instance,
                 )
+        connection_options: dict[str, Any] = {}
+        if args.disabled:
+            connection_options["disabled"] = True
+        if args.app_token_env:
+            connection_options["app_token_env"] = args.app_token_env
+        if args.server_url:
+            connection_options["server_url"] = args.server_url
         return add_channel(
             instance,
             args.id,
@@ -92,6 +85,14 @@ def dispatch_channel_command(
             args.mention_patterns,
             args.observe_unaddressed == "true",
             token,
+            **connection_options,
+        )
+    if args.command.startswith("whatsapp-"):
+        return channel_whatsapp(
+            instance,
+            args.id,
+            args.command.removeprefix("whatsapp-"),
+            reset=getattr(args, "reset", False),
         )
     if args.command == "list":
         return list_channels(instance)
@@ -114,6 +115,8 @@ def dispatch_channel_command(
                 message=f"cannot read --stdin token as UTF-8: {exc}",
                 instance=instance,
             )
+        if args.slot == "app":
+            return channel_set_app_token(instance, args.id, token)
         return set_channel_token(instance, args.id, token)
     if args.command == "identity":
         return channel_identity_fn(instance, args.id, args.user)
@@ -138,6 +141,10 @@ def dispatch_channel_command(
 
 def _channel_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     changes: dict[str, Any] = {}
+    if args.app_token_env is not None:
+        changes["app_token_env_var"] = args.app_token_env
+    if args.server_url is not None:
+        changes["server_url"] = args.server_url
     if args.platform is not None:
         changes["platform"] = args.platform
     if args.agent is not None:
