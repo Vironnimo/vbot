@@ -49,9 +49,8 @@ async def test_timeout_kills_process(
         context,
         {
             "command": "import time; time.sleep(30)",
-            "mode": "auto",
+            "mode": "foreground",
             "timeout": 0.01,
-            "background_after_seconds": 1,
         },
         manager,
     )
@@ -66,6 +65,7 @@ async def test_timeout_remains_active_after_foreground_yields_to_background(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(bash_module, "FOREGROUND_HANDOFF_SECONDS", 0.01)
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     context = make_context(tmp_path)
 
@@ -73,9 +73,8 @@ async def test_timeout_remains_active_after_foreground_yields_to_background(
         context,
         {
             "command": "import time; time.sleep(30)",
-            "mode": "auto",
+            "mode": "foreground",
             "timeout": 0.1,
-            "background_after_seconds": 0.01,
         },
         manager,
     )
@@ -117,9 +116,8 @@ async def test_natural_completion_at_deadline_not_reported_as_timeout(
         context,
         {
             "command": "print('done')",
-            "mode": "auto",
+            "mode": "foreground",
             "timeout": 0.01,
-            "background_after_seconds": 1,
         },
         manager,
     )
@@ -159,7 +157,7 @@ async def test_large_foreground_stdout_is_bounded_and_truncated(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("timeout_arguments", [{}, {"timeout": 0}])
-async def test_run_cancellation_stops_auto_mode_without_handoff(
+async def test_run_cancellation_stops_foreground_without_handoff(
     manager: ProcessManager,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -179,8 +177,7 @@ async def test_run_cancellation_stops_auto_mode_without_handoff(
         context,
         {
             "command": "import time; time.sleep(30)",
-            "mode": "auto",
-            "background_after_seconds": 30,
+            "mode": "foreground",
             **timeout_arguments,
         },
         manager,
@@ -193,7 +190,7 @@ async def test_run_cancellation_stops_auto_mode_without_handoff(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["foreground", "auto"])
+@pytest.mark.parametrize("mode", [None, "foreground"])
 async def test_direct_process_cancel_returns_user_abort_without_run_cancel(
     manager, tmp_path, monkeypatch, mode
 ):
@@ -207,8 +204,7 @@ async def test_direct_process_cancel_returns_user_abort_without_run_cancel(
             context,
             {
                 "command": "import time; time.sleep(30)",
-                "mode": mode,
-                **({"background_after_seconds": 60} if mode == "auto" else {}),
+                **({"mode": mode} if mode is not None else {}),
             },
             manager,
         )

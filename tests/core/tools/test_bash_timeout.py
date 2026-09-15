@@ -12,7 +12,7 @@ from tests.core.tools.bash_helpers import shell_env_cache as shell_env_cache
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["foreground", "auto", "background"])
+@pytest.mark.parametrize("mode", ["foreground", "background"])
 async def test_omitted_timeout_schedules_three_minutes_and_retires_after_exit(
     manager, tmp_path, monkeypatch, mode
 ):
@@ -46,9 +46,7 @@ async def test_omitted_timeout_schedules_three_minutes_and_retires_after_exit(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "mode,depth", [("foreground", 0), ("foreground", 1), ("auto", 0), ("background", 0)]
-)
+@pytest.mark.parametrize("mode,depth", [("foreground", 0), ("foreground", 1), ("background", 0)])
 @pytest.mark.parametrize("noisy", [False, True])
 async def test_omitted_timeout_ends_silent_and_noisy_commands(
     manager, tmp_path, monkeypatch, mode, depth, noisy
@@ -56,15 +54,13 @@ async def test_omitted_timeout_ends_silent_and_noisy_commands(
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     monkeypatch.setattr(bash_module, "DEFAULT_TIMEOUT_SECONDS", 0.7)
     arguments = {
-        "mode": mode,
+        **({"mode": mode} if mode is not None else {}),
         "command": (
             "import time\nwhile True:\n    print('working', flush=True)\n    time.sleep(0.02)"
             if noisy
             else "import time; time.sleep(30)"
         ),
     }
-    if mode == "auto":
-        arguments["background_after_seconds"] = 0
     result = await asyncio.wait_for(
         bash_handler(make_context(tmp_path, nesting_depth=depth), arguments, manager), 10
     )

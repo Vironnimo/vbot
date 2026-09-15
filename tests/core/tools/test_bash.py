@@ -34,7 +34,7 @@ from tests.core.tools.bash_helpers import (
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["foreground", "auto"])
+@pytest.mark.parametrize("mode", [None, "foreground"])
 async def test_user_handoff_preserves_process_and_automatic_delivery(
     manager, tmp_path, monkeypatch, mode
 ):
@@ -50,9 +50,9 @@ async def test_user_handoff_preserves_process_and_automatic_delivery(
     handoffs = []
     original_handoff_note = bash_results._handoff_note
 
-    def record_handoff(mode, elapsed, *, requested_by_user=False):
-        handoffs.append((mode, elapsed, requested_by_user))
-        return original_handoff_note(mode, elapsed, requested_by_user=requested_by_user)
+    def record_handoff(elapsed, *, requested_by_user=False):
+        handoffs.append((elapsed, requested_by_user))
+        return original_handoff_note(elapsed, requested_by_user=requested_by_user)
 
     monkeypatch.setattr(bash_results, "_handoff_note", record_handoff)
 
@@ -76,7 +76,7 @@ async def test_user_handoff_preserves_process_and_automatic_delivery(
                     "while not Path('release').exists():\n    time.sleep(0.01)\n"
                     "print('finished')"
                 ),
-                "mode": mode,
+                **({"mode": mode} if mode is not None else {}),
             },
             manager,
             trigger_service=Trigger(),
@@ -87,9 +87,8 @@ async def test_user_handoff_preserves_process_and_automatic_delivery(
     result = await asyncio.wait_for(task, 5)
     assert result["ok"] and result["data"]["delivery"] == "automatic"
     assert len(handoffs) == 1
-    assert handoffs[0][0] == mode
-    assert handoffs[0][1] >= 0
-    assert handoffs[0][2] is True
+    assert handoffs[0][0] >= 0
+    assert handoffs[0][1] is True
     process_id = result["data"]["process_id"]
     assert manager.get_process(process_id, AGENT_ID, project_id=None).status == "running"
     (tmp_path / "release").write_text("continue", encoding="utf-8")
@@ -110,7 +109,7 @@ async def test_subagent_foreground_never_exposes_user_handoff(manager, tmp_path,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", [None, "foreground", "auto", "background"])
+@pytest.mark.parametrize("mode", [None, "foreground", "background"])
 async def test_bash_modes_finish_without_stdin_input(manager, tmp_path, monkeypatch, mode):
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     arguments = {"command": "import sys; assert sys.stdin.read() == ''; print('eof')"}
