@@ -93,13 +93,12 @@ async def test_delivery_invalidates_pending_only_after_canonical_receipt(board, 
 @pytest.mark.asyncio
 async def test_inbox_delivers_oldest_pending_entries_with_a_durable_receipt(board):
     recipient = board.bindings[1].participant_id
-    for request_id, text in (("one", "first"), ("two", "second")):
+    for text in ("first", "second"):
         result, _ = await call(
             board,
             {
                 "action": "post",
                 "text": text,
-                "request_id": request_id,
                 "recipients": [recipient],
             },
         )

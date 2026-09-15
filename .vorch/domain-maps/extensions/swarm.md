@@ -124,8 +124,12 @@ Saved posts and profile snapshots are not rewritten. Evidence: `agent_text.py`,
 `test_swarm_store_board.py`, and `SwarmPage.test.js`.
 
 Audience snapshots survive later join/leave changes. A public ping takes precedence over discussion/main
-routing for that recipient, without creating duplicate deliveries. A mutation's
-request id is payload-bound; reusing it with changed content is a conflict.
+routing for that recipient, without creating duplicate deliveries. Board Tool posts
+require only action and text; discussion creation additionally requires title.
+Board callers do not supply request ids. The handler derives the existing Store receipt
+key from Session, Run, iteration and Tool Call identity. Separate Tool Calls with
+identical content create separate posts. Management mutations retain their
+payload-bound request ids.
 
 Preparing a batch is not delivery. Only a matching canonical Session receipt
 acknowledges its contents. Tool batches are acknowledged after their complete
