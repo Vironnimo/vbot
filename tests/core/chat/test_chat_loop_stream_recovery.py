@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -316,7 +317,9 @@ async def test_streaming_mode_chunk_timeout_preserves_partial_after_visible_outp
 @pytest.mark.asyncio
 async def test_streaming_mode_cancellation_closes_adapter_and_preserves_visible_partial(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level(logging.DEBUG, logger="vbot.chat")
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = BlockingStreamingStubAdapter()
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
@@ -335,6 +338,15 @@ async def test_streaming_mode_cancellation_closes_adapter_and_preserves_visible_
     messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert adapter.closed is True
     assert run.status == RunStatus.CANCELLED
+    terminal_logs = [
+        record
+        for record in caplog.records
+        if record.name == "vbot.chat"
+        and isinstance(record.args, tuple)
+        and record.args[:2] == (run.id, "cancelled")
+    ]
+    assert len(terminal_logs) == 1
+    assert terminal_logs[0].levelno == logging.DEBUG
     # The already-shown partial answer is preserved as an interrupted turn
     # (GLOSSARY → Cancel); the never-released late delta stays suppressed.
     assert persisted_roles(messages) == ["user", "assistant"]
@@ -385,6 +397,7 @@ async def test_local_provider_stream_not_aborted_by_chunk_stall(
 async def test_remote_provider_stream_aborted_by_chunk_stall(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setattr("core.chat.request_runner.STREAM_CHUNK_TIMEOUT_SECONDS", 0.01)
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
@@ -405,6 +418,23 @@ async def test_remote_provider_stream_aborted_by_chunk_stall(
     # continued twice, then the bounded recovery ends explicitly.
     assert len(adapter.stream_requests) == 3
     assert run.status == RunStatus.INTERRUPTED
+    diagnostics = [
+        record
+        for record in caplog.records
+        if record.name == "vbot.runs"
+        and record.levelno >= logging.WARNING
+        and isinstance(record.args, tuple)
+        and record.args[:1] == (run.id,)
+    ]
+    assert len(diagnostics) == 1
+    assert diagnostics[0].levelno == logging.WARNING
+    assert not any(
+        record.name == "vbot.chat"
+        and record.levelno >= logging.INFO
+        and isinstance(record.args, tuple)
+        and record.args[:2] == (run.id, "interrupted")
+        for record in caplog.records
+    )
     assert isinstance(exc_info.value.result, ChatMessage)
     assert exc_info.value.result.content == "partialpartialpartial"
     assert persisted_roles(messages) == [

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 from pathlib import Path
 from typing import Any
@@ -122,19 +123,32 @@ async def test_non_streaming_provider_normalization_runs_off_event_loop(
 
 
 @pytest.mark.asyncio
-async def test_send_logs_run_start_and_end_lines(
+@pytest.mark.parametrize("log_level", [logging.INFO, logging.DEBUG])
+async def test_send_logs_run_start_and_end_only_at_debug(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
+    log_level: int,
 ) -> None:
     agent = StubAgent(id="coder", model="openrouter/anthropic/claude-sonnet-4", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Hello", "reasoning": None, "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    with caplog.at_level("INFO", logger="vbot.chat"):
+    with caplog.at_level(log_level, logger="vbot.chat"):
         await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
-    log_messages = [record.getMessage() for record in caplog.records]
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "vbot.chat"
+        and isinstance(record.args, tuple)
+        and record.args[:1] == (run.id,)
+    ]
+    assert all(record.levelno == logging.DEBUG for record in records)
+    if log_level == logging.INFO:
+        assert records == []
+        return
+    log_messages = [record.getMessage() for record in records]
     start_line = next(
         message for message in log_messages if message.startswith(f"Run {run.id} started")
     )
