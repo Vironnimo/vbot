@@ -13,6 +13,16 @@ _MESSAGES = {
     "invalid_arguments": 'Pass {"patch": "..."} with non-empty patch text and no other fields.',
     "invalid_patch": "Invalid patch syntax at line {line}: {text}. Correct this line and retry.",
     "no_changes": "Patch contains no changes. Include an Add, Update, Delete, or Move operation.",
+    "context_only_patch": (
+        "This patch contains only unchanged context lines. No files were changed. "
+        "Include the actual lines to insert with + or the lines to remove with -. "
+        "Keep surrounding existing lines as context to locate the edit."
+    ),
+    "invalid_add_line": (
+        "Invalid Add File body at patch line {line}: {text}. Add supplies the complete "
+        "file content, not a deletion or an Update hunk. Prefix each content line with + "
+        "(including a literal leading -, @@, or patch marker); use Update File for edits."
+    ),
     "invalid_path": "Cannot use path {path}: {reason}.",
     "file_not_found": "File not found: {path}. Check the path and retry.",
     "not_a_file": "Path is not a regular file: {path}. Choose a file path.",
@@ -65,8 +75,15 @@ _HEADER = re.compile(r"^\*\*\*\s+(Add|Update|Delete|Move)\s+File:\s*(.*)$")
 
 
 class _PatchError(Exception):
-    def __init__(self, code: str, *, details: JsonObject | None = None, **values: object):
-        super().__init__(_MESSAGES[code].format(**values))
+    def __init__(
+        self,
+        code: str,
+        *,
+        details: JsonObject | None = None,
+        message: str | None = None,
+        **values: object,
+    ):
+        super().__init__(message if message is not None else _MESSAGES[code].format(**values))
         self.code = code
         self.details = details or {}
 
@@ -159,6 +176,9 @@ def _parse(patch: str) -> list[_Operation]:
             if hint:
                 hunk.hints.append(hint)
             continue
+        if line == "@@" and current and current.action == "add" and hunk is None:
+            # A bare opening hunk delimiter adds no constraint to a whole-file Add.
+            continue
         if line == "\\ No newline at end of file" and hunk and hunk.lines:
             if hunk.lines[-1][0] != "-":
                 hunk.no_newline = True
@@ -172,9 +192,18 @@ def _parse(patch: str) -> list[_Operation]:
             current.hunks.append(hunk)
         if hunk.eof or hunk.no_newline:
             raise _PatchError("invalid_patch", line=number, text=line[:200])
-        prefix, text = (line[0], line[1:]) if line and line[0] in " +-" else (" ", line)
-        if current.action == "add" and prefix != "+":
-            raise _PatchError("invalid_patch", line=number, text=line[:200])
+        if current.action == "add":
+            if line.startswith(("-", "@@")):
+                raise _PatchError(
+                    "invalid_patch",
+                    message=_MESSAGES["invalid_add_line"].format(line=number, text=line[:200]),
+                )
+            # Add has no context lines: a missing + means literal file content.
+            # Keep all whitespace; interpreting one space as a diff prefix would
+            # silently change indentation in otherwise recognizable creations.
+            prefix, text = "+", line[1:] if line.startswith("+") else line
+        else:
+            prefix, text = (line[0], line[1:]) if line and line[0] in " +-" else (" ", line)
         hunk.lines.append((prefix, text))
     for operation in operations:
         if operation.action == "update" and not operation.hunks and not operation.destination:
@@ -185,5 +214,7 @@ def _parse(patch: str) -> list[_Operation]:
         or any(p in "+-" for h in op.hunks for p, _ in h.lines)
         for op in operations
     ):
+        if operations:
+            raise _PatchError("no_changes", message=_MESSAGES["context_only_patch"])
         raise _PatchError("no_changes")
     return operations
