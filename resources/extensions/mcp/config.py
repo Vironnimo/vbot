@@ -28,11 +28,6 @@ CONNECTION_SCHEMA: dict[str, Any] = {
         "environment": {"type": "object", "additionalProperties": {"type": "string"}},
         "credential_environment": {"type": "object", "additionalProperties": {"type": "string"}},
         "credential_headers": {"type": "object", "additionalProperties": {"type": "string"}},
-        "agents": {
-            "type": "array",
-            "items": {"type": "string", "minLength": 1},
-            "uniqueItems": True,
-        },
         "enabled": {"type": "boolean"},
         "timeout": {"type": "number", "exclusiveMinimum": 0, "maximum": MAX_TIMEOUT_SECONDS},
         "oauth": {"type": "boolean"},
@@ -72,7 +67,6 @@ def validate_connection(value: Any) -> dict[str, Any]:
             raise ValueError("MCP credentials must reference named environment credentials")
     if any("\r" in key or "\n" in key for key in record.get("credential_headers", {})):
         raise ValueError("MCP header names cannot contain line breaks")
-    record.setdefault("agents", [])
     record.setdefault("enabled", True)
     record.setdefault("timeout", DEFAULT_TIMEOUT_SECONDS)
     return record
