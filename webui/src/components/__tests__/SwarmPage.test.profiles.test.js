@@ -481,7 +481,9 @@ describe('SwarmPage', () => {
       calls.indexOf('swarms.get'),
     );
     expect(document.querySelector('.editor')).toBeNull();
-    expect(button('Refresh')).toBeDefined();
+    expect(document.querySelector('.swarm-head h2').textContent).toBe(
+      'Research',
+    );
   });
 
   it('keeps a failed profile save open when selecting a retained Swarm', async () => {

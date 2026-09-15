@@ -1,4 +1,10 @@
 import { visibleTimelineItemsForRender } from '../../../../webui/src/lib/chatTimeline.js';
+import {
+  createChatState,
+  ensureSessionState,
+  appendRunEvent,
+  TERMINAL_RUN_EVENTS,
+} from '../../../../webui/src/lib/chatState.js';
 import { t, activeLocaleTag } from '../../../../webui/src/lib/i18n.js';
 import { formatTokenUsageTooltip } from '../../../../webui/src/lib/tokenUsageTooltip.js';
 import { SvelteSet } from 'svelte/reactivity';
@@ -6,7 +12,61 @@ import { SvelteSet } from 'svelte/reactivity';
 export function createSwarmPageActivity(host) {
   let history = $state(null);
 
-  let live = $state([]);
+  const projection = $state(
+    ensureSessionState(createChatState(), 'swarm', 'activity'),
+  );
+  let reasoningOpen = $state({});
+  let inspectedParticipant = null;
+  let inspectionRequest = null;
+  const settledRuns = new SvelteSet();
+  let flushTimer = null;
+  let pendingEvents = [];
+
+  function flushEvents() {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+    const events = pendingEvents;
+    pendingEvents = [];
+    for (const event of events) appendRunEvent(projection, event);
+  }
+
+  function clearProjection() {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+    pendingEvents = [];
+    projection.messages = [];
+    projection.runEvents = [];
+    projection.streamingRunEvents = [];
+    projection.streamingPhase = 0;
+    projection.seenStreamingEventKeys = new SvelteSet();
+    projection.currentRun = null;
+    projection.status = 'idle';
+  }
+
+  function adoptHistory(messages) {
+    projection.messages = messages;
+    // Only canonical completion proves that History includes the entire Run.
+    // A stale prefix or failed refresh must never erase visible streamed output.
+    const summarized = new SvelteSet(
+      messages
+        .filter((message) => message.role === 'run_summary')
+        .map((message) => message.run_id),
+    );
+    projection.runEvents = projection.runEvents.filter(
+      (event) => !summarized.has(event.run_id),
+    );
+    projection.streamingRunEvents = projection.streamingRunEvents.filter(
+      (event) => !summarized.has(event.run_id),
+    );
+  }
+
+  function isReasoningOpen(id) {
+    return Boolean(reasoningOpen[id]);
+  }
+
+  function setReasoningOpen(id, open) {
+    reasoningOpen[id] = open;
+  }
 
   let currentSubscription = null;
 
@@ -26,21 +86,15 @@ export function createSwarmPageActivity(host) {
     currentSubscription?.();
     currentSubscription = null;
     history = null;
-    live = [];
+    clearProjection();
+    reasoningOpen = {};
+    inspectedParticipant = null;
+    inspectionRequest = null;
+    settledRuns.clear();
   }
 
   const activityTimeline = $derived(
-    history
-      ? visibleTimelineItemsForRender({
-          messages: history.data.messages ?? [],
-          runEvents: live,
-          streamingRunEvents: [],
-          status: history.participant.run_active
-            ? 'running'
-            : (history.data.status ?? 'completed'),
-          currentRun: { runId: history.participant.lifecycle_run_id },
-        })
-      : [],
+    history ? visibleTimelineItemsForRender(projection) : [],
   );
 
   const selectedParticipant = $derived(
@@ -132,7 +186,15 @@ export function createSwarmPageActivity(host) {
             next_before: oldest.next_before,
           },
         };
-        if (settled) live = [];
+        adoptHistory(history.data.messages);
+        if (settled) {
+          if (participant.lifecycle_run_id)
+            settledRuns.add(participant.lifecycle_run_id);
+          inspectedParticipant = { ...participant, run_active: false };
+          projection.status = data.status ?? 'completed';
+          if (projection.currentRun?.runId === participant.lifecycle_run_id)
+            projection.currentRun.status = projection.status;
+        }
       }
     } catch (cause) {
       if (
@@ -183,6 +245,7 @@ export function createSwarmPageActivity(host) {
           next_before: data.next_before,
         },
       };
+      adoptHistory(history.data.messages);
     } catch (cause) {
       if (
         !host.model.disposed &&
@@ -206,25 +269,34 @@ export function createSwarmPageActivity(host) {
   ) {
     if (!host.model.selectedSwarm) return;
     if (activate) host.model.activeTab = 'participants';
+    if (settledRuns.has(participant.lifecycle_run_id))
+      participant = { ...participant, run_active: false };
     if (
       preserve &&
-      history?.participant.id === participant.id &&
-      history.participant.lifecycle_run_id === participant.lifecycle_run_id &&
-      history.participant.run_active === participant.run_active &&
-      (currentSubscription ||
+      inspectedParticipant?.id === participant.id &&
+      inspectedParticipant.lifecycle_run_id === participant.lifecycle_run_id &&
+      inspectedParticipant.run_active === participant.run_active &&
+      (inspectionRequest === activityRequest ||
+        historyLoading ||
+        currentSubscription ||
         !participant.lifecycle_run_id ||
-        participant.run_active === false)
-    ) {
-      // Board delivery and peer activity do not change this Session's stream.
+        (participant.run_active === false &&
+          !projection.runEvents.some(
+            (event) => event.run_id === participant.lifecycle_run_id,
+          )))
+    )
       return;
-    }
     if (preserve) {
+      if (flushTimer !== null) flushEvents();
+      else pendingEvents = [];
       activityRequest += 1;
       currentSubscription?.();
       currentSubscription = null;
     } else leaveActivity();
+    inspectedParticipant = participant;
     const request = activityRequest;
     const swarmId = host.model.selectedSwarm.id;
+    inspectionRequest = request;
     await Promise.all([
       reconcileActivity(
         request,
@@ -243,6 +315,7 @@ export function createSwarmPageActivity(host) {
               if (request === activityRequest) host.model.error = cause.message;
             }),
     ]);
+    if (inspectionRequest === request) inspectionRequest = null;
     if (
       host.model.disposed ||
       request !== activityRequest ||
@@ -251,10 +324,16 @@ export function createSwarmPageActivity(host) {
       participant.run_active === false
     )
       return;
+    projection.currentRun = {
+      runId: participant.lifecycle_run_id,
+      status: 'running',
+    };
+    projection.status = 'running';
     let key = null;
     const buffered = [];
     const sequences = new SvelteSet();
-    live = [];
+    let replayThrough = Infinity;
+    let replayCaughtUp = false;
     const receive = (id, event) => {
       if (
         host.model.disposed ||
@@ -265,7 +344,14 @@ export function createSwarmPageActivity(host) {
       )
         return;
       sequences.add(event.sequence);
-      live = [...live, event];
+      pendingEvents.push(event);
+      if (!replayCaughtUp && event.sequence >= replayThrough) {
+        replayCaughtUp = true;
+        flushEvents();
+      } else if (replayCaughtUp && flushTimer === null) {
+        // Match Chat's batched, compressed streaming projection.
+        flushTimer = setTimeout(flushEvents, 33);
+      }
       const payload = event.payload ?? {};
       if (
         history &&
@@ -285,14 +371,10 @@ export function createSwarmPageActivity(host) {
           },
         };
       }
-      if (
-        [
-          'run_completed',
-          'run_cancelled',
-          'run_failed',
-          'run_interrupted',
-        ].includes(event.type)
-      ) {
+      if (TERMINAL_RUN_EVENTS.has(event.type)) {
+        flushEvents();
+        settledRuns.add(participant.lifecycle_run_id);
+        inspectedParticipant = { ...participant, run_active: false };
         currentSubscription?.();
         currentSubscription = null;
         if (history)
@@ -328,6 +410,8 @@ export function createSwarmPageActivity(host) {
         return;
       }
       key = subscription.subscription_id;
+      replayThrough = subscription.replay_through_sequence;
+      replayCaughtUp = replayThrough === 0;
       if (host.model.disposed || request !== activityRequest) {
         off();
         unsubscribe(key);
@@ -344,6 +428,7 @@ export function createSwarmPageActivity(host) {
   }
   function destroy() {
     activityRequest += 1;
+    clearProjection();
     currentSubscription?.();
   }
 
@@ -362,6 +447,8 @@ export function createSwarmPageActivity(host) {
 
   return {
     cancelToolCall,
+    isReasoningOpen,
+    setReasoningOpen,
     destroy,
     get history() {
       return history;

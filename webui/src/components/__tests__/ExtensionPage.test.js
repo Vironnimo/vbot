@@ -426,6 +426,7 @@ it.each([
     }
     mocked.openExtensionPageRun.mockResolvedValue({
       stream: { url: '/api/extension-runs/review' },
+      replay_through_sequence: 3,
     });
     mocked.subscribeRunEvents.mockImplementation((url, handlers) =>
       actual.subscribeRunEvents(url, handlers, {
@@ -455,6 +456,17 @@ it.each([
           payload,
         }),
       }),
+    );
+    await vi.waitFor(() =>
+      expect(
+        sent.mock.calls
+          .map(([value]) => value)
+          .find(
+            (value) =>
+              value.type === 'vbot.extension.result' &&
+              value.id === 'review-sub',
+          )?.result?.replay_through_sequence,
+      ).toBe(3),
     );
     const forwarded = sent.mock.calls
       .map(([value]) => value)
