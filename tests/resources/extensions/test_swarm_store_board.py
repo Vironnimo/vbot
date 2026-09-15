@@ -350,3 +350,30 @@ async def test_board_epoch_stale_after_resume_and_post_author_is_immutable(
         await store.post(
             started["swarm_id"], first, text="stale", request_id="stale", expected_epoch=0
         )
+
+
+@pytest.mark.asyncio
+async def test_swarm_roster_projects_current_membership_without_joining_ping_recipients(store):
+    started = await _swarm(store)
+    sid = started["swarm_id"]
+    swarm = await store.get_swarm(sid)
+    first, second = [row["id"] for row in swarm["participants"]]
+    main = swarm["main_discussion_id"]
+    assert all(row["discussion_ids"] == [main] for row in swarm["participants"])
+    created = await store.create_discussion(
+        sid, first, title="Focused", text="Opening", recipients=[second], request_id="membership"
+    )
+    topic = created["discussion_id"]
+
+    async def memberships():
+        return {
+            row["id"]: row["discussion_ids"] for row in (await store.get_swarm(sid))["participants"]
+        }
+
+    assert await memberships() == {first: [main, topic], second: [main]}
+    await store.join_discussion(sid, second, topic)
+    assert await memberships() == {first: [main, topic], second: [main, topic]}
+    await store.leave_discussion(sid, first, topic)
+    assert await memberships() == {first: [main], second: [main, topic]}
+    await store.leave_discussion(sid, second, topic)
+    assert await memberships() == {first: [main], second: [main]}

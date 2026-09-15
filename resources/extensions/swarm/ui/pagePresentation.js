@@ -22,6 +22,20 @@ export function participantInitials(name) {
   ).toUpperCase();
 }
 
+export function participantState(participant) {
+  return participant.run_active ? 'running' : participant.state;
+}
+
+export function participantDetails(participant) {
+  const state = participantState(participant);
+  return [
+    participant.display_name,
+    participant.model,
+    t(`swarm.state.${state}`, state),
+    `${participant.pending_count ?? 0} ${t('swarm.pending', 'pending')}`,
+  ].join(' · ');
+}
+
 export const page = (value) =>
   Array.isArray(value) ? value : (value?.entries ?? value?.items ?? []);
 
