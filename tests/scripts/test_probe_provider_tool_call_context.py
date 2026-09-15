@@ -191,8 +191,8 @@ def test_bash_cases_use_production_profiles_and_exact_arguments() -> None:
             is True
         )
 
-    top = probe_scenario_agents._bash_scenario("top_auto_default")
-    sub = probe_scenario_agents._bash_scenario("sub_auto_default")
+    top = probe_scenario_agents._bash_scenario("top_foreground_default")
+    sub = probe_scenario_agents._bash_scenario("sub_foreground_default")
     assert top.tools[0]["parameters"] is tool_bash.BASH_TOOL_PARAMETERS
     assert probe_scenario_agents._bash_scenario("top_foreground_default").expected_arguments == {
         "command": "python --version"
@@ -200,10 +200,7 @@ def test_bash_cases_use_production_profiles_and_exact_arguments() -> None:
     assert probe_scenario_agents._bash_scenario("sub_foreground_default").expected_arguments == {
         "command": "python --version"
     }
-    assert top.expected_arguments == {
-        "mode": "auto",
-        "command": "python -m pytest tests/core/tools/test_bash.py -q",
-    }
+    assert top.expected_arguments == {"command": "python --version"}
     assert probe_scenario_agents._bash_scenario("top_foreground_env_one").expected_arguments == {
         "mode": "foreground",
         "command": "python -c \"import os; print(bool(os.environ['OPENAI_API_KEY']))\"",
@@ -239,12 +236,8 @@ def test_bash_cases_use_production_profiles_and_exact_arguments() -> None:
         assert validation["schema_valid"] is False
         assert validation["validation_path"].startswith("/env_keys")
         assert validation["validation_keyword"] == keyword
-    assert top.tools[0]["parameters"]["properties"]["background_after_seconds"]["default"] == 30
-    assert sub.tools[0]["parameters"]["properties"]["mode"]["enum"] == [
-        "foreground",
-        "auto",
-    ]
-    assert sub.tools[0]["parameters"]["properties"]["background_after_seconds"]["default"] == 1800
+    assert "background_after_seconds" not in top.tools[0]["parameters"]["properties"]
+    assert "mode" not in sub.tools[0]["parameters"]["properties"]
 
 
 def test_channel_send_cases_use_production_profiles_and_exact_arguments() -> None:
