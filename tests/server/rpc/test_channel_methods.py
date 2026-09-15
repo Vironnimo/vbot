@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -12,6 +12,79 @@ from core.channels import ChannelConfig, ChannelConfigError, DeniedChatFacts
 from core.sessions import SessionAddress
 from server.events import ServerEventBus
 from server.rpc.methods import dispatch_rpc
+
+
+@pytest.mark.asyncio
+async def test_slack_credentials_rollback_together_when_creation_fails() -> None:
+    service = Mock()
+    service.create_channel.side_effect = ChannelConfigError("cannot create")
+    state = _state(channel_service=service)
+    state.runtime.storage.credentials["UNRELATED"] = "keep"
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "channel.create",
+            "params": {
+                "id": "slack",
+                "platform": "slack",
+                "agent_id": "assistant",
+                "token": "private-bot-token",
+                "app_token": "private-app-token",
+            },
+        },
+    )
+    assert not response["ok"]
+    assert state.runtime.storage.credentials == {"UNRELATED": "keep"}
+    assert "private" not in str(response)
+
+
+@pytest.mark.asyncio
+async def test_slack_requires_distinct_credential_keys_before_writing() -> None:
+    state = _state()
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "channel.create",
+            "params": {
+                "id": "slack",
+                "platform": "slack",
+                "agent_id": "assistant",
+                "token_env_var": "SAME",
+                "app_token_env_var": "SAME",
+            },
+        },
+    )
+    assert not response["ok"]
+    state.runtime.channel_service.create_channel.assert_not_called()
+    assert not state.runtime.storage.credentials
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_creation_needs_no_token_and_pairing_uses_dedicated_rpc() -> None:
+    service = Mock()
+    service.pair_whatsapp = AsyncMock(return_value={"state": "pairing", "qr_image": "private-qr"})
+    state = _state(channel_service=service)
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "channel.create",
+            "params": {
+                "id": "wa",
+                "platform": "whatsapp",
+                "agent_id": "assistant",
+                "allowed_chat_ids": ["self"],
+                "enabled": False,
+            },
+        },
+    )
+    assert response["ok"]
+    assert response["result"]["token_env_var"] == ""
+    assert not state.runtime.storage.credentials
+    response = await dispatch_rpc(
+        state, {"method": "channel.whatsapp.pair", "params": {"id": "wa", "reset": True}}
+    )
+    assert response["ok"]
+    service.pair_whatsapp.assert_awaited_once_with("wa", reset=True)
 
 
 class _NullAsyncContext:

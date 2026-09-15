@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
 
   import Dropdown from '../Dropdown.svelte';
+  import WhatsAppSetup from './WhatsAppSetup.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
@@ -189,6 +190,16 @@
       ...channelFormValues,
       [fieldName]: value,
     };
+    if (fieldName === 'platform') {
+      channelFormValues.app_token_env_var = '';
+      channelFormValues.server_url = '';
+      if (value === 'whatsapp') {
+        channelFormValues.token_env_var = '';
+        channelFormValues.allowed_chat_ids = 'self';
+      } else if (channelFormValues.allowed_chat_ids === 'self') {
+        channelFormValues.allowed_chat_ids = '';
+      }
+    }
     clearChannelFeedback();
   }
 
@@ -590,23 +601,60 @@
         />
       </FormField>
 
-      <FormField
-        controlId="channel-token-env-input"
-        required
-        label={t('settings.channels.token_env_var', 'Token env var')}
-        help={t(
-          'settings.channels.token_env_var.help',
-          'Name of the environment variable that holds the bot token. Set the variable itself in the .env file in the vBot data directory — only the name goes here.',
-        )}
-      >
-        <TextField
-          id="channel-token-env-input"
-          value={channelFormValues.token_env_var}
+      {#if channelFormValues.platform !== 'whatsapp'}
+        <FormField
+          controlId="channel-token-env-input"
           required
-          disabled={channelBusy && channelFormMode === CHANNEL_FORM_MODE_CREATE}
-          onInput={(next) => setChannelFormField('token_env_var', next)}
-        />
-      </FormField>
+          label={t('settings.channels.token_env_var', 'Token env var')}
+          help={t(
+            'settings.channels.token_env_var.help',
+            'Name of the environment variable that holds the bot token. Set the variable itself in the .env file in the vBot data directory — only the name goes here.',
+          )}
+        >
+          <TextField
+            id="channel-token-env-input"
+            value={channelFormValues.token_env_var}
+            required
+            disabled={channelBusy &&
+              channelFormMode === CHANNEL_FORM_MODE_CREATE}
+            onInput={(next) => setChannelFormField('token_env_var', next)}
+          />
+        </FormField>
+      {/if}
+      {#if channelFormValues.platform === 'slack'}
+        <FormField
+          controlId="channel-app-token-env-input"
+          label={t(
+            'settings.channels.app_token_env',
+            'App token environment variable',
+          )}
+          help={t(
+            'settings.channels.app_token_help',
+            'Slack needs a second token for Socket Mode. Enter the name of the variable holding the xapp token with connections:write permission.',
+          )}
+        >
+          <TextField
+            id="channel-app-token-env-input"
+            required
+            value={channelFormValues.app_token_env_var}
+            onInput={(next) => setChannelFormField('app_token_env_var', next)}
+          />
+        </FormField>
+      {/if}
+      {#if channelFormValues.platform === 'mattermost'}
+        <FormField
+          controlId="channel-server-url-input"
+          label={t('settings.channels.server_url', 'Mattermost server URL')}
+        >
+          <TextField
+            id="channel-server-url-input"
+            required
+            placeholder="https://chat.example.org"
+            value={channelFormValues.server_url}
+            onInput={(next) => setChannelFormField('server_url', next)}
+          />
+        </FormField>
+      {/if}
 
       <FormField controlId="channel-allowed-chat-ids-input" full>
         {#snippet labelContent()}
@@ -677,6 +725,12 @@
     {#each channelPanelState.channels as channel (channel.id)}
       {@const rowBusy = channelBusy || channelActionChannelId === channel.id}
       <div class="s-channel-card">
+        {#if channel.failure_reason}<Banner variant="error"
+            >{channel.failure_reason}</Banner
+          >{/if}
+        {#if channel.platform === 'whatsapp'}
+          <WhatsAppSetup channelId={channel.id} onChanged={loadChannelsPanel} />
+        {/if}
         <div class="s-channel-head">
           <div class="s-row-info">
             <div class="s-row-label">{channel.id}</div>

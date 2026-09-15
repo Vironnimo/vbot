@@ -7,6 +7,34 @@ import pytest
 from cli import main as cli_main
 
 
+@pytest.mark.parametrize(
+    "platform, flags",
+    [
+        ("whatsapp", ["--allow", "self"]),
+        ("slack", ["--token-env", "BOT", "--app-token-env", "APP", "--disabled"]),
+        ("mattermost", ["--token-env", "BOT", "--server-url", "https://chat.example"]),
+    ],
+)
+def test_new_platform_connection_arguments(platform: str, flags: list[str]) -> None:
+    args = cli_main.parse_args(
+        ["channel", "add", "test", "--platform", platform, "--agent", "assistant", *flags]
+    )
+    assert args.platform == platform
+    if platform == "whatsapp":
+        assert args.token_env is None and not args.token_stdin
+    elif platform == "slack":
+        assert args.app_token_env == "APP" and args.disabled
+    else:
+        assert args.server_url == "https://chat.example"
+
+
+def test_whatsapp_nested_commands_and_slack_token_slot() -> None:
+    args = cli_main.parse_args(["channel", "whatsapp", "pair", "wa", "--reset"])
+    assert args.command == "whatsapp-pair" and args.reset
+    args = cli_main.parse_args(["channel", "token", "set", "slack", "--slot", "app", "--stdin"])
+    assert args.slot == "app"
+
+
 def test_parse_args_supports_channel_add_options() -> None:
     args = cli_main.parse_args(
         [
