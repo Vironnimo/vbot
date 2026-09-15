@@ -8,6 +8,7 @@
   import FormField from '../../../../webui/src/components/ui/FormField.svelte';
   import MarkdownContent from '../../../../webui/src/components/chat/MarkdownContent.svelte';
   import { requestId } from './pagePresentation.js';
+  import { createPageRefresh } from './pageRefresh.js';
 
   let { swarmId, client, contentLinks } = $props();
   let questions = $state([]),
@@ -30,6 +31,14 @@
   const call = (args) =>
     client.operation('decisions', { swarm_id: swarmId, ...args });
   const dirty = () => form !== null && JSON.stringify(form) !== baseline;
+  const backgroundRefresh = createPageRefresh(async () => {
+    await Promise.all([
+      refresh(),
+      detail && !form && !busy
+        ? readQuestion(detail.question.question_id)
+        : undefined,
+    ]);
+  });
   const participant = {
     hasPending: () => dirty() || busy,
     flush: async () => !dirty() && !busy,
@@ -43,15 +52,12 @@
     client.notifyAutosave();
   });
   onMount(() => {
-    void refresh();
-    return client.onInvalidation(() => {
-      void refresh();
-      if (detail && !form && !busy)
-        void readQuestion(detail.question.question_id);
-    });
+    void backgroundRefresh.run();
+    return client.onInvalidation(backgroundRefresh.schedule);
   });
   onDestroy(() => {
     disposed = true;
+    backgroundRefresh.destroy();
     readGeneration++;
     listGeneration++;
   });
