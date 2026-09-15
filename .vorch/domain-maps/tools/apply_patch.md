@@ -10,8 +10,9 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   in the `files` family with one required `patch` string. It is an ordinary
   Provider-neutral function Tool, not a Provider-native patch operation. The
   open model-facing schema is backed by handler-owned unknown-field validation.
-- The definition teaches one compact Update template plus Add/Delete/Move headers,
-  batching, insertion and EOF targeting. Detailed continuation guidance belongs in
+- The definition leads with file editing and complete replacement/insertion examples,
+  then Add/Delete/Move headers, batching, insertion-after and EOF targeting.
+  Detailed continuation guidance belongs in
   results; matching errors distinguish missing/ambiguous context hints from hunk text.
 - Add, Update, Delete, standalone `Move File: source -> destination`, and
   Update plus `Move to: destination` are supported. Paths use ordinary
@@ -58,6 +59,10 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   Missing context prefixes and omitted `@@` are accepted; unknown operation
   headers, unframed prose, and non-empty text after End Patch are rejected.
   Explicit `@@` hunks following Move File use Update-plus-Move semantics.
+- Add bodies tolerate missing `+` prefixes, including blank lines, preserving the
+  entire unprefixed line and its indentation. A bare opening `@@` is tolerated.
+  Unprefixed removals, context hints and later hunk delimiters remain invalid;
+  explicit `+` content remains literal, including leading patch syntax.
 - `Move to` is operation metadata and may precede, separate, or follow Update
   hunks. Repeated identical destinations are harmless, including after Move File;
   conflicting destinations fail before any writes. Prefixed content remains literal.
@@ -102,7 +107,9 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   Surplus blank boundary context can be dropped after the full locator misses.
   Blank lines explicitly marked for deletion remain meaningful operations.
 - Context-only intermediate hunks are ignored; an entirely context-only patch
-  fails. Identical old/new line sequences are no-ops only when located. A unique
+  fails with `no_changes` and explains that context locates an edit but supplies
+  no insertion/removal. It never invents omitted replacement content or reports
+  success. Identical old/new line sequences are no-ops only when located. A unique
   precise post-state with at least four shared non-whitespace context characters
   permits an already-applied retry before approximate matching. A missing
   deletion/move source remains an error, not inferred proof of prior execution.
@@ -119,7 +126,10 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   adopt the detected file style; explicit no-newline markers apply only at EOF.
   Binary files may be moved or deleted without text decoding.
 - Writes reuse `atomic_write_bytes`; its optional `mode` carries source
-  permissions to a move destination. A destination is written and checked before
+  permissions to a move destination. Its `before_replace` callback rechecks all
+  current operation paths before each bounded retry of Windows replacement
+  errors 5/32/33; completed entries are never replayed. Exhausted failures report
+  retry eligibility and the actual attempt count. A destination is written and checked before
   its source is deleted; both paths are rechecked before deleting the source.
   A move that wrote its destination but could not delete its source reports
   completed/pending paths and blocks follow-up entries on both. An observation
@@ -142,8 +152,14 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   locking, cancellation, and guarded retries;
   `test_apply_patch_overwrite.py` covers creation/replacement, read guards,
   empty contents, format preservation, and concurrent drift.
+- `test_apply_patch_recovery.py` covers Add syntax repair, context-only failure
+  and insertion, shared locks across Sessions, bounded replacement retry and
+  source/destination drift. `test_file_state.py` includes a real Windows reader
+  handle without delete sharing, not just injected exceptions.
 - Existing fuzzy-match, file-state, Runtime and Provider-schema
   tests cover the shared boundaries.
+  `tests/core/providers/test_ollama.py` verifies intact patch arguments through
+  Cloud response normalization and Chat ingestion.
 - `python -m scripts.probe_provider_tool_call --scenario apply_patch` uses the
   production registry and disposable files. Its matrix separates natural batching tasks
   (no imposed call count or prebuilt arguments), exact edge/invalid requests,
@@ -153,3 +169,5 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   tasks also cover insertion, EOF targeting, and recovery from missing/ambiguous
   hints. Exact cases pair move-metadata recovery with conflicting destinations and
   literal move-shaped text. Probe tests reject scope escapes and false completion.
+  The probe supplies Adapter-owned request context for gateway routing. Its matrix
+  includes missing Add prefixes, conflicting syntax and context-only recovery.
