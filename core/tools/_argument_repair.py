@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from core.tools.contracts import ToolContract, ToolContractError, _load_json_value, _same_json_value
@@ -16,13 +16,16 @@ def normalize_call_arguments(
     *,
     enum_fields: Sequence[str] = (),
     field_aliases: Mapping[str, str] | None = None,
+    field_normalizers: Mapping[str, Callable[[Any], Any]] | None = None,
     empty_as_omitted: Sequence[str] = (),
 ) -> Any:
     """Repair one owner-declared argument object, preserving every supplied instruction.
 
     Owners opt into field formatting and known call wrappers at this boundary.
-    Enum formatting and empty-as-omission need explicit field selection. Nested
-    objects remain payloads; batch owners call this separately for each item.
+    Field normalizers run on canonical field names before schema conversion and
+    alias conflict checks. Enum formatting and empty-as-omission need explicit
+    field selection. Nested objects remain payloads; batch owners call this
+    separately for each item.
     No edit-distance matching, identifier correction, or schema-score guessing.
     """
     value = copy.deepcopy(arguments)
@@ -65,6 +68,8 @@ def normalize_call_arguments(
 
     normalized: dict[str, Any] = {}
     for field, item in entries(value):
+        if field_normalizers and field in field_normalizers:
+            item = field_normalizers[field](item)
         if field in enum_fields and isinstance(item, str):
             options = properties.get(field, {}).get("enum", [])
             item = _formatted_name(item, options) or item
