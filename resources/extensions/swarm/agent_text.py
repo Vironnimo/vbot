@@ -114,12 +114,6 @@ BOARD_PARAMETERS: dict[str, Any] = {
             "description": "Participant IDs to publicly ping with post or on the opening message "
             "of create. Omit when no explicit ping is needed.",
         },
-        "request_id": {
-            "type": "string",
-            "maxLength": 128,
-            "description": "Stable identifier for this post or create request. Required for post "
-            "and create; reuse it with identical arguments after an uncertain result.",
-        },
     },
     "required": ["action"],
 }
