@@ -391,31 +391,6 @@ body {
   gap: 8px;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .participants {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 8px;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .participants
-  strong,
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .participants
-  small {
-  display: block;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .participants
-  strong {
-  margin-bottom: 5px;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .participants
-  button[aria-pressed='true'] {
-  border-color: var(--accent-40);
-  background: var(--accent-06);
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .history {
   margin-top: 4px;
   border: 1px solid var(--border);
@@ -426,15 +401,6 @@ body {
   > .section-head {
   flex-wrap: wrap;
   margin-bottom: 16px;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .participants
-  button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid var(--border-2);
-  text-align: left;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .history
@@ -665,6 +631,7 @@ body {
   border-radius: var(--r-sm);
   background: color-mix(in srgb, var(--participant-color) 4%, var(--bg));
 }
+.swarm-page .participant-chip[aria-pressed='true'],
 .swarm-page .participant-chip:hover {
   background: color-mix(in srgb, var(--participant-color) 10%, var(--bg));
   border-color: color-mix(in srgb, var(--participant-color) 24%, transparent);

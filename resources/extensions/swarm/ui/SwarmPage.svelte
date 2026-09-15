@@ -65,6 +65,26 @@
   >
 {/snippet}
 
+{#snippet participantChip(participant, selected = undefined)}
+  <Button
+    variant="tertiary"
+    class="participant-chip"
+    style={`--participant-color: ${participantColor(participant.id)}`}
+    tooltip={participantDetails(participant)}
+    ariaLabel={participantDetails(participant)}
+    aria-pressed={selected}
+    onClick={() => activity.inspectParticipant(participant)}
+  >
+    {@render participantAvatar(participant.id, participant.display_name)}
+    <strong>{participant.display_name}</strong>
+    <span
+      class="participant-status"
+      data-state={participantState(participant)}
+      aria-hidden="true"
+    ></span>
+  </Button>
+{/snippet}
+
 <svelte:head><title>{t('swarm.title', 'Swarms')}</title></svelte:head>
 {#snippet actionIcon(kind)}
   <svg
@@ -389,25 +409,7 @@
                 </p>
                 <div class="participant-row">
                   {#each model.discussionParticipants as participant (participant.id)}
-                    <Button
-                      variant="tertiary"
-                      class="participant-chip"
-                      style={`--participant-color: ${participantColor(participant.id)}`}
-                      tooltip={participantDetails(participant)}
-                      ariaLabel={participantDetails(participant)}
-                      onClick={() => activity.inspectParticipant(participant)}
-                    >
-                      {@render participantAvatar(
-                        participant.id,
-                        participant.display_name,
-                      )}
-                      <strong>{participant.display_name}</strong>
-                      <span
-                        class="participant-status"
-                        data-state={participantState(participant)}
-                        aria-hidden="true"
-                      ></span>
-                    </Button>
+                    {@render participantChip(participant)}
                   {:else}
                     <span class="muted"
                       >{t(
@@ -509,26 +511,13 @@
               role="tabpanel"
             >
               <h3>{t('swarm.participants', 'Participants')}</h3>
-              <div class="participants">
-                {#each model.selectedSwarm.participants ?? [] as participant (participant.id)}<Button
-                    variant="secondary"
-                    aria-pressed={activity.history?.participant.id ===
-                      participant.id}
-                    onClick={() => activity.inspectParticipant(participant)}
-                    >{@render participantAvatar(
-                      participant.id,
-                      participant.display_name,
-                    )}<span
-                      class:running={participant.state === 'running'}
-                      class="dot"
-                    ></span><span
-                      ><strong>{participant.display_name}</strong><small
-                        >{participant.model} · {participant.state} · {participant.pending_count ??
-                          0}
-                        {t('swarm.pending', 'pending')}</small
-                      ></span
-                    ></Button
-                  >{/each}
+              <div class="participants participant-row">
+                {#each model.selectedSwarm.participants ?? [] as participant (participant.id)}
+                  {@render participantChip(
+                    participant,
+                    activity.history?.participant.id === participant.id,
+                  )}
+                {/each}
               </div>
               {#if activity.history}<article
                   class="history"
@@ -611,6 +600,8 @@
                   {#each activity.activityTimeline as item (item.id)}
                     {#if item.type === 'assistant_run'}<ChatAssistantRun
                         {item}
+                        isReasoningOpen={activity.isReasoningOpen}
+                        onReasoningOpenChange={activity.setReasoningOpen}
                         onCancelToolCall={activity.cancelToolCall}
                         agentName={activity.history.participant.display_name}
                       />{:else}<ChatTimelineEntry

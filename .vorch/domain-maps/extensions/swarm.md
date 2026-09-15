@@ -332,3 +332,16 @@ WikiPanel.svelte owns free page drafts, bounded content loading, search, version
 Mutations are payload-bound and idempotent. History retains structural snapshots and each author's position changes; list/read/history cursors bind query and event watermark. Reads include current/snapshot revisions, own position, participation and bounded alternatives/reasons. Changes invalidate the human page without messaging or waking Agents. Versioned `#decision/<question_id>/<revision>` links open the current question; Board/Inbox/automatic delivery attach bounded current summaries for linked questions when Decisions is enabled, so an old post exposes changed context. `DecisionsPanel.svelte` submits operational edits explicitly and protects drafts across navigation and conflicts. Tests: `test_swarm_decisions.py`, `SwarmDecisions.test.js`, and `swarm_decision_cases.py` through the production Luna probe.
 
 Wiki search and decision submissions use explicit button callbacks and Enter handlers because the isolated page sandbox blocks native form submission. The page does not require `allow-forms`. Component tests cover these callbacks; built-browser checks cover the sandbox behavior.
+
+Swarm Activity retains one shared Chat event projection, compresses deltas and
+flushes live updates in 33 ms batches. Initial replay is buffered through the
+server-reported `replay_through_sequence` before replacing displayed History;
+opening a long-running Session therefore does not visibly replay its old steps.
+Canonical Run Summaries retire retained live output; stale History or active
+snapshots cannot erase newer output or restart a settled subscription. In-flight
+inspection survives peer invalidations, and Thinking disclosure state belongs to
+the inspected Session. Tests: `SwarmPage.test.streaming.test.js` and the existing
+Activity/reconciliation suites. The generic bridge only relays the replay
+watermark (`ExtensionPage.test.js`, `test_extensions_methods.py`).
+Activity and Board reuse the same compact participant chips; Activity retains
+all Swarm participants and marks the selected Session with a pressed state.
