@@ -84,7 +84,7 @@ Example:
 - Do not add a root parameter-object description unless it conveys conditional argument rules that cannot be stated more compactly on the affected properties.
 - Make a field optional only when omission has a real default, an unambiguous derived fallback, or selects the current target.
 - Use stable IDs returned by prior Tool Results for follow-up mutations. If IDs can shift, say when the Agent must list or refresh first.
-- Use one vocabulary consistently: `action` for a domain-behavior discriminator, `mode` only for a genuine execution contract such as Bash foreground/auto/background, domain names for arguments, and existing project terms for entities. Do not alternate between `action`, `operation`, `mode`, and `type` for the same role.
+- Use one vocabulary consistently: `action` for a domain-behavior discriminator, `mode` only for a genuine execution contract such as Bash foreground/background, domain names for arguments, and existing project terms for entities. Do not alternate between `action`, `operation`, `mode`, and `type` for the same role.
 
 ## Parameter Descriptions
 

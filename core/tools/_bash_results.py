@@ -80,7 +80,6 @@ async def _background_result(
     context: ToolContext,
     process_id: str,
     *,
-    mode: str,
     handoff_after: float | None,
     requested_by_user: bool = False,
 ) -> JsonObject:
@@ -100,7 +99,7 @@ async def _background_result(
         **fields,
     }
     result["delivery"] = "automatic"
-    result["handoff_note"] = _handoff_note(mode, handoff_after, requested_by_user=requested_by_user)
+    result["handoff_note"] = _handoff_note(handoff_after, requested_by_user=requested_by_user)
     return tool_success(result)
 
 
@@ -224,15 +223,13 @@ async def _completion_result(
     return tool_success(result)
 
 
-def _handoff_note(
-    mode: str, handoff_after: float | None, *, requested_by_user: bool = False
-) -> str:
+def _handoff_note(handoff_after: float | None, *, requested_by_user: bool = False) -> str:
     if requested_by_user and handoff_after is not None:
         transition = (
             "The user moved this command to the background after "
             f"{_format_elapsed_duration(handoff_after)}. The command is still running."
         )
-    elif mode == "auto" and handoff_after is not None:
+    elif handoff_after is not None:
         transition = (
             "The command is still running and has been handed off to vBot after "
             f"{handoff_after:g} seconds."
@@ -240,17 +237,12 @@ def _handoff_note(
     else:
         transition = "The command is still running and has been handed off to vBot immediately."
     note = (
-        f"{transition} vBot will monitor it and deliver its terminal result automatically "
-        "in one coalesced follow-up Run. You may continue work that does not depend on "
-        "this result, or finish the current Run now."
+        f"{transition} Its result will arrive automatically. Continue independent work, "
+        "or finish this Run and wait for the result before dependent work."
     )
     if requested_by_user:
         return note
-    return (
-        f"{note} Do not poll merely to wait, and do "
-        "not start another copy of the command. If your next action depends on the "
-        "result, inspect the process explicitly or use foreground mode next time."
-    )
+    return f"{note} Do not start another copy of the command or poll just to wait."
 
 
 def _shape_output_fields(
