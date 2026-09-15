@@ -89,14 +89,21 @@ STT and TTS use managed data-directory environments and child processes; the imm
 runtime is not changed. Managed verification and execution workers use `-I -B`:
 isolated mode alone ignores `PYTHONDONTWRITEBYTECODE` and would allow STT imports
 to create bytecode inside the release. Managed STT installs both the declared core dependencies and the
-local-speech extra because its worker imports vBot source; both lists enter its verification
-marker. The source-install STT path retains its legacy server-interpreter pip
-recipe. Fixed recipes preserve compatible Torch or install the selected CUDA/CPU build and verify
+local-speech extra because its worker imports vBot source. The source-install STT path
+retains its legacy server-interpreter pip recipe. Fixed recipes preserve compatible Torch
+or install the selected CUDA/CPU build and verify
 imports plus NVIDIA execution in a fresh process. Status is process-local and survives browser
 navigation; duplicate requests share the job, failures permit explicit retry, shutdown cancels and
 reaps the package subprocess. Raw package output stays private. Local execution remains unavailable
-during installation, failure and the verified restart-required state; a fresh Runtime rechecks
-package metadata.
+during installation, failure and the verified restart-required state. Source-install STT
+rechecks package metadata; managed STT/TTS require the environment interpreter and a
+`verified.json` completion receipt, written atomically only after successful verification
+and removed before package changes. Receipt contents are not runtime compatibility data:
+changed dependency declarations or worker source never invalidate a completed setup.
+Actual SDK, device and Model failures are handled at execution. Status reads neither
+import ML runtimes nor start subprocesses, rewrite receipts or run setup. Explicit
+`task_model.status` checks report the selected local speech environment's concrete
+unavailability reason once per change, plus recovery; catalog enumeration remains silent.
 See `USAGE.md` -> Local speech recognition for the user setup flow.
 
 `SpeechProgress` is a request-local, thread-safe snapshot of phase and elapsed
@@ -121,9 +128,9 @@ language, expressiveness/guidance). Their incompatible SDK dependencies are
 installed into managed Python 3.12 environments under the Runtime-injected
 `DataDirectoryLayout.speech_engines` root. `local-tts` installs only uv in the
 source-install server interpreter; packaged roles ship uv. Shipped recipes install each SDK and
-matched Torch/audio packages inside the managed environment. Verification writes a recipe marker, never loads weights,
-and makes TTS immediately available without restarting the server. A changed
-recipe or missing interpreter requires setup again. Fixed upstream revisions
+matched Torch/audio packages inside the managed environment. Verification writes a completion
+receipt, never loads weights, and makes TTS immediately available without restarting the server. A missing
+interpreter or incomplete setup requires setup again. Fixed upstream revisions
 avoid accidentally selecting Chatterbox's older PyPI V2 implementation.
 Repeated Chatterbox setup explicitly reinstalls the PyPI distribution for dependency resolution
 before restoring the pinned source without dependencies. This avoids resolving transitive Git

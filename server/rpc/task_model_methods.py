@@ -76,11 +76,22 @@ def _task_model_status(state: Any, params: JsonObject) -> JsonObject:
     try:
         normalized_task_type = validate_task_type(task_type)
         try:
-            state.runtime.model_tasks.binding_for(normalized_task_type)
+            binding = state.runtime.model_tasks.binding_for(normalized_task_type)
         except TaskModelError:
             configured = False
         else:
             configured = True
+            if normalized_task_type in {
+                "speech_to_text",
+                "text_to_speech",
+            } and binding.target.startswith("local/"):
+                # Only report the selected engine, never unused optional engines
+                # encountered during catalog enumeration. The owner deduplicates
+                # repeated readiness checks and reports recovery.
+                with suppress(ValueError):
+                    state.runtime.speech.local_setup_for(binding.target).status(
+                        log_unavailable=True
+                    )
         usable = (
             state.runtime.model_tasks.binding_is_usable(normalized_task_type)
             if configured

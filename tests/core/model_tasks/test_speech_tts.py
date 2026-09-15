@@ -66,7 +66,7 @@ async def test_tts_catalog_is_lazy_and_each_setup_has_its_own_availability(tmp_p
         setup = executor.setup_for("local/qwen3-tts")
         setup.python.parent.mkdir(parents=True)
         setup.python.touch()
-        (setup.directory / "verified.json").write_text(setup._recipe_key())
+        setup._write_marker(setup.directory / "verified.json")
         assert executor._definitions["qwen3-tts"].descriptor.can_execute()
         assert not executor._definitions["chatterbox"].descriptor.can_execute()
         setup._state = "installing"
@@ -169,8 +169,8 @@ async def test_managed_setup_never_installs_sdk_in_server_and_verifies_before_re
         assert source_stage[source_stage.index("--reinstall-package") + 1] == "chatterbox-tts"
     else:
         assert "--reinstall-package" not in package_stage
-    # Stale recipes and failed verification must not publish availability.
-    (setup.directory / "verified.json").write_text("stale")
+    # Incomplete setups and failed verification must not publish availability.
+    (setup.directory / "verified.json").unlink()
     fresh = LocalSpeechSetup(engine=engine, directory=setup.directory)
     monkeypatch.setattr(fresh, "_command", AsyncMock(return_value=1))
     fresh.install()
