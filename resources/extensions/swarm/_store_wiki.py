@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from typing import cast
 
+from core.tools.fuzzy_match import FuzzyReplacement, replace_fuzzy
 from core.utils.ids import new_id
 
 from ._store_database import SwarmDatabase
@@ -258,7 +259,13 @@ def _mutate(
     else:
         page_id = arguments["page_id"]
         current = _page(connection, swarm_id, page_id)
-        if current["revision"] != arguments["expected_revision"]:
+        stale = current["revision"] != arguments["expected_revision"]
+        if stale and not (
+            action == "update"
+            and "old_text" in arguments
+            and "title" not in arguments
+            and arguments["expected_revision"] < current["revision"]
+        ):
             raise SwarmStoreError("wiki_revision_conflict")
         if current["deleted"] and action != "restore":
             raise SwarmStoreError("wiki_deleted")
@@ -270,9 +277,19 @@ def _mutate(
         title = arguments.get("title", source["title"])
         content = arguments.get("content", source["content"])
         if "old_text" in arguments:
-            if content.count(arguments["old_text"]) != 1:
-                raise SwarmStoreError("wiki_edit_conflict")
-            content = content.replace(arguments["old_text"], arguments["new_text"], 1)
+            # A stale revision permits representation repair, never similarity
+            # matching that could overwrite another participant's changed text.
+            replacement = replace_fuzzy(
+                content,
+                arguments["old_text"],
+                arguments["new_text"],
+                replace_all=False,
+                precise_only=stale,
+                typographic=True,
+            )
+            if not isinstance(replacement, FuzzyReplacement):
+                raise SwarmStoreError("wiki_revision_conflict" if stale else "wiki_edit_conflict")
+            content = replacement.new_content
         if len(content) > 200000:
             raise SwarmStoreError("invalid_arguments", field="content")
         revision, deleted = current["revision"] + 1, int(action == "delete")

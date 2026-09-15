@@ -41,8 +41,9 @@ WIKI_PARAMETERS: dict[str, Any] = {
         "old_text": {
             "type": "string",
             "description": (
-                "Exact nonempty text to replace once with update. Supply new_text "
-                "and omit content. Omit for a whole-page update."
+                "Nonempty passage to replace once with update. Supply new_text and omit content. "
+                "Use enough context to identify one match; minor formatting differences are "
+                "tolerated. Omit for a whole-page update."
             ),
         },
         "new_text": {
@@ -55,8 +56,10 @@ WIKI_PARAMETERS: dict[str, Any] = {
         "expected_revision": {
             "type": "integer",
             "description": (
-                "Current page revision observed before changing it. Required for "
-                "update, delete, and restore."
+                "Page revision observed before changing it. Required for update, delete, and "
+                "restore. An older revision is accepted for old_text/new_text alone when the "
+                "passage still matches uniquely, allowing formatting differences. Other "
+                "changes require the current revision."
             ),
         },
         "revision": {
@@ -117,12 +120,14 @@ WIKI_ERRORS = {
         "revision to recover it."
     ),
     "wiki_revision_conflict": (
-        "The page changed since the revision you supplied. No change was applied. "
+        "The supplied revision differs from the current page, and this change could not be "
+        "safely applied to it. No change was applied. "
         "Read the current page, reconcile your change, and retry with its revision "
         "and a new request_id."
     ),
     "wiki_edit_conflict": (
-        "old_text must match exactly once. No change was applied. Read the relevant"
-        " content and choose a unique passage."
+        "old_text did not identify one matching passage, even with text-matching tolerance. "
+        "No change was applied. Read the relevant content and supply old_text with enough "
+        "surrounding context to identify a unique passage."
     ),
 }
