@@ -74,7 +74,7 @@ function button(text) {
 function createBridge(initialProfile = profile) {
   let storedProfile = structuredClone(initialProfile);
   let autosaveParticipant;
-  let invalidate;
+  const invalidationListeners = new Set();
   const runListeners = new Set();
   const operation = vi.fn((name, args) => {
     if (name === 'profiles.save') {
@@ -201,7 +201,7 @@ function createBridge(initialProfile = profile) {
         return autosaveParticipant;
       },
       invalidate() {
-        invalidate?.();
+        for (const listener of invalidationListeners) listener();
       },
       openLink: (url) => operation('link.open', { url }),
       openMedia: (url) => operation('media.open', { url }),
@@ -227,8 +227,8 @@ function createBridge(initialProfile = profile) {
         return () => {};
       },
       onInvalidation(callback) {
-        invalidate = callback;
-        return () => {};
+        invalidationListeners.add(callback);
+        return () => invalidationListeners.delete(callback);
       },
       onRunEvent(callback) {
         runListeners.add(callback);

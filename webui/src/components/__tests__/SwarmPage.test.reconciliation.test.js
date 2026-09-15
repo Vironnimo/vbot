@@ -96,7 +96,7 @@ describe('Swarm selection reconciliation', () => {
     await vi.waitFor(() => expect(pending()).toMatch(/2\s+pending/));
   });
 
-  it('reloads selected Session history when invalidated with an unchanged Run id', async () => {
+  it('keeps selected Session history when invalidated with an unchanged Run id', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
     button('Investigate').click();
@@ -104,21 +104,39 @@ describe('Swarm selection reconciliation', () => {
     button('Alpha').click();
     await vi.waitFor(() => expect(bridge.readHistory).toHaveBeenCalledTimes(1));
     const before = operation.mock.calls.filter(
-      ([name]) => name === 'swarms.usage',
+      ([name]) => name === 'swarms.get',
     ).length;
     bridge.invalidate();
     await vi.waitFor(() =>
       expect(
-        operation.mock.calls.filter(([name]) => name === 'swarms.usage').length,
+        operation.mock.calls.filter(([name]) => name === 'swarms.get').length,
       ).toBeGreaterThan(before),
     );
     await tick();
-    expect(bridge.readHistory).toHaveBeenCalledTimes(2);
+    expect(bridge.readHistory).toHaveBeenCalledTimes(1);
   });
 });
 
-it('loads older Session pages in canonical order and retains their depth on refresh', async () => {
-  const { bridge } = createBridge();
+it('retains older Session pages during invalidation and reconciles them on completion', async () => {
+  const { bridge, operation } = createBridge();
+  const original = operation.getMockImplementation();
+  operation.mockImplementation((name, args) =>
+    name === 'swarms.get'
+      ? Promise.resolve({
+          swarm: {
+            ...structuredClone(swarm),
+            participants: [
+              {
+                ...swarm.participants[0],
+                lifecycle_run_id: 'run-paged',
+                run_active: true,
+              },
+            ],
+          },
+        })
+      : original(name, args),
+  );
+  bridge.subscribeRun.mockResolvedValue({ subscription_id: 'stream-paged' });
   const entry = (n) => ({
     id: `history-${n}`,
     role: 'user',
@@ -161,6 +179,13 @@ it('loads older Session pages in canonical order and retains their depth on refr
     before: 'oldest',
   });
   bridge.invalidate();
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  expect(bridge.readHistory).toHaveBeenCalledTimes(3);
+  bridge.emitRun('stream-paged', {
+    type: 'run_completed',
+    run_id: 'run-paged',
+    sequence: 1,
+  });
   await vi.waitFor(() => expect(bridge.readHistory).toHaveBeenCalledTimes(6));
   await tick();
   const text = document.querySelector('.history').textContent;
@@ -303,6 +328,8 @@ it.each(['swarms.events', 'swarms.usage'])(
     });
     await render(bridge);
     button('Investigate').click();
+    await vi.waitFor(() => expect(button('Usage')).toBeDefined());
+    button(method === 'swarms.events' ? 'Delivery audit' : 'Usage').click();
     await vi.waitFor(() => expect(pending.length).toBeGreaterThan(0));
     button('Second swarm').click();
     await vi.waitFor(() =>
@@ -312,17 +339,21 @@ it.each(['swarms.events', 'swarms.usage'])(
     await tick();
     const selector = method === 'swarms.events' ? '.audit' : '.usage-summary';
     const current = method === 'swarms.events' ? 'swr-b-event-sentinel' : '222';
-    expect(document.querySelector(selector).textContent).toContain(current);
+    await vi.waitFor(() =>
+      expect(document.querySelector(selector).textContent).toContain(current),
+    );
     for (const resolve of pending) resolve(result('swr-a'));
     await new Promise((resolve) => setTimeout(resolve));
     await tick();
-    expect(document.querySelector(selector).textContent).toContain(current);
+    await vi.waitFor(() =>
+      expect(document.querySelector(selector).textContent).toContain(current),
+    );
     expect(bridge.replaceRoute).toHaveBeenLastCalledWith('/swarms/swr-b');
   },
 );
 
 it.each([false, true])(
-  'reattaches the same Run on refresh and ignores duplicate stream events (cleanup fails: %s)',
+  'retains the same Run subscription on refresh and ignores duplicate events (cleanup fails: %s)',
   async (cleanupFails) => {
     const { bridge, operation } = createBridge();
     if (cleanupFails)
@@ -357,23 +388,30 @@ it.each([false, true])(
     await vi.waitFor(() =>
       expect(bridge.subscribeRun).toHaveBeenCalledTimes(1),
     );
+    const reads = operation.mock.calls.filter(
+      ([name]) => name === 'swarms.get',
+    ).length;
     bridge.invalidate();
     await vi.waitFor(() =>
-      expect(bridge.subscribeRun).toHaveBeenCalledTimes(2),
+      expect(
+        operation.mock.calls.filter(([name]) => name === 'swarms.get').length,
+      ).toBeGreaterThan(reads),
     );
-    expect(bridge.unsubscribeRun).toHaveBeenCalledWith('first-stream');
+    expect(bridge.subscribeRun).toHaveBeenCalledTimes(1);
+    expect(bridge.readHistory).toHaveBeenCalledTimes(1);
+    expect(bridge.unsubscribeRun).not.toHaveBeenCalled();
     const event = {
       type: 'assistant_output_delta',
       run_id: 'refresh-run',
       sequence: 1,
       payload: { content_delta: 'live-refresh-sentinel' },
     };
-    bridge.emitRun('first-stream', {
+    bridge.emitRun('second-stream', {
       ...event,
       payload: { content_delta: 'stale-stream-sentinel' },
     });
-    bridge.emitRun('second-stream', event);
-    bridge.emitRun('second-stream', event);
+    bridge.emitRun('first-stream', event);
+    bridge.emitRun('first-stream', event);
     await tick();
     const text = document.querySelector('.history').textContent;
     expect(text).not.toContain('stale-stream-sentinel');
