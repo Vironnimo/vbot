@@ -288,13 +288,22 @@ describe('SwarmPage', () => {
       }
       expect(new Set(colors.values()).size).toBe(2);
       button('Participant 9').click();
-      await vi.waitFor(() => expect(bridge.readHistory).toHaveBeenCalled());
+      await vi.waitFor(() =>
+        expect(document.querySelector('.history')).not.toBeNull(),
+      );
       const activityAvatar = document.querySelector(
         '.participants .participant-avatar',
       );
       expect(activityAvatar.style.getPropertyValue('--participant-color')).toBe(
         colors.get('prt-a'),
       );
+      const activityChip = activityAvatar.closest('button');
+      expect(activityChip.getAttribute('aria-pressed')).toBe('true');
+      expect(activityChip.textContent).not.toContain(participants[0].model);
+      expect(activityChip.getAttribute('aria-label')).toContain(
+        participants[0].model,
+      );
+      expect(activityChip.querySelector('.participant-status')).not.toBeNull();
       fixtureState.mounted = await unmount(fixtureState.mounted);
       document.body.innerHTML = '';
     }
