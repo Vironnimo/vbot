@@ -513,25 +513,117 @@ async def test_packaged_stt_setup_installs_only_in_managed_environment(
     await setup.aclose()
 
 
-def test_managed_stt_marker_invalidates_when_base_requirements_change(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("engine", ["", "qwen3-tts", "chatterbox"])
+def test_completed_managed_speech_setup_survives_application_updates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, engine: str
 ) -> None:
-    directory = tmp_path / "speech-engines" / "stt"
-    setup = LocalSpeechSetup(directory=directory)
-    config = {
-        "project": {
-            "dependencies": ["base-package==1.0"],
-            "optional-dependencies": {"local-speech": ["speech-package==1.0"]},
-        }
-    }
-    monkeypatch.setattr(setup, "_config", lambda: config)
+    from core.model_tasks import speech_setup
+
+    directory = tmp_path / "speech-engines" / (engine or "stt")
+    setup = LocalSpeechSetup(engine=engine, directory=directory)
     setup.python.parent.mkdir(parents=True)
     setup.python.touch()
-    (directory / "verified.json").write_text(setup._recipe_key(), encoding="utf-8")
+    marker = directory / "verified.json"
+    receipt = json.dumps(
+        {
+            "recipe": {"base": ["websockets>=14,<18"], "speech": ["torch>=2.10,<3"]},
+            "sources": {
+                "speech_local.py": "previous-release",
+                "speech_worker.py": "previous-release",
+            },
+        }
+    )
+    marker.write_text(receipt, encoding="utf-8")
+    # Neither changed requirements nor changed worker source is runtime evidence
+    # that a completed environment stopped working. No metadata rewrite, import,
+    # subprocess, or setup should be needed to use it after an update.
+    monkeypatch.setattr(setup, "_config", MagicMock(side_effect=AssertionError("recipe read")))
+    monkeypatch.setattr(speech_setup, "__file__", str(tmp_path / "new-release" / "speech_setup.py"))
+    monkeypatch.setattr(
+        speech_setup, "_dependencies_available", MagicMock(side_effect=AssertionError("host probe"))
+    )
 
     assert setup.available()
-    config["project"]["dependencies"] = ["base-package==2.0"]
+    assert setup.install()["state"] == "ready"
+    assert setup._task is None
+    assert marker.read_text(encoding="utf-8") == receipt
+
+
+def test_managed_speech_reports_concrete_failures_only_when_requested(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.model_tasks import speech_setup
+
+    logger = MagicMock()
+    monkeypatch.setattr(speech_setup, "_LOGGER", logger)
+    setup = LocalSpeechSetup(directory=tmp_path / "stt")
     assert not setup.available()
+    assert setup.status()["error"] == "python_missing"
+    logger.warning.assert_not_called()
+    for _ in range(3):
+        assert setup.status(log_unavailable=True)["error"] == "python_missing"
+    assert logger.warning.call_count == 1
+    assert logger.warning.call_args.args[1:3] == ("stt", "python_missing")
+    setup.python.parent.mkdir(parents=True)
+    setup.python.touch()
+    assert setup.status(log_unavailable=True)["error"] == "setup_incomplete"
+    assert logger.warning.call_args.args[1:3] == ("stt", "setup_incomplete")
+    marker = tmp_path / "stt" / "verified.json"
+    setup._write_marker(marker)
+    setup._state = "ready"
+    assert setup.status(log_unavailable=True)["state"] == "ready"
+    assert setup.available()
+    logger.info.assert_called_once()
+    marker.unlink()
+    assert setup.status(log_unavailable=True)["state"] == "missing"
+    assert logger.warning.call_count == 3
+    assert not setup.available()
+
+
+@pytest.mark.parametrize("state", ["installing", "failed", "restart_required"])
+def test_managed_speech_never_runs_during_incomplete_setup(tmp_path: Path, state: str) -> None:
+    setup = LocalSpeechSetup(directory=tmp_path)
+    setup.python.parent.mkdir(parents=True)
+    setup.python.touch()
+    setup._write_marker(tmp_path / "verified.json")
+    setup._state = state
+    assert not setup.available()
+
+
+def test_managed_speech_reports_filesystem_access_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup = LocalSpeechSetup(directory=tmp_path)
+    monkeypatch.setattr(Path, "is_file", MagicMock(side_effect=PermissionError))
+    assert setup.status()["error"] == "environment_unreadable"
+    assert not setup.available()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("engine", ["", "qwen3-tts", "chatterbox"])
+async def test_failed_environment_recreation_cannot_reuse_old_completion_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, engine: str
+) -> None:
+    setup = LocalSpeechSetup(engine=engine, directory=tmp_path)
+    setup._write_marker(tmp_path / "verified.json")
+
+    # The interpreter is missing, but an earlier completion receipt remains.
+    # A failed recreation must discard that receipt before any changes, even
+    # if the failing operation leaves a new interpreter behind.
+    def fail_after_creating_interpreter() -> Any:
+        setup.python.parent.mkdir(parents=True)
+        setup.python.touch()
+        raise OSError("interrupted environment recreation")
+
+    monkeypatch.setattr(setup, "_config", fail_after_creating_interpreter)
+    setup.install()
+    assert setup._task is not None
+    await setup._task
+    assert setup.status()["state"] == "failed"
+    fresh = LocalSpeechSetup(engine=engine, directory=tmp_path)
+    assert fresh.status()["error"] == "setup_incomplete"
+    assert not fresh.available()
+    await setup.aclose()
 
 
 def test_managed_stt_worker_returns_typed_result_and_forwards_progress(

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import os
 import shutil
 import sys
@@ -39,16 +37,31 @@ class LocalSpeechSetup:
         self._phase = "checking"
         self._error = ""
         self._closed = False
+        self._reported_unavailability = ""
 
     @property
     def blocks_execution(self) -> bool:
         return self._state in {"installing", "restart_required", "failed"}
 
-    def status(self) -> dict[str, Any]:
+    def status(self, *, log_unavailable: bool = False) -> dict[str, Any]:
         state = self._state
-        if state == "idle":
-            state = "ready" if self.available() else "missing"
-        return {"state": state, "phase": self._phase, "error": self._error}
+        error = self._error
+        if state in {"idle", "ready"}:
+            error = self._availability_error()
+            state = "missing" if error else "ready"
+        if log_unavailable:
+            reason = error or (state if self.blocks_execution else "")
+            if reason and reason != self._reported_unavailability:
+                _LOGGER.warning(
+                    "Local speech unavailable (engine=%s, reason=%s, environment=%s)",
+                    self.engine or "stt",
+                    reason,
+                    self.directory or "server",
+                )
+            elif not reason and self._reported_unavailability:
+                _LOGGER.info("Local speech available again (engine=%s)", self.engine or "stt")
+            self._reported_unavailability = reason
+        return {"state": state, "phase": self._phase, "error": error}
 
     @property
     def python(self) -> Path:
@@ -56,14 +69,24 @@ class LocalSpeechSetup:
         return self.directory / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
     def available(self) -> bool:
+        return not self.blocks_execution and not self._availability_error()
+
+    def _availability_error(self) -> str:
         if not self.engine and self.directory is None:
-            return _dependencies_available()
-        if self.directory is None or not self.python.is_file():
-            return False
+            return "" if _dependencies_available() else "dependencies_missing"
+        if self.directory is None:
+            return "environment_missing"
         try:
-            return (self.directory / "verified.json").read_text() == self._recipe_key()
-        except (OSError, ValueError, KeyError):
-            return False
+            if not self.python.is_file():
+                return "python_missing"
+            # This receipt proves that setup finished, not that the installed
+            # packages or application source are identical to today's recipe.
+            # Updates must not revoke a completed setup based on text or hashes.
+            if not (self.directory / "verified.json").is_file():
+                return "setup_incomplete"
+        except OSError:
+            return "environment_unreadable"
+        return ""
 
     def _config(self) -> dict[str, Any]:
         source = Path(__file__).resolve()
@@ -76,21 +99,6 @@ class LocalSpeechSetup:
                 and (parent / "app" / "pyproject.toml").is_file()
             )
         return tomllib.loads(project.read_text(encoding="utf-8"))
-
-    def _recipe_key(self) -> str:
-        config = self._config()
-        recipe = (
-            config["tool"]["vbot"]["local-tts"][self.engine]
-            if self.engine
-            else config["project"]["optional-dependencies"]["local-speech"]
-        )
-        if not self.engine and self.directory is not None:
-            recipe = {"base": config["project"]["dependencies"], "speech": recipe}
-        sources = {}
-        for name in ("speech_local.py", "speech_worker.py"):
-            path = Path(__file__).with_name(name)
-            sources[name] = hashlib.sha256(path.read_bytes()).hexdigest()
-        return json.dumps({"recipe": recipe, "sources": sources}, sort_keys=True)
 
     def install(self) -> dict[str, Any]:
         if self._closed or self._state in {"installing", "restart_required"}:
@@ -200,6 +208,8 @@ class LocalSpeechSetup:
 
     async def _install_tts(self) -> None:
         assert self.directory is not None
+        marker = self.directory / "verified.json"
+        marker.unlink(missing_ok=True)
         config = self._config()
         recipe = config["tool"]["vbot"]["local-tts"][self.engine]
         # Packaged roles ship uv. Source installations retain their existing
@@ -221,8 +231,6 @@ class LocalSpeechSetup:
         ):
             self._fail("install_failed")
             return
-        marker = self.directory / "verified.json"
-        marker.unlink(missing_ok=True)
         gpu_tool = shutil.which("nvidia-smi")
         use_cuda = bool(gpu_tool) and await self._command([str(gpu_tool), "-L"]) == 0
         self._phase = "gpu" if use_cuda else "downloading"
@@ -296,6 +304,8 @@ class LocalSpeechSetup:
     async def _install_stt(self) -> None:
         """Install the shipped STT recipe only inside its managed environment."""
         assert self.directory is not None
+        marker = self.directory / "verified.json"
+        marker.unlink(missing_ok=True)
         project = self._config()["project"]
         # The worker imports vBot's speech engine source, which also needs the
         # declared core dependencies. Its isolated environment must provide
@@ -317,8 +327,6 @@ class LocalSpeechSetup:
             if await self._command(command, environment=environment) != 0:
                 self._fail("install_failed")
                 return
-        marker = self.directory / "verified.json"
-        marker.unlink(missing_ok=True)
         gpu_tool = shutil.which("nvidia-smi")
         use_cuda = bool(gpu_tool) and await self._command([str(gpu_tool), "-L"]) == 0
         self._phase = "gpu" if use_cuda else "downloading"
@@ -375,7 +383,7 @@ class LocalSpeechSetup:
 
     def _write_marker(self, marker: Path) -> None:
         temporary = marker.with_suffix(".tmp")
-        temporary.write_text(self._recipe_key(), encoding="utf-8")
+        temporary.write_text("{}\n", encoding="utf-8")
         os.replace(temporary, marker)
 
     def _fail(self, code: str) -> None:
