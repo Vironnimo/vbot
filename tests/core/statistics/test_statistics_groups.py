@@ -205,3 +205,47 @@ async def test_group_usage_combines_peers_resumed_runs_and_rebuilds_exactly(tmp_
     assert filtered["usage"]["totals"]["measured_input_tokens"] == 5
     assert filtered["usage"]["totals"]["estimated_input_tokens"] == 5
     assert filtered["tools"]["total_calls"] == 2
+    peers = {peer["participant_id"]: peer for peer in first["participants"]}
+    assert peers["one"]["usage"]["totals"]["measured_input_tokens"] == 6
+    assert peers["two"]["usage"] == filtered["usage"]
+    assert peers["two"]["tools"] == filtered["tools"]
+
+
+@pytest.mark.asyncio
+async def test_group_usage_never_hydrates_unrelated_indexed_sessions(tmp_path, monkeypatch):
+    from core.statistics import index as index_module
+    from core.statistics.index import StatisticsScope
+
+    manager = ChatSessionManager(tmp_path)
+    service = StatisticsService(manager, cast(AgentDirectory, _FakeAgents([])))
+    unrelated = manager.create("outside")
+    unrelated.append(_assistant(model="unrelated", at=BASE, usage={"input_tokens": 1000}))
+    service._index.snapshot(  # noqa: SLF001 - populate the shared disposable index
+        manager,
+        (StatisticsScope(None, "outside", "outside", ({"id": unrelated.address.session_id},)),),
+    )
+    binding = manager.create_bound_temporary_session(
+        SessionAddress(None, "temporary", "participant"),
+        owner_name="swarm",
+        group_id="group",
+        participant_id="peer",
+        config={},
+    )
+    owner = RunExecutionOwner("swarm", "group", "peer", binding.generation_id, "epoch")
+    await manager.record_run_owner_async(binding.address, run_id="owned", owner=owner)
+    session = manager.get(binding.address)
+    session.append(_assistant(model="owned", at=BASE, usage={"input_tokens": 2}))
+    decoded = []
+    original = index_module._message_from_projection  # noqa: SLF001 - observe hydration boundary
+
+    def decode(payload, ordinal):
+        decoded.append(payload.get("model"))
+        return original(payload, ordinal)
+
+    monkeypatch.setattr(index_module, "_message_from_projection", decode)
+    for expected in (2, 5):
+        result = await service.group_usage(owner_name="swarm", group_id="group")
+        assert result["usage"]["totals"]["measured_input_tokens"] == expected
+        assert "unrelated" not in decoded
+        session.append(_assistant(model="owned", at=BASE, usage={"input_tokens": 3}))
+    assert decoded

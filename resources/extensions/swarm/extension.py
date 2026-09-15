@@ -477,7 +477,13 @@ class SwarmExtension:
                 "wiki": self._wiki_operation,
                 "decisions": self._decisions_operation,
             }
-            if name in {"swarms.start", "swarms.stop", "swarms.resume", "swarms.delete"}:
+            if name in {
+                "swarms.start",
+                "swarms.stop",
+                "swarms.resume",
+                "swarms.delete",
+                "board.post",
+            }:
                 async with self._control_lock:
                     return await handlers[name](arguments)
             return await handlers[name](arguments)
@@ -777,6 +783,20 @@ class SwarmExtension:
             **{key: value for key, value in arguments.items() if key != "swarm_id"},
         )
         snapshot = await self._store().get_swarm(swarm_id)
+        if not result.get("replayed") and snapshot["state"] in {
+            "stopped",
+            "cancelled",
+            "interrupted",
+            "failed",
+        }:
+            try:
+                resumed = await self._resume_swarm(swarm_id, f"post:{result['post_id']}")
+                result["runs"] = resumed.get("runs", [])
+            except Exception:
+                _LOGGER.warning(
+                    "Swarm message saved but resume failed (swarm=%s)", swarm_id, exc_info=True
+                )
+                result["resume_failed"] = True
         self._changed(swarm_id, snapshot["settings_revision"])
         self._enqueue_wakes(swarm_id)
         return result
@@ -1027,7 +1047,7 @@ class SwarmExtension:
             try:
                 binding = bindings[participant_id]
                 await self._store().prepare_wake(
-                    swarm_id, participant_id, expected_epoch=snapshot["epoch"]
+                    swarm_id, participant_id, expected_epoch=snapshot["epoch"], announce=False
                 )
                 initial = await group.delivery_receipt(
                     binding.address,

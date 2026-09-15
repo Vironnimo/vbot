@@ -371,13 +371,19 @@ class SwarmStore:
         )
 
     async def prepare_wake(
-        self, swarm_id: str, participant_id: str, *, expected_epoch: int
+        self, swarm_id: str, participant_id: str, *, expected_epoch: int, announce: bool = True
     ) -> Json:
-        """Freeze one idle boundary and prepare its delivery before Run admission."""
+        """Prepare idle delivery; explicit Resume does not announce an automatic wake."""
         if type(expected_epoch) is not int or expected_epoch < 0:
             raise SwarmStoreError("invalid_arguments", field="expected_epoch")
         return await self._run(
-            _prepare_automatic_delivery, swarm_id, participant_id, expected_epoch, None, True
+            _prepare_automatic_delivery,
+            swarm_id,
+            participant_id,
+            expected_epoch,
+            None,
+            True,
+            announce,
         )
 
     async def reconcile_delivery(self, receipt_id: str) -> bool:

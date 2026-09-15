@@ -34,8 +34,11 @@ Both report RPCs reconcile through the dedicated two-worker Statistics pool with
 
 `group_usage` uses canonical Sessions Run-owner records and every Run-start boundary
 to restrict the existing index and aggregators to one owner/group, optionally one
-participant. An unfinished Run's slice ends before a later owned or ordinary Run;
-unrelated earlier history in a reused Session is excluded. Explicit owner scope
+participant. A group report returns participant breakdowns from the same indexed
+snapshot and Run slices; clients need no per-participant report fan-out. Scoped
+index reads hydrate only the requested Sessions, including after an append; they
+never load the entire retained index for one group. An unfinished Run's slice ends
+before a later owned or ordinary Run; unrelated earlier history in a reused Session is excluded. Explicit owner scope
 reconciliation does not prune normal Statistics scopes. The bounded worker facade
 returns the existing usage, Tools, Compaction and Run projections without costs,
 account data or separate counters. Generation checks and fork-prefix exclusion

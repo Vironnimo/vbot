@@ -637,3 +637,17 @@ async def test_targeted_resume_rejects_foreign_or_active_participant(store):
             await store.begin_resume(
                 swarm_id, request_id=peer_id, actor="user", participant_id=peer_id
             )
+
+
+@pytest.mark.asyncio
+async def test_explicit_resume_prepares_delivery_without_scheduling_another_run(store):
+    started = await _swarm(store)
+    sid = started["swarm_id"]
+    sender, recipient = [item["id"] for item in (await store.get_swarm(sid))["participants"]]
+    await store.set_participant_state(sid, recipient, "idle", idle_boundary=7)
+    await store.post(sid, sender, text="resume delivery", request_id="post")
+    for _ in range(2):
+        prepared = await store.prepare_wake(sid, recipient, expected_epoch=0, announce=False)
+        assert prepared["entries"]
+        assert not prepared["wake"]
+        assert not (await store.list_wake_intents(sid)).entries
