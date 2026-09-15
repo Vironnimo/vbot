@@ -40,7 +40,7 @@ _DEFAULT_RESPONSE_MODE = "mention"
 ALLOWED_CHANNEL_RESPONSE_MODES = frozenset(("mention", "all"))
 
 
-ALLOWED_CHANNEL_PLATFORMS = frozenset(("discord", "telegram"))
+ALLOWED_CHANNEL_PLATFORMS = frozenset(("discord", "telegram", "slack", "mattermost", "whatsapp"))
 
 
 MANAGED_CHANNEL_TOKEN_ENV_PREFIX = "VBOT_CHANNEL_TOKEN__"
@@ -60,6 +60,8 @@ _MUTABLE_FIELDS = frozenset(
         "response_mode",
         "mention_patterns",
         "observe_unaddressed",
+        "app_token_env_var",
+        "server_url",
     )
 )
 
@@ -134,9 +136,51 @@ def validate_channel_data(data: Any) -> list[JsonDiagnostic]:
         ALLOWED_CHANNEL_DM_SCOPES,
     )
     _validate_platform_id_list(diagnostics, "$.allowed_chat_ids", data.get("allowed_chat_ids", []))
-    validate_non_empty_string(
-        diagnostics, "$.token_env_var", data.get("token_env_var"), required=True
-    )
+    if data.get("platform") != "whatsapp":
+        validate_non_empty_string(
+            diagnostics, "$.token_env_var", data.get("token_env_var"), required=True
+        )
+    for key in ("token_env_var", "app_token_env_var", "server_url"):
+        if key in data and not isinstance(data[key], str):
+            add_error(diagnostics, f"$.{key}", "must be a string")
+    if data.get("platform") == "slack":
+        validate_non_empty_string(
+            diagnostics, "$.app_token_env_var", data.get("app_token_env_var"), required=True
+        )
+        if (
+            str(data.get("app_token_env_var", "")).strip()
+            == str(data.get("token_env_var", "")).strip()
+        ):
+            add_error(diagnostics, "$.app_token_env_var", "must differ from token_env_var")
+    if data.get("platform") == "mattermost":
+        from urllib.parse import urlsplit
+
+        try:
+            url = urlsplit(data.get("server_url", ""))
+            valid = (
+                url.scheme in {"http", "https"}
+                and bool(url.hostname)
+                and not (url.username or url.password or url.query or url.fragment)
+            )
+        except (ValueError, TypeError, AttributeError):
+            valid = False
+        if not valid:
+            add_error(
+                diagnostics,
+                "$.server_url",
+                "must be an HTTP(S) server URL without credentials, query or fragment",
+            )
+    if data.get("platform") == "whatsapp":
+        if data.get("allowed_chat_ids", []) not in ([], ["self"]):
+            add_error(
+                diagnostics,
+                "$.allowed_chat_ids",
+                "WhatsApp supports only the self chat: use ['self'] or []",
+            )
+        if data.get("token_env_var") or data.get("app_token_env_var") or data.get("server_url"):
+            add_error(
+                diagnostics, "$", "WhatsApp uses linked-device pairing, not tokens or a server URL"
+            )
     if "enabled" in data and not isinstance(data["enabled"], bool):
         add_error(diagnostics, "$.enabled", "must be a boolean")
     if "observe_unaddressed" in data and not isinstance(data["observe_unaddressed"], bool):
@@ -207,6 +251,8 @@ class ChannelConfig:
     response_mode: str = _DEFAULT_RESPONSE_MODE
     mention_patterns: list[str] = field(default_factory=list)
     observe_unaddressed: bool = False
+    app_token_env_var: str = ""
+    server_url: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize one channel config to JSON-compatible data."""
@@ -221,6 +267,8 @@ class ChannelConfig:
             "response_mode": self.response_mode,
             "mention_patterns": list(self.mention_patterns),
             "observe_unaddressed": self.observe_unaddressed,
+            "app_token_env_var": self.app_token_env_var,
+            "server_url": self.server_url,
         }
 
     @classmethod
@@ -238,6 +286,8 @@ class ChannelConfig:
             response_mode=payload.get("response_mode", _DEFAULT_RESPONSE_MODE),
             mention_patterns=list(payload.get("mention_patterns") or []),
             observe_unaddressed=payload.get("observe_unaddressed", False),
+            app_token_env_var=payload.get("app_token_env_var", ""),
+            server_url=payload.get("server_url", ""),
         )
         config.validate()
         return config
@@ -256,11 +306,15 @@ class ChannelConfig:
                 "response_mode": self.response_mode,
                 "mention_patterns": self.mention_patterns,
                 "observe_unaddressed": self.observe_unaddressed,
+                "app_token_env_var": self.app_token_env_var,
+                "server_url": self.server_url,
             }
         )
         self.id = self.id.strip()
         self.agent_id = self.agent_id.strip()
         self.token_env_var = self.token_env_var.strip()
+        self.app_token_env_var = self.app_token_env_var.strip()
+        self.server_url = self.server_url.strip().rstrip("/")
         self.allowed_chat_ids = [str(value).strip() for value in self.allowed_chat_ids]
         self.mention_patterns = list(self.mention_patterns)
 

@@ -56,7 +56,7 @@ describe('channelSettings helpers', () => {
     ]);
     expect(next.channels[1]).toMatchObject({
       dm_scope: 'main',
-      allowed_chat_ids: [12345, -100],
+      allowed_chat_ids: ['12345', '-100'],
       enabled: false,
       running: true,
     });
@@ -95,7 +95,7 @@ describe('channelSettings helpers', () => {
       platform: 'telegram',
       agent_id: 'assistant',
       dm_scope: CHANNEL_DM_SCOPE_MAIN,
-      allowed_chat_ids: [12345, -100],
+      allowed_chat_ids: ['12345', '-100'],
       token_env_var: 'TELEGRAM_BOT_TOKEN_TG_ASSISTANT',
       enabled: false,
     });
@@ -105,7 +105,7 @@ describe('channelSettings helpers', () => {
     expect(() =>
       buildCreatePayload({
         id: 'tg-assistant',
-        platform: 'discord',
+        platform: 'invalid',
         agent_id: 'assistant',
         token_env_var: 'TOKEN',
       }),
@@ -117,7 +117,7 @@ describe('channelSettings helpers', () => {
         platform: 'telegram',
         agent_id: 'assistant',
         token_env_var: 'TOKEN',
-        allowed_chat_ids: 'abc',
+        allowed_chat_ids: [false],
       }),
     ).toThrow(/allowed_chat_ids/u);
   });
@@ -140,7 +140,7 @@ describe('channelSettings helpers', () => {
       }),
     ).toEqual({
       id: 'tg-assistant',
-      allowed_chat_ids: [1, -2],
+      allowed_chat_ids: ['1', '-2'],
     });
   });
 
@@ -157,5 +157,43 @@ describe('channelSettings helpers', () => {
         dm_scope: 'invalid',
       }),
     ).toThrow(/dm_scope must be one of/u);
+  });
+
+  it('preserves opaque and large platform ids without rounding', () => {
+    expect(
+      buildUpdatePayload({
+        id: 'chat',
+        allowed_chat_ids: 'C123, 123456789012345678, self',
+      }).allowed_chat_ids,
+    ).toEqual(['C123', '123456789012345678', 'self']);
+  });
+
+  it('creates WhatsApp disabled without credentials and requires platform connection fields', () => {
+    const base = {
+      id: 'chat',
+      agent_id: 'assistant',
+      allowed_chat_ids: 'self',
+    };
+    const whatsapp = buildCreatePayload({ ...base, platform: 'whatsapp' });
+    expect(whatsapp.enabled).toBe(false);
+    expect(whatsapp.token_env_var).toBeUndefined();
+    expect(() =>
+      buildCreatePayload({ ...base, platform: 'slack', token_env_var: 'BOT' }),
+    ).toThrow(/app_token_env_var/u);
+    expect(
+      buildCreatePayload({
+        ...base,
+        platform: 'slack',
+        token_env_var: 'BOT',
+        app_token_env_var: 'APP',
+      }).app_token_env_var,
+    ).toBe('APP');
+    expect(() =>
+      buildCreatePayload({
+        ...base,
+        platform: 'mattermost',
+        token_env_var: 'BOT',
+      }),
+    ).toThrow(/server_url/u);
   });
 });
