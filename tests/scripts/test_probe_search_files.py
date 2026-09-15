@@ -14,6 +14,9 @@ from scripts.provider_probe.workflow_search_files import _case, search_cases
 )
 async def test_search_probe_case_has_a_verified_runtime_expectation(case):
     class Adapter:
+        def request_context_kwargs(self, **_kwargs):
+            return {}
+
         async def send(self, *_args, **_kwargs):
             return {"tool_calls": [{"name": "search_files", "arguments": case["arguments"]}]}
 
@@ -51,6 +54,9 @@ async def test_search_probe_resolves_fixture_root_before_checking_scope(
     }
 
     class Adapter:
+        def request_context_kwargs(self, **_kwargs):
+            return {}
+
         async def send(self, *_args, **_kwargs):
             return {"tool_calls": [{"name": "search_files", "arguments": case["arguments"]}]}
 
