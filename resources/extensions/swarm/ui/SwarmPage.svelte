@@ -2,6 +2,8 @@
   import {
     participantColor,
     participantInitials,
+    participantState,
+    participantDetails,
     canStop,
     resumableParticipantState,
     tokensUsed,
@@ -63,6 +65,26 @@
   >
 {/snippet}
 
+{#snippet participantChip(participant, selected = undefined)}
+  <Button
+    variant="tertiary"
+    class="participant-chip"
+    style={`--participant-color: ${participantColor(participant.id)}`}
+    tooltip={participantDetails(participant)}
+    ariaLabel={participantDetails(participant)}
+    aria-pressed={selected}
+    onClick={() => activity.inspectParticipant(participant)}
+  >
+    {@render participantAvatar(participant.id, participant.display_name)}
+    <strong>{participant.display_name}</strong>
+    <span
+      class="participant-status"
+      data-state={participantState(participant)}
+      aria-hidden="true"
+    ></span>
+  </Button>
+{/snippet}
+
 <svelte:head><title>{t('swarm.title', 'Swarms')}</title></svelte:head>
 {#snippet actionIcon(kind)}
   <svg
@@ -81,6 +103,7 @@
     {:else if kind === 'refresh'}<path
         d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-2l2 3M4 16l2 3a7 7 0 0 0 12-2"
       />
+    {:else if kind === 'folder'}<path d="M3 7V5h6l2 2h10v13H3Z" />
     {:else if kind === 'play'}<path d="m8 5 11 7-11 7Z" />
     {:else if kind === 'stop'}<rect x="6" y="6" width="12" height="12" rx="1" />
     {:else if kind === 'edit'}<path
@@ -198,25 +221,38 @@
       {/key}
     {:else}
       <section class="content">
-        <div class="workspace-toolbar">
-          <span class="eyebrow">{t('swarm.title', 'Swarms')}</span>
-          <Button
-            variant="tertiary"
-            icon
-            ariaLabel={t('common.refresh', 'Refresh')}
-            tooltip={t('common.refresh', 'Refresh')}
-            disabled={model.loading}
-            onClick={() => model.refresh()}
-            >{@render actionIcon('refresh')}</Button
-          >
-        </div>
+        {#if !model.selectedSwarm}<div class="workspace-toolbar">
+            <span class="eyebrow">{t('swarm.title', 'Swarms')}</span>
+            <Button
+              variant="tertiary"
+              icon
+              ariaLabel={t('common.refresh', 'Refresh')}
+              tooltip={t('common.refresh', 'Refresh')}
+              disabled={model.loading}
+              onClick={() => model.refresh()}
+              >{@render actionIcon('refresh')}</Button
+            >
+          </div>
+        {/if}
         {#if model.selectedSwarm}<div class="swarm-head">
-            <div>
-              <h2>{t('swarm.userPrompt', 'User Prompt:')}</h2>
-              <p class="goal">{model.selectedSwarm.prompt}</p>
-              <p class="muted">
-                {model.selectedSwarm.effective_configuration?.cwd ?? ''}
-              </p>
+            <div class="swarm-heading">
+              <span class="eyebrow">{t('swarm.profile', 'Swarm')}</span>
+              <div class="swarm-heading-title">
+                <h2>
+                  {model.selectedSwarm.profile_snapshot?.name ||
+                    t('swarm.profile', 'Swarm')}
+                </h2>
+                <StatusChip
+                  variant={canStop(model.selectedSwarm.state)
+                    ? 'warn'
+                    : 'neutral'}
+                >
+                  {t(
+                    `swarm.state.${model.selectedSwarm.state}`,
+                    model.selectedSwarm.state,
+                  )}
+                </StatusChip>
+              </div>
             </div>
             <div class="actions">
               {#if canStop(model.selectedSwarm.state)}<Button
@@ -246,7 +282,9 @@
                 onClick={() => {
                   model.deleteError = '';
                   model.swarmDeleteCandidate = model.selectedSwarm;
-                }}>{t('swarm.deleteRun.title', 'Delete Run')}</Button
+                }}
+                ariaLabel={t('swarm.deleteRun.title', 'Delete Run')}
+                icon>{@render actionIcon('trash')}</Button
               ><Button
                 variant="secondary"
                 onClick={() => (model.profileSnapshotOpen = true)}
@@ -276,13 +314,7 @@
               ariaLabel={t('swarm.details', 'Swarm details')}
               onChange={(next) =>
                 model.navigate(() => (model.activeTab = next))}
-            /><StatusChip
-              variant={canStop(model.selectedSwarm.state) ? 'warn' : 'neutral'}
-              >{t(
-                `swarm.state.${model.selectedSwarm.state}`,
-                model.selectedSwarm.state,
-              )}</StatusChip
-            >
+            />
           </div>
           {#if model.selectedSwarm.participants?.some( (participant) => ['failed', 'interrupted'].includes(participant.state) )}
             <Banner variant="error" role="alert">
@@ -301,16 +333,10 @@
             </Banner>
           {/if}
           {#if model.activeTab === 'board'}<section
-              class="panel"
+              class="panel board-panel"
               role="tabpanel"
             >
-              <div class="section-head">
-                <h3>{t('swarm.board.title', 'Board')}</h3>
-                <Button
-                  variant="secondary"
-                  onClick={() => (model.composeOpen = true)}
-                  >{t('swarm.board.openComposer', 'Write post')}</Button
-                >
+              <div class="section-head board-toolbar">
                 <FormField
                   controlId="swarm-discussion"
                   label={t('swarm.board.discussion', 'Discussion')}
@@ -340,11 +366,18 @@
                       'Load more discussions',
                     )}</Button
                   >{/if}
-              </div>
-              {#if model.selectedSwarm.goal_post_id}<details
-                  class="swarm-goal-post"
-                  use:model.contentLinks
+                <Button
+                  variant="secondary"
+                  onClick={() => (model.composeOpen = true)}
                 >
+                  {@render actionIcon('edit')}{t(
+                    'swarm.board.openComposer',
+                    'Write post',
+                  )}
+                </Button>
+              </div>
+              <div class="board-context">
+                <details class="swarm-goal-post" use:model.contentLinks>
                   <summary
                     >{t('swarm.board.goal', 'Pinned user request')}</summary
                   >
@@ -352,39 +385,51 @@
                     source={model.selectedSwarm.prompt}
                     class="msg-markdown"
                   />
-                  <small>{model.selectedSwarm.goal_post_id}</small>
-                </details>{/if}
+                </details>
+                {#if model.selectedSwarm.effective_configuration?.cwd}
+                  <div
+                    class="board-directory"
+                    use:tooltip={model.selectedSwarm.effective_configuration
+                      .cwd}
+                  >
+                    {@render actionIcon('folder')}
+                    <span
+                      >{model.selectedSwarm.effective_configuration.cwd}</span
+                    >
+                  </div>
+                {/if}
+              </div>
               <section
                 class="participant-pane"
                 aria-label={t('swarm.participants', 'Participants')}
               >
                 <p class="eyebrow">
                   {t('swarm.participants', 'Participants')}
+                  <span>{model.discussionParticipants.length}</span>
                 </p>
                 <div class="participant-row">
-                  {#each model.selectedSwarm.participants ?? [] as participant (participant.id)}<Button
-                      variant="secondary"
-                      onClick={() => activity.inspectParticipant(participant)}
-                      >{@render participantAvatar(
-                        participant.id,
-                        participant.display_name,
-                      )}<span
-                        ><strong>{participant.display_name}</strong><small
-                          >{participant.model} / {participant.state} / {participant.pending_count ??
-                            0}
-                          {t('swarm.pending', 'pending')}</small
-                        ></span
-                      >{#if participant.run_active}<span class="run-indicator"
-                          >{t('swarm.runActive', 'Run active')}</span
-                        >{/if}</Button
-                    >{/each}
+                  {#each model.discussionParticipants as participant (participant.id)}
+                    {@render participantChip(participant)}
+                  {:else}
+                    <span class="muted"
+                      >{t(
+                        'swarm.board.noParticipants',
+                        'No participants in this discussion.',
+                      )}</span
+                    >
+                  {/each}
                 </div>
               </section>
               {#if model.board.length === 0}<EmptyState
                   density="compact"
                   title={t('swarm.board.empty', 'No Board messages yet.')}
                 />{:else}<ol class="board" use:model.contentLinks>
-                  {#each model.board as post (post.id)}<li>
+                  {#each model.board as post (post.id)}<li
+                      style:--participant-color={post.author?.kind ===
+                        'participant' && post.author?.id
+                        ? participantColor(post.author.id)
+                        : 'var(--text-med)'}
+                    >
                       <div class="post-header">
                         <div class="post-author">
                           {@render participantAvatar(
@@ -466,26 +511,13 @@
               role="tabpanel"
             >
               <h3>{t('swarm.participants', 'Participants')}</h3>
-              <div class="participants">
-                {#each model.selectedSwarm.participants ?? [] as participant (participant.id)}<Button
-                    variant="secondary"
-                    aria-pressed={activity.history?.participant.id ===
-                      participant.id}
-                    onClick={() => activity.inspectParticipant(participant)}
-                    >{@render participantAvatar(
-                      participant.id,
-                      participant.display_name,
-                    )}<span
-                      class:running={participant.state === 'running'}
-                      class="dot"
-                    ></span><span
-                      ><strong>{participant.display_name}</strong><small
-                        >{participant.model} · {participant.state} · {participant.pending_count ??
-                          0}
-                        {t('swarm.pending', 'pending')}</small
-                      ></span
-                    ></Button
-                  >{/each}
+              <div class="participants participant-row">
+                {#each model.selectedSwarm.participants ?? [] as participant (participant.id)}
+                  {@render participantChip(
+                    participant,
+                    activity.history?.participant.id === participant.id,
+                  )}
+                {/each}
               </div>
               {#if activity.history}<article
                   class="history"
@@ -568,6 +600,8 @@
                   {#each activity.activityTimeline as item (item.id)}
                     {#if item.type === 'assistant_run'}<ChatAssistantRun
                         {item}
+                        isReasoningOpen={activity.isReasoningOpen}
+                        onReasoningOpenChange={activity.setReasoningOpen}
                         onCancelToolCall={activity.cancelToolCall}
                         agentName={activity.history.participant.display_name}
                       />{:else}<ChatTimelineEntry

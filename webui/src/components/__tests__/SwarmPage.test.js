@@ -282,18 +282,28 @@ describe('SwarmPage', () => {
         expect(color).toBe(
           rosterAvatar.style.getPropertyValue('--participant-color'),
         );
+        expect(post.style.getPropertyValue('--participant-color')).toBe(color);
         if (pass) expect(color).toBe(colors.get(participant.id));
         colors.set(participant.id, color);
       }
       expect(new Set(colors.values()).size).toBe(2);
       button('Participant 9').click();
-      await vi.waitFor(() => expect(bridge.readHistory).toHaveBeenCalled());
+      await vi.waitFor(() =>
+        expect(document.querySelector('.history')).not.toBeNull(),
+      );
       const activityAvatar = document.querySelector(
         '.participants .participant-avatar',
       );
       expect(activityAvatar.style.getPropertyValue('--participant-color')).toBe(
         colors.get('prt-a'),
       );
+      const activityChip = activityAvatar.closest('button');
+      expect(activityChip.getAttribute('aria-pressed')).toBe('true');
+      expect(activityChip.textContent).not.toContain(participants[0].model);
+      expect(activityChip.getAttribute('aria-label')).toContain(
+        participants[0].model,
+      );
+      expect(activityChip.querySelector('.participant-status')).not.toBeNull();
       fixtureState.mounted = await unmount(fixtureState.mounted);
       document.body.innerHTML = '';
     }
@@ -331,11 +341,23 @@ describe('SwarmPage', () => {
     await vi.waitFor(() =>
       expect(document.querySelector('.board time')).not.toBeNull(),
     );
-    expect(document.querySelector('.goal').textContent).toBe(prompt);
+    expect(document.querySelector('.swarm-head h2').textContent).toBe(
+      'Research',
+    );
+    expect(document.querySelector('.swarm-head').textContent).not.toContain(
+      prompt,
+    );
+    expect(
+      document.querySelector('.swarm-goal-post .msg-markdown').textContent,
+    ).toContain('second line');
+    expect(document.querySelectorAll('.swarm-goal-post')).toHaveLength(1);
+    expect(document.querySelector('.board-directory').textContent).toContain(
+      'C:/work',
+    );
     expect(document.querySelector('.swarm-head').textContent).not.toContain(
       'swr-a',
     );
-    expect(document.querySelector('.swarm-tabs .chip')).not.toBeNull();
+    expect(document.querySelector('.swarm-head .chip')).not.toBeNull();
     expect(button('Results')).toBeUndefined();
     expect(document.querySelector('.post-header strong').textContent).toBe(
       'Alpha',
@@ -553,4 +575,52 @@ describe('SwarmPage', () => {
     });
     expect(button('Load earlier messages')).toBeUndefined();
   });
+});
+
+it('shows compact discussion members with live status and refreshes join/leave changes', async () => {
+  const { bridge, operation } = createBridge();
+  const original = operation.getMockImplementation();
+  let participants = structuredClone(swarm.participants);
+  participants[0].state = 'idle';
+  participants[0].run_active = true;
+  operation.mockImplementation((name, args) =>
+    name === 'swarms.get'
+      ? Promise.resolve({
+          swarm: { ...swarm, participants: structuredClone(participants) },
+        })
+      : original(name, args),
+  );
+  await render(bridge);
+  button('Investigate').click();
+  const names = () =>
+    [...document.querySelectorAll('.participant-chip strong')].map(
+      (node) => node.textContent,
+    );
+  await vi.waitFor(() => expect(names()).toEqual(['Alpha', 'Beta']));
+  expect(document.querySelector('.participant-chip').textContent).not.toContain(
+    'demo/model',
+  );
+  expect(
+    document.querySelector('.participant-chip').getAttribute('aria-label'),
+  ).toContain('demo/model');
+  expect(document.querySelector('.participant-status').dataset.state).toBe(
+    'running',
+  );
+  const dropdown = document.getElementById('swarm-discussion');
+  dropdown.value = 'dsc-findings';
+  dropdown.dispatchEvent(new Event('change', { bubbles: true }));
+  await vi.waitFor(() => expect(names()).toEqual(['Beta']));
+  participants[0].discussion_ids.push('dsc-findings');
+  bridge.invalidate();
+  await vi.waitFor(() => expect(names()).toEqual(['Alpha', 'Beta']));
+  participants = participants.map((peer) => ({
+    ...peer,
+    discussion_ids: ['dsc-main'],
+  }));
+  bridge.invalidate();
+  await vi.waitFor(() => expect(names()).toEqual([]));
+  expect(document.querySelector('.participant-pane .muted')).not.toBeNull();
+  dropdown.value = 'dsc-main';
+  dropdown.dispatchEvent(new Event('change', { bubbles: true }));
+  await vi.waitFor(() => expect(names()).toEqual(['Alpha', 'Beta']));
 });

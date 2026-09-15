@@ -20,7 +20,10 @@ describe('SwarmPage', () => {
       const previous = swarm.participants[0].lifecycle_run_id;
       swarm.participants[0].lifecycle_run_id = 'run-bash';
       bridge.readHistory.mockResolvedValue({ messages: [], status: 'running' });
-      bridge.subscribeRun.mockResolvedValue({ subscription_id: 'stream-bash' });
+      bridge.subscribeRun.mockResolvedValue({
+        replay_through_sequence: 0,
+        subscription_id: 'stream-bash',
+      });
       try {
         await render(bridge);
         button('Investigate').click();
@@ -67,6 +70,7 @@ describe('SwarmPage', () => {
     const previousRun = swarm.participants[0].lifecycle_run_id;
     swarm.participants[0].lifecycle_run_id = 'run-live-test';
     bridge.subscribeRun.mockResolvedValue({
+      replay_through_sequence: 0,
       subscription_id: 'subscription-live-test',
     });
     try {
@@ -125,6 +129,12 @@ describe('SwarmPage', () => {
           content: 'final-output-sentinel',
           timestamp: '2026-09-08T09:00:00+00:00',
         },
+        {
+          id: 'summary-final-test',
+          role: 'run_summary',
+          run_id: 'run-final-test',
+          status: 'completed',
+        },
       ],
     });
     bridge.subscribeRun.mockImplementation(() => {
@@ -133,7 +143,10 @@ describe('SwarmPage', () => {
         run_id: 'run-final-test',
         sequence: 1,
       });
-      return Promise.resolve({ subscription_id: 'subscription-final-test' });
+      return Promise.resolve({
+        replay_through_sequence: 0,
+        subscription_id: 'subscription-final-test',
+      });
     });
     try {
       await render(bridge);
@@ -383,7 +396,10 @@ describe('Swarm failure feedback', () => {
         messages: [],
         status: 'completed',
       });
-      bridge.subscribeRun.mockResolvedValue({ subscription_id: 'retry-sub' });
+      bridge.subscribeRun.mockResolvedValue({
+        replay_through_sequence: 0,
+        subscription_id: 'retry-sub',
+      });
       await render(bridge);
       button('Investigate').click();
       await vi.waitFor(() => expect(button('Alpha')).toBeDefined());

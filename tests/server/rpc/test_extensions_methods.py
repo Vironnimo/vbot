@@ -942,3 +942,43 @@ async def test_extension_page_cancel_tool_is_owner_scoped_and_call_local(scenari
     assert run.tool_call_cancelled("call-a") is (scenario == "active")
     assert not run.cancel_requested
     assert callback.call_count == (1 if scenario == "active" else 0)
+
+
+@pytest.mark.asyncio
+async def test_extension_page_run_reports_verified_replay_watermark() -> None:
+    class Groups:
+        reads = 0
+
+        async def owned_run(self, group_id: str, run_id: str) -> Any:
+            assert (group_id, run_id) == ("group-a", "run-a")
+            self.reads += 1
+            return SimpleNamespace(
+                run=SimpleNamespace(events=[SimpleNamespace(sequence=self.reads * 7)])
+            )
+
+    class Delivery:
+        def open_extension_run(self, **kwargs: Any) -> Any:
+            assert kwargs["after_sequence"] == 3
+            return {"url": "/api/extension-runs/test"}
+
+    registry = _PageRegistry(SimpleNamespace(temporary_agents=Groups()))
+    state = _state_with_records([])
+    state.runtime.extensions = registry
+    state.file_delivery = Delivery()
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": "extensions.page_run",
+            "params": {
+                "name": "alpha",
+                "page": {"id": "main", "epoch": "epoch-a"},
+                "group_id": "group-a",
+                "run_id": "run-a",
+                "after_sequence": 3,
+            },
+        },
+    )
+    assert result == {
+        "ok": True,
+        "result": {"stream": {"url": "/api/extension-runs/test"}, "replay_through_sequence": 14},
+    }

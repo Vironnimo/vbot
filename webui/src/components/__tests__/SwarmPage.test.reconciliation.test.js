@@ -78,7 +78,9 @@ describe('Swarm selection reconciliation', () => {
     });
     await render(bridge);
     button('Investigate').click();
-    const pending = () => button('Alpha')?.querySelector('small')?.textContent;
+    const pending = () =>
+      button('Alpha')?.getAttribute('aria-label') ||
+      button('Alpha')?.querySelector('small')?.textContent;
     await vi.waitFor(() => expect(pending()).toMatch(/12\s+pending/));
     for (const remaining of [8, 4, 0]) {
       pendingCount = remaining;
@@ -136,7 +138,10 @@ it('retains older Session pages during invalidation and reconciles them on compl
         })
       : original(name, args),
   );
-  bridge.subscribeRun.mockResolvedValue({ subscription_id: 'stream-paged' });
+  bridge.subscribeRun.mockResolvedValue({
+    replay_through_sequence: 0,
+    subscription_id: 'stream-paged',
+  });
   const entry = (n) => ({
     id: `history-${n}`,
     role: 'user',
@@ -379,8 +384,14 @@ it.each([false, true])(
     );
     bridge.readHistory.mockResolvedValue({ messages: [] });
     bridge.subscribeRun
-      .mockResolvedValueOnce({ subscription_id: 'first-stream' })
-      .mockResolvedValue({ subscription_id: 'second-stream' });
+      .mockResolvedValueOnce({
+        replay_through_sequence: 0,
+        subscription_id: 'first-stream',
+      })
+      .mockResolvedValue({
+        replay_through_sequence: 0,
+        subscription_id: 'second-stream',
+      });
     await render(bridge);
     button('Investigate').click();
     await vi.waitFor(() => expect(button('Alpha')).toBeDefined());
@@ -413,6 +424,11 @@ it.each([false, true])(
     bridge.emitRun('first-stream', event);
     bridge.emitRun('first-stream', event);
     await tick();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.history').textContent).toContain(
+        'live-refresh-sentinel',
+      ),
+    );
     const text = document.querySelector('.history').textContent;
     expect(text).not.toContain('stale-stream-sentinel');
     expect(text.split('live-refresh-sentinel')).toHaveLength(2);

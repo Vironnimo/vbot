@@ -395,7 +395,9 @@ async def _extension_page_run(state: Any, params: JsonObject) -> JsonObject:
         verified = await verified_temporary_agents.owned_run(group_id, run_id)
         if verified.run is None:
             return {"stream": None}
+        replay = verified.run.events
         return {
+            "replay_through_sequence": replay[-1].sequence if replay else 0,
             "stream": state.file_delivery.open_extension_run(
                 extension=name,
                 page=page["id"],
@@ -403,7 +405,7 @@ async def _extension_page_run(state: Any, params: JsonObject) -> JsonObject:
                 group_id=group_id,
                 run_id=run_id,
                 after_sequence=after_sequence,
-            )
+            ),
         }
     except ValueError as error:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error

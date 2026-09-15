@@ -203,6 +203,11 @@ export function createSwarmPageModel(host) {
       : '';
 
   const discussionOptions = $derived(discussions);
+  const discussionParticipants = $derived(
+    (selectedSwarm?.participants ?? []).filter((participant) =>
+      participant.discussion_ids?.includes(selectedDiscussion),
+    ),
+  );
 
   const settingChanges = $derived(
     deliveryDraft && selectedSwarm
@@ -973,6 +978,9 @@ export function createSwarmPageModel(host) {
     date,
     get discussionOptions() {
       return discussionOptions;
+    },
+    get discussionParticipants() {
+      return discussionParticipants;
     },
     get settingChanges() {
       return settingChanges;

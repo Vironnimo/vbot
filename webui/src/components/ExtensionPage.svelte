@@ -363,7 +363,11 @@
           });
           runSubscriptions.get(data.id)?.close();
           runSubscriptions.set(data.id, subscription);
-          result = { live: true, subscription_id: data.id };
+          result = {
+            live: true,
+            subscription_id: data.id,
+            replay_through_sequence: opened.replay_through_sequence,
+          };
         } else result = { live: false };
       } else if (
         data.method === 'run.cancel_tool' &&
