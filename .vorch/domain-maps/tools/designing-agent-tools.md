@@ -4,7 +4,7 @@ This is the design map for the agent-facing part of every Tool: the model-facing
 
 ## Purpose and Priority
 
-A Tool definition exists to make the Model choose the right Tool and emit the right arguments with the smallest practical context footprint. It is not handler documentation, UI documentation, an implementation schema, or a security boundary. When rules compete, use this priority order: correct Tool selection and invocation, unambiguous Model guidance, small context footprint, and Provider portability.
+A Tool definition helps a fresh Agent choose a capability, supply a complete request, and achieve the intended result. Optimize the whole task: correct effects and useful evidence first, clear first-use guidance next, then unnecessary context and call cost. A shorter definition that causes empty operations, misleading results, or extra discovery calls is an unsuccessful optimization. Provider portability must preserve these semantics.
 
 ## Model Contract and Runtime Contract
 
@@ -24,9 +24,9 @@ A Tool definition exists to make the Model choose the right Tool and emit the ri
 
 - State when to use the Tool, what it does, and only the operational limitations that change how the Model should call it. Say what the Tool accomplishes and any decision the Agent must make; do not spend the description teaching the Model to construct an avoidably complex envelope.
 - Every Tool must have a clear description. Context efficiency comes from removing redundancy and irrelevant implementation detail, not from withholding guidance the Model needs.
-- Lead with the capability. Do not begin with architecture, implementation, or result-envelope details.
-- Keep the description as short as possible without making Tool selection ambiguous.
-- Do not repeat information already obvious from the Tool name, property names, types, enums, or `required` list.
+- Lead with the action and its observable result, such as editing file contents or finding matching lines. Explain targeting or context as part of that action, never as a substitute for the action itself. An editing Tool must teach how to supply the change as well as where it belongs.
+- Keep enough guidance for the first complete call. Remove words that add no decision value; brevity is not a separate acceptance criterion.
+- Schema types and names do not explain how arguments work together. Repeat a schema fact only when it resolves a likely misunderstanding about the requested effect.
 - Do not describe handler internals, libraries, storage layout, UI rendering, logging, telemetry, or validation machinery unless the Model must account for it when calling the Tool.
 - Mention result behavior only when it affects Tool choice, pagination, follow-up calls, or safe use.
 - Do not reference another Tool unless that Tool is guaranteed to be available in the same Model context. Availability-dependent guidance belongs in a dynamically gated prompt block.
@@ -93,7 +93,7 @@ Example:
 - State the omission condition from the Model's decision point, for example `Omit when no specific destination is given.` Add the resulting omission behavior or runtime default only when it materially affects that decision.
 - For a conditionally required parameter, state the relevant action or mode directly, for example `Required for write and submit.`
 - Do not repeat `required`, enum values, numeric bounds, or defaults in prose unless the repetition resolves a real ambiguity.
-- Use examples only when the expected syntax is not obvious from the schema. Keep examples canonical and short. Show omitted optional fields as omitted, not as `null`, unless `null` is a meaningful accepted value.
+- Use short canonical examples when syntax or the relationship between arguments needs explanation. Each example must perform the advertised operation: include the target and the actual change or query, not just a locator or context fragment. Show omitted optional fields as omitted, not as `null`, unless `null` is meaningful. Validate examples against independently specified results.
 
 ## Defaults
 
@@ -142,11 +142,11 @@ The model-facing texts decide whether a Tool gets chosen and called correctly; t
 
 - Write for a fresh Agent with no project context: self-contained, only concepts the Agent can observe or act on. Explain the available behavior and the next valid action, and never name a hidden implementation category merely to explain an exclusion.
 - All three surfaces are runtime Agent-facing text. Follow `AGENTS.md` -> Communication with the user -> Present Agent-facing text changes for review presentation.
-- Judge every sentence by one test: can the Agent learn this from the Tool's own failure or result message? If yes, cut it - error-time information belongs in the error text, not in the description. Truncation hints with "use offset", read-before-write guards, and similar-file suggestions are result-text material.
-- Cut what the Agent cannot act on: silent behavior with no decision value, non-actionable qualifiers, and duplication. A rule lives once, at its usage site - in the parameter description when it binds to that parameter, in the main description when it binds to the operation; a parameter description duplicating the main description shrinks to a minimal role label.
+- Place guidance where it supports the decision: the definition must enable a correct first call, including prerequisites and defaults that affect its result. Errors explain the actual failure and recovery; they do not replace instructions needed to avoid predictable mistakes. Results explain observed truncation and supply usable continuation arguments.
+- Remove irrelevant detail and repetition that adds no understanding. Keep the connection between operation, target, and payload clear even when it requires a brief reminder across surfaces. A minimal parameter label is insufficient when it leaves that relationship unexplained.
 - Keep in the pre-call texts what only they can teach: capabilities the Agent needs before the first call (accepted file types, output row shape, sort order, omit-defaults), deviations from standard semantics (case-insensitivity, exclusion syntax), behavior invisible in results, silent-hang warnings where bad input blocks forever without an error, and deliberate steering sentences planted to guide Agent behavior.
 - Structure a parameter description role-first: lead with the parameter's role, then accepted values, then the omit-rule as its own short sentence.
-- The result steers the loop; the System Prompt only orients. Name the state and the sanctioned next action together - a bare `status: "running"` invites polling. Every prohibition carries its sanctioned alternative in the same breath, and every observable state implies exactly one next action.
+- The result steers the loop; the System Prompt only orients. Name the observed state and valid next actions together - a bare `status: "running"` invites polling. Explain alternatives to a prohibited action. Distinguish an exhausted search from a partial page, and a successful invocation from a verified task outcome.
 - Error wording names the lifecycle state, never a wrong cause: "already delivered" informs; "not owned" reads as a permission problem and invites retries.
 - Prefer the shortest plain sentence naming the subject, the event, and the recipient; name concrete Agent actions, not abstract concepts. The glossary does not reach the Model - project context loads only for Agents working in that project, so do not rely on glossary terms in model-facing texts.
 
@@ -156,6 +156,7 @@ The shared `operation_envelope_schema`, `extract_tool_operation`, `action_schema
 
 ## Change and Verification Discipline
 
+- Start an audit from actual delivered definitions, arguments, results, and the Agent's following decisions. Deduplicate persisted copies of calls. Investigate successful but empty, noisy, or truncated results as well as explicit errors; verify suspected false positives and false negatives against independent evidence. Separate proven defects from uncertain task outcomes or historical file state.
 - Change exactly one Tool at a time. Shared Tool infrastructure may change with it only when that Tool requires the change, and every other Tool's verified behavior stays intact.
 - Keep the repository releaseable after every Tool change.
 - Before changing a Tool's public contract, inventory every accepted shape, default, permission rule, and persisted or UI consumer.
@@ -166,11 +167,17 @@ The shared `operation_envelope_schema`, `extract_tool_operation`, `action_schema
 - Commit each fully verified Tool as its own cohesive releaseable change before editing the next Tool.
 - Quality gates: a scoped non-mutating pass (`python scripts/quality.py --check <paths>`) while working and before any intermediate commit; the full gate (`python scripts/quality.py`) once, before the final commit that closes the task. Tool work adds no separate gate schedule.
 
+## Token Cost Comparisons
+
+Always include before/after token counts in Tool audits and changes, including replacements of older Tools. Measure the full model-facing definition (name, description, and parameters), using the same tokenizer and serialization on both sides. Use `core/utils/tokens.py` for local estimates; state the encoding, compared revisions, and whether wrappers are included. A definition cost applies to each Model request containing it, subject to Provider framing and caching; it is not a separately billed Tool execution.
+
+Where evidence exists, also measure argument and result tokens, call counts, pagination, and recovery calls for matched tasks. Count repeated history exposure separately from a payload counted once. Do not attribute whole-Run Provider usage to one Tool or compare unrelated live workloads as proof of savings. Report unavailable measurements explicitly. Present absolute counts and deltas alongside outcome quality; lower cost does not compensate for the wrong result.
+
 ## Review Checklist
 
 Before accepting a Tool definition, verify all of the following:
 
-- The Tool can be selected correctly from its name and first description sentence.
+- The first sentence states the action and observable result; the complete definition teaches a request that actually accomplishes it.
 - Every required argument is in `required`, and every optional argument is absent from it.
 - Every optional parameter tells the Model when to omit it; omission results appear only when they affect that decision.
 - No `additionalProperties` keyword is present in the model-facing schema.
@@ -181,5 +188,5 @@ Before accepting a Tool definition, verify all of the following:
 - Cross-Tool guidance cannot point to an unavailable Tool.
 - The handler independently validates conditional requirements and applies all defaults.
 - The Provider wire explicitly remains non-strict where the Provider supports strict Tool calling.
-- The minified Provider definition has been measured, and every remaining sentence or schema keyword earns its context cost.
+- Before/after definition tokens and the measurement basis are reported; any claimed workflow savings have matched-task evidence.
 - Focused tests and the complete Luna call matrix pass before another Tool is changed.
