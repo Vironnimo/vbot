@@ -22,6 +22,8 @@ CHANNEL_UPDATE_FLAGS = (
     "--response-mode",
     "--mention-pattern",
     "--observe-unaddressed",
+    "--app-token-env",
+    "--server-url",
 )
 
 
@@ -37,6 +39,9 @@ def channel_add(
     mention_patterns: Sequence[str] = (),
     observe_unaddressed: bool = False,
     token: str | None = None,
+    app_token_env: str | None = None,
+    server_url: str | None = None,
+    disabled: bool = False,
 ) -> CommandResult:
     """Create a channel configuration via `channel.create` RPC."""
 
@@ -47,6 +52,12 @@ def channel_add(
         "dm_scope": dm_scope,
         "allowed_chat_ids": list(allowed_chat_ids),
     }
+    if app_token_env:
+        params["app_token_env_var"] = app_token_env
+    if server_url:
+        params["server_url"] = server_url
+    if platform == "whatsapp" or disabled:
+        params["enabled"] = False
     if token is not None:
         if not token:
             return CommandResult(
@@ -55,7 +66,7 @@ def channel_add(
         params["token"] = token
     elif token_env:
         params["token_env_var"] = token_env
-    else:
+    elif platform != "whatsapp":
         return CommandResult(
             ok=False,
             message="channel add requires --token-stdin or --token-env",
@@ -73,6 +84,50 @@ def channel_add(
     return CommandResult(
         ok=True,
         message=_format_channel_operation("created", payload.data, channel_id),
+        instance=instance,
+        attention=_channel_attention(payload.data),
+    )
+
+
+def channel_whatsapp(
+    instance: ServerInstance, channel_id: str, action: str, *, reset: bool = False
+) -> CommandResult:
+    params: dict[str, object] = {"id": channel_id}
+    if action == "pair":
+        params["reset"] = reset
+    payload = _rpc_call(instance, f"channel.whatsapp.{action}", params)
+    if not payload.ok:
+        return payload.to_command_result()
+    fields = {
+        key: payload.data.get(key)
+        for key in ("id", "installed", "setup", "state", "error")
+        if payload.data.get(key) is not None
+    }
+    message = "\n".join(f"{key}: {value}" for key, value in fields.items())
+    message += "\nOpen Settings > Channels for the private pairing QR code."
+    return CommandResult(
+        ok=True,
+        message=message,
+        instance=instance,
+        attention=("WhatsApp needs attention; inspect setup error or link the account again",)
+        if payload.data.get("setup") == "failed" or payload.data.get("state") == "logged_out"
+        else (),
+    )
+
+
+def channel_set_app_token(instance: ServerInstance, channel_id: str, token: str) -> CommandResult:
+    if not token:
+        return CommandResult(
+            ok=False, message="token from stdin must not be empty", instance=instance
+        )
+    payload = _rpc_call(
+        instance, "channel.set_token", {"id": channel_id, "token": token, "slot": "app"}
+    )
+    if not payload.ok:
+        return payload.to_command_result()
+    return CommandResult(
+        ok=True,
+        message=_format_channel_token_result(payload.data, channel_id),
         instance=instance,
         attention=_channel_attention(payload.data),
     )
@@ -174,6 +229,8 @@ def channel_status(instance: ServerInstance, channel_id: str) -> CommandResult:
         f"{resolved_id}: enabled={enabled_text} running={running_text} "
         f"failed={failed_text}{failure_suffix}"
     ]
+    if isinstance(payload.data.get("connected"), bool):
+        lines.append(f"connected={_bool_text(payload.data['connected'])}")
     lines.extend(_format_denied_chats(resolved_id, payload.data.get("denied_chats")))
     return CommandResult(
         ok=True,
@@ -419,6 +476,9 @@ def _format_channel_row(channel: object) -> str:
         )
     if "observe_unaddressed" in channel:
         fields.append(f" observe_unaddressed={_bool_text(channel.get('observe_unaddressed'))}")
+    for key in ("app_token_env_var", "server_url"):
+        if channel.get(key):
+            fields.append(f" {key}={channel[key]}")
     return record_fields(fields, separator="")
 
 

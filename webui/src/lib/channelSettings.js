@@ -1,7 +1,13 @@
 import { asOptionalText, isPlainObject } from './values.js';
 
 export const CHANNEL_PLATFORM_TELEGRAM = 'telegram';
-export const CHANNEL_PLATFORMS = Object.freeze([CHANNEL_PLATFORM_TELEGRAM]);
+export const CHANNEL_PLATFORMS = Object.freeze([
+  CHANNEL_PLATFORM_TELEGRAM,
+  'discord',
+  'slack',
+  'mattermost',
+  'whatsapp',
+]);
 
 export const CHANNEL_DM_SCOPE_PER_CONVERSATION = 'per_conversation';
 export const CHANNEL_DM_SCOPE_MAIN = 'main';
@@ -52,10 +58,13 @@ export function buildCreatePayload(form) {
     agent_id: requiredText(source.agent_id, 'agent_id'),
     dm_scope: resolveDmScope(source.dm_scope),
     allowed_chat_ids: parseAllowedChatIds(source.allowed_chat_ids),
-    token_env_var: requiredText(source.token_env_var, 'token_env_var'),
-    enabled: hasOwn(source, 'enabled')
-      ? requiredBoolean(source.enabled, 'enabled')
-      : true,
+    ...connectionFields(source),
+    enabled:
+      source.platform === 'whatsapp'
+        ? false
+        : hasOwn(source, 'enabled')
+          ? requiredBoolean(source.enabled, 'enabled')
+          : true,
   };
 }
 
@@ -88,8 +97,18 @@ export function buildUpdatePayload(form) {
   }
 
   if (hasOwn(source, 'token_env_var')) {
-    payload.token_env_var = requiredText(source.token_env_var, 'token_env_var');
+    payload.token_env_var =
+      source.platform === 'whatsapp'
+        ? ''
+        : requiredText(source.token_env_var, 'token_env_var');
     hasUpdates = true;
+  }
+
+  for (const key of ['app_token_env_var', 'server_url']) {
+    if (hasOwn(source, key)) {
+      payload[key] = source[key].trim();
+      hasUpdates = true;
+    }
   }
 
   if (hasOwn(source, 'enabled')) {
@@ -140,6 +159,8 @@ function normalizeChannel(channel) {
         : CHANNEL_DM_SCOPE_PER_CONVERSATION,
     allowed_chat_ids: allowedChatIds,
     token_env_var: asOptionalText(channel?.token_env_var) ?? '',
+    app_token_env_var: asOptionalText(channel?.app_token_env_var) ?? '',
+    server_url: asOptionalText(channel?.server_url) ?? '',
     enabled: booleanWithDefault(channel?.enabled, true),
     running: optionalBoolean(channel?.running),
   };
@@ -238,24 +259,32 @@ function parseAllowedChatId(value) {
       throw new TypeError('allowed_chat_ids must contain integers only');
     }
 
-    return value;
+    return String(value);
   }
 
   if (typeof value === 'string') {
     const normalized = value.trim();
-    if (!/^-?\d+$/u.test(normalized)) {
-      throw new TypeError('allowed_chat_ids must contain integers only');
-    }
-
-    const parsed = Number.parseInt(normalized, 10);
-    if (!Number.isSafeInteger(parsed)) {
-      throw new TypeError('allowed_chat_ids must contain integers only');
-    }
-
-    return parsed;
+    if (!normalized)
+      throw new TypeError('allowed_chat_ids must contain non-empty IDs');
+    return normalized;
   }
 
   throw new TypeError('allowed_chat_ids must contain integers only');
+}
+
+function connectionFields(source) {
+  if (source.platform === 'whatsapp') return {};
+  const fields = {
+    token_env_var: requiredText(source.token_env_var, 'token_env_var'),
+  };
+  if (source.platform === 'slack')
+    fields.app_token_env_var = requiredText(
+      source.app_token_env_var,
+      'app_token_env_var',
+    );
+  if (source.platform === 'mattermost')
+    fields.server_url = requiredText(source.server_url, 'server_url');
+  return fields;
 }
 
 function requiredBoolean(value, fieldName) {

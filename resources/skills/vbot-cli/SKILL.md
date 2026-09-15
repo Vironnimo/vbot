@@ -31,7 +31,7 @@ For a focused question about a past conversation, use `session_search` and answe
 | Create or change an Extension, its Tools, hooks, Commands or pages | `references/extensions.md` |
 | Use bundled Swarm or Computer Use, or inspect Extension connection UI | `references/extension-usage.md` |
 | MCP installation, Tool access, discovery and application operations | `references/mcp.md` |
-| Telegram or Discord routing, tokens and group access | `references/channels.md` |
+| Channel setup (Telegram, Discord, Slack, Mattermost, WhatsApp), tokens and group access | `references/channels.md` |
 | First Telegram setup and chat-id discovery | `references/telegram-setup.md` |
 | Recurring or one-time scheduled Runs | `references/cron.md` |
 | Runs after startup, including restart continuation | `references/bootstrap.md` |

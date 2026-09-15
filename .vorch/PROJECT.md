@@ -97,7 +97,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 
 ## Development
 
-**Setup:** Python >= 3.11, Node.js for WebUI; editable install with dev extras:
+**Setup:** Python >= 3.11, Node.js for WebUI (Node.js >=22 plus npm on the server for optional WhatsApp Channels); editable install with dev extras:
 ```bash
 pip install -e ".[dev]"
 python -m cli.search_runtime
@@ -123,7 +123,7 @@ A git-ignored checkout marker selects dev data `~/.vbot-dev`, port `8421`. Insta
 
 **Release:** Read `.vorch/workflows/release-workflow.md` when the user requests a release.
 
-Windows binary artifacts require configured release signing, and publication is separate from building/testing. Unsigned developer packages are explicitly selected with `--package`; they are never accepted as unsigned official downloads. Local customization needs Git and Node.js/npm only in its development copy, not during normal packaged operation. Tests of Windows application lifecycle use disposable install/data roots, never the existing installed instance.
+Windows binary artifacts require configured release signing, and publication is separate from building/testing. Unsigned developer packages are explicitly selected with `--package`; they are never accepted as unsigned official downloads. Local customization needs Git and Node.js/npm only in its development copy, not during normal packaged operation, except the optional WhatsApp connection which currently requires an operator-installed Node.js >=22 and npm. Tests of Windows application lifecycle use disposable install/data roots, never the existing installed instance.
 
 ## Testing
 

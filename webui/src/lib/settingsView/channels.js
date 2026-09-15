@@ -30,6 +30,8 @@ export function createChannelFormValues(channel = null) {
       CHANNEL_DM_SCOPE_PER_CONVERSATION,
     ),
     token_env_var: textOrEmpty(channel?.token_env_var),
+    app_token_env_var: textOrEmpty(channel?.app_token_env_var),
+    server_url: textOrEmpty(channel?.server_url),
     allowed_chat_ids: formatAllowedChatIds(channel?.allowed_chat_ids),
   };
 }
@@ -80,7 +82,11 @@ export function mergeChannelStatuses(channels, statusResults) {
     }
 
     const running =
-      typeof status.running === 'boolean' ? status.running : channel.running;
+      typeof status.connected === 'boolean'
+        ? status.connected
+        : typeof status.running === 'boolean'
+          ? status.running
+          : channel.running;
 
     const enabled =
       typeof status.enabled === 'boolean' ? status.enabled : channel.enabled;
@@ -95,6 +101,7 @@ export function mergeChannelStatuses(channels, statusResults) {
     return {
       ...channel,
       running,
+      failure_reason: status.failure_reason || '',
       enabled,
       denied_chats: deniedChats,
       access: normalizeChannelAccess(status.access),
@@ -185,7 +192,7 @@ export function formatAllowedChatIds(value) {
   }
 
   return value
-    .filter((item) => Number.isSafeInteger(item))
+    .filter((item) => typeof item === 'string' || Number.isSafeInteger(item))
     .map((item) => String(item))
     .join(', ');
 }
