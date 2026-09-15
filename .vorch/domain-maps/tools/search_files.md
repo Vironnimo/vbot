@@ -36,6 +36,14 @@ convert only when their effects do not conflict with `options`. A standalone
 flag followed by `true` is accepted; `false` requires its explicit reverse flag.
 Never drop an unknown effect or silently override a separate explicit constraint.
 
+Known audit gap: malformed JSON-looking `patterns` strings can fall through
+shared scalar-array repair and execute as one regex. For example, the field text
+`["findMe\("]` is invalid JSON but a valid broad regex character class. A success
+envelope can therefore contain unrelated lines. Inspect `normalize_search_arguments`
+and `contracts.py::_normalize_array_value` together when fixing this boundary;
+preserve literal patterns supplied as members of an actual array. This is an
+observed defect, not intended search semantics.
+
 ## Selection Contract
 
 Both actions share traversal, union/deduplication, filters, and ignores. Hidden
@@ -66,6 +74,12 @@ Success returns `data.content` and `complete`. Paths are relative to effective c
 when possible, absolute otherwise; directory rows end in `/`. Content includes
 source line numbers, and occurrence output adds byte columns. No matches is success.
 Quiet returns `matched=true/false`, or null when an incomplete scan proves neither.
+`complete` describes scan completion, not whether the returned page contains all
+matches; a successful complete scan may still return `next_offset`. Empty output
+currently says only `No results.` and does not identify the resolved search roots.
+When investigating false negatives, check the effective cwd, literal quote or
+escape characters in patterns, and subsequent narrowed searches before attributing
+the outcome to the native engine.
 
 `limit` defaults to 100 (maximum 10,000); `offset` defaults to zero (maximum
 1,000,000). Logical matches or path/count rows define pages; context does not
