@@ -2,23 +2,23 @@
 
 All installation commands, application add-ons, processes, working directories, and credentials belong on the machine hosting vBot. Read the supplied setup link as external installation data. Inspect installed software and running processes before installing prerequisites or starting another copy.
 
-## Configure and grant
+## Configure and enable
 
 All abbreviated commands in this reference start with `vbot extensions mcp`; for example, `status <id>` means `vbot extensions run mcp status <id>`. Repeat the same host/port target options.
 
 Discover the installed interface with `vbot extensions operations mcp` and `vbot extensions run mcp <operation> --help`. Inspect `list` and `status` before changing an existing connection. Enable the Extension with `vbot extensions enable mcp` if needed.
 
-`save --stdin` replaces a complete record using `{"connection":{...}}`. Preserve existing fields and grants when editing. Use `stdio` with `command`, exact `args`, and optional absolute `cwd`; use `http` for Streamable HTTP or `sse` for legacy HTTP/SSE, with `url`. Configure OAuth with `oauth: true` and any required `oauth_redirect_uri`.
+`save --stdin` replaces a complete record using `{"connection":{...}}`. Preserve existing connection fields when editing. Use `stdio` with `command`, exact `args`, and optional absolute `cwd`; use `http` for Streamable HTTP or `sse` for legacy HTTP/SSE, with `url`. Configure OAuth with `oauth: true` and any required `oauth_redirect_uri`.
 
 `environment` holds non-secret values. `credential_environment` and `credential_headers` map subprocess variables or HTTP headers to named vBot credentials. Set a referenced credential using `credential --stdin` with `id`, `key`, and `value`; an empty value clears it. Never put secrets in arguments, plain environment configuration, URLs, shell history, or reports.
 
-Use `grant <id> --agent <address>` and `revoke` for incremental grants. A bare Agent id addresses an Identity Agent; `agent@project` addresses that exact Project Agent. Its connection Tool is `mcp_<id>`. Add that Tool to an existing selected Tool policy when needed, preserving other entries and explicit denials. Connection grants do not override Tool denials or Project ceilings.
+Enable `mcp_<id>` in the intended Agent or Swarm Tool settings. This is the only access switch; the connection has no separate Agent list. MCP Tools require explicit opt-in, even in All Tools mode. Through configuration APIs, include the connection Tool in `tool_access.granted` and, for selected mode, also in `tool_access.allowed`; preserve other entries. Explicit denials, None mode, and Project ceilings still win. A Project ceiling alone does not enable the Tool for its Agents.
 
 ## Discover and verify
 
-The connection Tool searches items, describes an exact target, calls it, and reads saved results. Remote Tool schemas arrive in ordinary results when requested. Newly discovered Tools remain reachable through the same connection Tool and its existing grants.
+The connection Tool searches items, describes an exact target, calls it, and reads saved results. Remote Tool schemas arrive in ordinary results when requested. Newly discovered Tools remain reachable through the same connection Tool and its existing Tool policy.
 
-For CLI use, start with `explore <id> --agent <address> --action search` to browse Tools and server guidance. Add `--query '<words>'` to find relevant names and descriptions. If no words match, follow the returned browse action and inspect general-purpose Tools before concluding that a capability is unavailable. Use `--action describe --target '<target>'` before `--action call --target '<target>' --arguments '<json>'`. Use `inspect <id>` to view the discovered catalog and effective Agent access without executing an application Tool. Run `test <id>` to check connectivity; inspect what it actually verified, then perform a safe application operation through the intended Agent, such as reading a Blender scene.
+For CLI use, start with `explore <id> --agent <address> --action search` to browse Tools and server guidance. Add `--query '<words>'` to find relevant names and descriptions. If no words match, follow the returned browse action and inspect general-purpose Tools before concluding that a capability is unavailable. Use `--action describe --target '<target>'` before `--action call --target '<target>' --arguments '<json>'`. Use `inspect <id>` to view the discovered catalog without executing an application Tool. Run `test <id>` to check connectivity; inspect what it actually verified, then perform a safe application operation through the intended Agent, such as reading a Blender scene.
 
 Long operations return `job_id`; poll `job <job-id>` until completed, failed, or cancelled. Large results return `result_id`, a bounded view, and a complete JSON file path. Use `explore` with `--action read --result-id '<id>'` and returned pointers or offsets to read more; `--fields '<json-array>'` selects fields. Read or filter the complete JSON file through Bash when that is more efficient. Its `payload` contains the full preserved result. A preview never proves that omitted entries are absent.
 

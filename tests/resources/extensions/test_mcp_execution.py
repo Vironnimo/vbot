@@ -44,6 +44,7 @@ async def test_transport_failure_does_not_claim_remote_call_was_undone(
             "target": target,
             "arguments": {"value": "sentinel"} if kind == "tool" else {"level": "debug"},
         },
+        allowed_tools=["mcp_example"],
     )
     assert result["error"]["code"] == "mcp_call_unconfirmed"
     assert len(calls) == 1
@@ -83,6 +84,7 @@ async def test_result_preparation_failure_preserves_completed_call_state(
             "target": target,
             "arguments": {"value": "sentinel"} if kind == "tool" else {"level": "debug"},
         },
+        allowed_tools=["mcp_example"],
     )
     assert result["error"]["code"] == "mcp_result_unavailable"
     assert result["data"] is None
@@ -104,7 +106,9 @@ async def test_target_validation_identifies_error_before_remote_effects(
     service, registry, runner, calls = context_service
     target = service._entries(runner, service._allowed(context(host)))[-1]["target"]
     result = await registry.dispatch(
-        context(host), {"action": "call", "target": target, "arguments": inputs}
+        context(host),
+        {"action": "call", "target": target, "arguments": inputs},
+        allowed_tools=["mcp_example"],
     )
     assert result["error"]["code"] == "mcp_invalid_arguments"
     assert pointer in result["error"]["message"]
@@ -117,7 +121,9 @@ async def test_target_validation_does_not_echo_rejected_argument_values(context_
     target = service._entries(runner, service._allowed(context(host)))[-1]["target"]
     value = {"private": 'test-owned-secret\\with"escapes\nand-newlines'}
     result = await registry.dispatch(
-        context(host), {"action": "call", "target": target, "arguments": {"value": value}}
+        context(host),
+        {"action": "call", "target": target, "arguments": {"value": value}},
+        allowed_tools=["mcp_example"],
     )
     assert result["error"]["code"] == "mcp_invalid_arguments"
     assert "test-owned-secret" not in json.dumps(result)
@@ -129,7 +135,9 @@ async def test_discovered_call_uses_validated_remote_tool(context_service, host)
     service, registry, runner, calls = context_service
     target = service._entries(runner, service._allowed(context(host)))[-1]["target"]
     result = await registry.dispatch(
-        context(host), {"action": "call", "target": target, "arguments": {"value": "sentinel"}}
+        context(host),
+        {"action": "call", "target": target, "arguments": {"value": "sentinel"}},
+        allowed_tools=["mcp_example"],
     )
 
     assert result["ok"]
@@ -145,7 +153,9 @@ async def test_discovered_calls_respect_all_denial_layers(context_service, host,
     target = service._entries(runner, service._allowed(original_context))[-1]["target"]
     remote = remote_tool_name("example", "inspect")
     if restriction == "agent":
-        host.resolve_agent(None, "alice").tool_access = ToolAccess(denied=(remote,))
+        host.resolve_agent(None, "alice").tool_access = ToolAccess(
+            granted=("mcp_example",), denied=(remote,)
+        )
     elif restriction == "run":
         original_context = replace(original_context, tool_restriction=("mcp_example",))
     else:
@@ -154,7 +164,9 @@ async def test_discovered_calls_respect_all_denial_layers(context_service, host,
         )
 
     result = await registry.dispatch(
-        original_context, {"action": "call", "target": target, "arguments": {"value": "sentinel"}}
+        original_context,
+        {"action": "call", "target": target, "arguments": {"value": "sentinel"}},
+        allowed_tools=["mcp_example"],
     )
 
     assert not result["ok"]
@@ -169,7 +181,9 @@ async def test_old_target_cannot_call_changed_schema(context_service, host):
     service._publish(runner, runner.catalog)
 
     result = await registry.dispatch(
-        context(host), {"action": "call", "target": target, "arguments": {"value": "sentinel"}}
+        context(host),
+        {"action": "call", "target": target, "arguments": {"value": "sentinel"}},
+        allowed_tools=["mcp_example"],
     )
 
     assert not result["ok"]
@@ -196,6 +210,7 @@ async def test_target_repairs_recognizable_arguments_before_remote_call(
             "target": target,
             "arguments": inputs,
         },
+        allowed_tools=["mcp_example"],
     )
     assert result["ok"], result
     assert calls == [("tools/call", {"name": "inspect", "arguments": expected})]
@@ -227,6 +242,7 @@ async def test_target_repairs_boolean_and_container_values(context_service, host
                 "metadata": {"Enabled": "FALSE", "request": {"operation": "original"}},
             },
         },
+        allowed_tools=["mcp_example"],
     )
     assert result["ok"], result
     assert calls[0][1]["arguments"] == {
@@ -249,6 +265,7 @@ async def test_target_conflicting_aliases_do_not_call_remote(context_service, ho
             "target": target,
             "arguments": {"value": "first", "VALUE": "second"},
         },
+        allowed_tools=["mcp_example"],
     )
     assert result["error"]["code"] == "mcp_invalid_arguments"
     assert calls == []
@@ -264,6 +281,7 @@ async def test_protocol_operation_repairs_enum_spelling(context_service, host):
             "target": service._operation_target("logging/setLevel"),
             "arguments": {"LEVEL": "DEBUG"},
         },
+        allowed_tools=["mcp_example"],
     )
     assert result["ok"], result
     assert calls == [("logging/setLevel", {"level": "debug"})]
@@ -277,7 +295,9 @@ async def test_remote_arguments_need_owner_evidence_for_field_aliases(
     service, registry, runner, calls = context_service
     target = service._entries(runner, service._allowed(context(host)))[-1]["target"]
     result = await registry.dispatch(
-        context(host), {"action": "call", "target": target, "arguments": inputs}
+        context(host),
+        {"action": "call", "target": target, "arguments": inputs},
+        allowed_tools=["mcp_example"],
     )
     assert result["error"]["code"] == "mcp_invalid_arguments"
     assert calls == []
@@ -302,12 +322,16 @@ async def test_remote_valid_application_payload_is_preserved(context_service, ho
     }
     if direct:
         result = await registry.dispatch(
-            replace(context(host), tool_name=remote_tool_name(runner.id, "inspect")), inputs
+            replace(context(host), tool_name=remote_tool_name(runner.id, "inspect")),
+            inputs,
+            allowed_tools=service._allowed(context(host)),
         )
     else:
         target = service._entries(runner, service._allowed(context(host)))[-1]["target"]
         result = await registry.dispatch(
-            context(host), {"action": "call", "target": target, "arguments": inputs}
+            context(host),
+            {"action": "call", "target": target, "arguments": inputs},
+            allowed_tools=["mcp_example"],
         )
     assert result["ok"], result
     assert calls == [("tools/call", {"name": "inspect", "arguments": inputs})]

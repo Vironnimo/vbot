@@ -48,6 +48,8 @@ def _bash_scenario(case_name: str) -> ProbeScenario:
             "command": "python --version",
             "timeout": 120,
         },
+        "top_foreground_unbounded": {"command": "python --version", "timeout": 0},
+        "top_foreground_long_timeout": {"command": "python --version", "timeout": 3600},
         "top_foreground_env_one": {
             "mode": "foreground",
             "command": "python -c \"import os; print(bool(os.environ['OPENAI_API_KEY']))\"",
@@ -106,6 +108,11 @@ def _bash_scenario(case_name: str) -> ProbeScenario:
             "command": "python -m http.server 8765",
             "timeout": 600,
         },
+        "top_background_unbounded": {
+            "mode": "background",
+            "command": "python -m http.server 8765",
+            "timeout": 0,
+        },
         "top_background_all": {
             "mode": "background",
             "command": "python -m http.server 8765",
@@ -114,6 +121,7 @@ def _bash_scenario(case_name: str) -> ProbeScenario:
             "timeout": 600,
         },
         "sub_foreground_default": {"command": "python --version"},
+        "sub_foreground_unbounded": {"command": "python --version", "timeout": 0},
         "sub_foreground": {"mode": "foreground", "command": "python --version"},
         "sub_foreground_description": {
             "mode": "foreground",

@@ -11,7 +11,7 @@ const configuration = {
   transport: 'stdio',
   command: 'python',
   args: ['', 'a b', 'ümlaut'],
-  agents: ['alice', 'coder@project'],
+
   enabled: true,
   timeout: 240,
   environment: { LANG: 'de' },
@@ -84,7 +84,7 @@ describe('MCP settings', () => {
     await controller.inspect('example');
     expect(state().inspector.error).toBe('');
   });
-  it('preserves complete configuration, exact arguments, and grants on edit', () => {
+  it('preserves complete configuration and exact arguments on edit', () => {
     expect(mcpConfiguration(mcpDraft(configuration))).toEqual(configuration);
   });
   it('removes local-only settings when switching to HTTP', () => {
@@ -99,7 +99,6 @@ describe('MCP settings', () => {
       transport: 'http',
       url: draft.url,
       oauth: true,
-      agents: configuration.agents,
     });
     expect(result).not.toHaveProperty('command');
     expect(result).not.toHaveProperty('args');
@@ -121,7 +120,10 @@ describe('MCP settings', () => {
   it('keeps the draft unsaved when the existing connection changed elsewhere', async () => {
     const operation = vi.fn().mockResolvedValue({
       connections: [
-        { id: 'example', configuration: { ...configuration, agents: [] } },
+        {
+          id: 'example',
+          configuration: { ...configuration, command: 'changed' },
+        },
       ],
     });
     setup(operation);

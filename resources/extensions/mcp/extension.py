@@ -16,20 +16,17 @@ from jsonschema import Draft202012Validator
 
 from core.extensions import ExtensionAPI
 from core.extensions.operations import ExtensionHost
-from core.projects.address import format_agent_address, parse_agent_address
+from core.projects.address import parse_agent_address
 from core.tools._argument_repair import normalize_call_arguments
 from core.tools.availability import resolve_tool_access
 from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.tools import (
     ToolContext,
-    ToolDefinitionProfile,
-    ToolDefinitionProfileContext,
     run_tool_worker,
     tool_failure,
     tool_success,
 )
 from core.utils.config import VBOT_ROOT
-from core.utils.errors import VBotError
 from core.utils.ids import new_id
 
 from ._definitions import (
@@ -122,7 +119,7 @@ class MCPService:
         identifier = config["id"]
         if identifier not in self.runners:
             self.runners[identifier] = ConnectionRunner(
-                config, self._host(), self.inputs, self._publish
+                config, self._host(), self.inputs, self._publish, authorize=self._authorize
             )
             self._publish(self.runners[identifier], {"tools": []})
         return self.runners[identifier]
@@ -146,9 +143,7 @@ class MCPService:
                 "ready": lambda: bool(self.connections.get(runner.id, {}).get("enabled")),
                 "parallel_safe": False,
                 "open_input_schema": True,
-                "definition_profile_resolver": self._profile(
-                    runner.id, MCP_DESCRIPTION, MCP_PARAMETERS
-                ),
+                "requires_opt_in": True,
             }
         ]
         for tool in catalog["tools"]:
@@ -167,37 +162,26 @@ class MCPService:
                     "catalog_visible": False,
                     "activation": "follows",
                     "activation_source": parent,
-                    "definition_profile_resolver": self._profile(
-                        runner.id, description, parameters
-                    ),
                 }
             )
         self.api.operations.replace_tools(runner.id, declarations)
 
-    def _profile(self, connection: str, description: str, parameters: dict[str, Any]) -> Any:
-        fingerprint = hashlib.sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest()
-
-        def resolve(context: ToolDefinitionProfileContext) -> ToolDefinitionProfile | None:
-            address = format_agent_address(context.agent_id, context.project_id)
-            config = self.connections.get(connection)
-            if config is None or address not in config["agents"]:
-                return None
-            return ToolDefinitionProfile(
-                key=fingerprint, description=description, parameters=parameters
-            )
-
-        return resolve
+    def _authorize(self, context: ToolContext) -> None:
+        """Recheck the ordinary Tool policy when a queued invocation begins."""
+        if context.tool_name not in self._allowed(context):
+            raise ValueError(MCP_MESSAGES["access_denied"])
 
     def _handler(
         self, connection: str, remote: str | None = None, schema: dict[str, Any] | None = None
     ) -> Any:
         async def invoke(context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
             config = self._connection(connection)
-            address = format_agent_address(context.agent_id, context.project_id)
-            if not config["enabled"] or address not in config["agents"]:
-                return tool_failure(
-                    "mcp_access_denied", "This Agent has no access to the MCP connection"
-                )
+            if not config["enabled"]:
+                return tool_failure("mcp_access_denied", "The MCP connection is disabled")
+            try:
+                self._authorize(context)
+            except ValueError:
+                return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
             runner = self._runner(config)
             if remote is None:
                 try:
@@ -231,7 +215,7 @@ class MCPService:
         return invoke
 
     def _allowed(self, context: ToolContext) -> tuple[str, ...]:
-        agent = self._host().resolve_agent(context.project_id, context.agent_id)
+        agent = self._host().resolve_tool_agent(context)
         registry = self.api.operations.tool_registry
         if registry is None:
             raise RuntimeError("MCP Tools are not bound")
@@ -410,12 +394,7 @@ class MCPService:
             # Reconnecting can publish new Tools; resolve followers against that catalog.
             allowed = self._allowed(context)
             config = self._connection(runner.id)
-            address = format_agent_address(context.agent_id, context.project_id)
-            if (
-                not config["enabled"]
-                or address not in config["agents"]
-                or f"mcp_{runner.id}" not in allowed
-            ):
+            if not config["enabled"] or f"mcp_{runner.id}" not in allowed:
                 raise ValueError(MCP_MESSAGES["access_denied"])
         entries = self._entries(runner, allowed)
         if arguments["action"] == "search":
@@ -647,8 +626,8 @@ class MCPService:
                     for item in catalog.get("prompts", [])
                 ],
             }
-        if operation in {"enable", "disable", "grant", "revoke", "remove"}:
-            return await self._mutate(operation, config, arguments)
+        if operation in {"enable", "disable", "remove"}:
+            return await self._mutate(operation, config)
         if operation == "credential":
             sources = set(config.get("credential_environment", {}).values()) | set(
                 config.get("credential_headers", {}).values()
@@ -692,51 +671,13 @@ class MCPService:
         return {
             **status,
             "configuration": copy.deepcopy(config),
-            "agent_access": self._agent_access(config),
             "pending_requests": [
                 item for item in self.inputs.list() if item["connection"] == identifier
             ],
         }
 
-    def _agent_access(self, config: dict[str, Any]) -> list[dict[str, Any]]:
-        registry = self.api.operations.tool_registry
-        if registry is None:
-            return []
-        tools = registry.list_tools()
-        runner = self.runners.get(config["id"])
-        remote = [
-            remote_tool_name(config["id"], tool["name"])
-            for tool in (runner.catalog if runner else {}).get("tools", [])
-        ]
-        rows = []
-        for address in config["agents"]:
-            if not config["enabled"]:
-                rows.append({"agent": address, "access": "disabled", "tool_count": 0})
-                continue
-            try:
-                agent_id, project_id = parse_agent_address(address)
-                agent = self._host().resolve_agent(project_id, agent_id)
-                allowed = resolve_tool_access(
-                    agent.tool_access, tools, agent.memory_prompt_mode, workspace=agent.workspace
-                ).allowed_tools
-            except (ValueError, VBotError):
-                rows.append({"agent": address, "access": "unresolved", "tool_count": 0})
-                continue
-            permitted = f"mcp_{config['id']}" in allowed
-            rows.append(
-                {
-                    "agent": address,
-                    "access": "allowed" if permitted else "blocked",
-                    "tool_count": sum(name in allowed for name in remote) if permitted else 0,
-                }
-            )
-        return rows
-
     async def _save(self, value: dict[str, Any]) -> dict[str, Any]:
         config = validate_connection(value)
-        for address in config["agents"]:
-            agent_id, project_id = parse_agent_address(address)
-            self._host().resolve_agent(project_id, agent_id)
         async with self._lock:
             records = {**self.connections, config["id"]: config}
             if self.store is None:
@@ -749,13 +690,8 @@ class MCPService:
         self.api.logger.info("MCP connection configured (connection=%s)", config["id"])
         return self._status(config["id"])
 
-    async def _mutate(
-        self, operation: str, original: dict[str, Any], arguments: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _mutate(self, operation: str, original: dict[str, Any]) -> dict[str, Any]:
         identifier = original["id"]
-        if operation == "grant":
-            agent_id, project_id = parse_agent_address(arguments["agent"])
-            self._host().resolve_agent(project_id, agent_id)
         async with self._lock:
             config = copy.deepcopy(self._connection(identifier))
             records = dict(self.connections)
@@ -764,23 +700,11 @@ class MCPService:
             elif operation in {"enable", "disable"}:
                 config["enabled"] = operation == "enable"
                 records[identifier] = config
-            else:
-                config["agents"] = [
-                    value for value in config["agents"] if value != arguments["agent"]
-                ]
-                if operation == "grant":
-                    config["agents"].append(arguments["agent"])
-                records[identifier] = config
             if self.store is None:
                 raise RuntimeError("MCP store was not initialized")
             await run_tool_worker(self.store.save, records)
             self.connections = records
-            runner = self.runners.get(identifier)
-            if operation in {"grant", "revoke"} and runner is not None:
-                runner.config = config
-                if runner.catalog:
-                    self._publish(runner, runner.catalog)
-            elif operation in {"disable", "remove"}:
+            if operation in {"disable", "remove"}:
                 await self._stop(identifier)
             elif config["enabled"]:
                 self._runner(config).start()
@@ -810,8 +734,6 @@ class MCPService:
     ) -> dict[str, Any]:
         agent_id, project_id = parse_agent_address(arguments["agent"])
         agent = self._host().resolve_agent(project_id, agent_id)
-        if arguments["agent"] not in runner.config["agents"]:
-            raise ValueError("Agent has no access to this MCP connection")
         registry = self.api.operations.tool_registry
         if registry is None:
             raise RuntimeError("MCP Tools are not bound")
@@ -910,8 +832,6 @@ def register(api: ExtensionAPI) -> None:
         "connect": "Start connecting an enabled connection; inspect status for readiness.",
         "disconnect": "Close the current client without disabling the saved connection.",
         "test": "Start a catalog/health check; use the returned job_id with job for its outcome.",
-        "grant": "Allow one Agent address to use this connection, subject to its Tool policy.",
-        "revoke": "Remove one Agent address from this connection's saved grants.",
         "save": "Create or replace a complete connection; read status before replacing one.",
         "events": "Read sequenced connection events after a cursor; inspect reported gaps.",
         "inspect": "Read the cached Tool catalog and guidance without connecting or calling Tools.",
@@ -931,7 +851,6 @@ def register(api: ExtensionAPI) -> None:
         **dict.fromkeys(
             ("status", "remove", "enable", "disable", "connect", "disconnect", "test"), base
         ),
-        **{name: {**base, "agent": {"type": "string"}} for name in ("grant", "revoke")},
         "save": {"connection": CONNECTION_SCHEMA},
         "events": {**base, "after": {"type": "integer", "minimum": 0}},
         "inspect": {
