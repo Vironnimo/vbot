@@ -162,33 +162,40 @@ function createBridge(initialProfile = profile) {
       return Promise.resolve({ entries: [], has_more: false });
     if (name === 'swarms.events')
       return Promise.resolve({ entries: [], has_more: false });
-    if (name === 'swarms.usage')
-      return Promise.resolve({
+    if (name === 'swarms.usage') {
+      const report = (participantId) => ({
+        participant_id: participantId ?? null,
+        participant_count: 2,
         usage: {
-          participant_id: args.participant_id ?? null,
-          participant_count: 2,
-          usage: {
-            totals: {
+          totals: {
+            measured_input_tokens: 30,
+            measured_output_tokens: 20,
+            estimated_input_tokens: 10,
+            estimated_output_tokens: 5,
+          },
+          models: [
+            {
+              provider: 'demo',
+              model: participantId === 'prt-b' ? 'fallback' : 'model',
+              runs: 1,
               measured_input_tokens: 30,
               measured_output_tokens: 20,
               estimated_input_tokens: 10,
               estimated_output_tokens: 5,
             },
-            models: [
-              {
-                provider: 'demo',
-                model: args.participant_id === 'prt-b' ? 'fallback' : 'model',
-                runs: 1,
-                measured_input_tokens: 30,
-                measured_output_tokens: 20,
-                estimated_input_tokens: 10,
-                estimated_output_tokens: 5,
-              },
-            ],
-          },
-          tools: { total_calls: args.participant_id === 'prt-b' ? 0 : 4 },
+          ],
+        },
+        tools: { total_calls: participantId === 'prt-b' ? 0 : 4 },
+      });
+      return Promise.resolve({
+        usage: {
+          ...report(args.participant_id),
+          participants: swarm.participants.map((participant) =>
+            report(participant.id),
+          ),
         },
       });
+    }
     return Promise.resolve({ profile: structuredClone(profile) });
   });
   let context;

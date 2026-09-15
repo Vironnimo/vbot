@@ -345,6 +345,13 @@ async def test_board_epoch_stale_after_resume_and_post_author_is_immutable(
     )["participants"][0]["display_name"]
     await store.begin_stop(started["swarm_id"], request_id="stop", actor="test")
     await store.finish_stop(started["swarm_id"], request_id="finish", actor="test", drain_report={})
+    with pytest.raises(SwarmStoreError) as stopped:
+        await store.post(
+            started["swarm_id"], first, text="late", request_id="late", expected_epoch=0
+        )
+    assert stopped.value.code == "swarm_closed"
+    posted = await store.post_human(started["swarm_id"], text="continue", request_id="human")
+    assert posted["post_id"]
     await store.begin_resume(started["swarm_id"], request_id="resume", actor="test")
     with pytest.raises(SwarmStoreError, match="stale_epoch"):
         await store.post(

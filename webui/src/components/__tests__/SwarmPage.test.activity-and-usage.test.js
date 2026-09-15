@@ -169,6 +169,39 @@ describe('SwarmPage', () => {
     }
   });
 
+  it('shares an in-flight Usage report while tabs and invalidations change', async () => {
+    const { bridge, operation } = createBridge();
+    const original = operation.getMockImplementation();
+    let finish;
+    operation.mockImplementation((name, args) =>
+      name === 'swarms.usage'
+        ? new Promise((resolve) => {
+            finish = () => resolve(original(name, args));
+          })
+        : original(name, args),
+    );
+    await render(bridge);
+    button('Investigate').click();
+    await vi.waitFor(() => expect(button('Usage')).toBeDefined());
+    button('Usage').click();
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    expect(document.querySelector('[role="status"]')).not.toBeNull();
+    button('Board').click();
+    await tick();
+    button('Usage').click();
+    bridge.invalidate();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(
+      operation.mock.calls.filter(([name]) => name === 'swarms.usage'),
+    ).toHaveLength(1);
+    finish();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.usage-summary')).not.toBeNull(),
+    );
+    await tick();
+    expect(document.querySelector('[role="status"]')).toBeNull();
+  });
+
   it('renders canonical per-participant Model usage and tool-call totals', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
@@ -200,8 +233,14 @@ describe('SwarmPage', () => {
     expect(document.body.textContent).toContain('demo/model');
     expect(operation).toHaveBeenCalledWith('swarms.usage', {
       swarm_id: 'swr-a',
-      participant_id: 'prt-a',
     });
+    expect(
+      operation.mock.calls.filter(([name]) => name === 'swarms.usage'),
+    ).toHaveLength(1);
+    expect(button('Delivery audit')).toBeUndefined();
+    expect(
+      operation.mock.calls.some(([name]) => name === 'swarms.events'),
+    ).toBe(false);
   });
 
   it('shows participant tool calls once across Models and without token usage', async () => {
@@ -209,15 +248,11 @@ describe('SwarmPage', () => {
     const original = operation.getMockImplementation();
     operation.mockImplementation(async (name, args) => {
       const result = await original(name, args);
-      if (name === 'swarms.usage' && args.participant_id === 'prt-a') {
-        result.usage.usage.models.push({
-          ...result.usage.usage.models[0],
-          model: 'second',
-        });
-      }
-      if (name === 'swarms.usage' && args.participant_id === 'prt-b') {
-        result.usage.usage = null;
-        result.usage.tools.total_calls = 7;
+      if (name === 'swarms.usage') {
+        const [first, second] = result.usage.participants;
+        first.usage.models.push({ ...first.usage.models[0], model: 'second' });
+        second.usage = null;
+        second.tools.total_calls = 7;
       }
       return result;
     });
@@ -263,9 +298,11 @@ describe('SwarmPage', () => {
           estimated_input_tokens: 0,
           estimated_output_tokens: value / 2,
         };
-        Object.assign(result.usage.usage.totals, counts);
-        Object.assign(result.usage.usage.models[0], counts, { runs: value });
-        result.usage.tools.total_calls = value;
+        for (const report of [result.usage, ...result.usage.participants]) {
+          Object.assign(report.usage.totals, counts);
+          Object.assign(report.usage.models[0], counts, { runs: value });
+          report.tools.total_calls = value;
+        }
       }
       return result;
     });
@@ -299,8 +336,10 @@ describe('SwarmPage', () => {
     operation.mockImplementation(async (name, args) => {
       const result = await original(name, args);
       if (name === 'swarms.usage') {
-        result.usage.usage = null;
-        result.usage.tools = null;
+        for (const report of [result.usage, ...result.usage.participants]) {
+          report.usage = null;
+          report.tools = null;
+        }
       }
       return result;
     });

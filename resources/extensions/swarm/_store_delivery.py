@@ -111,6 +111,7 @@ def _prepare_automatic_delivery(
     expected_epoch: int,
     boundary: int | None,
     wake_only: bool,
+    announce: bool = True,
 ) -> Json:
     def operation(connection: sqlite3.Connection) -> Json:
         _assert_epoch(connection, swarm_id, expected_epoch)
@@ -145,7 +146,8 @@ def _prepare_automatic_delivery(
                 ).fetchone()[0]
             )
             wake = (
-                newest > int(participant["wake_announced_seq"] or 0)
+                announce
+                and newest > int(participant["wake_announced_seq"] or 0)
                 and not participant["wake_pending"]
                 and participant["state"] in {"idle"}
                 and any(
@@ -204,7 +206,8 @@ def _prepare_automatic_delivery(
         epoch_value = int(epoch["epoch"])
         announced = int(participant["wake_announced_seq"] or 0)
         wake = bool(
-            newest > announced
+            announce
+            and newest > announced
             and not participant["wake_pending"]
             and any(settings[row["route_class"]]["wake_idle"] for row in pending)
             and participant["state"] in {"idle"}

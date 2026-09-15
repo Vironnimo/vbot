@@ -772,3 +772,20 @@ async def test_scoped_tools_repair_arguments_and_accept_matching_identity(board,
         context, {**arguments, "swarm_id": "foreign"}, allowed_tools=[name]
     )
     assert not rejected["ok"]
+
+
+@pytest.mark.asyncio
+async def test_post_survives_resume_preparation_failure(board, monkeypatch):
+    sid = board.swarm["id"]
+    await board.service.operation("swarms.stop", {"swarm_id": sid, "request_id": "stop"})
+
+    async def fail_open(*args, **kwargs):
+        raise RuntimeError("test-owned preparation failure")
+
+    monkeypatch.setattr(board.groups, "open_group", fail_open)
+    result = await board.service.operation(
+        "board.post", {"swarm_id": sid, "text": "retained followup", "request_id": "post"}
+    )
+    assert result["resume_failed"] is True
+    entries = await board.store.read_human_posts(sid, message_id=result["post_id"])
+    assert entries.entries[0]["text"] == "retained followup"

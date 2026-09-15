@@ -190,7 +190,6 @@ async def test_linked_board_posts_return_current_question_revision(board):
         {
             "action": "post",
             "text": f"Consider [alternatives](#decision/{qid}/3)",
-            "request_id": "link",
         },
     )
     assert post["ok"]

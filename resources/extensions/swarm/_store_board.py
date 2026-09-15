@@ -48,7 +48,14 @@ def _post_message(
     expected_epoch: int | None,
 ) -> Json:
     def operation(connection: sqlite3.Connection) -> Json:
-        _assert_mutable(connection, swarm_id)
+        if author_kind == "user":
+            row = connection.execute("SELECT state FROM swarms WHERE id=?", (swarm_id,)).fetchone()
+            if row is None:
+                raise SwarmStoreError("swarm_not_found")
+            if row["state"] == "deleting":
+                raise SwarmStoreError("swarm_closed")
+        else:
+            _assert_mutable(connection, swarm_id)
         if expected_epoch is not None:
             _assert_epoch(connection, swarm_id, expected_epoch)
         sender = (

@@ -201,9 +201,14 @@ terminal outcome. The page's active Run indicator uses exact canonical Run
 inspection, not the presence of a retained Run id.
 
 The Store's integer lifecycle epoch and the temporary facade's opaque admission
-epoch are different identities and are linked explicitly. Stop closes admission;
-retained records are not deleted. Startup recovery marks unfinished execution
-interrupted and never admits work automatically. Stale callbacks cannot reuse an
+epoch are different identities and are linked explicitly. Stop closes execution
+admission; the Board still accepts user posts. A new human Board post after Stop or
+startup interruption persists first, then resumes the same participant Sessions.
+Posting serializes with Stop/Resume/delete so a message sent during draining waits
+for it to finish. Resume prepares delivery without scheduling an additional
+automatic wake. Replaying a saved post never restarts a later stopped execution;
+participant Tools retain their epoch checks. Records are not deleted. Startup
+recovery marks unfinished execution interrupted and never admits work automatically. Stale callbacks cannot reuse an
 old registration to start or mutate new execution.
 
 Explicit Resume may continue inactive peers in an open epoch while
@@ -354,3 +359,9 @@ Activity/reconciliation suites. The generic bridge only relays the replay
 watermark (`ExtensionPage.test.js`, `test_extensions_methods.py`).
 Activity and Board reuse the same compact participant chips; Activity retains
 all Swarm participants and marks the selected Session with a pressed state.
+
+The human page omits the Delivery audit tab; internal events and canonical receipts
+remain available for diagnosis. Usage requests one combined group report, including
+participant breakdowns, and shares an in-flight request across refreshes. It shows
+refresh progress while retaining the last report. Evidence: `test_swarm_lifecycle.py`,
+`SwarmPage.test.activity-and-usage.test.js`, `SwarmPage.test.reconciliation.test.js`.
