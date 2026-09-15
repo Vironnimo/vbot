@@ -323,6 +323,13 @@ def _get_swarm(db: SwarmDatabase, swarm_id: str) -> Json:
         "AS pending_count FROM participants p WHERE p.swarm_id=? ORDER BY p.ordinal",
         (swarm_id,),
     ).fetchall()
+    memberships: dict[str, list[str]] = {}
+    for membership in connection.execute(
+        "SELECT m.participant_id,m.discussion_id FROM memberships m "
+        "JOIN discussions d ON d.id=m.discussion_id WHERE d.swarm_id=? ORDER BY d.sequence",
+        (swarm_id,),
+    ):
+        memberships.setdefault(membership["participant_id"], []).append(membership["discussion_id"])
     main = connection.execute(
         "SELECT id FROM discussions WHERE swarm_id=? AND is_main=1", (swarm_id,)
     ).fetchone()
@@ -359,7 +366,10 @@ def _get_swarm(db: SwarmDatabase, swarm_id: str) -> Json:
                 (swarm_id,),
             ).fetchone()
         ),
-        "participants": [dict(value) for value in participants],
+        "participants": [
+            {**dict(value), "discussion_ids": memberships.get(value["id"], [])}
+            for value in participants
+        ],
     }
 
 

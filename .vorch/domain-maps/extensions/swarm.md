@@ -274,9 +274,14 @@ host-provided timezone and separates the author/time header from the body.
 Board and participant lists share ID-derived avatar colors and name initials;
 the full author name remains visible independently of color. The presentation is
 stable across page remounts (`SwarmPage.test.js`) and does not change saved posts.
-The wrapping participant roster and modal post action sit above the messages;
-the complete User Prompt stays in the header, status beside the tabs, and the
-Swarm id under Usage (SwarmPage.test.js).
+The header shows the snapshot Swarm name and state. The Board holds the single
+collapsible user request and working directory. Compact participant buttons show
+names, identity colors and execution dots; Model/status/pending details are in
+hover/focus tooltips. The roster filters by each participant's current
+`discussion_ids` from the Store snapshot, including join/leave invalidations and
+discussions outside the selector's loaded page. Pings alone do not join a peer.
+Post backgrounds and left borders share the stable author color. The Swarm id
+stays under Usage (`SwarmPage.test.js`, `test_swarm_store_board.py`).
 Usage totals and participant Model rows abbreviate large counts with k/mio/mrd
 and at most one locale-formatted decimal (SwarmPage.test.js).
 The Usage page combines measured and estimated input/output counts as "Tokens used"
@@ -327,3 +332,16 @@ WikiPanel.svelte owns free page drafts, bounded content loading, search, version
 Mutations are payload-bound and idempotent. History retains structural snapshots and each author's position changes; list/read/history cursors bind query and event watermark. Reads include current/snapshot revisions, own position, participation and bounded alternatives/reasons. Changes invalidate the human page without messaging or waking Agents. Versioned `#decision/<question_id>/<revision>` links open the current question; Board/Inbox/automatic delivery attach bounded current summaries for linked questions when Decisions is enabled, so an old post exposes changed context. `DecisionsPanel.svelte` submits operational edits explicitly and protects drafts across navigation and conflicts. Tests: `test_swarm_decisions.py`, `SwarmDecisions.test.js`, and `swarm_decision_cases.py` through the production Luna probe.
 
 Wiki search and decision submissions use explicit button callbacks and Enter handlers because the isolated page sandbox blocks native form submission. The page does not require `allow-forms`. Component tests cover these callbacks; built-browser checks cover the sandbox behavior.
+
+Swarm Activity retains one shared Chat event projection, compresses deltas and
+flushes live updates in 33 ms batches. Initial replay is buffered through the
+server-reported `replay_through_sequence` before replacing displayed History;
+opening a long-running Session therefore does not visibly replay its old steps.
+Canonical Run Summaries retire retained live output; stale History or active
+snapshots cannot erase newer output or restart a settled subscription. In-flight
+inspection survives peer invalidations, and Thinking disclosure state belongs to
+the inspected Session. Tests: `SwarmPage.test.streaming.test.js` and the existing
+Activity/reconciliation suites. The generic bridge only relays the replay
+watermark (`ExtensionPage.test.js`, `test_extensions_methods.py`).
+Activity and Board reuse the same compact participant chips; Activity retains
+all Swarm participants and marks the selected Session with a pressed state.

@@ -33,7 +33,10 @@ describe('Swarm refresh under load', () => {
     );
     bridge.subscribeRun
       .mockRejectedValueOnce(new Error('test-owned stream failure'))
-      .mockResolvedValue({ subscription_id: 'stream-recovered' });
+      .mockResolvedValue({
+        replay_through_sequence: 0,
+        subscription_id: 'stream-recovered',
+      });
     await render(bridge);
     button('Investigate').click();
     await vi.waitFor(() => expect(button('Alpha')).toBeDefined());
@@ -51,9 +54,10 @@ describe('Swarm refresh under load', () => {
       sequence: 1,
       payload: { content_delta: 'Recovered output' },
     });
-    await tick();
-    expect(document.querySelector('.history').textContent).toContain(
-      'Recovered output',
+    await vi.waitFor(() =>
+      expect(document.querySelector('.history').textContent).toContain(
+        'Recovered output',
+      ),
     );
   });
 
@@ -169,6 +173,7 @@ describe('Swarm refresh under load', () => {
     );
     bridge.readHistory.mockResolvedValue({ messages: [] });
     bridge.subscribeRun.mockImplementation(async (_group, run) => ({
+      replay_through_sequence: 0,
       subscription_id: run,
     }));
     await render(bridge);
@@ -185,6 +190,9 @@ describe('Swarm refresh under load', () => {
       payload: { content_delta: 'Stable live output' },
     });
     await tick();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.history .streaming-text')).not.toBeNull(),
+    );
     const content = document.querySelector('.history .streaming-text');
     expect(content.textContent).toContain('Stable live output');
     const before = operation.mock.calls.filter(
@@ -224,8 +232,10 @@ describe('Swarm refresh under load', () => {
       payload: { content_delta: 'New live output' },
     });
     await tick();
-    expect(document.querySelector('.history').textContent).toContain(
-      'New live output',
+    await vi.waitFor(() =>
+      expect(document.querySelector('.history').textContent).toContain(
+        'New live output',
+      ),
     );
     expect(document.querySelector('.history').textContent).not.toContain(
       'Stale output',
