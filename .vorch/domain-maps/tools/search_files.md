@@ -36,13 +36,14 @@ convert only when their effects do not conflict with `options`. A standalone
 flag followed by `true` is accepted; `false` requires its explicit reverse flag.
 Never drop an unknown effect or silently override a separate explicit constraint.
 
-Known audit gap: malformed JSON-looking `patterns` strings can fall through
-shared scalar-array repair and execute as one regex. For example, the field text
-`["findMe\("]` is invalid JSON but a valid broad regex character class. A success
-envelope can therefore contain unrelated lines. Inspect `normalize_search_arguments`
-and `contracts.py::_normalize_array_value` together when fixing this boundary;
-preserve literal patterns supplied as members of an actual array. This is an
-observed defect, not intended search semantics.
+Before shared scalar-array conversion, the owning `patterns` normalizer recognizes
+double-quoted encoded lists. It preserves regex backslashes omitted from their
+JSON escaping, such as field text `["findMe\("]`, rather than executing the whole
+list as a broad regex character class. Broken list syntax or malformed lists with
+ambiguous JSON control/unicode escapes require correction. Valid encoded JSON and
+members of actual arrays retain their existing semantics, including literal quotes
+and character classes. Normalization also covers aliases and call wrappers before
+checking conflicts. It never strips quotes from a scalar search pattern.
 
 ## Selection Contract
 
@@ -75,8 +76,9 @@ when possible, absolute otherwise; directory rows end in `/`. Content includes
 source line numbers, and occurrence output adds byte columns. No matches is success.
 Quiet returns `matched=true/false`, or null when an incomplete scan proves neither.
 `complete` describes scan completion, not whether the returned page contains all
-matches; a successful complete scan may still return `next_offset`. Empty output
-currently says only `No results.` and does not identify the resolved search roots.
+matches; a successful complete scan may still return `next_offset`. When no result
+was observed, `searched_paths` contains absolute resolved roots with forward slashes
+and `patterns` contains the actual interpreted patterns, including literal quotes.
 When investigating false negatives, check the effective cwd, literal quote or
 escape characters in patterns, and subsequent narrowed searches before attributing
 the outcome to the native engine.
@@ -125,7 +127,8 @@ Historical grep/glob chat rows remain readable.
 
 ## Verification
 
-Primary tests: `tests/core/tools/test_search_files*.py`,
+Primary tests: `tests/core/tools/test_search_files*.py` (including encoded-list,
+literal-payload, conflict, and empty-scope regressions in `test_search_files_recovery.py`),
 `tests/cli/test_search_runtime.py`, `tests/scripts/test_search_files_access.py`,
 `tests/scripts/test_probe_search_files.py`, plus runtime, scanner, Chat, packaging,
 and Tool row integration tests. Tests execute the private native engine.

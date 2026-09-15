@@ -134,6 +134,46 @@ def search_cases() -> list[dict[str, Any]]:
     add(
         "repair_legacy", {**base, "literal": "true", "ignore_case": "false", "context": "0"}, normal
     )
+    add(
+        "repair_regex_list",
+        {**base, "patterns": r'["alpha\s+alpha"]'},
+        "src/a.py:1:alpha alpha",
+    )
+    add(
+        "preserve_array_regex",
+        {**base, "patterns": [r"\balpha\s+alpha"]},
+        "src/a.py:1:alpha alpha",
+    )
+    add(
+        "repair_list_aliases",
+        {**base, "patterns": [r"alpha\s+alpha"], "pattern": r'["alpha\s+alpha"]'},
+        "src/a.py:1:alpha alpha",
+    )
+    add(
+        "reject_broken_list",
+        {**base, "patterns": r'["alpha\s+alpha",]'},
+        error=True,
+        error_contains="malformed",
+    )
+    add(
+        "reject_ambiguous_list",
+        {**base, "patterns": r'["\balpha\s+alpha"]'},
+        error=True,
+        error_contains="malformed",
+    )
+    add(
+        "literal_call_text",
+        {**base, "patterns": ["computeDamage("], "options": ["-F"]},
+        "calls.ts:2:computeDamage(actor, target);",
+        files={"calls.ts": "// ordinary comment\ncomputeDamage(actor, target);\n"},
+    )
+    add(
+        "preserve_quotes",
+        {**base, "patterns": ['"alpha"']},
+        "No results.",
+        patterns=['"alpha"'],
+        searched_paths=["."],
+    )
     error_reasons = {
         "missing_root": "not found",
         "ambiguous_alias": "conflict",
@@ -182,6 +222,12 @@ def search_cases() -> list[dict[str, Any]]:
                 ),
                 "content": "src/a.py:2\ntests/b.PY:1",
             },
+            {
+                "id": "natural_literal_call",
+                "task": "Find lines containing the literal text computeDamage( in this directory.",
+                "files": {"calls.ts": "// ordinary comment\ncomputeDamage(actor, target);\n"},
+                "content": "calls.ts:2:computeDamage(actor, target);",
+            },
         ]
     )
     return cases
@@ -195,6 +241,7 @@ async def _case(adapter: Any, args: argparse.Namespace, case: dict) -> dict:
             "src/a.py": "alpha alpha\nbeta\nUPPER\n",
             "tests/b.PY": "alpha\n",
             "other.txt": "omega\n",
+            **case.get("files", {}),
         }.items():
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -216,7 +263,8 @@ async def _case(adapter: Any, args: argparse.Namespace, case: dict) -> dict:
                 "content": case.get("task")
                 or (
                     "Exercise this exact call, preserving intentional mistakes "
-                    "so the Tool can handle them: "
+                    "so the Tool can handle them. Preserve each value's type as well "
+                    "as its contents, including strings in array-typed fields: "
                 )
                 + json.dumps(case["arguments"]),
             },
@@ -228,6 +276,7 @@ async def _case(adapter: Any, args: argparse.Namespace, case: dict) -> dict:
                 tools=definitions,
                 thinking_effort=args.thinking_effort,
                 max_tokens=args.max_tokens or 1500,
+                **adapter.request_context_kwargs(agent_id="search-probe", session_id=root.name),
             )
         response = adapter.normalize_response(raw, model_id=args.model)
         calls = response.get("tool_calls") or []
@@ -266,9 +315,13 @@ async def _case(adapter: Any, args: argparse.Namespace, case: dict) -> dict:
             passed = passed and data.get("content") == case["content"]
         if "contains" in case:
             passed = passed and case["contains"] in data.get("content", "")
-        for field in ("matched", "next_offset"):
+        for field in ("matched", "next_offset", "patterns"):
             if field in case:
                 passed = passed and data.get(field) == case[field]
+        if "searched_paths" in case:
+            passed = passed and data.get("searched_paths") == [
+                (root / path).as_posix() for path in case["searched_paths"]
+            ]
         return {
             "case": case["id"],
             "passed": passed,
