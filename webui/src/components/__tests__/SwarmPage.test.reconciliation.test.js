@@ -78,7 +78,9 @@ describe('Swarm selection reconciliation', () => {
     });
     await render(bridge);
     button('Investigate').click();
-    const pending = () => button('Alpha')?.querySelector('small')?.textContent;
+    const pending = () =>
+      button('Alpha')?.getAttribute('aria-label') ||
+      button('Alpha')?.querySelector('small')?.textContent;
     await vi.waitFor(() => expect(pending()).toMatch(/12\s+pending/));
     for (const remaining of [8, 4, 0]) {
       pendingCount = remaining;
