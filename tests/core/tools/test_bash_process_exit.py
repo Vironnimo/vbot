@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import sys
 
 import psutil  # type: ignore[import-untyped]
@@ -20,8 +21,9 @@ from tests.core.tools.bash_helpers import shell_env_cache as shell_env_cache
 @pytest.mark.parametrize("mode", ["foreground", "background"])
 @pytest.mark.parametrize("exit_code", [0, 7])
 async def test_descendant_pipe_does_not_hide_exit_or_block_timeout(
-    manager, tmp_path, monkeypatch, mode, exit_code
+    manager, tmp_path, monkeypatch, mode, exit_code, caplog
 ):
+    caplog.set_level(logging.DEBUG, logger="vbot.tools.process_manager")
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     pid_path = tmp_path / "descendant.pid"
     command = (
@@ -54,6 +56,13 @@ async def test_descendant_pipe_does_not_hide_exit_or_block_timeout(
         assert not tracked.wait_task.cancelled()
         assert tracked.stdout_task.done() and tracked.stderr_task.done()
         assert not tracked.truncated
+        diagnostics = [
+            record
+            for record in caplog.records
+            if record.name == "vbot.tools.process_manager" and record.args == (tracked.process_id,)
+        ]
+        assert len(diagnostics) == 1
+        assert diagnostics[0].levelno == logging.DEBUG
         assert result["ok"] is True
         if mode != "background":
             assert result["data"]["exit_code"] == exit_code
