@@ -48,7 +48,7 @@ Block persistence: each scope persists ordered `layout.json` plus thin text over
 - Agent-scope prompt seeding copies current effective content once when custom prompts activate; missing agent-scope fragments read as `""` and assemble only under the enabled flag. Block layout writes are inert-tolerant (pruning contributor-gone ids is normal, never an error) and seeding preserves existing layouts without copying text overrides.
 - Backend-only briefs remain readable for internal Runs but are invisible to the System Prompt UI and never enter agent scopes.
 
-Local TTS owns managed SDK environments and verified-recipe markers under
+Local speech owns managed SDK environments and setup-completion receipts under
 `DataDirectoryLayout.speech_engines` (`<data-dir>/speech-engines/`), created only
 by explicit speech setup. These are durable installation data, not temporary
 artifacts; formats/lifecycle belong to `speech_setup.py` (`model_tasks/speech.md`).
