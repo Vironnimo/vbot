@@ -8,6 +8,7 @@ import {
 import { setApplicationTimeZone } from '../../../../webui/src/lib/dateTimePrefs.svelte.js';
 import { onMount, tick } from 'svelte';
 import { createExtensionPageClient } from '$lib/extensionPageClient.js';
+import { createPageRefresh } from './pageRefresh.js';
 
 export function createSwarmPageModel(host) {
   let client = $state(null);
@@ -105,6 +106,8 @@ export function createSwarmPageModel(host) {
   let directoryRequest = 0;
 
   let disposed = false;
+
+  const backgroundRefresh = createPageRefresh(() => refresh());
 
   function navigate(action) {
     if (profileEditor) return profileEditor.requestTransition(action);
@@ -335,23 +338,27 @@ export function createSwarmPageModel(host) {
       if (silent && inspected) {
         void host.activity.inspectParticipant(inspected, {
           activate: false,
-          preserve:
-            inspected.lifecycle_run_id ===
-            host.activity.history.participant.lifecycle_run_id,
+          preserve: true,
         });
       }
-      await loadDiscussions(swarm);
-      if (disposed || request !== selectionRequest) return;
-      await Promise.all([
-        loadBoard(swarm, selectedDiscussion),
-        loadEvents(swarm),
-        loadUsage(swarm),
-      ]);
       if (!disposed && request === selectionRequest && !silent)
         await client.replaceRoute(`/swarms/${id}`);
+      if (disposed || request !== selectionRequest) return;
+      await loadVisibleTab(swarm);
     } catch (cause) {
       if (!disposed && request === selectionRequest) error = cause.message;
     }
+  }
+
+  async function loadVisibleTab(swarm = selectedSwarm) {
+    if (!swarm) return;
+    if (activeTab === 'board')
+      await Promise.all([
+        loadDiscussions(swarm),
+        loadBoard(swarm, selectedDiscussion),
+      ]);
+    else if (activeTab === 'usage') await loadUsage(swarm);
+    else if (activeTab === 'audit') await loadEvents(swarm);
   }
 
   async function loadMoreProfiles() {
@@ -777,12 +784,13 @@ export function createSwarmPageModel(host) {
       if (!initialized) {
         initialized = true;
         routeSelection(next.route);
-        refresh();
+        void backgroundRefresh.run();
       } else if (next.route !== previousRoute) routeSelection(next.route);
     });
-    const offInvalidation = client.onInvalidation(() => refresh());
+    const offInvalidation = client.onInvalidation(backgroundRefresh.schedule);
     return () => {
       disposed = true;
+      backgroundRefresh.destroy();
       selectionRequest += 1;
       host.activity.destroy();
       clearTimeout(startupTimeout);
@@ -850,7 +858,11 @@ export function createSwarmPageModel(host) {
       return activeTab;
     },
     set activeTab(value) {
+      if (value === activeTab) return;
       activeTab = value;
+      void loadVisibleTab().catch((cause) => {
+        if (!disposed) error = cause.message;
+      });
     },
     get editor() {
       return editor;

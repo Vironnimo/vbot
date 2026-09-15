@@ -309,6 +309,16 @@ Management operation descriptions state each action and its continuation or revi
 
 Private UI routing: `ui/SwarmPage.svelte` composes the page; `pageModel.svelte.js` retains its management state, request generations, Board/Usage loading, mutations, and bridge lifetime, while `pageActivity.svelte.js` owns participant History/replay subscriptions and context projection. `pagePresentation.js` holds display-only count/avatar helpers. `ProfileEditor.svelte` retains profile drafts, validation, and autosave; `profilePromptPreview.svelte.js` owns preview request ordering and freshness. Adjacent `swarmPage.css` and `profileEditor.css` scope styles to their page/editor surfaces, including portaled dialogs.
 
+Background invalidations are coalesced by the Swarm-internal `ui/pageRefresh.js`:
+each mounted page/panel has one refresh in flight and at most one pending pass,
+with a fixed scheduling window that continuous traffic cannot postpone. The
+overview reloads Board, Usage, or audit data only for the visible tab; selecting
+a tab loads its current data independently of hidden reports. Activity retains
+the existing History and live subscription while its participant's Run identity
+and active state are unchanged. A new Run or terminal state reconciles History;
+subscription failures remain retryable on a later invalidation. Coverage:
+`SwarmPage.test.performance.test.js` and `SwarmPage.test.reconciliation.test.js`.
+
 WikiPanel.svelte owns free page drafts, bounded content loading, search, version history and restore. Existing pages autosave and flush before local or shell navigation; new pages save explicitly. Conflicts retain the draft and block navigation until it is saved or explicitly discarded. Invalidation refreshes discovery without replacing an open edit. The Extension-page bridge remains generic; the Wiki adds one management operation. Regression coverage includes SwarmWiki.test.js and `webui/src/components/__tests__/SwarmPage.test.js` plus the bundled-page build test.
 
 
