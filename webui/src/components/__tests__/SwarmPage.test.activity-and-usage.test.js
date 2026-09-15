@@ -163,6 +163,11 @@ describe('SwarmPage', () => {
     await new Promise((resolve) => setTimeout(resolve));
     await tick();
     button('Usage').click();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelectorAll('.table-wrap tbody tr').length,
+      ).toBeGreaterThan(0),
+    );
     await tick();
     expect(
       [...document.querySelectorAll('.usage-summary dd')].map((el) =>
@@ -207,6 +212,11 @@ describe('SwarmPage', () => {
     button('Investigate').click();
     await new Promise((resolve) => setTimeout(resolve));
     button('Usage').click();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelectorAll('.table-wrap tbody tr').length,
+      ).toBeGreaterThan(0),
+    );
     await tick();
     const rows = [...document.querySelectorAll('.table-wrap tbody tr')];
     expect(
@@ -250,6 +260,11 @@ describe('SwarmPage', () => {
     button('Investigate').click();
     await new Promise((resolve) => setTimeout(resolve));
     button('Usage').click();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelectorAll('.table-wrap tbody tr').length,
+      ).toBeGreaterThan(0),
+    );
     await tick();
     expect(
       [...document.querySelectorAll('.usage-summary dd')].map((el) =>
@@ -280,6 +295,11 @@ describe('SwarmPage', () => {
     button('Investigate').click();
     await new Promise((resolve) => setTimeout(resolve));
     button('Usage').click();
+    await vi.waitFor(() =>
+      expect(
+        document.querySelectorAll('.table-wrap tbody tr').length,
+      ).toBeGreaterThan(0),
+    );
     await tick();
     expect(
       [...document.querySelectorAll('.usage-summary dd')].map((el) =>

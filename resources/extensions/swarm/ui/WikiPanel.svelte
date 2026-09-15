@@ -9,6 +9,7 @@
   import FormField from '../../../../webui/src/components/ui/FormField.svelte';
   import MarkdownContent from '../../../../webui/src/components/chat/MarkdownContent.svelte';
   import { requestId } from './pagePresentation.js';
+  import { createPageRefresh } from './pageRefresh.js';
 
   let { swarmId, client, contentLinks, initialPageId = null } = $props();
   let entries = $state([]),
@@ -41,6 +42,14 @@
     hasChanges,
     save: persist,
   });
+  const backgroundRefresh = createPageRefresh(async () => {
+    await Promise.all([
+      refresh(),
+      selected && !editing && !historyOpen
+        ? readPage(selected.page_id)
+        : undefined,
+    ]);
+  });
   $effect(() => {
     if (editing)
       return untrack(() => client.registerAutosave(autosave.participant));
@@ -53,15 +62,13 @@
     return autosave.cancelPendingTimer;
   });
   onMount(() => {
-    void refresh();
+    void backgroundRefresh.run();
     if (initialPageId) void readPage(initialPageId);
-    return client.onInvalidation(() => {
-      void refresh();
-      if (selected && !editing && !historyOpen) void readPage(selected.page_id);
-    });
+    return client.onInvalidation(backgroundRefresh.schedule);
   });
   onDestroy(() => {
     disposed = true;
+    backgroundRefresh.destroy();
     readGeneration += 1;
     listGeneration += 1;
     historyGeneration += 1;
