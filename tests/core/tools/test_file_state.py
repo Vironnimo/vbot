@@ -112,11 +112,11 @@ def test_eviction_caps_tracked_files(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_stale_failure_text_maps_reason_to_code() -> None:
     never_code, never_message = stale_failure_text(StaleReason.NEVER_READ, Path("a.txt"))
     assert never_code == "file_not_read"
-    assert "read it first" in never_message.lower()
+    assert "a.txt" in never_message
 
     modified_code, modified_message = stale_failure_text(StaleReason.MODIFIED, Path("a.txt"))
     assert modified_code == "file_modified_since_read"
-    assert "read it again" in modified_message.lower()
+    assert "a.txt" in modified_message
 
 
 def test_path_lock_serializes_same_path(tmp_path: Path) -> None:
@@ -193,3 +193,52 @@ def test_atomic_write_failure_keeps_original_and_removes_temp(
 
     assert target.read_bytes() == b"before"
     assert list(file_root.iterdir()) == [target]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows sharing handles")
+def test_atomic_replace_recovers_from_a_real_reader_without_delete_sharing(tmp_path, monkeypatch):
+    import ctypes
+    from ctypes import wintypes
+
+    target = tmp_path / "file.txt"
+    target.write_bytes(b"before")
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create.restype = wintypes.HANDLE
+    close = kernel.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    close.restype = wintypes.BOOL
+    # A watcher may allow other reads/writes while denying rename/delete.
+    handle = create(str(target), 0x80000000, 3, None, 3, 0x80, None)
+    assert handle != ctypes.c_void_p(-1).value
+    releases = []
+    checks = []
+
+    def release_reader(delay):
+        nonlocal handle
+        releases.append(delay)
+        assert close(handle)
+        handle = None
+
+    def check_before_replace():
+        checks.append(target.read_bytes())
+        assert checks[-1] == b"before"
+
+    monkeypatch.setattr(file_state_module.time, "sleep", release_reader)
+    try:
+        atomic_write_bytes(target, b"after", before_replace=check_before_replace)
+    finally:
+        if handle is not None:
+            close(handle)
+    assert len(releases) == 1 and checks == [b"before", b"before"]
+    assert target.read_bytes() == b"after"
+    assert list(tmp_path.iterdir()) == [target]
