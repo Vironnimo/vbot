@@ -206,6 +206,18 @@ export function createSwarmPageActivity(host) {
   ) {
     if (!host.model.selectedSwarm) return;
     if (activate) host.model.activeTab = 'participants';
+    if (
+      preserve &&
+      history?.participant.id === participant.id &&
+      history.participant.lifecycle_run_id === participant.lifecycle_run_id &&
+      history.participant.run_active === participant.run_active &&
+      (currentSubscription ||
+        !participant.lifecycle_run_id ||
+        participant.run_active === false)
+    ) {
+      // Board delivery and peer activity do not change this Session's stream.
+      return;
+    }
     if (preserve) {
       activityRequest += 1;
       currentSubscription?.();
@@ -283,6 +295,8 @@ export function createSwarmPageActivity(host) {
       ) {
         currentSubscription?.();
         currentSubscription = null;
+        if (history)
+          history.participant = { ...participant, run_active: false };
         void reconcileActivity(request, swarmId, participant, true);
       }
     };
@@ -322,7 +336,10 @@ export function createSwarmPageActivity(host) {
       for (const [id, event] of buffered) receive(id, event);
     } catch (cause) {
       off();
-      if (request === activityRequest) host.model.error = cause.message;
+      if (request === activityRequest) {
+        currentSubscription = null;
+        host.model.error = cause.message;
+      }
     }
   }
   function destroy() {
