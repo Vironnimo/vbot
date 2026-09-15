@@ -51,6 +51,7 @@ async def board(tmp_path):
         data_dir=tmp_path,
         sample=None,
         resolve_agent=None,
+        resolve_tool_agent=lambda context: None,
         store_attachment=None,
         resolve_credential=None,
         set_credential=None,

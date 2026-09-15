@@ -210,6 +210,7 @@ class Runtime:
                     data_dir=self.storage.data_dir,
                     sample=self._sample_extension,
                     resolve_agent=self.agent_resolver.resolve_agent,
+                    resolve_tool_agent=self._extension_tool_agent,
                     store_attachment=self.attachment_store.store,
                     resolve_credential=self.resolve_environment_credential,
                     set_credential=self._set_extension_credential,
@@ -279,10 +280,29 @@ class Runtime:
             self.storage.remove_data_dir_credential(key)
         self.reload_environment_credentials()
 
+    def _extension_tool_agent(self, context: Any) -> Any:
+        from core.sessions import SessionAddress
+
+        address = SessionAddress(context.project_id, context.agent_id, context.session_id)
+        binding = self.chat_sessions.temporary_binding(address)
+        if binding is not None:
+            owner = context.execution_owner
+            if owner is None or (
+                owner.extension != binding.owner_name
+                or owner.group_id != binding.group_id
+                or owner.participant_id != binding.participant_id
+                or owner.generation_id != binding.generation_id
+            ):
+                raise ValueError("Temporary Tool invocation no longer owns this Session")
+            return self.agent_resolver.resolve_temporary_agent(
+                address, generation_id=binding.generation_id
+            )
+        return self.agent_resolver.resolve_agent(context.project_id, context.agent_id)
+
     async def _sample_extension(self, context: Any, request: dict[str, Any]) -> dict[str, Any]:
         from core.chat.model_resolution import resolve_agent_model_target
 
-        agent = self.agent_resolver.resolve_agent(context.project_id, context.agent_id)
+        agent = self._extension_tool_agent(context)
         provider_id, model_id, connection_id = resolve_agent_model_target(self, agent)
         adapter = self.get_adapter(ConnectionRef(provider_id, connection_id))
         options = {

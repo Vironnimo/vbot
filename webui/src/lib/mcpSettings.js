@@ -1,13 +1,4 @@
-import {
-  buildAgentTargetOptions,
-  createAgentTargetCatalogLoader,
-} from './agentTargetOptions.js';
-import {
-  extensionOperation,
-  listAgents,
-  listProjects,
-  showProject,
-} from './api.js';
+import { extensionOperation } from './api.js';
 import { t } from './i18n.js';
 
 export const MCP_REFRESH_MS = 3000;
@@ -23,7 +14,6 @@ export function mcpDraft(configuration = null) {
   const source = configuration ?? {
     id: '',
     transport: 'stdio',
-    agents: [],
     enabled: true,
   };
   return {
@@ -91,26 +81,16 @@ export function mcpCredentialNames(configuration) {
 export function createMcpSettings({
   onChange,
   operation = extensionOperation,
-  agents = listAgents,
-  projects = listProjects,
-  project = showProject,
 }) {
   let state = {
     connections: [],
-    targets: [],
     loading: true,
     busy: false,
     error: '',
-    targetError: '',
     notice: '',
     job: null,
     inspector: null,
   };
-  const targetCatalog = createAgentTargetCatalogLoader({
-    listAgents: agents,
-    listProjects: projects,
-    showProject: project,
-  });
   let disposed = false;
   let timer;
   let generation = 0;
@@ -207,22 +187,6 @@ export function createMcpSettings({
       ++inspectionGeneration;
       publish({ inspector: null });
     },
-    async loadTargets() {
-      const catalog = await targetCatalog.load();
-      if (!catalog) return;
-      const failure = catalog.agentError ?? catalog.projectError;
-      publish({
-        targets: buildAgentTargetOptions(catalog.agents, catalog.projectTeams),
-        targetError: failure
-          ? failure.message
-          : catalog.failedProjects.length
-            ? t(
-                'mcp.targetsPartial',
-                'Some Project Agents could not be loaded. Existing grants are preserved.',
-              )
-            : '',
-      });
-    },
     save(draft, original) {
       return act(async () => {
         const connection = mcpConfiguration(draft);
@@ -282,7 +246,6 @@ export function createMcpSettings({
       });
     },
     dispose() {
-      targetCatalog.dispose();
       disposed = true;
       ++generation;
       ++inspectionGeneration;

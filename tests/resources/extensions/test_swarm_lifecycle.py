@@ -317,6 +317,7 @@ async def lifecycle(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
         data_dir=tmp_path,
         sample=None,  # type: ignore[arg-type]
         resolve_agent=None,  # type: ignore[arg-type]
+        resolve_tool_agent=lambda context: None,
         store_attachment=None,  # type: ignore[arg-type]
         resolve_credential=None,  # type: ignore[arg-type]
         set_credential=None,  # type: ignore[arg-type]

@@ -78,3 +78,5 @@ Runtime preserves `get_adapter(ConnectionRef)`, token getter/extra access, Reaso
 - Invalid individual Agent/Project configs skip individually; Projects need only `project_id` + `cwd`.
 - The bootstrap Agent ensures **before** ChannelService starts so a channel targeting `main` recovers on first start.
 - Channel/Cron starts and the usage collector share the event-loop guard: wired but not started when no loop exists. Channel startup failures isolate to failed health state; Cron storage corruption disables scheduling without failing startup and protects state from overwrite.
+
+Extension Tool consumers resolve their calling Agent through `ExtensionHost.resolve_tool_agent(context)`. Runtime checks the canonical temporary Session binding against the execution owner before temporary resolution, otherwise uses normal Identity/Project resolution. MCP policy and sampling share this seam (`tests/core/runtime/test_runtime_mcp_access.py`).
