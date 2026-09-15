@@ -691,7 +691,7 @@ class ProcessManager:
         if tasks:
             _, pending = await asyncio.wait(tasks, timeout=PROCESS_OUTPUT_DRAIN_SECONDS)
             if pending:
-                _LOGGER.warning(
+                _LOGGER.debug(
                     "Process output pipes remained open after exit for process=%s; closing readers",
                     tracked.process_id,
                 )

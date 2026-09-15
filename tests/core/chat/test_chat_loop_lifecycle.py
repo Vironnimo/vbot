@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -337,7 +338,7 @@ async def test_provider_retry_is_visible_before_answer_without_leaking_error(tmp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("expected", [False, True])
-async def test_run_failures_remain_visible_in_history_once(tmp_path, expected):
+async def test_run_failures_remain_visible_in_history_once(tmp_path, expected, caplog):
     failure = (
         ProviderTimeoutError("timeout sentinel")
         if expected
@@ -364,6 +365,17 @@ async def test_run_failures_remain_visible_in_history_once(tmp_path, expected):
     assert errors[0].error_kind == ("timeout" if expected else "internal_error")
     assert "private-internal-detail" not in errors[0].content
     assert run.events[-1].payload["error_message_id"] == errors[0].id
+    diagnostics = [
+        record
+        for record in caplog.records
+        if record.name in {"vbot.chat", "vbot.runs"}
+        and record.levelno >= logging.WARNING
+        and isinstance(record.args, tuple)
+        and record.args[:1] == (run.id,)
+    ]
+    assert len(diagnostics) == 1
+    assert diagnostics[0].levelno == (logging.WARNING if expected else logging.ERROR)
+    assert bool(diagnostics[0].exc_info) is not expected
 
 
 @pytest.mark.asyncio

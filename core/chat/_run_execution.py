@@ -226,7 +226,7 @@ class RunExecution:
             start_line_extras += f" project={project_id}"
         if internal:
             start_line_extras += " internal"
-        _LOGGER.info(
+        _LOGGER.debug(
             "Run %s started (agent=%s session=%s model=%s connection=%s%s)",
             run.id,
             run.agent_id,
@@ -489,7 +489,7 @@ class RunExecution:
                 else {"success": "completed", "error": "failed", "cancelled": "cancelled"}[outcome]
             )
             run_timing = _timing_payload(run_timing_started_at, run_timing_started_perf)
-            _LOGGER.info(
+            _LOGGER.debug(
                 "Run %s %s (agent=%s session=%s duration_ms=%s iterations=%d "
                 "tool_calls=%d input_tokens=%d output_tokens=%d)",
                 run.id,
