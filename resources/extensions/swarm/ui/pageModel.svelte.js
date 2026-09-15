@@ -41,10 +41,6 @@ export function createSwarmPageModel(host) {
 
   let swarmsCursor = $state(null);
 
-  let eventsCursor = $state(null);
-
-  let events = $state([]);
-
   let usage = $state(null);
 
   let participantUsage = $state([]);
@@ -101,7 +97,9 @@ export function createSwarmPageModel(host) {
 
   let usageRequest = 0;
 
-  let eventsRequest = 0;
+  let usageFlight = null;
+
+  let usageLoading = $state(false);
 
   let directoryRequest = 0;
 
@@ -190,7 +188,6 @@ export function createSwarmPageModel(host) {
     { id: 'decisions', label: t('swarm.tabs.decisions', 'Decisions') },
     { id: 'participants', label: t('swarm.tabs.activity', 'Activity') },
     { id: 'usage', label: t('swarm.tabs.usage', 'Usage') },
-    { id: 'audit', label: t('swarm.tabs.audit', 'Delivery audit') },
   ]);
 
   const date = (value) =>
@@ -331,7 +328,6 @@ export function createSwarmPageModel(host) {
         discussions = [];
         board = [];
         boardCursor = null;
-        events = [];
         usage = null;
         participantUsage = [];
       }
@@ -363,7 +359,6 @@ export function createSwarmPageModel(host) {
         loadBoard(swarm, selectedDiscussion),
       ]);
     else if (activeTab === 'usage') await loadUsage(swarm);
-    else if (activeTab === 'audit') await loadEvents(swarm);
   }
 
   async function loadMoreProfiles() {
@@ -462,64 +457,39 @@ export function createSwarmPageModel(host) {
     }
   }
 
-  async function loadEvents(swarm = selectedSwarm) {
-    if (swarm) {
-      const selection = selectionRequest;
-      const request = ++eventsRequest;
-      const result = await call('swarms.events', {
-        swarm_id: swarm.id,
-        limit: 100,
-      });
+  async function loadUsage(swarm = selectedSwarm) {
+    if (!swarm) return;
+    const request = ++usageRequest;
+    usageLoading = true;
+    if (usageFlight?.swarmId !== swarm.id) {
+      const flight = {
+        swarmId: swarm.id,
+        promise: call('swarms.usage', { swarm_id: swarm.id }),
+      };
+      usageFlight = flight;
+    }
+    const flight = usageFlight;
+    try {
+      const report = await flight.promise;
       if (
         disposed ||
-        selection !== selectionRequest ||
-        request !== eventsRequest ||
+        request !== usageRequest ||
         selectedSwarm?.id !== swarm.id
       )
         return;
-      events = page(result);
-      eventsCursor = result.cursor ?? null;
-    }
-  }
-
-  async function loadMoreEvents() {
-    if (!selectedSwarm || !eventsCursor) return;
-    const selection = selectionRequest;
-    const request = ++eventsRequest;
-    const result = await call('swarms.events', {
-      swarm_id: selectedSwarm.id,
-      limit: 100,
-      cursor: eventsCursor,
-    });
-    if (disposed || selection !== selectionRequest || request !== eventsRequest)
-      return;
-    events = [...events, ...page(result)];
-    eventsCursor = result.cursor ?? null;
-  }
-
-  async function loadUsage(swarm = selectedSwarm) {
-    if (!swarm) return;
-    const selection = selectionRequest;
-    const request = ++usageRequest;
-    const reports = await Promise.all([
-      call('swarms.usage', { swarm_id: swarm.id }),
-      ...(swarm.participants ?? []).map(async (participant) => ({
+      usage = report;
+      participantUsage = (swarm.participants ?? []).map((participant) => ({
         participant,
-        report: await call('swarms.usage', {
-          swarm_id: swarm.id,
-          participant_id: participant.id,
-        }),
-      })),
-    ]);
-    if (
-      disposed ||
-      selection !== selectionRequest ||
-      request !== usageRequest ||
-      selectedSwarm?.id !== swarm.id
-    )
-      return;
-    usage = reports[0];
-    participantUsage = reports.slice(1);
+        report: {
+          usage: report.usage?.participants?.find(
+            (row) => row.participant_id === participant.id,
+          ),
+        },
+      }));
+    } finally {
+      if (usageFlight === flight) usageFlight = null;
+      if (!disposed && request === usageRequest) usageLoading = false;
+    }
   }
 
   async function saveProfile(profile) {
@@ -634,24 +604,35 @@ export function createSwarmPageModel(host) {
         request_id: requestId(),
       });
       await refresh();
-      const failed = (result.runs ?? []).filter((run) => run.error);
-      if (failed.length) {
-        const names = failed.map(
-          (run) =>
-            selectedSwarm?.participants?.find(
-              (participant) => participant.id === run.participant_id,
-            )?.display_name ?? run.participant_id,
-        );
-        error = t(
-          'swarm.resume.failed',
-          'Could not resume: {names}. Open their Activity and check the application logs for details.',
-          { names: names.join(', ') },
-        );
-      }
+      showResumeFailures(result);
     } catch (cause) {
       error = cause.message;
     } finally {
       pending = '';
+    }
+  }
+
+  function showResumeFailures(result) {
+    if (result.resume_failed) {
+      error = t(
+        'swarm.post.resumeFailed',
+        'Your message was posted, but the Swarm could not resume. Use Resume to try again.',
+      );
+      return;
+    }
+    const failed = (result.runs ?? []).filter((run) => run.error);
+    if (failed.length) {
+      const names = failed.map(
+        (run) =>
+          selectedSwarm?.participants?.find(
+            (participant) => participant.id === run.participant_id,
+          )?.display_name ?? run.participant_id,
+      );
+      error = t(
+        'swarm.resume.failed',
+        'Could not resume: {names}. Open their Activity and check the application logs for details.',
+        { names: names.join(', ') },
+      );
     }
   }
 
@@ -685,7 +666,6 @@ export function createSwarmPageModel(host) {
         result.swarm ??
         (await call('swarms.get', { swarm_id: selectedSwarm.id })).swarm;
       settingsOpen = false;
-      await loadEvents();
     } catch (cause) {
       error = cause.message;
     } finally {
@@ -698,7 +678,7 @@ export function createSwarmPageModel(host) {
     posting = true;
     error = '';
     try {
-      await call('board.post', {
+      const result = await call('board.post', {
         swarm_id: selectedSwarm.id,
         discussion_id: selectedDiscussion,
         text: postText,
@@ -717,8 +697,8 @@ export function createSwarmPageModel(host) {
       postRecipients = '';
       replyTo = '';
       composeOpen = false;
-      await loadBoard();
-      await loadEvents();
+      await refresh();
+      showResumeFailures(result);
     } catch (cause) {
       error = cause.message;
     } finally {
@@ -850,11 +830,8 @@ export function createSwarmPageModel(host) {
     get swarmsCursor() {
       return swarmsCursor;
     },
-    get eventsCursor() {
-      return eventsCursor;
-    },
-    get events() {
-      return events;
+    get usageLoading() {
+      return usageLoading;
     },
     get usage() {
       return usage;
@@ -996,7 +973,6 @@ export function createSwarmPageModel(host) {
     loadBoard,
     chooseDiscussion,
     openDiscussion,
-    loadMoreEvents,
     saveProfile,
     openProfile,
     deleteProfile,

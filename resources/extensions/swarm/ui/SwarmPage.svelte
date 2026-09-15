@@ -624,6 +624,9 @@
                 <dt>{t('swarm.id', 'Swarm ID')}</dt>
                 <dd>{model.selectedSwarm.id}</dd>
               </dl>
+              {#if model.usageLoading}<p role="status">
+                  {t('swarm.usage.loading', 'Updating usage...')}
+                </p>{/if}
               {#if model.usage?.usage}<dl class="usage-summary">
                   <div>
                     <dt>
@@ -669,7 +672,7 @@
                         {/each}
                       </tbody>
                     </table>
-                  </div>{/if}{:else}<EmptyState
+                  </div>{/if}{:else if !model.usageLoading}<EmptyState
                   density="compact"
                   title={t(
                     'swarm.usageEmpty',
@@ -677,39 +680,7 @@
                   )}
                 />{/if}
             </section>
-          {:else}<section class="panel" role="tabpanel">
-              <h3>{t('swarm.audit', 'Delivery audit')}</h3>
-              <ol class="audit">
-                {#each model.events as event (event.id)}<li>
-                    <strong>{event.kind}</strong><span
-                      >{event.actor} / {model.date(event.created_at)}</span
-                    >
-                    {#if event.old || event.new}<dl class="audit-change">
-                        {#if event.old}<div>
-                            <dt>{t('swarm.audit.previous', 'Previous')}</dt>
-                            <dd>{JSON.stringify(event.old)}</dd>
-                          </div>{/if}
-                        {#if event.new}<div>
-                            <dt>{t('swarm.audit.current', 'Current')}</dt>
-                            <dd>{JSON.stringify(event.new)}</dd>
-                          </div>{/if}
-                      </dl>{/if}
-                  </li>{:else}<li>
-                    <EmptyState
-                      density="compact"
-                      title={t(
-                        'swarm.auditEmpty',
-                        'No delivery changes recorded.',
-                      )}
-                    />
-                  </li>{/each}
-              </ol>
-              {#if model.eventsCursor}<Button
-                  variant="secondary"
-                  onClick={model.loadMoreEvents}
-                  >{t('swarm.audit.more', 'Load more events')}</Button
-                >{/if}
-            </section>{/if}
+          {/if}
         {:else}<section class="start">
             <p class="eyebrow">{t('swarm.start', 'Start')}</p>
             <h2>{t('swarm.startTitle', 'Give the group a goal')}</h2>
