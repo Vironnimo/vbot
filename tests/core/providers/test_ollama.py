@@ -71,6 +71,48 @@ CLOUD_REASONING_CONTENT_RESPONSE: dict[str, Any] = {
 
 class TestOllamaCloudChatWire:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "patch",
+        [
+            "*** Begin Patch\n*** Update File: file.txt\n@@\n summary();\n*** End Patch",
+            "*** Begin Patch\n*** Update File: file.txt\n@@\n+check();\n summary();\n*** End Patch",
+            '*** Update File: file.txt\n@@\n-old = "quoted";\n+new = "\\n\\t";\n context\n',
+        ],
+    )
+    async def test_patch_body_survives_cloud_response_and_chat_ingestion(
+        self, cloud_adapter: OllamaCloudAdapter, patch: str
+    ) -> None:
+        # The observed empty Update arrived as a complete function call. Neither
+        # that attempt nor a real insertion may be repaired or trimmed in transit.
+        raw = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "patch-call",
+                                "type": "function",
+                                "function": {
+                                    "name": "apply_patch",
+                                    "arguments": json.dumps({"patch": patch}),
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+        }
+        response = cloud_adapter.normalize_response(raw, model_id="deepseek-v4.1-flash")
+        message = _assistant_message_from_response("ollama-cloud/deepseek-v4.1-flash", response)
+        restored = ChatMessage.from_dict(json.loads(json.dumps(message.to_dict())))
+        assert restored.tool_calls is not None and len(restored.tool_calls) == 1
+        assert restored.tool_calls[0].arguments == {"patch": patch}
+        await cloud_adapter.aclose()
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("streaming", [False, True])
     @pytest.mark.parametrize("delta", [-1, 0, 1])
     async def test_request_body_limit_counts_exact_wire_bytes_before_io(

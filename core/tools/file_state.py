@@ -19,7 +19,8 @@ import os
 import stat
 import tempfile
 import threading
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from enum import Enum
 from pathlib import Path
@@ -34,6 +35,13 @@ FILE_STATE_GUARD_ENABLED = True
 # not grow the map without bound; oldest insertions are evicted first. A rarely
 # evicted entry only costs a harmless re-read.
 _MAX_TRACKED_FILES = 8192
+_REPLACE_RETRY_DELAYS = (0.02, 0.05, 0.1, 0.2, 0.4, 0.8)
+
+
+class _ReplaceRetriesExhaustedError(OSError):
+    def __init__(self, error: OSError, attempts_made: int):
+        super().__init__(str(error))
+        self.attempts_made = attempts_made
 
 
 class StaleReason(Enum):
@@ -135,12 +143,16 @@ def stale_failure_text(reason: StaleReason, resolved: Path) -> tuple[str, str]:
         return (
             "file_not_read",
             f"{model_path(resolved)} has not been read in this session. "
-            "Read it first before writing to it.",
+            "This Add would overwrite it. Read it first with the read Tool; shell reads "
+            "do not satisfy this check. If read is unavailable, use Update with current "
+            "matching context for the intended edits.",
         )
     return (
         "file_modified_since_read",
         f"{model_path(resolved)} has been modified since you last read it. "
-        "Read it again before writing to it.",
+        "This Add would overwrite it. Read it again with the read Tool; shell reads "
+        "do not satisfy this check. If read is unavailable, use Update with current "
+        "matching context for the intended edits.",
     )
 
 
@@ -153,13 +165,23 @@ def _stamp(resolved: Path) -> tuple[float, int] | None:
     return (info.st_mtime, info.st_size)
 
 
-def atomic_write_bytes(resolved: Path, payload: bytes, *, mode: int | None = None) -> None:
+def atomic_write_bytes(
+    resolved: Path,
+    payload: bytes,
+    *,
+    mode: int | None = None,
+    before_replace: Callable[[], None] | None = None,
+) -> None:
     """Replace ``resolved`` atomically with ``payload``.
 
     The temporary file lives beside the target so ``os.replace`` stays on one
     filesystem. Existing permission bits are copied before the replace. Any
     failure removes the temporary file and leaves the original target intact.
     An explicit mode carries source permissions to a patch move's destination.
+    With a caller-supplied precondition check, briefly retry Windows replace
+    access/sharing failures. Check all caller preconditions before every attempt;
+    never replay a write whose replacement completed or retry other I/O stages.
+    Exhausted replacement errors carry their one-based ``attempts_made`` count.
     """
     existing_mode = mode
     if existing_mode is None:
@@ -181,7 +203,18 @@ def atomic_write_bytes(resolved: Path, payload: bytes, *, mode: int | None = Non
             os.fsync(handle.fileno())
         if existing_mode is not None:
             os.chmod(temporary, existing_mode)
-        os.replace(temporary, resolved)
+        for attempt in range(len(_REPLACE_RETRY_DELAYS) + 1):
+            if before_replace is not None:
+                before_replace()
+            try:
+                os.replace(temporary, resolved)
+                break
+            except OSError as error:
+                if before_replace is None or getattr(error, "winerror", None) not in {5, 32, 33}:
+                    raise
+                if attempt == len(_REPLACE_RETRY_DELAYS):
+                    raise _ReplaceRetriesExhaustedError(error, attempt + 1) from error
+                time.sleep(_REPLACE_RETRY_DELAYS[attempt])
         temporary = None
     except BaseException:
         if descriptor >= 0:
