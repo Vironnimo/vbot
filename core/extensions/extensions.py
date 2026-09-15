@@ -722,7 +722,6 @@ class ExtensionRegistry:
         self, phase: str, extension_name: str, handler: LifecycleHandler
     ) -> None:
         """Call one lifecycle handler with fail-open isolation (logs at ``error``)."""
-        started_at = time.perf_counter()
         try:
             await invoke_extension_handler(handler)
         except Exception as exc:
@@ -732,12 +731,6 @@ class ExtensionRegistry:
                 phase,
                 exc,
                 exc_info=True,
-            )
-        finally:
-            _log_slow_extension_handler(
-                extension_name=extension_name,
-                handler_kind=phase,
-                started_at=started_at,
             )
 
     async def _invoke(
