@@ -1048,3 +1048,59 @@ async def test_participant_inspection_failure_is_not_reported_as_idle(
     monkeypatch.setattr(lifecycle.groups, "owned_run", broken)
     with pytest.raises(RuntimeError):
         await lifecycle.service.operation("swarms.get", {"swarm_id": started["swarm_id"]})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("during_stop", [False, True])
+@pytest.mark.parametrize("mode", ["all", "idle", "pull"])
+async def test_human_post_after_stop_continues_same_session_once(
+    lifecycle, tmp_path, monkeypatch, during_stop, mode
+):
+    adapter = PausedSwarmAdapter(pause_at=1)
+    lifecycle.runtime.adapter = adapter
+    profile = await single_participant_profile(lifecycle, tmp_path, mode=mode)
+    started = await lifecycle.service.operation(
+        "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
+    )
+    sid = started["swarm_id"]
+    await asyncio.wait_for(adapter.started.wait(), timeout=5)
+    before = (await lifecycle.groups.list(sid))[0]
+    draining = asyncio.Event()
+    release = asyncio.Event()
+    close = lifecycle.groups.close_group
+
+    async def delayed_close(*args, **kwargs):
+        draining.set()
+        await release.wait()
+        return await close(*args, **kwargs)
+
+    if during_stop:
+        monkeypatch.setattr(lifecycle.groups, "close_group", delayed_close)
+    stop = asyncio.create_task(
+        lifecycle.service.operation("swarms.stop", {"swarm_id": sid, "request_id": "stop"})
+    )
+    if during_stop:
+        await asyncio.wait_for(draining.wait(), timeout=5)
+    else:
+        await stop
+    arguments = {"swarm_id": sid, "text": "continue-sentinel", "request_id": "post"}
+    post = asyncio.create_task(lifecycle.service.operation("board.post", arguments))
+    if during_stop:
+        await asyncio.sleep(0)
+        assert not post.done()
+        release.set()
+    await stop
+    result = await post
+    assert len(result["runs"]) == 1
+    await lifecycle.runtime.chat_run_manager.get(result["runs"][0]["run_id"]).wait()
+    after = (await lifecycle.groups.list(sid))[0]
+    assert after.address == before.address and after.generation_id == before.generation_id
+    assert "continue-sentinel" in str(adapter.requests[1]["messages"])
+    history = lifecycle.runtime.chat_sessions.get(after.address).load()
+    assert len([message for message in history if message.role == "user"]) == 1
+    await lifecycle.service.operation("swarms.stop", {"swarm_id": sid, "request_id": "stop-again"})
+    replay = await lifecycle.service.operation("board.post", arguments)
+    assert replay["post_id"] == result["post_id"] and replay["replayed"]
+    snapshot = await lifecycle.service.store.get_swarm(sid)
+    assert snapshot["state"] == "cancelled"
+    assert len(lifecycle.runtime.chat_sessions.owned_runs(owner_name="swarm", group_id=sid)) == 2
