@@ -25,6 +25,52 @@ async def wiki_cases(store: Any, sid: str, pid: str) -> list[tuple[str, dict[str
         "request_id": "rename",
     }
     create_args = {"action": "create", "title": "New", "content": "", "request_id": "new"}
+    tolerance_cases = []
+    for name, content, old, new, succeeds in [
+        ("formatting", "Before\r\n“Ready” — wait…\r\nAfter", '"Ready" -- wait...', "Done", True),
+        (
+            "indentation",
+            "Before\n    First\n    Second\nAfter",
+            "First\nSecond",
+            "Changed\nSecond",
+            True,
+        ),
+        ("whitespace", "Before\nFirst   finding\nAfter", "First finding", "Verified finding", True),
+        ("ambiguous", "“Ready” and “Ready”", '"Ready"', "Done", False),
+        (
+            "changed",
+            "Start\nThe result is verified.\nEnd",
+            "Start\nThe result is pending.\nEnd",
+            "Changed",
+            False,
+        ),
+    ]:
+        fixture = await create("tolerance_" + name, content)
+        await store.wiki(
+            sid,
+            pid,
+            {
+                "action": "update",
+                "page_id": fixture["page_id"],
+                "expected_revision": 1,
+                "title": "Peer " + name,
+                "request_id": "peer-" + name,
+            },
+        )
+        tolerance_cases.append(
+            (
+                "tolerance_" + name,
+                {
+                    "action": "update",
+                    "page_id": fixture["page_id"],
+                    "expected_revision": 1,
+                    "old_text": old,
+                    "new_text": new,
+                    "request_id": "tolerance-" + name,
+                },
+                succeeds,
+            )
+        )
     return [
         ("list_default", {"action": "list"}, True),
         ("list_max", {"action": "list", "limit": 100}, True),
@@ -60,7 +106,7 @@ async def wiki_cases(store: Any, sid: str, pid: str) -> list[tuple[str, dict[str
             {
                 "action": "update",
                 "page_id": target,
-                "expected_revision": 2,
+                "expected_revision": 1,
                 "old_text": "beta",
                 "new_text": "gamma",
                 "request_id": "patch",
@@ -130,12 +176,38 @@ async def wiki_cases(store: Any, sid: str, pid: str) -> list[tuple[str, dict[str
             },
             False,
         ),
-    ]
+    ] + tolerance_cases
 
 
 async def verify_wiki_effect(
     store: Any, sid: str, pid: str, name: str, result: dict[str, Any]
 ) -> bool:
+    if name.startswith("tolerance_"):
+        suffix = name.removeprefix("tolerance_")
+        expected_content, expected_revision = {
+            "formatting": ("Before\r\nDone\r\nAfter", 3),
+            "indentation": ("Before\n    Changed\n    Second\nAfter", 3),
+            "whitespace": ("Before\nVerified finding\nAfter", 3),
+            "ambiguous": ("“Ready” and “Ready”", 2),
+            "changed": ("Start\nThe result is verified.\nEnd", 2),
+        }[suffix]
+        pages = await store.wiki(sid, pid, {"action": "list", "query": "Peer " + suffix})
+        if len(pages["entries"]) != 1:
+            return False
+        current = await store.wiki(
+            sid,
+            pid,
+            {
+                "action": "read",
+                "page_id": pages["entries"][0]["page_id"],
+            },
+        )
+        return (current["title"], current["content"], current["revision"], current["deleted"]) == (
+            "Peer " + suffix,
+            expected_content,
+            expected_revision,
+            False,
+        )
     expected = {
         "create": (1, "New", "", False),
         "create_replay": (1, "New", "", False),

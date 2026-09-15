@@ -244,9 +244,7 @@ async def test_registered_board_public_posts_pages_and_durable_read_receipt(boar
 
 @pytest.mark.asyncio
 async def test_board_discussion_join_leave_reply_and_exact_pagination(board):
-    created, _ = await call(
-        board, {"action": "create", "title": "Topic", "text": "opening"}
-    )
+    created, _ = await call(board, {"action": "create", "title": "Topic", "text": "opening"})
     discussion = created["data"]["discussion_id"]
     first, _ = await call(board, {"action": "list", "limit": 1})
     next_page, _ = await call(board, first["data"]["next_call"]["arguments"])
@@ -404,9 +402,7 @@ async def test_create_pings_opening_atomically_without_joining_recipients(board)
         board, {**arguments, "recipients": []}, tool_call_id=created_context.tool_call_id
     )
     assert conflict["error"]["code"] == "request_conflict"
-    invalid, _ = await call(
-        board, {**arguments, "recipients": [peer, "foreign"]}
-    )
+    invalid, _ = await call(board, {**arguments, "recipients": [peer, "foreign"]})
     assert invalid["error"]["code"] == "invalid_recipient"
     assert (
         await board.store.list_discussions(board.swarm["id"], peer)
@@ -418,9 +414,7 @@ async def test_create_pings_opening_atomically_without_joining_recipients(board)
 
 @pytest.mark.asyncio
 async def test_reply_uses_owned_message_discussion_and_rejects_contradiction(board):
-    created, _ = await call(
-        board, {"action": "create", "title": "Topic", "text": "Opening"}
-    )
+    created, _ = await call(board, {"action": "create", "title": "Topic", "text": "Opening"})
     topic = created["data"]
     arguments = {
         "action": "post",
@@ -442,9 +436,7 @@ async def test_reply_uses_owned_message_discussion_and_rejects_contradiction(boa
         peer=1,
     )
     assert mismatch["error"]["code"] == "reply_discussion_mismatch"
-    missing, _ = await call(
-        board, {**arguments, "reply_to": "foreign"}, peer=1
-    )
+    missing, _ = await call(board, {**arguments, "reply_to": "foreign"}, peer=1)
     assert missing["error"]["code"] == "message_not_found"
     assert (
         len(
