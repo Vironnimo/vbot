@@ -23,7 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
-dependencies = ["psutil", "pillow>=12.3,<13", "mcp==2.1.1", "httpx", "idna>=3,<4", "curl_cffi>=0.7,<1", "pyyaml", "croniter", "python-dateutil", "tzdata", "tzlocal>=5,<6", "beautifulsoup4", "pypdf>=6,<7", "sqlite-vec>=0.1.9,<0.2", "pathspec>=1.1", "jsonschema>=4.25,<5", "tiktoken>=0.13,<1", "websockets>=14,<18", "pyte>=0.8.2,<0.9", "pywinpty>=3,<4; sys_platform == 'win32'", "ptyprocess>=0.7,<1; sys_platform != 'win32'"]
+dependencies = ["psutil", "pillow>=12.3,<13", "mcp==2.1.1", "httpx", "idna>=3,<4", "curl_cffi>=0.7,<1", "pyyaml", "croniter", "python-dateutil", "tzdata", "tzlocal>=5,<6", "beautifulsoup4", "pypdf>=6,<7", "sqlite-vec>=0.1.9,<0.2", "pathspec>=1.1", "jsonschema>=4.25,<5", "tiktoken>=0.13,<1", "websockets>=15,<18", "pyte>=0.8.2,<0.9", "pywinpty>=3,<4; sys_platform == 'win32'", "ptyprocess>=0.7,<1; sys_platform != 'win32'"]
 
 [project.scripts]
 vbot = "cli.main:main"
@@ -47,10 +47,11 @@ desktop = ["pywebview", "pyopen-wakeword>=1.1,<2", "sounddevice", "soxr>=0.5,<2"
 dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "types-jsonschema", "types-python-dateutil", "hatchling", "pytest-xdist", "pytest-timeout", "respx", "fastapi", "uvicorn[standard]", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart", "psutil", "numpy", "soxr>=0.5,<2", "av>=18,<19", "pystray>=0.19.5,<0.20; sys_platform == 'win32'"]
 
 [tool.hatch.build.targets.sdist]
-exclude = ["/archive"]
+exclude = ["/archive", "**/node_modules/**"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["core", "server", "cli", "desktop"]
+exclude = ["**/node_modules/**"]
 
 [tool.vbot.native-dependencies]
 ripgrep = "resources/ripgrep.lock.json"
