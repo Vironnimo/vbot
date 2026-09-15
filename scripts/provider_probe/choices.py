@@ -129,11 +129,6 @@ BASH_CASES = (
     "top_foreground_env_one",
     "top_foreground_env_many",
     "top_foreground_all_multiline",
-    "top_auto_default",
-    "top_auto_zero",
-    "top_auto_background_after",
-    "top_auto_timeout",
-    "top_auto_all",
     "top_background",
     "top_background_workdir",
     "top_background_timeout",
@@ -141,12 +136,8 @@ BASH_CASES = (
     "top_background_all",
     "sub_foreground_default",
     "sub_foreground_unbounded",
-    "sub_foreground",
     "sub_foreground_description",
     "sub_foreground_all",
-    "sub_auto_default",
-    "sub_auto_zero",
-    "sub_auto_all",
 )
 
 

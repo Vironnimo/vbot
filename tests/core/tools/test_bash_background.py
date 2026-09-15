@@ -159,6 +159,7 @@ async def test_background_after_expiry_triggers_background_completion_when_trigg
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(bash_module, "FOREGROUND_HANDOFF_SECONDS", 0.01)
     calls: list[dict[str, Any]] = []
     trigger_called = asyncio.Event()
 
@@ -193,8 +194,7 @@ async def test_background_after_expiry_triggers_background_completion_when_trigg
         context,
         {
             "command": "import time; print('yield-marker'); time.sleep(0.2)",
-            "mode": "auto",
-            "background_after_seconds": 0.01,
+            "mode": "foreground",
         },
         manager,
         trigger_service=MockTriggerService(),
