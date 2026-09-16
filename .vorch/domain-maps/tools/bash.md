@@ -4,6 +4,8 @@ Runs host shell commands and streams foreground stdout/stderr into the Run timel
 
 `bash.py` owns execution and cancellation coordination. Internal `_bash_environment.py` owns the cached host environment and login probe; `_bash_results.py` owns completion/handoff result shaping and durable background-status projection.
 
+Windows PATH refresh expands registry values marked `REG_EXPAND_SZ` before combining machine/user paths; literal registry strings remain unchanged (`test_bash_environment.py`).
+
 ## Interfaces
 
 - Tool name: `bash`
