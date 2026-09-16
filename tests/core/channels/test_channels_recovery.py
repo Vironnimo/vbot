@@ -562,3 +562,30 @@ async def test_channel_service_keeps_attempt_count_without_healthy_run(
     service.stop()
     await asyncio.wait_for(blocking[-1].stopped.wait(), timeout=1)
     await asyncio.sleep(0)
+
+
+def test_configuration_save_failure_keeps_existing_adapter_running(tmp_path, monkeypatch):
+    storage = ChannelStorage(tmp_path)
+    original = make_config(enabled=True)
+    storage.save(original)
+    service = make_service(tmp_path)
+    monkeypatch.setattr(service, "_is_running", lambda _id: True)
+    monkeypatch.setattr(service, "_preflight_adapter_start", lambda _config: None)
+
+    def forbidden_stop(*args, **kwargs):
+        raise AssertionError("a failed save must not stop the running adapter")
+
+    def fail_save(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(service, "stop_channel", forbidden_stop)
+    monkeypatch.setattr(service._storage, "save", fail_save)
+    with pytest.raises(OSError, match="disk full"):
+        service.update_channel(original.id, enabled=False)
+    assert storage.get(original.id).to_dict() == original.to_dict()
+
+
+def test_restart_delay_remains_bounded_after_many_failures(tmp_path):
+    service = make_service(tmp_path)
+    assert service._restart_delay_seconds(1025) <= 30
+    assert service._restart_delay_seconds(1000000) <= 30
