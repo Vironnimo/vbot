@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -123,6 +123,18 @@ class _FailedToolCallCircuitBreaker:
     def _reset(self) -> None:
         self._last_signature = None
         self._consecutive_count = 0
+
+
+@dataclass
+class _ToolProgress:
+    """Run-owned Tool budgets, preserved when the Model route changes."""
+
+    iteration_count: int = 0
+    failed_calls: _FailedToolCallCircuitBreaker = field(
+        default_factory=_FailedToolCallCircuitBreaker
+    )
+    finalization_reason: str | None = None
+    finalization_violations: int = 0
 
 
 def _tool_message_is_failure(message: ChatMessage) -> bool:
