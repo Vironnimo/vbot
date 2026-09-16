@@ -15,7 +15,7 @@ from core.utils.errors import ProviderError, VBotError
 
 
 def test_network_error_is_vbot_error_not_provider_error_and_retryable() -> None:
-    """NetworkError must not participate in provider fallback classification."""
+    """Transport errors remain retryable without becoming Provider-specific."""
     error = NetworkError("network down")
 
     assert isinstance(error, VBotError)

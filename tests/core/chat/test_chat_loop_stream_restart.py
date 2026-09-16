@@ -473,7 +473,7 @@ async def test_streaming_mode_restart_exhaustion_marks_run_interrupted(tmp_path:
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    # Initial attempt plus MAX_STREAM_RESTARTS replays, then recovery ends with
+    # The shared per-Model budget allows three attempts, then recovery ends with
     # an explicit interruption instead of a fabricated normal completion/error.
     assert len(adapter.stream_requests) == 3
     assert run.status == RunStatus.INTERRUPTED

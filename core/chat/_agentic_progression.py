@@ -14,7 +14,6 @@ from core.chat._request_builder import _run_prompt_method
 from core.chat._run_state import _RequestState
 from core.chat._step_outcomes import (
     MAX_IDENTICAL_FAILED_TOOL_CALLS,
-    MAX_STREAM_CONTINUATIONS,
     MAX_TOOL_FINALIZATION_VIOLATIONS,
     STREAM_RECOVERY_NOTE,
     TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
@@ -153,8 +152,7 @@ class AgenticProgression:
             session_usage = aggregate_session_usage(context.session_snapshot.messages)
             run.terminal_payload_extras["session_usage"] = session_usage
         tool_iteration_count = 0
-        stream_continuation_count = 0
-        interruption_chain: list[ChatMessage] = []
+        interruption_chain = context.interruption_chain
         emitted_change_stats: dict[str, object] | None = None
         failed_tool_call_breaker = _FailedToolCallCircuitBreaker()
         tool_finalization_reason: str | None = None
@@ -357,6 +355,7 @@ class AgenticProgression:
                             continuation_tracker=context.continuation_tracker,
                             output_cwd=output_cwd,
                             provider_id=target.provider_id,
+                            recovery=context.recovery,
                         )
                 except ProviderRequestTooLargeError:
                     smaller = await _CHAT_TRANSFORM_WORKERS.run(
@@ -369,6 +368,12 @@ class AgenticProgression:
                         raise
                     messages_for_request = smaller
                     continue
+                except RunInterruptedError as exc:
+                    if exc.result is None and interruption_chain:
+                        exc.result = _combined_interrupted_result(
+                            interruption_chain, output_cwd=output_cwd
+                        )
+                    raise
                 break
             # This is the sole mutation point for the Iteration count: one
             # completed request/response pair, independent of how many Tool
@@ -511,6 +516,8 @@ class AgenticProgression:
                     interruption_chain.append(assistant_message)
 
                 if not assistant_message.tool_calls:
+                    if assistant_step.failure is not None:
+                        raise assistant_step.failure
                     if preserved_cancelled_output:
                         # The already visible response is durable; end the turn
                         # without new provider work (no auto-compaction). The Run
@@ -525,9 +532,8 @@ class AgenticProgression:
                             ),
                         )
                     if recovery == "continue":
-                        if stream_continuation_count >= MAX_STREAM_CONTINUATIONS:
-                            raise RunInterruptedError(
-                                assistant_message.interruption_cause or "internal",
+                        if not context.recovery.available(target.model_reference):
+                            raise context.recovery.exhausted(
                                 result=_combined_interrupted_result(
                                     interruption_chain,
                                     output_cwd=output_cwd,
@@ -535,7 +541,6 @@ class AgenticProgression:
                             )
                         await session.add_note_async(recovery_note or STREAM_RECOVERY_NOTE)
                         await context.session_snapshot.refresh(session)
-                        stream_continuation_count += 1
                         continue
                     terminal_error = _terminal_outcome_error(
                         terminal_outcome,
@@ -545,7 +550,6 @@ class AgenticProgression:
                         raise terminal_error
                     break
 
-                stream_continuation_count = 0
                 finalization_violation = tool_finalization_reason is not None
                 finalization_request_reason: str | None = None
                 tool_limit_reached = (
@@ -622,6 +626,7 @@ class AgenticProgression:
                             )
                             media_outputs = []
                         else:
+                            context.recovery.reset()
                             tool_iteration_count += 1
                             tool_messages, media_outputs = await _dispatch_tool_calls(
                                 tool_dispatch_context,

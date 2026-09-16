@@ -302,13 +302,12 @@ async def test_child_loop_shares_the_reflection_service(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_provider_retry_is_visible_before_answer_without_leaking_error(tmp_path):
     class RetryingAdapter(StubAdapter):
-        async def send(self, messages, *, model_id, **kwargs):
-            attempts = 0
+        attempts = 0
 
+        async def send(self, messages, *, model_id, **kwargs):
             async def request():
-                nonlocal attempts
-                attempts += 1
-                if attempts == 1:
+                self.attempts += 1
+                if self.attempts == 1:
                     raise ProviderTimeoutError("private-provider-detail")
                 return await super(RetryingAdapter, self).send(
                     messages, model_id=model_id, **kwargs
@@ -327,7 +326,7 @@ async def test_provider_retry_is_visible_before_answer_without_leaking_error(tmp
     assert [item["state"] for item in status] == ["waiting", "retrying", "waiting", "finished"]
     assert status[1]["error_kind"] == "timeout"
     assert status[1]["attempt"] == 2
-    assert status[1]["max_attempts"] == 4
+    assert status[1]["max_attempts"] == 6
     assert "private-provider-detail" not in str(status)
     assert run.iteration_count == 1
     assert not any(
@@ -368,7 +367,7 @@ async def test_run_failures_remain_visible_in_history_once(tmp_path, expected, c
     diagnostics = [
         record
         for record in caplog.records
-        if record.name in {"vbot.chat", "vbot.runs"}
+        if record.name == "vbot.runs"
         and record.levelno >= logging.WARNING
         and isinstance(record.args, tuple)
         and record.args[:1] == (run.id,)

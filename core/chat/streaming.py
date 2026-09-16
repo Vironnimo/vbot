@@ -29,6 +29,7 @@ from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     REASONING_DELTA_EVENT,
     TOOL_CALL_DELTA_EVENT,
+    RunInterruptedError,
 )
 from core.utils.errors import ProviderError, VBotError
 
@@ -97,13 +98,13 @@ def decide_stream_recovery(
     whole stream while restarts remain and interrupts when that budget is
     exhausted; anything else fails. Once answer text has escaped, the stream is
     never replayed and accumulated content is preserved as an interrupted
-    Assistant boundary for same-Run continuation.
+    Assistant boundary. Transient failures permit same-Run continuation; fatal
+    failures are raised after preserving that boundary.
 
     A rate-limit failure with a configured model-fallback chain fails
     immediately (advancing the chain) instead of burning same-model restarts:
-    the adapter already retried with backoff inside this attempt, and quota
-    pressure rarely clears within seconds. Without a chain the restart budget
-    applies unchanged.
+    quota pressure rarely clears within seconds. Without a chain the shared
+    Chat budget and Retry-After backoff apply.
     """
     if finish_received:
         return StreamRecoveryAction.ACCEPT_COMPLETE
@@ -119,13 +120,15 @@ def decide_stream_recovery(
                 return StreamRecoveryAction.RESTART
             # A retryable Provider failure still belongs to the Run-local Model
             # fallback policy once same-Model recovery is exhausted. Transport
-            # and timeout failures have no useful alternate Model route and
-            # therefore remain explicit interruptions.
+            # and timeout failures become interruptions, which can also advance
+            # the configured chain before ending the Run.
             if _is_model_fallback_trigger(error):
                 return StreamRecoveryAction.FAIL
             return StreamRecoveryAction.INTERRUPT
         return StreamRecoveryAction.FAIL
-    return StreamRecoveryAction.PRESERVE_PARTIAL
+    if _is_stream_restartable_error(error) or _is_streaming_fallback_error(error):
+        return StreamRecoveryAction.PRESERVE_PARTIAL
+    return StreamRecoveryAction.FAIL
 
 
 def _is_streaming_fallback_error(error: Exception) -> bool:
@@ -159,9 +162,9 @@ def _is_stream_restartable_error(error: Exception) -> bool:
 def _is_model_fallback_trigger(error: Exception) -> bool:
     """Whether a propagated error should switch the agent to its fallback model.
 
-    Only a retryable ``ProviderError`` (provider-specific and transient). A
-    ``NetworkError`` is deliberately excluded — it is not provider-specific, so
-    switching models would not help.
+    Retryable Provider errors propagate directly. Exhausted transport failures
+    instead become RunInterruptedError, preserving their terminal cause when no
+    configured fallback is available.
     """
     return isinstance(error, ProviderError) and error.retryable
 
@@ -190,17 +193,20 @@ def should_advance_model_fallback_chain(error: Exception) -> bool:
     """Whether a failed attempt should advance to the next fallback-chain candidate.
 
     Advances on retryable ``ProviderError`` failures (transient and
-    provider-specific — the adapter's own retries are already exhausted by the
-    time errors propagate here) and on fatal errors that are clearly
+    provider-specific), exhausted provider/network/timeout interruptions, and
+    fatal errors that are clearly
     model-scoped (404 or unknown-model wording): the binding itself is dead, so
     the next candidate is the only sensible recovery.
 
-    Never advances on ``NetworkError`` (not a ``ProviderError`` — connectivity
-    is route-independent), auth failures (account-wide), streaming-unsupported,
+    Raw ``NetworkError`` must first exhaust same-Model recovery. A configured
+    route may use a different host, so its normalized interruption can advance.
+    Never advances on auth failures (account-wide), streaming-unsupported,
     or any other fatal class (billing, permission, context/token limits,
     content policy) where an identical-shaped retry on another model either
     fails again or silently changes the outcome's meaning.
     """
+    if isinstance(error, RunInterruptedError):
+        return error.cause in {"provider", "network", "timeout"}
     if not isinstance(error, ProviderError):
         return False
     if isinstance(error, (ProviderAuthError, ProviderStreamingUnsupportedError)):
@@ -645,17 +651,19 @@ async def iter_with_chunk_timeout(
     *,
     timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
     progress_timeout_seconds: float | None = STREAM_PROGRESS_TIMEOUT_SECONDS,
+    deadline: float | None = None,
 ) -> AsyncIterator[JsonObject]:
     """Yield stream chunks with separate transport and Model-progress timeouts.
 
-    A ``timeout_seconds`` of ``None`` disables the stall guard entirely — used
-    for local/loopback providers whose prefill can be silent for minutes (see
+    Chat disables both stall windows for local/loopback providers whose prefill
+    can be silent for minutes (see
     :func:`is_local_provider_base_url`). Provider heartbeats reset the transport
     window but not ``progress_timeout_seconds``: OpenAI-compatible gateways may
     buffer a complete Tool Call while sending SSE comments, so those comments
     prove the request is alive without pretending the Model produced a delta.
+    An optional monotonic deadline bounds recovery regardless of fresh deltas.
     """
-    if timeout_seconds is None and progress_timeout_seconds is None:
+    if timeout_seconds is None and progress_timeout_seconds is None and deadline is None:
         async for chunk in source:
             yield chunk
         return
@@ -667,12 +675,16 @@ async def iter_with_chunk_timeout(
             progress_timeout_seconds,
         )
         wait_timeout = _minimum_timeout(timeout_seconds, progress_remaining)
+        if deadline is not None:
+            wait_timeout = _minimum_timeout(wait_timeout, max(0.0, deadline - time.monotonic()))
         try:
             chunk = await asyncio.wait_for(iterator.__anext__(), timeout=wait_timeout)
         except StopAsyncIteration:
             return
         except TimeoutError as exc:
             await _close_async_iterator(iterator)
+            if deadline is not None and time.monotonic() >= deadline:
+                raise StreamingProgressTimeoutError("Model recovery time budget exhausted") from exc
             if (
                 progress_timeout_seconds is not None
                 and time.monotonic() - last_progress_at >= progress_timeout_seconds

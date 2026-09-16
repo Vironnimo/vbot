@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from collections.abc import AsyncIterator
@@ -12,6 +13,11 @@ import pytest
 from core.chat import ChatMessage
 from core.chat._message_history import effective_compaction_messages
 from core.chat.messages import COMPACTION_SKILL_NOTE_PREFIX, COMPACTION_SUMMARY_NOTE_PREFIX
+from core.chat.streaming import (
+    StreamingChunkTimeoutError,
+    StreamingProgressTimeoutError,
+    iter_with_chunk_timeout,
+)
 from core.chat.wire_shaping import _embed_notes_into_request
 from core.compaction import (
     MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
@@ -882,3 +888,30 @@ async def test_compaction_engine_leaves_context_projection_for_chat() -> None:
 
     assert result.usage is not None
     assert set(result.usage) == {"compacted_token_count"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("heartbeats", [False, True])
+async def test_compaction_stalled_stream_is_bounded_and_closed(monkeypatch, heartbeats):
+    closed = asyncio.Event()
+
+    class StalledAdapter:
+        async def stream(self, *args, **kwargs):
+            try:
+                while True:
+                    if heartbeats:
+                        yield {"type": "heartbeat"}
+                        await asyncio.sleep(0.005)
+                    else:
+                        await asyncio.Event().wait()
+            finally:
+                closed.set()
+
+    def bounded(source):
+        return iter_with_chunk_timeout(source, timeout_seconds=0.05, progress_timeout_seconds=0.15)
+
+    monkeypatch.setattr("core.compaction.compaction.iter_with_chunk_timeout", bounded)
+    expected = StreamingProgressTimeoutError if heartbeats else StreamingChunkTimeoutError
+    with pytest.raises(expected):
+        await asyncio.wait_for(_send_streaming_model_request(StalledAdapter(), [], {}), 2)
+    assert closed.is_set()
