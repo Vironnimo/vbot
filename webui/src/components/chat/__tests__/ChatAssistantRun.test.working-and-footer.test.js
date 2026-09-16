@@ -406,15 +406,29 @@ describe('ChatAssistantRun run footer', () => {
     expect(document.querySelector('.run-footer__notice')).toBeNull();
   });
 
-  it('renders no notice line while the provider streams with a tiny idle time', () => {
-    const item = createAssistantRunItem({
-      status: 'running',
-      items: [],
-    });
-    item.providerHeartbeat = { idleSeconds: 0.3 };
-    mountedComponent = mountRun({ item });
+  it.each([0.3, 13, 59.9])(
+    'renders no notice line for an ordinary %ss pause',
+    (idleSeconds) => {
+      const item = createAssistantRunItem({
+        status: 'running',
+        items: [],
+      });
+      item.providerHeartbeat = { idleSeconds };
+      mountedComponent = mountRun({ item });
 
-    expect(document.querySelector('.run-footer__notice')).toBeNull();
+      expect(document.querySelector('.run-footer__notice')).toBeNull();
+    },
+  );
+
+  it('uses the live clock to reveal a long request wait without heartbeats', () => {
+    const startedAt = Date.parse('2026-09-16T12:00:00Z');
+    const item = createAssistantRunItem({ status: 'running' });
+    item.providerRequestStatus = {
+      state: 'waiting',
+      timestamp: new Date(startedAt).toISOString(),
+    };
+    mountedComponent = mountRun({ item, nowMs: startedAt + 60_000 });
+    expect(document.querySelector('.run-footer__notice')).not.toBeNull();
   });
 });
 
