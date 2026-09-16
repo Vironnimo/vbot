@@ -111,6 +111,8 @@ Mounted coverage: `components/__tests__/AudioPlayer.test.js`.
 
 Chat shows three distinct server-owned projections: last-step Provider Usage, cumulative Session Usage, and Current Context Usage (restored from History, updated from live/terminal events; badge uses `{tokens, estimated}`, tooltip exposes provenance). The frontend formats but never sums, recalculates cost, or infers missing values; cache counts are input subsets, provider-reported reasoning an output subset, absent counters stay absent, and `reasoning_turns` distinguishes no-reporting from zero.
 
+Chat has no top error strip. Run failures appear once in the timeline with full Provider payloads in the existing Details disclosure; terminal failures without an error Message use a timeline fallback until the canonical error event or Run Summary arrives. History, admission/action, command-catalog and stream errors remain visible beside the composer until their owning state clears them.
+
 Errors normalize at the transport boundary, then attach to their Session/Run/Queue operation/toast; command-catalog errors use latest-request-wins. Admission failures never become Run failures, and rendering a failure discards no recoverable history nor leaves a finished Run marked active.
 
 ## Source and tests
