@@ -139,16 +139,17 @@ def expand_recurring_timed(
     """Expand one recurring timed event into UTC (start, end) pairs.
 
     Returns occurrences overlapping the half-open window. Occurrence ends use
-    wall-clock arithmetic in the event zone, so a meeting keeps its local
-    09:00-10:00 shape even when a DST transition falls inside it.
+    wall-clock arithmetic in the event zone. A start in a DST gap is shifted
+    forward by the gap before adding its duration; ambiguous starts use the
+    first occurrence (fold=0).
     """
     duration = timedelta(minutes=duration_minutes)
     window_start_local = window_start_utc.astimezone(tz).replace(tzinfo=None)
     window_end_local = window_end_utc.astimezone(tz).replace(tzinfo=None)
     rule = _build_rrule(start_local, rrule_spec)
     candidates = rule.between(
-        window_start_local - duration,
-        window_end_local,
+        window_start_local - duration - timedelta(days=1),
+        window_end_local + timedelta(days=1),
         inc=True,
     )
 
@@ -158,7 +159,11 @@ def expand_recurring_timed(
             continue
         if naive_start < start_local:
             continue
-        local_start = naive_start.replace(tzinfo=tz)
+        # Round-trip using the pre-transition offset to resolve imaginary times
+        # before duration arithmetic (RFC 5545 section 3.3.5 / erratum 4271).
+        local_start = naive_start.replace(tzinfo=tz).astimezone(UTC).astimezone(tz)
+        if local_start.replace(tzinfo=None).isoformat() in exdates:
+            continue
         local_end = local_start + duration
         start_utc = local_start.astimezone(UTC)
         end_utc = local_end.astimezone(UTC)
@@ -195,7 +200,9 @@ def expand_recurring_allday(
         if occurrence_date.isoformat() in exdates:
             continue
         occurrence_end = occurrence_date + timedelta(days=duration_days)
-        if occurrence_end <= window_start_date or occurrence_date >= window_end_date:
+        start_utc = datetime.combine(occurrence_date, time.min, tzinfo=system_tz).astimezone(UTC)
+        end_utc = datetime.combine(occurrence_end, time.min, tzinfo=system_tz).astimezone(UTC)
+        if end_utc <= window_start_utc or start_utc >= window_end_utc:
             continue
         occurrences.append((occurrence_date, occurrence_end))
         if len(occurrences) >= max_occurrences:

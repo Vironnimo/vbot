@@ -394,6 +394,9 @@ class ChannelConversationEngine:
             _QueuedInternalPrompt(
                 conversation=conversation,
                 prompt=_format_interaction_note(conversation, restored_event),
+                route=RouteFacts(
+                    agent_id=self._config.agent_id, session_id=binding.origin_session_id
+                ),
             ),
         )
         if queued:
@@ -508,9 +511,26 @@ class ChannelConversationEngine:
             await self._process_queued_media(queued)
             return
         if isinstance(queued, _QueuedInternalPrompt):
-            route, reply_plan = await self._routing._prepare_inbound_route_async(
-                queued.conversation
-            )
+            if queued.route is None:
+                route, reply_plan = await self._routing._prepare_inbound_route_async(
+                    queued.conversation
+                )
+            else:
+                route = queued.route
+                reply_plan = self._routing._reply_plan_for(queued.conversation)
+                exists = await _CHANNEL_SESSION_WORKERS.run(
+                    self._chat_sessions.exists,
+                    _session_address(route.agent_id, route.session_id),
+                )
+                if not exists:
+                    await self._send_reply(reply_plan, _FAILED_REPLY)
+                    return
+                await _CHANNEL_SESSION_WORKERS.run(
+                    self._routing._update_session_metadata,
+                    route,
+                    queued.conversation,
+                    reply_plan,
+                )
             await self._trigger_and_relay(
                 route,
                 reply_plan,
