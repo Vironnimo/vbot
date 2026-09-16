@@ -227,3 +227,51 @@ async def test_user_cancel_before_visible_output_does_not_persist_assistant(
     assert run.status == RunStatus.CANCELLED
     assert persisted_roles(messages) == ["user"]
     assert not any(event.type == "assistant_output" for event in run.events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "worker",
+    [
+        "record_delivered",
+        "_prepare_completed_assistant",
+        "_assistant_continuation_dict",
+        "observe",
+        "project",
+    ],
+)
+async def test_cancel_during_completed_answer_preparation_preserves_visible_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, worker: str
+) -> None:
+    from core.chat._agentic_progression import _CHAT_TRANSFORM_WORKERS
+
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = CompletedStreamingStubAdapter()
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    run = await build_chat_loop(runtime, streaming=True).start_run(
+        "coder", "Hi", session_id="session-one"
+    )
+    await adapter.finish_emitted.wait()
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = _CHAT_TRANSFORM_WORKERS.run
+
+    async def pause_worker(function, *args, **kwargs):
+        if function.__name__ == worker:
+            entered.set()
+            await release.wait()
+        return await original(function, *args, **kwargs)
+
+    monkeypatch.setattr(_CHAT_TRANSFORM_WORKERS, "run", pause_worker)
+    adapter.release_stream.set()
+    await asyncio.wait_for(entered.wait(), 5)
+    assert any(event.type == "assistant_output" for event in run.events)
+    run.request_cancel(reason="user")
+    await asyncio.sleep(0)
+    release.set()
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    assert [message.content for message in messages if message.role == "assistant"] == [
+        "Complete answer"
+    ]
