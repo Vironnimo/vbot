@@ -437,3 +437,23 @@ def test_short_action_ids_skip_collisions(tmp_path, monkeypatch):
     assert first["id"] == "act_000000000001"
     assert second["id"] == "act_000000000002"
     assert service.actions._actions[first["id"]]["prompt"] == "first"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("field", "value"), [("prompt", ""), ("when", "nonsense")])
+async def test_invalid_action_validation_keeps_runtime_and_calendar_available(
+    tmp_path, field, value
+):
+    service, event, _, _ = setup(tmp_path)
+    service.actions.add(event.id, when="start", prompt="prepare", target="main")
+    path = tmp_path / "calendar" / "actions.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["actions"][0][field] = value
+    original = json.dumps(payload)
+    path.write_text(original, encoding="utf-8")
+    reopened = CalendarService(tmp_path, tz="UTC")
+    reopened.actions.start()
+    assert reopened.actions.storage_error
+    assert reopened.get_event(event.id).title == "Meeting"
+    assert path.read_text(encoding="utf-8") == original
+    await reopened.actions.aclose()
