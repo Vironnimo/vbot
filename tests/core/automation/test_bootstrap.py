@@ -243,6 +243,8 @@ async def test_failed_once_job_can_be_rearmed_for_a_later_startup(tmp_path: Path
     assert failed_service.get_job(created.id).status == "failed"
     rearmed = failed_service.enable_job(created.id)
     assert rearmed.status == "active"
+    assert rearmed.last_run_id is None
+    assert rearmed.last_session_id is None
     failed_service.activate()
     await failed_service.wait_until_idle()
     assert len(trigger.calls) == 1

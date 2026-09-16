@@ -586,3 +586,24 @@ async def test_start_compaction_run_delegates_to_command_chat_loop() -> None:
         project_id="proj",
     )
     assert result is run
+
+
+@pytest.mark.parametrize("cancel_producer", [False, True])
+async def test_removed_queue_item_does_not_cancel_its_producer_task(cancel_producer) -> None:
+    from core.runs import RunCancelledError
+
+    item = make_queued_item()
+    chat_loop = SimpleNamespace(
+        start_run=AsyncMock(side_effect=ActiveRunError("busy")),
+        queue_run=AsyncMock(return_value=item),
+    )
+    service = TriggerService(cast(Any, chat_loop), Mock(), Mock())
+    task = asyncio.create_task(service.trigger_run("coder", "queued", session_id="session-one"))
+    await asyncio.sleep(0)
+    if cancel_producer:
+        task.cancel()
+    else:
+        item.future.cancel()
+    with pytest.raises(asyncio.CancelledError if cancel_producer else RunCancelledError):
+        await task
+    assert task.cancelled() is cancel_producer
