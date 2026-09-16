@@ -24,6 +24,7 @@ from core.runs import (
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
     ToolRegistry,
+    tool_failure,
     tool_success,
 )
 from core.tools.file_state import FileReadState
@@ -855,3 +856,94 @@ async def test_streaming_rate_limit_with_chain_skips_same_model_restarts(
     assert assistant.content == "Recovered"
     assert len(primary_adapter.stream_requests) == 1
     assert len(fallback_adapter.stream_requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_fallback_keeps_consumed_tool_round_budget(tmp_path: Path) -> None:
+    calls: list[str] = []
+    tools = ToolRegistry()
+
+    def record(context, arguments):
+        calls.append(context.tool_call_id)
+        return tool_success({})
+
+    tools.register("probe", "Probe", {"type": "object"}, record)
+    primary = StubAdapter(
+        [
+            {"tool_calls": [{"id": "first", "name": "probe", "arguments": {}}]},
+            ProviderRateLimitError("switch route"),
+        ]
+    )
+    fallback = StubAdapter(
+        [
+            {"tool_calls": [{"id": "second", "name": "probe", "arguments": {}}]},
+            {"content": "done", "tool_calls": None},
+        ]
+    )
+    agent = StubAgent(
+        id="coder",
+        model="openai/primary",
+        fallback_models=["anthropic/fallback::api-key"],
+        allowed_tools=["probe"],
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=primary,
+        tools=tools,
+        adapters_by_connection={"openai:api-key": primary, "anthropic:api-key": fallback},
+        provider_ids={"openai", "anthropic"},
+    )
+    await build_chat_loop(runtime, max_tool_iterations=1).send("coder", "Work", session_id="s1")
+    assert calls == ["first"]
+    messages = runtime.chat_sessions.get(session_address("coder", "s1")).load()
+    rejected = next(
+        message
+        for message in messages
+        if message.role == "tool" and message.tool_call_id == "second"
+    )
+    assert json.loads(str(rejected.content))["error"]["code"] == "tool_iteration_limit"
+    assert fallback.requests[-1]["kwargs"]["tools"] == []
+
+
+@pytest.mark.asyncio
+async def test_identical_tool_failures_share_circuit_breaker_across_fallback(
+    tmp_path: Path,
+) -> None:
+    tools = ToolRegistry()
+    calls: list[str] = []
+
+    def fail(context, arguments):
+        calls.append(context.tool_call_id)
+        return tool_failure("unavailable", "still unavailable")
+
+    tools.register("probe", "Probe", {"type": "object"}, fail)
+    primary_responses: list[Any] = [
+        {"tool_calls": [{"id": f"call-{index}", "name": "probe", "arguments": {}}]}
+        for index in range(7)
+    ]
+    primary_responses.append(ProviderRateLimitError("switch route"))
+    primary = StubAdapter(primary_responses)
+    fallback = StubAdapter(
+        [
+            {"tool_calls": [{"id": "last", "name": "probe", "arguments": {}}]},
+            {"content": "Cannot complete", "tool_calls": None},
+        ]
+    )
+    agent = StubAgent(
+        id="coder",
+        model="openai/primary",
+        fallback_models=["anthropic/fallback::api-key"],
+        allowed_tools=["probe"],
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=primary,
+        tools=tools,
+        adapters_by_connection={"openai:api-key": primary, "anthropic:api-key": fallback},
+        provider_ids={"openai", "anthropic"},
+    )
+    await build_chat_loop(runtime).send("coder", "Work", session_id="s1")
+    assert len(calls) == 8
+    assert fallback.requests[-1]["kwargs"]["tools"] == []

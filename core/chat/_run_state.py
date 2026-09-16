@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
+from core.chat._step_outcomes import _ToolProgress
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.content_blocks import ContentBlock
 from core.chat.continuation import (
@@ -199,6 +200,7 @@ class _RunExecutionContext:
     image_budget: RequestImageBudget = field(default_factory=RequestImageBudget)
     context_usage: RequestContextUsage = field(default_factory=RequestContextUsage)
     recovery: RecoveryBudget = field(default_factory=RecoveryBudget)
+    tool_progress: _ToolProgress = field(default_factory=_ToolProgress)
     interruption_chain: list[ChatMessage] = field(default_factory=list)
     compaction_retry_after: float = 0.0
 
