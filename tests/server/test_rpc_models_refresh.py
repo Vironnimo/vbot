@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from shutil import copy2
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +13,10 @@ from core.models.database import (
     MODEL_DATABASE_SOURCE_SYSTEM,
     read_model_database_manifest,
 )
+from core.runtime import Runtime
+from core.sessions.format import write_bootstrap_marker
+from core.utils.config import Config
+from server.events import ServerEventBus
 from server.rpc import (
     model_methods,
 )
@@ -26,6 +31,51 @@ from tests.server.rpc_test_support import (
     openrouter_provider,
 )
 from tests.server.rpc_test_support import _no_models_dev_fetch as _no_models_dev_fetch
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["runtime", "system"])
+async def test_model_refresh_uses_started_runtime_storage_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    resources_dir = tmp_path / "configured-resources"
+    providers_dir = resources_dir / "providers"
+    providers_dir.mkdir(parents=True)
+    copy2(
+        Path(__file__).resolve().parents[2] / "resources/providers/openrouter.json",
+        providers_dir / "openrouter.json",
+    )
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+    write_bootstrap_marker(data_dir)
+    monkeypatch.setenv("RESOURCES_PATH", str(resources_dir))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setattr(model_methods, "refresh_models", fake_refresh_models)
+    runtime = Runtime(Config(data_dir=data_dir), safe_startup_mode="test")
+    runtime.start()
+    try:
+        registry = runtime.models
+        state = SimpleNamespace(runtime=runtime, event_bus=ServerEventBus())
+        params = {"provider_id": "openrouter", "target": target}
+        if target == "system":
+            params["expected_resources_dir"] = str(resources_dir)
+
+        response = await dispatch_rpc(state, {"method": "model.refresh_db", "params": params})
+
+        assert response["ok"] is True, response
+        assert runtime.models is registry
+        assert registry.get("openrouter", "fresh-model").name == "Fresh Model"
+        destination = (
+            runtime.storage.layout.models if target == "runtime" else resources_dir / "models"
+        )
+        other = resources_dir / "models" if target == "runtime" else runtime.storage.layout.models
+        assert (destination / "openrouter.json").is_file()
+        assert not (other / "openrouter.json").exists()
+        manifest = read_model_database_manifest(destination)
+        assert manifest is not None
+        assert manifest.source == target
+    finally:
+        await runtime.aclose()
 
 
 @pytest.mark.asyncio
@@ -69,7 +119,7 @@ async def test_normal_model_refresh_copies_complete_system_db_to_runtime_root(
     monkeypatch.setattr(model_methods, "refresh_models", fake_refresh_models)
     state = make_state(tmp_path, StubAdapter())
     state.runtime.providers.add(openrouter_provider())
-    system_models_dir = state.runtime.resources_dir / "models"
+    system_models_dir = state.runtime.storage.resources_dir / "models"
     system_models_dir.mkdir(parents=True)
     override_text = '{"models": {"fresh-model": {"name": "Manual"}}}\n'
     system_models_dir.joinpath("openrouter.overrides.json").write_text(
@@ -112,13 +162,13 @@ async def test_explicit_system_refresh_writes_only_serving_checkout(
             "params": {
                 "provider_id": "openrouter",
                 "target": "system",
-                "expected_resources_dir": str(state.runtime.resources_dir),
+                "expected_resources_dir": str(state.runtime.storage.resources_dir),
             },
         },
     )
 
     assert response["ok"] is True
-    system_models_dir = state.runtime.resources_dir / "models"
+    system_models_dir = state.runtime.storage.resources_dir / "models"
     assert system_models_dir.joinpath("openrouter.json").is_file()
     # ``artifacts/models`` is now created by ``initialize_data_directory``
     # on startup, so it may exist as an empty directory. The refresh must

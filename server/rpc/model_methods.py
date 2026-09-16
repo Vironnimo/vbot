@@ -39,7 +39,6 @@ from server.rpc.payloads import _model_detail_response, _model_response
 from server.rpc.provider_access import (
     _connection_reachability,
     _runtime_provider_credential,
-    _runtime_resources_dir,
 )
 from server.rpc.validation import _reject_unsupported, _required_string
 
@@ -329,7 +328,7 @@ async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:
                 RPC_ERROR_INVALID_REQUEST,
                 "model refresh target must be 'runtime' or 'system'",
             )
-        system_resources_dir = _runtime_resources_dir(runtime)
+        system_resources_dir = runtime.storage.resources_dir
         data_dir = Path(runtime.storage.data_dir)
         if target == _MODEL_REFRESH_TARGET_RUNTIME:
             if "expected_resources_dir" in params:
