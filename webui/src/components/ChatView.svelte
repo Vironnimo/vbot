@@ -743,43 +743,6 @@
             onSessionDeleted={navigation.handleSessionDeleted}
           />
         {/if}
-        {#if chatState.historyError || chatState.actionError || chatState.commandsError || target.activeSessionState?.actionError || target.activeSessionState?.streamError || target.activeSessionState?.error}
-          <div class="chat-view__notice-stack" aria-live="polite">
-            <div class="chat-view__measure chat-view__notice-inner">
-              {#if chatState.historyError}
-                <Banner variant="error">
-                  {t(
-                    'chat.historyLoadError',
-                    'Chat history could not be loaded.',
-                  )}
-                  {chatState.historyError}
-                </Banner>
-              {/if}
-              {#if chatState.actionError}
-                <Banner variant="error">{chatState.actionError}</Banner>
-              {/if}
-              {#if chatState.commandsError}
-                <Banner variant="error">{chatState.commandsError}</Banner>
-              {/if}
-              {#if target.activeSessionState?.actionError}
-                <Banner variant="error"
-                  >{target.activeSessionState.actionError}</Banner
-                >
-              {/if}
-              {#if target.activeSessionState?.streamError}
-                <Banner variant="warn"
-                  >{target.activeSessionState.streamError}</Banner
-                >
-              {/if}
-              {#if target.activeSessionState?.error}
-                <Banner variant="error">
-                  {t('chat.runError', 'Run failed.')}
-                  {target.activeSessionState.error}
-                </Banner>
-              {/if}
-            </div>
-          </div>
-        {/if}
         <div class="chat-view__timeline-shell">
           <ChatTimeline
             sessionState={target.activeSessionState}
@@ -920,6 +883,37 @@
               onEditQueuedMessage={actions.handleEditQueuedMessage}
             />
           </div>
+          {#if chatState.historyError || chatState.actionError || chatState.commandsError || target.activeSessionState?.actionError || target.activeSessionState?.streamError}
+            <div class="chat-view__composer-feedback" aria-live="polite">
+              <div class="chat-view__measure chat-view__feedback-inner">
+                {#if chatState.historyError}
+                  <Banner variant="error">
+                    {t(
+                      'chat.historyLoadError',
+                      'Chat history could not be loaded.',
+                    )}
+                    {chatState.historyError}
+                  </Banner>
+                {/if}
+                {#if chatState.actionError}
+                  <Banner variant="error">{chatState.actionError}</Banner>
+                {/if}
+                {#if chatState.commandsError}
+                  <Banner variant="error">{chatState.commandsError}</Banner>
+                {/if}
+                {#if target.activeSessionState?.actionError}
+                  <Banner variant="error"
+                    >{target.activeSessionState.actionError}</Banner
+                  >
+                {/if}
+                {#if target.activeSessionState?.streamError}
+                  <Banner variant="warn"
+                    >{target.activeSessionState.streamError}</Banner
+                  >
+                {/if}
+              </div>
+            </div>
+          {/if}
           <div class="chat-view__composer-shell">
             {#if actions.chatToast}
               <div

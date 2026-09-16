@@ -83,7 +83,8 @@ export function selectTrackedRunTimelineSource(
 
   if (
     isTrackedRunTerminal(sessionState, liveAssistantRun) &&
-    hasPersistedAssistantTurn(currentTurnMessages)
+    (hasPersistedRunSummary(currentTurnMessages, activeRunId) ||
+      hasPersistedAssistantTurn(currentTurnMessages))
   ) {
     if (!hasPersistedRunSummary(currentTurnMessages, activeRunId)) {
       // A History page loaded while the Run was still active can contain only

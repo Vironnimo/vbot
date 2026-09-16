@@ -1,3 +1,4 @@
+import { t } from '../i18n.js';
 import {
   mergeTimelineItems,
   stripTimelineSequence,
@@ -101,8 +102,48 @@ function buildVisibleTimelineItems(sessionState, runEvents) {
   return visibleItems.flatMap((item) =>
     isCompactionOnlyRunItem(item)
       ? item.items.map(stripTimelineSequence)
-      : [stripTimelineSequence(item)],
+      : [
+          stripTimelineSequence(item),
+          ...runFailureFallback(item, runEvents, sessionState.messages),
+        ],
   );
+}
+
+// Some failures (including early executor failures) have no persisted error
+// Message. Keep the terminal cause in the timeline until canonical History or
+// an error-message event supplies the Run's durable presentation.
+function runFailureFallback(item, runEvents, messages) {
+  if (item.type !== 'assistant_run' || item.status !== 'failed') return [];
+  const runId = item.runId;
+  const failure = runEvents.find(
+    (event) => event.run_id === runId && event.type === 'run_failed',
+  );
+  if (
+    !failure ||
+    runEvents.some(
+      (event) =>
+        event.run_id === runId &&
+        event.type === 'error_message_persisted' &&
+        event.payload?.message,
+    ) ||
+    (messages ?? []).some(
+      (message) => message.role === 'run_summary' && message.run_id === runId,
+    )
+  )
+    return [];
+  const id = `run-failure-${runId}`;
+  return [
+    {
+      id,
+      type: 'message',
+      message: {
+        id,
+        role: 'error',
+        content: failure.payload?.error || t('chat.runError', 'Run failed.'),
+        timestamp: failure.timestamp,
+      },
+    },
+  ];
 }
 
 // A standalone Compaction Run emits nothing but Compaction events, so its run
