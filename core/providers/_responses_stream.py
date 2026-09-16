@@ -13,6 +13,7 @@ from core.providers._responses_output import (
     _extract_reasoning_meta,
     _extract_reasoning_parts,
     _extract_responses_usage,
+    responses_terminal_outcome,
 )
 from core.providers._responses_values import (
     REASONING_SUMMARY_DELTA_EVENTS,
@@ -28,12 +29,6 @@ from core.providers._responses_values import (
     _response_output_items,
 )
 from core.providers.adapter import (
-    TERMINAL_OUTCOME_CONTENT_FILTERED,
-    TERMINAL_OUTCOME_ERROR,
-    TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
-    TERMINAL_OUTCOME_STOP,
-    TERMINAL_OUTCOME_TOOL_CALLS,
-    TERMINAL_OUTCOME_UNKNOWN,
     TerminalOutcome,
     normalize_tool_call_candidates,
 )
@@ -236,6 +231,14 @@ def _function_arguments_delta(
     if not isinstance(delta, str) or not delta:
         return []
     arguments_delta = _record_tool_argument_delta(tool_call_id, delta, state)
+    # The durable Responses replay carrier must agree with the canonical Call,
+    # even when the terminal event omits its output array.
+    for item in state.output_items_by_index.values():
+        if item.get("type") == "function_call" and _function_call_id(item) == tool_call_id:
+            item["arguments"] = state.emitted_tool_arguments[tool_call_id]
+            function = item.get("function")
+            if isinstance(function, Mapping):
+                item["function"] = {**function, "arguments": item["arguments"]}
     if arguments_delta is None:
         return []
     return [
@@ -357,9 +360,11 @@ def _completed_event_deltas(
         deltas.append({"type": "usage", **usage})
     for output_index, item in enumerate(output_items):
         if item.get("type") == "function_call":
-            _output_item_event_deltas(
-                {"item": item, "output_index": output_index},
-                state,
+            deltas.extend(
+                _output_item_event_deltas(
+                    {"item": item, "output_index": output_index},
+                    state,
+                )
             )
     deltas.append({"type": "finish", "reason": _responses_finish_reason(response, state)})
     return deltas
@@ -443,28 +448,9 @@ def _responses_finish_reason(
     response: Mapping[str, Any],
     state: ResponsesStreamState | None = None,
 ) -> TerminalOutcome:
-    status = response.get("status")
-    if status == "failed":
-        return TERMINAL_OUTCOME_ERROR
-    if status == "incomplete":
-        incomplete_details = response.get("incomplete_details")
-        reason = (
-            incomplete_details.get("reason") if isinstance(incomplete_details, Mapping) else None
-        )
-        if reason == "max_output_tokens":
-            return TERMINAL_OUTCOME_OUTPUT_TRUNCATED
-        if reason in {"content_filter", "content_policy_violation"}:
-            return TERMINAL_OUTCOME_CONTENT_FILTERED
-        return TERMINAL_OUTCOME_UNKNOWN
-    if status != "completed":
-        return TERMINAL_OUTCOME_UNKNOWN
-
-    output_items = _response_output_items(response.get("output"))
-    if any(item.get("type") == "function_call" for item in output_items):
-        return TERMINAL_OUTCOME_TOOL_CALLS
-    if state is not None and _stream_has_tool_calls(state):
-        return TERMINAL_OUTCOME_TOOL_CALLS
-    return TERMINAL_OUTCOME_STOP
+    return responses_terminal_outcome(
+        response, has_tool_calls=state is not None and _stream_has_tool_calls(state)
+    )
 
 
 def _stream_has_tool_calls(state: ResponsesStreamState) -> bool:
