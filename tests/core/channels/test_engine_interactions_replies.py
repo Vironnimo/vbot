@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
 import core.channels._conversation_content as content_module
@@ -33,6 +34,77 @@ from .engine_test_support import (
     make_new_only_dispatcher,
     pytest,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delete_origin", [False, True])
+async def test_waiting_bound_tap_keeps_origin_after_anchor_changes(tmp_path, delete_origin):
+    storage = ChannelStorage(tmp_path)
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def trigger(agent_id, content, session_id, **kwargs):
+        if content == "hold":
+            started.set()
+            await release.wait()
+        return make_completed_run(output_text="done", session_id=session_id)
+
+    trigger_mock = AsyncMock(side_effect=trigger)
+    engine, sessions, _, _transport = make_engine(
+        tmp_path, trigger_run=trigger_mock, run_button_binding_registry=storage
+    )
+    sessions.create("assistant", session_id="origin")
+    sessions.create("assistant", session_id="other")
+    binding = RunButtonBinding(
+        id="waiting-binding",
+        platform_target="12345",
+        thread_id=None,
+        origin_session_id="origin",
+        original_button_data=("run:done",),
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    storage.save_run_button_binding("tg-assistant", binding)
+    data = bound_run_callback_data(binding.id, 0)
+    event = InteractionEvent(
+        platform="telegram",
+        channel_id="tg-assistant",
+        chat_id="12345",
+        user_id="50",
+        message_id="777",
+        data=data,
+        buttons=((InteractionButton(label="Done", data=data),),),
+    )
+    conversation = make_conversation()
+    try:
+        await engine.handle_inbound_text(conversation, "hold")
+        await asyncio.wait_for(started.wait(), 10)
+        assert await engine.trigger_interaction_reply(conversation, event) == "enqueued"
+        sessions.mutate_metadata(
+            SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID),
+            lambda metadata: metadata.update(active_session_id="other"),
+        )
+        if delete_origin:
+            await sessions.archive(
+                SessionAddress(project_id=None, agent_id="assistant", session_id="origin")
+            )
+        release.set()
+        await drain(engine, 12345)
+        calls = trigger_mock.await_args_list
+        assert [call.args[2] for call in calls] == (
+            [SESSION_ID] if delete_origin else [SESSION_ID, "origin"]
+        )
+        assert (
+            sessions.get_metadata(
+                SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+            )[routing_module.ACTIVE_SESSION_METADATA_KEY]
+            == "other"
+        )
+        if delete_origin:
+            assert not sessions.exists(
+                SessionAddress(project_id=None, agent_id="assistant", session_id="origin")
+            )
+    finally:
+        release.set()
+        await engine.stop()
 
 
 def _interaction_event(
