@@ -67,6 +67,8 @@ Live Extension catalogs publish atomically through `ExtensionOperations.replace_
 
 ## Constraints & Gotchas
 
+Tool execution normally consumes the shared 500-slot semaphore (also the default per-batch limit). The registered `subagent` coordinator opts out via `execution_slot_required=False`: waiting for a child Run must not hold a slot that its Tools need. Per-batch concurrency and Sub-Agent admission limits still apply. Chat's emitting registry delegates this execution policy.
+
 - Non-envelope, non-serializable, or schema-violating successful results reject as `invalid_tool_result` without aborting the Run.
 - Disallowed normal Tools fail at dispatch even if a provider asks for them.
 - Chat alone derives Session Grants during request building; static restrictions and live denials stay dispatch-only and must never filter provider definitions or mutate prompt assembly.

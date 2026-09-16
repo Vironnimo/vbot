@@ -144,6 +144,7 @@ def register_subagent_tools(
         SUBAGENT_TOOL_DESCRIPTION,
         SUBAGENT_TOOL_PARAMETERS,
         coordinator.spawn,
+        execution_slot_required=False,
         open_input_schema=True,
         result_schema={"type": "object"},
         display=ToolDisplay(

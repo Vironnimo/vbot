@@ -33,6 +33,8 @@ Sub-agent orchestration, in-memory batch tracking, parent-child run linkage, and
 
 ## Constraints & Gotchas
 
+Per-Run spawn admission counts remain attached weakly to the live parent Run after fetched/completed batches are pruned. Releasing an unregistered reservation refunds it; fetching a successful child result does not reset the parent's admission budget.
+
 - The caller cannot target its own active Session.
 - Limits from Sub-Agent settings: depth 4, per-turn 8, timeout 60 minutes defaults (schema in `settings.md`).
 - Parent-Run and Parent-Agent cancellation are separate controls: a top-level background child survives Run cancellation while a later Run can cancel it via public id; ownership relies on the process-local tracker, sufficient because Runs/queue do not survive restarts either.

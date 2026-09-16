@@ -21,6 +21,7 @@ from core.runs import (
     RunAdmission,
     RunExecutor,
     RunKind,
+    RunNotFoundError,
     RunStatus,
 )
 from core.sessions import SessionAddress, TemporarySessionBinding
@@ -266,11 +267,16 @@ async def _handle_subagent(
             "subagent_depth_exceeded",
             f"Sub-agent nesting depth limit exceeded: {settings['max_subagent_depth']}",
         )
+    try:
+        parent_run = runtime.chat_run_manager.get(context.run_id)
+    except RunNotFoundError:
+        parent_run = None
     if not batch_tracker.reserve_slot(
         parent_key,
         settings["max_subagents_per_turn"],
         context.project_id,
         execution_owner=context.execution_owner,
+        parent_run=parent_run,
     ):
         return tool_failure(
             "subagent_limit_exceeded",

@@ -151,6 +151,8 @@ class Tool:
     # a tool to its owning extension.
     extension: str | None = None
     parallel_safe: bool = True
+    # Coordinators wait on separately bounded child work and must not hold its slots.
+    execution_slot_required: bool = True
     open_input_schema: bool = False
     # Independently executed batches may need malformed items to reach the
     # handler so valid siblings still run. The handler then owns complete root
