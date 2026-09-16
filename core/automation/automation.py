@@ -14,6 +14,7 @@ from core.runs import (
     ActiveRunError,
     ChatRunManager,
     Run,
+    RunCancelledError,
     RunExecutionOwner,
     RunKind,
     RunNotFoundError,
@@ -850,7 +851,15 @@ class TriggerService:
                                 resume_process_restart,
                             ),
                         )
-                return await queued_item.future
+                try:
+                    return await queued_item.future
+                except asyncio.CancelledError:
+                    task = asyncio.current_task()
+                    if task is not None and task.cancelling():
+                        raise
+                    # Removing one Queue item is a domain cancellation, not
+                    # cancellation of the producer's long-lived scheduler.
+                    raise RunCancelledError("Queued Run was removed before admission") from None
             except BaseException:
                 self.release_waiting_work(waiting_work_admission)
                 raise
