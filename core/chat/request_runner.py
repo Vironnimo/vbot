@@ -25,6 +25,7 @@ from core.chat.events import (
 )
 from core.chat.messages import JsonObject
 from core.chat.model_resolution import resolve_request_temperature, resolve_request_top_p
+from core.chat.recovery import IncompleteResponseError, RecoveryBudget
 from core.chat.streaming import (
     STREAM_CHUNK_TIMEOUT_SECONDS,
     STREAM_PROGRESS_TIMEOUT_SECONDS,
@@ -41,11 +42,17 @@ from core.chat.streaming import (
 from core.chat.wire_shaping import _assistant_message_from_response
 from core.providers.accounts import ConnectionRef
 from core.providers.adapter import (
+    TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
     TERMINAL_OUTCOME_STOP,
     TerminalOutcome,
     terminal_outcome_from_response,
 )
-from core.providers.errors import NetworkError, ProviderError
+from core.providers.errors import (
+    NetworkError,
+    ProviderError,
+    ProviderRateLimitError,
+    ProviderTimeoutError,
+)
 from core.runs import (
     PROVIDER_HEARTBEAT_EVENT,
     PROVIDER_REQUEST_STATUS_EVENT,
@@ -53,7 +60,7 @@ from core.runs import (
     RunInterruptedError,
 )
 from core.utils.logging import get_logger
-from core.utils.retry import RetryNotice, observe_retries
+from core.utils.retry import RetryNotice, caller_owns_retries
 
 if TYPE_CHECKING:
     from core.chat.continuation import ContinuationCause, ContinuationTracker
@@ -75,14 +82,6 @@ def _has_fallback_chain(agent: Any) -> bool:
     return any(candidate != primary for candidate in candidates)
 
 
-# How often a streaming attempt may be restarted from scratch after a transient
-# drop that occurred before answer text or a Tool Call fragment. Readable
-# Reasoning alone is replay-safe. Each restart re-issues the whole request (the
-# adapter's own connect-level retry still applies per attempt), so this bounds
-# only the post-connect mid-stream replays.
-MAX_STREAM_RESTARTS = 2
-
-
 def _normalize_non_streaming_step(
     adapter: Any,
     response: JsonObject,
@@ -94,6 +93,7 @@ def _normalize_non_streaming_step(
     """Normalize one Provider response and build its canonical Assistant step."""
     normalized = adapter.normalize_response(response, model_id=model_id)
     terminal_outcome = terminal_outcome_from_response(normalized)
+    _check_empty_response(normalized, terminal_outcome)
     message = _assistant_message_from_response(
         agent_model,
         normalized,
@@ -107,7 +107,7 @@ def _normalize_non_streaming_step(
         ended_in_reasoning=False,
     ):
         _LOGGER.warning(
-            "Provider completed a non-streaming response without visible answer content; "
+            "Provider ended a non-streaming response without a complete answer; "
             "requesting a continuation (model=%s)",
             model_id,
         )
@@ -137,10 +137,27 @@ def _needs_visible_answer_recovery(
     ended_in_reasoning: bool,
 ) -> bool:
     """Detect a successful-looking step that ended before a visible answer."""
-    if terminal_outcome != TERMINAL_OUTCOME_STOP or not reasoning or tool_calls:
+    if tool_calls:
+        return False
+    if terminal_outcome == TERMINAL_OUTCOME_OUTPUT_TRUNCATED:
+        return True
+    if terminal_outcome != TERMINAL_OUTCOME_STOP or not reasoning:
         return False
     has_visible_content = bool(content.strip()) if isinstance(content, str) else bool(content)
     return not has_visible_content or ended_in_reasoning
+
+
+def _check_empty_response(response: JsonObject, outcome: TerminalOutcome | None) -> None:
+    if outcome not in {TERMINAL_OUTCOME_STOP, TERMINAL_OUTCOME_OUTPUT_TRUNCATED}:
+        return
+    content = response.get("content")
+    reasoning = response.get("reasoning")
+    if (
+        not (content.strip() if isinstance(content, str) else content)
+        and not (reasoning.strip() if isinstance(reasoning, str) else reasoning)
+        and not response.get("tool_calls")
+    ):
+        raise IncompleteResponseError("The Model returned no answer or Tool Calls")
 
 
 def _resolve_request_context_kwargs(
@@ -180,17 +197,12 @@ def _connection_local_id(connection: ConnectionRef) -> str | None:
 
 
 class _StreamRestartNeeded(Exception):  # noqa: N818 — control-flow signal, not an error
-    """Internal signal: a stream dropped before answer text or a Tool Call.
+    """Request another budgeted attempt before answer text has escaped."""
 
-    Raised by ``_consume_stream_attempt`` and caught by
-    ``_send_streaming_assistant_request`` to replay the stream. It never escapes
-    the chat loop — the final attempt cannot restart and re-raises the real
-    error instead.
-    """
-
-    def __init__(self, cause: Exception) -> None:
+    def __init__(self, cause: Exception, *, non_streaming: bool = False) -> None:
         super().__init__(str(cause))
         self.cause = cause
+        self.non_streaming = non_streaming
 
 
 class _StreamingRunDeltaEmitter:
@@ -264,6 +276,7 @@ class WireRequestRunner:
         continuation_tracker: ContinuationTracker | None = None,
         *,
         provider_id: str = "",
+        recovery: RecoveryBudget | None = None,
     ) -> _AssistantStep:
         request_context = _resolve_request_context_kwargs(
             adapter,
@@ -305,38 +318,98 @@ class WireRequestRunner:
                 )
 
         run.emit(PROVIDER_REQUEST_STATUS_EVENT, {"state": "waiting", "model": response_model})
-        with observe_retries(retry_notice):
-            try:
-                if self._streaming:
-                    return await self._send_streaming_assistant_request(
-                        agent,
-                        adapter,
-                        model_id,
-                        response_model,
-                        messages,
-                        tools,
-                        run,
-                        chunk_timeout_seconds=chunk_timeout_seconds,
-                        request_context=request_context,
-                        continuation_tracker=continuation_tracker,
-                        output_cwd=output_cwd,
-                        temperature=temperature,
-                        top_p=top_p,
-                    )
-
-                return await self._send_non_streaming_assistant_request(
-                    agent,
-                    adapter,
-                    model_id,
-                    response_model,
-                    messages,
-                    tools,
-                    request_context=request_context,
-                    temperature=temperature,
-                    top_p=top_p,
-                )
-            finally:
-                run.emit(PROVIDER_REQUEST_STATUS_EVENT, {"state": "finished"})
+        budget = recovery if recovery is not None else RecoveryBudget()
+        use_streaming = self._streaming
+        try:
+            while True:
+                run.raise_if_cancelled()
+                await budget.begin(response_model, retry_notice)
+                try:
+                    # One Chat budget covers establishment and open-stream
+                    # recovery. Standalone Adapter consumers keep their retries.
+                    with caller_owns_retries():
+                        if use_streaming:
+                            step = await self._consume_stream_attempt(
+                                agent,
+                                adapter,
+                                model_id,
+                                response_model,
+                                messages,
+                                tools,
+                                run,
+                                can_restart=budget.available(response_model),
+                                chunk_timeout_seconds=chunk_timeout_seconds,
+                                request_context=request_context,
+                                continuation_tracker=continuation_tracker,
+                                output_cwd=output_cwd,
+                                temperature=temperature,
+                                top_p=top_p,
+                                has_fallback_chain=_has_fallback_chain(agent),
+                                recovery_deadline=budget.deadline,
+                            )
+                        else:
+                            remaining = (
+                                max(0.0, budget.deadline - budget.clock())
+                                if budget.deadline is not None
+                                else None
+                            )
+                            try:
+                                async with asyncio.timeout(remaining):
+                                    step = await self._send_non_streaming_assistant_request(
+                                        agent,
+                                        adapter,
+                                        model_id,
+                                        response_model,
+                                        messages,
+                                        tools,
+                                        request_context=request_context,
+                                        temperature=temperature,
+                                        top_p=top_p,
+                                    )
+                            except TimeoutError as exc:
+                                raise ProviderTimeoutError(
+                                    "Model recovery time budget exhausted"
+                                ) from exc
+                            if self._streaming:
+                                step = replace(
+                                    step,
+                                    message=_with_assistant_output_files(
+                                        step.message,
+                                        cwd=output_cwd,
+                                    ),
+                                )
+                                _emit_assistant_events(run, step.message)
+                except _StreamRestartNeeded as restart:
+                    if restart.non_streaming:
+                        use_streaming = False
+                    else:
+                        budget.failed(restart.cause, response_model)
+                    continue
+                except (ProviderError, NetworkError) as exc:
+                    if getattr(exc, "retryable", False):
+                        budget.failed(exc, response_model)
+                    if (
+                        (not use_streaming or isinstance(exc, IncompleteResponseError))
+                        and getattr(exc, "retryable", False)
+                        and not (
+                            isinstance(exc, ProviderRateLimitError) and _has_fallback_chain(agent)
+                        )
+                        and budget.available(response_model)
+                    ):
+                        continue
+                    if isinstance(exc, NetworkError):
+                        raise budget.exhausted() from exc
+                    raise
+                if (
+                    step.recovery == "continue"
+                    or step.terminal_outcome == TERMINAL_OUTCOME_OUTPUT_TRUNCATED
+                ):
+                    # A stream break carries its real error (including Retry-After)
+                    # separately from a fatal error to raise after persistence.
+                    budget.failed(step.recovery_error or IncompleteResponseError(), response_model)
+                return step
+        finally:
+            run.emit(PROVIDER_REQUEST_STATUS_EVENT, {"state": "finished"})
 
     async def _send_non_streaming_assistant_request(
         self,
@@ -369,60 +442,6 @@ class WireRequestRunner:
             agent_model=agent.model,
         )
 
-    async def _send_streaming_assistant_request(
-        self,
-        agent: Any,
-        adapter: Any,
-        model_id: str,
-        response_model: str,
-        messages: list[JsonObject],
-        tools: list[JsonObject],
-        run: Run,
-        output_cwd: Path | None,
-        chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
-        request_context: dict[str, Any] | None = None,
-        continuation_tracker: ContinuationTracker | None = None,
-        *,
-        temperature: float | None,
-        top_p: float | None,
-    ) -> _AssistantStep:
-        # A transient drop before answer text is replayed as a full stream
-        # restart. Readable Reasoning and any unexecuted Tool Call preview are
-        # discarded before replay. Once answer text arrives, partial output is
-        # persisted so the progression loop can continue it without duplication.
-        fallback_chain_available = _has_fallback_chain(agent)
-        for attempt in range(MAX_STREAM_RESTARTS + 1):
-            try:
-                return await self._consume_stream_attempt(
-                    agent,
-                    adapter,
-                    model_id,
-                    response_model,
-                    messages,
-                    tools,
-                    run,
-                    can_restart=attempt < MAX_STREAM_RESTARTS,
-                    chunk_timeout_seconds=chunk_timeout_seconds,
-                    request_context=request_context or {},
-                    continuation_tracker=continuation_tracker,
-                    output_cwd=output_cwd,
-                    temperature=temperature,
-                    top_p=top_p,
-                    has_fallback_chain=fallback_chain_available,
-                )
-            except _StreamRestartNeeded as restart:
-                _LOGGER.warning(
-                    "Streaming attempt %d/%d dropped before answer or Tool Call output "
-                    "(%s: %s); restarting stream",
-                    attempt + 1,
-                    MAX_STREAM_RESTARTS + 1,
-                    type(restart.cause).__name__,
-                    restart.cause,
-                )
-        # Unreachable: the final attempt runs with can_restart=False, so it either
-        # returns a message or re-raises the underlying error.
-        raise AssertionError("stream restart loop exited without returning")
-
     async def _consume_stream_attempt(
         self,
         agent: Any,
@@ -441,6 +460,7 @@ class WireRequestRunner:
         temperature: float | None = None,
         top_p: float | None = None,
         has_fallback_chain: bool = False,
+        recovery_deadline: float | None = None,
     ) -> _AssistantStep:
         accumulator = StreamingAccumulator()
         delta_emitter = _StreamingRunDeltaEmitter(run)
@@ -459,6 +479,7 @@ class WireRequestRunner:
             async for delta in iter_with_chunk_timeout(
                 stream,
                 timeout_seconds=chunk_timeout_seconds,
+                deadline=recovery_deadline,
                 progress_timeout_seconds=(
                     STREAM_PROGRESS_TIMEOUT_SECONDS if chunk_timeout_seconds is not None else None
                 ),
@@ -488,30 +509,9 @@ class WireRequestRunner:
             if accumulator.finish_reason is None:
                 raise NetworkError("Provider stream ended without finish delta")
             assistant_fields = accumulator.finalize_assistant_fields()
-            if _needs_visible_answer_recovery(
-                assistant_fields.finish_reason,
-                content=assistant_fields.content,
-                reasoning=assistant_fields.reasoning,
-                tool_calls=assistant_fields.tool_calls,
-                ended_in_reasoning=accumulator.ends_with_reasoning,
-            ):
-                _LOGGER.warning(
-                    "Provider completed a stream in the Reasoning phase; requesting a visible "
-                    "answer continuation (run=%s model=%s)",
-                    run.id,
-                    model_id,
-                )
-                return self._finalize_interrupted_partial(
-                    agent,
-                    response_model,
-                    accumulator,
-                    run,
-                    interruption_cause="provider",
-                    recovery="continue",
-                    recovery_note=OUTPUT_INTEGRITY_RECOVERY_NOTE,
-                    replay_reasoning=False,
-                    output_cwd=output_cwd,
-                )
+            _check_empty_response(
+                assistant_fields.to_response_dict(), assistant_fields.finish_reason
+            )
         except (
             ProviderError,
             NetworkError,
@@ -524,8 +524,11 @@ class WireRequestRunner:
             action = decide_stream_recovery(
                 exc,
                 can_restart=can_restart,
-                has_partial_content=accumulator.partial_content is not None,
-                finish_received=accumulator.finish_reason is not None,
+                has_partial_content=bool((accumulator.partial_content or "").strip()),
+                finish_received=(
+                    accumulator.finish_reason is not None
+                    and not isinstance(exc, IncompleteResponseError)
+                ),
                 has_fallback_chain=has_fallback_chain,
             )
             if action is StreamRecoveryAction.ACCEPT_COMPLETE:
@@ -537,26 +540,11 @@ class WireRequestRunner:
                 )
                 assistant_fields = accumulator.finalize_assistant_fields()
             elif action is StreamRecoveryAction.FALLBACK:
-                assistant_step = await self._send_non_streaming_assistant_request(
-                    agent,
-                    adapter,
-                    model_id,
-                    response_model,
-                    messages,
-                    tools,
-                    request_context=request_context or {},
-                    temperature=temperature,
-                    top_p=top_p,
-                )
-                assistant_step = replace(
-                    assistant_step,
-                    message=_with_assistant_output_files(
-                        assistant_step.message,
-                        cwd=output_cwd,
-                    ),
-                )
-                _emit_assistant_events(run, assistant_step.message)
-                return assistant_step
+                if continuation_tracker is not None:
+                    await continuation_tracker.discard_stream_attempt()
+                if accumulator.partial_reasoning is not None or accumulator.has_partial_tool_call:
+                    run.emit(STREAM_ATTEMPT_RESTARTED_EVENT)
+                raise _StreamRestartNeeded(exc, non_streaming=True) from exc
             elif action is StreamRecoveryAction.RESTART:
                 if continuation_tracker is not None:
                     await continuation_tracker.discard_stream_attempt()
@@ -589,6 +577,7 @@ class WireRequestRunner:
                     run,
                     interruption_cause=interruption_cause,
                     recovery="continue",
+                    recovery_error=exc,
                     output_cwd=output_cwd,
                 )
             elif action is StreamRecoveryAction.INTERRUPT:
@@ -615,6 +604,21 @@ class WireRequestRunner:
                     )
                 raise RunInterruptedError(interruption_cause) from exc
             else:
+                if not isinstance(exc, IncompleteResponseError) and (
+                    accumulator.partial_content is not None
+                    or accumulator.partial_reasoning is not None
+                ):
+                    return replace(
+                        self._finalize_interrupted_partial(
+                            agent,
+                            response_model,
+                            accumulator,
+                            run,
+                            interruption_cause=normalize_interruption_cause(exc),
+                            output_cwd=output_cwd,
+                        ),
+                        failure=exc,
+                    )
                 raise
         except asyncio.CancelledError:
             delta_emitter.close()
@@ -641,12 +645,31 @@ class WireRequestRunner:
             delta_emitter.close()
             raise
 
+        _check_empty_response(assistant_fields.to_response_dict(), assistant_fields.finish_reason)
         assistant_message = _assistant_message_from_response(
             agent.model,
             assistant_fields.to_response_dict(),
             reasoning_scope=response_model,
             reasoning_timing=assistant_fields.reasoning_timing,
         )
+        if _needs_visible_answer_recovery(
+            assistant_fields.finish_reason,
+            content=assistant_message.content,
+            reasoning=assistant_message.reasoning,
+            tool_calls=assistant_message.tool_calls,
+            ended_in_reasoning=accumulator.ends_with_reasoning,
+        ):
+            return self._finalize_interrupted_partial(
+                agent,
+                response_model,
+                accumulator,
+                run,
+                interruption_cause="provider",
+                recovery="continue",
+                recovery_note=OUTPUT_INTEGRITY_RECOVERY_NOTE,
+                replay_reasoning=False,
+                output_cwd=output_cwd,
+            )
         assistant_message = _with_assistant_output_files(assistant_message, cwd=output_cwd)
         _emit_streaming_assistant_events(run, assistant_message)
         return _AssistantStep(
@@ -666,6 +689,7 @@ class WireRequestRunner:
         recovery: Literal["none", "continue", "interrupt"] = "none",
         recovery_note: str | None = None,
         replay_reasoning: bool = True,
+        recovery_error: Exception | None = None,
     ) -> _AssistantStep:
         """Preserve a stream broken after visible output as an interrupted turn.
 
@@ -699,6 +723,7 @@ class WireRequestRunner:
             recovery=recovery,
             recovery_note=recovery_note,
             replay_reasoning=replay_reasoning,
+            recovery_error=recovery_error,
         )
 
     def resolve_chunk_timeout(self, connection: ConnectionRef) -> float | None:
