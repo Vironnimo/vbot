@@ -10,7 +10,7 @@ import {
 
 export function createChatViewActions(context) {
   // Chat-local bottom toast for transient command replies and lifecycle notices.
-  // Error notices stay in the top stack.
+  // Operation errors stay beside the composer until their owner clears them.
   let chatToast = $state('');
 
   // Non-persisted `output: "transient"` command cards (/status, /help) rendered
