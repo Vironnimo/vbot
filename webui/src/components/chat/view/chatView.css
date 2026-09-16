@@ -136,11 +136,9 @@
   margin-block: auto;
 }
 
-.chat-view__notice-stack {
+.chat-view__composer-feedback {
   flex-shrink: 0;
-  padding: 10px 20px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  padding: 0 20px 10px;
 }
 
 .chat-view__project-team {
@@ -232,8 +230,8 @@
   font-size: 12px;
 }
 
-/* Center inner content on the same axis as the capped message column. Bars
-     (notice stack, composer) stay full-width; their content is capped to
+/* Center inner content on the same axis as the capped message column.
+     Feedback and composer content is capped to
      `--chat-measure` and centered. `full` disables the cap (measure: none). */
 .chat-view__measure {
   width: 100%;
@@ -241,7 +239,7 @@
   margin-inline: auto;
 }
 
-.chat-view__notice-inner {
+.chat-view__feedback-inner {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -326,8 +324,8 @@
 }
 
 @media (max-width: 640px) {
-  .chat-view__notice-stack {
-    padding: 10px 14px;
+  .chat-view__composer-feedback {
+    padding: 0 14px 10px;
   }
 
   .chat-view__content-shell {
