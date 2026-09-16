@@ -33,6 +33,7 @@ CLOSED_TOOL = {
 # hardcoded adapter set. These ids carry "anthropic" in the protocol map below
 # and must route through the internal Messages adapter.
 ANTHROPIC_MESSAGES_MODELS: tuple[str, ...] = (
+    "union-alpha",
     "minimax-m2.5",
     "minimax-m2.7",
     "minimax-m3",
@@ -46,6 +47,7 @@ ANTHROPIC_MESSAGES_MODELS: tuple[str, ...] = (
 # Small per-model profiles mirroring the independent facts carried by
 # ``metadata.opencode_go``. Models absent here are unknown to the adapter.
 _PROFILE_BY_MODEL: dict[str, dict[str, object]] = {
+    "union-alpha": {"protocol": "anthropic", "thinking_control": "provider_default"},
     "minimax-m2.7": {"protocol": "anthropic"},
     "minimax-m2.5": {"protocol": "anthropic"},
     "minimax-m3": {"protocol": "anthropic"},

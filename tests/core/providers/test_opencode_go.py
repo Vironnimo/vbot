@@ -112,6 +112,87 @@ def test_public_package_exports_opencode_go_adapter() -> None:
     assert PublicOpenCodeGoAdapter is OpenCodeGoAdapter
 
 
+@pytest.mark.parametrize(
+    "effort", [None, "none", "minimal", "low", "medium", "high", "xhigh", "max"]
+)
+@respx.mock
+@pytest.mark.asyncio
+async def test_union_alpha_keeps_provider_default_without_discarding_native_history(effort):
+    """No verified control is distinct from disabling Reasoning or its replay."""
+    from core.chat import ChatMessage
+    from core.chat.wire_shaping import _assemble_request_history
+    from core.providers.providers import ProviderRegistry
+
+    resources = Path(__file__).resolve().parents[3] / "resources"
+    registry = ModelRegistry.load(resources)
+    config = ProviderRegistry.load(resources).get("opencode-go")
+
+    def lookup(model_id):
+        return registry.get("opencode-go", model_id)
+
+    adapter = OpenCodeGoAdapter(config, "test-token", model_lookup=lookup)
+    scope = "opencode-go/union-alpha::api-key"
+    # Test-owned native state protects future replay; current live Union Alpha
+    # responses have no Thinking blocks, so this is not live transport evidence.
+    native = {"type": "thinking", "thinking": "test-native-state", "signature": "test-signature"}
+    history = [
+        ChatMessage.user("First"),
+        ChatMessage.assistant(
+            model="opencode-go/union-alpha",
+            content="Prior answer",
+            reasoning="test-native-state",
+            reasoning_meta={"content_blocks": [native]},
+            reasoning_scope=scope,
+        ),
+        ChatMessage.user("Next"),
+    ]
+    history = [ChatMessage.from_dict(message.to_dict()) for message in history]
+    messages = _assemble_request_history(
+        history, replay_policy=adapter.reasoning_replay_policy("union-alpha"), agent_model=scope
+    )
+    route = respx.post(f"{config.base_url}/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Next answer"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 49, "output_tokens": 66, "cache_read_input_tokens": 0},
+            },
+        )
+    )
+    try:
+        raw = await adapter.send(
+            messages,
+            model_id="union-alpha",
+            thinking_effort=effort,
+            **adapter.request_context_kwargs(agent_id="audit", session_id="test-session"),
+        )
+        payload = json.loads(route.calls.last.request.content)
+        assert payload["model"] == "union-alpha"
+        assert not (
+            {"thinking", "output_config", "reasoning_effort", "thinking_effort"} & payload.keys()
+        )
+        assert payload["messages"][1]["content"][0] == native
+        assert "reasoning" not in payload["messages"][1]
+        assert adapter.reasoning_replay_policy("union-alpha") == "full_history"
+        assert (
+            adapter.describe_reasoning_render(
+                model_lookup=lookup, model_id="union-alpha", effort=effort
+            ).kind
+            == "default"
+        )
+        normalized = adapter.normalize_response(raw, model_id="union-alpha")
+        assert normalized["terminal_outcome"] == "stop"
+        assert not normalized.get("reasoning")
+        assert not normalized.get("reasoning_meta")
+        assert normalized["usage"]["input_tokens"] == 49
+        assert normalized["usage"]["output_tokens"] == 66
+    finally:
+        await adapter.aclose()
+
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_title_service_sends_opencode_session_header(opencode_go_adapter) -> None:

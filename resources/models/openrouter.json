@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-16T15:27:31.253429+00:00",
+  "fetched_at": "2026-09-16T17:27:09.624534+00:00",
   "models": {
     "aion-labs/aion-2.0": {
       "capabilities": {
@@ -16187,7 +16187,7 @@
       ],
       "context_window": 262144,
       "family": "nemotron",
-      "max_output_tokens": 182520,
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -29002,6 +29002,7 @@
         "api-key"
       ],
       "context_window": 262144,
+      "family": "alpha",
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
@@ -31927,7 +31928,7 @@
       ],
       "context_window": 1048576,
       "family": "glm",
-      "max_output_tokens": 128000,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -32130,6 +32131,7 @@
           "logprobs",
           "max_tokens",
           "min_p",
+          "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
           "reasoning_effort",
@@ -33339,6 +33341,7 @@
           "logprobs",
           "max_tokens",
           "min_p",
+          "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
           "reasoning_effort",
