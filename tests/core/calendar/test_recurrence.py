@@ -70,6 +70,39 @@ class TestParseDateString:
 
 
 class TestExpandRecurringTimed:
+    def test_gap_start_shifts_forward_without_losing_duration_or_count(self):
+        occurrences = expand_recurring_timed(
+            start_local=datetime(2026, 3, 28, 2, 30),
+            tz=BERLIN,
+            rrule_spec={"freq": "daily", "interval": 1, "count": 3},
+            duration_minutes=30,
+            exdates=frozenset(),
+            window_start_utc=datetime(2026, 3, 28, tzinfo=UTC),
+            window_end_utc=datetime(2026, 3, 31, tzinfo=UTC),
+            max_occurrences=500,
+        )
+        assert [start for start, _ in occurrences] == [
+            datetime(2026, 3, 28, 1, 30, tzinfo=UTC),
+            datetime(2026, 3, 29, 1, 30, tzinfo=UTC),
+            datetime(2026, 3, 30, 0, 30, tzinfo=UTC),
+        ]
+        assert all(end - start == timedelta(minutes=30) for start, end in occurrences)
+
+    def test_fall_back_overlap_is_filtered_by_instants(self):
+        occurrences = expand_recurring_timed(
+            start_local=datetime(2026, 10, 25, 2, 30),
+            tz=BERLIN,
+            rrule_spec={"freq": "daily", "interval": 1, "count": 1},
+            duration_minutes=30,
+            exdates=frozenset(),
+            window_start_utc=datetime(2026, 10, 25, 1, 10, tzinfo=UTC),
+            window_end_utc=datetime(2026, 10, 25, 1, 20, tzinfo=UTC),
+            max_occurrences=500,
+        )
+        assert occurrences == [
+            (datetime(2026, 10, 25, 0, 30, tzinfo=UTC), datetime(2026, 10, 25, 2, 0, tzinfo=UTC))
+        ]
+
     def test_weekly_expansion_is_wall_clock_stable_across_dst(self) -> None:
         """09:00 Europe/Berlin stays 09:00 local when DST ends (UTC shifts +2 -> +1)."""
         occurrences = expand_recurring_timed(
