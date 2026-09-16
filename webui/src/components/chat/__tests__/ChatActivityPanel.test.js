@@ -297,6 +297,51 @@ describe('ChatActivityPanel', () => {
     expect(document.querySelector('.chat-activity__parent-link')).toBeNull();
   });
 
+  it.each([
+    ['running', 'running'],
+    ['completed', 'success'],
+  ])(
+    'opens overlapping History/live background work in %s state',
+    (status, dotStatus) => {
+      const bash = backgroundBashTask({
+        id: 'overlap',
+        command: 'npm run build',
+      });
+      mountedComponent = mount(ChatActivityPanel, {
+        target: document.body,
+        props: {
+          timelineItems: [
+            { id: 'history-run', type: 'assistant_run', items: [bash] },
+            {
+              id: 'live-run',
+              type: 'assistant_run',
+              items: [{ ...bash, id: 'live-tool' }],
+            },
+          ],
+          backgroundBashStatuses: { 'process-overlap': status },
+        },
+      });
+      flushSync();
+
+      document.querySelector('.chat-activity__rail').click();
+      flushSync();
+
+      expect(document.querySelector('.chat-activity__panel')).not.toBeNull();
+      expect(
+        document.querySelectorAll('.chat-activity__task-row'),
+      ).toHaveLength(1);
+      expect(
+        document.querySelector(`[data-status="${dotStatus}"]`),
+      ).not.toBeNull();
+      expect(
+        document.querySelectorAll('[data-cancel-kind="bash"]'),
+      ).toHaveLength(status === 'running' ? 1 : 0);
+      document.querySelector('.chat-activity__rail').click();
+      flushSync();
+      expect(document.querySelector('.chat-activity__panel')).toBeNull();
+    },
+  );
+
   it('shows the resolved Parent Session as a navigation link', async () => {
     const navigateToParent = vi.fn();
     const target = {

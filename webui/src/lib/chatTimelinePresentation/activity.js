@@ -112,14 +112,24 @@ export const runFooterParts = (assistantRun, nowMs = Date.now()) => {
 // SSE keepalive comments from gateways like OpenRouter arrive every few
 // seconds even while Model deltas stream, so a heartbeat with a tiny idle
 // value is normal streaming traffic, not a problem. The notice only appears
-// once the reported idle time crosses this threshold.
-const PROVIDER_IDLE_NOTICE_THRESHOLD_SECONDS = 10;
+// once a full minute passes without Model output. Short reasoning pauses and
+// the start of an ordinary request do not need a second status line.
+const PROVIDER_IDLE_NOTICE_THRESHOLD_SECONDS = 60;
 
 // Transient problem/liveness notice for an assistant run, rendered on its own
 // line below the footer. Returns '' when there is nothing to report.
-export const runFooterNotice = (assistantRun) => {
+export const runFooterNotice = (assistantRun, nowMs = Date.now()) => {
   const request = assistantRun.providerRequestStatus;
   if (assistantRun.status === 'running' && request) {
+    const waitingMs = elapsedSinceTimestamp(request.timestamp, nowMs);
+    if (
+      request.state !== 'retrying' &&
+      !request.error_kind &&
+      (waitingMs === null ||
+        waitingMs < PROVIDER_IDLE_NOTICE_THRESHOLD_SECONDS * 1000)
+    ) {
+      return '';
+    }
     const reason =
       request.error_kind === 'timeout'
         ? t('chat.requestTimeout', 'Provider request timed out.')
@@ -515,7 +525,11 @@ export const backgroundTasks = (
     }
   }
 
-  return tasks
+  // A retained live Run can overlap its persisted History until reconciliation
+  // confirms the full Run. Both describe the same background process; the panel
+  // must show it once, otherwise its keyed rows cannot mount when opened.
+  // Prefer the latest occurrence, keeping its current Tool projection and order.
+  return [...new Map(tasks.map((task) => [task.id, task])).values()]
     .sort((left, right) => {
       const activeDifference =
         Number(right.dotStatus === 'running') -
