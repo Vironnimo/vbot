@@ -195,10 +195,10 @@ def make_state(tmp_path: Any, provider: ProviderConfig) -> SimpleNamespace:
             ),
             storage=SimpleNamespace(
                 data_dir=tmp_path,
+                resources_dir=tmp_path / "resources",
                 layout=DataDirectoryLayout(tmp_path),
             ),
             models=StubModelRegistry(),
-            _resolve_resources_path=lambda: tmp_path / "resources",
         ),
         event_bus=ServerEventBus(),
     )
@@ -772,7 +772,7 @@ async def test_model_refresh_continues_after_oauth_credential_failure(
         connections=[*provider.connections, make_api_key_connection()],
     )
     state = make_state(tmp_path, provider)
-    resources_dir = state.runtime._resolve_resources_path()
+    resources_dir = state.runtime.storage.resources_dir
     models_dir = resources_dir / "models"
     models_dir.mkdir(parents=True)
     old_model = {

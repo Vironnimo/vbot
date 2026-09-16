@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any, cast
 
 from core.providers.accounts import split_connection_id
@@ -70,16 +69,6 @@ async def _runtime_provider_credential(
         # but keep recovery and per-attempt credential access alive through discovery.
         await getter()
         yield getter
-
-
-def _runtime_resources_dir(runtime: Any) -> Path:
-    resolve_resources_path = getattr(runtime, "_resolve_resources_path", None)
-    if callable(resolve_resources_path):
-        return Path(resolve_resources_path())
-    resources_dir = getattr(runtime, "resources_dir", None)
-    if resources_dir is not None:
-        return Path(resources_dir)
-    raise ConfigError("Runtime resources directory is not available")
 
 
 def _oauth_device_connection(runtime: Any, provider_id: str, connection_id: str) -> Any:

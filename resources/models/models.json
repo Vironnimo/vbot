@@ -5586,7 +5586,7 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 3500000,
+      "context_window": 10000000,
       "family": "llama",
       "knowledge": "2024-08",
       "last_updated": "2025-04-05",
@@ -6210,6 +6210,34 @@
       "release_date": "2025-12-02",
       "temperature": true
     },
+    "mistral/devstral-small-2": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "devstral",
+      "knowledge": "2025-12",
+      "last_updated": "2025-12-09",
+      "max_output_tokens": 262144,
+      "name": "Devstral Small 2",
+      "release_date": "2025-12-09",
+      "temperature": true
+    },
     "mistral/devstral-small-2507": {
       "capabilities": {
         "input_modalities": [
@@ -6290,6 +6318,168 @@
       "release_date": "2025-06-10",
       "temperature": true
     },
+    "mistral/magistral-small-2509": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 131072,
+      "family": "magistral",
+      "last_updated": "2025-09-18",
+      "max_output_tokens": 131072,
+      "name": "Magistral Small 1.2",
+      "release_date": "2025-09-18",
+      "temperature": true
+    },
+    "mistral/ministral-14b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "ministral",
+      "last_updated": "2025-12-02",
+      "max_output_tokens": 262144,
+      "name": "Ministral 14B",
+      "release_date": "2025-12-02",
+      "temperature": true
+    },
+    "mistral/ministral-3-14b-instruct-2512": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "ministral",
+      "last_updated": "2025-12-02",
+      "max_output_tokens": 262144,
+      "name": "Ministral 3 14B",
+      "release_date": "2025-12-02",
+      "temperature": true
+    },
+    "mistral/ministral-3-3b-instruct-2512": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "ministral",
+      "last_updated": "2025-12-02",
+      "max_output_tokens": 262144,
+      "name": "Ministral 3 3B",
+      "release_date": "2025-12-02",
+      "temperature": true
+    },
+    "mistral/ministral-3-8b-instruct-2512": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "ministral",
+      "last_updated": "2025-12-02",
+      "max_output_tokens": 262144,
+      "name": "Ministral 3 8B",
+      "release_date": "2025-12-02",
+      "temperature": true
+    },
+    "mistral/ministral-3b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 128000,
+      "family": "ministral",
+      "knowledge": "2024-03",
+      "last_updated": "2024-10-16",
+      "max_output_tokens": 8192,
+      "name": "Ministral 3B",
+      "release_date": "2024-10-16",
+      "temperature": true
+    },
     "mistral/ministral-8b-instruct-2410": {
       "capabilities": {
         "input_modalities": [
@@ -6368,7 +6558,7 @@
       "last_updated": "2025-12-02",
       "max_output_tokens": 262144,
       "name": "Mistral Large 3",
-      "release_date": "2024-11-01",
+      "release_date": "2025-12-02",
       "temperature": true
     },
     "mistral/mistral-large-latest": {
@@ -6723,6 +6913,60 @@
       "release_date": "2024-11-01",
       "temperature": true
     },
+    "mistral/voxtral-mini-3b-2507": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 32768,
+      "family": "voxtral",
+      "last_updated": "2025-07-15",
+      "max_output_tokens": 32768,
+      "name": "Voxtral Mini 3B 2507",
+      "release_date": "2025-07-15",
+      "temperature": true
+    },
+    "mistral/voxtral-small-24b-2507": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 32768,
+      "family": "voxtral",
+      "last_updated": "2025-07-15",
+      "max_output_tokens": 32768,
+      "name": "Voxtral Small 24B 2507",
+      "release_date": "2025-07-15",
+      "temperature": true
+    },
     "mistral/voxtral-small-latest": {
       "capabilities": {
         "input_modalities": [
@@ -6911,6 +7155,30 @@
       "name": "Kimi K2.7 Code Highspeed",
       "release_date": "2026-06-12",
       "temperature": false
+    },
+    "moonshotai/kimi-k2.8-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "kimi-k2",
+      "last_updated": "2026-09-11",
+      "max_output_tokens": null,
+      "name": "Kimi K2.8 Preview",
+      "release_date": "2026-09-11"
     },
     "moonshotai/kimi-k3": {
       "capabilities": {
@@ -9266,6 +9534,31 @@
       "release_date": "2026-05-19",
       "temperature": true
     },
+    "openbmb/minicpm5-2b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 131072,
+      "last_updated": "2026-09-12",
+      "max_output_tokens": 131072,
+      "name": "MiniCPM5-2B",
+      "release_date": "2026-09-06",
+      "temperature": true
+    },
     "perplexity/sonar": {
       "capabilities": {
         "input_modalities": [
@@ -10078,6 +10371,93 @@
       "release_date": "2026-08-06",
       "temperature": true
     },
+    "vispark/vision-large": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "audio",
+          "video",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "last_updated": "2026-09",
+      "max_output_tokens": 65536,
+      "name": "Vision Large",
+      "release_date": "2024-05-15",
+      "temperature": true
+    },
+    "vispark/vision-medium": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "audio",
+          "video",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "last_updated": "2026-09",
+      "max_output_tokens": 65536,
+      "name": "Vision Medium",
+      "release_date": "2024-05-15",
+      "temperature": true
+    },
+    "vispark/vision-small": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "audio",
+          "video",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "last_updated": "2026-09",
+      "max_output_tokens": 65536,
+      "name": "Vision Small",
+      "release_date": "2024-05-15",
+      "temperature": true
+    },
     "writer/palmyra-x4": {
       "capabilities": {
         "input_modalities": [
@@ -10096,18 +10476,19 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 122880,
+      "context_window": 128000,
       "family": "palmyra",
       "last_updated": "2025-04-28",
-      "max_output_tokens": 8192,
+      "max_output_tokens": 4096,
       "name": "Palmyra X4",
-      "release_date": "2025-04-28",
+      "release_date": "2024-10-09",
       "temperature": true
     },
     "writer/palmyra-x5": {
       "capabilities": {
         "input_modalities": [
-          "text"
+          "text",
+          "image"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -10120,9 +10501,9 @@
           "temperature"
         ],
         "tools": true,
-        "vision": false
+        "vision": true
       },
-      "context_window": 1040000,
+      "context_window": 1000000,
       "family": "palmyra",
       "last_updated": "2025-04-28",
       "max_output_tokens": 8192,
@@ -10788,7 +11169,7 @@
         "vision": true
       },
       "context_window": 128000,
-      "family": "glm",
+      "family": "glm-flash",
       "last_updated": "2025-12-08",
       "max_output_tokens": 32768,
       "name": "GLM-4.6V-Flash",
@@ -11050,7 +11431,7 @@
         "vision": true
       },
       "context_window": 1000000,
-      "family": "glm",
+      "family": "glm-flash",
       "last_updated": "2026-08-26",
       "max_output_tokens": 131072,
       "name": "GLM-5.3-Flash",

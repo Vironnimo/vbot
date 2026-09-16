@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-11T09:16:11.947691+00:00",
+  "fetched_at": "2026-09-16T15:27:24.782835+00:00",
   "models": {
     "deepseek-v4-flash:0731": {
       "capabilities": {
@@ -50,7 +50,11 @@
           "text"
         ],
         "reasoning": {
-          "control": "on_off",
+          "control": "levels",
+          "levels": [
+            "high",
+            "max"
+          ],
           "supported": true
         },
         "supported_parameters": [],
@@ -66,7 +70,8 @@
         "api-key"
       ],
       "context_window": 1048576,
-      "max_output_tokens": null,
+      "family": "deepseek-thinking",
+      "max_output_tokens": 1048576,
       "metadata": {
         "ollama": {
           "remote": true
@@ -85,7 +90,12 @@
           "text"
         ],
         "reasoning": {
-          "control": "on_off",
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
           "supported": true
         },
         "supported_parameters": [],
@@ -103,10 +113,14 @@
         "api-key"
       ],
       "context_window": 1048576,
-      "max_output_tokens": null,
+      "family": "deepseek-flash",
+      "max_output_tokens": 384000,
       "metadata": {
         "ollama": {
           "remote": true
+        },
+        "ollama_cloud": {
+          "reasoning_response_field": "reasoning_content"
         }
       },
       "name": "deepseek-v4.1-flash"
@@ -308,7 +322,7 @@
         "api-key"
       ],
       "context_window": 1048576,
-      "family": "glm",
+      "family": "glm-flash",
       "max_output_tokens": 131072,
       "metadata": {
         "ollama": {

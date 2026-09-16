@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-11T09:16:17.809688+00:00",
+  "fetched_at": "2026-09-16T15:27:30.624967+00:00",
   "models": {
     "deepseek-flash": {
       "capabilities": {
@@ -371,7 +371,7 @@
         "api-key"
       ],
       "context_window": 1000000,
-      "family": "glm",
+      "family": "glm-flash",
       "max_output_tokens": 131072,
       "metadata": {
         "opencode_go": {
@@ -1230,6 +1230,35 @@
       "family": "qwen3.8-max",
       "max_output_tokens": 131072,
       "name": "qwen3.8-max"
+    },
+    "union-alpha": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": 131072,
+      "name": "union-alpha"
     }
   },
   "provider_id": "opencode-go",

@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-11T09:16:32.368391+00:00",
+  "fetched_at": "2026-09-16T15:27:44.280671+00:00",
   "provider_id": "xai",
   "raw_response": {
     "models": [
@@ -147,7 +147,7 @@
         "completion_text_token_price": 60000,
         "completion_text_token_price_long_context": 120000,
         "created": 1782691200,
-        "fingerprint": "fp_4412857b23",
+        "fingerprint": "fp_5f75a018a4",
         "id": "grok-4.5",
         "input_modalities": [
           "text",
@@ -172,7 +172,7 @@
         "completion_text_token_price": 60000,
         "completion_text_token_price_long_context": 120000,
         "created": 1785974400,
-        "fingerprint": "fp_94fc96ba9b",
+        "fingerprint": "fp_ce33d1c7a0",
         "id": "grok-4.6",
         "input_modalities": [
           "text",

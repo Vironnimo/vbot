@@ -33,6 +33,8 @@ Domain vocabulary. Core terms (Provider, Model, Reasoning) live in `.vorch/GLOSS
 
 ## Complete Model DB snapshots
 
+The manual refresh RPC reads the configured bundled root from `runtime.storage.resources_dir`, the same StorageManager initialized at Runtime startup. Do not probe Runtime-private path resolvers; regression coverage exercises both refresh targets against a started Runtime with a custom resources path (`tests/server/test_rpc_models_refresh.py`).
+
 System root is the tracked `resources/models/`; runtime root is `<data_dir>/artifacts/models/`. Each snapshot holds generated catalogs, raw inspection dumps, a bundled Override snapshot, plus `manifest.json` (`schema_version`, UTC `refreshed_at`, source). Load compares manifests and picks the newer entire root (system wins ties; incompatible/missing runtime manifest falls back to system), then applies current bundled Overrides so an older runtime snapshot cannot hide update changes. Both refresh targets stage and validate before atomic directory replacement - a failed fetch/publish leaves the previous root intact. Runtime refresh starts from the active snapshot and replaces staged overrides with the complete current bundled set before discovery writes, preserving additions and removing deletions.
 
 ## The three layers

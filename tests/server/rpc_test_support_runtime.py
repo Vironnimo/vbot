@@ -283,7 +283,6 @@ class StubTerminalManager:
 
 class StubRuntime:
     def __init__(self, tmp_path: Path, adapter: StubAdapter) -> None:
-        self.resources_dir = tmp_path / "resources"
         self.storage = StubStorage(tmp_path)
         self.agents = StubAgents(
             StubAgent(id="coder", allowed_tools=["*"]),
@@ -459,9 +458,6 @@ class StubRuntime:
                 raise ConfigError(f"Provider credentials not found for provider '{provider_id}'")
 
         return CredentialResolver()
-
-    def _resolve_resources_path(self) -> Path:
-        return self.resources_dir
 
     def reload_skills(self) -> None:
         self.skills = ReloadableStubRuntimeSkills(self)

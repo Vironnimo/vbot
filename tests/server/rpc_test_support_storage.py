@@ -33,6 +33,7 @@ STUB_SUBAGENT_SETTING_FIELDS = (
 class StubStorage:
     def __init__(self, tmp_path: Path) -> None:
         self.data_dir = tmp_path
+        self.resources_dir = tmp_path / "resources"
         self.layout = DataDirectoryLayout(tmp_path)
         self.prompts_dir = tmp_path / "prompts"
         self._appearance = {
