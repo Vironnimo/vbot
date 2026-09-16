@@ -146,7 +146,7 @@ function findLastUsage(messages) {
   return null;
 }
 
-export function truncateSessionForEdit(sessionState, messageId) {
+export function truncateSessionForEdit(sessionState, messageId, acceptedRunId) {
   const targetIndex = (sessionState?.messages ?? []).findIndex(
     (message) => message?.id === messageId,
   );
@@ -156,10 +156,14 @@ export function truncateSessionForEdit(sessionState, messageId) {
   sessionState.messages = sessionState.messages.slice(0, targetIndex);
   sessionState.historySnapshotVersion =
     (sessionState.historySnapshotVersion ?? 0) + 1;
-  sessionState.runEvents = [];
-  sessionState.streamingRunEvents = [];
-  sessionState.streamingPhase = 0;
-  sessionState.seenStreamingEventKeys = new Set();
+  sessionState.runEvents = sessionState.runEvents.filter(
+    (event) => acceptedRunId && event.run_id === acceptedRunId,
+  );
+  if (!acceptedRunId || sessionState.currentRun?.runId !== acceptedRunId) {
+    sessionState.streamingRunEvents = [];
+    sessionState.streamingPhase = 0;
+    sessionState.seenStreamingEventKeys = new Set();
+  }
   sessionState.usage = findLastUsage(sessionState.messages);
   sessionState.contextUsage = null;
   return true;

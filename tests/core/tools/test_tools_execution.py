@@ -672,3 +672,67 @@ class TestToolExecutor:
         assert await first_task == [tool_success({"id": "call-1"})]
         assert await second_task == [tool_success({"id": "call-2"})]
         assert max_active_count == 1
+
+
+@pytest.mark.asyncio
+async def test_coordinator_wait_does_not_hold_child_execution_capacity() -> None:
+    registry = ToolRegistry()
+    children: list[str] = []
+    config = make_execution_config(allowed_tools=["*"])
+    executor = ToolExecutor(registry, global_limit=1)
+
+    async def coordinator(context, _arguments):
+        return (
+            await executor.execute_many([ToolCall(id="child", name="leaf", arguments={})], config)
+        )[0]
+
+    def leaf(context, _arguments):
+        children.append(context.tool_call_id)
+        return tool_success({})
+
+    registry.register(
+        "coordinator",
+        "Wait for child",
+        {"type": "object"},
+        coordinator,
+        execution_slot_required=False,
+    )
+    registry.register("leaf", "Child work", {"type": "object"}, leaf)
+    results = await asyncio.wait_for(
+        executor.execute_many([ToolCall(id="parent", name="coordinator", arguments={})], config), 2
+    )
+    assert children == ["child"]
+    assert results == [tool_success({})]
+
+
+@pytest.mark.asyncio
+async def test_default_capacity_runs_500_tools_before_queueing_overflow() -> None:
+    registry = ToolRegistry()
+    admitted = asyncio.Event()
+    release = asyncio.Event()
+    count = 0
+
+    async def handler(context, arguments):
+        nonlocal count
+        count += 1
+        if count == 500:
+            admitted.set()
+        await release.wait()
+        return tool_success({})
+
+    registry.register("capacity", "Capacity test", {"type": "object"}, handler)
+    executor = ToolExecutor(registry)
+    task = asyncio.create_task(
+        executor.execute_many(
+            [ToolCall(id=f"call-{index}", name="capacity", arguments={}) for index in range(501)],
+            make_execution_config(allowed_tools=["*"]),
+        )
+    )
+    try:
+        await asyncio.wait_for(admitted.wait(), 3)
+        await asyncio.sleep(0)
+        assert count == 500
+    finally:
+        release.set()
+        await task
+    assert count == 501

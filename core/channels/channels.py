@@ -386,11 +386,12 @@ class ChannelService:
 
         was_running = self._is_running(normalized_id) or self._is_stop_in_progress(normalized_id)
 
-        if was_running:
-            self.stop_channel(normalized_id)
-
+        # Persist before disrupting a healthy adapter. A failed atomic save
+        # leaves both its configuration and its current connection untouched.
         self._storage.save(updated)
         try:
+            if was_running:
+                self.stop_channel(normalized_id)
             if updated.enabled:
                 self.start_channel(normalized_id, config_override=updated)
             else:
@@ -936,7 +937,8 @@ class ChannelService:
         self.start_channel(channel_id, reset_backoff=False)
 
     def _restart_delay_seconds(self, attempt: int) -> float:
-        delay = _ADAPTER_RESTART_INITIAL_DELAY_SECONDS * float(2 ** (attempt - 1))
+        # Cap the exponent before converting to float, even after years offline.
+        delay = _ADAPTER_RESTART_INITIAL_DELAY_SECONDS * (2.0 ** min(max(attempt - 1, 0), 30))
         return float(min(_ADAPTER_RESTART_MAX_DELAY_SECONDS, delay))
 
     def _can_restart_channel(self, channel_id: str) -> bool:

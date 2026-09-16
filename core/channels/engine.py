@@ -43,6 +43,7 @@ from core.runs import (
     RUN_COMPLETED_EVENT,
     RUN_FAILED_EVENT,
     RUN_INTERRUPTED_EVENT,
+    RunCancelledError,
     RunKind,
     WaitingWorkAdmission,
     WaitingWorkLimitError,
@@ -740,6 +741,8 @@ class ChannelConversationEngine:
                         **tool_access_kwargs,
                         waiting_work_admission=waiting_work_admission,
                     )
+        except RunCancelledError:
+            return
         except Exception as error:
             _LOGGER.error(
                 "Channel trigger run failed (channel=%s agent=%s session=%s target=%s): %s",

@@ -398,3 +398,48 @@ async def test_chat_history_includes_tool_timing_and_run_summary(tmp_path: Path)
     assert messages[4]["run_id"] == "run-one"
     assert messages[4]["status"] == "completed"
     assert messages[4]["timing"] == timing
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish_during", ["read_chat_history_snapshot", "_project_chat_history"])
+async def test_history_completion_cannot_pair_earlier_page_with_idle_run(
+    tmp_path, monkeypatch, finish_during
+):
+    from server.rpc import chat_methods
+
+    state = make_state(tmp_path, StubAdapter())
+    session = state.runtime.chat_sessions.create("coder", session_id="coherent")
+    state.runtime.agents.update("coder", current_session_id="coherent")
+    release = asyncio.Event()
+
+    async def execute(run):
+        await release.wait()
+        session.append(ChatMessage.assistant(model="openai/test", content="Completed answer"))
+        return "done"
+
+    run = await state.chat_runs.start(session.address, execute)
+    original = chat_methods._CHAT_RPC_WORKERS.run
+    injected = False
+
+    async def intercepted(function, *args, **kwargs):
+        nonlocal injected
+        result = await original(function, *args, **kwargs)
+        if function.__name__ == finish_during and not injected:
+            injected = True
+            release.set()
+            await run.wait()
+        return result
+
+    monkeypatch.setattr(chat_methods._CHAT_RPC_WORKERS, "run", intercepted)
+    try:
+        response = await dispatch_rpc(
+            state, {"method": "chat.history", "params": {"agent_id": "coder"}}
+        )
+        assert response["ok"] is True
+        result = response["result"]
+        assert result.get("active_run", {}).get("run_id") == run.id or any(
+            message.get("content") == "Completed answer" for message in result["messages"]
+        )
+    finally:
+        release.set()
+        await run.wait()

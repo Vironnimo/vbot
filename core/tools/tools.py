@@ -8,6 +8,7 @@ import inspect
 import json
 import weakref
 from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 from functools import wraps
 from typing import Any, ClassVar, TypeVar
 
@@ -80,7 +81,7 @@ from core.utils.workers import BoundedWorkerPool
 _LOGGER = get_logger("tools")
 
 TOOL_ALLOWLIST_WILDCARD = "*"
-DEFAULT_TOOL_CONCURRENCY_LIMIT = 50
+DEFAULT_TOOL_CONCURRENCY_LIMIT = 500
 DEFAULT_TOOL_WORKER_LIMIT = 8
 BUILTIN_TOOL_FAMILY_LABELS = {
     "files": "Files",
@@ -172,6 +173,7 @@ class ToolRegistry:
         extension: str | None = None,
         result_schema: JsonObject | None = None,
         parallel_safe: bool = True,
+        execution_slot_required: bool = True,
         open_input_schema: bool = False,
         handler_validates_arguments: bool = False,
         coerce_arguments: bool = True,
@@ -224,6 +226,7 @@ class ToolRegistry:
             readiness_hint=readiness_hint,
             extension=extension,
             parallel_safe=parallel_safe,
+            execution_slot_required=execution_slot_required,
             open_input_schema=open_input_schema,
             handler_validates_arguments=handler_validates_arguments,
             coerce_arguments=coerce_arguments,
@@ -327,6 +330,11 @@ class ToolRegistry:
         """
         tool = self._tools.get(name)
         return tool is None or tool.parallel_safe
+
+    def requires_execution_slot(self, name: str) -> bool:
+        """Keep child-Run coordinators outside the leaf execution semaphore."""
+        tool = self._tools.get(name)
+        return tool is None or tool.execution_slot_required
 
     def schema_fingerprint(self, name: str) -> str:
         """Return the deterministic canonical schema fingerprint for a Tool."""
@@ -805,7 +813,9 @@ class ToolExecutor:
         config: ToolExecutionConfig,
         per_run_semaphore: asyncio.Semaphore,
     ) -> JsonObject:
-        async with per_run_semaphore, self._get_global_semaphore():
+        needs_slot = self._registry.requires_execution_slot(tool_call.name)
+        global_slot = self._get_global_semaphore() if needs_slot else nullcontext()
+        async with per_run_semaphore, global_slot:
             # Per-call cancel hooks close over tool_call.id so concurrent sibling
             # tool calls in one execution group each register/inspect their own id.
             cancel_registration_hook, cancel_check_hook = _build_per_call_cancel_hooks(

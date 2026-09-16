@@ -63,6 +63,8 @@ New event/action ids use `evt_`/`act_` plus 12 lowercase base32 characters, with
 
 ## Constraints & Gotchas
 
+Malformed persisted action fields (including invalid prompts and `when` expressions) degrade the action store without aborting Runtime startup. The original bytes remain untouched and Calendar event access remains available (`test_actions.py`).
+
 - The `when` grammar is deliberately small; unknown expressions raise `CalendarValidationError` naming the grammar. A `start..end` range's end side is an inclusive day when given as a date.
 - `update_event` rebuilds the candidate via the create path while retaining its stable id: an update that clears `rrule` re-anchors from `start_local`, drops exdates, and re-resolves the anchor zone from the current application zone. Existing recurring timed events retain their persisted `tz_name` unless their start is explicitly changed; changing the application zone never silently rewrites stored event anchors.
 - Tool tests must build fixtures relative to `service.resolve_when(...)` - the tool resolves `when` against the real clock, so hard-coded dates silently break when the month rolls over.

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from core.chat._request_builder import _run_prompt_method
-from core.chat._run_state import _RequestState
+from core.chat._run_state import _AssistantStep, _RequestState
 from core.chat._step_outcomes import (
     MAX_IDENTICAL_FAILED_TOOL_CALLS,
     MAX_TOOL_FINALIZATION_VIOLATIONS,
@@ -20,7 +20,6 @@ from core.chat._step_outcomes import (
     TOOL_FINALIZATION_NOTE,
     TOOL_ITERATION_LIMIT_FAILURE_CODE,
     _combined_interrupted_result,
-    _FailedToolCallCircuitBreaker,
     _prepare_completed_assistant,
     _terminal_outcome_error,
     _terminal_tool_failure,
@@ -52,6 +51,7 @@ from core.debug import DebugContext
 from core.extensions import HookContext, SessionRequestContext
 from core.providers.adapter import (
     TERMINAL_OUTCOME_TOOL_CALLS,
+    TerminalOutcome,
     request_input_budget,
 )
 from core.providers.errors import ProviderRequestTooLargeError
@@ -151,17 +151,16 @@ class AgenticProgression:
         if not isinstance(session_usage, dict):
             session_usage = aggregate_session_usage(context.session_snapshot.messages)
             run.terminal_payload_extras["session_usage"] = session_usage
-        tool_iteration_count = 0
         interruption_chain = context.interruption_chain
         emitted_change_stats: dict[str, object] | None = None
-        failed_tool_call_breaker = _FailedToolCallCircuitBreaker()
-        tool_finalization_reason: str | None = None
-        tool_finalization_violation_count = 0
         tool_catalog_revision = -1
         while True:
             run.raise_if_cancelled()
             registry = self._dependencies.tools
-            if tool_finalization_reason is None and registry.revision != tool_catalog_revision:
+            if (
+                context.tool_progress.finalization_reason is None
+                and registry.revision != tool_catalog_revision
+            ):
                 tool_catalog_revision = registry.revision
                 refreshed = await _run_prompt_method(
                     self._dependencies.get_system_prompts(),
@@ -309,7 +308,7 @@ class AgenticProgression:
                 target.model_id,
                 len(messages_for_request),
             )
-            request_tools = [] if tool_finalization_reason is not None else tools
+            request_tools = [] if context.tool_progress.finalization_reason is not None else tools
             step_started_perf = time.perf_counter()
             workspace = getattr(agent, "workspace", None)
             output_cwd = (
@@ -332,7 +331,7 @@ class AgenticProgression:
                 self._requests._raise_if_measured_context_exhausted(
                     context.session_snapshot.active_messages,
                     messages_for_request,
-                    [] if tool_finalization_reason is not None else tools,
+                    [] if context.tool_progress.finalization_reason is not None else tools,
                     agent,
                     run,
                     target,
@@ -348,7 +347,7 @@ class AgenticProgression:
                             target.model_id,
                             target.model_reference,
                             messages_for_request,
-                            [] if tool_finalization_reason is not None else tools,
+                            [] if context.tool_progress.finalization_reason is not None else tools,
                             run,
                             prompt_cache_affinity_id=context.prompt_cache_affinity_id,
                             chunk_timeout_seconds=target.chunk_timeout_seconds,
@@ -383,19 +382,9 @@ class AgenticProgression:
             terminal_outcome = assistant_step.terminal_outcome
             recovery = assistant_step.recovery
             recovery_note = assistant_step.recovery_note
-            if (
-                not assistant_message.interrupted
-                and _terminal_outcome_error(
-                    terminal_outcome, has_tool_calls=bool(assistant_message.tool_calls)
-                )
-                is None
-            ):
-                await _CHAT_TRANSFORM_WORKERS.run(
-                    context.image_budget.record_delivered, messages_for_request
-                )
             # Both an interrupted partial and a finished readable stream may
-            # already be visible when Cancel arrives. The latter can race only
-            # while acquiring the append lock; neither may vanish from History.
+            # already be visible when Cancel arrives. Preparation and lock admission
+            # are both cancellable; neither may lose this visible boundary.
             preserve_after_cancel = assistant_message.interrupted or (
                 self._streaming
                 and not assistant_message.tool_calls
@@ -410,50 +399,85 @@ class AgenticProgression:
             )
             if not preserve_after_cancel:
                 run.raise_if_cancelled()
-            assistant_message = await _CHAT_TRANSFORM_WORKERS.run(
-                _prepare_completed_assistant,
+
+            async def prepare_boundary(
+                assistant_message: ChatMessage,
+                terminal_outcome: TerminalOutcome | None = terminal_outcome,
+                messages_for_request: list[JsonObject] = messages_for_request,
+                output_cwd: Path | None = output_cwd,
+                request_context_usage: JsonObject = request_context_usage,
+                assistant_step: _AssistantStep = assistant_step,
+                request_tools: list[JsonObject] = request_tools,
+            ) -> tuple[ChatMessage, JsonObject, list[JsonObject], JsonObject]:
+                if (
+                    not assistant_message.interrupted
+                    and _terminal_outcome_error(
+                        terminal_outcome, has_tool_calls=bool(assistant_message.tool_calls)
+                    )
+                    is None
+                ):
+                    await _CHAT_TRANSFORM_WORKERS.run(
+                        context.image_budget.record_delivered, messages_for_request
+                    )
+                assistant_message = await _CHAT_TRANSFORM_WORKERS.run(
+                    _prepare_completed_assistant,
+                    assistant_message,
+                    messages_for_request,
+                    output_cwd,
+                    int(request_context_usage["tokens"]),
+                )
+                assistant_request_message = await _CHAT_TRANSFORM_WORKERS.run(
+                    _assistant_continuation_dict,
+                    assistant_message,
+                    replay_policy=(
+                        replay_policy if assistant_step.replay_reasoning else REASONING_REPLAY_NONE
+                    ),
+                )
+                assistant_request_messages: list[JsonObject] = [assistant_request_message]
+                if (
+                    not assistant_step.replay_reasoning
+                    and not assistant_request_message.get("content")
+                    and not assistant_request_message.get("tool_calls")
+                ):
+                    # A Reasoning-only integrity boundary becomes empty after native
+                    # Reasoning is stripped. Do not send an empty Assistant entry.
+                    assistant_request_messages = []
+                assert isinstance(assistant_message.usage, dict)
+                await _CHAT_TRANSFORM_WORKERS.run(
+                    context.context_usage.observe,
+                    assistant_message.usage,
+                    messages_for_request,
+                    adapter=target.adapter,
+                    model_id=target.model_id,
+                    tools=request_tools,
+                    scope=context.prompt_cache_affinity_id,
+                )
+                assistant_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
+                    context.context_usage.project,
+                    [*messages_for_request, *assistant_request_messages],
+                    adapter=target.adapter,
+                    model_id=target.model_id,
+                    tools=request_tools,
+                    scope=context.prompt_cache_affinity_id,
+                )
+                assistant_message = replace(
+                    assistant_message,
+                    usage={**assistant_message.usage, "context_usage": assistant_context_usage},
+                )
+                return (
+                    assistant_message,
+                    assistant_request_message,
+                    assistant_request_messages,
+                    assistant_context_usage,
+                )
+
+            (
                 assistant_message,
-                messages_for_request,
-                output_cwd,
-                int(request_context_usage["tokens"]),
-            )
-            assistant_request_message = await _CHAT_TRANSFORM_WORKERS.run(
-                _assistant_continuation_dict,
-                assistant_message,
-                replay_policy=(
-                    replay_policy if assistant_step.replay_reasoning else REASONING_REPLAY_NONE
-                ),
-            )
-            assistant_request_messages: list[JsonObject] = [assistant_request_message]
-            if (
-                not assistant_step.replay_reasoning
-                and not assistant_request_message.get("content")
-                and not assistant_request_message.get("tool_calls")
-            ):
-                # A Reasoning-only integrity boundary becomes empty after native
-                # Reasoning is stripped. Do not send an empty Assistant entry.
-                assistant_request_messages = []
-            assert isinstance(assistant_message.usage, dict)
-            await _CHAT_TRANSFORM_WORKERS.run(
-                context.context_usage.observe,
-                assistant_message.usage,
-                messages_for_request,
-                adapter=target.adapter,
-                model_id=target.model_id,
-                tools=request_tools,
-                scope=context.prompt_cache_affinity_id,
-            )
-            assistant_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
-                context.context_usage.project,
-                [*messages_for_request, *assistant_request_messages],
-                adapter=target.adapter,
-                model_id=target.model_id,
-                tools=request_tools,
-                scope=context.prompt_cache_affinity_id,
-            )
-            assistant_message = replace(
-                assistant_message,
-                usage={**assistant_message.usage, "context_usage": assistant_context_usage},
+                assistant_request_message,
+                assistant_request_messages,
+                assistant_context_usage,
+            ) = await _finish_visible_boundary(
+                prepare_boundary(assistant_message), run, preserve_after_cancel
             )
             assert assistant_message.usage is not None
             run.input_token_total += _usage_token_count(assistant_message.usage, "input_tokens")
@@ -479,7 +503,9 @@ class AgenticProgression:
                 preserve_after_cancel=preserve_after_cancel,
             ):
                 preserved_cancelled_output = run.cancel_requested and preserve_after_cancel
-                await session.append_async(assistant_message)
+                await _finish_visible_boundary(
+                    session.append_async(assistant_message), run, preserve_after_cancel
+                )
                 await context.session_snapshot.refresh(session)
                 run.terminal_payload_extras["context_usage"] = assistant_context_usage
                 session_usage = add_session_turn_usage(session_usage, assistant_message.usage)
@@ -550,12 +576,12 @@ class AgenticProgression:
                         raise terminal_error
                     break
 
-                finalization_violation = tool_finalization_reason is not None
+                finalization_violation = context.tool_progress.finalization_reason is not None
                 finalization_request_reason: str | None = None
                 tool_limit_reached = (
                     not finalization_violation
                     and terminal_outcome == TERMINAL_OUTCOME_TOOL_CALLS
-                    and tool_iteration_count >= self._max_tool_iterations
+                    and context.tool_progress.iteration_count >= self._max_tool_iterations
                 )
 
                 session.begin_defer_notes()
@@ -627,7 +653,7 @@ class AgenticProgression:
                             media_outputs = []
                         else:
                             context.recovery.reset()
-                            tool_iteration_count += 1
+                            context.tool_progress.iteration_count += 1
                             tool_messages, media_outputs = await _dispatch_tool_calls(
                                 tool_dispatch_context,
                                 assistant_message.tool_calls,
@@ -648,7 +674,7 @@ class AgenticProgression:
                         request_message = _message_to_request_dict(tool_message)
                         messages.append(request_message)
                         tool_request_messages.append(request_message)
-                    repeated_failed_tool = failed_tool_call_breaker.observe(
+                    repeated_failed_tool = context.tool_progress.failed_calls.observe(
                         assistant_message.tool_calls,
                         tool_messages,
                         tool_dispatch_context.registry,
@@ -822,14 +848,17 @@ class AgenticProgression:
             run.terminal_payload_extras["context_usage"] = tool_context_usage
 
             if finalization_violation:
-                tool_finalization_violation_count += 1
-                if tool_finalization_violation_count >= MAX_TOOL_FINALIZATION_VIOLATIONS:
+                context.tool_progress.finalization_violations += 1
+                if (
+                    context.tool_progress.finalization_violations
+                    >= MAX_TOOL_FINALIZATION_VIOLATIONS
+                ):
                     # The Model already received one correlated disabled-Tool
                     # failure and ignored the boundary again. Complete gracefully
                     # instead of creating an unbounded recovery loop.
                     return assistant_message
             if finalization_request_reason is not None:
-                tool_finalization_reason = finalization_request_reason
+                context.tool_progress.finalization_reason = finalization_request_reason
 
             if self._compaction_service is not None:
                 compacted_state = await self._compaction_runs.maybe_auto_compact_state(
@@ -858,3 +887,28 @@ class AgenticProgression:
                 continue_same_run=False,
             )
         return assistant_message
+
+
+_BoundaryResult = TypeVar("_BoundaryResult")
+
+
+async def _finish_visible_boundary(
+    work: Awaitable[_BoundaryResult], run: Run, preserve_after_cancel: bool
+) -> _BoundaryResult:
+    """Finish already-visible output preparation/persistence before honoring Stop."""
+    if not preserve_after_cancel:
+        return await work
+    task = asyncio.ensure_future(work)
+    try:
+        while True:
+            try:
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                if task.done():
+                    return task.result()
+                if not run.cancel_requested:
+                    raise
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)

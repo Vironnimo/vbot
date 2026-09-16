@@ -131,7 +131,7 @@ class CalendarActions:
                             row["status"] = "interrupted"
                             self._recovery_pending.add(key)
                         self._executions[key] = row
-            except (OSError, ValueError, TypeError, KeyError) as error:
+            except (OSError, ValueError, TypeError, KeyError, CalendarValidationError) as error:
                 self._storage_error = CalendarStorageError(f"Cannot load calendar actions: {error}")
                 self._actions.clear()
                 self._executions.clear()

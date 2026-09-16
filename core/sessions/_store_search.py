@@ -42,15 +42,16 @@ def search(
     """Search canonical Messages through FTS or a truthful projection fallback."""
     if not query or not query.strip() or limit <= 0 or (roles is not None and not roles):
         return []
-    compact = re.sub(r"\s+", " ", query).strip().casefold()
+    compact = re.sub(r"\s+", " ", query).strip()
     if not compact:
         return []
 
     def matches(text: str) -> bool:
         haystack = re.sub(r"\s+", " ", text).strip().casefold()
+        folded = compact.casefold()
         if match_mode == "phrase":
-            return compact in haystack
-        terms = [term for term in compact.split(" ") if term]
+            return folded in haystack
+        terms = [term for term in folded.split(" ") if term]
         if match_mode == "any_term":
             return any(term in haystack for term in terms)
         return all(term in haystack for term in terms)

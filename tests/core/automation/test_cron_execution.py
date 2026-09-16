@@ -549,3 +549,74 @@ def test_start_degrades_cron_when_once_fire_claim_is_not_utf8(
     start_job_task.assert_not_called()
     assert caplog.records
     assert claim_path.read_bytes() == b"\xff"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("schedule_type", ["once", "cron"])
+async def test_removed_queued_fire_settles_without_killing_scheduler(
+    tmp_path, monkeypatch, schedule_type
+):
+    from core.runs import RunCancelledError
+
+    service, trigger = make_service(tmp_path)
+    kwargs = (
+        {"run_at": (datetime.now(UTC) + timedelta(minutes=1)).isoformat()}
+        if schedule_type == "once"
+        else {"cron_expression": "* * * * *"}
+    )
+    job = service.create_job(agent_id="agent", prompt="work", schedule_type=schedule_type, **kwargs)
+    trigger.trigger_run.side_effect = RunCancelledError("removed")
+    if schedule_type == "once":
+        monkeypatch.setattr(cron_timing, "_sleep_until_utc", AsyncMock(return_value=True))
+        await service._run_once_job(job)
+        assert service.get_job(job.id).status == "failed"
+        assert not list(service._once_fire_claims_dir.glob("*.json"))
+    else:
+        assert await service._trigger_job_run(job) is False
+        assert service.get_job(job.id).status == "active"
+        assert await service._trigger_job_run(job) is False
+        assert trigger.trigger_run.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_rescheduling_keeps_live_run_waiter_and_global_slot(tmp_path, monkeypatch):
+    service, trigger = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent", prompt="work", schedule_type="cron", cron_expression="* * * * *"
+    )
+    running = asyncio.Event()
+    release = asyncio.Event()
+
+    async def wait():
+        running.set()
+        await release.wait()
+
+    trigger.trigger_run.return_value = SimpleNamespace(id="run", wait=wait)
+    sleeps = 0
+    resumed = asyncio.Event()
+
+    async def sleep_until(*args, **kwargs):
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps > 1:
+            resumed.set()
+            await asyncio.Future()
+        return True
+
+    monkeypatch.setattr(cron_timing, "_sleep_until_utc", sleep_until)
+    service.start()
+    try:
+        await asyncio.wait_for(running.wait(), 1)
+        task = service._job_tasks[job.id]
+        available = service._run_slots._value
+        service.update_job(job.id, cron_expression="*/2 * * * *")
+        await asyncio.sleep(0)
+        assert service._job_tasks[job.id] is task
+        assert not task.cancelling()
+        assert service._run_slots._value == available
+        release.set()
+        await asyncio.wait_for(resumed.wait(), 1)
+        assert service._run_slots._value == available + 1
+        assert trigger.trigger_run.await_count == 1
+    finally:
+        await service.aclose()

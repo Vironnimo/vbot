@@ -114,3 +114,37 @@ async def test_log_lease_finishes_only_after_process_is_terminal(tmp_path: Path)
         assert not tracked.log_file.exists()
     finally:
         await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_split_unicode_and_ansi_are_decoded_per_pipe_before_poll_and_spooling(
+    tmp_path: Path,
+) -> None:
+    manager = ProcessManager(temporary_files=TemporaryFileManager(tmp_path))
+    try:
+        process_id = await manager.spawn(
+            SCOPE_A,
+            AGENT_A,
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            env=None,
+            cwd=None,
+        )
+        tracked = manager.get_process(process_id, AGENT_A)
+        manager._append_output(tracked, "stdout", b"\xe2")
+        manager._append_output(tracked, "stderr", b"error \x1b[")
+        first = await manager.poll(process_id, AGENT_A)
+        assert first["output"] == "error "
+        manager._append_output(tracked, "stdout", b"\x82\xac\x1b]title")
+        manager._append_output(tracked, "stderr", b"31mred\x1b[0m")
+        second = await manager.poll(process_id, AGENT_A)
+        assert second["stdout"] == "\u20ac"
+        assert second["stderr"] == "red"
+        manager._append_output(tracked, "stdout", b"\x1b")
+        manager._append_output(tracked, "stderr", b"!")
+        manager._append_output(tracked, "stdout", b"\\done")
+        await manager.kill(process_id, AGENT_A)
+        assert (await manager.snapshot(process_id, AGENT_A))["output"] == "error \u20acred!done"
+        assert tracked.log_file is not None
+        assert tracked.log_file.read_text(encoding="utf-8") == "error \u20acred!done"
+    finally:
+        await manager.aclose()
