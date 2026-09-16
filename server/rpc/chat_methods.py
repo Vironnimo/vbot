@@ -141,28 +141,30 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
             SessionAddress(project_id=project_id, agent_id=agent_id, session_id=active_session_id),
         )
         reflection_runs = await _reflection_runs(state, session) if before is None else None
-        history = await _CHAT_RPC_WORKERS.run(
-            session.read_chat_history_snapshot,
-            limit=limit,
-            before=before,
-            excluded_roles=("note", "history_edit"),
-            complete_run_segment=True,
-            background_roles=("note", "tool"),
-            background_tool_names=("bash", "process"),
-        )
-        projection = await _CHAT_RPC_WORKERS.run(
-            _project_chat_history,
-            history.page,
-            session_usage=history.session_usage,
-            context_messages=list(history.context_messages),
-            background_messages=list(history.background_messages),
-            file_delivery=getattr(state, "file_delivery", None),
-        )
-        active_run_object = _state_chat_runs(state).active_run(
-            agent_id=agent_id,
-            session_id=active_session_id,
-            project_id=project_id,
-        )
+        while True:
+            active_run_object = _state_chat_runs(state).active_run(
+                agent_id=agent_id,
+                session_id=active_session_id,
+                project_id=project_id,
+            )
+            history = await _CHAT_RPC_WORKERS.run(
+                session.read_chat_history_snapshot,
+                limit=limit,
+                before=before,
+                excluded_roles=("note", "history_edit"),
+                complete_run_segment=True,
+                background_roles=("note", "tool"),
+                background_tool_names=("bash", "process"),
+            )
+            latest_run = _state_chat_runs(state).active_run(
+                agent_id=agent_id,
+                session_id=active_session_id,
+                project_id=project_id,
+            )
+            if latest_run is active_run_object:
+                break
+        # Freeze the live projection at the same boundary as durable history.
+        # A completion during projection must not turn an earlier page into idle history.
         active_run = (
             _run_response(
                 active_run_object,
@@ -171,6 +173,14 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
             )
             if active_run_object is not None
             else None
+        )
+        projection = await _CHAT_RPC_WORKERS.run(
+            _project_chat_history,
+            history.page,
+            session_usage=history.session_usage,
+            context_messages=list(history.context_messages),
+            background_messages=list(history.background_messages),
+            file_delivery=getattr(state, "file_delivery", None),
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc

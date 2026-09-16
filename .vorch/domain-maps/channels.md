@@ -81,6 +81,8 @@ A message can carry an inline keyboard; tapping produces a tap event normally ro
 
 ## Constraints & Gotchas
 
+Channel updates persist validated configuration before stopping the existing adapter; a failed save leaves it running. Restart backoff caps its exponent before numeric conversion, including arbitrarily large failure counts. A removed queued Run admission ends only that inbound turn; the Channel worker continues with its followers and releases their waiting-work reservations.
+
 - Only Assistant text from a completed Run or preserved partial text from an interrupted Run reaches the platform; Tool Results, Reasoning, and intermediate events stay in canonical Session history/SSE.
 - Adapter failures restart with exponential backoff (`1s`, `2s`, `4s`, capped at `30s`). After 3 fast retries the channel is marked failed in runtime-local health state, but recovery continues indefinitely at the capped interval while enabled - a channel is the operator's lifeline, so transient blips must self-heal. An adapter up >= 5 minutes counts as healthy: its next crash resets counters. `is_failed()` never reports failure while the task runs. `channel.json` remains configuration truth.
 - Create/update preflight adapter construction where possible and roll back persisted config if starting the enabled adapter fails.

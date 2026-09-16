@@ -166,14 +166,18 @@ def _read_registry_path() -> str | None:
             r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
         ) as key,
     ):
-        machine_path, _regtype = winreg.QueryValueEx(key, "PATH")
+        machine_path, regtype = winreg.QueryValueEx(key, "PATH")
+        if regtype == winreg.REG_EXPAND_SZ:
+            machine_path = winreg.ExpandEnvironmentStrings(machine_path)
         if machine_path:
             segments.append(machine_path)
     with (
         contextlib.suppress(OSError),
         winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as key,
     ):
-        user_path, _regtype = winreg.QueryValueEx(key, "PATH")
+        user_path, regtype = winreg.QueryValueEx(key, "PATH")
+        if regtype == winreg.REG_EXPAND_SZ:
+            user_path = winreg.ExpandEnvironmentStrings(user_path)
         if user_path:
             segments.append(user_path)
 

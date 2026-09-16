@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from core.config_validation import (
     JsonDiagnostic,
 )
-from core.runs import RunKind
+from core.runs import RunCancelledError, RunKind
 from core.sessions import SessionAddress
 from core.utils.atomic import atomic_write_text
 from core.utils.ids import new_id
@@ -122,6 +122,8 @@ class CronService:
         self._storage_load_error: CronStorageError | None = None
         self._jobs_loaded = False
         self._job_tasks: dict[str, asyncio.Task[None]] = {}
+        self._executing_jobs: set[str] = set()
+        self._pending_restarts: set[str] = set()
         self._run_slots = asyncio.Semaphore(MAX_CONCURRENT_CRON_RUNS)
         self._changed_callbacks: set[Callable[[], None]] = set()
         self._timezone = _resolve_timezone(tz)
@@ -475,7 +477,8 @@ class CronService:
             return
 
         for job_id in list(self._job_tasks):
-            self._cancel_job_task(job_id)
+            self._cancel_job_task(job_id, force=True)
+        self._pending_restarts.clear()
         self._started = False
 
     async def aclose(self) -> None:
@@ -566,8 +569,11 @@ class CronService:
 
         task.add_done_callback(on_done)
 
-    def _cancel_job_task(self, job_id: str) -> None:
+    def _cancel_job_task(self, job_id: str, *, force: bool = False) -> None:
         """Cancel and forget one tracked asyncio task if present."""
+        if not force and job_id in self._executing_jobs:
+            self._pending_restarts.add(job_id)
+            return
         task = self._job_tasks.pop(job_id, None)
         if task is not None and not task.done():
             task.cancel()
@@ -599,6 +605,8 @@ class CronService:
                 return
 
             await self._trigger_job_run(latest)
+            if job.id in self._pending_restarts:
+                return
 
     async def _run_interval_job(self, job: CronJob) -> None:
         """Schedule native fixed intervals from their persisted cadence anchor."""
@@ -619,6 +627,8 @@ class CronService:
                 return
 
             await self._trigger_job_run(latest)
+            if job.id in self._pending_restarts:
+                return
 
     async def _run_once_job(self, job: CronJob) -> None:
         """Sleep until run_at, fire once, then mark completed.
@@ -657,10 +667,18 @@ class CronService:
                     return
                 continue
 
-            if not await self._trigger_job_run(latest):
+            succeeded = await self._trigger_job_run(latest)
+            if job.id in self._pending_restarts:
+                _claims.remove(self._once_fire_claims_dir, job.id)
+                return
+            if not succeeded:
                 _claims.remove(self._once_fire_claims_dir, latest.id)
                 current_after_failure = self._jobs.get(latest.id)
-                if current_after_failure is None or current_after_failure.remaining_runs == 0:
+                if (
+                    current_after_failure is None
+                    or current_after_failure.remaining_runs == 0
+                    or current_after_failure.status != "active"
+                ):
                     return
                 failed_fire_attempts += 1
                 if await self._back_off_or_abandon_once_job(job.id, failed_fire_attempts):
@@ -714,83 +732,101 @@ class CronService:
         _claims.remove(self._once_fire_claims_dir, job_id)
 
     async def _trigger_job_run(self, job: CronJob) -> bool:
-        async with self._run_slots:
-            latest = self._jobs.get(job.id)
-            if latest is None or latest.status != "active":
-                return False
-
-            latest.last_attempt_at = _timing._utc_now_iso()
-            latest.last_error = None
-            self._jobs[latest.id] = latest
-            self._save_jobs_after_fire(latest.id)
-            _LOGGER.info(
-                "Cron job fired (job=%s agent=%s session=%s%s)",
-                latest.id,
-                latest.agent_id,
-                latest.session_id,
-                f" project={latest.project_id}" if latest.project_id else "",
-            )
-            run: Any | None = None
-            try:
-                run = await self._trigger_service.trigger_run(
-                    latest.agent_id,
-                    latest.prompt,
-                    latest.session_id,
-                    project_id=latest.project_id,
-                    run_kind=RunKind.CRON,
-                    contributes_to_agent_activity=False,
-                )
+        self._executing_jobs.add(job.id)
+        try:
+            async with self._run_slots:
                 latest = self._jobs.get(job.id)
-                if latest is None:
+                if latest is None or latest.status != "active":
                     return False
-                latest.last_fired_at = _timing._utc_now_iso()
-                run_id = getattr(run, "id", None)
-                latest.last_run_id = run_id if isinstance(run_id, str) else None
-                if latest.remaining_runs is not None:
-                    latest.remaining_runs = max(latest.remaining_runs - 1, 0)
-                self._jobs[latest.id] = latest
-                await self._persist_after_fire(latest.id)
 
-                wait_for_run = getattr(run, "wait", None)
-                if callable(wait_for_run):
-                    await wait_for_run()
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                if run is None:
-                    # Pre-admission failure - the Run never started. A full Queue
-                    # or a shutdown window must not burn a recurring job's
-                    # five-strike execution-failure budget; once jobs keep their
-                    # own fire-claim retry via the False return either way.
-                    self._record_trigger_failure(job.id, error)
+                latest.last_attempt_at = _timing._utc_now_iso()
+                latest.last_error = None
+                self._jobs[latest.id] = latest
+                self._save_jobs_after_fire(latest.id)
+                _LOGGER.info(
+                    "Cron job fired (job=%s agent=%s session=%s%s)",
+                    latest.id,
+                    latest.agent_id,
+                    latest.session_id,
+                    f" project={latest.project_id}" if latest.project_id else "",
+                )
+                run: Any | None = None
+                try:
+                    run = await self._trigger_service.trigger_run(
+                        latest.agent_id,
+                        latest.prompt,
+                        latest.session_id,
+                        project_id=latest.project_id,
+                        run_kind=RunKind.CRON,
+                        contributes_to_agent_activity=False,
+                    )
+                    latest = self._jobs.get(job.id)
+                    if latest is None:
+                        wait_for_run = getattr(run, "wait", None)
+                        if callable(wait_for_run):
+                            await wait_for_run()
+                        return False
+                    latest.last_fired_at = _timing._utc_now_iso()
+                    run_id = getattr(run, "id", None)
+                    latest.last_run_id = run_id if isinstance(run_id, str) else None
+                    if latest.remaining_runs is not None:
+                        latest.remaining_runs = max(latest.remaining_runs - 1, 0)
+                    self._jobs[latest.id] = latest
+                    await self._persist_after_fire(latest.id)
+
+                    wait_for_run = getattr(run, "wait", None)
+                    if callable(wait_for_run):
+                        await wait_for_run()
+                except asyncio.CancelledError:
+                    raise
+                except RunCancelledError as error:
+                    if run is not None:
+                        self._record_run_failure(job.id, error)
+                        self._finalize_exhausted_job(job.id)
+                    else:
+                        self._record_trigger_failure(job.id, error)
+                        latest = self._jobs.get(job.id)
+                        if latest is not None and latest.schedule_type == "once":
+                            latest.status = "failed"
+                            self._save_jobs_after_fire(latest.id)
+                    return False
+                except Exception as error:
+                    if run is None:
+                        # Pre-admission failure - the Run never started. A full Queue
+                        # or a shutdown window must not burn a recurring job's
+                        # five-strike execution-failure budget; once jobs keep their
+                        # own fire-claim retry via the False return either way.
+                        self._record_trigger_failure(job.id, error)
+                        _LOGGER.error(
+                            "Cron job trigger failed before admission for job=%s: %s",
+                            job.id,
+                            error,
+                            exc_info=(type(error), error, error.__traceback__),
+                        )
+                        return False
+                    self._record_run_failure(job.id, error)
+                    self._finalize_exhausted_job(job.id)
                     _LOGGER.error(
-                        "Cron job trigger failed before admission for job=%s: %s",
+                        "Cron job Run failed for job=%s: %s",
                         job.id,
                         error,
                         exc_info=(type(error), error, error.__traceback__),
                     )
                     return False
-                self._record_run_failure(job.id, error)
-                self._finalize_exhausted_job(job.id)
-                _LOGGER.error(
-                    "Cron job Run failed for job=%s: %s",
-                    job.id,
-                    error,
-                    exc_info=(type(error), error, error.__traceback__),
-                )
-                return False
 
-            latest = self._jobs.get(job.id)
-            if latest is None:
-                return False
-            latest.last_completed_at = _timing._utc_now_iso()
-            latest.last_outcome = "success"
-            latest.last_error = None
-            latest.consecutive_failures = 0
-            self._jobs[latest.id] = latest
-            self._save_jobs_after_fire(latest.id)
-            self._finalize_exhausted_job(latest.id)
-            return True
+                latest = self._jobs.get(job.id)
+                if latest is None:
+                    return False
+                latest.last_completed_at = _timing._utc_now_iso()
+                latest.last_outcome = "success"
+                latest.last_error = None
+                latest.consecutive_failures = 0
+                self._jobs[latest.id] = latest
+                self._save_jobs_after_fire(latest.id)
+                self._finalize_exhausted_job(latest.id)
+                return True
+        finally:
+            self._executing_jobs.discard(job.id)
 
     def _record_run_failure(self, job_id: str, error: BaseException) -> None:
         job = self._jobs.get(job_id)
@@ -898,6 +934,9 @@ class CronService:
             ) from error
 
     def _restart_job_task(self, job: CronJob) -> None:
+        if job.id in self._executing_jobs:
+            self._pending_restarts.add(job.id)
+            return
         self._cancel_job_task(job.id)
         if job.status != "active":
             return
@@ -908,6 +947,20 @@ class CronService:
         if owns_job_slot:
             self._job_tasks.pop(job_id, None)
 
+        if owns_job_slot and job_id in self._pending_restarts:
+            self._pending_restarts.discard(job_id)
+            if not task.cancelled():
+                error = task.exception()
+                if error is not None:
+                    _LOGGER.error(
+                        "Cron execution failed during reschedule (job=%s)",
+                        job_id,
+                        exc_info=(type(error), error, error.__traceback__),
+                    )
+            job = self._jobs.get(job_id)
+            if self._started and job is not None and job.status == "active":
+                self._start_job_task(job)
+            return
         if task.cancelled():
             return
 
