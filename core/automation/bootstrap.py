@@ -317,6 +317,8 @@ class BootstrapService:
         candidate.status = "active"
         candidate.armed_after_startup_id = self._startup_id
         candidate.last_started_startup_id = None
+        candidate.last_run_id = None
+        candidate.last_session_id = None
         candidate.last_error = None
         self._validate_job(candidate)
         self._validate_capacity(candidate, replacing_id=job_id)
@@ -353,6 +355,8 @@ class BootstrapService:
             status="active",
             armed_after_startup_id=self._startup_id,
             last_started_startup_id=None,
+            last_run_id=None,
+            last_session_id=None,
             last_error=None,
         )
         self._validate_capacity(candidate, replacing_id=job_id)

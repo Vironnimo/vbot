@@ -323,3 +323,39 @@ async def test_observed_message_waits_behind_active_channel_run(
     ]
     assert notes_after_release[-1] == "[channel-message] [Alice|50|member]: side conversation"
     await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_removed_run_admission_keeps_channel_followups_and_releases_reservations(
+    tmp_path, monkeypatch
+):
+    from core.runs import RunCancelledError
+
+    waiting = ChatRunManager(waiting_work_limit=16)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def trigger(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            await release.wait()
+            raise RunCancelledError("queued Run removed")
+        return Run(run_id="next", agent_id="assistant", session_id=SESSION_ID)
+
+    engine, _, _, _ = make_engine(
+        tmp_path, trigger_run=AsyncMock(side_effect=trigger), waiting_work_manager=waiting
+    )
+    monkeypatch.setattr(engine, "_relay_run_events", AsyncMock())
+    try:
+        await engine.handle_inbound_text(make_conversation(), "removed")
+        await asyncio.wait_for(started.wait(), 1)
+        await engine.handle_inbound_text(make_conversation(), "next")
+        release.set()
+        await asyncio.wait_for(drain(engine, 12345), 1)
+        assert calls == 2
+        assert waiting.waiting_work_count() == 0
+    finally:
+        await engine.stop()
