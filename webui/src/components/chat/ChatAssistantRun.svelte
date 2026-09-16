@@ -817,10 +817,10 @@
           </span>
         {/if}
       </div>
-      {#if runFooterNotice(item)}
+      {#if runFooterNotice(item, nowMs)}
         <!-- Transient problem/liveness notices live on their own line so they
              can never push the stable footer parts onto a wrap line. -->
-        <div class="run-footer__notice">{runFooterNotice(item)}</div>
+        <div class="run-footer__notice">{runFooterNotice(item, nowMs)}</div>
       {/if}
     {/if}
   </div>
