@@ -445,3 +445,16 @@ def test_time_filter_uses_instant_index_and_preserves_timestamp_encodings(tmp_pa
         assert selected == {message.id for message in equivalent}
     finally:
         sessions.close()
+
+
+def test_fts_query_keeps_unicode_tokenizer_spelling(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    message = ChatMessage.user("Die Stra\u00dfe ist lang")
+    sessions.create("agent", session_id="unicode").append(message)
+    try:
+        hits = sessions.fts_search(
+            "Stra\u00dfe", project_id=None, agent_id="agent", session_id="unicode", roles=("user",)
+        )
+        assert [hit[1] for hit in hits] == [message.id]
+    finally:
+        sessions.close()
