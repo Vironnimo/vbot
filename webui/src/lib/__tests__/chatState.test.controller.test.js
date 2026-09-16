@@ -577,3 +577,84 @@ describe('chat controller', () => {
     );
   });
 });
+
+it('keeps a successor Run when an older send response arrives', async () => {
+  const response = deferred();
+  const { controller, chatState, runStream } = setup({
+    operationOverrides: { startChatRun: vi.fn(() => response.promise) },
+  });
+  const session = ensureSessionState(chatState, 'alpha', 'session');
+  const sending = controller.sendMessage(session, 'Hello');
+  appendRunEvent(session, { run_id: 'one', sequence: 1, type: 'run_started' });
+  appendRunEvent(session, {
+    run_id: 'one',
+    sequence: 2,
+    type: 'run_completed',
+  });
+  appendRunEvent(session, { run_id: 'two', sequence: 1, type: 'run_started' });
+  appendRunEvent(session, {
+    run_id: 'two',
+    sequence: 2,
+    type: 'assistant_output_delta',
+    payload: { content_delta: 'New' },
+  });
+  const drafts = session.streamingRunEvents;
+  response.resolve({
+    run_id: 'one',
+    status: 'running',
+    sse_url: '/one',
+    events: [],
+  });
+  await sending;
+  expect(session.currentRun.runId).toBe('two');
+  expect(session.streamingRunEvents).toBe(drafts);
+  expect(runStream.subscribeToRun).not.toHaveBeenCalled();
+  controller.destroy();
+});
+
+it('preserves accepted edit events that arrived before its response', async () => {
+  const response = deferred();
+  const { controller, chatState } = setup({
+    operationOverrides: { editChatMessage: vi.fn(() => response.promise) },
+  });
+  const session = ensureSessionState(chatState, 'alpha', 'session');
+  session.messages = [{ id: 'target', role: 'user', content: 'Old' }];
+  const editing = controller.editMessage(session, 'target', 'New');
+  appendRunEvent(session, { run_id: 'edit', sequence: 1, type: 'run_started' });
+  appendRunEvent(session, {
+    run_id: 'edit',
+    sequence: 2,
+    type: 'assistant_output_delta',
+    payload: { content_delta: 'Reply' },
+  });
+  const drafts = session.streamingRunEvents;
+  response.resolve({
+    run_id: 'edit',
+    status: 'running',
+    sse_url: '/edit',
+    events: [],
+  });
+  await editing;
+  expect(
+    session.runEvents.some(
+      (event) => event.run_id === 'edit' && event.sequence === 1,
+    ),
+  ).toBe(true);
+  expect(session.streamingRunEvents).toBe(drafts);
+  expect(session.messages).toEqual([]);
+  controller.destroy();
+});
+
+it('invalidates a pending Queue read when a newer connection snapshot arrives', async () => {
+  const response = deferred();
+  const { controller, chatState } = setup({
+    operationOverrides: { listQueue: vi.fn(() => response.promise) },
+  });
+  const session = ensureSessionState(chatState, 'alpha', 'session');
+  const syncing = controller.syncSessionQueue(session);
+  controller.applyConnectionSnapshot({ active_runs: [], queues: [] });
+  response.resolve({ items: [{ id: 'obsolete', content: 'old' }] });
+  await syncing;
+  expect(session.queue).toEqual([]);
+  controller.destroy();
+});

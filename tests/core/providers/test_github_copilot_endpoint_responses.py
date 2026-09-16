@@ -334,6 +334,7 @@ async def test_send_routes_gpt_5_4_responses_with_nested_tool_name_and_visible_r
         "max_output_tokens": 4096,
     }
     assert metadata_copilot_adapter.normalize_response(response) == {
+        "terminal_outcome": "unknown",
         "role": "assistant",
         "content": None,
         "reasoning": "Need docs lookup.",
@@ -443,6 +444,7 @@ async def test_send_routes_gpt_5_4_family_responses_with_nested_tool_name(
         "max_output_tokens": 4096,
     }
     assert metadata_copilot_adapter.normalize_response(response) == {
+        "terminal_outcome": "unknown",
         "role": "assistant",
         "content": None,
         "reasoning": "Need docs lookup.",
@@ -768,7 +770,7 @@ async def test_stream_gpt_5_4_family_responses_deduplicates_replayed_arguments(
                         "id": "fc_1",
                         "call_id": "call_1",
                         "name": "",
-                        "arguments": "",
+                        "arguments": '{"q":"docs"}',
                         "function": {
                             "name": "search",
                             "arguments": '{"q":"docs"}',
@@ -866,9 +868,10 @@ async def test_stream_responses_backfills_only_missing_tool_argument_suffix(
                     {
                         "type": "function_call",
                         "call_id": "call_stable",
+                        "arguments": '{"q":"docs"}',
                         "function": {
                             "name": "search",
-                            "arguments": '{"q"',
+                            "arguments": '{"q":"docs"}',
                         },
                     }
                 ]
