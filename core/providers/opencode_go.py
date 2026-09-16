@@ -19,6 +19,7 @@ from core.providers._http_shared import (
 from core.providers.adapter import ModelLookup
 from core.providers.anthropic_compatible import (
     ANTHROPIC_OVERLOADED_STATUS,
+    ANTHROPIC_REASONING_PARAMETER_NAMES,
     ANTHROPIC_VERSION,
     AnthropicCompatibleAdapter,
 )
@@ -33,11 +34,14 @@ from core.providers.github_copilot_responses import (
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
+    REASONING_INTENT_DEFAULT,
     REASONING_REPLAY_FIDELITY_READABLE_ONLY,
+    ReasoningIntent,
     ReasoningReplayFidelity,
     closest_supported_effort,
     model_reasoning_levels,
     normalize_thinking_effort,
+    remove_reasoning_kwargs,
 )
 from core.providers.token_getter import TokenGetter
 from core.utils.logging import get_logger
@@ -69,6 +73,7 @@ THINKING_CONTROL_METADATA_KEY = "thinking_control"
 THINKING_CONTROL_TOGGLE = "toggle"
 THINKING_CONTROL_TOGGLE_WITH_EFFORT = "toggle_with_effort"
 THINKING_CONTROL_ALWAYS_ENABLED = "always_enabled"
+THINKING_CONTROL_PROVIDER_DEFAULT = "provider_default"
 MINIMUM_REASONING_EFFORT_METADATA_KEY = "minimum_reasoning_effort"
 # The endpoint returns bare ids with no protocol, so a model the override does
 # not mark is unknown: route it the SAFE default (OpenAI chat/completions) and
@@ -194,6 +199,34 @@ class OpenCodeGoResponsesPolicy:
 class _OpenCodeGoMessagesAdapter(AnthropicCompatibleAdapter):
     """OpenCode Go's Anthropic Messages wire adapter."""
 
+    def _apply_reasoning(
+        self,
+        payload: dict[str, Any],
+        request_kwargs: dict[str, Any],
+        model_id: str,
+        *,
+        reasoning_supported: bool | None,
+        max_tokens: int | None,
+    ) -> None:
+        if _model_profile_value(self._model_lookup, model_id, THINKING_CONTROL_METADATA_KEY) == (
+            THINKING_CONTROL_PROVIDER_DEFAULT
+        ):
+            # Union Alpha publishes no controls and returns no Thinking blocks
+            # even with enabled/adaptive thinking (verified 2026-09-16).
+            # Leave its internal reasoning to the Provider; preserve any native
+            # history independently rather than claiming thinking is disabled.
+            remove_reasoning_kwargs(
+                request_kwargs, "thinking_effort", *ANTHROPIC_REASONING_PARAMETER_NAMES
+            )
+            return
+        super()._apply_reasoning(
+            payload,
+            request_kwargs,
+            model_id,
+            reasoning_supported=reasoning_supported,
+            max_tokens=max_tokens,
+        )
+
     def _request_headers_from_kwargs(
         self,
         request_kwargs: dict[str, Any],
@@ -317,6 +350,29 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         if self._model_protocol(model_id) == PROTOCOL_OPENAI:
             return REASONING_REPLAY_FIDELITY_READABLE_ONLY
         return super().reasoning_replay_fidelity(model_id)
+
+    @classmethod
+    def describe_reasoning_render(
+        cls,
+        *,
+        model_lookup: ModelLookup | None,
+        model_id: str,
+        effort: str | None,
+        provider_config: ProviderConfig | None = None,
+    ) -> ReasoningIntent:
+        if (
+            _model_profile_value(model_lookup, model_id, PROTOCOL_METADATA_KEY)
+            == PROTOCOL_ANTHROPIC
+            and _model_profile_value(model_lookup, model_id, THINKING_CONTROL_METADATA_KEY)
+            == THINKING_CONTROL_PROVIDER_DEFAULT
+        ):
+            return ReasoningIntent(REASONING_INTENT_DEFAULT)
+        return super().describe_reasoning_render(
+            model_lookup=model_lookup,
+            model_id=model_id,
+            effort=effort,
+            provider_config=provider_config,
+        )
 
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         """Resolve media support from the wire selected for this model."""
@@ -720,24 +776,24 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         return value if isinstance(value, str) else None
 
     def _profile_value(self, model_id: str, key: str) -> Any:
-        model_lookup = getattr(self, "_model_lookup", None)
-        if model_lookup is None:
-            return None
-        for candidate in _model_lookup_candidates(model_id):
-            model = model_lookup(candidate)
-            if model is None:
-                continue
-            opencode_go = model.metadata.get(OPENCODE_GO_METADATA_KEY)
-            if isinstance(opencode_go, Mapping):
-                return opencode_go.get(key)
-            # The model exists but carries no profile — stop here so callers do
-            # not scan weaker candidates after resolving an exact Model.
-            return None
-        return None
+        return _model_profile_value(getattr(self, "_model_lookup", None), model_id, key)
 
     def _thinking_keep(self, model_id: str) -> str | None:
         value = self._profile_value(model_id, THINKING_KEEP_METADATA_KEY)
         return value if isinstance(value, str) else None
+
+
+def _model_profile_value(model_lookup: ModelLookup | None, model_id: str, key: str) -> Any:
+    if model_lookup is None:
+        return None
+    for candidate in _model_lookup_candidates(model_id):
+        model = model_lookup(candidate)
+        if model is None:
+            continue
+        profile = model.metadata.get(OPENCODE_GO_METADATA_KEY)
+        # An exact Model without a profile must not inherit a weaker match.
+        return profile.get(key) if isinstance(profile, Mapping) else None
+    return None
 
 
 def _bare_model_id(model_id: str) -> str:

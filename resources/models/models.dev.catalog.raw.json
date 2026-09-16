@@ -87160,8 +87160,8 @@
         "infomaniak/mistralai/Ministral-3-14B-Instruct-2512": {
           "attachment": false,
           "cost": {
-            "input": 0.34617,
-            "output": 0.46156
+            "input": 0.34611,
+            "output": 0.46148
           },
           "description": "Open vision-language model for efficient local deployment, instruction following, and tool use",
           "family": "ministral",
@@ -87190,8 +87190,8 @@
         "ionos/meta-llama/Llama-3.3-70B-Instruct": {
           "attachment": false,
           "cost": {
-            "input": 0.750035,
-            "output": 0.750035
+            "input": 0.749905,
+            "output": 0.749905
           },
           "description": "Popular open Llama workhorse for multilingual chat, coding, and self-hosting",
           "family": "llama",
@@ -87221,8 +87221,8 @@
         "ionos/openai/gpt-oss-120b": {
           "attachment": false,
           "cost": {
-            "input": 0.173085,
-            "output": 0.750035
+            "input": 0.173055,
+            "output": 0.749905
           },
           "description": "Open GPT reasoning model for self-hosted agents and controllable deployments",
           "family": "gpt-oss",
@@ -91128,8 +91128,8 @@
         "scaleway/deepseek-v4-flash-0731": {
           "attachment": false,
           "cost": {
-            "input": 0.46156,
-            "output": 0.92312
+            "input": 0.46148,
+            "output": 0.92296
           },
           "description": "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding",
           "family": "deepseek-flash",
@@ -91202,8 +91202,8 @@
         "scaleway/gpt-oss-120b": {
           "attachment": false,
           "cost": {
-            "input": 0.173085,
-            "output": 0.69234
+            "input": 0.173055,
+            "output": 0.69222
           },
           "description": "Open GPT reasoning model for self-hosted agents and controllable deployments",
           "family": "gpt-oss",
@@ -91242,8 +91242,8 @@
         "scaleway/llama-3.3-70b-instruct": {
           "attachment": false,
           "cost": {
-            "input": 1.03851,
-            "output": 1.03851
+            "input": 1.038331,
+            "output": 1.038331
           },
           "description": "Popular open Llama workhorse for multilingual chat, coding, and self-hosting",
           "family": "llama",
@@ -118921,9 +118921,9 @@
         "glm-5": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.43,
-            "input": 0.86,
-            "output": 2.752
+            "cache_read": 0.465,
+            "input": 0.93,
+            "output": 2.878
           },
           "description": "General GLM flagship for coding, analysis, and tool-heavy engineering workflows",
           "family": "glm",
@@ -119033,7 +119033,7 @@
           "id": "glm-5.3",
           "last_updated": "2026-08-31",
           "limit": {
-            "context": 1048576,
+            "context": 1000000,
             "output": 128000
           },
           "modalities": {
@@ -119442,9 +119442,9 @@
         "minimax-m2.7": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.209,
-            "input": 0.418,
-            "output": 1.588
+            "cache_read": 0.242,
+            "input": 0.484,
+            "output": 1.852
           },
           "description": "Open MiniMax flagship for coding agents, office automation, and complex environments",
           "family": "minimax",
@@ -143052,6 +143052,37 @@
           "temperature": true,
           "tool_call": true
         },
+        "stealth/union-alpha": {
+          "attachment": true,
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "description": "Union Alpha is a multimodal model built for research, coding, and agentic workflows, while delivering frontier-level performance across a broad range of general-purpose tasks. Union Alpha is a stealth model....",
+          "family": "alpha",
+          "id": "stealth/union-alpha",
+          "last_updated": "2026-09-16",
+          "limit": {
+            "context": 262144,
+            "output": 131072
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "name": "Union Alpha",
+          "open_weights": false,
+          "reasoning": false,
+          "release_date": "2026-09-16",
+          "structured_output": false,
+          "temperature": true,
+          "tool_call": true
+        },
         "stepfun/step-3.5-flash": {
           "attachment": false,
           "cost": {
@@ -143309,9 +143340,9 @@
         "tencent/hy3": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.035,
-            "input": 0.14,
-            "output": 0.58
+            "cache_read": 0.020625,
+            "input": 0.0825,
+            "output": 0.33
           },
           "description": "Hy3 is a 295B-parameter Mixture-of-Experts model from Tencent (21B active, 192 experts with top-8 routing) built for reasoning, agentic workflows, and real-world production use. It supports a configurable reasoning effort:...",
           "family": "Hy",
@@ -144599,7 +144630,7 @@
           "last_updated": "2026-06-13",
           "limit": {
             "context": 1048576,
-            "output": 128000
+            "output": 131072
           },
           "modalities": {
             "input": [
@@ -145023,16 +145054,16 @@
         "~deepseek/deepseek-pro-latest": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.05808,
-            "input": 0.5808,
-            "output": 1.7424
+            "cache_read": 0.018438,
+            "input": 0.57948,
+            "output": 1.73844
           },
           "description": "This model always redirects to the latest model in the DeepSeek Pro family.",
           "family": "deepseek",
           "id": "~deepseek/deepseek-pro-latest",
           "last_updated": "2026-09-14",
           "limit": {
-            "context": 1000000,
+            "context": 1048576,
             "output": 393216
           },
           "modalities": {
@@ -160351,7 +160382,7 @@
           "tool_call": true
         },
         "consensusprotocol/deepseek-v4.1-flash": {
-          "attachment": false,
+          "attachment": true,
           "cost": {
             "cache_read": 0.005,
             "input": 0.2,
@@ -160368,7 +160399,8 @@
           },
           "modalities": {
             "input": [
-              "text"
+              "text",
+              "image"
             ],
             "output": [
               "text"
@@ -160381,9 +160413,9 @@
             {
               "type": "effort",
               "values": [
-                "none",
                 "low",
                 "high",
+                "xhigh",
                 "max"
               ]
             }
@@ -160391,7 +160423,7 @@
           "release_date": "2026-09-10",
           "structured_output": false,
           "temperature": true,
-          "tool_call": false
+          "tool_call": true
         },
         "consensusprotocol/gemma-4-31b-it": {
           "attachment": false,
@@ -237584,9 +237616,9 @@
         "deepseek/deepseek-v4-flash": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.017416,
-            "input": 0.08708,
-            "output": 0.17416
+            "cache_read": 0.017108,
+            "input": 0.08554,
+            "output": 0.17108
           },
           "description": "Fast DeepSeek V4 lane for economical reasoning, coding, and long-context work",
           "family": "deepseek-flash",
@@ -237768,9 +237800,9 @@
         "deepseek/deepseek-v4-pro-0813": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.020958,
-            "input": 0.65868,
-            "output": 1.97604
+            "cache_read": 0.018438,
+            "input": 0.57948,
+            "output": 1.73844
           },
           "description": "DeepSeek V4 Pro snapshot with million-token context and support for thinking and non-thinking modes",
           "family": "deepseek-thinking",
@@ -247764,6 +247796,37 @@
           "temperature": true,
           "tool_call": false
         },
+        "stealth/union-alpha": {
+          "attachment": true,
+          "cost": {
+            "input": 0,
+            "output": 0
+          },
+          "description": "Multimodal model for analyzing text, images, documents, and rich media",
+          "family": "alpha",
+          "id": "stealth/union-alpha",
+          "last_updated": "2026-09-16",
+          "limit": {
+            "context": 262144,
+            "output": 131072
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "name": "Union Alpha",
+          "open_weights": false,
+          "reasoning": false,
+          "release_date": "2026-09-16",
+          "structured_output": false,
+          "temperature": true,
+          "tool_call": true
+        },
         "stepfun/step-3.5-flash": {
           "attachment": false,
           "cost": {
@@ -247968,9 +248031,9 @@
         "tencent/hy3": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.033,
-            "input": 0.132,
-            "output": 0.528
+            "cache_read": 0.020625,
+            "input": 0.0825,
+            "output": 0.33
           },
           "description": "Tencent Hy reasoning model for coding, instruction following, and agent tasks",
           "family": "Hy",
@@ -249324,7 +249387,7 @@
           "last_updated": "2026-06-13",
           "limit": {
             "context": 1048576,
-            "output": 128000
+            "output": 131072
           },
           "modalities": {
             "input": [
@@ -249750,9 +249813,9 @@
         "~deepseek/deepseek-pro-latest": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.05808,
-            "input": 0.5808,
-            "output": 1.7424
+            "cache_read": 0.018438,
+            "input": 0.57948,
+            "output": 1.73844
           },
           "description": "Flagship DeepSeek model for coding, reasoning, and agentic work",
           "family": "deepseek",
@@ -308493,133 +308556,6 @@
           "temperature": true,
           "tool_call": false
         },
-        "kwaipilot/kat-coder-air-v2.5": {
-          "attachment": false,
-          "cost": {
-            "cache_read": 0.03,
-            "input": 0.15,
-            "output": 0.6
-          },
-          "description": "Coding model for repository understanding, refactors, and agentic engineering tasks",
-          "family": "kat-coder",
-          "id": "kwaipilot/kat-coder-air-v2.5",
-          "last_updated": "2026-07-10",
-          "limit": {
-            "context": 256000,
-            "output": 80000
-          },
-          "modalities": {
-            "input": [
-              "text",
-              "image"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "name": "Kat Coder Air V2.5",
-          "open_weights": false,
-          "reasoning": true,
-          "reasoning_options": [],
-          "release_date": "2026-07-10",
-          "temperature": true,
-          "tool_call": true
-        },
-        "kwaipilot/kat-coder-pro-v1": {
-          "attachment": false,
-          "cost": {
-            "cache_read": 0.06,
-            "input": 0.3,
-            "output": 1.2
-          },
-          "description": "Coding model for repository understanding, refactors, and agentic engineering tasks",
-          "family": "kat-coder",
-          "id": "kwaipilot/kat-coder-pro-v1",
-          "knowledge": "2024-10",
-          "last_updated": "2025-10-24",
-          "limit": {
-            "context": 256000,
-            "output": 32000
-          },
-          "modalities": {
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "name": "KAT-Coder-Pro V1",
-          "open_weights": false,
-          "reasoning": true,
-          "reasoning_options": [],
-          "release_date": "2025-11-09",
-          "temperature": true,
-          "tool_call": false
-        },
-        "kwaipilot/kat-coder-pro-v2": {
-          "attachment": false,
-          "cost": {
-            "cache_read": 0.06,
-            "input": 0.3,
-            "output": 1.2
-          },
-          "description": "Coding model for repository understanding, refactors, and agentic engineering tasks",
-          "family": "kat-coder",
-          "id": "kwaipilot/kat-coder-pro-v2",
-          "last_updated": "2026-03-30",
-          "limit": {
-            "context": 256000,
-            "output": 256000
-          },
-          "modalities": {
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "name": "Kat Coder Pro V2",
-          "open_weights": false,
-          "reasoning": true,
-          "reasoning_options": [],
-          "release_date": "2026-03-27",
-          "temperature": true,
-          "tool_call": true
-        },
-        "kwaipilot/kat-coder-pro-v2.5": {
-          "attachment": false,
-          "cost": {
-            "cache_read": 0.15,
-            "input": 0.74,
-            "output": 2.96
-          },
-          "description": "Coding model for repository understanding, refactors, and agentic engineering tasks",
-          "family": "kat-coder",
-          "id": "kwaipilot/kat-coder-pro-v2.5",
-          "last_updated": "2026-07-10",
-          "limit": {
-            "context": 256000,
-            "output": 80000
-          },
-          "modalities": {
-            "input": [
-              "text",
-              "image"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "name": "Kat Coder Pro V2.5",
-          "open_weights": false,
-          "reasoning": true,
-          "reasoning_options": [],
-          "release_date": "2026-07-10",
-          "temperature": true,
-          "tool_call": true
-        },
         "meta/llama-3.1-70b": {
           "attachment": false,
           "cost": {
@@ -309739,7 +309675,6 @@
         "moonshotai/kimi-k2.5": {
           "attachment": true,
           "cost": {
-            "cache_read": 0.1,
             "input": 0.6,
             "output": 3
           },
@@ -309750,8 +309685,8 @@
           "knowledge": "2025-01",
           "last_updated": "2026-01",
           "limit": {
-            "context": 262114,
-            "output": 262114
+            "context": 256000,
+            "output": 256000
           },
           "modalities": {
             "input": [
@@ -312597,13 +312532,12 @@
         "openai/gpt-oss-20b": {
           "attachment": false,
           "cost": {
-            "input": 0.05,
-            "output": 0.2
+            "input": 0.03,
+            "output": 0.14
           },
           "description": "Open-weight GPT model for self-hosted reasoning and instruction-following workloads",
           "family": "gpt-oss",
           "id": "openai/gpt-oss-20b",
-          "knowledge": "2024-10",
           "last_updated": "2025-08-05",
           "limit": {
             "context": 131072,
