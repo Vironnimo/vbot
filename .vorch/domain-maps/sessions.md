@@ -2,6 +2,8 @@
 
 Canonical Session history, metadata, completion activity, continuation state, and SQLite persistence.
 
+FTS queries preserve Unicode spelling for SQLite's tokenizer (for example `Straße`); Python case folding belongs only to the canonical fallback matcher, not the FTS expression (`test_session_fts.py`).
+
 ## Overview
 
 `core/sessions/` owns the system-managed Session domain and the single canonical database `<data-dir>/sessions.db`. Chat, Agents, Projects, Channels, Recall, Statistics, and server orchestration address Sessions only through `ChatSessionManager`; no caller constructs storage paths or queries the database directly. Legacy JSONL artifacts are accepted only by the explicit offline converter under `scripts/converters/` and are rejected at Runtime startup.
