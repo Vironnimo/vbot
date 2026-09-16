@@ -186,6 +186,36 @@ class TestAddExdate:
 
 
 class TestOccurrencesInWindow:
+    @pytest.mark.parametrize("recurring", [False, True])
+    @pytest.mark.parametrize("day", ["2026-09-03", "2026-03-29", "2026-10-25"])
+    def test_allday_blocks_intraday_window(self, service, recurring, day):
+        event = service.create_event(
+            title="Busy", start=day, rrule={"freq": "daily", "count": 1} if recurring else None
+        )
+        start, end = service.parse_window(f"{day}T09:00:00", f"{day}T17:00:00")
+        assert [item.event_id for item in service.occurrences_in_window(start, end)] == [event.id]
+        assert service.find_free_slots(start, end, 30, now_utc=start) == []
+        midnight, next_midnight = service.parse_window(day, day)
+        assert service.occurrences_in_window(midnight - timedelta(hours=1), midnight) == []
+        assert (
+            service.occurrences_in_window(next_midnight, next_midnight + timedelta(hours=1)) == []
+        )
+
+    def test_shifted_dst_occurrence_can_be_excluded(self, service):
+        event = service.create_event(
+            title="Daily",
+            start="2026-03-28T02:30:00",
+            duration_minutes=30,
+            rrule={"freq": "daily", "count": 3},
+        )
+        start, end = service.parse_window("2026-03-29T03:35:00", "2026-03-29T03:45:00")
+        (occurrence,) = service.occurrences_in_window(start, end)
+        assert occurrence.start_utc == datetime(2026, 3, 29, 1, 30, tzinfo=UTC)
+        assert occurrence.end_utc == datetime(2026, 3, 29, 2, 0, tzinfo=UTC)
+        assert service.find_free_slots(start, end, 5, now_utc=start) == []
+        service.add_exdate(event.id, occurrence.occurrence_start)
+        assert service.occurrences_in_window(start, end) == []
+
     def test_single_and_recurring_and_allday_expand(self, service: CalendarService) -> None:
         service.create_event(title="Single", start="2026-09-03T15:00:00+02:00", duration_minutes=60)
         service.create_event(
@@ -236,6 +266,18 @@ class TestOccurrencesInWindow:
 
 
 class TestFindFreeSlots:
+    @pytest.mark.parametrize("end_minute,second,expected", [(2, 0, 5), (5, 0, 5), (5, 1, 10)])
+    def test_rounds_cursor_after_busy_interval(self, service, end_minute, second, expected):
+        service.create_event(
+            title="Busy",
+            start=f"2026-09-03T09:{end_minute:02}:{second:02}+00:00",
+            duration_minutes=60,
+        )
+        start = datetime(2026, 9, 3, 9, 30, tzinfo=UTC)
+        end = datetime(2026, 9, 3, 11, tzinfo=UTC)
+        slots = service.find_free_slots(start, end, 30, now_utc=start)
+        assert slots[0].start_utc == datetime(2026, 9, 3, 10, expected, tzinfo=UTC)
+
     def test_first_read_after_restart_uses_persisted_events(self, tmp_path: Path) -> None:
         original = CalendarService(tmp_path, tz="Europe/Berlin")
         original.create_event(title="All day", start="2026-09-03", duration_days=1)
