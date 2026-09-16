@@ -399,6 +399,7 @@ async def test_remote_provider_stream_aborted_by_chunk_stall(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
     monkeypatch.setattr("core.chat.request_runner.STREAM_CHUNK_TIMEOUT_SECONDS", 0.01)
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = SlowStreamingStubAdapter(delay=0.05)
@@ -415,8 +416,8 @@ async def test_remote_provider_stream_aborted_by_chunk_stall(
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     # A remote provider keeps the stall guard. Consecutive visible partials are
-    # continued twice, then the bounded recovery ends explicitly.
-    assert len(adapter.stream_requests) == 3
+    # continued eight times, then the bounded recovery ends explicitly.
+    assert len(adapter.stream_requests) == 9
     assert run.status == RunStatus.INTERRUPTED
     diagnostics = [
         record
@@ -436,14 +437,7 @@ async def test_remote_provider_stream_aborted_by_chunk_stall(
         for record in caplog.records
     )
     assert isinstance(exc_info.value.result, ChatMessage)
-    assert exc_info.value.result.content == "partialpartialpartial"
-    assert persisted_roles(messages) == [
-        "user",
-        "assistant",
-        "note",
-        "assistant",
-        "note",
-        "assistant",
-    ]
+    assert exc_info.value.result.content == "partial" * 9
+    assert persisted_roles(messages) == ["user", "assistant"] + ["note", "assistant"] * 8
     assert messages[-1].role == "run_summary"
     assert messages[-1].status == "interrupted"
