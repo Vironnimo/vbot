@@ -578,7 +578,9 @@ def inject_continuation_reminder(
 
 def normalize_interruption_cause(error: BaseException | None) -> ContinuationCause:
     if isinstance(error, ProviderTimeoutError) or (
-        error is not None and error.__class__.__name__ == "StreamingChunkTimeoutError"
+        error is not None
+        and error.__class__.__name__
+        in {"StreamingChunkTimeoutError", "StreamingProgressTimeoutError"}
     ):
         return "timeout"
     if isinstance(error, NetworkError):

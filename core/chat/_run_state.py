@@ -27,6 +27,7 @@ from core.chat.model_resolution import (
     _resolve_agent_connection,
     _split_agent_model,
 )
+from core.chat.recovery import RecoveryBudget
 from core.chat.usage import RequestContextUsage
 from core.chat.wire_shaping import RequestImageBudget
 from core.projects import (
@@ -99,6 +100,8 @@ class _AssistantStep:
     recovery: Literal["none", "continue", "interrupt"] = "none"
     recovery_note: str | None = None
     replay_reasoning: bool = True
+    failure: Exception | None = None
+    recovery_error: Exception | None = None
 
 
 @dataclass(frozen=True)
@@ -195,6 +198,9 @@ class _RunExecutionContext:
     request_state: _RequestState | None = None
     image_budget: RequestImageBudget = field(default_factory=RequestImageBudget)
     context_usage: RequestContextUsage = field(default_factory=RequestContextUsage)
+    recovery: RecoveryBudget = field(default_factory=RecoveryBudget)
+    interruption_chain: list[ChatMessage] = field(default_factory=list)
+    compaction_retry_after: float = 0.0
 
 
 @dataclass
