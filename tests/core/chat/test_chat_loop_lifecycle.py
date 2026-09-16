@@ -326,7 +326,7 @@ async def test_provider_retry_is_visible_before_answer_without_leaking_error(tmp
     assert [item["state"] for item in status] == ["waiting", "retrying", "waiting", "finished"]
     assert status[1]["error_kind"] == "timeout"
     assert status[1]["attempt"] == 2
-    assert status[1]["max_attempts"] == 3
+    assert status[1]["max_attempts"] == 9
     assert "private-provider-detail" not in str(status)
     assert run.iteration_count == 1
     assert not any(
@@ -337,7 +337,8 @@ async def test_provider_retry_is_visible_before_answer_without_leaking_error(tmp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("expected", [False, True])
-async def test_run_failures_remain_visible_in_history_once(tmp_path, expected, caplog):
+async def test_run_failures_remain_visible_in_history_once(tmp_path, expected, caplog, monkeypatch):
+    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
     failure = (
         ProviderTimeoutError("timeout sentinel")
         if expected

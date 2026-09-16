@@ -220,9 +220,12 @@ async def test_send_closes_adapter_after_provider_error(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_provider_rate_limit_error_is_persisted_and_run_fails(tmp_path: Path) -> None:
+async def test_provider_rate_limit_error_is_persisted_and_run_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([ProviderRateLimitError("too many requests")] * 3)  # type: ignore[list-item]
+    adapter = StubAdapter([ProviderRateLimitError("too many requests")] * 9)  # type: ignore[list-item]
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(ProviderRateLimitError, match="too many requests"):
@@ -306,7 +309,9 @@ async def test_fallback_model_activates_on_retryable_error(tmp_path: Path) -> No
 @pytest.mark.asyncio
 async def test_streaming_fallback_activates_after_same_model_recovery_is_exhausted(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
@@ -317,7 +322,7 @@ async def test_streaming_fallback_activates_after_same_model_recovery_is_exhaust
     # same-model restart budget; only rate limits skip it via the fast path.
     primary_adapter = StubAdapter(
         [],
-        stream_responses=[ProviderError("provider overloaded", retryable=True) for _ in range(3)],
+        stream_responses=[ProviderError("provider overloaded", retryable=True) for _ in range(9)],
     )
     fallback_adapter = StubAdapter(
         [],
@@ -345,7 +350,7 @@ async def test_streaming_fallback_activates_after_same_model_recovery_is_exhaust
 
     run = next(iter(runtime.chat_runs._runs.values()))
     assert assistant.content == "Recovered"
-    assert len(primary_adapter.stream_requests) == 3
+    assert len(primary_adapter.stream_requests) == 9
     assert len(fallback_adapter.stream_requests) == 1
     assert run.status == RunStatus.COMPLETED
     assert [event.type for event in run.events if event.type == MODEL_FALLBACK_ACTIVATED_EVENT] == [
@@ -460,9 +465,12 @@ async def test_fallback_not_triggered_on_non_retryable_error(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_fallback_not_triggered_when_fallback_model_empty(tmp_path: Path) -> None:
+async def test_fallback_not_triggered_when_fallback_model_empty(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([ProviderRateLimitError("primary rate limited")] * 3)  # type: ignore[list-item]
+    adapter = StubAdapter([ProviderRateLimitError("primary rate limited")] * 9)  # type: ignore[list-item]
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(ProviderRateLimitError, match="primary rate limited"):

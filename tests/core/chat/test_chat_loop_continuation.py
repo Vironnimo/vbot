@@ -65,11 +65,13 @@ async def test_start_run_requires_existing_session(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_content_block_request_is_serialized_in_continuation_journal(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(
         [],
-        stream_responses=[NetworkError("offline") for _ in range(3)],
+        stream_responses=[NetworkError("offline") for _ in range(9)],
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     content: list[ContentBlock] = [
@@ -265,11 +267,14 @@ async def test_cancel_after_ten_tools_then_correction_reuses_canonical_results_o
 
 
 @pytest.mark.asyncio
-async def test_second_interrupted_message_extends_same_checkpoint(tmp_path: Path) -> None:
+async def test_second_interrupted_message_extends_same_checkpoint(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     first_adapter = StubAdapter(
         [],
-        stream_responses=[NetworkError("offline") for _ in range(3)],
+        stream_responses=[NetworkError("offline") for _ in range(9)],
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=first_adapter)
     loop = build_chat_loop(runtime, streaming=True)
@@ -287,7 +292,7 @@ async def test_second_interrupted_message_extends_same_checkpoint(tmp_path: Path
                 {"type": "reasoning_delta", "text": "Resume plan"},
                 NetworkError("offline again"),
             ]
-            for _ in range(3)
+            for _ in range(9)
         ],
     )
     second_run = await loop.start_run(

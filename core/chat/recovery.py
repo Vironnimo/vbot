@@ -12,9 +12,9 @@ from core.providers.errors import ProviderError
 from core.runs import RunInterruptedError
 from core.utils.retry import RetryNotice, compute_retry_delay
 
-MAX_TARGET_ATTEMPTS = 3
-MAX_RECOVERY_ATTEMPTS = 6
-RECOVERY_TIMEOUT_SECONDS = 300.0
+MAX_TARGET_ATTEMPTS = 9
+MAX_RECOVERY_ATTEMPTS = 18
+RECOVERY_TIMEOUT_SECONDS = 1800.0
 
 
 class IncompleteResponseError(ProviderError):
@@ -29,7 +29,7 @@ class RecoveryBudget:
     """Bound one unfinished Model step, including its configured fallback routes.
 
     Successful Tool boundaries reset the budget. Partial text, Reasoning,
-    transport heartbeats and Model switches do not. The five-minute deadline
+    transport heartbeats and Model switches do not. The thirty-minute deadline
     begins at the first failure, leaving healthy initial generation unaffected.
     """
 
@@ -59,17 +59,17 @@ class RecoveryBudget:
     async def begin(self, target: str, notify: Callable[[RetryNotice], None]) -> None:
         if not self.available(target):
             raise self.exhausted() from self.last_error
+        target_attempts = self.target_attempts.get(target, 0)
         if self.last_error is not None and self.failed_target == target:
             hint = getattr(self.last_error, "retry_after", None)
             delay, _ = compute_retry_delay(
-                max(0, self.attempts - 1),
+                max(0, target_attempts - 1),
                 retry_after=hint if isinstance(hint, (int, float)) else None,
             )
             if self.deadline is not None and self.clock() + delay >= self.deadline:
                 raise self.exhausted() from self.last_error
             # Status describes this Model route, not hypothetical attempts on
             # fallback routes. The total budget can further narrow its ceiling.
-            target_attempts = self.target_attempts.get(target, 0)
             attempt = target_attempts + 1
             max_attempts = min(
                 MAX_TARGET_ATTEMPTS,

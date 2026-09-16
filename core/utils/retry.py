@@ -118,9 +118,10 @@ def compute_retry_delay(
     base_delay = initial_delay * (BACKOFF_FACTOR**attempt)
     jitter = random.uniform(0, base_delay * JITTER_FACTOR)
     delay = base_delay + jitter
-    if retry_after is not None and retry_after > base_delay:
+    if retry_after is not None:
         retry_after_floor = min(float(retry_after), MAX_RETRY_AFTER_SECONDS)
-        return retry_after_floor + jitter, True
+        if retry_after_floor > base_delay:
+            return retry_after_floor + jitter, True
     return delay, False
 
 
