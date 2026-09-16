@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import codecs
 import contextlib
 import os
 from asyncio.subprocess import DEVNULL, PIPE, Process
@@ -15,7 +14,6 @@ from typing import Any, Literal, TextIO
 
 from core.runs import RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
-from core.utils.ansi import strip_ansi
 from core.utils.errors import VBotError
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
@@ -26,6 +24,8 @@ from core.utils.processes import (
     kill_process_tree_async,
     subprocess_creation_flags,
 )
+
+from ._process_output import ProcessOutputDecoder
 
 _LOGGER = get_logger("tools.process_manager")
 
@@ -100,7 +100,9 @@ class TrackedProcess:
     poll_offset: int = 0
     log_file: Path | None = None
     log_handle: TextIO | None = field(default=None, repr=False)
-    log_decoder: codecs.IncrementalDecoder | None = field(default=None, repr=False)
+    output_decoders: dict[OutputStreamName, ProcessOutputDecoder] = field(
+        default_factory=dict, repr=False
+    )
     log_lease: TemporaryFileLease | None = field(default=None, repr=False)
     output_chunks: list[OutputChunk] = field(default_factory=list)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
@@ -557,16 +559,13 @@ class ProcessManager:
 
         tracked.log_file = lease.path
         tracked.log_lease = lease
-        # Chunks can split multi-byte UTF-8 characters; an incremental decoder
-        # carries the partial bytes over to the next chunk instead of replacing.
-        tracked.log_decoder = codecs.getincrementaldecoder("utf-8")("replace")
 
     def _spill_to_log_file(self, tracked: TrackedProcess, chunk: bytes) -> None:
-        if tracked.log_handle is None or tracked.log_decoder is None:
+        if tracked.log_handle is None:
             return
 
         try:
-            text = strip_ansi(tracked.log_decoder.decode(chunk))
+            text = chunk.decode("utf-8")
             if text:
                 tracked.log_handle.write(text)
                 # Flush per chunk so the file is greppable while the process runs.
@@ -583,13 +582,8 @@ class ProcessManager:
     def _close_log_file(self, tracked: TrackedProcess) -> None:
         if tracked.log_handle is not None:
             with contextlib.suppress(OSError):
-                if tracked.log_decoder is not None:
-                    remainder = strip_ansi(tracked.log_decoder.decode(b"", final=True))
-                    if remainder:
-                        tracked.log_handle.write(remainder)
                 tracked.log_handle.close()
         tracked.log_handle = None
-        tracked.log_decoder = None
         if tracked.log_lease is not None:
             tracked.log_lease.finish()
             tracked.log_lease = None
@@ -625,12 +619,17 @@ class ProcessManager:
         if stream is None:
             return
 
-        while True:
-            chunk = await stream.read(4096)
-            if not chunk:
-                return
+        try:
+            while True:
+                chunk = await stream.read(4096)
+                if not chunk:
+                    return
+                async with tracked.lock:
+                    self._append_output(tracked, stream_name, chunk)
+                tracked.output_event.set()
+        finally:
             async with tracked.lock:
-                self._append_output(tracked, stream_name, chunk)
+                self._append_output(tracked, stream_name, b"", final=True)
             tracked.output_event.set()
 
     async def _watch_process(self, tracked: TrackedProcess) -> None:
@@ -709,7 +708,15 @@ class ProcessManager:
         tracked: TrackedProcess,
         stream_name: OutputStreamName,
         chunk: bytes,
+        *,
+        final: bool = False,
     ) -> None:
+        decoder = tracked.output_decoders.get(stream_name)
+        if decoder is None:
+            decoder = tracked.output_decoders[stream_name] = ProcessOutputDecoder()
+        chunk = decoder.decode(chunk, final=final)
+        if not chunk:
+            return
         start_offset = tracked.buffer_start_offset + len(tracked.combined_buffer)
         tracked.combined_buffer.extend(chunk)
         end_offset = start_offset + len(chunk)
@@ -760,8 +767,10 @@ class ProcessManager:
                 bytes_to_remove -= len(chunk)
                 removed = len(chunk)
             else:
-                chunks[0] = chunk[bytes_to_remove:]
                 removed = bytes_to_remove
+                while removed < len(chunk) and chunk[removed] & 0xC0 == 0x80:
+                    removed += 1
+                chunks[0] = chunk[removed:]
                 bytes_to_remove = 0
 
             if stream_name == "stdout":
@@ -776,6 +785,11 @@ class ProcessManager:
         if overflow <= 0:
             return
 
+        while (
+            overflow < len(tracked.combined_buffer)
+            and tracked.combined_buffer[overflow] & 0xC0 == 0x80
+        ):
+            overflow += 1
         del tracked.combined_buffer[:overflow]
         tracked.buffer_start_offset += overflow
         tracked.truncated = True
@@ -970,11 +984,8 @@ def _chunks_between(
 
 
 def _decode(data: bytes) -> str:
-    # Single decode chokepoint for all process output reaching the model and UI.
-    # Raw bytes stay in the buffer for byte-accurate offset accounting; ANSI
-    # control sequences are stripped only from the surfaced text, so a model
-    # cannot copy escape codes into file writes and the output stays clean.
-    return strip_ansi(data.decode("utf-8", errors="replace"))
+    # Stored chunks contain complete, normalized UTF-8 characters.
+    return data.decode("utf-8", errors="replace")
 
 
 def _utc_now() -> datetime:
