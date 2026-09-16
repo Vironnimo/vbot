@@ -10,6 +10,7 @@ from core.channels.adapter import (
     ConversationFacts,
     MessageFacts,
     QuotedMessageFacts,
+    RouteFacts,
 )
 from core.chat.commands import (
     PreparedCommand,
@@ -66,10 +67,9 @@ class ConversationTransport(Protocol):
         """Extract caption text from one raw platform message for gating checks."""
 
 
-# Queued work carries the ConversationFacts, not a resolved route: the routed session
-# is resolved in the per-conversation worker at processing time. Resolving at enqueue
-# time would pin messages to a session that a queued /new ahead of them is about to
-# move off the conversation anchor (observed messages always resolved late already).
+# Ordinary queued work resolves its Session when the conversation worker processes
+# it, so messages behind /new follow the new anchor. Origin-bound button prompts
+# are the exception: their explicit route must survive later navigation.
 @dataclass(slots=True, frozen=True)
 class _QueuedInboundMessage:
     conversation: ConversationFacts
@@ -111,6 +111,8 @@ class _QueuedInternalPrompt:
     conversation: ConversationFacts
     prompt: str
     admission: WaitingWorkAdmission | None = None
+    # Bound button taps retain their origin while ordinary ingress follows navigation.
+    route: RouteFacts | None = None
 
 
 _QueuedWork = (

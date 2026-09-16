@@ -14,6 +14,52 @@ import {
 } from '../chatState.js';
 import { makeStreamHarness } from './chatRunStream.support.js';
 
+it.each(['run_completed', 'run_failed', 'run_cancelled', 'run_interrupted'])(
+  'does not let an older %s event close the current Run stream',
+  (type) => {
+    const chatState = createChatState();
+    const session = ensureSessionState(chatState, 'alpha', 'session');
+    const close = vi.fn();
+    const { stream } = makeStreamHarness({
+      chatState,
+      displayedAgentId: 'alpha',
+      displayedSessionId: 'session',
+      subscribeRunEvents: vi.fn(() => ({ close })),
+    });
+    stream.attachRunStream(session, {
+      run_id: 'new',
+      status: 'running',
+      sse_url: '/new',
+    });
+    session.contextUsage = { tokens: 100, estimated: false };
+    stream.handleServerEvents({
+      type,
+      payload: {
+        run_event_type: type,
+        run_id: 'old',
+        agent_id: 'alpha',
+        session_id: 'session',
+        run_event_sequence: 8,
+        status: type.slice(4),
+        output: { iteration_count: 99 },
+        context_usage: { tokens: 50, estimated: false },
+      },
+    });
+    expect(session.currentRun.runId).toBe('new');
+    expect(session.currentRun.status).toBe('running');
+    expect(session.status).toBe('running');
+    expect(session.currentRun.iterationCount).toBe(0);
+    expect(session.contextUsage.tokens).toBe(100);
+    expect(close).not.toHaveBeenCalled();
+    expect(
+      session.runEvents.some(
+        (event) => event.run_id === 'old' && event.type === type,
+      ),
+    ).toBe(true);
+    stream.closeSubscriptions();
+  },
+);
+
 it('restores Run controls from a reconnect snapshot with an evicted event prefix', () => {
   const chatState = createChatState();
   const { stream } = makeStreamHarness({
