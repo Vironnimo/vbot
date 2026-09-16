@@ -167,6 +167,11 @@ class _EmittingToolRegistry(ToolRegistry):
         resolver = getattr(self._registry, "is_parallel_safe", None)
         return bool(callable(resolver) and resolver(name))
 
+    def requires_execution_slot(self, name: str) -> bool:
+        """Delegate the wrapped Tool's global execution-slot policy."""
+        resolver = getattr(self._registry, "requires_execution_slot", None)
+        return not callable(resolver) or bool(resolver(name))
+
     def schema_fingerprint(self, name: str) -> str:
         """Return the wrapped registry's Tool schema fingerprint."""
         resolver = getattr(self._registry, "schema_fingerprint", None)

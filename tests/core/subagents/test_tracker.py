@@ -436,3 +436,21 @@ async def test_work_ids_are_reserved_before_registration_across_parent_batches(m
     monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
     assert tracker.allocate_work_id(first) == "sub_000000000001"
     assert tracker.allocate_work_id(second) == "sub_000000000002"
+
+
+async def test_parent_run_budget_survives_fetched_batch_pruning() -> None:
+    from unittest.mock import Mock
+
+    from core.runs import Run
+
+    tracker = SubAgentBatchTracker(Mock())
+    parent = ("parent", "session", "run-parent")
+    run = Run(run_id=parent[2], agent_id=parent[0], session_id=parent[1])
+    assert tracker.reserve_slot(parent, max_count=1, parent_run=run)
+    tracker.register_reserved(parent, "child", "child-session", "child-run")
+    tracker.mark_fetched(parent, "child-session", "child-run")
+    tracker.on_sub_agent_complete(parent, "child-run", {"status": "completed", "content": "done"})
+    assert parent not in tracker._batches
+    assert not tracker.reserve_slot(parent, max_count=1, parent_run=run)
+    next_run = Run(run_id="next", agent_id=parent[0], session_id=parent[1])
+    assert tracker.reserve_slot((parent[0], parent[1], "next"), max_count=1, parent_run=next_run)

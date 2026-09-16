@@ -8,11 +8,12 @@ Parent Run, and submits each ready result to shared Run-boundary delivery.
 from __future__ import annotations
 
 import asyncio
+import weakref
 from dataclasses import dataclass, field
 from typing import Any
 
 from core.projects import format_agent_address
-from core.runs import RunExecutionOwner, RunStatus
+from core.runs import Run, RunExecutionOwner, RunStatus
 from core.sessions import SessionAddress
 from core.tools.tools import JsonObject
 from core.utils.ids import new_id
@@ -45,6 +46,7 @@ class _SubAgentEntry:
 @dataclass
 class _SubAgentBatch:
     entries: dict[str, _SubAgentEntry]
+    parent_run: weakref.ReferenceType[Run] | None = None
     allocated_ids: set[str] = field(default_factory=set)
     reserved_count: int = 0
     # The Parent Run's project, captured when the batch is first created. The
@@ -62,6 +64,7 @@ class SubAgentBatchTracker:
         self._trigger_service = trigger_service
         self._sessions = sessions
         self._batches: dict[ParentKey, _SubAgentBatch] = {}
+        self._run_spawn_counts: weakref.WeakKeyDictionary[Run, int] = weakref.WeakKeyDictionary()
 
     def allocate_work_id(self, parent_key: ParentKey) -> str:
         """Reserve a public id before spawn yields, retaining it with its batch."""
@@ -108,6 +111,7 @@ class SubAgentBatchTracker:
         project_id: str | None = None,
         *,
         execution_owner: RunExecutionOwner | None = None,
+        parent_run: Run | None = None,
     ) -> bool:
         """Reserve one sub-agent slot before async session/run work begins.
 
@@ -121,10 +125,19 @@ class SubAgentBatchTracker:
                 entries={}, project_id=project_id, execution_owner=execution_owner
             )
             self._batches[parent_key] = batch
-        if self._spawn_count(batch) >= max_count:
+        if parent_run is not None:
+            batch.parent_run = weakref.ref(parent_run)
+        count = (
+            self._run_spawn_counts.get(parent_run, self._spawn_count(batch))
+            if parent_run is not None
+            else self._spawn_count(batch)
+        )
+        if count >= max_count:
             self._prune_if_empty(parent_key, batch)
             return False
         batch.reserved_count += 1
+        if parent_run is not None:
+            self._run_spawn_counts[parent_run] = count + 1
         return True
 
     def release_slot(self, parent_key: ParentKey) -> None:
@@ -134,6 +147,11 @@ class SubAgentBatchTracker:
             return
         if batch.reserved_count > 0:
             batch.reserved_count -= 1
+            parent_run = batch.parent_run() if batch.parent_run is not None else None
+            if parent_run is not None:
+                self._run_spawn_counts[parent_run] = max(
+                    0, self._run_spawn_counts.get(parent_run, 0) - 1
+                )
         self._prune_if_empty(parent_key, batch)
 
     def register_reserved(
