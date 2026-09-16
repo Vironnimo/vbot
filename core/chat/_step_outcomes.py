@@ -41,8 +41,6 @@ TOOL_FINALIZATION_NOTE = (
     "possible using the information already available."
 )
 
-MAX_STREAM_CONTINUATIONS = 2
-
 STREAM_RECOVERY_NOTE = (
     "The previous Model response stream ended unexpectedly after producing visible "
     "answer text. The partial Assistant response is already part of this conversation. "
@@ -52,9 +50,9 @@ STREAM_RECOVERY_NOTE = (
 )
 
 OUTPUT_INTEGRITY_RECOVERY_NOTE = (
-    "The previous Model response ended after producing Reasoning but no complete visible "
-    "answer. Continue the same task by providing only the missing visible answer. Do not "
-    "repeat visible text that is already present, and do not emit raw Reasoning delimiter tags."
+    "The previous response ended before completing the task. Continue from the work and "
+    "partial answer already present without repeating visible text. Use Tools if further "
+    "work is needed, then provide the missing answer. Do not emit raw Reasoning delimiter tags."
 )
 
 

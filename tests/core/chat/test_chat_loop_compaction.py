@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -236,3 +237,56 @@ def test_context_window_uses_the_selected_provider_connection(tmp_path: Path) ->
         build_chat_loop(subscription_runtime)._requests.resolve_context_window(subscription_agent)
         == 272_000
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retry", ["cooldown", "expired", "forced"])
+async def test_failed_auto_compaction_defers_retries_but_allows_expiry_and_user_request(
+    tmp_path, monkeypatch, retry
+):
+    now = [0.0]
+    monkeypatch.setattr(
+        "core.compaction.run_coordination.time",
+        SimpleNamespace(monotonic=lambda: now[0], perf_counter=time.perf_counter),
+    )
+    entered = asyncio.Event()
+    released = asyncio.Event()
+    tools = ToolRegistry()
+
+    async def probe(context, arguments):
+        entered.set()
+        await released.wait()
+        return tool_success({"done": True})
+
+    tools.register("probe", "Probe", {"type": "object"}, probe)
+    agent = StubAgent(id="coder", model="openai/test", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [{"tool_calls": [{"id": "one", "name": "probe", "arguments": {}}]}, {"content": "Done"}]
+    )
+    service = StubCompactionService(
+        should_auto=True, compact_error=RuntimeError("summary unavailable")
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=tools,
+        storage=StubStorage({"auto": True}),
+        models=StubModels({("openai", "test"): 1_000_000}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="test")
+    session.append(ChatMessage.user("Earlier context"))
+    session.append(ChatMessage.assistant(model=agent.model, content="Earlier answer"))
+    run = await build_chat_loop(runtime, compaction_service=cast(Any, service)).start_run(
+        "coder", "Work", session_id="test"
+    )
+    await asyncio.wait_for(entered.wait(), 5)
+    assert len(service.compact_calls) == 1
+    if retry == "expired":
+        now[0] = 61
+    elif retry == "forced":
+        assert run.request_compaction()
+    released.set()
+    assert (await asyncio.wait_for(run.wait(), 5)).content == "Done"
+    assert len(service.compact_calls) == (1 if retry == "cooldown" else 2)
+    assert not any(message.role == "compaction_checkpoint" for message in session.load())

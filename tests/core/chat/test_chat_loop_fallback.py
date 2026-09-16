@@ -222,7 +222,7 @@ async def test_send_closes_adapter_after_provider_error(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_provider_rate_limit_error_is_persisted_and_run_fails(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([ProviderRateLimitError("too many requests")])  # type: ignore[list-item]
+    adapter = StubAdapter([ProviderRateLimitError("too many requests")] * 3)  # type: ignore[list-item]
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(ProviderRateLimitError, match="too many requests"):
@@ -462,7 +462,7 @@ async def test_fallback_not_triggered_on_non_retryable_error(tmp_path: Path) -> 
 @pytest.mark.asyncio
 async def test_fallback_not_triggered_when_fallback_model_empty(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
+    adapter = StubAdapter([ProviderRateLimitError("primary rate limited")] * 3)  # type: ignore[list-item]
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(ProviderRateLimitError, match="primary rate limited"):

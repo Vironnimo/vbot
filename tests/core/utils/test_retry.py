@@ -23,6 +23,7 @@ from core.utils.retry import (
     JITTER_FACTOR,
     MAX_RETRIES,
     MAX_RETRY_AFTER_SECONDS,
+    caller_owns_retries,
     compute_retry_delay,
     observe_retries,
     retry_async,
@@ -473,3 +474,25 @@ async def test_retry_observer_failure_does_not_change_request_outcome(caplog):
             == "done"
         )
     assert any(record.exc_info for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_caller_retry_ownership_is_nested_task_local_and_restored():
+    async def externally_owned():
+        operation = AsyncMock(side_effect=ProviderTimeoutError())
+        with caller_owns_retries():
+            with caller_owns_retries(), pytest.raises(ProviderTimeoutError):
+                await retry_async(operation, initial_delay=0)
+            with pytest.raises(ProviderTimeoutError):
+                await retry_async(operation, initial_delay=0)
+        assert operation.await_count == 2
+        restored = AsyncMock(side_effect=[ProviderTimeoutError(), "restored"])
+        assert await retry_async(restored, initial_delay=0) == "restored"
+
+    async def standalone():
+        operation = AsyncMock(side_effect=ProviderTimeoutError())
+        with pytest.raises(ProviderTimeoutError):
+            await retry_async(operation, initial_delay=0)
+        assert operation.await_count == 4
+
+    await asyncio.gather(externally_owned(), standalone())
