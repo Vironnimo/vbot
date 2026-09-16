@@ -251,12 +251,13 @@ async def test_truncated_tools_never_execute_and_cannot_reset_budget(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_fallback_chain_cannot_multiply_total_recovery_budget(tmp_path):
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_fallback_chain_cannot_multiply_total_recovery_budget(tmp_path, fallback):
     adapters = [StubAdapter([], stream_responses=[NetworkError("offline")] * 3) for _ in range(3)]
     agent = StubAgent(
         id="coder",
         model="openai/test",
-        fallback_models=["anthropic/backup::api-key", "third/last::api-key"],
+        fallback_models=["anthropic/backup::api-key", "third/last::api-key"] if fallback else [],
     )
     runtime: Any = StubRuntime(
         data_dir=tmp_path,
@@ -269,7 +270,19 @@ async def test_fallback_chain_cannot_multiply_total_recovery_budget(tmp_path):
     )
     with pytest.raises(RunInterruptedError):
         await build_chat_loop(runtime, streaming=True).send("coder", "Work", session_id="test")
-    assert [len(adapter.stream_requests) for adapter in adapters] == [3, 3, 0]
+    assert [len(adapter.stream_requests) for adapter in adapters] == [3, 3 if fallback else 0, 0]
+    run = next(iter(runtime.chat_runs._runs.values()))
+    retry_status = [
+        event.payload
+        for event in run.events
+        if event.type == PROVIDER_REQUEST_STATUS_EVENT
+        and event.payload.get("state") == "retrying"
+        and "attempt" in event.payload
+    ]
+    routes = ["openai/test::api-key"] + (["anthropic/backup::api-key"] if fallback else [])
+    assert [
+        (status["model"], status["attempt"], status["max_attempts"]) for status in retry_status
+    ] == [(route, attempt, 3) for route in routes for attempt in (2, 3)]
 
 
 @pytest.mark.asyncio

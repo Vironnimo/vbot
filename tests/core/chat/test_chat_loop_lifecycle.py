@@ -326,7 +326,7 @@ async def test_provider_retry_is_visible_before_answer_without_leaking_error(tmp
     assert [item["state"] for item in status] == ["waiting", "retrying", "waiting", "finished"]
     assert status[1]["error_kind"] == "timeout"
     assert status[1]["attempt"] == 2
-    assert status[1]["max_attempts"] == 6
+    assert status[1]["max_attempts"] == 3
     assert "private-provider-detail" not in str(status)
     assert run.iteration_count == 1
     assert not any(

@@ -67,14 +67,20 @@ class RecoveryBudget:
             )
             if self.deadline is not None and self.clock() + delay >= self.deadline:
                 raise self.exhausted() from self.last_error
-            notice = RetryNotice(
-                self.last_error, self.attempts + 1, MAX_RECOVERY_ATTEMPTS, delay, True
+            # Status describes this Model route, not hypothetical attempts on
+            # fallback routes. The total budget can further narrow its ceiling.
+            target_attempts = self.target_attempts.get(target, 0)
+            attempt = target_attempts + 1
+            max_attempts = min(
+                MAX_TARGET_ATTEMPTS,
+                target_attempts + MAX_RECOVERY_ATTEMPTS - self.attempts,
             )
+            notice = RetryNotice(self.last_error, attempt, max_attempts, delay, True)
             notify(notice)
             await asyncio.sleep(delay)
             if not self.available(target):
                 raise self.exhausted() from self.last_error
-            notify(RetryNotice(self.last_error, self.attempts + 1, MAX_RECOVERY_ATTEMPTS, 0, False))
+            notify(RetryNotice(self.last_error, attempt, max_attempts, 0, False))
         self.attempts += 1
         self.target_attempts[target] = self.target_attempts.get(target, 0) + 1
 

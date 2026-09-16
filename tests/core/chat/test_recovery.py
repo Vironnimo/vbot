@@ -28,6 +28,33 @@ async def test_retry_after_applies_to_shared_budget_and_is_observable(monkeypatc
     assert 60 <= sleep.await_args.args[0] <= 60.5
     assert [notice.waiting for notice in notices] == [True, False]
     assert notices[0].attempt == 2
+    assert notices[0].max_attempts == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("previous_attempts", [0, 3, 4])
+async def test_retry_status_matches_current_route_and_remaining_total(
+    monkeypatch, previous_attempts
+):
+    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
+    budget = RecoveryBudget()
+    for index in range(previous_attempts):
+        target = f"previous-{index // 3}"
+        await budget.begin(target, lambda notice: None)
+        budget.failed(ProviderRateLimitError("limited"), target)
+    notices = []
+    current_limit = 2 if previous_attempts == 4 else 3
+    for _ in range(current_limit):
+        await budget.begin("current", notices.append)
+        budget.failed(ProviderRateLimitError("limited"), "current")
+    with pytest.raises(RunInterruptedError):
+        await budget.begin("current", notices.append)
+    assert [(notice.attempt, notice.max_attempts, notice.waiting) for notice in notices] == [
+        (attempt, current_limit, waiting)
+        for attempt in range(2, current_limit + 1)
+        for waiting in (True, False)
+    ]
+    assert budget.attempts == previous_attempts + current_limit
 
 
 @pytest.mark.asyncio
