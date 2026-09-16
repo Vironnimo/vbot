@@ -45,6 +45,25 @@ def stream(text="Done", outcome="stop", *, reasoning=False):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
+async def test_ninth_attempt_can_complete_without_a_fallback(tmp_path, streaming):
+    failures = [NetworkError("temporarily unavailable")] * 8
+    adapter = StubAdapter(
+        [*failures, {"content": "Recovered"}],
+        stream_responses=[*failures, stream("Recovered")],
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path, agent=StubAgent(id="coder", model="openai/test"), adapter=adapter
+    )
+    result = await build_chat_loop(runtime, streaming=streaming).send(
+        "coder", "Work", session_id="test"
+    )
+    assert result.content == "Recovered"
+    assert len(adapter.stream_requests if streaming else adapter.requests) == 9
+    assert next(iter(runtime.chat_runs._runs.values())).status == RunStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("reasoning", [False, True])
 async def test_truncated_response_continues_from_durable_partial(tmp_path, streaming, reasoning):
     first = {
@@ -122,11 +141,11 @@ async def test_exhausted_recovery_reaches_configured_backup(tmp_path, failure):
         "progress": StreamingProgressTimeoutError,
     }
     failed = (
-        [errors[failure]("unavailable") for _ in range(3)]
+        [errors[failure]("unavailable") for _ in range(9)]
         if failure in errors
-        else [stream("thinking", reasoning=True)] * 3
+        else [stream("thinking", reasoning=True)] * 9
         if failure == "reasoning"
-        else [[{"type": "finish", "reason": "stop"}]] * 3
+        else [[{"type": "finish", "reason": "stop"}]] * 9
     )
     adapter = StubAdapter([], stream_responses=failed)
     backup = StubAdapter([], stream_responses=[stream("Recovered")])
@@ -142,7 +161,7 @@ async def test_exhausted_recovery_reaches_configured_backup(tmp_path, failure):
     )
     result = await build_chat_loop(runtime, streaming=True).send("coder", "Work", session_id="test")
     assert result.content == "Recovered"
-    assert len(adapter.stream_requests) == 3
+    assert len(adapter.stream_requests) == 9
     assert len(backup.stream_requests) == 1
 
 
@@ -169,7 +188,7 @@ async def test_establishment_and_stream_retries_do_not_multiply(tmp_path, stream
     )
     with pytest.raises(ProviderError):
         await build_chat_loop(runtime, streaming=streaming).send("coder", "Work", session_id="test")
-    assert adapter.attempts == 3
+    assert adapter.attempts == 9
 
 
 @pytest.mark.asyncio
@@ -179,7 +198,7 @@ async def test_restarts_and_partial_continuations_share_the_same_budget(tmp_path
         stream_responses=[
             NetworkError("first"),
             [{"type": "content_delta", "text": "Partial"}, NetworkError("second")],
-            stream("thinking", reasoning=True),
+            *[stream("thinking", reasoning=True)] * 7,
         ],
     )
     runtime: Any = StubRuntime(
@@ -187,7 +206,7 @@ async def test_restarts_and_partial_continuations_share_the_same_budget(tmp_path
     )
     with pytest.raises(RunInterruptedError):
         await build_chat_loop(runtime, streaming=True).send("coder", "Work", session_id="test")
-    assert len(adapter.stream_requests) == 3
+    assert len(adapter.stream_requests) == 9
     assert next(iter(runtime.chat_runs._runs.values())).status == RunStatus.INTERRUPTED
 
 
@@ -233,7 +252,7 @@ async def test_truncated_tools_never_execute_and_cannot_reset_budget(tmp_path):
                 "terminal_outcome": "output_truncated",
                 "tool_calls": [{"id": f"call_{i}", "name": "probe", "arguments": {"different": i}}],
             }
-            for i in range(3)
+            for i in range(9)
         ]
     )
     runtime: Any = StubRuntime(
@@ -245,15 +264,15 @@ async def test_truncated_tools_never_execute_and_cannot_reset_budget(tmp_path):
     with pytest.raises(RunInterruptedError):
         await build_chat_loop(runtime).send("coder", "Work", session_id="test")
     assert calls == []
-    assert len(adapter.requests) == 3
+    assert len(adapter.requests) == 9
     history = runtime.chat_sessions.get(session_address("coder", "test")).load()
-    assert len([message for message in history if message.role == "tool"]) == 3
+    assert len([message for message in history if message.role == "tool"]) == 9
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fallback", [False, True])
 async def test_fallback_chain_cannot_multiply_total_recovery_budget(tmp_path, fallback):
-    adapters = [StubAdapter([], stream_responses=[NetworkError("offline")] * 3) for _ in range(3)]
+    adapters = [StubAdapter([], stream_responses=[NetworkError("offline")] * 9) for _ in range(3)]
     agent = StubAgent(
         id="coder",
         model="openai/test",
@@ -270,7 +289,7 @@ async def test_fallback_chain_cannot_multiply_total_recovery_budget(tmp_path, fa
     )
     with pytest.raises(RunInterruptedError):
         await build_chat_loop(runtime, streaming=True).send("coder", "Work", session_id="test")
-    assert [len(adapter.stream_requests) for adapter in adapters] == [3, 3 if fallback else 0, 0]
+    assert [len(adapter.stream_requests) for adapter in adapters] == [9, 9 if fallback else 0, 0]
     run = next(iter(runtime.chat_runs._runs.values()))
     retry_status = [
         event.payload
@@ -282,7 +301,7 @@ async def test_fallback_chain_cannot_multiply_total_recovery_budget(tmp_path, fa
     routes = ["openai/test::api-key"] + (["anthropic/backup::api-key"] if fallback else [])
     assert [
         (status["model"], status["attempt"], status["max_attempts"]) for status in retry_status
-    ] == [(route, attempt, 3) for route in routes for attempt in (2, 3)]
+    ] == [(route, attempt, 9) for route in routes for attempt in range(2, 10)]
 
 
 @pytest.mark.asyncio
@@ -358,14 +377,14 @@ async def test_cancel_during_backoff_stops_before_next_provider_request(tmp_path
 @pytest.mark.parametrize("streaming", [False, True])
 async def test_whitespace_only_exhaustion_does_not_create_empty_assistant(tmp_path, streaming):
     adapter = StubAdapter(
-        [{"content": " \n", "terminal_outcome": "stop"}] * 3, stream_responses=[stream(" \n")] * 3
+        [{"content": " \n", "terminal_outcome": "stop"}] * 9, stream_responses=[stream(" \n")] * 9
     )
     runtime: Any = StubRuntime(
         data_dir=tmp_path, agent=StubAgent(id="coder", model="openai/test"), adapter=adapter
     )
     with pytest.raises(ProviderError):
         await build_chat_loop(runtime, streaming=streaming).send("coder", "Work", session_id="test")
-    assert len(adapter.stream_requests if streaming else adapter.requests) == 3
+    assert len(adapter.stream_requests if streaming else adapter.requests) == 9
     assert not any(
         m.role == "assistant"
         for m in runtime.chat_sessions.get(session_address("coder", "test")).load()
@@ -434,16 +453,15 @@ async def test_partial_result_survives_exhaustion_before_further_output(
     if not backup:
         # The first partial is saved, but the server's delay cannot fit the
         # remaining recovery window, so no second operation may start.
-        monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (301, True))
+        monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (1801, True))
     adapter = StubAdapter(
         [],
         stream_responses=[
             [{"type": "content_delta", "text": "Partial"}, NetworkError("dropped")],
-            NetworkError("offline"),
-            NetworkError("offline"),
+            *[NetworkError("offline")] * 8,
         ],
     )
-    secondary = StubAdapter([], stream_responses=[NetworkError("offline")] * 3)
+    secondary = StubAdapter([], stream_responses=[NetworkError("offline")] * 9)
     agent = StubAgent(
         id="coder",
         model="openai/test",
@@ -459,8 +477,8 @@ async def test_partial_result_survives_exhaustion_before_further_output(
     with pytest.raises(RunInterruptedError) as raised:
         await build_chat_loop(runtime, streaming=True).send("coder", "Work", session_id="test")
     assert raised.value.result.content == "Partial"
-    assert len(adapter.stream_requests) == (3 if backup else 1)
-    assert len(secondary.stream_requests) == (3 if backup else 0)
+    assert len(adapter.stream_requests) == (9 if backup else 1)
+    assert len(secondary.stream_requests) == (9 if backup else 0)
 
 
 @pytest.mark.asyncio
@@ -468,8 +486,8 @@ async def test_interrupted_result_includes_fragments_from_all_fallback_routes(tm
     def fragments(text):
         return [[{"type": "content_delta", "text": part}, NetworkError("dropped")] for part in text]
 
-    primary = StubAdapter([], stream_responses=fragments("abc"))
-    secondary = StubAdapter([], stream_responses=fragments("def"))
+    primary = StubAdapter([], stream_responses=fragments("abcdefghi"))
+    secondary = StubAdapter([], stream_responses=fragments("jklmnopqr"))
     agent = StubAgent(
         id="coder", model="openai/test", fallback_models=["anthropic/backup::api-key"]
     )
@@ -482,6 +500,6 @@ async def test_interrupted_result_includes_fragments_from_all_fallback_routes(tm
     )
     with pytest.raises(RunInterruptedError) as raised:
         await build_chat_loop(runtime, streaming=True).send("coder", "Work", session_id="test")
-    assert raised.value.result.content == "abcdef"
+    assert raised.value.result.content == "abcdefghijklmnopqr"
     history = runtime.chat_sessions.get(session_address("coder", "test")).load()
-    assert [m.content for m in history if m.role == "assistant"] == list("abcdef")
+    assert [m.content for m in history if m.role == "assistant"] == list("abcdefghijklmnopqr")

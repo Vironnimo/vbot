@@ -75,6 +75,12 @@ def test_compute_retry_delay_adds_jitter_above_retry_after_floor():
     assert honored is True
 
 
+def test_capped_retry_after_cannot_shorten_later_exponential_backoff():
+    with patch("core.utils.retry.random.uniform", return_value=0):
+        delays = [compute_retry_delay(attempt, retry_after=10_000)[0] for attempt in range(8)]
+    assert delays == [60, 60, 60, 60, 60, 60, 64, 128]
+
+
 # ----- Success path -----
 
 

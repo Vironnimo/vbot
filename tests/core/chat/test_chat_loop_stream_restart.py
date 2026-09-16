@@ -134,7 +134,9 @@ async def test_streaming_empty_native_network_error_restarts_instead_of_empty_as
 @pytest.mark.asyncio
 async def test_reasoning_only_restart_exhaustion_keeps_only_final_attempt_checkpoint(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(
         [],
@@ -143,7 +145,7 @@ async def test_reasoning_only_restart_exhaustion_keeps_only_final_attempt_checkp
                 {"type": "reasoning_delta", "text": f"Attempt {attempt}"},
                 NetworkError(f"drop {attempt}"),
             ]
-            for attempt in range(1, 4)
+            for attempt in range(1, 10)
         ],
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
@@ -155,13 +157,13 @@ async def test_reasoning_only_restart_exhaustion_keeps_only_final_attempt_checkp
     run = next(iter(runtime.chat_runs._runs.values()))
     state = await recover_continuation(session)
     assert state is not None
-    assert state.reasoning == "Attempt 3"
+    assert state.reasoning == "Attempt 9"
     assert state.cause == "network"
-    assert len(adapter.stream_requests) == 3
+    assert len(adapter.stream_requests) == 9
     assert run.status == RunStatus.INTERRUPTED
     messages = session.load()
     assert persisted_roles(messages) == ["user", "assistant"]
-    assert messages[1].reasoning == "Attempt 3"
+    assert messages[1].reasoning == "Attempt 9"
     assert messages[1].interrupted is True
     assert messages[-1].role == "run_summary"
     assert messages[-1].status == "interrupted"
@@ -456,15 +458,15 @@ def _classified_responses_error(
 
 
 @pytest.mark.asyncio
-async def test_streaming_mode_restart_exhaustion_marks_run_interrupted(tmp_path: Path) -> None:
+async def test_streaming_mode_restart_exhaustion_marks_run_interrupted(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(
         [],
-        stream_responses=[
-            NetworkError("drop 1"),
-            NetworkError("drop 2"),
-            NetworkError("drop 3"),
-        ],
+        stream_responses=[NetworkError(f"drop {attempt}") for attempt in range(9)],
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
@@ -473,9 +475,9 @@ async def test_streaming_mode_restart_exhaustion_marks_run_interrupted(tmp_path:
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
-    # The shared per-Model budget allows three attempts, then recovery ends with
+    # The shared per-Model budget allows nine attempts, then recovery ends with
     # an explicit interruption instead of a fabricated normal completion/error.
-    assert len(adapter.stream_requests) == 3
+    assert len(adapter.stream_requests) == 9
     assert run.status == RunStatus.INTERRUPTED
     assert persisted_roles(messages) == ["user"]
     assert messages[-1].role == "run_summary"
