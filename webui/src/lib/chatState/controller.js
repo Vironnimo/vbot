@@ -438,6 +438,7 @@ export function createChatController({
       return { kind: 'ignored' };
     }
     sessionState.actionError = '';
+    const previousRunId = sessionState.currentRun?.runId;
     try {
       const params = {
         agent_id: sessionState.agentId,
@@ -486,6 +487,15 @@ export function createChatController({
         addServerQueuedMessage(sessionState, run.item);
         return { kind: 'queued' };
       }
+      // Live admission may already have moved on to a successor Run.
+      const currentRunId = sessionState.currentRun?.runId;
+      if (
+        currentRunId &&
+        currentRunId !== run.run_id &&
+        currentRunId !== previousRunId
+      ) {
+        return { kind: 'started', runId: run.run_id ?? '' };
+      }
       startRun(sessionState, run);
       runStream.subscribeToRun(sessionState, run.sse_url, {
         afterSequence: 0,
@@ -509,7 +519,7 @@ export function createChatController({
         message_id: messageId,
         content,
       });
-      truncateSessionForEdit(sessionState, messageId);
+      truncateSessionForEdit(sessionState, messageId, run.run_id);
       startRun(sessionState, run);
       runStream.subscribeToRun(sessionState, run.sse_url, {
         afterSequence: 0,
@@ -740,6 +750,10 @@ export function createChatController({
             (item) => item?.id && !serverItemIds.has(item.id),
           ).length;
         }
+        queueSyncVersions.set(
+          sessionState.key,
+          (queueSyncVersions.get(sessionState.key) ?? 0) + 1,
+        );
         syncQueueFromServer(sessionState, serverItems);
       }
       if (discardedCount > 0) {
