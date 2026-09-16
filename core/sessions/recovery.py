@@ -65,12 +65,22 @@ def _quarantine_database(database_path: Path) -> QuarantineResult:
             os.replace(member, destination)
             moved.append((member, destination))
     except OSError as exc:
+        rollback_errors: list[str] = []
         for original, destination in reversed(moved):
-            with suppress(OSError):
+            try:
                 os.replace(destination, original)
+            except OSError as rollback_error:
+                rollback_errors.append(str(rollback_error))
+        # Never recursively delete evidence: a failed rollback can leave the
+        # only copy of a bundle member here. Only remove an empty directory.
         with suppress(OSError):
-            __import__("shutil").rmtree(batch, ignore_errors=True)
-        return QuarantineResult("failed", reason=str(exc))
+            batch.rmdir()
+        reason = str(exc)
+        if rollback_errors:
+            reason += f"; rollback failed; retained bundle at {batch}: " + "; ".join(
+                rollback_errors
+            )
+        return QuarantineResult("failed", path=batch if rollback_errors else None, reason=reason)
     return QuarantineResult("success", path=batch)
 
 
@@ -252,20 +262,20 @@ def _restore_snapshot_with_incident_locked(
     after = set(quarantine_root.iterdir()) if quarantine_root.exists() else set()
     created = sorted(after - before, key=lambda path: path.name)
     quarantine_path = created[-1] if created else None
-    try:
-        write_recovery_incident(
-            data_dir,
-            cause=cause,
-            quarantine_path=quarantine_path,
-            restored_snapshot_id=manifest.snapshot_id,
-            restored_snapshot_time=manifest.created_at,
-            failure_detected_at=failure_detected_at,
-            verification="ok",
-            incident_id=incident_id,
-            recovered_at=snapshots._utc_now(),
-        )
-    except SessionStoreUnavailableError:
-        return False
+    # Publication failure is operational, not evidence that this snapshot is
+    # unusable. Propagate it so auto-recovery stops instead of restoring an
+    # older candidate over the already verified database.
+    write_recovery_incident(
+        data_dir,
+        cause=cause,
+        quarantine_path=quarantine_path,
+        restored_snapshot_id=manifest.snapshot_id,
+        restored_snapshot_time=manifest.created_at,
+        failure_detected_at=failure_detected_at,
+        verification="ok",
+        incident_id=incident_id,
+        recovered_at=snapshots._utc_now(),
+    )
     return True
 
 

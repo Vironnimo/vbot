@@ -144,6 +144,69 @@ def test_recovery_lock_is_not_broken_by_wall_clock_age(tmp_path: Path) -> None:
         snapshots_module._release_lock(owner)
 
 
+def test_failed_quarantine_rollback_keeps_the_only_database_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "sessions.db"
+    sidecar = tmp_path / "sessions.db-wal"
+    database.write_bytes(b"original database")
+    sidecar.write_bytes(b"original wal")
+    real_replace = recovery_module.os.replace
+
+    def fail_sidecar_and_rollback(source: str | Path, destination: str | Path) -> None:
+        if Path(source) == sidecar or Path(destination) == database:
+            raise OSError("injected move failure")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(recovery_module.os, "replace", fail_sidecar_and_rollback)
+    result = recovery_module.quarantine_database(database)
+    assert result.status == "failed"
+    assert result.path is not None
+    assert (result.path / database.name).read_bytes() == b"original database"
+    assert sidecar.read_bytes() == b"original wal"
+
+
+def test_final_incident_failure_never_restores_an_older_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    older, address, first_message = _create_verified_snapshot(tmp_path)
+    sessions = ChatSessionManager(tmp_path)
+    newer_message = ChatMessage.user("newer recoverable history")
+    sessions.get(address).append(newer_message)
+    marker = read_session_store_marker(tmp_path)
+    assert marker is not None
+    newest = snapshots_module.create_snapshot(
+        tmp_path,
+        tmp_path / "sessions.db",
+        sessions.backup_snapshot,
+        database_id=str(marker["database_id"]),
+    )
+    sessions.close()
+    assert newest is not None
+    database = tmp_path / "sessions.db"
+    database.write_bytes(b"damaged")
+    monkeypatch.setattr(snapshots_module, "list_snapshots", lambda *a, **kw: [newest, older])
+    real_publish = recovery_module.write_recovery_incident
+
+    def fail_final_incident(*args, **kwargs):
+        if kwargs.get("verification") == "ok":
+            raise recovery_module.SessionStoreUnavailableError("injected finalization failure")
+        return real_publish(*args, **kwargs)
+
+    monkeypatch.setattr(recovery_module, "write_recovery_incident", fail_final_incident)
+    assert recovery_module.auto_restore_if_needed(tmp_path, database) is False
+    monkeypatch.setattr(recovery_module, "write_recovery_incident", real_publish)
+    reopened = ChatSessionManager(tmp_path)
+    try:
+        assert [message.content for message in reopened.get(address).load()] == [
+            first_message.content,
+            newer_message.content,
+        ]
+    finally:
+        reopened.close()
+    assert len(list((tmp_path / "session-quarantine").iterdir())) == 1
+
+
 def test_concurrent_recovery_reprobes_after_the_first_owner_finishes(tmp_path: Path) -> None:
     _snapshot, _address, _message = _create_verified_snapshot(tmp_path)
     database = tmp_path / "sessions.db"
