@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-16T15:27:31.253429+00:00",
+  "fetched_at": "2026-09-16T17:27:09.624534+00:00",
   "provider_id": "openrouter",
   "raw_response": {
     "data": [
@@ -2879,6 +2879,7 @@
           "logprobs",
           "max_tokens",
           "min_p",
+          "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
           "reasoning_effort",
@@ -3083,6 +3084,7 @@
           "logprobs",
           "max_tokens",
           "min_p",
+          "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
           "reasoning_effort",
@@ -10111,8 +10113,8 @@
         "name": "Tencent: Hy3",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.000000528",
-          "input_cache_read": "0.000000033",
+          "completion": "0.00000033",
+          "input_cache_read": "0.000000020625",
           "overrides": [
             {
               "completion": "0.000000528",
@@ -10129,7 +10131,7 @@
               "utc_start": 1600
             }
           ],
-          "prompt": "0.000000132"
+          "prompt": "0.0000000825"
         },
         "reasoning": {
           "default_effort": "high",
@@ -11167,7 +11169,7 @@
         "top_provider": {
           "context_length": 1048576,
           "is_moderated": false,
-          "max_completion_tokens": 128000
+          "max_completion_tokens": 131072
         }
       },
       {
@@ -12499,9 +12501,9 @@
         "name": "NVIDIA: Nemotron 3 Ultra",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.0000024",
-          "input_cache_read": "0.00000012",
-          "prompt": "0.0000006"
+          "completion": "0.000003125",
+          "input_cache_read": "0.0000001875",
+          "prompt": "0.000000625"
         },
         "reasoning": {
           "default_effort": "high",
@@ -12535,9 +12537,9 @@
         ],
         "supported_voices": null,
         "top_provider": {
-          "context_length": 202800,
+          "context_length": 256000,
           "is_moderated": false,
-          "max_completion_tokens": 182520
+          "max_completion_tokens": 32768
         }
       },
       {
@@ -17184,9 +17186,9 @@
         "name": "DeepSeek: DeepSeek V4 Flash 0423",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.00000017416",
-          "input_cache_read": "0.000000017416",
-          "prompt": "0.00000008708"
+          "completion": "0.00000017108",
+          "input_cache_read": "0.000000017108",
+          "prompt": "0.00000008554"
         },
         "reasoning": {
           "default_effort": "high",
