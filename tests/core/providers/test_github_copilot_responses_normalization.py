@@ -43,6 +43,7 @@ def test_normalize_response_extracts_text_tool_calls_usage_and_reasoning_meta() 
     normalized = normalize_responses_response(response)
 
     assert normalized == {
+        "terminal_outcome": "unknown",
         "role": "assistant",
         "content": "Done.",
         "reasoning": "Considered evidence.",
@@ -220,6 +221,7 @@ def test_normalize_response_extracts_nested_function_call_name_and_visible_reaso
     normalized = normalize_responses_response(response)
 
     assert normalized == {
+        "terminal_outcome": "unknown",
         "role": "assistant",
         "content": "Calling tool.",
         "reasoning": "Need docs lookup.",

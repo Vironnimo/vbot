@@ -102,6 +102,7 @@ async def test_send_routes_gpt_5_mini_to_responses_from_metadata(
     assert request_body["max_output_tokens"] == 64000
     assert request_body["text"] == {"format": {"type": "json_object"}}
     assert metadata_copilot_adapter.normalize_response(response) == {
+        "terminal_outcome": "unknown",
         "role": "assistant",
         "content": "Hi",
         "reasoning": None,
