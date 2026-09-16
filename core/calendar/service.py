@@ -370,7 +370,7 @@ class CalendarService:
             gap_end = min(busy_start, window_end)
             if cursor + duration <= gap_end and len(slots) < max_results:
                 slots.append(FreeSlot(start_utc=cursor, end_utc=cursor + duration))
-            cursor = max(cursor, busy_end)
+            cursor = _round_up_to_minutes(max(cursor, busy_end), FIND_FREE_ROUNDING_MINUTES)
             if cursor >= window_end or len(slots) >= max_results:
                 break
         if len(slots) < max_results and cursor + duration <= window_end:
@@ -458,9 +458,11 @@ class CalendarService:
         if event.rrule is None:
             start_date = parse_date_string(event.start_date, field_name="start_date")
             end_date = start_date + timedelta(days=duration_days)
-            window_start_date = window_start.astimezone(self._timezone).date()
-            window_end_date = window_end.astimezone(self._timezone).date()
-            if end_date <= window_start_date or start_date >= window_end_date:
+            start_utc = datetime.combine(start_date, time.min, tzinfo=self._timezone).astimezone(
+                UTC
+            )
+            end_utc = datetime.combine(end_date, time.min, tzinfo=self._timezone).astimezone(UTC)
+            if end_utc <= window_start or start_utc >= window_end:
                 return []
             return [(start_date, end_date)]
         assert event.start_date is not None
