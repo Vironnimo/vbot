@@ -19,6 +19,7 @@ from core.compaction.compaction import (
     COMPACTION_POLICY_META_KEY,
     COMPACTION_TRIGGER_MANUAL,
     MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
+    CompactionError,
     CompactionInsufficientReclaimError,
     CompactionSettings,
 )
@@ -230,7 +231,7 @@ class CompactionRunCoordinator:
         # checkpoint is stamped below.
         compaction_started_perf = time.perf_counter()
         try:
-            raw_messages = await session.load_async()
+            raw_messages, snapshot_cursor = await self._load_compaction_snapshot(run, session)
             messages = active_session_messages(raw_messages)
             context_usage = latest_session_context_usage(messages)
             if context_usage is not None:
@@ -327,7 +328,10 @@ class CompactionRunCoordinator:
                 active_adapter=request.active_adapter,
                 active_model_id=request.active_model_id,
             )
-            await session.append_async(checkpoint)
+            if not await self._append_compaction_checkpoint_if_current(
+                run, session, checkpoint, snapshot_cursor
+            ):
+                raise CompactionError("Session context changed during Compaction. Please retry.")
             messages.append(checkpoint)
             raw_messages.append(checkpoint)
             await self._host.rotate_prompt_cache_affinity(run)
@@ -370,7 +374,7 @@ class CompactionRunCoordinator:
             snapshot = await session.load_since_async()
         if snapshot is None:
             raise AssertionError("A full Session snapshot must always produce a cursor")
-        return active_session_messages(snapshot.messages), snapshot.cursor
+        return list(snapshot.messages), snapshot.cursor
 
     async def _append_compaction_checkpoint_if_current(
         self,
@@ -456,6 +460,7 @@ class CompactionRunCoordinator:
         if not should_compact and not forced:
             return current_state
         session_messages, snapshot_cursor = await self._load_compaction_snapshot(run, session)
+        session_messages = active_session_messages(session_messages)
         if settings.strategy == "summary_tail" and has_unconsumed_skill_activation(
             session_messages
         ):

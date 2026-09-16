@@ -27,6 +27,7 @@ from core.chat.continuation import (
 from core.compaction import (
     TOOL_RESULT_COMPACTED_FIELD,
 )
+from core.compaction.compaction import CompactionError
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.runs import (
     COMPACTION_ABORTED_EVENT,
@@ -57,6 +58,31 @@ from tests.core.chat.chat_loop_support import (
 )
 
 _ASYNC_COORDINATION_TIMEOUT_SECONDS = 10.0
+
+
+@pytest.mark.asyncio
+async def test_manual_compaction_preserves_note_appended_during_summary(tmp_path):
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Earlier context"))
+    service = _BlockingOnceCompactionService()
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    affinity = runtime.chat_sessions.prompt_cache_affinity_id(session.address)
+    run = await loop.start_compaction_run("coder", session.id)
+    await asyncio.wait_for(service.started.wait(), 10)
+    try:
+        async with asyncio.timeout(10):
+            async with runtime.chat_sessions.write_lock(session.address):
+                await session.append_async(ChatMessage.note("BACKGROUND_RESULT_SENTINEL"))
+    finally:
+        service.release.set()
+    with pytest.raises(CompactionError):
+        await run.wait()
+    assert [message.role for message in session.load()] == ["user", "note"]
+    assert session.load()[-1].content == "BACKGROUND_RESULT_SENTINEL"
+    assert runtime.chat_sessions.prompt_cache_affinity_id(session.address) == affinity
+    assert any(event.type == COMPACTION_ABORTED_EVENT for event in run.events)
 
 
 class _BlockingOnceCompactionService:

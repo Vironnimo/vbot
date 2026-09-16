@@ -162,7 +162,9 @@ export function createChatRunStream({
     if (currentRun?.runId !== run.run_id) {
       startRun(sessionState, { ...run, sse_url: sseUrl });
     } else {
-      currentRun.status = run.status ?? currentRun.status;
+      if (currentRun.status === 'running') {
+        currentRun.status = run.status ?? currentRun.status;
+      }
       currentRun.sseUrl = sseUrl;
       currentRun.startedAt = run.started_at ?? currentRun.startedAt ?? null;
       if (Number.isInteger(run.iteration_count) && run.iteration_count >= 0) {
@@ -485,7 +487,10 @@ export function createChatRunStream({
       // the projection stays consistent if the local removal races.
       removeQueuedMessage(sessionState, event.payload.queue_item_id);
     }
-    if (TERMINAL_RUN_EVENTS.has(event.type)) {
+    if (
+      TERMINAL_RUN_EVENTS.has(event.type) &&
+      sessionState.currentRun?.runId === event.run_id
+    ) {
       delete orderedRunEventBuffers[sessionState.key];
       clearGapWatchdog(sessionState.key);
       clearTerminalReconciliation(sessionState.key);
@@ -677,7 +682,11 @@ export function createChatRunStream({
     }
     const appended = appendRunEvent(sessionState, event);
     handleAppendedRunEvent(sessionState, appended);
-    if (event.type === 'run_started' && displayed) {
+    if (
+      event.type === 'run_started' &&
+      displayed &&
+      sessionState.currentRun?.runId === event.run_id
+    ) {
       attachRunStream(
         sessionState,
         {

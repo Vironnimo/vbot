@@ -23,6 +23,16 @@ import {
 } from './streamingEvents.js';
 
 export function startRun(sessionState, run) {
+  const current = sessionState.currentRun;
+  if (current?.runId === run.run_id) {
+    // A start response can arrive after live output or even completion.
+    // Enrich the existing projection without resetting its lifecycle or drafts.
+    current.sseUrl = run.sse_url ?? current.sseUrl;
+    current.startedAt = current.startedAt ?? run.started_at ?? null;
+    applyRunControls(sessionState, run);
+    appendRunEvents(sessionState, run.events ?? []);
+    return current;
+  }
   sessionState.currentRun = {
     runId: run.run_id,
     controls: run.controls ?? {},
@@ -51,6 +61,11 @@ export function startRun(sessionState, run) {
   sessionState.streamingPhase = 0;
   sessionState.seenStreamingEventKeys = new Set();
   appendRunEvents(sessionState, run.events ?? []);
+  const terminal = sessionState.runEvents.find(
+    (event) =>
+      event.run_id === run.run_id && TERMINAL_RUN_EVENTS.has(event.type),
+  );
+  if (terminal) finishRun(sessionState, terminal);
   return sessionState.currentRun;
 }
 
@@ -81,7 +96,11 @@ export function appendRunEvent(sessionState, event) {
   }
 
   sessionState.runEvents = [...sessionState.runEvents, normalizedEvent];
-  if (normalizedEvent.payload?.context_usage) {
+  if (
+    normalizedEvent.payload?.context_usage &&
+    (!sessionState.currentRun ||
+      sessionState.currentRun.runId === normalizedEvent.run_id)
+  ) {
     sessionState.contextUsage = normalizedEvent.payload.context_usage;
   }
   if (normalizedEvent.type === RUN_EVENT_STREAM_ATTEMPT_RESTARTED) {
@@ -154,6 +173,14 @@ function appendRunEvents(sessionState, events) {
 }
 
 function beginRunFromEvent(sessionState, event) {
+  if (
+    sessionState.runEvents.some(
+      (existing) =>
+        existing.run_id === event.run_id &&
+        TERMINAL_RUN_EVENTS.has(existing.type),
+    )
+  )
+    return;
   const currentRun = sessionState.currentRun;
   const isSameRun = currentRun?.runId === event.run_id;
   const currentSseUrl = isSameRun ? currentRun.sseUrl : '';
@@ -188,6 +215,12 @@ export function finishRun(sessionState, event) {
   const type = event?.type;
   const status = event?.payload?.status;
   const completedRunId = event?.run_id ?? '';
+  if (
+    sessionState.currentRun &&
+    sessionState.currentRun.runId !== completedRunId
+  ) {
+    return sessionState;
+  }
   const contributesToAgentActivity =
     event?.contributes_to_agent_activity !== false;
   if (sessionState.currentRun) {

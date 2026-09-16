@@ -119,7 +119,7 @@ describe('Swarm Wiki', () => {
       expect(document.querySelector('a[href="#wiki/wpg-one"]')).not.toBeNull(),
     );
     expect(document.querySelector('.swarm-goal-post').textContent).toContain(
-      'pst-goal',
+      swarm.prompt,
     );
     document.querySelector('a[href="#wiki/wpg-one"]').click();
     await vi.waitFor(() =>
