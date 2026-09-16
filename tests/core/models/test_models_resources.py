@@ -272,7 +272,7 @@ class TestModelRegistryRealResources:
         assert model.metadata["opencode_go"]["reasoning_response_field"] == "reasoning_content"
 
     def test_opencode_go_current_endpoint_profiles_load(self):
-        """All 28 current official Models route through their documented wire."""
+        """Protect verified endpoint profiles, including Union Alpha's Messages wire."""
 
         registry = ModelRegistry.load(RESOURCES_DIR)
 
@@ -302,6 +302,7 @@ class TestModelRegistryRealResources:
                 "hy3",
             ),
             "anthropic": (
+                "union-alpha",
                 "minimax-m3",
                 "minimax-m2.7",
                 "minimax-m2.5",
@@ -312,11 +313,28 @@ class TestModelRegistryRealResources:
                 "qwen3.6-plus",
             ),
         }
-        assert sum(len(model_ids) for model_ids in expected_by_protocol.values()) == 28
+        assert sum(len(model_ids) for model_ids in expected_by_protocol.values()) == 29
         for protocol, model_ids in expected_by_protocol.items():
             for model_id in model_ids:
                 model = registry.get("opencode-go", model_id)
                 assert model.metadata["opencode_go"]["protocol"] == protocol
+
+    def test_union_alpha_gateway_facts_remain_independent(self):
+        registry = ModelRegistry.load(RESOURCES_DIR)
+        go = registry.get("opencode-go", "union-alpha")
+        router = registry.get("openrouter", "stealth/union-alpha")
+        for model in (go, router):
+            assert model.context_window == 262_144
+            assert model.max_output_tokens == 131_072
+            assert model.capabilities.input_modalities == ("text", "image")
+            assert model.capabilities.tools is True
+        assert go.capabilities.reasoning.supported is True
+        assert go.capabilities.reasoning.control is None
+        assert go.metadata["opencode_go"] == {
+            "protocol": "anthropic",
+            "thinking_control": "provider_default",
+        }
+        assert router.capabilities.reasoning.supported is False
 
     def test_gpt6_and_deepseek41_profiles_load(self):
         registry = ModelRegistry.load(RESOURCES_DIR)
