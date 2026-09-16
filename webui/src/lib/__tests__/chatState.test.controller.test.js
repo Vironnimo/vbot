@@ -8,6 +8,50 @@ import {
 } from '../chatState.js';
 import { setup, deferred, review } from './chatState.controller.support.js';
 
+it.each(['run_completed', 'run_failed', 'run_cancelled', 'run_interrupted'])(
+  'keeps %s authoritative when the send response arrives late',
+  async (type) => {
+    const response = deferred();
+    const { controller, chatState } = setup({
+      operationOverrides: { startChatRun: vi.fn(() => response.promise) },
+    });
+    const session = ensureSessionState(chatState, 'alpha', 'session');
+    const sending = controller.sendMessage(session, 'Hello');
+    appendRunEvent(session, {
+      run_id: 'one',
+      sequence: 1,
+      type: 'run_started',
+    });
+    appendRunEvent(session, {
+      run_id: 'one',
+      sequence: 2,
+      type: 'assistant_output_delta',
+      payload: { content_delta: 'Reply' },
+    });
+    const terminal = {
+      run_id: 'one',
+      sequence: 3,
+      type,
+      payload: { iteration_count: 2 },
+    };
+    appendRunEvent(session, terminal);
+    const drafts = session.streamingRunEvents;
+    response.resolve({
+      run_id: 'one',
+      status: 'running',
+      sse_url: '/one',
+      events: [],
+    });
+    await sending;
+    appendRunEvent(session, terminal);
+    expect(session.status).toBe(type.slice(4));
+    expect(session.currentRun.status).toBe(type.slice(4));
+    expect(session.currentRun.iterationCount).toBe(2);
+    expect(session.streamingRunEvents).toBe(drafts);
+    controller.destroy();
+  },
+);
+
 it('keeps live Run controls authoritative across stale snapshots and other Runs', () => {
   const session = ensureSessionState(
     createChatState(),
