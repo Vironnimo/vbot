@@ -23,6 +23,7 @@ from core.chat._run_state import (
     create_run_execution_context,
 )
 from core.chat._skill_activation import _activate_triggered_skills
+from core.chat._step_outcomes import OUTPUT_INTEGRITY_RECOVERY_NOTE
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.content_blocks import ContentBlock
 from core.chat.continuation import (
@@ -422,7 +423,7 @@ class RunExecution:
             try:
                 completed_assistant = await self._progression._send_until_final(context, target)
                 return completed_assistant
-            except ProviderError as primary_exc:
+            except (ProviderError, RunInterruptedError) as primary_exc:
                 try:
                     (
                         completed_assistant,
@@ -439,15 +440,13 @@ class RunExecution:
                     return completed_assistant
                 _run_succeeded = False
                 run_error = chain_error
+                if isinstance(chain_error, RunInterruptedError):
+                    _run_interrupted = True
+                    if isinstance(chain_error.result, ChatMessage):
+                        completed_assistant = chain_error.result
+                    raise chain_error from primary_exc
                 await _persist_run_error(run, session, chain_error)
                 raise chain_error from primary_exc
-            except RunInterruptedError as exc:
-                _run_succeeded = False
-                _run_interrupted = True
-                run_error = exc
-                if isinstance(exc.result, ChatMessage):
-                    completed_assistant = exc.result
-                raise
             except (ChatError, ConfigError, VBotError) as exc:
                 _run_succeeded = False
                 run_error = exc
@@ -676,8 +675,8 @@ class RunExecution:
         context: _RunExecutionContext,
         run: Run,
         session: ChatSession,
-        first_failure: ProviderError,
-    ) -> tuple[ChatMessage | None, ProviderError]:
+        first_failure: ProviderError | RunInterruptedError,
+    ) -> tuple[ChatMessage | None, ProviderError | RunInterruptedError]:
         """Advance through the resolved fallback chain after a provider failure.
 
         Returns ``(assistant, error_to_report)``. ``assistant`` is set when a
@@ -697,8 +696,10 @@ class RunExecution:
             return None, first_failure
 
         from_binding = agent.model
-        last_failure: ProviderError = first_failure
+        last_failure: ProviderError | RunInterruptedError = first_failure
         for binding, provider_id, connection_id in chain:
+            if not context.recovery.available():
+                break
             _, candidate_model_id = _split_agent_model(binding)
             try:
                 candidate_target = self._requests._create_model_target(
@@ -734,6 +735,8 @@ class RunExecution:
             await session.add_note_async(
                 f"Model {from_binding} unavailable. Switched to {binding} for this run."
             )
+            if isinstance(last_failure, RunInterruptedError) and last_failure.result is not None:
+                await session.add_note_async(OUTPUT_INTEGRITY_RECOVERY_NOTE)
             await context.session_snapshot.refresh(session)
             live_messages = context.request_state.messages if context.request_state else []
             context.request_state = await self._requests.build_request_state(
@@ -782,10 +785,10 @@ class RunExecution:
             try:
                 completed = await self._progression._send_until_final(context, candidate_target)
                 return completed, last_failure
-            except RunInterruptedError:
-                raise
-            except ProviderError as candidate_failure:
+            except (ProviderError, RunInterruptedError) as candidate_failure:
                 if not should_advance_model_fallback_chain(candidate_failure):
+                    if isinstance(candidate_failure, RunInterruptedError):
+                        raise
                     await _persist_run_error(run, session, candidate_failure)
                     raise
                 last_failure = candidate_failure

@@ -58,6 +58,22 @@ _retry_observer: ContextVar[Callable[[RetryNotice], None] | None] = ContextVar(
     "retry_observer", default=None
 )
 
+_retries_owned_by_caller: ContextVar[bool] = ContextVar("retries_owned_by_caller", default=False)
+
+
+@contextmanager
+def caller_owns_retries() -> Iterator[None]:
+    """Use one operation attempt when the caller owns end-to-end recovery.
+
+    Task-local and nestable: other Runs and standalone Provider consumers keep
+    their normal retry policy. Protocol-specific repairs remain Adapter-owned.
+    """
+    token = _retries_owned_by_caller.set(True)
+    try:
+        yield
+    finally:
+        _retries_owned_by_caller.reset(token)
+
 
 @contextmanager
 def observe_retries(observer: Callable[[RetryNotice], None]) -> Iterator[None]:
@@ -142,6 +158,8 @@ async def retry_async(
         The last retryable exception if all retries are exhausted. Every
         ``VBotError`` carries this loop's one-based ``attempts_made`` count.
     """
+    if _retries_owned_by_caller.get():
+        max_retries = 0
     last_error: Exception | None = None
 
     for attempt in range(max_retries + 1):

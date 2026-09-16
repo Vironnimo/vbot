@@ -22,7 +22,7 @@ from core.chat.messages import (
     ChatMessage,
     JsonObject,
 )
-from core.chat.streaming import StreamingAccumulator
+from core.chat.streaming import StreamingAccumulator, iter_with_chunk_timeout
 from core.chat.wire_shaping import (
     SYSTEM_REMINDER_CLOSE_TAG,
     SYSTEM_REMINDER_OPEN_TAG,
@@ -881,7 +881,9 @@ async def _send_streaming_model_request(
     never be passed back through a raw-wire response parser.
     """
     accumulator = StreamingAccumulator()
-    async for delta in adapter.stream(messages, **request_options):
+    # Internal maintenance must remain bounded even when a local Model stalls;
+    # no fallback result may replace an incomplete summary checkpoint.
+    async for delta in iter_with_chunk_timeout(adapter.stream(messages, **request_options)):
         if delta.get("type") != "heartbeat":
             accumulator.add_delta(delta)
     if accumulator.finish_reason != TERMINAL_OUTCOME_STOP:
