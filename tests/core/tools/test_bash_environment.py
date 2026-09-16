@@ -405,13 +405,17 @@ def test_read_registry_path_combines_machine_and_user(monkeypatch: pytest.Monkey
     fake_winreg: Any = types.ModuleType("winreg")
     fake_winreg.HKEY_LOCAL_MACHINE = 1
     fake_winreg.HKEY_CURRENT_USER = 2
+    fake_winreg.REG_EXPAND_SZ = 2
+    fake_winreg.ExpandEnvironmentStrings = lambda value: value.replace(
+        "%SystemRoot%", "C:\\windows"
+    )
 
     open_key_calls: list[tuple[int, str]] = []
 
     def fake_open_key(hkey: int, subkey: str) -> FakeKey:
         open_key_calls.append((hkey, subkey))
         if hkey == fake_winreg.HKEY_LOCAL_MACHINE:
-            return FakeKey("C:\\system32;C:\\windows")
+            return FakeKey("C:\\system32;%SystemRoot%")
         return FakeKey("C:\\user\\bin")
 
     def fake_query_value_ex(key: FakeKey, name: str) -> tuple[str, int]:
@@ -443,6 +447,10 @@ def test_read_registry_path_returns_none_when_both_empty(
     fake_winreg: Any = types.ModuleType("winreg")
     fake_winreg.HKEY_LOCAL_MACHINE = 1
     fake_winreg.HKEY_CURRENT_USER = 2
+    fake_winreg.REG_EXPAND_SZ = 2
+    fake_winreg.ExpandEnvironmentStrings = lambda value: value.replace(
+        "%SystemRoot%", "C:\\windows"
+    )
 
     def fake_open_key(hkey: int, subkey: str) -> FakeKey:
         return FakeKey()
@@ -464,6 +472,10 @@ def test_read_registry_path_returns_none_on_oserror(monkeypatch: pytest.MonkeyPa
     fake_winreg: Any = types.ModuleType("winreg")
     fake_winreg.HKEY_LOCAL_MACHINE = 1
     fake_winreg.HKEY_CURRENT_USER = 2
+    fake_winreg.REG_EXPAND_SZ = 2
+    fake_winreg.ExpandEnvironmentStrings = lambda value: value.replace(
+        "%SystemRoot%", "C:\\windows"
+    )
 
     def fake_open_key(hkey: int, subkey: str) -> Any:
         raise OSError("registry unavailable")
