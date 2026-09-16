@@ -545,6 +545,12 @@ def test_stream_completed_event_prefers_tool_calls_finish_over_completed_status(
                 ],
             },
         },
+        {
+            "type": "tool_call_delta",
+            "id": "call_1",
+            "name_delta": "search",
+            "arguments_delta": '{"q":"docs"}',
+        },
         {"type": "finish", "reason": "tool_calls"},
     ]
 
@@ -701,3 +707,64 @@ def test_stream_backfills_only_missing_reasoning_suffix_from_completed_response(
         },
         {"type": "finish", "reason": "stop"},
     ]
+
+
+@pytest.mark.parametrize(
+    ("status", "reason", "outcome"),
+    [
+        ("incomplete", "max_output_tokens", "output_truncated"),
+        ("incomplete", "content_filter", "content_filtered"),
+        ("incomplete", "other", "unknown"),
+        ("failed", "", "error"),
+        ("completed", "", "tool_calls"),
+        (None, "", "unknown"),
+    ],
+)
+def test_nonstream_terminal_outcome_prevents_executing_incomplete_calls(status, reason, outcome):
+    response = normalize_responses_response(
+        {
+            "status": status,
+            "incomplete_details": {"reason": reason},
+            "output": [
+                {"type": "function_call", "call_id": "call", "name": "write", "arguments": "{}"}
+            ],
+        }
+    )
+    assert response["terminal_outcome"] == outcome
+
+
+def test_empty_completion_replays_accumulated_function_arguments():
+    deltas = list(
+        _iter_deltas(
+            [
+                _sse(
+                    "response.output_item.added",
+                    {
+                        "output_index": 0,
+                        "item": {
+                            "type": "function_call",
+                            "id": "item",
+                            "call_id": "call",
+                            "name": "read",
+                            "arguments": "",
+                        },
+                    },
+                ),
+                _sse(
+                    "response.function_call_arguments.delta",
+                    {"item_id": "item", "delta": '{"path":'},
+                ),
+                _sse(
+                    "response.function_call_arguments.delta", {"item_id": "item", "delta": '"x"}'}
+                ),
+                _sse(
+                    "response.completed",
+                    {"response": {"id": "resp", "status": "completed", "output": []}},
+                ),
+            ]
+        )
+    )
+    metadata = [delta["reasoning_meta"] for delta in deltas if delta["type"] == "reasoning_meta"][
+        -1
+    ]
+    assert metadata["response_output"][0]["arguments"] == '{"path":"x"}'

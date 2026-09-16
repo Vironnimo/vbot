@@ -13,6 +13,13 @@ from core.providers._responses_values import (
     _response_output_items,
 )
 from core.providers.adapter import (
+    TERMINAL_OUTCOME_CONTENT_FILTERED,
+    TERMINAL_OUTCOME_ERROR,
+    TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
+    TERMINAL_OUTCOME_STOP,
+    TERMINAL_OUTCOME_TOOL_CALLS,
+    TERMINAL_OUTCOME_UNKNOWN,
+    TerminalOutcome,
     normalize_tool_call_candidates,
 )
 from core.providers.reasoning import reasoning_token_count
@@ -24,6 +31,7 @@ def normalize_responses_response(response: Mapping[str, Any]) -> dict[str, Any]:
     output_items = _response_output_items(response.get("output"))
     normalized: dict[str, Any] = {
         "role": "assistant",
+        "terminal_outcome": responses_terminal_outcome(response),
         "content": _joined_or_none(_extract_output_text_parts(output_items)),
         "reasoning": _joined_or_none(_extract_reasoning_parts(output_items)),
         "reasoning_meta": _extract_reasoning_meta(response, output_items),
@@ -186,3 +194,32 @@ def _responses_cache_write_tokens(usage: Mapping[str, Any]) -> int | None:
     if isinstance(cache_write_tokens, int) and cache_write_tokens >= 0:
         return cache_write_tokens
     return None
+
+
+def responses_terminal_outcome(
+    response: Mapping[str, Any],
+    *,
+    has_tool_calls: bool = False,
+) -> TerminalOutcome:
+    status = response.get("status")
+    if status == "failed":
+        return TERMINAL_OUTCOME_ERROR
+    if status == "incomplete":
+        incomplete_details = response.get("incomplete_details")
+        reason = (
+            incomplete_details.get("reason") if isinstance(incomplete_details, Mapping) else None
+        )
+        if reason == "max_output_tokens":
+            return TERMINAL_OUTCOME_OUTPUT_TRUNCATED
+        if reason in {"content_filter", "content_policy_violation"}:
+            return TERMINAL_OUTCOME_CONTENT_FILTERED
+        return TERMINAL_OUTCOME_UNKNOWN
+    if status != "completed":
+        return TERMINAL_OUTCOME_UNKNOWN
+
+    output_items = _response_output_items(response.get("output"))
+    if any(item.get("type") == "function_call" for item in output_items):
+        return TERMINAL_OUTCOME_TOOL_CALLS
+    if has_tool_calls:
+        return TERMINAL_OUTCOME_TOOL_CALLS
+    return TERMINAL_OUTCOME_STOP
