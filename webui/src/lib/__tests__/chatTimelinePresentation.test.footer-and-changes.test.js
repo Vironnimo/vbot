@@ -11,7 +11,7 @@ import {
   runFooterParts,
   sessionChangeStats,
 } from '../chatTimelinePresentation.js';
-import { init } from '../i18n.js';
+import { init, t } from '../i18n.js';
 
 describe('runFooterParts', () => {
   beforeEach(() => {
@@ -157,23 +157,63 @@ describe('runFooterParts', () => {
     expect(runFooterNotice({ status: 'running' })).toBe('');
   });
 
-  it('hides the notice while the provider streams with a tiny idle time', () => {
-    expect(
-      runFooterNotice({
-        status: 'running',
-        providerHeartbeat: { idleSeconds: 0.3 },
-      }),
-    ).toBe('');
-  });
+  it.each([0.3, 13, 59.9])(
+    'hides ordinary Provider pauses of %s seconds',
+    (idleSeconds) => {
+      expect(
+        runFooterNotice({
+          status: 'running',
+          providerHeartbeat: { idleSeconds },
+        }),
+      ).toBe('');
+    },
+  );
 
   it('shows the notice once the idle time reaches the threshold', () => {
     expect(
       runFooterNotice({
         status: 'running',
-        providerHeartbeat: { idleSeconds: 10.2 },
+        providerHeartbeat: { idleSeconds: 60 },
       }),
-    ).toBe('Provider connected · waiting 10s for the next model chunk');
+    ).toBe(t('chat.providerWorking', '', { seconds: 60 }));
   });
+
+  it('waits a minute before reporting an ordinary request without heartbeats', () => {
+    const startedAt = Date.parse('2026-09-16T12:00:00Z');
+    const item = {
+      status: 'running',
+      providerRequestStatus: {
+        state: 'waiting',
+        timestamp: new Date(startedAt).toISOString(),
+      },
+    };
+    expect(runFooterNotice(item, startedAt + 59_999)).toBe('');
+    expect(runFooterNotice(item, startedAt + 60_000)).not.toBe('');
+    expect(
+      runFooterNotice({ ...item, status: 'completed' }, startedAt + 60_000),
+    ).toBe('');
+  });
+
+  it.each(['retrying', 'waiting'])(
+    'reports failed requests immediately during %s',
+    (state) => {
+      const nowMs = Date.parse('2026-09-16T12:00:00Z');
+      const notice = runFooterNotice(
+        {
+          status: 'running',
+          providerRequestStatus: {
+            state,
+            error_kind: 'rate_limit',
+            attempt: 2,
+            max_attempts: 3,
+            timestamp: new Date(nowMs).toISOString(),
+          },
+        },
+        nowMs,
+      );
+      expect(notice).not.toBe('');
+    },
+  );
 });
 
 describe('runChangeStats', () => {
