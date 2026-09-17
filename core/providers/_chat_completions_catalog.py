@@ -92,7 +92,7 @@ def _parse_optional_int(value: Any) -> int | None:
 
 
 def _positive_int(value: Any) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         return None
     return value
 

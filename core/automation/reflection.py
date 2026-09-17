@@ -415,6 +415,6 @@ def _log_excerpt(summary: str) -> str:
 
 
 def _non_negative_int(value: Any) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
+    if not isinstance(value, int) or isinstance(value, bool):
         return 0
     return max(value, 0)

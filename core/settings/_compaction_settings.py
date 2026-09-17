@@ -107,7 +107,7 @@ def _normalize_compaction_threshold(value: Any) -> float:
 def _normalize_compaction_positive_integer(value: Any, field: str, default: int) -> int:
     if value is None:
         return default
-    if isinstance(value, bool) or not isinstance(value, int):
+    if not isinstance(value, int) or isinstance(value, bool):
         raise StorageError(f"Compaction Policy {field} must be an integer")
     if value <= 0:
         raise StorageError(f"Compaction Policy {field} must be positive")

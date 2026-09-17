@@ -157,7 +157,7 @@ def _extract_optional_non_negative_int(params: Mapping[str, Any], field_name: st
     value = params.get(field_name)
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise ValueError(f"{field_name} must be a non-negative integer")
     if value == 0:
         return None

@@ -460,6 +460,6 @@ def _openai_cache_write_tokens(usage: dict[str, Any]) -> int | None:
 
 
 def _optional_non_negative_usage_int(value: Any) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         return None
     return value

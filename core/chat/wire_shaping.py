@@ -828,7 +828,7 @@ def _complete_usage_with_estimates(
 
 
 def _optional_usage_token_count(value: Any) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         return None
     return value
 

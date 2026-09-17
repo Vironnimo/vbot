@@ -385,7 +385,7 @@ def _custom_bool(value: Any, path: str) -> bool:
 def _optional_positive_integer(value: Any, path: str) -> int | None:
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise StorageError(f"{path} must be a positive integer or null")
     return value
 

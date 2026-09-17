@@ -197,7 +197,7 @@ def test_resample_pcm16_filters_out_of_band_audio() -> None:
 
     def sine_pcm16(frequency: int, rate: int) -> bytes:
         samples = (np.sin(2 * np.pi * frequency * np.arange(rate) / rate) * 12000).astype(np.int16)
-        return samples.tobytes()
+        return bytes(samples.tobytes())
 
     def rms(pcm16: bytes) -> float:
         samples = np.frombuffer(pcm16, dtype=np.int16).astype(np.float64)
