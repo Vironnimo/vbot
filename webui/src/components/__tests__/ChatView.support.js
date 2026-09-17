@@ -277,6 +277,16 @@ export function createChatRpcMock({
       throw new Error('Unexpected stream call');
     }
 
+    if (method === 'chat.control_run') {
+      return {
+        run_id: params.run_id,
+        status: 'running',
+        sse_url: `/api/runs/${params.run_id}/events`,
+        controls: { compaction: 'unavailable', background_tool_call_ids: [] },
+        events: [],
+      };
+    }
+
     if (method === 'session.create') {
       // Deterministic session id derived from the address so project-agent
       // session-create tests can assert against it. `builder@vbot` →
