@@ -82,6 +82,7 @@ async def _background_result(
     *,
     handoff_after: float | None,
     requested_by_user: bool = False,
+    timeout_seconds: float | None = None,
 ) -> JsonObject:
     process_manager.mark_backgrounded(process_id, context.agent_id, project_id=context.project_id)
     tracked = process_manager.get_process(
@@ -99,7 +100,11 @@ async def _background_result(
         **fields,
     }
     result["delivery"] = "automatic"
-    result["handoff_note"] = _handoff_note(handoff_after, requested_by_user=requested_by_user)
+    result["handoff_note"] = _handoff_note(
+        handoff_after,
+        requested_by_user=requested_by_user,
+        timeout_seconds=timeout_seconds,
+    )
     return tool_success(result)
 
 
@@ -223,7 +228,12 @@ async def _completion_result(
     return tool_success(result)
 
 
-def _handoff_note(handoff_after: float | None, *, requested_by_user: bool = False) -> str:
+def _handoff_note(
+    handoff_after: float | None,
+    *,
+    requested_by_user: bool = False,
+    timeout_seconds: float | None = None,
+) -> str:
     if requested_by_user and handoff_after is not None:
         transition = (
             "The user moved this command to the background after "
@@ -236,9 +246,17 @@ def _handoff_note(handoff_after: float | None, *, requested_by_user: bool = Fals
         )
     else:
         transition = "The command is still running and has been handed off to vBot immediately."
+    if timeout_seconds is None:
+        limit = " No tool timeout applies to this command."
+    else:
+        limit = (
+            f" A tool timeout of {timeout_seconds:g} s still applies to this command, "
+            "including time in the background."
+        )
     note = (
-        f"{transition} Its result will arrive automatically. Continue independent work, "
-        "or finish this Run and wait for the result before dependent work."
+        f"{transition}{limit} Its result will arrive automatically. "
+        "Continue independent work, or finish this Run and wait for the result "
+        "before dependent work."
     )
     if requested_by_user:
         return note
