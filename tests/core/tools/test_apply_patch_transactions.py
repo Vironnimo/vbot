@@ -154,6 +154,20 @@ def test_closest_candidates_are_raw_reusable_and_never_applied(tmp_path):
     assert (tmp_path / "other.txt").read_bytes() == b"done\n"
 
 
+def test_missing_hunk_without_close_candidate_offers_no_excerpt_promise(tmp_path):
+    path = tmp_path / "file.txt"
+    before = b"alpha\nbeta\n"
+    path.write_bytes(before)
+    result = apply(
+        tmp_path,
+        update("@@\n-gamma delta epsilon zeta eta theta iota kappa lambda\n+changed"),
+    )
+    assert result["error"]["code"] == "text_not_found"
+    assert "candidate excerpts" not in result["error"]["message"]
+    assert json.loads(result["error"]["message"].split("\n")[-1])["candidates"] == []
+    assert path.read_bytes() == before
+
+
 def test_ambiguous_hint_reports_actual_locations_including_offset(tmp_path):
     path = tmp_path / "file.txt"
     path.write_bytes(b"intro\nsection\nrepeated\nleft\nrepeated\nright\n")

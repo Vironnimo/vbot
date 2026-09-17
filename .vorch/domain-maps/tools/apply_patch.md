@@ -77,7 +77,9 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 - Match errors return bounded raw candidate excerpts with starting file lines.
   Missing targets use similarity-ranked diagnostics; ambiguity reports the
   winning match's actual locations (including section offsets), not guessed
-  alternatives. These excerpts never authorize a write.
+  alternatives. These excerpts never authorize a write. The missing-target
+  guidance points at those excerpts only when the result carries any, and
+  otherwise tells the Model to read the file.
 - After any text-entry failure on a path, remaining hunks on that path allow
   only unique precise/normalized matches, preventing approximate matching from
   silently satisfying a failed earlier precondition. Other files retain normal
