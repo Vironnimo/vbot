@@ -62,16 +62,16 @@ _SUBAGENT_ID_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
     "description": (
-        "Stable id returned by run. Required for cancel. Omit for status to inspect all "
-        "Sub-Agent work still tracked for this Session."
+        "Sub-Agent work id returned by run. Required for cancel; omit for run. "
+        "Omit for status to inspect all Sub-Agent work still tracked for this Session."
     ),
 }
 _SUBAGENT_CONTENT_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
     "description": (
-        "Task or continuation message. Required for run; make it self-contained unless "
-        "continuing session_id."
+        "Task or continuation message. Required for run; omit for status and cancel. "
+        "Make it self-contained unless continuing session_id."
     ),
 }
 _SUBAGENT_DESCRIPTION_PARAMETER: JsonObject = {
@@ -108,7 +108,8 @@ _SUBAGENT_SESSION_ID_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
     "description": (
-        "Existing Sub-Agent Session to continue. Omit to start a new Session; requires agent_id."
+        "Sub-Agent Session id from an earlier subagent result to continue. Used by run "
+        "only. Omit to start a new Session; requires agent_id."
     ),
 }
 
