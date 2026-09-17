@@ -374,32 +374,31 @@ def test_linux_install_manifest_records_selected_environment_interpreter() -> No
 
 
 @pytest.mark.parametrize("script_name", ["setup.sh", "setup.ps1"])
-def test_fresh_server_install_seeds_global_agent_defaults(script_name: str) -> None:
+def test_fresh_server_install_seeds_thinking_effort_only(script_name: str) -> None:
     script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
 
     if script_name.endswith(".sh"):
-        assert 'DEFAULT_AGENT_TEMPERATURE="0.1"' in script
         assert 'DEFAULT_AGENT_THINKING_EFFORT="high"' in script
+        assert "DEFAULT_AGENT_TEMPERATURE" not in script
         creation = script[
             script.index('if [ ! -f "$SETTINGS_PATH" ]') : script.index(
                 'elif [ "$PORT_PROVIDED" -eq 1 ]'
             )
         ]
         assert '"defaults"' in creation
-        assert '"temperature": %s' in creation
+        assert '"temperature"' not in creation
         assert '"thinking_effort": "%s"' in creation
-        assert '"$DEFAULT_AGENT_TEMPERATURE"' in creation
         assert '"$DEFAULT_AGENT_THINKING_EFFORT"' in creation
     else:
-        assert "$DefaultAgentTemperature = 0.1" in script
         assert '$DefaultAgentThinkingEffort = "high"' in script
+        assert "DefaultAgentTemperature" not in script
         creation = script[
             script.index("if ($settingsWasMissing) {") : script.index(
                 "elseif ($SyncPortIntoSettings)"
             )
         ]
         assert "defaults = [ordered]@{" in creation
-        assert "temperature = $DefaultAgentTemperature" in creation
+        assert "temperature" not in creation
         assert "thinking_effort = $DefaultAgentThinkingEffort" in creation
 
 

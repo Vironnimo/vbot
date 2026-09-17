@@ -24,7 +24,6 @@ $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $WebUiDir = Join-Path $ProjectRoot "webui"
 $DesktopIconPath = Join-Path $ProjectRoot "desktop\icon.ico"
 $RecoverableProblemExitCode = 2
-$DefaultAgentTemperature = 0.1
 $DefaultAgentThinkingEffort = "high"
 
 if ($Desktop -and $DesktopClient) {
@@ -325,7 +324,6 @@ function Initialize-DataDirectory {
             server_port = $ResolvedPort
             defaults = [ordered]@{
                 agent = [ordered]@{
-                    temperature = $DefaultAgentTemperature
                     thinking_effort = $DefaultAgentThinkingEffort
                 }
             }

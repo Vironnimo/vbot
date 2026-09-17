@@ -300,7 +300,7 @@ Open `http://127.0.0.1:8420/`. vBot has already created an initial Identity Agen
 3. Select the Agent's chat Model.
 4. Return to Chat and send a message. A successful response confirms the complete path from the WebUI through vBot to the selected Provider and Model.
 
-The WebUI is the recommended place to manage Connections and Accounts because it keeps credentials out of command history. A fresh server installation seeds global Agent defaults with temperature `0.1` and thinking effort `high`; the initial Agent and later Agents inherit them unless configured more specifically. Installation and updates preserve an existing `settings.json`, so these fresh-install defaults never replace an existing instance's choices.
+The WebUI is the recommended place to manage Connections and Accounts because it keeps credentials out of command history. A fresh server installation seeds global Agent defaults with thinking effort `high` and leaves temperature unset, so Agents request their Model's recommended temperature - or none at all, leaving the choice to Provider and API defaults - unless configured more specifically. Installation and updates preserve an existing `settings.json`, so these fresh-install defaults never replace an existing instance's choices.
 
 <details>
 <summary>Equivalent Provider CLI examples</summary>
