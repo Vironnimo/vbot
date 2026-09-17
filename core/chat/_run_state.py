@@ -202,7 +202,6 @@ class _RunExecutionContext:
     recovery: RecoveryBudget = field(default_factory=RecoveryBudget)
     tool_progress: _ToolProgress = field(default_factory=_ToolProgress)
     interruption_chain: list[ChatMessage] = field(default_factory=list)
-    compaction_retry_after: float = 0.0
 
 
 @dataclass

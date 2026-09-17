@@ -41,7 +41,6 @@ if TYPE_CHECKING:
 
 
 _LOGGER = get_logger("compaction.coordination")
-AUTO_COMPACTION_RETRY_DELAY_SECONDS = 60.0
 
 
 class ManualCompactionRequest(Protocol):
@@ -428,8 +427,6 @@ class CompactionRunCoordinator:
         forced = run.compaction_state == "pending"
         if not settings.auto and not forced:
             return current_state
-        if not forced and time.monotonic() < getattr(context, "compaction_retry_after", 0.0):
-            return current_state
         if settings.strategy == "continuation" and not allow_continuation:
             if forced and not continue_same_run:
                 run.emit(COMPACTION_ABORTED_EVENT, {"reason": "run_finished"})
@@ -555,7 +552,6 @@ class CompactionRunCoordinator:
                 COMPACTION_ABORTED_EVENT,
                 {"reason": "failed"},
             )
-            context.compaction_retry_after = time.monotonic() + AUTO_COMPACTION_RETRY_DELAY_SECONDS
             _LOGGER.warning("Compaction failed; continuing without compaction", exc_info=True)
             return current_state
         finally:
@@ -610,7 +606,6 @@ class CompactionRunCoordinator:
             )
         except Exception:
             run.emit(COMPACTION_ABORTED_EVENT, {"reason": "failed"})
-            context.compaction_retry_after = time.monotonic() + AUTO_COMPACTION_RETRY_DELAY_SECONDS
             _LOGGER.warning(
                 "Post-compaction request projection failed; continuing without Compaction",
                 exc_info=True,
