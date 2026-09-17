@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -479,6 +480,30 @@ def test_timezone_change_reprojects_wall_clock_cron(tmp_path: Path) -> None:
 
     assert service.system_timezone_name() == "Europe/Berlin"
     assert service.next_fire_at(job, reference_time=reference) == "2026-01-02T08:00:00+00:00"
+
+
+def test_next_fire_keeps_local_wall_clock_across_dst_transitions(tmp_path: Path) -> None:
+    service, _trigger_service = make_service(tmp_path, tz="Europe/Berlin")
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Midnight run",
+        schedule_type="cron",
+        cron_expression="0 0 * * *",
+    )
+    berlin = ZoneInfo("Europe/Berlin")
+
+    # Spring forward: 2026-03-29 is 23 hours long, so the next local midnight is
+    # 2026-03-29T22:00Z — not 23:00 local that evening, which a fixed-offset step
+    # after midnight would report.
+    assert (
+        service.next_fire_at(job, reference_time=datetime(2026, 3, 29, tzinfo=berlin))
+        == "2026-03-29T22:00:00+00:00"
+    )
+    # Fall back: 2026-10-25 is 25 hours long.
+    assert (
+        service.next_fire_at(job, reference_time=datetime(2026, 10, 25, tzinfo=berlin))
+        == "2026-10-25T23:00:00+00:00"
+    )
 
 
 def test_create_validates_target_and_owned_session(tmp_path: Path) -> None:
