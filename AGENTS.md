@@ -84,7 +84,7 @@ Maintain affected documentation as part of the task with small, factual updates:
 - `.vorch/PROJECT.md` — architecture, conventions, dev/test setup, domain-maps index, strategic context
 - `.vorch/domain-maps/<domain>.md` — a domain's ownership, contracts, or documented behavior changes, including affected supplementary files, or a new domain emerges (a new domain also gets added to the domain-maps index in PROJECT.md)
 - `.vorch/GLOSSARY.md` — shared vocabulary under the Terminology rules below
-- `.vorch/FLAGGED.md` — git-ignored, never commit it; append a deferred concern at the bottom so you needn't read the whole file, or fold it into a related existing entry when you already know one fits.
+- `.vorch/FLAGGED.md` — git-ignored, never commit it; append a deferred concern at the bottom so you needn't read the whole file, or fold it into a related existing entry when you already know one fits; delete an entry once its concern is resolved or verified fixed instead of annotating it.
 
 **Write all project documents in English.** Plans, design documents, decision records (like the system-prompt handoff), domain maps, PROJECT.md, GLOSSARY.md, FLAGGED.md — every project artifact is written in English, regardless of the language you and the user speak in chat. User-facing chat follows the user's language; the documents do not.
 
