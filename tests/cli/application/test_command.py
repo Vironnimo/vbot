@@ -44,6 +44,9 @@ def test_human_packaged_update_waits_for_its_terminal_result(
         return terminal
 
     monkeypatch.setattr(command, "discover", lambda: install)
+    # A packaged update can run inside an Agent's handoff child process, so the
+    # ambient environment may carry the ticket this human path must ignore.
+    monkeypatch.delenv("VBOT_UPDATE_HANDOFF", raising=False)
     monkeypatch.setattr(operations, "request_update", request)
     monkeypatch.setattr(operations, "wait", wait)
 
