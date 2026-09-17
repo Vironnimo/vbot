@@ -113,13 +113,30 @@ def next_fire_at(
     if reference_utc.tzinfo is None:
         reference_utc = reference_utc.replace(tzinfo=UTC)
     reference_local = reference_utc.astimezone(timezone)
-    next_fire_local = cast(
-        datetime,
-        croniter(job.cron_expression, reference_local).get_next(datetime),
-    )
-    if next_fire_local.tzinfo is None:
-        next_fire_local = next_fire_local.replace(tzinfo=timezone)
+    next_fire_local = _next_cron_fire_local(timezone, job.cron_expression, reference_local)
     return next_fire_local.astimezone(UTC).isoformat()
+
+
+def _next_cron_fire_local(
+    timezone: ZoneInfo,
+    expression: str,
+    reference_local: datetime,
+) -> datetime:
+    """Return the next cron fire in ``timezone``, iterating local wall-clock time.
+
+    croniter advances aware datetimes by a fixed offset, so a daylight-saving
+    transition inside the step produces a spurious tick: a daily Expression asked
+    after local midnight of a spring-forward day answers 23:00 that evening
+    instead of the following midnight. Stepping naive wall-clock time and
+    resolving the zone per tick keeps wall-clock schedules on their local time.
+    A fire inside a spring-forward gap resolves to the instant right after the
+    gap; a fire inside a fall-back overlap resolves to its first occurrence.
+    """
+    wall_clock = reference_local.replace(tzinfo=None)
+    next_local = cast(datetime, croniter(expression, wall_clock).get_next(datetime))
+    if next_local.tzinfo is None:
+        return next_local.replace(tzinfo=timezone)
+    return next_local.astimezone(timezone)
 
 
 def _project_job_occurrences(
@@ -202,17 +219,15 @@ def _project_cron_ticks(
         return []
     # get_next is exclusive; step back in UTC to include an exact window-start tick.
     cursor_local = (window_start - timedelta(microseconds=1)).astimezone(timezone)
-    iterator = croniter(job.cron_expression, cursor_local)
     ticks: list[datetime] = []
     while len(ticks) < cap:
-        next_local = cast(datetime, iterator.get_next(datetime))
-        if next_local.tzinfo is None:
-            next_local = next_local.replace(tzinfo=timezone)
-        next_utc = next_local.astimezone(UTC)
+        fire_local = _next_cron_fire_local(timezone, job.cron_expression, cursor_local)
+        next_utc = fire_local.astimezone(UTC)
         if next_utc >= window_end:
             break
         if next_utc >= window_start:
             ticks.append(next_utc)
+        cursor_local = fire_local
     return ticks
 
 
