@@ -264,8 +264,10 @@ async def test_cancellation_waits_for_inference_then_shutdown_releases_model() -
 def test_native_transformers_adapter_contracts_without_weights(
     engine_name: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    torch = pytest.importorskip("torch")
-    transformers = pytest.importorskip("transformers")
+    # The native adapters are version-bound: the declared local-speech extra pins
+    # the minor releases whose Auto classes these engines import.
+    torch = pytest.importorskip("torch", minversion="2.10")
+    transformers = pytest.importorskip("transformers", minversion="5.16.1")
 
     from core.model_tasks.speech_local import (
         _PROGRESS,
