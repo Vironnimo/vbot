@@ -768,11 +768,11 @@
             onLoadOlder={actions.loadOlderHistory}
             onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
             onCancelToolCall={actions.handleCancelToolCall}
-            onBackgroundToolCall={(target) =>
+            onBackgroundToolCall={({ runId, toolCallId }) =>
               chatController.controlRun(
                 target.activeSessionState,
                 'background_tool',
-                target,
+                { runId, toolCallId },
               )}
             onCancelSubAgent={actions.handleCancelSubAgent}
             messageEditingDisabled={chatState.loadingHistory ||

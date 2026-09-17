@@ -83,6 +83,20 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     deleteCalendarEvent: (id) => call('calendar.delete', { id }),
     addCalendarExdate: (params) => call('calendar.add_exdate', params),
     startChatRun: (params) => call('chat.stream', params),
+    controlRun: ({ agentId, sessionId, runId, action, toolCallId } = {}) =>
+      call('chat.control_run', {
+        agent_id: agentId,
+        session_id: sessionId,
+        run_id: runId,
+        action,
+        ...(toolCallId ? { tool_call_id: toolCallId } : {}),
+      }),
+    cancelToolCall: ({ agentId, runId, toolCallId } = {}) =>
+      call('chat.cancel_tool_call', {
+        agent_id: agentId,
+        run_id: runId,
+        tool_call_id: toolCallId,
+      }),
     listFiles: (agentId) => call('files.list', { agent_id: agentId }),
     listPrompts: (params = {}) => call('prompt.list', params),
     updatePromptBlock: (params) => call('prompt.update', params),
