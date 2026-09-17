@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -240,15 +239,9 @@ def test_context_window_uses_the_selected_provider_connection(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("retry", ["cooldown", "expired", "forced"])
-async def test_failed_auto_compaction_defers_retries_but_allows_expiry_and_user_request(
-    tmp_path, monkeypatch, retry
-):
-    now = [0.0]
-    monkeypatch.setattr(
-        "core.compaction.run_coordination.time",
-        SimpleNamespace(monotonic=lambda: now[0], perf_counter=time.perf_counter),
-    )
+async def test_failed_auto_compaction_retries_at_the_next_boundary(tmp_path: Path) -> None:
+    """A failed attempt must leave the next eligible boundary retrying."""
+
     entered = asyncio.Event()
     released = asyncio.Event()
     tools = ToolRegistry()
@@ -282,11 +275,9 @@ async def test_failed_auto_compaction_defers_retries_but_allows_expiry_and_user_
     )
     await asyncio.wait_for(entered.wait(), 5)
     assert len(service.compact_calls) == 1
-    if retry == "expired":
-        now[0] = 61
-    elif retry == "forced":
-        assert run.request_compaction()
     released.set()
     assert (await asyncio.wait_for(run.wait(), 5)).content == "Done"
-    assert len(service.compact_calls) == (1 if retry == "cooldown" else 2)
+    # Pre-request check, post-Tool-batch check and final-response check each
+    # retried; a failed attempt never suppresses a later eligible boundary.
+    assert len(service.compact_calls) == 3
     assert not any(message.role == "compaction_checkpoint" for message in session.load())
