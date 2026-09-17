@@ -50,9 +50,13 @@ async def test_user_handoff_preserves_process_and_automatic_delivery(
     handoffs = []
     original_handoff_note = bash_results._handoff_note
 
-    def record_handoff(elapsed, *, requested_by_user=False):
+    def record_handoff(elapsed, *, requested_by_user=False, timeout_seconds=None):
         handoffs.append((elapsed, requested_by_user))
-        return original_handoff_note(elapsed, requested_by_user=requested_by_user)
+        return original_handoff_note(
+            elapsed,
+            requested_by_user=requested_by_user,
+            timeout_seconds=timeout_seconds,
+        )
 
     monkeypatch.setattr(bash_results, "_handoff_note", record_handoff)
 
