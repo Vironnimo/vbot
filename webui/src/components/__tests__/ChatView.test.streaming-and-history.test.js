@@ -109,6 +109,83 @@ describe('ChatView', () => {
     );
   });
 
+  it('forwards a live bash row background action to the Run control RPC', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        streamResponse: {
+          run_id: 'run-bash-handoff',
+          sse_url: '/api/runs/run-bash-handoff/events',
+          status: 'running',
+          events: [],
+        },
+      }),
+    );
+
+    chatViewTest.mount({ target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    sendComposerMessage('Run a long command');
+
+    await waitForCondition(
+      () => subscribeRunEventsMock.mock.calls.length === 1,
+      100,
+    );
+
+    const handlers = subscribeRunEventsMock.mock.calls[0][1];
+    handlers.onEvent({
+      data: {
+        type: 'tool_call_started',
+        run_id: 'run-bash-handoff',
+        sequence: 1,
+        payload: {
+          tool_call: {
+            id: 'call-bash-handoff',
+            index: 0,
+            name: 'bash',
+            arguments: { command: 'sleep 60' },
+          },
+        },
+      },
+    });
+    handlers.onEvent({
+      data: {
+        type: 'run_controls_changed',
+        run_id: 'run-bash-handoff',
+        sequence: 2,
+        payload: {
+          compaction: 'unavailable',
+          background_tool_call_ids: ['call-bash-handoff'],
+        },
+      },
+    });
+    flushSync();
+
+    const backgroundButton = document.querySelector(
+      '[aria-label="Move to background"]',
+    );
+    expect(backgroundButton).toBeTruthy();
+    backgroundButton.click();
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(([method]) => method === 'chat.control_run'),
+      100,
+    );
+    expect(rpcMock).toHaveBeenCalledWith('chat.control_run', {
+      agent_id: 'alpha',
+      session_id: 'session-1',
+      run_id: 'run-bash-handoff',
+      action: 'background_tool',
+      tool_call_id: 'call-bash-handoff',
+    });
+  });
+
   it('flushes stable run events immediately so a fast sub-agent starts as running', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({
