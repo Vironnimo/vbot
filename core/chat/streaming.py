@@ -674,27 +674,27 @@ async def iter_with_chunk_timeout(
             last_progress_at,
             progress_timeout_seconds,
         )
-        wait_timeout = _minimum_timeout(timeout_seconds, progress_remaining)
-        if deadline is not None:
-            wait_timeout = _minimum_timeout(wait_timeout, max(0.0, deadline - time.monotonic()))
+        deadline_remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+        wait_timeout = _minimum_timeout(timeout_seconds, progress_remaining, deadline_remaining)
         try:
             chunk = await asyncio.wait_for(iterator.__anext__(), timeout=wait_timeout)
         except StopAsyncIteration:
             return
         except TimeoutError as exc:
             await _close_async_iterator(iterator)
-            if deadline is not None and time.monotonic() >= deadline:
+            # The bound that sized this wait decides the failure: ``wait_for`` can
+            # resume marginally before the bound it was given, so comparing the bound
+            # is race-free where a wall-clock comparison is not.
+            if deadline_remaining is not None and wait_timeout == deadline_remaining:
                 raise StreamingProgressTimeoutError("Model recovery time budget exhausted") from exc
-            if (
-                progress_timeout_seconds is not None
-                and time.monotonic() - last_progress_at >= progress_timeout_seconds
-            ):
+            if progress_remaining is not None and wait_timeout == progress_remaining:
                 raise StreamingProgressTimeoutError(
                     "provider connection stayed alive but produced no Model delta for "
                     f"{progress_timeout_seconds:g} seconds"
                 ) from exc
+            active_stall_seconds = timeout_seconds if timeout_seconds is not None else wait_timeout
             raise StreamingChunkTimeoutError(
-                f"provider stream stalled for {timeout_seconds:g} seconds"
+                f"provider stream stalled for {active_stall_seconds or 0.0:g} seconds"
             ) from exc
         if chunk.get("type") != "heartbeat":
             last_progress_at = time.monotonic()
@@ -710,8 +710,8 @@ def _remaining_progress_seconds(
     return max(0.0, progress_timeout_seconds - (time.monotonic() - last_progress_at))
 
 
-def _minimum_timeout(first: float | None, second: float | None) -> float | None:
-    values = [value for value in (first, second) if value is not None]
+def _minimum_timeout(*timeouts: float | None) -> float | None:
+    values = [value for value in timeouts if value is not None]
     return min(values) if values else None
 
 
