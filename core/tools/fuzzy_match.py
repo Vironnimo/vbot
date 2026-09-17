@@ -343,7 +343,7 @@ def _detect_line_ending(content: str) -> str | None:
 
 def _to_line_ending(text_lf: str, file_ending: str | None) -> str:
     """Convert LF-normalized text to the target line ending."""
-    if file_ending in (None, "\n"):
+    if file_ending is None or file_ending == "\n":
         return text_lf
     return text_lf.replace("\n", file_ending)
 

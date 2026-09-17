@@ -419,7 +419,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
     ) -> dict[str, Any]:
         """Pin OpenRouter routing to one cache lineage without leaking its address."""
 
-        scope = (
+        scope: list[str | None] = (
             ["prompt-cache-affinity", prompt_cache_affinity_id]
             if prompt_cache_affinity_id is not None
             else ["session", project_id, agent_id, session_id]

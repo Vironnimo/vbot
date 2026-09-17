@@ -338,7 +338,7 @@ def _checkpoint(
 def _optional_checkpoint(value: Any, snapshot: _Snapshot) -> int | None:
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
         raise _HistoryError("invalid_arguments", "checkpoint must be a positive integer")
     _checkpoint(snapshot, value)
     return value
@@ -362,13 +362,13 @@ def _cursor_roles(value: Any) -> tuple[str, ...]:
 
 
 def _bounded_int(value: Any, field: str, minimum: int, maximum: int) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+    if not isinstance(value, int) or isinstance(value, bool) or not minimum <= value <= maximum:
         raise _HistoryError("invalid_arguments", f"{field} must be between {minimum} and {maximum}")
     return value
 
 
 def _cursor_int(value: Any, *, minimum: int, maximum: int | None = None) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
         raise _HistoryError("invalid_cursor", "History cursor is invalid.")
     if maximum is not None and value > maximum:
         raise _HistoryError("invalid_cursor", "History cursor is invalid.")

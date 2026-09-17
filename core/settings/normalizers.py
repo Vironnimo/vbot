@@ -396,7 +396,7 @@ def _normalize_debug_enabled(value: Any) -> bool:
 def _normalize_debug_trace_limit(value: Any) -> int:
     if value is None:
         return cast("int", DEBUG_SETTING_DEFAULTS["trace_limit"])
-    if isinstance(value, bool) or not isinstance(value, int):
+    if not isinstance(value, int) or isinstance(value, bool):
         raise StorageError("Debug setting trace_limit must be an integer")
     if value <= 0:
         raise StorageError("Debug setting trace_limit must be positive")
@@ -439,7 +439,7 @@ def _normalize_reflection_enabled(value: Any) -> bool:
 def _normalize_reflection_interval(key: str, value: Any) -> int:
     if value is None:
         return cast("int", REFLECTION_SETTING_DEFAULTS[key])
-    if isinstance(value, bool) or not isinstance(value, int):
+    if not isinstance(value, int) or isinstance(value, bool):
         raise StorageError(f"Reflection setting {key} must be an integer")
     if value <= 0:
         raise StorageError(f"Reflection setting {key} must be positive")
