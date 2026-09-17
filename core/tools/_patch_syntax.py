@@ -43,10 +43,7 @@ _MESSAGES = {
         "Hunk {hunk} in {path} matches multiple locations. Add unchanged neighboring lines "
         "or a unique context hint and retry."
     ),
-    "text_not_found": (
-        "Hunk {hunk} in {path} was not found. Use any candidate excerpts below to update "
-        "the hunk, or inspect the file for current context."
-    ),
+    "text_not_found": "Hunk {hunk} in {path} was not found. {guidance}",
     "line_numbered_content": (
         "Hunk {hunk} in {path} contains incomplete line-number gutters. "
         "Supply complete raw lines without read-output prefixes."
@@ -71,6 +68,21 @@ _MESSAGES = {
 }
 
 
+_NOT_FOUND_EXCERPTS = (
+    "Use any candidate excerpts below to update the hunk, or inspect the file for current context."
+)
+_NOT_FOUND_WITHOUT_EXCERPTS = (
+    "Read the file for its current content, then retry the hunk with matching context."
+)
+
+
+def _not_found_guidance(details: JsonObject | None) -> str:
+    """Name the recovery the result supports: a candidate list can come back empty."""
+    if details and details.get("candidates"):
+        return _NOT_FOUND_EXCERPTS
+    return _NOT_FOUND_WITHOUT_EXCERPTS
+
+
 _HEADER = re.compile(r"^\*\*\*\s+(Add|Update|Delete|Move)\s+File:\s*(.*)$")
 
 
@@ -83,6 +95,8 @@ class _PatchError(Exception):
         message: str | None = None,
         **values: object,
     ):
+        if message is None and code == "text_not_found":
+            values["guidance"] = _not_found_guidance(details)
         super().__init__(message if message is not None else _MESSAGES[code].format(**values))
         self.code = code
         self.details = details or {}
