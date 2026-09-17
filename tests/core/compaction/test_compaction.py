@@ -6,6 +6,7 @@ import asyncio
 import json
 import threading
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -894,14 +895,16 @@ async def test_compaction_engine_leaves_context_projection_for_chat() -> None:
 @pytest.mark.parametrize("heartbeats", [False, True])
 async def test_compaction_stalled_stream_is_bounded_and_closed(monkeypatch, heartbeats):
     closed = asyncio.Event()
+    clock = 0.0
 
     class StalledAdapter:
         async def stream(self, *args, **kwargs):
+            nonlocal clock
             try:
                 while True:
                     if heartbeats:
                         yield {"type": "heartbeat"}
-                        await asyncio.sleep(0.005)
+                        clock += 0.05
                     else:
                         await asyncio.Event().wait()
             finally:
@@ -910,6 +913,10 @@ async def test_compaction_stalled_stream_is_bounded_and_closed(monkeypatch, hear
     def bounded(source):
         return iter_with_chunk_timeout(source, timeout_seconds=0.05, progress_timeout_seconds=0.15)
 
+    # The controlled clock decides the timeout branch deterministically: a
+    # heartbeat source that advances it past the progress window must report a
+    # progress timeout, independent of how fast workers are scheduled.
+    monkeypatch.setattr("core.chat.streaming.time", SimpleNamespace(monotonic=lambda: clock))
     monkeypatch.setattr("core.compaction.compaction.iter_with_chunk_timeout", bounded)
     expected = StreamingProgressTimeoutError if heartbeats else StreamingChunkTimeoutError
     with pytest.raises(expected):
