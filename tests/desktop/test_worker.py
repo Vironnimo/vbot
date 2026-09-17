@@ -136,15 +136,7 @@ def test_worker_publishes_error_when_engine_start_fails(
 
 
 def test_mock_engine_works_with_worker(fake_bridge: FakeBridge) -> None:
-    """Mock engine with low scores should not trigger detection.
-
-    Skips when pyaudio is unavailable since the worker opens a real mic stream.
-    """
-    try:
-        import pyaudio  # type: ignore[import-untyped]  # noqa: F401
-    except ImportError:
-        pytest.skip("pyaudio not installed")
-
+    """Mock engine with low scores should not trigger detection."""
     from desktop.wakeword.worker import WakewordWorker
 
     engine = MockWakewordEngine(score_sequence=[0.0])
@@ -154,6 +146,12 @@ def test_mock_engine_works_with_worker(fake_bridge: FakeBridge) -> None:
         server_url="http://127.0.0.1:8420",
     )
     worker._read_config = lambda: {"target_agent_id": "main"}  # type: ignore[method-assign]
+    worker._target_agent_available = lambda _agent_id: True  # type: ignore[assignment,method-assign]
+    worker._open_stream = lambda: setattr(  # type: ignore[method-assign]
+        worker,
+        "_stream",
+        FakeSounddeviceStream([_make_silence_chunk()], on_read=worker._running.clear),
+    )
 
     worker.start()
     # Let it run for at least a few detection cycles
