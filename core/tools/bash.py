@@ -121,10 +121,10 @@ _BASH_WORKDIR_PARAMETER: JsonObject = {
 _BASH_TIMEOUT_PARAMETER: JsonObject = {
     "type": "number",
     "minimum": 0,
-    "default": DEFAULT_TIMEOUT_SECONDS,
     "description": (
-        "Total runtime limit in seconds, including time in background. Omit for 180 seconds; "
-        "use a longer limit for slow work or 0 for no limit."
+        "Total runtime limit in seconds, including time in background. Foreground default: "
+        "180 seconds; background mode has no default limit. Use a longer limit for slow "
+        "work or 0 for no limit."
     ),
 }
 _BASH_ENV_KEYS_PARAMETER: JsonObject = {
@@ -325,6 +325,7 @@ async def bash_handler(
             context,
             process_id,
             handoff_after=None,
+            timeout_seconds=parsed["timeout"],
         )
         _maybe_spawn_completion_watcher(
             process_manager,
@@ -332,6 +333,8 @@ async def bash_handler(
             process_id,
             command,
             trigger_service,
+            timeout_state=timeout_state,
+            timeout_seconds=parsed["timeout"],
         )
         return result
 
@@ -340,6 +343,7 @@ async def bash_handler(
         context,
         process_id,
         command=command,
+        timeout_seconds=parsed["timeout"],
     )
 
     if context.is_cancelled() or context.was_cancelled_by_user():
@@ -360,6 +364,8 @@ async def bash_handler(
             process_id,
             command,
             trigger_service,
+            timeout_state=timeout_state,
+            timeout_seconds=parsed["timeout"],
         )
         return result
 
@@ -457,6 +463,9 @@ async def _watch_background_process(
     command: str,
     trigger_service: Any,
     project_id: str | None = None,
+    *,
+    timeout_state: dict[str, bool] | None = None,
+    timeout_seconds: float | None = None,
 ) -> None:
     try:
         tracked = process_manager.get_process(process_id, agent_id, project_id=project_id)
@@ -498,6 +507,11 @@ async def _watch_background_process(
     output = str(_shape_output_fields(tracked, output)["output"])
 
     user_cancelled = tracked.cancelled_by_user
+    timed_out = (
+        timeout_state is not None
+        and bool(timeout_state.get("timed_out"))
+        and tracked.status == "killed"
+    )
 
     if user_cancelled:
         body = (
@@ -505,6 +519,18 @@ async def _watch_background_process(
             f"{BASH_COMPLETION_PROCESS_ID_PREFIX}{process_id}\n"
             f"{_background_user_cancelled_message(tracked)}\n"
             f"Command: {command}\n"
+            "Output:\n"
+            f"{output}"
+        )
+    elif timed_out:
+        limit = f"{timeout_seconds:g}" if timeout_seconds is not None else "configured"
+        body = (
+            f"{BASH_COMPLETION_STATUS_PREFIX}killed\n"
+            f"{BASH_COMPLETION_PROCESS_ID_PREFIX}{process_id}\n"
+            f"Command: {command}\n"
+            "Reason: the vBot tool timeout of "
+            f"{limit} s elapsed and killed the process. Set a longer timeout if the "
+            "command legitimately needs more time, or timeout: 0 for no limit.\n"
             "Output:\n"
             f"{output}"
         )
@@ -549,6 +575,9 @@ def _maybe_spawn_completion_watcher(
     process_id: str,
     command: str,
     trigger_service: Any | None,
+    *,
+    timeout_state: dict[str, bool] | None = None,
+    timeout_seconds: float | None = None,
 ) -> None:
     if trigger_service is None:
         return
@@ -563,6 +592,8 @@ def _maybe_spawn_completion_watcher(
             command,
             trigger_service,
             project_id=context.project_id,
+            timeout_state=timeout_state,
+            timeout_seconds=timeout_seconds,
         )
     )
     try:
@@ -649,7 +680,6 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
         timeout = optional_number(
             arguments.get("timeout"),
             field_name="timeout",
-            default=DEFAULT_TIMEOUT_SECONDS,
             minimum=0,
         )
         env_keys = normalize_env_keys(
@@ -658,6 +688,9 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
         )
     except ValueError as error:
         return str(error)
+
+    if timeout is None and mode == DEFAULT_EXECUTION_MODE:
+        timeout = DEFAULT_TIMEOUT_SECONDS
 
     return {
         "command": command,
@@ -743,6 +776,7 @@ async def _run_foreground_phase(
     process_id: str,
     *,
     command: str,
+    timeout_seconds: float | None = None,
 ) -> JsonObject:
     deadline = (
         asyncio.get_running_loop().time() + FOREGROUND_HANDOFF_SECONDS
@@ -802,6 +836,7 @@ async def _run_foreground_phase(
                 context,
                 process_id,
                 requested_by_user=background_requested,
+                timeout_seconds=timeout_seconds,
                 handoff_after=(
                     (
                         datetime.now(UTC)
