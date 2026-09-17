@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 
-import pytest
-
 import core.sessions._store_codec as session_store_module
 from core.chat import ChatMessage
 from core.chat.content_blocks import FileMentionBlock, TextBlock
@@ -260,13 +258,6 @@ def test_role_specific_relational_message_storage_round_trips(
     assert [hit[1] for hit in fork_hits] == [user.id]
 
 
-@pytest.mark.skipif(
-    sqlite3.sqlite_version_info < (3, 49, 0),
-    reason=(
-        "the visibility count only plans onto the covering index from the SQLite 3.49 "
-        "planner on; older planners scan a narrower live-session index instead"
-    ),
-)
 def test_session_list_order_queries_use_declared_indexes(manager, tmp_path) -> None:
     manager.create("coder", session_id="one", project_id=None)
     manager.create("reviewer", session_id="two", project_id="project")
