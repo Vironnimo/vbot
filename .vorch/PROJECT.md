@@ -48,7 +48,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 | runtime.md | `core/runtime/` | Bootstrap, service lifecycle, DI wiring |
 | providers.md | `core/providers/` | Provider boundary, Connection/discovery/request/usage invariants |
 | models.md | `core/models/` | Model DB layers, registry, capabilities, id convention |
-| model_tasks.md | `core/model_tasks/` | Task-model bindings, target discovery, option schemas |
+| model_tasks.md | `core/model_tasks/` | Task-model bindings/execution, target discovery, option schemas, Jev experiments and external Actions |
 | chat.md | `core/chat/` | ChatMessage boundary, Agentic Loop invariants |
 | runs.md | `core/runs/` | Run lifecycle, cancellation, timeline events, queues |
 | compaction.md | `core/compaction/` | Triggers, strategies, plans, checkpoints |

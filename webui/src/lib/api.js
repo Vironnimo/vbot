@@ -195,3 +195,15 @@ export {
   updateCalendarAction,
   deleteCalendarAction,
 } from './api/automation.js';
+
+export {
+  listDecisionExperiments,
+  getDecisionExperiment,
+  saveDecisionExperiment,
+  deleteDecisionExperiment,
+  getDecisionHistory,
+  startDecisionEvaluation,
+  getDecisionResult,
+  cancelDecisionEvaluation,
+  evaluateDecision,
+} from './api/decisions.js';
