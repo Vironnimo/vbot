@@ -40,10 +40,10 @@ async def test_owned_run_survives_reopen_and_requires_exact_durable_terminal(tmp
     sessions, binding, owner = make_sessions(tmp_path)
     child = sessions.create("existing", "target")
     child.append(ChatMessage.user("older unrelated work"))
-    child.append(summary("old"))
+    child.start_run("old").append(summary("old"))
     await sessions.record_run_owner_async(child.address, run_id="owned", owner=owner)
     child.append(ChatMessage.user("owned work"))
-    child.append(summary("foreign"))
+    child.start_run("foreign").append(summary("foreign"))
     rows = await sessions.owned_runs_async(owner_name="fixture", group_id="group")
     assert len(rows) == 1
     assert rows[0].owner == owner

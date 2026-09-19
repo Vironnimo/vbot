@@ -10,6 +10,7 @@ import pytest
 
 from core.chat import ChatMessage
 from core.chat.content_blocks import TextBlock
+from core.chat.messages import ToolCall
 from core.sessions import ChatSessionManager
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
@@ -22,7 +23,9 @@ def test_session_sql_recipes_preserve_scope_active_lineage_blocks_and_exact_resu
     session = sessions.create("agent-id", session_id="session-id")
     obsolete = ChatMessage.user("old discarded text")
     user = ChatMessage.user([TextBlock(type="text", text="Unicode Grüße")])
-    assistant = ChatMessage.assistant(model="test", content="answer")
+    assistant = ChatMessage.assistant(
+        model="test", content="answer", tool_calls=[ToolCall(id="call", name="bash")]
+    )
     result = ChatMessage.tool(
         tool_call_id="call", name="bash", content="prefix " * 500 + "exact fragment\n" + "x" * 3000
     )

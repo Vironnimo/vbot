@@ -12,6 +12,7 @@ from core.agents.temporary import (
     TemporaryExecutionGroups,
 )
 from core.chat import ChatMessage
+from core.chat.messages import ToolCall
 from core.extensions import ExtensionAPI, ExtensionRecord, ExtensionRegistry
 from core.extensions.extensions import ExtensionDeclarations
 from core.extensions.operations import ExtensionHost
@@ -142,6 +143,19 @@ async def board(tmp_path):
         sessions.close()
 
 
+async def persist_carriers(sessions, address, *, messages, **kwargs):
+    calls = [
+        ToolCall(id=message.tool_call_id, name=message.name)
+        for message in messages
+        if message.role == "tool"
+    ]
+    if calls:
+        assistant = ChatMessage.assistant(model="fixture", content=None, tool_calls=calls)
+        await sessions.get(address).append_async(assistant)
+        kwargs["assistant_message_id"] = assistant.id
+    await sessions.append_messages_with_receipts_async(address, messages=messages, **kwargs)
+
+
 async def call(board, arguments, peer=0, *, tool_call_id=None):
     context = replace(board.contexts[peer], tool_call_id=tool_call_id or new_id("call"))
     result = await board.tools.get("swarm_board").handler(context, arguments)
@@ -225,7 +239,8 @@ async def test_registered_board_public_posts_pages_and_durable_read_receipt(boar
     receipt_id, content_hash, effect = context._delivery_receipts[0]
     assert not await board.store.reconcile_delivery(receipt_id)
     binding = board.bindings[1]
-    await board.sessions.append_messages_with_receipts_async(
+    await persist_carriers(
+        board.sessions,
         binding.address,
         generation_id=binding.generation_id,
         owner_name="swarm",

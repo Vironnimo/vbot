@@ -157,7 +157,12 @@ def mutate_activity(
 
 
 def append_messages(
-    connection: sqlite3.Connection, address: SessionAddress, messages: Sequence[ChatMessage]
+    connection: sqlite3.Connection,
+    address: SessionAddress,
+    messages: Sequence[ChatMessage],
+    *,
+    run_id: str | None = None,
+    assistant_message_id: str | None = None,
 ) -> None:
     if not messages:
         return
@@ -169,7 +174,14 @@ def append_messages(
         session_key = int(state["session_key"])
         next_seq = int(state["message_count"])
         for index, message in enumerate(messages):
-            _store_codec._insert_message(connection, session_key, next_seq + index, message)
+            _store_codec._insert_message(
+                connection,
+                session_key,
+                next_seq + index,
+                message,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+            )
         last_message = messages[-1]
         connection.execute(
             "UPDATE sessions SET message_count = message_count + ?, last_message_at = ?, "
@@ -324,6 +336,7 @@ def delete(connection: sqlite3.Connection, address: SessionAddress) -> None:
     def _fn(connection: sqlite3.Connection) -> None:
         state = _store_values._require_live(connection, address)
         _store_values._reject_owner_managed_mutation(connection, state)
+        _store_fts._delete_fts_session(connection, int(state["session_key"]))
         connection.execute("DELETE FROM sessions WHERE session_key = ?", (state["session_key"],))
 
     _fn(connection)

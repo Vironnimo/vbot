@@ -22,6 +22,9 @@ export function loadHistory(sessionState, messages, options = {}) {
   const visibleMessages = incremental
     ? mergeHistoryRecords(sessionState.messages, incomingMessages)
     : incomingMessages;
+  const runs = incremental ? { ...sessionState.historyRuns } : {};
+  for (const run of options.runs ?? []) runs[run.run_id] = run;
+  sessionState.historyRuns = runs;
   const activeRunId = isRunActive(sessionState)
     ? sessionState.currentRun?.runId
     : null;
@@ -32,9 +35,8 @@ export function loadHistory(sessionState, messages, options = {}) {
     ? []
     : pruneRunEventsPersistedInHistory(
         sessionState.runEvents.filter(keepGeneration),
-        visibleMessages,
+        runs,
         activeRunId,
-        options.generation,
       );
   const retainedStreamingRunEvents = changedGeneration
     ? []
@@ -43,12 +45,7 @@ export function loadHistory(sessionState, messages, options = {}) {
         .filter(
           (event) =>
             event.run_id === activeRunId ||
-            !runProjectionPersistedInHistory(
-              sessionState.runEvents,
-              visibleMessages,
-              event.run_id,
-              options.generation,
-            ),
+            !runProjectionPersistedInHistory(runs, event.run_id),
         );
   const retainLiveRunProjection =
     !changedGeneration &&
@@ -159,6 +156,8 @@ export function attachableHistoryRun(sessionState, activeRun) {
 }
 
 export function prependHistory(sessionState, messages, options = {}) {
+  for (const run of options.runs ?? [])
+    sessionState.historyRuns[run.run_id] = run;
   const existingIds = new Set((sessionState.messages ?? []).map(recordKey));
   const olderMessages = Array.isArray(messages)
     ? messages

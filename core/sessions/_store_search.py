@@ -63,7 +63,7 @@ def search(
     ) -> _store_values._FtsSearchRows:
         sql = (
             f"SELECT s.project_id, s.agent_id, s.session_id, {_store_values._MESSAGE_RECORD_COLUMNS} "
-            f"FROM messages AS m {_store_values._MESSAGE_RECORD_JOINS} "
+            f"FROM history_records AS m {_store_values._MESSAGE_RECORD_JOINS} "
             "JOIN sessions AS s ON s.session_key = m.session_key "
             "WHERE s.status = 'live' AND m.active = 1"
         )
@@ -156,7 +156,7 @@ def search(
             f"SELECT s.project_id, s.agent_id, s.session_id, "
             f"{_store_values._MESSAGE_RECORD_COLUMNS}, bm25({fts_table}) AS rank "
             f"FROM {fts_table} "
-            f"JOIN messages AS m ON m.message_key = {fts_table}.rowid "
+            f"JOIN history_records AS m ON m.message_key = {fts_table}.rowid "
             f"{_store_values._MESSAGE_RECORD_JOINS} "
             "JOIN sessions AS s ON s.session_key = m.session_key "
             f"WHERE {fts_table} MATCH ? AND s.status = 'live' AND m.active = 1"

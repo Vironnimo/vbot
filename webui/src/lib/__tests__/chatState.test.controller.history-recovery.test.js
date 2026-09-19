@@ -19,6 +19,7 @@ describe('chat controller', () => {
           }),
       )
       .mockResolvedValueOnce({
+        runs: [{ run_id: 'run-final', status: 'completed', complete: true }],
         active_run: null,
         has_more: false,
         messages: [

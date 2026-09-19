@@ -10,7 +10,7 @@ from collections import deque
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from core.runs.run import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
@@ -139,6 +139,12 @@ def _session_address(project_id: str | None, agent_id: str, session_id: str) -> 
     return SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
 
 
+class RunPersistence(Protocol):
+    async def start_run(self, run: Run) -> None: ...
+
+    async def finish_run(self, run: Run, status: str, payload: JsonObject) -> JsonObject: ...
+
+
 class ChatRunManager:
     """Coordinates active chat runs across sessions."""
 
@@ -169,9 +175,15 @@ class ChatRunManager:
         self._run_event_retention_limit = run_event_retention_limit
         self._waiting_work_limit = waiting_work_limit
         self._closed = False
+        self._persistence: RunPersistence | None = None
         self._admission_validator = admission_validator
         self._maintenance_operation_id: str | None = None
         self._maintenance_origin: tuple[SessionAddress, str] | None = None
+
+    def bind_persistence(self, persistence: RunPersistence) -> None:
+        if self._persistence is not None and self._persistence is not persistence:
+            raise ValueError("Run persistence is already configured")
+        self._persistence = persistence
 
     async def maintenance_begin(
         self,
@@ -791,55 +803,83 @@ class ChatRunManager:
             extras["timing"] = terminal_timing()
             return extras
 
+        result = None
+        error: BaseException | None = None
+        status = RunStatus.COMPLETED
+        abort: BaseException | None = None
+        admitted = False
         try:
+            if self._persistence is not None:
+                admission = asyncio.create_task(self._persistence.start_run(run))
+                try:
+                    await asyncio.shield(admission)
+                except asyncio.CancelledError:
+                    # Admission can already be committing in the writer thread.
+                    # Observe its outcome before attempting terminal persistence.
+                    await admission
+                    admitted = True
+                    raise
+                admitted = True
             run.raise_if_cancelled()
             started_payload: JsonObject = {"status": RunStatus.RUNNING.value}
-            if run._started_from_queue_item_id is not None:  # noqa: SLF001 - executor shares run instance.
+            if run._started_from_queue_item_id is not None:  # noqa: SLF001
                 started_payload["queue_item_id"] = run._started_from_queue_item_id  # noqa: SLF001
             run.emit(RUN_STARTED_EVENT, started_payload)
             result = await executor(run)
-            if run.cancel_requested:
-                await run._wait_for_cancel_cleanup()  # noqa: SLF001
-                run.mark_cancelled(payload_extras=terminal_extras())
-                return
-            result_usage = getattr(result, "usage", None) if result is not None else None
-            payload_extras: JsonObject = terminal_extras()
-            if result_usage:
-                payload_extras["usage"] = result_usage
-            run.mark_completed(result, payload_extras=payload_extras)
-        except RunInterruptedError as error:
-            if run.cancel_requested:
-                await run._wait_for_cancel_cleanup()  # noqa: SLF001
-                run.mark_cancelled(payload_extras=terminal_extras())
-                return
-            run.mark_interrupted(error, payload_extras=terminal_extras())
-        except asyncio.CancelledError:
-            await run._wait_for_cancel_cleanup()  # noqa: SLF001
-            run.mark_cancelled(payload_extras=terminal_extras())
-        except (KeyboardInterrupt, SystemExit):
-            # Process-level interrupts must never be downgraded to a failed run:
-            # record the run as cancelled best-effort, then let the interrupt
-            # propagate so shutdown proceeds.
-            run.mark_cancelled(payload_extras=terminal_extras())
-            raise
+        except RunInterruptedError as exc:
+            status, error = RunStatus.INTERRUPTED, exc
+        except asyncio.CancelledError as exc:
+            status, error = RunStatus.CANCELLED, exc
         except Exception as exc:
-            if run.cancel_requested:
-                await run._wait_for_cancel_cleanup()  # noqa: SLF001
-                run.mark_cancelled(payload_extras=terminal_extras())
-                return
-            run.mark_failed(exc, payload_extras=terminal_extras())
+            status, error = RunStatus.FAILED, exc
+        except BaseException as exc:
+            status, abort = RunStatus.CANCELLED, exc
         finally:
-            # An escaping BaseException, including one from exception-handler
-            # cleanup, must settle waiters before releasing the Session slot.
-            # Preserve the original abort on the executor task while waiters
-            # receive the ordinary terminal cancellation contract.
-            if run.status == RunStatus.RUNNING:
-                run.mark_cancelled(payload_extras=terminal_extras())
+            try:
+                if run.cancel_requested or status == RunStatus.CANCELLED:
+                    status = RunStatus.CANCELLED
+                    await run._wait_for_cancel_cleanup()  # noqa: SLF001
+            except BaseException as exc:
+                status, abort = RunStatus.CANCELLED, exc
+            run._completion_started = True  # noqa: SLF001 - freeze outcome before the commit.
+            payload = terminal_extras()
+            usage = getattr(result, "usage", None)
+            if usage:
+                payload["usage"] = usage
+            try:
+                if self._persistence is not None and admitted:
+                    payload.update(await self._persistence.finish_run(run, status.value, payload))
+                elif self._persistence is not None:
+                    payload["history_persisted"] = False
+            except Exception as exc:
+                # No terminal acknowledgement may claim a durable completion
+                # when its transaction failed. The running row is recoverable.
+                _LOGGER.error("Run completion persistence failed: %s", run.id, exc_info=True)
+                status, error = RunStatus.FAILED, exc
+                payload["history_persisted"] = False
+            except BaseException as exc:
+                status, abort = RunStatus.CANCELLED, exc
+                payload["history_persisted"] = False
+            notification_errors = await run.notify_completion(status)
+            if notification_errors:
+                payload["completion_notification_errors"] = notification_errors
+            if status == RunStatus.CANCELLED:
+                run.mark_cancelled(payload_extras=payload)
+            elif status == RunStatus.INTERRUPTED:
+                assert isinstance(error, RunInterruptedError)
+                run.mark_interrupted(error, payload_extras=payload)
+            elif status == RunStatus.FAILED:
+                assert isinstance(error, Exception)
+                run.mark_failed(error, payload_extras=payload)
+            else:
+                run.mark_completed(result, payload_extras=payload)
             async with self._lock:
                 if self._active_by_session.get(address) is run:
                     self._active_by_session.pop(address, None)
                 self._prune_terminal_runs_locked()
             await self._drain_next(address)
+        if abort is not None:
+            raise abort
 
     async def _drain_next(self, address: SessionAddress) -> None:
         async with self._lock:

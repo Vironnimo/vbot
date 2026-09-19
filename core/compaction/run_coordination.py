@@ -226,6 +226,7 @@ class CompactionRunCoordinator:
     ) -> ChatMessage:
         """Execute one manual Compaction inside its canonical Run lifecycle."""
         await self._host.sessions.record_run_start_async(session.address, run_id=run.id)
+        session = session.for_run(run.id)
         await self._host.record_run_kind(run)
         request: Any | None = None
         # The divider appears at this emit; its visible duration ends when the
@@ -333,10 +334,6 @@ class CompactionRunCoordinator:
                 run, session, checkpoint, snapshot_cursor
             ):
                 raise CompactionError("Session context changed during Compaction. Please retry.")
-            run.terminal_payload_extras["history_checkpoint"] = {
-                "generation_id": snapshot_cursor.generation_id,
-                "sequence": snapshot_cursor.next_seq,
-            }
             messages.append(checkpoint)
             raw_messages.append(checkpoint)
             await self._host.rotate_prompt_cache_affinity(run)

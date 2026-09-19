@@ -27,6 +27,7 @@ from core.tools.session_search import (
     SESSION_SEARCH_RESULT_MAX_BYTES,
     session_search_handler,
 )
+from tests.core.sessions.history_fixtures import append_tool_fixture
 from tests.core.tools.session_search_helpers import (
     make_context,
     success,
@@ -297,13 +298,14 @@ async def test_search_excludes_its_own_persisted_results(
 ) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="artifact-loop")
-    session.append(
+    append_tool_fixture(
+        session,
         ChatMessage.tool(
             tool_call_id="call-1",
             name=tool_name,
             content="needle artifact",
             timestamp=timestamp(2),
-        )
+        ),
     )
     real = ChatMessage.user("needle real", timestamp=timestamp(1))
     session.append(real)

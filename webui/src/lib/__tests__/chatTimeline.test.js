@@ -25,20 +25,11 @@ describe('pruneRunEventsPersistedInHistory (handoff3 B10)', () => {
         payload: { status: CHAT_STATUS_RUNNING },
       },
     ];
-    const messages = [
-      { id: 'user-run-finished', role: 'user', content: 'Hi' },
-      { id: 'assistant-finished', role: 'assistant', content: 'Done.' },
-      {
-        id: 'summary',
-        role: 'run_summary',
-        run_id: 'run-finished',
-        status: 'completed',
-      },
-    ];
+    const runs = { 'run-finished': { complete: true, status: 'completed' } };
 
     const prunedEvents = pruneRunEventsPersistedInHistory(
       runEvents,
-      messages,
+      runs,
       'run-active',
     );
 
@@ -50,7 +41,7 @@ describe('pruneRunEventsPersistedInHistory (handoff3 B10)', () => {
 
     const prunedEvents = pruneRunEventsPersistedInHistory(
       runEvents,
-      [{ id: 'user-other', role: 'user', content: 'Other' }],
+      { 'run-finished': { complete: false } },
       'run-active',
     );
 
@@ -75,7 +66,7 @@ describe('pruneRunEventsPersistedInHistory (handoff3 B10)', () => {
 
     const prunedEvents = pruneRunEventsPersistedInHistory(
       runEvents,
-      [],
+      {},
       'run-active',
     );
 
@@ -84,14 +75,11 @@ describe('pruneRunEventsPersistedInHistory (handoff3 B10)', () => {
 
   it('never prunes the active run, even when its output is already persisted', () => {
     const runEvents = finishedRunEvents('run-active', 'assistant-active');
-    const messages = [
-      { id: 'user-run-active', role: 'user', content: 'Hi' },
-      { id: 'assistant-active', role: 'assistant', content: 'Done.' },
-    ];
+    const runs = { 'run-active': { complete: true } };
 
     const prunedEvents = pruneRunEventsPersistedInHistory(
       runEvents,
-      messages,
+      runs,
       'run-active',
     );
 
@@ -602,4 +590,52 @@ describe('agent_takeover timeline projection', () => {
     expect(afterUser.type).toBe('message');
     expect(afterUser.message.role).toBe('user');
   });
+});
+
+it('keeps repeated Provider Tool ids separate by their persisted Assistant identity', () => {
+  const state = ensureSessionState(createChatState(), 'agent', 'session');
+  const messages = ['first', 'second'].flatMap((id, index) => [
+    {
+      id,
+      role: 'assistant',
+      history_run_id: 'run',
+      history_sequence: index * 2,
+      tool_calls: [{ id: 'reused', name: 'read', arguments: { path: id } }],
+    },
+    {
+      id: `${id}-result`,
+      role: 'tool',
+      history_run_id: 'run',
+      history_sequence: index * 2 + 1,
+      tool_call_id: 'reused',
+      name: 'read',
+      content: id,
+    },
+  ]);
+  loadHistory(state, messages);
+  startRun(state, { run_id: 'run' });
+  appendRunEvent(state, {
+    run_id: 'run',
+    sequence: 1,
+    type: 'tool_call_started',
+    payload: {
+      assistant_message_id: 'second',
+      tool_call: { id: 'reused', name: 'read', arguments: { path: 'second' } },
+    },
+  });
+  appendRunEvent(state, {
+    run_id: 'run',
+    sequence: 2,
+    type: 'tool_call_result',
+    payload: {
+      assistant_message_id: 'second',
+      tool_call: { id: 'reused', name: 'read' },
+      result: 'second',
+    },
+  });
+  const tools = visibleTimelineItemsForRender(state).flatMap(
+    (item) => item.tools ?? [],
+  );
+  expect(tools.map((tool) => tool.result)).toEqual(['first', 'second']);
+  expect(new Set(tools.map((tool) => tool.id)).size).toBe(2);
 });

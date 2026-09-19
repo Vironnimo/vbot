@@ -163,7 +163,9 @@ async def test_compact_session_appends_checkpoint_and_closes_adapter(tmp_path: P
     assert compaction_service.compact_calls[0]["storage"] is runtime.storage
     assert compaction_service.compact_calls[0]["instruction"] is None
     assert adapter.closed is True
-    persisted_checkpoint = session.load()[-1]
+    persisted_checkpoint = next(
+        message for message in reversed(session.load()) if message.role == "compaction_checkpoint"
+    )
     assert persisted_checkpoint.projection is not None
     assert str(persisted_checkpoint.projection[0]["content"]).startswith("[compaction-summary]")
 

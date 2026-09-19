@@ -56,7 +56,7 @@ def _journal_mode(database) -> str:
         probe.close()
 
 
-def test_unreleased_session_store_uses_the_first_schema_generation() -> None:
+def test_relational_session_store_uses_initial_schema() -> None:
     assert SCHEMA_VERSION == 1
     assert SCHEMA_CONVERSION_FLOOR == 1
     assert FTS_STORAGE_VERSION == 1
@@ -199,7 +199,7 @@ def test_additive_temporary_tables_preserve_a_copied_current_baseline(tmp_path) 
     copied.close()
 
     with sqlite3.connect(copied_database) as verification:
-        assert verification.execute("PRAGMA user_version").fetchone() == (1,)
+        assert verification.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
         assert verification.execute("PRAGMA application_id").fetchone() == (APPLICATION_ID,)
         for table, rows in previous_rows.items():
             assert (

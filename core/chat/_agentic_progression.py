@@ -506,6 +506,7 @@ class AgenticProgression:
                 await _finish_visible_boundary(
                     session.append_async(assistant_message), run, preserve_after_cancel
                 )
+                session.assistant_message_id = assistant_message.id
                 await context.session_snapshot.refresh(session)
                 run.terminal_payload_extras["context_usage"] = assistant_context_usage
                 session_usage = add_session_turn_usage(session_usage, assistant_message.usage)
@@ -689,6 +690,7 @@ class AgenticProgression:
                             TOOL_FINALIZATION_NOTE.format(reason=finalization_request_reason)
                         )
                     deferred_notes = session.take_deferred_notes()
+                    session.assistant_message_id = assistant_message.id
                     batch_messages = [*tool_messages, *deferred_notes]
                     binding = context.request.temporary_binding
                     extension_registry = self._dependencies.get_extension_registry()
@@ -698,6 +700,8 @@ class AgenticProgression:
                             generation_id=binding.generation_id,
                             owner_name=binding.owner_name,
                             messages=batch_messages,
+                            run_id=run.id,
+                            assistant_message_id=assistant_message.id,
                             receipts=[
                                 (
                                     next(

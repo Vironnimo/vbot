@@ -8,6 +8,7 @@ from typing import cast
 
 import pytest
 
+from core.chat.messages import ToolCall
 from core.runs import RunExecutionOwner
 from core.sessions import ChatSessionManager, SessionAddress
 from core.statistics import (
@@ -29,7 +30,7 @@ from tests.core.statistics.statistics_test_support import (
 async def test_group_usage_slices_exact_owned_run_in_reused_session(tmp_path: Path) -> None:
     manager = ChatSessionManager(tmp_path)
     service = StatisticsService(manager, cast(AgentDirectory, _FakeAgents([])))
-    session = manager.create("reused")
+    session = manager.create("reused").start_run("outside")
     session.append(
         _assistant(model="outside", at=BASE, usage={"input_tokens": 99, "output_tokens": 1})
     )
@@ -43,6 +44,7 @@ async def test_group_usage_slices_exact_owned_run_in_reused_session(tmp_path: Pa
     )
     owner = RunExecutionOwner("swarm", "group", "peer", binding.generation_id, "0")
     await manager.record_run_owner_async(session.address, run_id="owned", owner=owner)
+    session = session.for_run("owned")
     session.append(
         _assistant(model="fallback", at=BASE, usage={"input_tokens": 2, "output_tokens": 3})
     )
@@ -72,10 +74,12 @@ async def test_group_usage_stops_open_owned_run_at_ordinary_successor(tmp_path: 
     )
     owner = RunExecutionOwner("swarm", "group", "peer", binding.generation_id, "0")
     await manager.record_run_owner_async(session.address, run_id="owned", owner=owner)
+    session = session.for_run("owned")
     session.append(
         _assistant(model="owned", at=BASE, usage={"input_tokens": 2, "output_tokens": 3})
     )
     await manager.record_run_start_async(session.address, run_id="ordinary")
+    session = session.for_run("ordinary")
     session.append(
         _assistant(model="ordinary", at=BASE, usage={"input_tokens": 99, "output_tokens": 1})
     )
@@ -101,7 +105,9 @@ async def test_group_usage_empty_owned_run_does_not_claim_same_sequence_successo
     session = manager.create("ordinary")
     owner = RunExecutionOwner("swarm", "group", "peer", binding.generation_id, "epoch")
     await manager.record_run_owner_async(session.address, run_id="empty-owned", owner=owner)
+    session = session.for_run("empty-owned")
     await manager.record_run_start_async(session.address, run_id="ordinary")
+    session = session.for_run("ordinary")
     session.append(
         _assistant(model="outside", at=BASE, usage={"input_tokens": 99, "output_tokens": 1})
     )
@@ -129,7 +135,7 @@ async def test_group_usage_pages_canonical_boundaries_above_one_hundred_particip
             "swarm", "group", binding.participant_id, binding.generation_id, "epoch"
         )
         await manager.record_run_owner_async(binding.address, run_id=f"run-{index}", owner=owner)
-        manager.get(binding.address).append(
+        manager.get(binding.address).for_run(f"run-{index}").append(
             _assistant(model="owned", at=BASE, usage={"input_tokens": 2, "output_tokens": 3})
         )
     usage = await service.group_usage(owner_name="swarm", group_id="group")
@@ -154,9 +160,16 @@ async def test_group_usage_combines_peers_resumed_runs_and_rebuilds_exactly(tmp_
         for index in range(2):
             run_id = f"{peer}-{index}"
             await manager.record_run_owner_async(session.address, run_id=run_id, owner=owner)
+            session = session.for_run(run_id)
             session.append(
                 _assistant(
                     model=model,
+                    tool_calls=[
+                        ToolCall(
+                            id=f"call-owned_tool-{(BASE + timedelta(seconds=index)).isoformat()}",
+                            name="owned_tool",
+                        )
+                    ],
                     at=BASE + timedelta(seconds=index),
                     usage={
                         "input_tokens": tokens,
@@ -178,6 +191,7 @@ async def test_group_usage_combines_peers_resumed_runs_and_rebuilds_exactly(tmp_
                 session.append(_compaction(at=BASE, before=20, after=10))
             session.append(_run_summary(status="completed", at=BASE, duration_ms=1, run_id=run_id))
         await manager.record_run_start_async(session.address, run_id=f"outside-{peer}")
+        session = session.for_run(f"outside-{peer}")
         session.append(
             _assistant(model="outside", at=BASE, usage={"input_tokens": 99, "output_tokens": 1})
         )
@@ -233,7 +247,7 @@ async def test_group_usage_never_hydrates_unrelated_indexed_sessions(tmp_path, m
     )
     owner = RunExecutionOwner("swarm", "group", "peer", binding.generation_id, "epoch")
     await manager.record_run_owner_async(binding.address, run_id="owned", owner=owner)
-    session = manager.get(binding.address)
+    session = manager.get(binding.address).for_run("owned")
     session.append(_assistant(model="owned", at=BASE, usage={"input_tokens": 2}))
     decoded = []
     original = index_module._message_from_projection  # noqa: SLF001 - observe hydration boundary
