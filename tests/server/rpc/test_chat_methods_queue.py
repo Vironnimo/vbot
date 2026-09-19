@@ -268,3 +268,44 @@ async def test_queue_update_identity_item_rebuilds_without_project() -> None:
     assert loop.build_calls[-1]["project_id"] is None
     assert loop.build_calls[-1]["queued_item"].item_id == "q-1"
     assert state.chat_runs.update_project_ids[-1] is None
+
+
+@pytest.mark.asyncio
+async def test_steer_rpc_requires_exact_run_and_public_project_queue() -> None:
+    from core.runs import ChatRunManager
+    from core.sessions import SessionAddress
+    from server.rpc.chat_methods import _chat_queue_steer
+
+    manager = ChatRunManager()
+    release = asyncio.Event()
+
+    async def execute(run: Any) -> str:
+        run.accepts_steering = True
+        await release.wait()
+        return "done"
+
+    address = SessionAddress(project_id="project", agent_id="coder", session_id="one")
+    run = await manager.start(address, execute)
+    await asyncio.sleep(0)
+    item = await manager.enqueue(address, execute, steerable=True, display_content="Correction")
+    state = SimpleNamespace(chat_runs=manager, event_bus=ServerEventBus())
+    params = {
+        "agent_id": "coder@project",
+        "session_id": "one",
+        "item_id": item.item_id,
+        "run_id": run.id,
+    }
+    try:
+        with pytest.raises(RpcError):
+            _chat_queue_steer(state, {**params, "agent_id": "coder"})
+        with pytest.raises(RpcError):
+            _chat_queue_steer(state, {**params, "run_id": "stale"})
+        response = _chat_queue_steer(state, params)
+        assert response["run_id"] == run.id
+        assert response["item"]["steering"] is True
+        assert response["item"]["editable"] is False
+        item.internal = True
+        with pytest.raises(RpcError):
+            _chat_queue_steer(state, params)
+    finally:
+        await manager.aclose()

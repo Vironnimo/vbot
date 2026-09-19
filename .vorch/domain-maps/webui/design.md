@@ -109,6 +109,8 @@ Inherited and disabled instructions remain readable. The component-local `.sp-bl
 
 ### Chat and content inspection
 
+Queued messages appear as slim single-line rows above the composer, without a heading, status badge, or separate action row. Steer is a quiet text button; edit/remove use icons. Full text appears in a scrollable floating hover/focus card (`QueuedMessages.svelte`).
+
 Chat's current layout supports up to two retained areas, each containing Chat or an HTML preview. The split control sits with Sessions/New Session; HTML links can open the preview in the other area. Closing or switching areas retains drafts and scroll state. The preview has its own compact file toolbar, bounded iframe, and live-reload control. Source owners and interaction contracts are in `chat.md`.
 
 The context ring shows usage through a passive quick tooltip on hover or keyboard focus.

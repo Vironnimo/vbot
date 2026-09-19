@@ -7,7 +7,7 @@ import logging
 import time
 import uuid
 from collections import deque
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
@@ -434,6 +434,7 @@ class ChatRunManager:
         *,
         display_content: str = "",
         editable: bool = False,
+        steerable: bool = False,
         internal: bool = False,
         waiting_work_admission: WaitingWorkAdmission | None = None,
         admission: RunAdmission = DEFAULT_RUN_ADMISSION,
@@ -447,6 +448,7 @@ class ChatRunManager:
             internal=internal,
             future=future,
             editable=editable,
+            steerable=steerable,
             admission=admission,
         )
 
@@ -557,6 +559,8 @@ class ChatRunManager:
         for item in queue:
             if item.item_id != item_id:
                 continue
+            if item.steering_in_flight:
+                return False
             queue.remove(item)
             if not item.future.done():
                 item.future.cancel()
@@ -585,12 +589,79 @@ class ChatRunManager:
         for item in queue:
             if item.item_id != item_id:
                 continue
+            if item.steering_run_id is not None:
+                return False
             item.executor = new_executor
             item.display_content = new_display_content
             if editable is not None:
                 item.editable = editable
             return True
         return False
+
+    def steer_queued(
+        self,
+        agent_id: str,
+        session_id: str,
+        item_id: str,
+        *,
+        project_id: str | None,
+        run_id: str,
+    ) -> QueuedRunItem:
+        """Bind a queued input to the exact active Run without removing it yet."""
+        run = self.active_run(agent_id=agent_id, session_id=session_id, project_id=project_id)
+        if run is None or run.id != run_id or not run.accepts_steering or run.cancel_requested:
+            raise ActiveRunError("the selected Run no longer accepts steering")
+        for item in self.list_queued(agent_id, session_id, project_id=project_id):
+            if item.item_id != item_id:
+                continue
+            if (
+                not item.steerable
+                or item.internal
+                or item.admission.owner is not None
+                or run.execution_owner is not None
+            ):
+                raise ActiveRunError("this queued input cannot steer a Run")
+            if item.admission.working_project_id != run.working_project_id:
+                raise ActiveRunError("queued input has a different working Project")
+            if item.steering_run_id != run.id:
+                item.steering_run_id = run.id
+                _LOGGER.info("Queue steering requested (run=%s item=%s)", run.id, item.item_id)
+            return item
+        raise RunNotFoundError(f"queued item not found: {item_id}")
+
+    def pending_steering(self, run: Run) -> list[QueuedRunItem]:
+        """Snapshot requested input in Queue order at a safe executor boundary."""
+        return [
+            item
+            for item in self.list_queued(run.agent_id, run.session_id, project_id=run.project_id)
+            if item.steering_run_id == run.id and not item.future.cancelled()
+        ]
+
+    async def deliver_steering(
+        self, run: Run, persist: Callable[[QueuedRunItem], Awaitable[None]]
+    ) -> bool:
+        """Keep input queued until its append succeeds, without locking across I/O."""
+        delivered = False
+        for item in self.pending_steering(run):
+            # Another selected item can be removed while the previous append awaits I/O.
+            if item.future.done():
+                continue
+            run.raise_if_cancelled()
+            item.steering_in_flight = True
+            try:
+                await persist(item)
+                address = _session_address(run.project_id, run.agent_id, run.session_id)
+                queue = self._queues.get(address)
+                if queue is not None and item in queue:
+                    queue.remove(item)
+                    if not queue:
+                        self._queues.pop(address, None)
+                if not item.future.done():
+                    item.future.set_result(run)
+                delivered = True
+            finally:
+                item.steering_in_flight = False
+        return delivered
 
     def get(self, run_id: str) -> Run:
         """Return a run by id."""
@@ -898,6 +969,8 @@ class ChatRunManager:
                 self._queues.pop(address, None)
                 return
 
+            for pending in queue:
+                pending.steering_run_id = None
             while queue:
                 item = queue.popleft()
                 # The cancellation callback normally removes an abandoned item

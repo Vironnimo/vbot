@@ -127,6 +127,14 @@ export function appendRunEvent(sessionState, event) {
   if (normalizedEvent.type === 'model_step_usage') {
     applyModelStepUsage(sessionState, normalizedEvent.payload);
   }
+  if (
+    normalizedEvent.type === 'user_message_persisted' &&
+    normalizedEvent.payload?.queue_item_id
+  ) {
+    sessionState.queue = sessionState.queue.filter(
+      (item) => item.id !== normalizedEvent.payload.queue_item_id,
+    );
+  }
   advanceStreamingPhase(sessionState, normalizedEvent);
   if (TERMINAL_RUN_EVENTS.has(normalizedEvent.type)) {
     finishRun(sessionState, normalizedEvent);

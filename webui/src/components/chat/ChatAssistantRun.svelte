@@ -49,6 +49,7 @@
     visibleRunChildren,
   } from '$lib/chatTimelinePresentation.js';
 
+  import ChatTimelineEntry from './ChatTimelineEntry.svelte';
   import ChatCompactionSeparator from './ChatCompactionSeparator.svelte';
   import MarkdownContent from './MarkdownContent.svelte';
 
@@ -718,6 +719,8 @@
             {/if}
           {/if}
         {/if}
+      {:else if child.type === 'user_message'}
+        <ChatTimelineEntry item={{ type: 'message', message: child.message }} />
       {:else if child.type === 'assistant_output'}
         {@const working = isRunChildWorking(item, child)}
         <MarkdownContent

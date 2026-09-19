@@ -678,8 +678,8 @@ async def test_chat_loop_queue_run_uses_display_preview_for_busy_session(tmp_pat
         session_id=session_id,
     )
 
-    assert item.display_content == "x" * 500
-    assert item.editable is False
+    assert item.display_content == "x" * 600
+    assert item.editable is True
     assert runtime.chat_runs.list_queued("coder", session_id, project_id=None)[0] is item
 
     short_text_item = await build_chat_loop(runtime).queue_run(
@@ -793,3 +793,69 @@ async def test_enqueue_idle_session_start_immediately_carries_queue_item_id() ->
 
     release.set()
     assert await run.wait() == "done"
+
+
+@pytest.mark.asyncio
+async def test_steering_append_failure_retains_input_and_blocks_mid_append_edits() -> None:
+    manager = ChatRunManager()
+    release = asyncio.Event()
+    address = SessionAddress(project_id=None, agent_id="coder", session_id="one")
+
+    async def execute(run: Run) -> str:
+        run.accepts_steering = True
+        await release.wait()
+        return "done"
+
+    run = await manager.start(address, execute)
+    await asyncio.sleep(0)
+    item = await manager.enqueue(address, execute, steerable=True, editable=True)
+    manager.steer_queued("coder", "one", item.item_id, project_id=None, run_id=run.id)
+
+    async def fail_append(_item: QueuedRunItem) -> None:
+        assert not manager.remove_queued("coder", "one", item.item_id, project_id=None)
+        assert not manager.update_queued(
+            "coder", "one", item.item_id, execute, "Changed", project_id=None
+        )
+        raise OSError("append failed")
+
+    try:
+        with pytest.raises(OSError):
+            await manager.deliver_steering(run, fail_append)
+        assert manager.pending_steering(run) == [item]
+        assert not item.future.done()
+        assert manager.remove_queued("coder", "one", item.item_id, project_id=None)
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_removing_second_steer_during_first_append_does_not_deliver_it() -> None:
+    manager = ChatRunManager()
+    release = asyncio.Event()
+    address = SessionAddress(project_id=None, agent_id="coder", session_id="one")
+
+    async def execute(run: Run) -> str:
+        run.accepts_steering = True
+        await release.wait()
+        return "done"
+
+    run = await manager.start(address, execute)
+    await asyncio.sleep(0)
+    first = await manager.enqueue(address, execute, steerable=True)
+    second = await manager.enqueue(address, execute, steerable=True)
+    for item in [first, second]:
+        manager.steer_queued("coder", "one", item.item_id, project_id=None, run_id=run.id)
+    delivered = []
+
+    async def append(item: QueuedRunItem) -> None:
+        delivered.append(item.item_id)
+        assert manager.remove_queued("coder", "one", second.item_id, project_id=None)
+        await asyncio.sleep(0)
+
+    try:
+        assert await manager.deliver_steering(run, append)
+        assert delivered == [first.item_id]
+        assert first.future.result() is run
+        assert second.future.cancelled()
+    finally:
+        await manager.aclose()

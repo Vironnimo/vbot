@@ -390,3 +390,34 @@ export function updateQueueItem(
   }
   return rpc('chat.queue_update', params, requestOptions);
 }
+
+export function steerQueueItem(
+  agentId,
+  sessionId,
+  itemId,
+  runId,
+  options = {},
+) {
+  for (const [name, value] of Object.entries({
+    agent_id: agentId,
+    session_id: sessionId,
+    item_id: itemId,
+    run_id: runId,
+  })) {
+    requireNonEmptyString(
+      value,
+      `${name} must be a non-empty string`,
+      'chat.queue_steer',
+    );
+  }
+  return rpc(
+    'chat.queue_steer',
+    {
+      agent_id: agentId,
+      session_id: sessionId,
+      item_id: itemId,
+      run_id: runId,
+    },
+    options,
+  );
+}

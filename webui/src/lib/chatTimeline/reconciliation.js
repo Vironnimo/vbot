@@ -10,7 +10,10 @@ import {
   appendHistoryToolResult,
 } from './history.js';
 import { appendLiveRunEvent } from './live.js';
-import { markPendingToolsCancelled } from './runChildren.js';
+import {
+  markPendingToolsCancelled,
+  appendSteeringMessage,
+} from './runChildren.js';
 
 // Completeness is an explicit database read fact from the same History snapshot.
 export function runProjectionPersistedInHistory(runs, runId) {
@@ -89,7 +92,8 @@ export function reconcileTimeline(sessionState, liveItems) {
       continue;
     }
     if (message.role === 'user') {
-      history.push(message);
+      if (owned.get(runId).find((row) => row.role === 'user') === message)
+        history.push(message);
       continue;
     }
     flushHistory();
@@ -137,8 +141,11 @@ function mergeRun(messages, liveRun) {
     runId: liveRun.runId,
     source: 'history',
   });
+  const firstUser = messages.find((message) => message.role === 'user');
   for (const message of messages) {
-    if (message.role === 'assistant')
+    if (message.role === 'user' && message !== firstUser)
+      appendSteeringMessage(historyRun, message);
+    else if (message.role === 'assistant')
       appendHistoryAssistantMessage(historyRun, message);
     else if (message.role === 'tool')
       appendHistoryToolResult(historyRun, message);
@@ -164,7 +171,8 @@ function mergeRun(messages, liveRun) {
     // A dispatched Tool identifies the completed Assistant response immediately
     // before it. Its preceding text draft belongs to that exact Message even
     // when a sparse replay omitted the stable Assistant event.
-    if (child.type === 'tool_call')
+    if (child.type === 'user_message') phaseMessageId = null;
+    else if (child.type === 'tool_call')
       phaseMessageId =
         child.assistantMessageId ?? toolMessages.get(child.toolCallId) ?? null;
     else if (child.type === 'compaction_separator') phaseMessageId = null;
@@ -207,6 +215,8 @@ function mergeRun(messages, liveRun) {
 
 function childrenMatch(saved, live, phaseMessageId) {
   if (saved.type !== live.type) return false;
+  if (saved.type === 'user_message')
+    return saved.message?.id === live.message?.id;
   if (saved.type === 'tool_call')
     return (
       saved.toolCallId &&

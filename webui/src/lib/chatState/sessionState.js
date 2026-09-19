@@ -316,14 +316,27 @@ function normalizeServerQueuedItem(item) {
     id: item.id,
     content: typeof item?.content === 'string' ? item.content : '',
     editable: item?.editable === true,
+    steerable: item?.steerable === true,
+    steering: item?.steering === true,
     created_at: typeof item?.created_at === 'string' ? item.created_at : null,
   };
 }
 
 export function syncQueueFromServer(sessionState, serverItems) {
+  const consumed = new Set(
+    (sessionState.runEvents ?? [])
+      .filter((event) => event.type === 'user_message_persisted')
+      .map((event) => event.payload?.queue_item_id)
+      .filter(Boolean),
+  );
   const normalizedItems = Array.isArray(serverItems)
     ? serverItems
-        .filter((item) => typeof item?.id === 'string' && item.id.length > 0)
+        .filter(
+          (item) =>
+            typeof item?.id === 'string' &&
+            item.id.length > 0 &&
+            !consumed.has(item.id),
+        )
         .map((item) => normalizeServerQueuedItem(item))
     : [];
   sessionState.queue = normalizedItems;

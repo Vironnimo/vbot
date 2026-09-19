@@ -1,13 +1,26 @@
 <script>
   import Button from './ui/Button.svelte';
-  import StatusChip from './ui/StatusChip.svelte';
+  import { floatingHoverCard } from '$lib/tooltip.js';
   import { t } from '$lib/i18n.js';
 
   let {
     queuedMessages = [],
     onRemoveQueuedMessage,
+    onSteerQueuedMessage,
+    canSteer = false,
     onEditQueuedMessage,
   } = $props();
+
+  let steeringIds = $state([]);
+  const steer = async (id) => {
+    if (steeringIds.includes(id)) return;
+    steeringIds = [...steeringIds, id];
+    try {
+      await onSteerQueuedMessage?.(id);
+    } finally {
+      steeringIds = steeringIds.filter((value) => value !== id);
+    }
+  };
 
   let editingId = $state('');
   let editedContent = $state('');
@@ -74,20 +87,12 @@
     class="queued-messages"
     aria-label={t('queue.title', 'Queued messages')}
   >
-    <div class="queued-messages__header">
-      <div>
-        <h3>{t('queue.title', 'Queued messages')}</h3>
-        <p>{t('queue.pending', 'Waiting for the active run to finish.')}</p>
-      </div>
-      <StatusChip variant="warn">
-        {t('queue.count', '{count} queued', { count: queuedMessages.length })}
-      </StatusChip>
-    </div>
     <ol>
       {#each queuedMessages as message (message.id)}
-        <li>
+        <li class:editing={editingId === message.id}>
           {#if editingId === message.id}
             <textarea
+              aria-label={t('queue.editMessage', 'Edit queued message')}
               class="queued-messages__editor"
               value={editedContent}
               oninput={(event) => {
@@ -125,16 +130,52 @@
               <p class="queued-messages__error">{editError}</p>
             {/if}
           {:else}
-            <span class="queued-messages__content">{message.content}</span>
+            <div class="queued-messages__preview">
+              <button type="button" class="queued-messages__content"
+                >{message.content}</button
+              >
+              <div class="queued-messages__full" use:floatingHoverCard>
+                {message.content}
+              </div>
+            </div>
             <div class="queued-messages__actions">
-              {#if message.editable === true}
+              {#if message.steerable === true}
+                <Button
+                  variant="tertiary"
+                  disabled={!canSteer ||
+                    message.steering ||
+                    steeringIds.includes(message.id)}
+                  ariaLabel={t('queue.steer', 'Steer')}
+                  tooltip={t(
+                    'queue.steerHint',
+                    'Send to the active Run at its next iteration.',
+                  )}
+                  onClick={() => steer(message.id)}
+                >
+                  {message.steering
+                    ? t('queue.steering', 'Steering…')
+                    : t('queue.steer', 'Steer')}
+                </Button>
+              {/if}
+              {#if message.editable === true && !message.steering}
                 <Button
                   variant="tertiary"
                   disabled={editSaving}
                   ariaLabel={t('queue.editMessage', 'Edit queued message')}
                   onClick={() => beginEdit(message)}
                 >
-                  {t('queue.editMessage', 'Edit')}
+                  <svg
+                    width="13"
+                    height="13"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    aria-hidden="true"
+                    ><path
+                      d="m15 5 4 4M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15z"
+                    /></svg
+                  >
                 </Button>
               {/if}
               <Button
@@ -142,7 +183,15 @@
                 ariaLabel={t('queue.removeMessage', 'Remove queued message')}
                 onClick={() => onRemoveQueuedMessage?.(message.id)}
               >
-                {t('common.remove', 'Remove')}
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg
+                >
               </Button>
             </div>
           {/if}
@@ -154,79 +203,86 @@
 
 <style>
   .queued-messages {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
     flex-shrink: 0;
-    padding: 12px 20px;
-    border-top: 1px solid var(--border);
-    background: var(--surface);
+    padding: 4px 12px;
+    background: var(--composer-surface);
+    border-radius: var(--r-md);
   }
-
-  .queued-messages__header,
-  .queued-messages li {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 14px;
-  }
-
-  .queued-messages h3,
-  .queued-messages p {
-    margin: 0;
-  }
-
-  .queued-messages h3 {
-    color: var(--text-med);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 500;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-  }
-
-  .queued-messages p {
-    margin-top: 3px;
-    color: var(--text-lo);
-    font-size: 12px;
-  }
-
   .queued-messages ol {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 1px;
     margin: 0;
     padding: 0;
     list-style: none;
   }
-
   .queued-messages li {
-    padding: 7px 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    background: var(--bg);
-    align-items: flex-start;
-    flex-direction: column;
+    display: flex;
+    align-items: center;
     gap: 8px;
-  }
-
-  .queued-messages__content {
     min-width: 0;
+    padding: 2px 0;
+  }
+  .queued-messages li.editing {
+    flex-wrap: wrap;
+    padding: 6px 0;
+  }
+  .queued-messages__preview {
+    flex: 1;
+    min-width: 0;
+    outline-offset: 2px;
+  }
+  .queued-messages__content {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    font-family: inherit;
     overflow: hidden;
     color: var(--text-med);
     font-size: 12.5px;
     text-overflow: ellipsis;
     white-space: nowrap;
-    width: 100%;
   }
-
+  .queued-messages__full {
+    position: fixed;
+    z-index: var(--z-floating);
+    visibility: hidden;
+    pointer-events: none;
+    box-shadow: var(--dropdown-elevation);
+    max-width: min(560px, calc(100vw - 24px));
+    max-height: min(60vh, 480px);
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    padding: 12px;
+    color: var(--text-hi);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .queued-messages__full:global([data-floating-open='true']) {
+    visibility: visible;
+    pointer-events: auto;
+  }
   .queued-messages__actions {
     display: flex;
-    width: 100%;
-    justify-content: flex-end;
-    gap: 8px;
+    align-items: center;
+    flex-shrink: 0;
+    gap: 2px;
   }
-
+  .editing .queued-messages__actions {
+    margin-left: auto;
+  }
+  .queued-messages__actions :global(button) {
+    min-height: 26px;
+    padding: 3px 6px;
+    font-size: 11.5px;
+  }
   .queued-messages__editor {
     width: 100%;
     min-height: 68px;
@@ -234,47 +290,24 @@
     border-radius: var(--r-md);
     background: var(--surface-2);
     color: var(--text-hi);
-    font-family: var(--font-ui);
-    font-size: 12.5px;
-    line-height: 1.4;
+    font: inherit;
     padding: 8px 10px;
     resize: vertical;
   }
-
   .queued-messages__editor:focus {
     border-color: var(--accent-40);
     outline: none;
     box-shadow: var(--focus-ring);
   }
-
   .queued-messages__error {
     margin: 0;
     color: var(--red);
     font-size: 12px;
   }
-
-  .queued-messages__actions :global(.btn-tertiary) {
-    flex-shrink: 0;
-  }
-
-  @media (max-width: 640px) {
-    .queued-messages {
-      padding: 12px 14px;
-    }
-
-    .queued-messages__header,
-    .queued-messages li {
-      align-items: flex-start;
-      flex-direction: column;
-    }
-
-    .queued-messages__actions {
-      justify-content: flex-start;
-    }
-
-    .queued-messages__content {
-      width: 100%;
-      white-space: normal;
+  @media (pointer: coarse) {
+    .queued-messages__actions :global(button) {
+      min-height: 40px;
+      min-width: 40px;
     }
   }
 </style>

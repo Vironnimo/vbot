@@ -224,6 +224,14 @@ export function createChatViewActions(context) {
     });
   };
 
+  const handleSteerQueuedMessage = async (queuedMessageId) => {
+    const sessionState = context.target.activeSessionState;
+    return await context.chatController.steerQueued(
+      sessionState,
+      queuedMessageId,
+    );
+  };
+
   const handleRemoveQueuedMessage = async (queuedMessageId) => {
     const sessionState = context.target.activeSessionState;
     await context.chatController.removeQueued(sessionState, queuedMessageId);
@@ -333,6 +341,9 @@ export function createChatViewActions(context) {
     },
     get handleCancelBackgroundProcess() {
       return handleCancelBackgroundProcess;
+    },
+    get handleSteerQueuedMessage() {
+      return handleSteerQueuedMessage;
     },
     get handleRemoveQueuedMessage() {
       return handleRemoveQueuedMessage;
