@@ -18,6 +18,49 @@ def _apply_patch_cases() -> list[dict[str, Any]]:
 
     return [
         {
+            "id": "input_alias",
+            "before": {},
+            "arguments": {"input": "*** Add File: new.txt\n+hello"},
+            "expected": {"new.txt": "hello\n"},
+        },
+        {
+            "id": "conflicting_input_alias",
+            "before": {},
+            "arguments": {
+                "patch": "*** Add File: new.txt\n+hello",
+                "input": "*** Add File: other.txt\n+different",
+            },
+            "error": "invalid_arguments",
+        },
+        {
+            "id": "separate_patch_frames",
+            "before": {"one.txt": "old\n"},
+            "arguments": patch(
+                "*** Update File: one.txt\n@@\n-old\n+new\n*** End Patch\n"
+                "*** Begin Patch\n*** Add File: two.txt\n+second\n*** End Patch\n"
+                "*** Add File: three.txt\n+third"
+            ),
+            "expected": {"one.txt": "new\n", "two.txt": "second\n", "three.txt": "third\n"},
+        },
+        {
+            "id": "text_after_patch_end",
+            "before": {},
+            "arguments": patch("*** Add File: new.txt\n+hello\n*** End Patch\n+stray"),
+            "error": "invalid_patch",
+        },
+        {
+            "id": "context_block_anchor",
+            "before": {"one.txt": "first\nvalue=1\nsecond\nvalue=1\n"},
+            "arguments": patch("*** Update File: one.txt\n@@\n second\n@@\n-value=1\n+value=2"),
+            "expected": {"one.txt": "first\nvalue=1\nsecond\nvalue=2\n"},
+        },
+        {
+            "id": "missing_context_block",
+            "before": {"one.txt": "value=1\n"},
+            "arguments": patch("*** Update File: one.txt\n@@\n missing\n@@\n-value=1\n+value=2"),
+            "error": "context_not_found",
+        },
+        {
             "id": "create",
             "before": {},
             "task": "Create new.txt containing exactly hello followed by a newline.",
@@ -490,7 +533,11 @@ async def _probe_apply_patch_case(
             # The evaluator can only mutate its disposable directory, even if
             # the model invents a path. Runtime file tools retain normal agency.
             try:
-                normalized = registry.get("apply_patch").contract.normalize_arguments(arguments)
+                tool = registry.get("apply_patch")
+                normalized = (
+                    tool.argument_normalizer(arguments) if tool.argument_normalizer else arguments
+                )
+                normalized = tool.contract.normalize_arguments(normalized)
                 operations = _parse(normalized.get("patch", ""))
             except Exception:
                 operations = []  # Let the real handler diagnose malformed input.

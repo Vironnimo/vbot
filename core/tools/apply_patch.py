@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 from difflib import SequenceMatcher
 from pathlib import Path
 
+from core.tools._argument_repair import normalize_call_arguments
 from core.tools._change_preview import _change_preview
 from core.tools._patch_syntax import (
     _MESSAGES,
@@ -19,6 +20,7 @@ from core.tools._patch_syntax import (
     _PatchError,
 )
 from core.tools.arguments import line_number_gutter_candidates, strip_line_number_gutters
+from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.file_state import FileReadState, StaleReason, atomic_write_bytes, stale_failure_text
 from core.tools.fuzzy_match import (
     AmbiguousFuzzyMatch,
@@ -61,7 +63,8 @@ APPLY_PATCH_TOOL_PARAMETERS: JsonObject = {
                 "Insert text before an existing line:\n"
                 "*** Begin Patch\n*** Update File: path\n@@\n"
                 "+new line\n existing line\n*** End Patch\n"
-                "Repeat @@ blocks or file headers for more edits in the same patch. "
+                "Repeat @@ blocks or file headers before the final *** End Patch for more edits. "
+                "Context-only blocks before @@ locate the next edit; they do not supply a change. "
                 "`*** Add File: path` followed by + lines creates or fully overwrites "
                 "a file with that content. `*** Delete File: path` deletes a file. "
                 "`*** Move File: source -> destination` moves a file.\n"
@@ -73,6 +76,20 @@ APPLY_PATCH_TOOL_PARAMETERS: JsonObject = {
     },
     "required": ["patch"],
 }
+
+_PATCH_CONTRACT = compile_tool_contract(
+    name=APPLY_PATCH_TOOL_NAME,
+    input_schema=APPLY_PATCH_TOOL_PARAMETERS,
+    require_closed_input=False,
+)
+
+
+def _normalize_patch_arguments(arguments: JsonObject) -> JsonObject:
+    arguments = normalize_call_arguments(
+        _PATCH_CONTRACT, arguments, field_aliases={"input": "patch"}
+    )
+    return arguments
+
 
 _VALIDATION_FAILED = "Patch validation failed; no files were changed."
 _WRITE_FAILED = (
@@ -800,6 +817,10 @@ def _batch_result(context: ToolContext, batch: _Batch) -> JsonObject:
 
 
 def _execute(context: ToolContext, arguments: JsonObject, state: FileReadState) -> JsonObject:
+    try:
+        arguments = _normalize_patch_arguments(arguments)
+    except ToolContractError as error:
+        return tool_failure("invalid_arguments", str(error))
     patch = arguments.get("patch")
     if set(arguments) != {"patch"} or not isinstance(patch, str) or not patch.strip():
         return tool_failure("invalid_arguments", _MESSAGES["invalid_arguments"])
@@ -870,6 +891,10 @@ def _execute(context: ToolContext, arguments: JsonObject, state: FileReadState) 
 
 
 def _display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
+    try:
+        arguments = _normalize_patch_arguments(arguments)
+    except ToolContractError:
+        return ()
     patch = arguments.get("patch")
     if not isinstance(patch, str):
         return ()
@@ -898,9 +923,10 @@ def register_apply_patch_tool(registry: ToolRegistry, *, file_state: FileReadSta
         offload_tool_handler(make_apply_patch_handler(file_state)),
         family="files",
         open_input_schema=True,
+        argument_normalizer=_normalize_patch_arguments,
         result_schema={
             "type": "object",
             "required": ["status", "total", "succeeded", "failed", "results", "files"],
         },
-        display=ToolDisplay(parts_builder=_display_parts, hidden_argument_keys=("patch",)),
+        display=ToolDisplay(parts_builder=_display_parts, hidden_argument_keys=("patch", "input")),
     )
