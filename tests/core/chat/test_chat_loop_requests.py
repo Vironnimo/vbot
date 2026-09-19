@@ -841,9 +841,13 @@ async def test_note_added_during_tool_dispatch_is_persisted_after_tool_results(
         "assistant",
     ]
     assert persisted_after_first_turn[3].content == "Tool finished background work"
+    assert all(message.run_id for message in persisted_after_first_turn)
 
     await build_chat_loop(runtime).send("coder", "Follow up", session_id="session-one")
 
+    assert all(
+        "run_id" not in message for request in adapter.requests for message in request["messages"]
+    )
     second_turn_request = adapter.requests[2]["messages"]
     assert [message["role"] for message in second_turn_request] == [
         "system",

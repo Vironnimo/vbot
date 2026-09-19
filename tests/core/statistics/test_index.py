@@ -12,12 +12,13 @@ from typing import cast
 
 import pytest
 
-from core.chat.messages import ChatMessage
+from core.chat.messages import ChatMessage, ToolCall
 from core.sessions import ChatSession, ChatSessionManager, SessionAddress
 from core.sessions.schema import JOURNAL_MODE_DELETE
 from core.statistics import AgentDirectory, StatisticsService
 from core.statistics.index import StatisticsIndex
 from core.tools import tool_success
+from tests.core.sessions.history_fixtures import seed_history
 
 BASE = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
 
@@ -76,7 +77,7 @@ def _timing(start: datetime, duration_ms: int) -> dict:
 
 def _service(tmp_path: Path) -> tuple[StatisticsService, ChatSessionManager, ChatSession]:
     manager = ChatSessionManager(tmp_path)
-    session = manager.create("main", session_id="session-one")
+    session = manager.create("main", session_id="session-one").start_run("run-one")
     session.append(
         ChatMessage.assistant(
             model="openai/gpt-5",
@@ -152,6 +153,7 @@ def test_cached_snapshot_reloads_when_another_service_updates_index(
     )
     first_service.report()
     second_service.report()
+    session = session.start_run("run-two")
     session.append(
         ChatMessage.assistant(
             model="openai/gpt-5",
@@ -196,6 +198,7 @@ def test_appended_messages_incrementally_extend_the_affected_projection(
         return original(self, cursor)
 
     monkeypatch.setattr(ChatSession, "load_since", track_load_since)
+    session = session.start_run("run-two")
     session.append(
         ChatMessage.assistant(
             model="openai/gpt-5",
@@ -266,7 +269,7 @@ def test_replaced_canonical_session_rebuilds_only_that_projection(tmp_path: Path
     address = SessionAddress(project_id=None, agent_id="main", session_id=session.id)
     _manager.delete(address)
     replacement = _manager.create("main", session_id=session.id)
-    replacement.append_many(replacement_messages)
+    seed_history(replacement, replacement_messages)
 
     report = service.report()
 
@@ -318,6 +321,7 @@ def test_index_projection_does_not_store_large_or_sensitive_message_content(tmp_
         ChatMessage.assistant(
             model="openai/gpt-5",
             content=secret_text,
+            tool_calls=[ToolCall(id="call-one", name="read")],
             reasoning=f"reasoning-{secret_text}",
             timestamp=BASE,
         )
@@ -357,7 +361,7 @@ def test_corrupt_index_is_discarded_and_rebuilt_once(tmp_path: Path) -> None:
 
     assert report.overview.total_runs == 1
     with sqlite3.connect(index_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
 
 
 @pytest.mark.parametrize("indexed", [True, False])
@@ -389,7 +393,8 @@ def test_index_and_live_fallback_agree_on_forks_windows_and_run_activity(
 ) -> None:
     service, manager, source = _service(tmp_path)
     fork = asyncio.run(manager.fork(SessionAddress(None, "main", source.id)))
-    fork.append_many(
+    seed_history(
+        fork,
         [
             ChatMessage.assistant(
                 model="other/model",
@@ -404,7 +409,7 @@ def test_index_and_live_fallback_agree_on_forks_windows_and_run_activity(
                 timing=_timing(BASE + timedelta(seconds=2), 1000),
                 timestamp=BASE + timedelta(seconds=3),
             ),
-        ]
+        ],
     )
     window = {"since": BASE, "until": BASE + timedelta(seconds=4)}
     indexed_report = asdict(service.report(**window))

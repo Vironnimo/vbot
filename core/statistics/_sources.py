@@ -13,7 +13,6 @@ from core.sessions import (
     FORK_SOURCE_META_KEY,
     ChatSession,
     OwnedRunRecord,
-    RunStartBoundary,
     SessionAddress,
 )
 from core.statistics._measurements import (
@@ -97,10 +96,6 @@ class SessionSource(Protocol):
         after: int = 0,
         limit: int = 100,
     ) -> list[OwnedRunRecord]: ...
-
-    def run_start_boundaries(
-        self, addresses: Sequence[SessionAddress]
-    ) -> Sequence[RunStartBoundary]: ...
 
 
 def _indexed_activity_summary(summary: JsonObject) -> JsonObject:
@@ -209,44 +204,7 @@ def _owner_scopes(records: Sequence[OwnedRunRecord]) -> tuple[StatisticsScope, .
 
 
 def _owned_run_messages(
-    messages: Sequence[ChatMessage], record: OwnedRunRecord, boundaries: Sequence[RunStartBoundary]
+    messages: Sequence[ChatMessage], record: OwnedRunRecord
 ) -> list[ChatMessage]:
     """Select one owner Run without treating a reused Session as wholly owned."""
-    start = record.start_sequence
-    end = record.terminal_sequence
-    if end is None:
-        generation_starts = [
-            boundary for boundary in boundaries if boundary.generation_id == record.generation_id
-        ]
-        current = next(
-            (
-                index
-                for index, boundary in enumerate(generation_starts)
-                if boundary.run_id == record.run_id
-            ),
-            None,
-        )
-        if current is None:
-            return []
-        # A Run with no output can share its sequence with its successor.
-        # Canonical admission order, not a strict sequence comparison, separates them.
-        if current + 1 < len(generation_starts):
-            end = generation_starts[current + 1].start_sequence - 1
-    selected: list[ChatMessage] = []
-    for message in messages:
-        ordinal = _statistics_message_ordinal(message)
-        if ordinal is None or ordinal < start or (end is not None and ordinal > end):
-            continue
-        selected.append(message)
-    return selected
-
-
-def _statistics_message_ordinal(message: ChatMessage) -> int | None:
-    prefix = "statistics-"
-    if not message.id.startswith(prefix):
-        return None
-    try:
-        value = int(message.id.removeprefix(prefix))
-    except ValueError:
-        return None
-    return value if value >= 0 else None
+    return [message for message in messages if message.run_id == record.run_id]

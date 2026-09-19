@@ -41,12 +41,14 @@ async def test_run_result_keeps_exact_scope_when_session_has_continued(tmp_path)
             "duration_ms": 1000,
         }
         session = manager.create("joel", project_id="project")
+        session = session.start_run("first")
         session.append(ChatMessage.assistant(model="test/model", content="Which option?"))
         session.append(
             ChatMessage.run_summary(
                 run_id="first", status="completed", timing=timing, iteration_count=1
             )
         )
+        session = session.start_run("second")
         session.append(ChatMessage.assistant(model="test/model", content="Already continued"))
         session.append(
             ChatMessage.run_summary(

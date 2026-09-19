@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import sqlite3
 
 import core.sessions._store_codec as session_store_module
@@ -215,18 +216,26 @@ def test_role_specific_relational_message_storage_round_trips(
         },
     )
 
-    session.append_many([user, assistant, tool, run_summary])
+    assert run_summary.timing is not None
+    run_summary = dataclasses.replace(run_summary, timestamp=run_summary.timing["completed_at"])
+    session.start_run("run-one").append_many([user, assistant, tool, run_summary])
 
-    assert session.load() == [user, assistant, tool, run_summary]
+    assert session.load() == [
+        dataclasses.replace(message, run_id="run-one")
+        for message in [user, assistant, tool, run_summary]
+    ]
     with sqlite3.connect(tmp_path / "sessions.db") as connection:
-        assert connection.execute(
-            "SELECT content FROM messages WHERE message_id = ?", (tool.id,)
-        ).fetchone() == (None,)
+        assert (
+            connection.execute(
+                "SELECT content FROM messages WHERE message_id = ?", (tool.id,)
+            ).fetchone()
+            is None
+        )
         assert connection.execute(
             """
             SELECT result_content, result_ok, error_code, error_message,
                    error_retryable, error_attempts_made, data_json, artifacts_json
-            FROM tool_messages
+            FROM tool_calls WHERE result_id IS NOT NULL
             """
         ).fetchone() == (
             tool.content,
@@ -248,7 +257,7 @@ def test_role_specific_relational_message_storage_round_trips(
     forked = asyncio.run(manager.fork(session.address, target_agent_id="reviewer"))
     monkeypatch.setattr(session_store_module, "message_from_row", original_message_from_row)
 
-    assert forked.load() == [user, assistant, tool, run_summary]
+    assert forked.load() == session.load()
     fork_hits = manager.fts_search(
         "normalized",
         project_id=forked.address.project_id,

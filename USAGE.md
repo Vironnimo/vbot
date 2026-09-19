@@ -467,19 +467,7 @@ vbot session-store snapshot restore <snapshot-id> --yes
 
 `status` reports safe operational metadata, FTS state, verified snapshots, and any unacknowledged recovery incident without returning Session content. Snapshot creation is an explicit current-format backup. A recovery incident remains visible until the exact incident is acknowledged; acknowledgement does not delete snapshots or quarantine evidence. Offline restore requires `--yes`, proves the exact target server is stopped, and must be rehearsed on a copied data directory first.
 
-Legacy JSONL conversion is a separate operator action and is never performed by Runtime, Setup, update, or server startup. Rehearse on a disposable copy, keep the immutable capture and conversion manifest outside the source, and inspect every reported orphan, unknown file, rejected path, and torn tail:
-
-```bash
-python scripts/converters/session_sqlite.py inventory --source <copied-legacy-root> --work-dir <work-dir>
-python scripts/converters/session_sqlite.py dry-run --source <copied-legacy-root> --work-dir <work-dir>
-python scripts/converters/session_sqlite.py convert --source <copied-legacy-root> --work-dir <work-dir>
-python scripts/converters/session_sqlite.py verify --source <copied-legacy-root> --database <work-dir>/converted.db --manifest <work-dir>/conversion-manifest.json
-python scripts/converters/session_sqlite.py export-jsonl --database <work-dir>/converted.db --output <export-copy>
-```
-
-`verify` checks every generation's address, lifecycle, Messages, reconstructed metadata, completion activity, folded Continuation, and the staged database hash. `install` is the only converter command that relocates source artifacts or publishes a current-format target; its external backup preserves accepted sources plus skipped, orphan, and unknown evidence, while only accepted Session artifacts are relocated. Relocation uses a resumable cross-filesystem-safe copy, hash, durable publish, then unlink sequence. `install` requires a proven-stopped exact target server and a verified staged database. `resume` reconciles its recorded stage with the filesystem and database after interruption and requires host/port only once install work begins. Do not run `install`, `resume`, or a real-data conversion against a production or development Session root until a separate operator decision authorizes that cutover.
-
-The safe later cutover sequence is: development rehearsal on copies; review the manifest, counts, generation ids, semantic digests, marker, snapshot, and search results; separately approve the worktree merge; separately approve deployment; stop and prove the exact target server; create the external backup and run the converter install; reopen the new Runtime and verify status, Sessions, search, Statistics, and logs; retain the source capture, displaced target, manifest, snapshot, and incident evidence until acceptance. A merge or deployment approval does not by itself authorize real Session conversion.
+The Session database stores Runs, Messages, Tool invocations/results and checkpoints relationally.
 
 Desktop owns separate per-user settings because it can connect to different servers. On Windows they live under `%APPDATA%\vbot`; on Linux they live under `$XDG_CONFIG_HOME/vbot` or `~/.config/vbot`. Remembered servers, wakeword configuration, and imported wakeword Models are Desktop-local and are not server Settings.
 
@@ -1284,5 +1272,5 @@ publish them or migrate an existing source installation.
 - Complete Bash process output under `temp/bash/` is retained for 72 hours after completion; Sub-Agent activity files under `temp/subagents/` are retained for 24 hours. These temporary files supplement canonical Session history.
 - Recall indexes are derived and disposable; deleting `<data-dir>/recall/` does not delete canonical Sessions.
 - A current-format Session recovery incident stays visible until explicit acknowledgement. Preserve its quarantine bundle and verified snapshots; never delete evidence as part of acknowledgement.
-- Update protection creates a compatible Session snapshot before replacing current-format code. Legacy JSONL conversion is an explicit offline operation and is never part of update, startup, deployment, or merge.
+- Update protection creates a compatible Session snapshot before replacing current-format code.
 - The Desktop wakeword listener is independent of Chat text-to-speech playback, so speaker output can trigger a sensitive wakeword Model. Choose device placement and sensitivity accordingly.

@@ -171,6 +171,7 @@ export function appendHistoryAssistantMessage(assistantRun, message) {
       sequence: assistantRun.items.length,
       timestamp: message.timestamp,
       payload: {
+        assistant_message_id: message.id,
         tool_call: {
           index,
           ...toolCall,

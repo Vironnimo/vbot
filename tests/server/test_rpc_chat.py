@@ -12,6 +12,7 @@ from core.chat import (
     ReplySurface,
 )
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
+from core.sessions import SessionAddress
 from core.tools import FileReadState, register_read_tool
 from server.rpc import (
     chat_methods,
@@ -391,7 +392,16 @@ async def test_chat_send_collected_timeline_includes_read_tool_result_envelope(
     fingerprint = state.runtime.tools.schema_fingerprint("read")
     started_payload = dict(tool_started["payload"])
     display = started_payload.pop("display")
+    assistant = next(
+        message
+        for message in state.runtime.chat_sessions.get(
+            SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+        ).load()
+        if message.role == "assistant" and message.tool_calls
+    )
+    assert tool_result["payload"]["assistant_message_id"] == assistant.id
     assert started_payload == {
+        "assistant_message_id": assistant.id,
         "tool_call": {
             "id": "call_read",
             "index": 0,

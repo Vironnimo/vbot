@@ -101,6 +101,7 @@ async def test_subagent_result_preserves_interruption_details_from_jsonl(tmp_pat
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     session = runtime.chat_sessions.create("worker", session_id="sub-session")
+    session = session.start_run("missing-run")
     session.append(ChatMessage.user("write the plan"))
     session.append(
         ChatMessage.assistant(
@@ -145,6 +146,7 @@ async def test_subagent_result_falls_back_to_jsonl_when_run_is_missing(tmp_path:
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     session = runtime.chat_sessions.create("worker", session_id="sub-session")
+    session = session.start_run("missing-run")
     session.append(ChatMessage.user("question"))
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="first"))
     session.append(
@@ -423,6 +425,7 @@ async def test_subagent_result_falls_back_to_jsonl_when_live_run_has_no_output(
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     session = runtime.chat_sessions.create("worker", session_id="sub-session")
+    session = session.start_run("sub-run")
     session.append(ChatMessage.user("question"))
     session.append(
         ChatMessage.assistant(
@@ -480,6 +483,7 @@ async def test_subagent_result_failed_live_run_error_falls_back_to_jsonl_output(
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     session = runtime.chat_sessions.create("worker", session_id="sub-session")
+    session = session.start_run("sub-run")
     session.append(ChatMessage.user("question"))
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="jsonl answer"))
     session.append(
@@ -517,7 +521,7 @@ async def test_subagent_result_failed_live_run_error_falls_back_to_jsonl_output(
     assert result["data"]["result"] == "jsonl answer"
 
 
-async def test_subagent_result_polls_jsonl_until_assistant_output_appears(
+async def test_subagent_result_polls_persisted_run_until_assistant_output_appears(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -543,8 +547,9 @@ async def test_subagent_result_polls_jsonl_until_assistant_output_appears(
 
     async def append_after_first_poll(delay_seconds: float) -> None:
         sleeps.append(delay_seconds)
-        session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="late answer"))
-        session.append(
+        writer = session.start_run("sub-run")
+        writer.append(ChatMessage.assistant(model="openai/gpt-5.2", content="late answer"))
+        writer.append(
             ChatMessage.run_summary(
                 run_id="sub-run",
                 status="failed",
@@ -612,6 +617,7 @@ async def test_subagent_result_ignores_prior_terminal_run_when_new_output_is_unf
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     session = runtime.chat_sessions.create("worker", session_id="sub-session")
+    session = session.start_run("first-run")
     session.append(ChatMessage.user("first question"))
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="First answer."))
     session.append(
@@ -622,6 +628,7 @@ async def test_subagent_result_ignores_prior_terminal_run_when_new_output_is_unf
             iteration_count=1,
         )
     )
+    session = session.start_run("second-run")
     session.append(ChatMessage.user("continue"))
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Still working."))
     tracker = SubAgentBatchTracker(RecordingTriggerService())

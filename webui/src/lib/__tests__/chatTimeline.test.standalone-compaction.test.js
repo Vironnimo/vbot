@@ -55,29 +55,19 @@ describe('manual compaction run dedup against persisted history', () => {
         timestamp: '2026-08-27T13:48:01Z',
         payload: {
           status: CHAT_STATUS_COMPLETED,
-          history_checkpoint: { generation_id: 'generation', sequence: 3 },
+          history_persisted: true,
         },
       },
     ];
   }
 
   it('prunes every event of a finished compaction run once its checkpoint is persisted', () => {
-    const messages = [
-      { id: 'user-1', role: 'user', content: 'Earlier turn' },
-      { id: 'assistant-1', role: 'assistant', content: 'Earlier answer' },
-      {
-        id: 'checkpoint-1',
-        history_sequence: 3,
-        role: 'compaction_checkpoint',
-        timestamp: COMPACTION_TIMESTAMP,
-      },
-    ];
+    const runs = { 'run-compaction': { status: 'completed', complete: true } };
 
     const pruned = pruneRunEventsPersistedInHistory(
       manualCompactionRunEvents('run-compaction'),
-      messages,
+      runs,
       'run-next',
-      'generation',
     );
 
     expect(pruned).toEqual([]);
@@ -89,41 +79,49 @@ describe('manual compaction run dedup against persisted history', () => {
       'alpha',
       'session-compaction-dedup',
     );
-    loadHistory(sessionState, [
+    loadHistory(
+      sessionState,
+      [
+        {
+          id: 'user-1',
+          role: 'user',
+          content: 'Earlier turn',
+          timestamp: '2026-08-27T13:40:00Z',
+        },
+        {
+          id: 'assistant-1',
+          role: 'assistant',
+          content: 'Earlier answer',
+          timestamp: '2026-08-27T13:46:00Z',
+        },
+        {
+          id: 'summary-prev',
+          role: 'run_summary',
+          run_id: 'run-prev',
+          status: 'completed',
+          timestamp: '2026-08-27T13:46:01Z',
+          timing: { duration_ms: 87_000 },
+          iteration_count: 1,
+        },
+        {
+          id: 'checkpoint-1',
+          history_sequence: 3,
+          role: 'compaction_checkpoint',
+          timestamp: COMPACTION_TIMESTAMP,
+        },
+        {
+          id: 'user-2',
+          role: 'user',
+          content: 'ja, klingt gut. setz das mal um.',
+          timestamp: '2026-08-27T13:48:05Z',
+        },
+      ],
       {
-        id: 'user-1',
-        role: 'user',
-        content: 'Earlier turn',
-        timestamp: '2026-08-27T13:40:00Z',
+        runs: [
+          { run_id: 'run-compaction', status: 'completed', complete: true },
+        ],
       },
-      {
-        id: 'assistant-1',
-        role: 'assistant',
-        content: 'Earlier answer',
-        timestamp: '2026-08-27T13:46:00Z',
-      },
-      {
-        id: 'summary-prev',
-        role: 'run_summary',
-        run_id: 'run-prev',
-        status: 'completed',
-        timestamp: '2026-08-27T13:46:01Z',
-        timing: { duration_ms: 87_000 },
-        iteration_count: 1,
-      },
-      {
-        id: 'checkpoint-1',
-        history_sequence: 3,
-        role: 'compaction_checkpoint',
-        timestamp: COMPACTION_TIMESTAMP,
-      },
-      {
-        id: 'user-2',
-        role: 'user',
-        content: 'ja, klingt gut. setz das mal um.',
-        timestamp: '2026-08-27T13:48:05Z',
-      },
-    ]);
+    );
     for (const event of manualCompactionRunEvents('run-compaction')) {
       appendRunEvent(sessionState, event);
     }
@@ -211,7 +209,7 @@ describe('standalone compaction run renders bare', () => {
         timestamp: '2026-08-27T14:00:56Z',
         payload: {
           status: CHAT_STATUS_COMPLETED,
-          history_checkpoint: { generation_id: 'generation', sequence: 3 },
+          history_persisted: true,
         },
       },
     ];

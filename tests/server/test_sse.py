@@ -122,7 +122,12 @@ def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_p
     assert reasoning_data["payload"]["message"]["reasoning"] == "Thinking clearly"
     started_payload = dict(tool_started_data["payload"])
     display = started_payload.pop("display")
+    assert (
+        tool_result_data["payload"]["assistant_message_id"]
+        == reasoning_data["payload"]["message"]["id"]
+    )
     assert started_payload == {
+        "assistant_message_id": reasoning_data["payload"]["message"]["id"],
         "tool_call": {
             "id": "call-one",
             "index": 0,

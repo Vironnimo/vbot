@@ -52,7 +52,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 | chat.md | `core/chat/` | ChatMessage boundary, Agentic Loop invariants |
 | runs.md | `core/runs/` | Run lifecycle, cancellation, timeline events, queues |
 | compaction.md | `core/compaction/` | Triggers, strategies, plans, checkpoints |
-| sessions.md | `core/sessions/` | Canonical SQLite Session persistence, metadata, offline conversion boundary, and lifecycle |
+| sessions.md | `core/sessions/` | Canonical SQLite Session persistence, metadata, and lifecycle |
 | recall.md | `core/recall/` | Recall backends: canonical scan, FTS index, vector index |
 | statistics.md | `core/statistics/` | Disposable SQLite projection, report RPC |
 | memory.md | `core/memory/` | Pinned memory service, workspace memory files |
@@ -117,7 +117,7 @@ python desktop/main.py                # Desktop shell
 ```
 A git-ignored checkout marker selects dev data `~/.vbot-dev`, port `8421`. Installed CLI outside the checkout uses product defaults `~/.vbot`, `8420`. Never target the installed instance with development commands. Managed worktrees have separate data dirs and ports.
 
-**Session store:** Live operator-safe health: `python cli/main.py session-store status|snapshot|incident`; `snapshot restore` requires a proven-stopped target. `python scripts/converters/session_sqlite.py inventory|dry-run|convert|verify|install|resume|export-jsonl` is only for explicit offline work on copied legacy data.
+**Session store:** Live operator-safe health: `python cli/main.py session-store status|snapshot|incident`; `snapshot restore` requires a proven-stopped target. Runs, Messages, Tool invocations/results and checkpoints are stored relationally.
 
 **Frontend build:** `cd webui && npm ci && npm run build`. Also compiles bundled Extension `ui/page.html` entries to relative `web/` assets via `webui/scripts/build-extension-pages.mjs`; installers ship assets and Extension sources. The frontend gate covers these external source/test paths with the shared dependency tree.
 

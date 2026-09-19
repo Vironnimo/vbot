@@ -659,7 +659,7 @@ class TemporaryExecutionGroups:
         self, group_id: str, participant_id: str, query: dict[str, Any]
     ) -> SessionChatHistorySnapshot:
         if (
-            set(query) - {"limit", "before"}
+            set(query) - {"limit", "before", "after"}
             or type(query.get("limit", 50)) is not int
             or not 1 <= query.get("limit", 50) <= 100
         ):
@@ -680,6 +680,9 @@ class TemporaryExecutionGroups:
             return self._sessions.get(binding.address).read_chat_history_snapshot(
                 limit=query.get("limit", 50),
                 before=query.get("before"),
+                after=query.get("after"),
+                excluded_roles=("note", "history_edit"),
+                complete_run_segment=True,
             )
 
         result = await asyncio.to_thread(read)

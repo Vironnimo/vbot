@@ -153,13 +153,12 @@ def test_fts_projection_uses_canonical_message_key_and_recall_text_only(tmp_path
             assert "message_json" not in columns
             assert "reasoning" not in columns
             assert "tool_calls_json" not in columns
-            assert "run_id" not in columns
+            assert "run_id" in columns
             assert "message_search" not in tables
             assert {
                 "assistant_messages",
                 "tool_calls",
-                "tool_messages",
-                "run_summaries",
+                "runs",
                 "compaction_checkpoints",
                 "continuations",
             }.issubset(tables)
@@ -324,7 +323,6 @@ def test_history_edit_materializes_active_lineage_and_removes_stale_fts_rows(
             "JOIN sessions AS session ON session.session_key = message.session_key "
             "WHERE session.agent_id = 'agent' ORDER BY message.seq"
         ).fetchall() == [
-            (0,),
             (0,),
             (0,),
             (1,),

@@ -18,6 +18,7 @@ from core.recall import (
 )
 from core.sessions import ChatSessionManager
 from core.sessions.schema import JOURNAL_MODE_DELETE
+from tests.core.sessions.history_fixtures import append_tool_fixture
 
 pytestmark = pytest.mark.asyncio
 
@@ -455,7 +456,7 @@ async def test_tool_inclusive_substring_search_uses_complete_bounded_fallback(
         content='{"ok":true,"data":"prefixneedle"}',
         timestamp=timestamp(1),
     )
-    sessions.create("coder", session_id="tool-substring").append(target)
+    append_tool_fixture(sessions.create("coder", session_id="tool-substring"), target)
     try:
         page = await backend(tmp_path, sessions).search_page(
             message_request("needle", roles=("tool",))

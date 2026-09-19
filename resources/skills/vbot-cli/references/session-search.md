@@ -27,7 +27,7 @@ scope = (project_id, agent_id, session_id)
 
 Scope mapping matters: a Tool result may use `project_id: null` for Identity Sessions. SQLite stores that scope as the empty string `""`, **not SQL NULL**; use `s.project_id = ?` with `""`, never `IS NULL`.
 
-`sessions` contains live and archived generations. Match the full address and `status = 'live'`; join Messages by `session_key`. `m.active = 1` excludes history replaced by an edit. `m.seq` is canonical order and disambiguates repeated Message ids. Compaction summaries have role `compaction_checkpoint`; they are summaries, not verbatim User or Assistant text. Do not confuse a same-named Session in another Agent or Project with the selected target.
+`sessions` contains live and archived generations. Match the full address and `status = 'live'`; join Messages by `session_key`. `messages` stores User and Assistant content; `tool_calls` stores each invocation with its result. The read-only `history_records` view combines these entities in Timeline order. `m.active = 1` excludes history replaced by an edit. `m.seq` is canonical order and disambiguates repeated Message ids. Compaction summaries have role `compaction_checkpoint`; they are summaries, not verbatim User or Assistant text. Do not confuse a same-named Session in another Agent or Project with the selected target.
 
 ## Read User and Assistant Messages
 
@@ -61,8 +61,8 @@ SELECT s.generation_id, m.seq, m.message_id, m.role, m.timestamp,
        substr(COALESCE(m.content, m.content_search, t.result_content, ''),
               max(1, instr(lower(COALESCE(m.content, m.content_search, t.result_content, '')),
                            lower(?)) - 300), 2000) AS preview
-FROM sessions s JOIN messages m ON m.session_key = s.session_key
-LEFT JOIN tool_messages t ON t.message_key = m.message_key
+FROM sessions s JOIN history_records m ON m.session_key = s.session_key
+LEFT JOIN tool_calls t ON t.result_key = m.message_key
 WHERE s.project_id = ? AND s.agent_id = ? AND s.session_id = ?
   AND s.status = 'live' AND m.active = 1
   AND m.role IN ('user', 'assistant', 'tool')
@@ -82,8 +82,8 @@ sequence = 123
 generation_id = "generation-id"
 result_sql = """
 SELECT m.seq, m.message_id, t.name, t.result_content
-FROM sessions s JOIN messages m ON m.session_key = s.session_key
-JOIN tool_messages t ON t.message_key = m.message_key
+FROM sessions s JOIN history_records m ON m.session_key = s.session_key
+JOIN tool_calls t ON t.result_key = m.message_key
 WHERE s.project_id = ? AND s.agent_id = ? AND s.session_id = ?
   AND s.status = 'live' AND s.generation_id = ? AND m.active = 1 AND m.seq = ?
 """

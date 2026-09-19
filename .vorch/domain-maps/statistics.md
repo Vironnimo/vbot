@@ -32,13 +32,12 @@ Both report RPCs reconcile through the dedicated two-worker Statistics pool with
 
 ## Extension group projection
 
-`group_usage` uses canonical Sessions Run-owner records and every Run-start boundary
+`group_usage` uses canonical Sessions Run-owner records and explicit Message Run ids
 to restrict the existing index and aggregators to one owner/group, optionally one
 participant. A group report returns participant breakdowns from the same indexed
 snapshot and Run slices; clients need no per-participant report fan-out. Scoped
 index reads hydrate only the requested Sessions, including after an append; they
-never load the entire retained index for one group. An unfinished Run's slice ends
-before a later owned or ordinary Run; unrelated earlier history in a reused Session is excluded. Explicit owner scope
+never load the entire retained index for one group. Messages from other Runs in a reused Session are excluded by identity. Explicit owner scope
 reconciliation does not prune normal Statistics scopes. The bounded worker facade
 returns the existing usage, Tools, Compaction and Run projections without costs,
 account data or separate counters. Generation checks and fork-prefix exclusion
@@ -47,7 +46,7 @@ remain in force (`statistics.py`, `index.py`; `test_statistics_groups.py`,
 
 ## Conventions
 
-- **Run-summary segmentation:** messages between consecutive `run_summary` records form run groups; run counts/status/durations come straight from summaries - exact, not estimated.
+- **Run identity:** the compact index retains each Message's stored `run_id`; aggregation and group usage select that exact identity. Run completion projections supply status and duration. Neighboring footer order never establishes membership. Index schema 4 rebuilds older disposable projections.
 - **Canonical-first projection:** Session appends succeed independently; Statistics is never a Chat write dependency. Scope discovery reads normalized Session summaries plus only the allowlisted residual `seen_skills` field, never complete open-ended metadata. Reconciliation consumes raw append-only records, including superseded lineage, so a Message edit preserves historical Usage, Runs, Compactions, errors, and Tool activity while adding one `history_edit` record. It applies metadata-only changes without history reads, ingests ordinary growth from the generation-aware cursor, rebuilds only a new generation or invalid cursor, and deletes missing scopes; generation-stamped snapshots reuse only when nothing changed. A Session that is deleted or archived between scope listing, version lookup, and detail loading is skipped and its old derived rows are pruned. Reports and Run activity share one surviving-Session read boundary, which excludes fork prefixes exactly once and applies the same deletion-race policy to indexed and canonical reads. Only the deliberately degraded live-scan fallback after repeated disposable-index failure loads complete canonical histories; it applies the same race policy instead of failing the whole report.
 - **Fork prefixes excluded** from all activity windows via `fork_source.message_count`; structural counts, current offer Session metadata, and post-fork messages count normally; invalid hand-edited provenance fails open unsliced.
 - **Real vs estimated tokens never merge:** field-level flags feed matching buckets; turn-level `estimated` remains the legacy signal; cached tokens are already inside canonical input so cache figures surface separately, never added on top; reasoning tokens are a measured-output subset.

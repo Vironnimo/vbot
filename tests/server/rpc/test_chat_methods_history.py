@@ -23,6 +23,7 @@ from core.sessions.format import write_bootstrap_marker
 from core.tools.tools import tool_success
 from server.rpc import chat_methods
 from server.rpc.methods import dispatch_rpc
+from tests.core.sessions.history_fixtures import append_tool_fixture, seed_history
 
 
 class HistoryAgentStore:
@@ -163,7 +164,8 @@ async def test_chat_history_projects_only_active_edit_lineage_but_keeps_raw_usag
 async def test_chat_history_projects_durable_background_bash_statuses(tmp_path: Path) -> None:
     state, chat_sessions = _history_state(tmp_path)
     session = chat_sessions.create("parent", session_id="session-one")
-    session.append(
+    append_tool_fixture(
+        session,
         ChatMessage.tool(
             tool_call_id="bash-one",
             name="bash",
@@ -176,7 +178,7 @@ async def test_chat_history_projects_durable_background_bash_statuses(tmp_path: 
                     }
                 )
             ),
-        )
+        ),
     )
     session.add_note(
         "Automatic completion delivery\n\n"
@@ -321,8 +323,7 @@ async def test_chat_history_expands_limit_to_complete_oldest_run_segment(tmp_pat
             id="second-summary",
         ),
     ]
-    for message in messages:
-        session.append(message)
+    seed_history(session, messages)
 
     response = await dispatch_rpc(
         state,
@@ -350,7 +351,8 @@ async def test_chat_history_expanded_page_cursor_skips_excluded_run_boundary(
         "completed_at": "2026-07-24T10:00:01+00:00",
         "duration_ms": 1000,
     }
-    session.append_many(
+    seed_history(
+        session,
         [
             replace(ChatMessage.user("first"), id="first-user"),
             replace(
@@ -373,7 +375,7 @@ async def test_chat_history_expanded_page_cursor_skips_excluded_run_boundary(
                 ),
                 id="second-summary",
             ),
-        ]
+        ],
     )
 
     newest = await dispatch_rpc(
@@ -435,8 +437,7 @@ async def test_chat_history_keeps_the_active_tail_segment_together(tmp_path: Pat
             id="active-assistant",
         ),
     ]
-    for message in messages:
-        session.append(message)
+    seed_history(session, messages)
 
     response = await dispatch_rpc(
         state,

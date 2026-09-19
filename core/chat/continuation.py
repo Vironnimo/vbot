@@ -327,6 +327,12 @@ class ContinuationTracker:
         if state is None:
             raise RuntimeError("continuation journal lost its unresolved state")
 
+    async def prepare_completion(self) -> None:
+        """Flush pending state; the Run transaction owns successful resolution."""
+        cancelled_task = await self._flush_boundary()
+        await self._close_timer(cancelled_task)
+        self._closed = True
+
     async def resolve(self) -> None:
         cancelled_task = await self._flush_boundary(
             self._record("resolved", checkpoint_id=self.checkpoint_id)
@@ -442,7 +448,6 @@ async def recover_continuation(
     session: ChatSession,
     *,
     active_run_id: str | None = None,
-    canonical_messages: list[Any] | None = None,
 ) -> ContinuationState | None:
     """Load a checkpoint and lazily classify a journal abandoned by a restart."""
     records = await session.load_continuation_records_async()
@@ -457,13 +462,11 @@ async def recover_continuation(
     if state is None:
         await session.clear_continuation_async()
         return None
-    messages = canonical_messages
-    if messages is None:
-        messages = await session.load_active_async()
+    messages = await session.load_run_messages_async(state.latest_run_id)
     _reconcile_canonical_tool_results(state, messages)
     if not state.active or state.latest_run_id == active_run_id:
         return state
-    if _transcript_proves_normal_completion(messages, state.latest_run_id):
+    if any(message.role == "run_summary" and message.status == "completed" for message in messages):
         await session.clear_continuation_async()
         return None
     await session.append_continuation_records_async(
@@ -590,29 +593,10 @@ def normalize_interruption_cause(error: BaseException | None) -> ContinuationCau
     return "internal"
 
 
-def _transcript_proves_normal_completion(messages: list[Any], run_id: str) -> bool:
-    for index, message in enumerate(messages):
-        if message.role != "run_summary" or message.run_id != run_id:
-            continue
-        if message.status != "completed":
-            return False
-        for prior in reversed(messages[:index]):
-            if prior.role == "run_summary":
-                break
-            if prior.role == "assistant":
-                return not prior.interrupted and not prior.tool_calls
-        return False
-    return False
-
-
 def _reconcile_canonical_tool_results(state: ContinuationState, messages: list[Any]) -> None:
     """Let canonical assistant/tool messages settle journal references after a crash."""
     if state.active or state.cause == "process_restart":
-        tail_start = 0
-        for index, message in enumerate(messages):
-            if message.role == "run_summary":
-                tail_start = index + 1
-        for message in messages[tail_start:]:
+        for message in messages:
             if message.role != "assistant":
                 continue
             for tool_call in message.tool_calls or []:

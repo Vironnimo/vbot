@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
+from core.chat.messages import ToolCall
 from core.sessions import skill_tool_activation
 from core.skills import SkillRegistry
 from core.tools import JsonObject as ToolJsonObject
@@ -250,6 +251,13 @@ async def test_loaded_project_skill_grant_is_recovered_in_later_run(tmp_path: Pa
     runtime.skills_for = resolve_skills
     session = runtime.chat_sessions.create("coder", session_id="s1")
     session.append(
+        ChatMessage.assistant(
+            model="test",
+            content=None,
+            tool_calls=[ToolCall(id="call-project", name="project", arguments={})],
+        )
+    )
+    session.append(
         ChatMessage.tool(
             tool_call_id="call-project",
             name="project",
@@ -291,6 +299,13 @@ async def test_loaded_project_skill_scope_is_recovered_per_session(tmp_path: Pat
     runtime.skills_for = resolve_skills
     loaded_session = runtime.chat_sessions.create("coder", session_id="loaded")
     clean_session = runtime.chat_sessions.create("coder", session_id="clean")
+    loaded_session.append(
+        ChatMessage.assistant(
+            model="test",
+            content=None,
+            tool_calls=[ToolCall(id="call-project", name="project", arguments={})],
+        )
+    )
     loaded_session.append(
         ChatMessage.tool(
             tool_call_id="call-project",

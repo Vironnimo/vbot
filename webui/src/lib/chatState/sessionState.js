@@ -119,6 +119,7 @@ export function ensureSessionState(state, agentId, sessionId) {
       historyLoaded: false,
       historySnapshotVersion: 0,
       historyGeneration: '',
+      historyRuns: {},
       historyAfter: '',
       runEvents: [],
       streamingRunEvents: [],
