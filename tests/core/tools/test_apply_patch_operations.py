@@ -28,7 +28,7 @@ def test_display_uses_generic_metadata_and_bounded_previews(tmp_path):
     assert isinstance(result, dict)
     display = registry.display_for_call("apply_patch", arguments, result=result)
     assert display["summary"] == "file.txt"
-    assert display["hidden_argument_keys"] == ["patch"]
+    assert set(display["hidden_argument_keys"]) == {"patch", "input"}
     assert {
         fact.get("change"): fact["value"]
         for fact in ctx.presentation_facts
@@ -163,7 +163,7 @@ def test_multi_hunk_and_retries_do_not_repeat_changes(tmp_path):
     first = "@@\n alpha\n-one\n+first\n beta"
     second = "@@\n beta\n-two\n+second\n omega"
     assert apply(tmp_path, update(first))["ok"]
-    assert apply(tmp_path, update(first + "\n@@\n unchanged inert anchor\n" + second))["ok"]
+    assert apply(tmp_path, update(first + "\n@@\n beta\n" + second))["ok"]
     before = path.read_bytes(), path.stat().st_mtime_ns
     result = apply(tmp_path, update(first + "\n" + second))
     assert result["ok"] and result["data"]["already_applied"]
@@ -280,8 +280,15 @@ def test_external_change_during_planning_is_detected(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "arguments", [{}, {"patch": ""}, {"patch": 42}, {"patch": "x", "path": "x"}]
+    ("arguments", "code"),
+    [
+        ({}, "invalid_arguments"),
+        ({"patch": ""}, "invalid_arguments"),
+        ({"patch": 42}, "invalid_patch"),
+        ({"patch": "x", "path": "x"}, "invalid_arguments"),
+    ],
 )
-def test_argument_validation(tmp_path, arguments):
+def test_argument_validation(tmp_path, arguments, code):
     result = make_apply_patch_handler(FileReadState())(context(tmp_path), arguments)
-    assert result["error"]["code"] == "invalid_arguments"
+    assert result["error"]["code"] == code
+    assert list(tmp_path.iterdir()) == []

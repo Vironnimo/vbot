@@ -38,7 +38,7 @@ class _PatchAdapter:
 
 def test_patch_probe_measures_actual_effects_and_rejects_scope_escape():
     args = PROBE._parser().parse_args(["--scenario", "apply_patch"])
-    case = probe_workflow_patch._apply_patch_cases()[0]
+    case = next(c for c in probe_workflow_patch._apply_patch_cases() if c["id"] == "create")
     good = _PatchAdapter({"patch": "*** Add File: new.txt\n+hello"})
     assert asyncio.run(probe_workflow_patch._probe_apply_patch_case(good, args, case))["passed"]
     wrong = _PatchAdapter({"patch": "*** Add File: new.txt\n+wrong"})
@@ -47,6 +47,9 @@ def test_patch_probe_measures_actual_effects_and_rejects_scope_escape():
     ]
     escaped = _PatchAdapter({"patch": "*** Add File: ../escaped.txt\n+no"})
     row = asyncio.run(probe_workflow_patch._probe_apply_patch_case(escaped, args, case))
+    assert row["error_codes"] == ["probe_scope_violation"]
+    escaped_alias = _PatchAdapter({"input": "*** Add File: ../escaped.txt\n+no"})
+    row = asyncio.run(probe_workflow_patch._probe_apply_patch_case(escaped_alias, args, case))
     assert row["error_codes"] == ["probe_scope_violation"]
 
 
