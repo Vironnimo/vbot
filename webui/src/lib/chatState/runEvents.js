@@ -57,9 +57,7 @@ export function startRun(sessionState, run) {
   sessionState.error = null;
   sessionState.streamError = '';
   sessionState.streamStatus = CHAT_STATUS_RUNNING;
-  sessionState.streamingRunEvents = [];
   sessionState.streamingPhase = 0;
-  sessionState.seenStreamingEventKeys = new Set();
   appendRunEvents(sessionState, run.events ?? []);
   const terminal = sessionState.runEvents.find(
     (event) =>
@@ -206,9 +204,7 @@ function beginRunFromEvent(sessionState, event) {
   if (isSameRun) {
     return;
   }
-  sessionState.streamingRunEvents = [];
   sessionState.streamingPhase = 0;
-  sessionState.seenStreamingEventKeys = new Set();
 }
 
 export function finishRun(sessionState, event) {

@@ -15,7 +15,7 @@ import {
 } from './chatTimeline.support.js';
 
 describe('pruneRunEventsPersistedInHistory (handoff3 B10)', () => {
-  it('drops every event of a non-active run whose output messages are all persisted', () => {
+  it('drops every event of a non-active Run with a canonical terminal summary', () => {
     const runEvents = [
       ...finishedRunEvents('run-finished', 'assistant-finished'),
       {
@@ -28,6 +28,12 @@ describe('pruneRunEventsPersistedInHistory (handoff3 B10)', () => {
     const messages = [
       { id: 'user-run-finished', role: 'user', content: 'Hi' },
       { id: 'assistant-finished', role: 'assistant', content: 'Done.' },
+      {
+        id: 'summary',
+        role: 'run_summary',
+        run_id: 'run-finished',
+        status: 'completed',
+      },
     ];
 
     const prunedEvents = pruneRunEventsPersistedInHistory(

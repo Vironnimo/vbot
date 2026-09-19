@@ -208,6 +208,31 @@ export function createChatController({
     };
   }
 
+  async function readCurrentHistory(sessionState) {
+    let after = sessionState.historyAfter;
+    let result = null;
+    do {
+      const page = await operations.loadChatHistory({
+        agent_id: sessionState.agentId,
+        session_id: sessionState.sessionId,
+        limit: after ? 500 : HISTORY_INITIAL_LIMIT,
+        ...(after ? { after } : {}),
+      });
+      if (!result || !page.incremental) result = page;
+      else
+        result = {
+          ...page,
+          incremental: result.incremental,
+          has_more: result.has_more,
+          next_before: result.next_before,
+          history_reset: result.history_reset,
+          messages: [...(result.messages ?? []), ...(page.messages ?? [])],
+        };
+      after = page.next_after;
+    } while (result?.has_newer);
+    return result;
+  }
+
   async function loadHistoryForSession(agentId, sessionId) {
     const sessionState = ensureSessionState(chatState, agentId, sessionId);
     const request = beginHistoryRequest(sessionState);
@@ -226,11 +251,7 @@ export function createChatController({
       let staleRunId;
       do {
         staleRunId = sessionState.currentRun?.runId ?? '';
-        history = await operations.loadChatHistory({
-          agent_id: agentId,
-          session_id: sessionId,
-          limit: HISTORY_INITIAL_LIMIT,
-        });
+        history = await readCurrentHistory(sessionState);
         if (
           !isLatestRequest() ||
           sessionState.historySnapshotVersion !== request.snapshotVersion
@@ -248,6 +269,11 @@ export function createChatController({
       loadHistory(sessionState, history?.messages ?? [], {
         hasMore: history?.has_more === true,
         nextBefore: history?.next_before,
+        nextAfter: history?.next_after,
+        generation: history?.history_generation,
+        incremental: history?.incremental,
+        reset: history?.history_reset,
+        activeRunId: history?.active_run?.run_id,
         sessionUsage: history?.session_usage,
         contextUsage: history?.context_usage,
         backgroundBashStatuses: history?.background_bash_statuses,
@@ -298,11 +324,7 @@ export function createChatController({
     const reflectionRequest = beginReflectionRequest(sessionState);
     const isLatestRequest = request.isLatest;
     try {
-      const history = await operations.loadChatHistory({
-        agent_id: sessionState.agentId,
-        session_id: sessionState.sessionId,
-        limit: HISTORY_INITIAL_LIMIT,
-      });
+      const history = await readCurrentHistory(sessionState);
       // A new Run may have started while durable history was loading. That
       // newer Run owns the Session now, so this recovery response must not
       // replace its optimistic state or subscription.
@@ -317,6 +339,11 @@ export function createChatController({
       loadHistory(sessionState, history?.messages ?? [], {
         hasMore: history?.has_more === true,
         nextBefore: history?.next_before,
+        nextAfter: history?.next_after,
+        generation: history?.history_generation,
+        incremental: history?.incremental,
+        reset: history?.history_reset,
+        activeRunId: history?.active_run?.run_id,
         sessionUsage: history?.session_usage,
         contextUsage: history?.context_usage,
         backgroundBashStatuses: history?.background_bash_statuses,

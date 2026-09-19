@@ -125,6 +125,8 @@ class SessionMessagePage:
     has_more: bool
     editable_message_ids: frozenset[str] = frozenset()
     before_cursor: str | None = None
+    record_sequences: tuple[int, ...] = ()
+    record_run_ids: tuple[str | None, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -133,6 +135,10 @@ class SessionChatHistorySnapshot:
     session_usage: JsonObject
     context_messages: tuple[ChatMessage, ...]
     background_messages: tuple[ChatMessage, ...]
+    generation_id: str = ""
+    after_cursor: str = ""
+    incremental: bool = False
+    has_newer: bool = False
 
 
 @dataclass(frozen=True)

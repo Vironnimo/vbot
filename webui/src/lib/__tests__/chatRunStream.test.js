@@ -880,3 +880,38 @@ describe('createChatRunStream().mergeRunResponse()', () => {
     expect(sessionState.runEvents).toEqual([]);
   });
 });
+
+it.each(['run_completed', 'run_failed', 'run_cancelled', 'run_interrupted'])(
+  'reconciles canonical History after an ordinary %s event',
+  async (type) => {
+    const chatState = createChatState();
+    const session = ensureSessionState(chatState, 'alpha', 'session');
+    const reconcileRunSession = vi.fn(async () => true);
+    const { stream } = makeStreamHarness({
+      chatState,
+      displayedAgentId: 'alpha',
+      displayedSessionId: 'session',
+      reconcileRunSession,
+    });
+    stream.attachRunStream(session, {
+      run_id: 'run',
+      sse_url: '/run',
+      status: 'running',
+    });
+    stream.handleServerEvents({
+      type,
+      payload: {
+        run_event_type: type,
+        run_id: 'run',
+        agent_id: 'alpha',
+        session_id: 'session',
+        run_event_sequence: 1,
+        status: type.slice(4),
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(reconcileRunSession).toHaveBeenCalledWith(session, 'run');
+    stream.closeSubscriptions();
+  },
+);

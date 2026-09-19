@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from core.providers.accounts import ConnectionRef
 from core.providers.adapter import ProviderAdapter
 from core.runtime import Runtime
+from core.sessions._metadata import _decode_chat_history_cursor
 from core.sessions.format import write_bootstrap_marker
 from core.utils.config import Config
 from server.app import create_app
@@ -70,12 +71,20 @@ def test_bootstrap_agent_and_current_history(tmp_path: Path) -> None:
     assert agent["id"] == "main"
     assert agent["name"] == "Main"
     assert agent["current_session_id"]
+    history = history_response.json()["result"]
+    assert history["history_generation"]
+    assert _decode_chat_history_cursor(history["next_after"]) == (history["history_generation"], 0)
     assert history_response.json() == {
         "ok": True,
         "result": {
             "agent_id": "main",
             "session_id": agent["current_session_id"],
             "messages": [],
+            "history_generation": history["history_generation"],
+            "next_after": history["next_after"],
+            "incremental": False,
+            "history_reset": False,
+            "has_newer": False,
             "has_more": False,
             "background_bash_statuses": {},
             "reflection_runs": [],

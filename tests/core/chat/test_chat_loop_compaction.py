@@ -170,6 +170,13 @@ async def test_compaction_routes_session_context_through_selected_adapter(
     if manual:
         run = await loop.start_compaction_run("coder", session.id)
         await run.wait()
+        snapshot = session.read_chat_history_snapshot(limit=1)
+        terminal = run.events[-1]
+        assert terminal.payload["history_checkpoint"] == {
+            "generation_id": snapshot.generation_id,
+            "sequence": snapshot.page.record_sequences[-1],
+        }
+        assert snapshot.page.record_run_ids == (run.id,)
     else:
         await loop.send("coder", "Continue", session_id=session.id)
 

@@ -443,3 +443,48 @@ async def test_history_completion_cannot_pair_earlier_page_with_idle_run(
     finally:
         release.set()
         await run.wait()
+
+
+@pytest.mark.asyncio
+async def test_chat_history_incremental_projection_and_edit_reset(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    session = state.runtime.chat_sessions.create("coder", session_id="timeline")
+    await state.runtime.chat_sessions.record_run_start_async(session.address, run_id="run-one")
+    user = ChatMessage.user("question")
+    session.append(user)
+
+    async def history(**params: Any) -> Any:
+        response = await dispatch_rpc(
+            state,
+            {
+                "method": "chat.history",
+                "params": {
+                    "agent_id": "coder",
+                    "session_id": session.id,
+                    **params,
+                },
+            },
+        )
+        assert response["ok"] is True
+        return response["result"]
+
+    first = await history(limit=1)
+    assert first["messages"][0]["history_run_id"] == "run-one"
+    assert first["messages"][0]["history_sequence"] == 0
+    session.append(
+        ChatMessage.assistant(model="test", content="answer", reasoning_meta={"secret": "private"})
+    )
+    delta = await history(after=first["next_after"], limit=1)
+    assert delta["incremental"] is True
+    assert delta["history_reset"] is False
+    assert [message["history_sequence"] for message in delta["messages"]] == [1]
+    assert delta["messages"][0]["history_run_id"] == "run-one"
+    assert "reasoning_meta" not in delta["messages"][0]
+    assert delta["history_generation"] == first["history_generation"]
+    replacement = ChatMessage.user("edited")
+    session.append_many([ChatMessage.history_edit(user.id), replacement])
+    reset = await history(after=delta["next_after"], limit=10)
+    assert reset["incremental"] is False
+    assert reset["history_reset"] is True
+    assert [message["id"] for message in reset["messages"]] == [replacement.id]
+    assert reset["messages"][0]["history_sequence"] == 3

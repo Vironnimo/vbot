@@ -1,6 +1,7 @@
 import {
   createAssistantRunItem,
   historyMessageItem,
+  historyMessageKey,
   CHAT_STATUS_COMPLETED,
   CHAT_STATUS_FAILED,
   syncAssistantRunCollections,
@@ -24,13 +25,26 @@ export function historyTimelineItems(messages) {
   const timelineItems = [];
   let activeAssistantRun = null;
   let previousVisibleRole = '';
+  let activeRecordRunId;
 
   for (const message of messages ?? []) {
+    // Missing terminal persistence must not merge two canonical executions.
+    // Keep the existing within-Run presentation, including text-only rows.
+    if (
+      activeAssistantRun &&
+      activeRecordRunId !== undefined &&
+      Object.hasOwn(message, 'history_run_id') &&
+      activeRecordRunId !== message.history_run_id
+    ) {
+      pushActiveAssistantRun(timelineItems, activeAssistantRun);
+      activeAssistantRun = null;
+      previousVisibleRole = '';
+    }
     if (message?.role === 'compaction_checkpoint') {
       pushActiveAssistantRun(timelineItems, activeAssistantRun);
       activeAssistantRun = null;
       timelineItems.push({
-        id: `compaction-${message.id ?? message.timestamp}`,
+        id: `compaction-${historyMessageKey(message)}`,
         type: 'compaction_separator',
         timestamp: message.timestamp,
         message,
@@ -44,7 +58,7 @@ export function historyTimelineItems(messages) {
       pushActiveAssistantRun(timelineItems, activeAssistantRun);
       activeAssistantRun = null;
       timelineItems.push({
-        id: `takeover-${message.id ?? message.timestamp}`,
+        id: `takeover-${historyMessageKey(message)}`,
         type: 'takeover_separator',
         timestamp: message.timestamp,
         message,
@@ -93,9 +107,10 @@ export function historyTimelineItems(messages) {
           previousTimelineItemIsUser(timelineItems) ||
           followsAssistant)
       ) {
+        activeRecordRunId = message.history_run_id;
         activeAssistantRun = createAssistantRunItem({
-          id: `history-run-${message.id ?? message.timestamp ?? timelineItems.length}`,
-          runId: null,
+          id: `history-run-${historyMessageKey(message)}`,
+          runId: message.history_run_id ?? null,
           source: 'history',
           sequence: timelineItems.length,
           timestamp: message.timestamp,
@@ -196,7 +211,7 @@ export function appendHistoryToolResult(assistantRun, message) {
 // durable trace when the terminal Run produced no visible output.
 function terminalRunSummaryItem(message, sequence) {
   const assistantRun = createAssistantRunItem({
-    id: `history-run-summary-${message.id ?? message.timestamp ?? sequence}`,
+    id: `history-run-summary-${historyMessageKey(message)}`,
     runId: message.run_id ?? null,
     source: 'history',
     sequence,
