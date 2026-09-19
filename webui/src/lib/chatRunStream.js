@@ -419,7 +419,7 @@ export function createChatRunStream({
         'The live stream closed before the run finished. Waiting for server status.',
       );
       closeRunSubscription(sessionKey);
-      void reconcileAfterStreamFailure(sessionState, runId);
+      void reconcileRunHistory(sessionState, runId);
     }, TERMINAL_RECONCILIATION_DELAY_MS);
     pendingTerminalReconciliations[sessionKey] = pending;
   }
@@ -499,6 +499,12 @@ export function createChatRunStream({
       closeRunSubscription(sessionState.key);
       sessionState.streamError = '';
       void syncSessionQueue(sessionState);
+      if (
+        sessionState.historyLoaded ||
+        isDisplayedSession(sessionState.agentId, sessionState.sessionId)
+      ) {
+        void reconcileRunHistory(sessionState, event.run_id);
+      }
     }
   }
 
@@ -554,7 +560,7 @@ export function createChatRunStream({
       'The live stream closed before the run finished. Waiting for server status.',
     )} ${error?.message ?? ''}`;
     closeRunSubscription(sessionState.key);
-    void reconcileAfterStreamFailure(sessionState, currentRun.runId);
+    void reconcileRunHistory(sessionState, currentRun.runId);
   }
 
   function armHeartbeatWatchdog(sessionState, sseUrl, retryAttempt) {
@@ -578,7 +584,7 @@ export function createChatRunStream({
     }, SSE_HEARTBEAT_TIMEOUT_MS);
   }
 
-  function reconcileAfterStreamFailure(sessionState, expectedRunId) {
+  function reconcileRunHistory(sessionState, expectedRunId) {
     const sessionKey = sessionState.key;
     const reconciliationKey = `${sessionKey}::${expectedRunId}`;
     if (pendingReconciliations[reconciliationKey]) {
@@ -592,10 +598,7 @@ export function createChatRunStream({
         if (destroyed) {
           return;
         }
-        if (
-          sessionState.currentRun?.runId !== expectedRunId ||
-          sessionState.currentRun?.status !== 'running'
-        ) {
+        if (sessionState.currentRun?.runId !== expectedRunId) {
           clearPendingRecoveryRetry(sessionKey);
           return;
         }
@@ -623,11 +626,8 @@ export function createChatRunStream({
     }
     pendingRecoveryRetries[sessionKey] = setTimeout(() => {
       delete pendingRecoveryRetries[sessionKey];
-      if (
-        sessionState.currentRun?.runId === expectedRunId &&
-        sessionState.currentRun?.status === 'running'
-      ) {
-        void reconcileAfterStreamFailure(sessionState, expectedRunId);
+      if (sessionState.currentRun?.runId === expectedRunId) {
+        void reconcileRunHistory(sessionState, expectedRunId);
       }
     }, SSE_RECOVERY_RETRY_DELAY_MS);
   }
@@ -869,7 +869,7 @@ export function createChatRunStream({
             'errors.streamClosed',
             'The live stream closed before the run finished. Waiting for server status.',
           );
-          void reconcileAfterStreamFailure(sessionState, currentRunId);
+          void reconcileRunHistory(sessionState, currentRunId);
         } else {
           resetStaleRun(sessionState);
         }
