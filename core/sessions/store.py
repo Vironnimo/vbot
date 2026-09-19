@@ -27,7 +27,7 @@ from core.sessions import (
     _store_search,
     _store_values,
 )
-from core.sessions._types import JsonObject
+from core.sessions._types import JsonObject, SessionChatHistorySnapshot
 from core.sessions.errors import (
     FtsHealth,
     SessionNotFoundError,
@@ -582,16 +582,8 @@ class SessionStore:
         complete_run_segment: bool,
         background_roles: Sequence[str],
         background_tool_names: Sequence[str],
-    ) -> tuple[
-        list[ChatMessage],
-        bool,
-        frozenset[str],
-        JsonObject,
-        list[ChatMessage],
-        list[ChatMessage],
-        str,
-        int | None,
-    ]:
+        after: tuple[str, int] | None = None,
+    ) -> SessionChatHistorySnapshot:
         with self._runtime.read_ctx() as connection:
             return _store_history.chat_history_snapshot(
                 connection,
@@ -604,6 +596,7 @@ class SessionStore:
                 complete_run_segment=complete_run_segment,
                 background_roles=background_roles,
                 background_tool_names=background_tool_names,
+                after=after,
             )
 
     def status_snapshot(

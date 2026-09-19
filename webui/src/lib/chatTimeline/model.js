@@ -148,10 +148,16 @@ export function syncAssistantRunCollections(assistantRun) {
 
 export function historyMessageItem(message) {
   return {
-    id: message.id ?? `history-${message.role}-${message.timestamp}`,
+    id: historyMessageKey(message),
     type: 'message',
     message,
   };
+}
+
+export function historyMessageKey(message) {
+  return Number.isInteger(message.history_sequence)
+    ? `history-record-${message.history_sequence}`
+    : (message.id ?? `history-${message.role}-${message.timestamp}`);
 }
 
 export function normalizedIterationCount(value) {

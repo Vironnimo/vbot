@@ -7,8 +7,9 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from core.chat.errors import ChatSessionError
-from core.sessions import _store_codec, _store_values
-from core.sessions._types import JsonObject
+from core.sessions import _store_codec, _store_timeline, _store_values
+from core.sessions._io import _encode_chat_history_cursor
+from core.sessions._types import JsonObject, SessionChatHistorySnapshot, SessionMessagePage
 from core.sessions.errors import (
     SessionPageCursorError,
     SessionStoreCorruptError,
@@ -357,30 +358,40 @@ def chat_history_snapshot(
     complete_run_segment: bool,
     background_roles: Sequence[str],
     background_tool_names: Sequence[str],
-) -> tuple[
-    list[ChatMessage],
-    bool,
-    frozenset[str],
-    JsonObject,
-    list[ChatMessage],
-    list[ChatMessage],
-    str,
-    int | None,
-]:
+    after: tuple[str, int] | None = None,
+) -> SessionChatHistorySnapshot:
     """Read one WebUI history projection from a single SQLite snapshot."""
     if limit is not None and (not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0):
         raise ChatSessionError("message page limit must be a positive integer")
     state = _store_values._require_live(connection, address)
-    page_rows, has_more, editable_ids, page_floor = _active_message_page_from_connection(
-        connection,
-        state,
-        limit=limit,
-        before_message_id=before_message_id,
-        before_sequence=before_sequence,
-        expected_generation_id=expected_generation_id,
-        excluded_roles=excluded_roles,
-        complete_run_segment=complete_run_segment,
-    )
+    incremental = _store_timeline.can_append(connection, state, after)
+    through = int(state["message_count"])
+    if incremental:
+        assert after is not None
+        page_rows, through = _store_timeline.appended_rows(
+            connection,
+            state,
+            sequence=after[1],
+            limit=limit or 500,
+            excluded_roles=excluded_roles,
+        )
+        has_more, page_floor = False, None
+        editable_ids = frozenset(
+            str(row["message_id"])
+            for row in page_rows
+            if row["role"] == "user" and row["content"] is not None and row["sender_id"] is None
+        )
+    else:
+        page_rows, has_more, editable_ids, page_floor = _active_message_page_from_connection(
+            connection,
+            state,
+            limit=limit,
+            before_message_id=before_message_id,
+            before_sequence=before_sequence,
+            expected_generation_id=expected_generation_id,
+            excluded_roles=excluded_roles,
+            complete_run_segment=complete_run_segment,
+        )
     usage, _cache_input_tokens = _session_usage_from_connection(
         connection, int(state["session_key"])
     )
@@ -391,15 +402,27 @@ def chat_history_snapshot(
         roles=background_roles,
         tool_names=background_tool_names,
     )
-    return (
-        [_store_codec.message_from_row(row) for row in page_rows],
-        has_more,
-        editable_ids,
-        usage,
-        [_store_codec.message_from_row(row) for row in context_rows],
-        [_store_codec.message_from_row(row) for row in background_rows],
-        str(state["generation_id"]),
-        page_floor,
+    generation = str(state["generation_id"])
+    return SessionChatHistorySnapshot(
+        page=SessionMessagePage(
+            messages=tuple(_store_codec.message_from_row(row) for row in page_rows),
+            has_more=has_more,
+            editable_message_ids=editable_ids,
+            before_cursor=(
+                _encode_chat_history_cursor(generation, page_floor)
+                if has_more and page_floor is not None
+                else None
+            ),
+            record_sequences=tuple(int(row["seq"]) for row in page_rows),
+            record_run_ids=_store_timeline.record_run_ids(connection, state, page_rows),
+        ),
+        session_usage=usage,
+        context_messages=tuple(_store_codec.message_from_row(row) for row in context_rows),
+        background_messages=tuple(_store_codec.message_from_row(row) for row in background_rows),
+        generation_id=generation,
+        after_cursor=_encode_chat_history_cursor(generation, through),
+        incremental=incremental,
+        has_newer=through < int(state["message_count"]),
     )
 
 

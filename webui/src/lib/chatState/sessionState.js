@@ -118,6 +118,8 @@ export function ensureSessionState(state, agentId, sessionId) {
       messages: [],
       historyLoaded: false,
       historySnapshotVersion: 0,
+      historyGeneration: '',
+      historyAfter: '',
       runEvents: [],
       streamingRunEvents: [],
       streamingPhase: 0,

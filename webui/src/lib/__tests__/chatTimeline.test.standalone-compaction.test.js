@@ -42,6 +42,7 @@ describe('manual compaction run dedup against persisted history', () => {
           context_tokens_after: 40_289,
           message: {
             id: 'checkpoint-1',
+            history_sequence: 3,
             role: 'compaction_checkpoint',
             timestamp: COMPACTION_TIMESTAMP,
           },
@@ -52,7 +53,10 @@ describe('manual compaction run dedup against persisted history', () => {
         run_id: runId,
         sequence: 4,
         timestamp: '2026-08-27T13:48:01Z',
-        payload: { status: CHAT_STATUS_COMPLETED },
+        payload: {
+          status: CHAT_STATUS_COMPLETED,
+          history_checkpoint: { generation_id: 'generation', sequence: 3 },
+        },
       },
     ];
   }
@@ -63,6 +67,7 @@ describe('manual compaction run dedup against persisted history', () => {
       { id: 'assistant-1', role: 'assistant', content: 'Earlier answer' },
       {
         id: 'checkpoint-1',
+        history_sequence: 3,
         role: 'compaction_checkpoint',
         timestamp: COMPACTION_TIMESTAMP,
       },
@@ -72,6 +77,7 @@ describe('manual compaction run dedup against persisted history', () => {
       manualCompactionRunEvents('run-compaction'),
       messages,
       'run-next',
+      'generation',
     );
 
     expect(pruned).toEqual([]);
@@ -107,6 +113,7 @@ describe('manual compaction run dedup against persisted history', () => {
       },
       {
         id: 'checkpoint-1',
+        history_sequence: 3,
         role: 'compaction_checkpoint',
         timestamp: COMPACTION_TIMESTAMP,
       },
@@ -202,7 +209,10 @@ describe('standalone compaction run renders bare', () => {
         run_id: runId,
         sequence: 4,
         timestamp: '2026-08-27T14:00:56Z',
-        payload: { status: CHAT_STATUS_COMPLETED },
+        payload: {
+          status: CHAT_STATUS_COMPLETED,
+          history_checkpoint: { generation_id: 'generation', sequence: 3 },
+        },
       },
     ];
   }
@@ -257,6 +267,7 @@ describe('standalone compaction run renders bare', () => {
       },
       {
         id: 'checkpoint-1',
+        history_sequence: 3,
         role: 'compaction_checkpoint',
         timestamp: '2026-08-27T14:00:55Z',
         usage: {

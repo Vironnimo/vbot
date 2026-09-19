@@ -19,6 +19,15 @@ import {
   reportedMultiStepMessages,
 } from './ChatTimeline.support.js';
 
+// Match the canonical identity supplied by chat.history, including sparse replay.
+function historyRows(runId, messages) {
+  return messages.map((message, history_sequence) => ({
+    ...message,
+    history_sequence,
+    history_run_id: runId,
+  }));
+}
+
 describe('ChatTimeline', () => {
   const suite = setupTimelineRunSuite();
 
@@ -41,7 +50,10 @@ describe('ChatTimeline', () => {
       payload: { message: reportedMultiStepMessages()[0] },
     });
     appendReportedLiveRunEvents(sessionState, 'run-reported-overlap', 2);
-    loadHistory(sessionState, reportedMultiStepMessages());
+    loadHistory(
+      sessionState,
+      historyRows('run-reported-overlap', reportedMultiStepMessages()),
+    );
 
     suite.mountedComponent = mount(ChatTimeline, {
       target: document.body,
@@ -436,14 +448,24 @@ describe('ChatTimeline', () => {
       status: 'running',
     });
 
-    loadHistory(sessionState, [
-      { id: 'user-one', role: 'user', content: 'Inspect the file' },
-      {
-        id: 'assistant-one',
-        role: 'assistant',
-        content: 'The file says A.',
-      },
-    ]);
+    loadHistory(
+      sessionState,
+      historyRows(sessionState.currentRun.runId, [
+        { id: 'user-one', role: 'user', content: 'Inspect the file' },
+        {
+          id: 'assistant-one',
+          role: 'assistant',
+          content: 'The file says A.',
+        },
+        {
+          id: 'summary-one',
+          role: 'run_summary',
+          run_id: 'run-history-ahead',
+          status: 'completed',
+          iteration_count: 1,
+        },
+      ]),
+    );
 
     appendRunEvent(sessionState, {
       type: 'user_message_persisted',
@@ -509,33 +531,36 @@ describe('ChatTimeline', () => {
       status: 'running',
     });
 
-    loadHistory(sessionState, [
-      { id: 'user-one', role: 'user', content: 'Inspect the file' },
-      {
-        id: 'assistant-tools',
-        role: 'assistant',
-        reasoning: 'Need to read it.',
-        tool_calls: [
-          {
-            id: 'call-one',
-            name: 'read',
-            arguments: { path: 'a.txt' },
-          },
-        ],
-      },
-      {
-        id: 'tool-one',
-        role: 'tool',
-        tool_call_id: 'call-one',
-        name: 'read',
-        content: '{"ok": true, "content": "A"}',
-      },
-      {
-        id: 'assistant-final',
-        role: 'assistant',
-        content: 'The file says A.',
-      },
-    ]);
+    loadHistory(
+      sessionState,
+      historyRows(sessionState.currentRun.runId, [
+        { id: 'user-one', role: 'user', content: 'Inspect the file' },
+        {
+          id: 'assistant-tools',
+          role: 'assistant',
+          reasoning: 'Need to read it.',
+          tool_calls: [
+            {
+              id: 'call-one',
+              name: 'read',
+              arguments: { path: 'a.txt' },
+            },
+          ],
+        },
+        {
+          id: 'tool-one',
+          role: 'tool',
+          tool_call_id: 'call-one',
+          name: 'read',
+          content: '{"ok": true, "content": "A"}',
+        },
+        {
+          id: 'assistant-final',
+          role: 'assistant',
+          content: 'The file says A.',
+        },
+      ]),
+    );
 
     appendRunEvent(sessionState, {
       type: 'user_message_persisted',
