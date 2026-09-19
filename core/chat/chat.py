@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, cast
 
 from core.chat._agentic_progression import AgenticProgression
+from core.chat._queued_input import QueuedChatInput as _QueuedRunExecutor
 from core.chat._request_builder import RequestBuilder
 from core.chat._run_execution import RunExecution
 from core.chat._run_state import _RunRequest
@@ -57,31 +57,6 @@ if TYPE_CHECKING:
     from core.chat._run_state import ChatLoopDependencies, ReflectionNotifier, SessionTitleNotifier
     from core.compaction import CompactionService
     from core.projects import AgentRunOverrides
-
-
-@dataclass(frozen=True)
-class _QueuedRunExecutor:
-    """Editable queued executor retaining every immutable admission input."""
-
-    loop: ChatLoop
-    request: _RunRequest
-
-    async def __call__(self, run: Run) -> ChatMessage:
-        return await self.loop._execution._execute_run(run, self.request)
-
-    def with_edited_content(
-        self,
-        content: str | list[ContentBlock],
-        input_origin: InputOrigin | None,
-    ) -> _QueuedRunExecutor:
-        return replace(
-            self,
-            request=replace(
-                self.request,
-                content=content,
-                input_origin=input_origin,
-            ),
-        )
 
 
 class ChatLoop:
@@ -366,6 +341,7 @@ class ChatLoop:
             _QueuedRunExecutor(self, request),
             display_content=_display_content_preview(content),
             editable=queue_content_is_editable(content),
+            steerable=request.supports_steering and run_kind == RunKind.USER,
             internal=internal,
             waiting_work_admission=waiting_work_admission,
             admission=RunAdmission(

@@ -28,6 +28,42 @@ describe('QueuedMessages', () => {
     document.body.innerHTML = '';
   });
 
+  it('shows the complete queued text on hover and focus and sends Steer once', async () => {
+    let resolveSteer;
+    const onSteerQueuedMessage = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveSteer = resolve;
+        }),
+    );
+    const content = 'Long message '.repeat(100) + 'THE END';
+    mountedComponent = mount(QueuedMessages, {
+      target: document.body,
+      props: {
+        queuedMessages: [{ id: 'q', content, editable: true, steerable: true }],
+        canSteer: true,
+        onSteerQueuedMessage,
+      },
+    });
+    flushSync();
+    const anchor = document.querySelector('.queued-messages__preview');
+    anchor.dispatchEvent(new MouseEvent('pointerenter'));
+    flushSync();
+    const card = document.querySelector('[data-floating-hover-card]');
+    expect(card.textContent).toBe(content);
+    anchor.querySelector('button').focus();
+    flushSync();
+    expect(card.getAttribute('aria-hidden')).toBe('false');
+    button('Steer').click();
+    flushSync();
+    expect(button('Steer').disabled).toBe(true);
+    button('Steer').click();
+    expect(onSteerQueuedMessage).toHaveBeenCalledTimes(1);
+    expect(onSteerQueuedMessage).toHaveBeenCalledWith('q');
+    resolveSteer(false);
+    await vi.waitFor(() => expect(button('Steer').disabled).toBe(false));
+  });
+
   it('keeps a failed Queue edit open with its unsaved content', async () => {
     const onEditQueuedMessage = vi.fn().mockResolvedValue(false);
     mountedComponent = mount(QueuedMessages, {

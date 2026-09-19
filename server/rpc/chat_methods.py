@@ -762,6 +762,25 @@ def _chat_queue_list(state: Any, params: JsonObject) -> JsonObject:
     return {"items": [item.to_dict() for item in items]}
 
 
+def _chat_queue_steer(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"agent_id", "session_id", "item_id", "run_id"}, "chat.queue_steer")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    item_id = _required_string(params, "item_id")
+    run_id = _required_string(params, "run_id")
+    try:
+        manager = _state_chat_runs(state)
+        if not _queue_item_is_public(manager, agent_id, session_id, item_id, project_id):
+            raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
+        item = manager.steer_queued(
+            agent_id, session_id, item_id, project_id=project_id, run_id=run_id
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    _publish_queue_changed(state, agent_id, session_id)
+    return {"item": item.to_dict(), "run_id": run_id}
+
+
 def _chat_queue_remove(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"agent_id", "session_id", "item_id"}, "chat.queue_remove")
 
@@ -905,6 +924,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "chat.cancel_tool_call": _cancel_tool_call_chat,
         "chat.control_run": _control_run_chat,
         "chat.cancel_process": _cancel_process_chat,
+        "chat.queue_steer": _chat_queue_steer,
         "chat.queue_list": _chat_queue_list,
         "chat.queue_remove": _chat_queue_remove,
         "chat.queue_update": _chat_queue_update,

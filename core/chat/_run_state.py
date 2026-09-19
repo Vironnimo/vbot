@@ -155,6 +155,23 @@ class _RunRequest:
     input_already_persisted: bool = False
     temporary_parent_binding: TemporarySessionBinding | None = None
 
+    @property
+    def supports_steering(self) -> bool:
+        """Only ordinary user input can share the current execution policy."""
+        return (
+            not self.internal
+            and self.sender is None
+            and (self.reply_surface is None or self.reply_surface.kind == "webui")
+            and self.tool_restriction is None
+            and self.tool_denial_resolver is None
+            and self.input_persisted_hook is None
+            and self.agent_overrides is None
+            and self.temporary_binding is None
+            and self.temporary_parent_binding is None
+            and not self.input_already_persisted
+            and not self.resume_process_restart
+        )
+
 
 @dataclass(frozen=True)
 class _ModelTarget:

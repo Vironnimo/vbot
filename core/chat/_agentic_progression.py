@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
+from core.chat._queued_input import persist_steering_input, rebuild_after_steering
 from core.chat._request_builder import _run_prompt_method
 from core.chat._run_state import _AssistantStep, _RequestState
 from core.chat._step_outcomes import (
@@ -59,6 +60,7 @@ from core.providers.reasoning import REASONING_REPLAY_NONE
 from core.runs import (
     MODEL_STEP_USAGE_EVENT,
     RUN_CHANGE_STATS_EVENT,
+    QueuedRunItem,
     Run,
     RunInterruptedError,
 )
@@ -155,6 +157,24 @@ class AgenticProgression:
         emitted_change_stats: dict[str, object] | None = None
         tool_catalog_revision = -1
         while True:
+            run.raise_if_cancelled()
+            async with self._dependencies.sessions.write_lock(session_address):
+
+                async def persist_input(item: QueuedRunItem) -> None:
+                    await persist_steering_input(context, item)
+
+                delivered = await _finish_visible_boundary(
+                    self._dependencies.run_manager.deliver_steering(run, persist_input),
+                    run,
+                    True,
+                )
+            if delivered:
+                await rebuild_after_steering(context, target, self._requests)
+                assert context.request_state is not None
+                state = context.request_state
+                messages = state.messages
+                tools = state.tools
+                tool_catalog_revision = -1
             run.raise_if_cancelled()
             registry = self._dependencies.tools
             if (
@@ -575,6 +595,10 @@ class AgenticProgression:
                     )
                     if terminal_error is not None:
                         raise terminal_error
+                    if self._dependencies.run_manager.pending_steering(run):
+                        continue
+                    # Seal admission synchronously with the last pending-input check.
+                    run.accepts_steering = False
                     break
 
                 finalization_violation = context.tool_progress.finalization_reason is not None

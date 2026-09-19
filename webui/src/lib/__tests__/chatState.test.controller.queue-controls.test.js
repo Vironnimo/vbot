@@ -8,6 +8,27 @@ import {
 import { setup, deferred } from './chatState.controller.support.js';
 
 describe('chat controller', () => {
+  it('steers the exact active Run and reconciles a consumed item without starting another Run', async () => {
+    const steerQueueItem = vi.fn().mockResolvedValue({ run_id: 'r' });
+    const listQueue = vi.fn().mockResolvedValue({ items: [] });
+    const { chatState, controller, runStream } = setup({
+      operationOverrides: { steerQueueItem, listQueue },
+    });
+    const session = ensureSessionState(chatState, 'coder@project', 'one');
+    session.currentRun = { runId: 'r', status: 'running' };
+    session.queue = [{ id: 'q', content: 'Correction', steerable: true }];
+    expect(await controller.steerQueued(session, 'q')).toBe(true);
+    expect(steerQueueItem).toHaveBeenCalledWith(
+      'coder@project',
+      'one',
+      'q',
+      'r',
+    );
+    expect(session.queue).toEqual([]);
+    expect(session.currentRun.runId).toBe('r');
+    expect(runStream.attachRunStream).not.toHaveBeenCalled();
+  });
+
   it('applies each connection snapshot object only once', () => {
     const { controller, runStream } = setup();
     const snapshot = { active_runs: [] };
@@ -36,7 +57,14 @@ describe('chat controller', () => {
       'session-one',
     );
     expect(target.queue).toEqual([
-      { id: 'queued-one', content: 'Next', editable: true, created_at: null },
+      {
+        id: 'queued-one',
+        content: 'Next',
+        editable: true,
+        created_at: null,
+        steerable: false,
+        steering: false,
+      },
     ]);
   });
 
@@ -73,7 +101,14 @@ describe('chat controller', () => {
 
     expect(identitySession.queue).toEqual([]);
     expect(projectSession.queue).toEqual([
-      { id: 'kept', content: 'Server text', editable: true, created_at: null },
+      {
+        id: 'kept',
+        content: 'Server text',
+        editable: true,
+        created_at: null,
+        steerable: false,
+        steering: false,
+      },
     ]);
     expect(onRestartQueueDiscarded).toHaveBeenCalledWith(2);
   });
@@ -136,6 +171,8 @@ describe('chat controller', () => {
         content: 'Newest',
         editable: true,
         created_at: null,
+        steerable: false,
+        steering: false,
       },
     ]);
   });
