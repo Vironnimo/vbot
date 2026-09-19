@@ -31,12 +31,12 @@ def summary(run_id):
 
 
 def start(manager, session, run_id):
-    asyncio.run(manager.record_run_start_async(session.address, run_id=run_id))
+    return session.start_run(run_id)
 
 
 def test_run_identity_survives_bounded_page_without_user_or_summary(manager):
     session = manager.create("coder")
-    start(manager, session, "first")
+    session = start(manager, session, "first")
     session.append_many(
         [
             ChatMessage.user("question"),
@@ -44,7 +44,7 @@ def test_run_identity_survives_bounded_page_without_user_or_summary(manager):
             summary("first"),
         ]
     )
-    start(manager, session, "automatic")
+    session = start(manager, session, "automatic")
     session.append_many(
         [
             ChatMessage.note("trigger"),
@@ -64,33 +64,32 @@ def test_run_identity_survives_bounded_page_without_user_or_summary(manager):
 
 def test_empty_runs_with_equal_start_sequence_do_not_claim_successor(manager):
     session = manager.create("coder")
-    start(manager, session, "empty")
-    start(manager, session, "successor")
+    session = start(manager, session, "empty")
+    session = start(manager, session, "successor")
     session.append(ChatMessage.assistant(content="output", model="test"))
     assert read(session).page.record_run_ids == ("successor",)
 
 
 def test_summary_does_not_assign_previous_failed_run_to_successor(manager):
     session = manager.create("coder")
-    start(manager, session, "missing-summary")
+    session = start(manager, session, "missing-summary")
     session.append(ChatMessage.assistant(content="partial", model="test"))
-    start(manager, session, "successor")
+    session = start(manager, session, "successor")
     session.append_many([ChatMessage.assistant(content="new", model="test"), summary("successor")])
     assert read(session).page.record_run_ids == ("missing-summary", "successor", "successor")
 
 
 def test_historical_summary_segments_and_fork_keep_read_identity(manager):
     session = manager.create("coder")
-    session.append_many(
-        [
-            ChatMessage.user("one"),
-            ChatMessage.assistant(content="one", model="test"),
-            summary("one"),
-            ChatMessage.user("two"),
-            ChatMessage.assistant(content="two", model="test"),
-            summary("two"),
-        ]
-    )
+    for run_id in ("one", "two"):
+        session = session.start_run(run_id)
+        session.append_many(
+            [
+                ChatMessage.user(run_id),
+                ChatMessage.assistant(content=run_id, model="test"),
+                summary(run_id),
+            ]
+        )
     page = read(session)
     assert page.page.record_run_ids == ("one", "one", "one", "two", "two", "two")
     fork = asyncio.run(manager.fork(session.address))
@@ -100,9 +99,9 @@ def test_historical_summary_segments_and_fork_keep_read_identity(manager):
 
 def test_completed_run_does_not_claim_unrelated_later_records(manager):
     session = manager.create("coder")
-    start(manager, session, "one")
+    session = start(manager, session, "one")
     session.append_many([ChatMessage.assistant(content="one", model="test"), summary("one")])
-    session.append(ChatMessage.user("external"))
+    manager.get(session.address).append(ChatMessage.user("external"))
     assert read(session, limit=1).page.record_run_ids == (None,)
 
 

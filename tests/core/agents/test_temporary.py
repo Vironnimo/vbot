@@ -473,6 +473,7 @@ class GroupTestChat:
                 binding.address, run_id=run.id, owner=owner, input_id=input_id
             )
             session = self.sessions.get(binding.address)
+            session = session.start_run(run.id)
             await session.append_async(
                 ChatMessage.assistant(model="fixture/model", content="result")
             )

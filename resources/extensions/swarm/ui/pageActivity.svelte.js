@@ -3,6 +3,7 @@ import {
   createChatState,
   ensureSessionState,
   appendRunEvent,
+  loadHistory,
   TERMINAL_RUN_EVENTS,
 } from '../../../../webui/src/lib/chatState.js';
 import { t, activeLocaleTag } from '../../../../webui/src/lib/i18n.js';
@@ -35,6 +36,9 @@ export function createSwarmPageActivity(host) {
     flushTimer = null;
     pendingEvents = [];
     projection.messages = [];
+    projection.historyRuns = {};
+    projection.historyGeneration = null;
+    projection.historyAfter = '';
     projection.runEvents = [];
     projection.streamingRunEvents = [];
     projection.streamingPhase = 0;
@@ -43,21 +47,17 @@ export function createSwarmPageActivity(host) {
     projection.status = 'idle';
   }
 
-  function adoptHistory(messages) {
-    projection.messages = messages;
-    // Only canonical completion proves that History includes the entire Run.
-    // A stale prefix or failed refresh must never erase visible streamed output.
-    const summarized = new SvelteSet(
-      messages
-        .filter((message) => message.role === 'run_summary')
-        .map((message) => message.run_id),
-    );
-    projection.runEvents = projection.runEvents.filter(
-      (event) => !summarized.has(event.run_id),
-    );
-    projection.streamingRunEvents = projection.streamingRunEvents.filter(
-      (event) => !summarized.has(event.run_id),
-    );
+  function adoptHistory(data) {
+    loadHistory(projection, data.messages, {
+      runs: data.runs,
+      incremental: data.incremental,
+      generation: data.history_generation,
+      nextAfter: data.next_after,
+      hasMore: data.has_more,
+      nextBefore: data.next_before,
+      sessionUsage: data.session_usage,
+      contextUsage: data.context_usage,
+    });
   }
 
   function isReasoningOpen(id) {
@@ -142,15 +142,16 @@ export function createSwarmPageActivity(host) {
     const pageCount = historyPageCount;
     historyLoading = true;
     try {
-      const data = await host.model.client.readHistory(
-        swarmId,
-        participant.id,
-        {
-          limit: 100,
-        },
-      );
+      let data = await host.model.client.readHistory(swarmId, participant.id, {
+        limit: 100,
+        ...(history?.participant.id === participant.id &&
+        projection.historyAfter
+          ? { after: projection.historyAfter }
+          : {}),
+      });
       const pages = [data];
       while (
+        !data.incremental &&
         pages.length < pageCount &&
         pages.at(-1).has_more &&
         pages.at(-1).next_before
@@ -168,25 +169,60 @@ export function createSwarmPageActivity(host) {
           }),
         );
       }
+      while (data.incremental && data.has_newer && data.next_after) {
+        if (
+          host.model.disposed ||
+          request !== activityRequest ||
+          read !== historyRequest
+        )
+          return;
+        const next = await host.model.client.readHistory(
+          swarmId,
+          participant.id,
+          {
+            limit: 100,
+            after: data.next_after,
+          },
+        );
+        if (!next.incremental) {
+          pages.splice(0, pages.length, next);
+          data = next;
+          break;
+        }
+        pages.push(next);
+        data = next;
+      }
       if (
         !host.model.disposed &&
         request === activityRequest &&
         read === historyRequest
       ) {
         const oldest = pages.at(-1);
-        historyPageCount = pages.length;
+        if (!data.incremental) historyPageCount = pages.length;
         history = {
           participant: settled
             ? { ...participant, run_active: false }
             : participant,
           data: {
             ...data,
-            messages: pages.toReversed().flatMap((page) => page.messages ?? []),
-            has_more: oldest.has_more,
-            next_before: oldest.next_before,
+            messages: (data.incremental ? pages : pages.toReversed()).flatMap(
+              (page) => page.messages ?? [],
+            ),
+            runs: (data.incremental ? pages : pages.toReversed()).flatMap(
+              (page) => page.runs ?? [],
+            ),
+            has_more: data.incremental
+              ? history.data.has_more
+              : oldest.has_more,
+            next_before: data.incremental
+              ? history.data.next_before
+              : oldest.next_before,
           },
         };
-        adoptHistory(history.data.messages);
+        adoptHistory(history.data);
+        history.data.messages = projection.messages;
+        history.data.runs = Object.values(projection.historyRuns);
+        history.data.incremental = false;
         if (settled) {
           if (participant.lifecycle_run_id)
             settledRuns.add(participant.lifecycle_run_id);
@@ -241,11 +277,12 @@ export function createSwarmPageActivity(host) {
         data: {
           ...history.data,
           messages: [...(data.messages ?? []), ...selected.data.messages],
+          runs: [...(data.runs ?? []), ...(selected.data.runs ?? [])],
           has_more: data.has_more,
           next_before: data.next_before,
         },
       };
-      adoptHistory(history.data.messages);
+      adoptHistory(history.data);
     } catch (cause) {
       if (
         !host.model.disposed &&

@@ -130,17 +130,21 @@ class StatisticsService:
                 session_id = str(summary["id"])
                 title = summary.get("title")
                 session_title = title if isinstance(title, str) and title else None
-                group: list[ChatMessage] = []
+                groups: dict[str, list[ChatMessage]] = {}
                 for message in messages:
                     if message.role != "run_summary":
-                        group.append(message)
+                        if message.run_id:
+                            groups.setdefault(message.run_id, []).append(message)
                         continue
                     activity = _run_activity_record(
-                        scope.display_key, session_id, session_title, group, message
+                        scope.display_key,
+                        session_id,
+                        session_title,
+                        groups.get(message.run_id or "", []),
+                        message,
                     )
                     if _run_overlaps(activity, since=since, until=until):
                         runs.append(activity)
-                    group = []
 
         runs.sort(key=lambda run: run.started_at, reverse=True)
         total_runs = len(runs)
@@ -231,29 +235,16 @@ class StatisticsService:
             by_address.setdefault(record.address, []).append(record)
         aggregator = _Aggregator(since=None, until=None)
         participant_aggregators: dict[str, _Aggregator] = {}
-        addresses = tuple(by_address)
-        boundaries = [
-            boundary
-            for offset in range(0, len(addresses), 100)
-            for boundary in self._sessions.run_start_boundaries(addresses[offset : offset + 100])
-        ]
         for address, address_records in by_address.items():
             key = statistics_session_key(address.project_id, address.agent_id, address.session_id)
             indexed = snapshot.get(key)
             if indexed is None:
                 continue
             messages = list(indexed.messages)
-            address_boundaries = [
-                boundary
-                for boundary in boundaries
-                if boundary.address.project_id == address.project_id
-                and boundary.address.agent_id == address.agent_id
-                and boundary.address.session_id == address.session_id
-            ]
             for record in address_records:
                 if indexed.generation_id != record.generation_id:
                     continue
-                sliced = _owned_run_messages(messages, record, address_boundaries)
+                sliced = _owned_run_messages(messages, record)
                 if not sliced:
                     continue
                 display_key = record.owner.participant_id

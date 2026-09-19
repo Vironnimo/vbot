@@ -310,7 +310,9 @@ class Run:
         # the session; once execution has entered, normal forceful cancellation
         # remains unchanged.
         self._execution_started = False
+        self._completion_started = False
         self._cancel_callbacks: list[CancelCallback] = []
+        self._completion_observers: list[Callable[[RunStatus], Awaitable[None]]] = []
         self._tool_cancel_callbacks: dict[
             str,
             CancelCallback | _ActiveToolCallSentinel | _CancelledToolCallSentinel,
@@ -396,6 +398,21 @@ class Run:
         """Attach the background execution task for cancellation."""
         self._task = task
 
+    def add_completion_observer(self, observer: Callable[[RunStatus], Awaitable[None]]) -> None:
+        """Observe the settled outcome after persistence, before terminal publication."""
+        self._completion_observers.append(observer)
+
+    async def notify_completion(self, status: RunStatus) -> list[str]:
+        errors = []
+        for observer in self._completion_observers:
+            try:
+                await observer(status)
+            except Exception as exc:
+                # A notification cannot undo a committed execution result.
+                errors.append(str(exc))
+                _LOGGER.exception("Run completion observer failed: %s", self.id)
+        return errors
+
     def add_cancel_callback(self, callback: CancelCallback) -> None:
         """Register cleanup work to trigger when cancellation is requested."""
         if self.cancel_requested:
@@ -405,7 +422,7 @@ class Run:
 
     def request_cancel(self, reason: str | None = None) -> None:
         """Request best-effort cancellation of this run."""
-        if self.status != RunStatus.RUNNING or self.cancel_requested:
+        if self.status != RunStatus.RUNNING or self.cancel_requested or self._completion_started:
             return
         self.cancel_reason = reason
         self.cancel_requested = True

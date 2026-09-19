@@ -98,14 +98,14 @@ describe('ChatTimeline', () => {
       sseUrl: '/api/runs/run-overlap/events',
       status: 'running',
     };
-    sessionState.messages = [
+    sessionState.messages = historyRows('run-overlap', [
       { id: 'user-one', role: 'user', content: 'Inspect the file' },
       {
         id: 'assistant-one',
         role: 'assistant',
         content: 'The file says A.',
       },
-    ];
+    ]);
 
     appendRunEvent(sessionState, {
       type: 'user_message_persisted',
@@ -176,14 +176,14 @@ describe('ChatTimeline', () => {
       'session-terminal-overlap',
     );
 
-    sessionState.messages = [
+    sessionState.messages = historyRows('run-terminal-overlap', [
       { id: 'user-one', role: 'user', content: 'Inspect the file' },
       {
         id: 'assistant-one',
         role: 'assistant',
         content: 'The file says A.',
       },
-    ];
+    ]);
 
     appendRunEvent(sessionState, {
       type: 'user_message_persisted',
@@ -377,14 +377,14 @@ describe('ChatTimeline', () => {
       status: 'running',
     };
     sessionState.status = 'completed';
-    sessionState.messages = [
+    sessionState.messages = historyRows('run-terminal-history-refresh', [
       { id: 'user-one', role: 'user', content: 'Inspect the file' },
       {
         id: 'assistant-one',
         role: 'assistant',
         content: 'The file says A.',
       },
-    ];
+    ]);
 
     appendRunEvent(sessionState, {
       type: 'user_message_persisted',
@@ -465,6 +465,11 @@ describe('ChatTimeline', () => {
           iteration_count: 1,
         },
       ]),
+      {
+        runs: [
+          { run_id: 'run-history-ahead', status: 'completed', complete: true },
+        ],
+      },
     );
 
     appendRunEvent(sessionState, {

@@ -199,6 +199,7 @@ async def test_status_result_keeps_handle_and_child_unread_until_parent_persiste
     trigger_service = RecordingTriggerService()
     tracker = SubAgentBatchTracker(trigger_service)
     child = runtime.chat_sessions.create("worker", session_id="child-session")
+    child = child.start_run("child-run")
     child.append(ChatMessage.assistant(model="openai/gpt-5.2", content="child output"))
     child.append(
         ChatMessage.run_summary(
@@ -395,6 +396,7 @@ async def test_inspect_resolves_exact_completed_work_after_child_session_reuse(
         "completed_at": "2026-07-24T11:00:01+00:00",
         "duration_ms": 1000,
     }
+    session = session.start_run("old-run")
     session.append(ChatMessage.user("old request"))
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="old result"))
     session.append(
@@ -406,6 +408,7 @@ async def test_inspect_resolves_exact_completed_work_after_child_session_reuse(
             iteration_count=1,
         )
     )
+    session = session.start_run("new-run")
     session.append(ChatMessage.user("new request"))
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="new result"))
     session.append(
@@ -471,6 +474,7 @@ async def test_qualified_subagent_result_uses_target_project_for_persisted_fallb
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     context = make_context(project_id=None)
     session = runtime.chat_sessions.create("worker", session_id="project-child", project_id="vbot")
+    session = session.start_run("missing-run")
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="project result"))
     session.append(
         ChatMessage.run_summary(

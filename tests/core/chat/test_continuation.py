@@ -456,6 +456,7 @@ async def test_recover_classifies_abandoned_journal_as_process_restart(tmp_path:
 @pytest.mark.asyncio
 async def test_restart_reconciliation_uses_only_current_transcript_tail(tmp_path: Path) -> None:
     session = _session(tmp_path)
+    session = session.start_run("old-run")
     session.append(ChatMessage.user("old work"))
     session.append(
         ChatMessage.assistant(
@@ -476,6 +477,7 @@ async def test_restart_reconciliation_uses_only_current_transcript_tail(tmp_path
             },
         )
     )
+    session = session.start_run("new-run")
     session.append(ChatMessage.user("new work"))
     session.append(
         ChatMessage.assistant(
@@ -515,6 +517,7 @@ async def test_recover_clears_stale_journal_when_transcript_proves_normal_comple
     session = _session(tmp_path)
     session.append(ChatMessage.user("work"))
     session.append(ChatMessage.assistant(model="test/model", content="done"))
+    session = session.start_run("run-one")
     session.append(
         ChatMessage.run_summary(
             run_id="run-one",

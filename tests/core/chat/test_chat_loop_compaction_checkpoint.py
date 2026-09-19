@@ -79,8 +79,8 @@ async def test_manual_compaction_preserves_note_appended_during_summary(tmp_path
         service.release.set()
     with pytest.raises(CompactionError):
         await run.wait()
-    assert [message.role for message in session.load()] == ["user", "note"]
-    assert session.load()[-1].content == "BACKGROUND_RESULT_SENTINEL"
+    assert [message.role for message in session.load()] == ["user", "note", "run_summary"]
+    assert session.load()[-2].content == "BACKGROUND_RESULT_SENTINEL"
     assert runtime.chat_sessions.prompt_cache_affinity_id(session.address) == affinity
     assert any(event.type == COMPACTION_ABORTED_EVENT for event in run.events)
 

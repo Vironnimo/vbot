@@ -19,6 +19,7 @@ from core.tools import (
     make_history_handler,
     register_history_tool,
 )
+from tests.core.sessions.history_fixtures import append_tool_fixture
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
@@ -448,7 +449,7 @@ def test_around_distinguishes_missing_and_out_of_scope_anchor(tmp_path: Path) ->
     manager = ChatSessionManager(tmp_path)
     session = manager.create("agent", session_id="session-one")
     tool = ChatMessage.tool(tool_call_id="read", name="read", content="evidence")
-    session.append(tool)
+    append_tool_fixture(session, tool)
     session.append(_checkpoint())
 
     missing = _call(manager, session, {"action": "around", "message_id": "missing"})

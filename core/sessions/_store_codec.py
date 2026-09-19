@@ -5,36 +5,17 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from core.chat.errors import ChatSessionError
 from core.sessions import _store_fts, _store_values
-from core.sessions._types import JsonObject
+from core.sessions._types import JsonObject, SessionRunCompletion
 from core.sessions.errors import SessionStoreCorruptError
+from core.utils.ids import new_id
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
-
-
-def _copy_message_relation(
-    connection: sqlite3.Connection,
-    *,
-    table: str,
-    columns: Sequence[str],
-    source_session_key: int,
-    target_session_key: int,
-) -> None:
-    column_list = ", ".join(columns)
-    selected_columns = ", ".join(f"child.{column}" for column in columns)
-    connection.execute(
-        f"INSERT INTO {table} (message_key, {column_list}) "
-        f"SELECT target.message_key, {selected_columns} FROM {table} AS child "
-        "JOIN messages AS source ON source.message_key = child.message_key "
-        "JOIN messages AS target ON target.session_key = ? AND target.seq = source.seq "
-        "WHERE source.session_key = ?",
-        (target_session_key, source_session_key),
-    )
 
 
 def _copy_session_messages(
@@ -43,135 +24,91 @@ def _copy_session_messages(
     source_session_key: int,
     target_session_key: int,
 ) -> None:
-    """Copy one canonical normalized Message graph without Python reconstruction."""
+    """Fork a relational snapshot with new storage identities and exact provenance."""
+    offset = _store_values._allocate_history_key(connection)
+    maximum = connection.execute(
+        "SELECT COALESCE(MAX(message_key),0) FROM history_records WHERE session_key=?",
+        (source_session_key,),
+    ).fetchone()[0]
     connection.execute(
-        """
-        INSERT INTO messages (
-            session_key, seq, message_id, role, timestamp, content, content_blocks_json,
-            content_search, model, active, searchable
-        )
-        SELECT ?, seq, message_id, role, timestamp, content, content_blocks_json,
-               content_search, model, active, searchable
-        FROM messages
-        WHERE session_key = ?
-        ORDER BY seq
-        """,
-        (target_session_key, source_session_key),
+        "UPDATE store_meta SET value=? WHERE key='history_identity'", (str(offset + maximum),)
     )
-    relations = (
-        (
-            "assistant_messages",
-            (
-                "reasoning",
-                "reasoning_meta_json",
-                "reasoning_scope",
-                "reasoning_started_at",
-                "reasoning_completed_at",
-                "reasoning_duration_ms",
-                "reasoning_timing_extra_json",
-                "phase",
-                "input_tokens",
-                "output_tokens",
-                "cache_read_tokens",
-                "cache_write_tokens",
-                "reasoning_tokens",
-                "usage_estimated",
-                "input_tokens_estimated",
-                "output_tokens_estimated",
-                "usage_present",
-                "usage_extra_json",
-                "tool_calls_present",
-                "interrupted",
-                "interruption_cause",
-            ),
-        ),
-        (
-            "tool_calls",
-            (
-                "ordinal",
-                "tool_call_id",
-                "name",
-                "arguments_json",
-                "rejection_code",
-                "rejection_message",
-                "rejection_fingerprint",
-                "argument_sequence_index",
-                "argument_sequence_length",
-            ),
-        ),
-        (
-            "assistant_output_files",
-            ("ordinal", "path", "line_index", "start_index", "end_index"),
-        ),
-        ("user_message_senders", ("sender_id", "display_name", "role")),
-        ("error_messages", ("error_kind",)),
-        (
-            "compaction_checkpoints",
-            (
-                "tail_boundary_id",
-                "projection_json",
-                "policy",
-                "strategy",
-                "compacted_token_count",
-                "context_tokens_before",
-                "context_tokens_after",
-                "compaction_duration_ms",
-                "usage_present",
-                "usage_extra_json",
-            ),
-        ),
-        (
-            "run_summaries",
-            (
-                "run_id",
-                "work_id",
-                "status",
-                "started_at",
-                "completed_at",
-                "duration_ms",
-                "timing_extra_json",
-                "iteration_count",
-                "changed_files",
-                "lines_added",
-                "lines_removed",
-                "change_stats_extra_json",
-            ),
-        ),
-        ("run_change_paths", ("ordinal", "path")),
-        ("history_edits", ("target_message_id",)),
-    )
-    for table, columns in relations:
-        _copy_message_relation(
-            connection,
-            table=table,
-            columns=columns,
-            source_session_key=source_session_key,
-            target_session_key=target_session_key,
+
+    def copy(table, replacements, where, params):
+        columns = [
+            str(row[1])
+            for row in connection.execute(f"PRAGMA table_xinfo({table})")
+            if not row[6] and replacements.get(str(row[1]), "") is not None
+        ]
+        expressions = [replacements.get(column, "source." + column) for column in columns]
+        connection.execute(
+            f"INSERT INTO {table} ({', '.join(columns)}) SELECT {', '.join(expressions)} "
+            f"FROM {table} source WHERE {where}",
+            params,
         )
 
-    connection.execute(
-        """
-        INSERT INTO tool_messages (
-            message_key, tool_call_key, tool_call_id, name, result_content,
-            started_at, completed_at, duration_ms, timing_extra_json, display_json
+    scope = "source.session_key=?"
+    replacement = {"session_key": str(target_session_key)}
+    copy(
+        "runs",
+        {
+            **replacement,
+            "run_key": None,
+            "status": "CASE WHEN source.status='running' THEN 'interrupted' ELSE source.status END",
+            "completed_at": "CASE WHEN source.status='running' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE source.completed_at END",
+            "completion_reason": "CASE WHEN source.status='running' THEN 'fork_snapshot' ELSE source.completion_reason END",
+            "contributes_to_activity": "0",
+            "terminal_key": f"source.terminal_key + {offset}",
+            "origin_generation_id": f"COALESCE(source.origin_generation_id, (SELECT generation_id FROM sessions WHERE session_key={source_session_key}))",
+        },
+        scope,
+        (source_session_key,),
+    )
+    copy(
+        "messages",
+        {**replacement, "message_key": f"source.message_key + {offset}"},
+        scope,
+        (source_session_key,),
+    )
+    for table in (
+        "assistant_messages",
+        "assistant_output_files",
+        "user_message_senders",
+        "error_messages",
+        "tool_calls",
+    ):
+        replacements: dict[str, str | None] = {"message_key": f"source.message_key + {offset}"}
+        if table == "tool_calls":
+            replacements.update(
+                tool_call_key=None,
+                result_key=f"source.result_key + {offset}",
+                status="CASE WHEN source.status IN ('pending','running') THEN 'interrupted' ELSE source.status END",
+                completed_at="CASE WHEN source.status IN ('pending','running') THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE source.completed_at END",
+            )
+        copy(
+            table,
+            replacements,
+            "source.message_key IN (SELECT message_key FROM messages WHERE session_key=?)",
+            (source_session_key,),
         )
-        SELECT target.message_key, target_call.tool_call_key, child.tool_call_id, child.name,
-               child.result_content, child.started_at, child.completed_at, child.duration_ms,
-               child.timing_extra_json, child.display_json
-        FROM tool_messages AS child
-        JOIN messages AS source ON source.message_key = child.message_key
-        JOIN messages AS target ON target.session_key = ? AND target.seq = source.seq
-        LEFT JOIN tool_calls AS source_call ON source_call.tool_call_key = child.tool_call_key
-        LEFT JOIN messages AS source_call_message
-          ON source_call_message.message_key = source_call.message_key
-        LEFT JOIN messages AS target_call_message
-          ON target_call_message.session_key = ? AND target_call_message.seq = source_call_message.seq
-        LEFT JOIN tool_calls AS target_call
-          ON target_call.message_key = target_call_message.message_key
-         AND target_call.ordinal = source_call.ordinal
-        WHERE source.session_key = ?
-        """,
-        (target_session_key, target_session_key, source_session_key),
+    copy(
+        "compaction_checkpoints",
+        {**replacement, "snapshot_key": f"source.snapshot_key + {offset}"},
+        scope,
+        (source_session_key,),
+    )
+    copy(
+        "history_edits",
+        {**replacement, "edit_key": f"source.edit_key + {offset}"},
+        scope,
+        (source_session_key,),
+    )
+    connection.execute(
+        "INSERT INTO run_change_paths(run_key, ordinal, path) "
+        "SELECT target.run_key, p.ordinal, p.path FROM run_change_paths p "
+        "JOIN runs source ON source.run_key=p.run_key JOIN runs target "
+        "ON target.session_key=? AND target.run_id=source.run_id WHERE source.session_key=?",
+        (target_session_key, source_session_key),
     )
     _store_fts._insert_fts_session(connection, target_session_key)
 
@@ -225,7 +162,7 @@ def _deactivate_history_tail(
     target = connection.execute(
         """
         SELECT message_key, seq
-        FROM messages
+        FROM history_records
         WHERE session_key = ? AND message_id = ? AND role = 'user' AND active = 1
         ORDER BY seq
         LIMIT 1
@@ -237,15 +174,27 @@ def _deactivate_history_tail(
     keys = [
         int(row[0])
         for row in connection.execute(
-            "SELECT message_key FROM messages WHERE session_key = ? AND seq >= ? AND active = 1",
+            "SELECT message_key FROM history_records WHERE session_key = ? AND seq >= ? AND active = 1",
             (session_key, int(target["seq"])),
         ).fetchall()
     ]
     for message_key in keys:
         _store_fts._delete_fts_message(connection, message_key)
+    floor = int(target["seq"])
     connection.execute(
-        "UPDATE messages SET active = 0 WHERE session_key = ? AND seq >= ? AND active = 1",
-        (session_key, int(target["seq"])),
+        "UPDATE messages SET active=0 WHERE session_key=? AND seq>=?", (session_key, floor)
+    )
+    connection.execute(
+        "UPDATE compaction_checkpoints SET active=0 WHERE session_key=? AND seq>=?",
+        (session_key, floor),
+    )
+    connection.execute(
+        "UPDATE runs SET terminal_active=0 WHERE session_key=? AND terminal_sequence>=?",
+        (session_key, floor),
+    )
+    connection.execute(
+        "UPDATE tool_calls SET result_active=0 WHERE result_sequence>=? AND message_key IN (SELECT message_key FROM messages WHERE session_key=?)",
+        (floor, session_key),
     )
 
 
@@ -256,14 +205,65 @@ def _insert_message(
     message: ChatMessage,
     *,
     index_fts: bool = True,
+    run_id: str | None = None,
+    assistant_message_id: str | None = None,
 ) -> int:
+    if run_id is not None:
+        run = connection.execute(
+            "SELECT status,origin_generation_id FROM runs WHERE session_key=? AND run_id=?",
+            (session_key, run_id),
+        ).fetchone()
+        if run is None or run["status"] != "running" or run["origin_generation_id"] is not None:
+            raise ChatSessionError("Messages require an admitted, running Run in this Session")
+    if message.role in {"history_edit", "agent_takeover"}:
+        connection.execute(
+            "UPDATE sessions SET history_reset_sequence=? WHERE session_key=?",
+            (sequence + 1, session_key),
+        )
+    if message.role == "tool":
+        return _complete_tool(
+            connection,
+            session_key,
+            sequence,
+            message,
+            run_id=run_id,
+            assistant_message_id=assistant_message_id,
+            index_fts=index_fts,
+        )
+    if message.role == "run_summary":
+        return _finish_run(connection, session_key, sequence, message)
+    if message.role == "compaction_checkpoint":
+        key = _save_context(connection, session_key, sequence, message, run_id=run_id)
+        if index_fts:
+            _store_fts._insert_fts_message(connection, key)
+        return key
     if message.role == "history_edit":
         if message.target_message_id is None:
             raise ChatSessionError("history edit target is missing")
         _deactivate_history_tail(connection, session_key, message.target_message_id)
+        cursor = connection.execute(
+            "INSERT INTO history_edits(edit_key, session_key, seq, message_id, timestamp, target_message_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                _store_values._allocate_history_key(connection),
+                session_key,
+                sequence,
+                message.id,
+                message.timestamp,
+                message.target_message_id,
+            ),
+        )
+        assert cursor.lastrowid is not None
+        return int(cursor.lastrowid)
     cursor = connection.execute(
         _store_values._MESSAGE_INSERT,
-        (session_key, sequence, *_message_base_row(message)),
+        (
+            _store_values._allocate_history_key(connection),
+            session_key,
+            sequence,
+            *_message_base_row(message),
+            run_id,
+        ),
     )
     if cursor.lastrowid is None:
         raise SessionStoreCorruptError("SQLite did not return a canonical message key")
@@ -378,122 +378,10 @@ def _insert_message(
             """,
             (message_key, message.sender.id, message.sender.display_name, message.sender.role),
         )
-    elif message.role == "tool":
-        timing, timing_extra, _timing_present = _timing_fields(message.timing)
-        linked = connection.execute(
-            """
-            SELECT tc.tool_call_key
-            FROM tool_calls AS tc
-            JOIN messages AS owner ON owner.message_key = tc.message_key
-            WHERE owner.session_key = ? AND owner.seq < ? AND tc.tool_call_id = ?
-            ORDER BY owner.seq DESC, tc.ordinal DESC
-            LIMIT 1
-            """,
-            (session_key, sequence, message.tool_call_id),
-        ).fetchone()
-        connection.execute(
-            """
-            INSERT INTO tool_messages (
-                message_key, tool_call_key, tool_call_id, name, result_content,
-                started_at, completed_at, duration_ms, timing_extra_json, display_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                message_key,
-                None if linked is None else int(linked[0]),
-                message.tool_call_id,
-                message.name,
-                message.content,
-                timing.get("started_at"),
-                timing.get("completed_at"),
-                timing.get("duration_ms"),
-                timing_extra,
-                _store_values._optional_json(message.tool_display, "tool_display"),
-            ),
-        )
     elif message.role == "error":
         connection.execute(
             "INSERT INTO error_messages (message_key, error_kind) VALUES (?, ?)",
             (message_key, message.error_kind),
-        )
-    elif message.role == "compaction_checkpoint":
-        usage, usage_extra, usage_present = _split_structured_fields(
-            message.usage,
-            {
-                "compacted_token_count": _is_non_negative_int,
-                "context_tokens_before": _is_non_negative_int,
-                "context_tokens_after": _is_non_negative_int,
-                "compaction_duration_ms": _is_non_negative_int,
-            },
-        )
-        connection.execute(
-            """
-            INSERT INTO compaction_checkpoints (
-                message_key, tail_boundary_id, projection_json, policy, strategy,
-                compacted_token_count, context_tokens_before, context_tokens_after,
-                compaction_duration_ms, usage_present, usage_extra_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                message_key,
-                message.tail_boundary_id,
-                _store_values._optional_json(message.projection, "projection"),
-                message.compaction_policy,
-                message.compaction_strategy,
-                usage.get("compacted_token_count"),
-                usage.get("context_tokens_before"),
-                usage.get("context_tokens_after"),
-                usage.get("compaction_duration_ms"),
-                int(usage_present),
-                usage_extra,
-            ),
-        )
-    elif message.role == "run_summary":
-        timing, timing_extra, _timing_present = _timing_fields(message.timing)
-        changes, changes_extra, changes_present = _split_structured_fields(
-            message.change_stats,
-            {
-                "files": _is_non_negative_int,
-                "added": _is_non_negative_int,
-                "removed": _is_non_negative_int,
-                "paths": lambda value: (
-                    isinstance(value, list) and all(isinstance(path, str) for path in value)
-                ),
-            },
-        )
-        connection.execute(
-            """
-            INSERT INTO run_summaries (
-                message_key, run_id, work_id, status, started_at, completed_at,
-                duration_ms, timing_extra_json, iteration_count, changed_files,
-                lines_added, lines_removed, change_stats_extra_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                message_key,
-                message.run_id,
-                message.work_id,
-                message.status,
-                timing.get("started_at"),
-                timing.get("completed_at"),
-                timing.get("duration_ms"),
-                timing_extra,
-                message.iteration_count,
-                changes.get("files") if changes_present else None,
-                changes.get("added") if changes_present else None,
-                changes.get("removed") if changes_present else None,
-                changes_extra,
-            ),
-        )
-        for ordinal, path in enumerate(changes.get("paths", ())):
-            connection.execute(
-                "INSERT INTO run_change_paths (message_key, ordinal, path) VALUES (?, ?, ?)",
-                (message_key, ordinal, path),
-            )
-    elif message.role == "history_edit":
-        connection.execute(
-            "INSERT INTO history_edits (message_key, target_message_id) VALUES (?, ?)",
-            (message_key, message.target_message_id),
         )
 
     if index_fts:
@@ -715,3 +603,174 @@ def _message_base_row(message: ChatMessage) -> tuple[Any, ...]:
         int(message.role != "history_edit"),
         int(_store_fts._message_is_searchable(message)),
     )
+
+
+def _save_context(
+    connection: sqlite3.Connection,
+    session_key: int,
+    sequence: int,
+    message: ChatMessage,
+    *,
+    run_id: str | None,
+) -> int:
+    usage, usage_extra, usage_present = _split_structured_fields(
+        message.usage,
+        {
+            "compacted_token_count": _is_non_negative_int,
+            "context_tokens_before": _is_non_negative_int,
+            "context_tokens_after": _is_non_negative_int,
+            "compaction_duration_ms": _is_non_negative_int,
+        },
+    )
+    cursor = connection.execute(
+        """
+        INSERT INTO compaction_checkpoints (
+            snapshot_key, session_key, seq, run_id, message_id, timestamp, content, tail_boundary_id, projection_json, policy, strategy,
+            compacted_token_count, context_tokens_before, context_tokens_after,
+            compaction_duration_ms, usage_present, usage_extra_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            _store_values._allocate_history_key(connection),
+            session_key,
+            sequence,
+            run_id,
+            message.id,
+            message.timestamp,
+            message.content,
+            message.tail_boundary_id,
+            _store_values._optional_json(message.projection, "projection"),
+            message.compaction_policy,
+            message.compaction_strategy,
+            usage.get("compacted_token_count"),
+            usage.get("context_tokens_before"),
+            usage.get("context_tokens_after"),
+            usage.get("compaction_duration_ms"),
+            int(usage_present),
+            usage_extra,
+        ),
+    )
+    assert cursor.lastrowid is not None
+    return int(cursor.lastrowid)
+
+
+def _finish_run(
+    connection: sqlite3.Connection,
+    session_key: int,
+    sequence: int,
+    message: ChatMessage | SessionRunCompletion,
+) -> int:
+    timing, timing_extra, _timing_present = _timing_fields(message.timing)
+    changes, changes_extra, changes_present = _split_structured_fields(
+        message.change_stats,
+        {
+            "files": _is_non_negative_int,
+            "added": _is_non_negative_int,
+            "removed": _is_non_negative_int,
+            "paths": lambda value: (
+                isinstance(value, list) and all(isinstance(path, str) for path in value)
+            ),
+        },
+    )
+    row = connection.execute(
+        "SELECT run_key FROM runs WHERE session_key=? AND run_id=? AND status='running'",
+        (session_key, message.run_id),
+    ).fetchone()
+    if row is None:
+        raise ChatSessionError("Only an admitted running Run can be completed")
+    run_key = int(row[0])
+    terminal_key = _store_values._allocate_history_key(connection)
+    connection.execute(
+        "UPDATE runs SET work_id=?, status=?, started_at=?, completed_at=?, duration_ms=?, "
+        "timing_extra_json=?, iteration_count=?, changed_files=?, lines_added=?, lines_removed=?, "
+        "change_stats_extra_json=?, terminal_sequence=?, terminal_id=?, terminal_key=?, completion_reason=? WHERE run_key=?",
+        (
+            message.work_id,
+            message.status,
+            timing.get("started_at"),
+            timing.get("completed_at"),
+            timing.get("duration_ms"),
+            timing_extra,
+            message.iteration_count,
+            changes.get("files") if changes_present else None,
+            changes.get("added") if changes_present else None,
+            changes.get("removed") if changes_present else None,
+            changes_extra,
+            sequence,
+            new_id("msg") if isinstance(message, SessionRunCompletion) else message.id,
+            terminal_key,
+            message.completion_reason if isinstance(message, SessionRunCompletion) else None,
+            run_key,
+        ),
+    )
+    for ordinal, path in enumerate(changes.get("paths", ())):
+        connection.execute(
+            "INSERT INTO run_change_paths (run_key, ordinal, path) VALUES (?, ?, ?)",
+            (run_key, ordinal, path),
+        )
+    return terminal_key
+
+
+def _complete_tool(
+    connection: sqlite3.Connection,
+    session_key: int,
+    sequence: int,
+    message: ChatMessage,
+    *,
+    run_id: str | None,
+    assistant_message_id: str | None,
+    index_fts: bool,
+) -> int:
+    clauses = ["m.session_key=?", "tc.tool_call_id=?"]
+    values: list[Any] = [session_key, message.tool_call_id]
+    if run_id is not None:
+        clauses.append("m.run_id=?")
+        values.append(run_id)
+    if assistant_message_id is not None:
+        clauses.append("m.message_id=?")
+        values.append(assistant_message_id)
+    rows = connection.execute(
+        "SELECT tc.tool_call_key, tc.result_id FROM tool_calls tc JOIN messages m "
+        "ON m.message_key=tc.message_key WHERE " + " AND ".join(clauses),
+        values,
+    ).fetchall()
+    if len(rows) != 1:
+        raise ChatSessionError("Tool result must identify exactly one stored invocation")
+    if rows[0]["result_id"] is not None:
+        raise ChatSessionError("Tool invocation already has a result")
+    timing, timing_extra, _ = _timing_fields(message.timing)
+    key = int(rows[0]["tool_call_key"])
+    try:
+        result = json.loads(message.content) if isinstance(message.content, str) else None
+    except json.JSONDecodeError:
+        result = None
+    status = "completed"
+    if isinstance(result, dict) and result.get("ok") is False:
+        error = result.get("error")
+        code = error.get("code") if isinstance(error, dict) else None
+        status = (
+            "cancelled" if code in {"cancelled", "tool_cancelled", "user_cancelled"} else "failed"
+        )
+    result_key = _store_values._allocate_history_key(connection)
+    connection.execute(
+        "UPDATE tool_calls SET result_id=?, result_sequence=?, result_timestamp=?, "
+        "result_content=?, status=?, started_at=?, completed_at=?, duration_ms=?, "
+        "timing_extra_json=?, display_json=?, result_key=? WHERE tool_call_key=?",
+        (
+            message.id,
+            sequence,
+            message.timestamp,
+            message.content,
+            status,
+            timing.get("started_at"),
+            timing.get("completed_at"),
+            timing.get("duration_ms"),
+            timing_extra,
+            _store_values._optional_json(message.tool_display, "tool_display"),
+            result_key,
+            key,
+        ),
+    )
+    if index_fts:
+        _store_fts._insert_fts_message(connection, result_key)
+    return result_key

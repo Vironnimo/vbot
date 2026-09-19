@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -141,8 +141,12 @@ class _EmittingToolRegistry(ToolRegistry):
         denial_resolver: Callable[[str], str | None] | None = None,
         rejections: Mapping[int, ToolCallRejection] | None = None,
         tool_restriction: Sequence[str] | None = None,
+        started_hook: Callable[[str, str], Awaitable[None]] | None = None,
+        assistant_message_id: str | None = None,
     ) -> None:
         self._registry = registry
+        self._started_hook = started_hook
+        self._assistant_message_id = assistant_message_id
         self._run = run
         self._extension_registry = extension_registry
         self._note_hook = note_hook
@@ -210,6 +214,8 @@ class _EmittingToolRegistry(ToolRegistry):
         started_at = datetime.now(UTC)
         started_perf = time.perf_counter()
         try:
+            if self._started_hook is not None:
+                await self._started_hook(context.tool_call_id, started_at.isoformat())
             rejection = self._rejections.get(context.tool_call_index)
             if rejection is not None:
                 rejected_result = tool_failure(
@@ -225,6 +231,7 @@ class _EmittingToolRegistry(ToolRegistry):
                 self._run.emit(
                     TOOL_CALL_STARTED_EVENT,
                     {
+                        "assistant_message_id": self._assistant_message_id,
                         "tool_call": {
                             "id": context.tool_call_id,
                             "index": context.tool_call_index,
@@ -238,6 +245,7 @@ class _EmittingToolRegistry(ToolRegistry):
                 self._run.emit(
                     TOOL_CALL_RESULT_EVENT,
                     {
+                        "assistant_message_id": self._assistant_message_id,
                         "tool_call": {
                             "id": context.tool_call_id,
                             "index": context.tool_call_index,
@@ -271,6 +279,7 @@ class _EmittingToolRegistry(ToolRegistry):
                 self._run.emit(
                     TOOL_CALL_STARTED_EVENT,
                     {
+                        "assistant_message_id": self._assistant_message_id,
                         "tool_call": {
                             "id": context.tool_call_id,
                             "index": context.tool_call_index,
@@ -284,6 +293,7 @@ class _EmittingToolRegistry(ToolRegistry):
                 self._run.emit(
                     TOOL_CALL_RESULT_EVENT,
                     {
+                        "assistant_message_id": self._assistant_message_id,
                         "tool_call": {
                             "id": context.tool_call_id,
                             "index": context.tool_call_index,
@@ -348,6 +358,7 @@ class _EmittingToolRegistry(ToolRegistry):
             self._run.emit(
                 TOOL_CALL_STARTED_EVENT,
                 {
+                    "assistant_message_id": self._assistant_message_id,
                     "tool_call": {
                         "id": context.tool_call_id,
                         "index": context.tool_call_index,
@@ -418,6 +429,7 @@ class _EmittingToolRegistry(ToolRegistry):
             self._run.emit(
                 TOOL_CALL_RESULT_EVENT,
                 {
+                    "assistant_message_id": self._assistant_message_id,
                     "tool_call": {
                         "id": context.tool_call_id,
                         "index": context.tool_call_index,
@@ -528,6 +540,8 @@ async def _dispatch_tool_calls(
         run,
         context.extension_registry,
         note_hook=session.add_note,
+        started_hook=session.start_tool_async if session.run_id is not None else None,
+        assistant_message_id=session.assistant_message_id,
         denial_resolver=context.tool_denial_resolver,
         tool_restriction=context.tool_restriction,
         rejections={
@@ -651,6 +665,7 @@ def _fail_tool_calls_without_dispatch(
         context.run.emit(
             TOOL_CALL_STARTED_EVENT,
             {
+                "assistant_message_id": context.session.assistant_message_id,
                 "tool_call": {
                     "id": tool_call.id,
                     "index": index,
@@ -666,6 +681,7 @@ def _fail_tool_calls_without_dispatch(
         context.run.emit(
             TOOL_CALL_RESULT_EVENT,
             {
+                "assistant_message_id": context.session.assistant_message_id,
                 "tool_call": {
                     "id": tool_call.id,
                     "index": index,

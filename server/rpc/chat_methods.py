@@ -191,6 +191,7 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         "session_id": active_session_id,
         "messages": projection.messages,
         "history_generation": history.generation_id,
+        "runs": list(history.runs),
         "next_after": history.after_cursor,
         "incremental": history.incremental,
         "history_reset": after is not None and not history.incremental,

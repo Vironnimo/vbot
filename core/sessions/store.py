@@ -14,12 +14,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
-from core.chat.errors import ChatSessionError
 from core.sessions import (
     _store_continuation,
     _store_fts,
     _store_history,
-    _store_import,
     _store_mutations,
     _store_owned,
     _store_queries,
@@ -44,16 +42,6 @@ from core.sessions.format import (
     validate_session_store_paths,
 )
 from core.sessions.schema import (
-    FTS_COMPLETED_HIGH_WATER_KEY,
-    FTS_DEGRADED_REASON_KEY,
-    FTS_GENERATION_KEY,
-    FTS_SQL,
-    FTS_SQL_FALLBACK,
-    FTS_STALE_KEY,
-    FTS_STORAGE_VERSION,
-    FTS_STORAGE_VERSION_KEY,
-    FTS_TARGET_HIGH_WATER_KEY,
-    FTS_TRIGRAM_TABLE,
     SCHEMA_VERSION,
 )
 from core.sessions.sqlite_runtime import (
@@ -67,7 +55,12 @@ from core.sessions.sqlite_runtime import (
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
     from core.runs import RunExecutionOwner
-    from core.sessions._types import SessionAddress, SessionReadCursor
+    from core.sessions._types import (
+        SessionAddress,
+        SessionReadBatch,
+        SessionReadCursor,
+        SessionRunCompletion,
+    )
 
 
 _WriteResult = TypeVar("_WriteResult")
@@ -80,7 +73,6 @@ class SessionStore:
         self.path = Path(path)
         self._runtime = SQLiteRuntime(self.path)
         self._offline = _offline
-        self._offline_bulk_import = False
         try:
             self._writer = self._open_runtime(offline=_offline)
         except BaseException:
@@ -179,57 +171,6 @@ class SessionStore:
     def checkpoint(self) -> None:
         self._runtime.checkpoint()
 
-    def prepare_offline_bulk_import(self) -> None:
-        """Open one disposable canonical-data transaction without maintaining FTS."""
-        if not self._offline:
-            raise RuntimeError("bulk import mode is available only to the offline converter")
-        if self._offline_bulk_import:
-            raise RuntimeError("bulk import mode is already active")
-        mode = str(self._writer.execute("PRAGMA journal_mode=MEMORY").fetchone()[0]).lower()
-        if mode != "memory":
-            raise SessionStoreUnavailableError("staged Session database rejected MEMORY journal")
-        self._writer.execute("PRAGMA synchronous=OFF")
-        self._writer.execute("PRAGMA temp_store=MEMORY")
-        self._writer.execute(f"PRAGMA cache_size=-{_store_values._OFFLINE_IMPORT_CACHE_KIB}")
-        _store_fts._drop_fts(self._writer)
-        _store_fts._set_fts_meta(self._writer, FTS_STALE_KEY, "offline-import")
-        self._writer.execute("BEGIN IMMEDIATE")
-        self._offline_bulk_import = True
-
-    def finish_offline_bulk_import(self) -> None:
-        """Commit canonical rows and build both disposable FTS indexes in SQLite."""
-        if not self._offline or not self._offline_bulk_import:
-            raise RuntimeError("bulk import mode is not active")
-        self._writer.execute("COMMIT")
-        self._offline_bulk_import = False
-        try:
-            self._writer.executescript(FTS_SQL)
-        except sqlite3.Error:
-            _store_fts._drop_fts(self._writer)
-            self._writer.executescript(FTS_SQL_FALLBACK)
-        target = int(
-            self._writer.execute("SELECT COALESCE(MAX(message_key), 0) FROM messages").fetchone()[0]
-        )
-        _store_fts._set_fts_meta(self._writer, FTS_STORAGE_VERSION_KEY, str(FTS_STORAGE_VERSION))
-        _store_fts._set_fts_meta(self._writer, FTS_GENERATION_KEY, uuid.uuid4().hex)
-        _store_fts._set_fts_meta(self._writer, FTS_TARGET_HIGH_WATER_KEY, str(target))
-        _store_fts._set_fts_meta(self._writer, FTS_COMPLETED_HIGH_WATER_KEY, "0")
-        _store_fts._set_fts_meta(self._writer, FTS_STALE_KEY, "rebuilding")
-        _store_fts._set_fts_meta(self._writer, FTS_DEGRADED_REASON_KEY, "FTS rebuild in progress")
-        self._writer.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
-        if _store_fts._fts_table_exists(self._writer, FTS_TRIGRAM_TABLE):
-            self._writer.execute(
-                "INSERT INTO messages_fts_trigram(messages_fts_trigram) VALUES('rebuild')"
-            )
-        coverage_ok, coverage_reason = _store_fts._fts_coverage_ok(self._writer)
-        if not coverage_ok:
-            raise SessionStoreCorruptError(
-                coverage_reason or "offline FTS rebuild did not cover canonical Messages"
-            )
-        _store_fts._set_fts_meta(self._writer, FTS_COMPLETED_HIGH_WATER_KEY, str(target))
-        _store_fts._set_fts_meta(self._writer, FTS_DEGRADED_REASON_KEY, "")
-        self._writer.execute("DELETE FROM store_meta WHERE key = ?", (FTS_STALE_KEY,))
-
     def backup(
         self,
         destination: Path,
@@ -308,49 +249,6 @@ class SessionStore:
             )
         )
 
-    def import_generation(
-        self,
-        address: SessionAddress,
-        *,
-        generation_id: str,
-        messages: Sequence[ChatMessage],
-        metadata: JsonObject,
-        activity: JsonObject,
-        continuation: Sequence[JsonObject],
-        archived: bool,
-        created_at: str,
-    ) -> None:
-        if not self._offline:
-            raise ChatSessionError("generation import is available only to the offline converter")
-
-        def operation(connection: sqlite3.Connection) -> None:
-            _store_import.import_generation(
-                connection,
-                address,
-                generation_id=generation_id,
-                messages=messages,
-                metadata=metadata,
-                activity=activity,
-                continuation=continuation,
-                archived=archived,
-                created_at=created_at,
-                index_fts=not self._offline_bulk_import,
-            )
-
-        if self._offline_bulk_import:
-            # The generated name is never built from an unvalidated imported id.
-            savepoint = f"generation_{uuid.uuid4().hex}"
-            self._writer.execute(f"SAVEPOINT {savepoint}")
-            try:
-                operation(self._writer)
-                self._writer.execute(f"RELEASE {savepoint}")
-            except BaseException:
-                self._writer.execute(f"ROLLBACK TO {savepoint}")
-                self._writer.execute(f"RELEASE {savepoint}")
-                raise
-            return
-        self._execute_write(operation, patience_s=TRANSCRIPT_WRITE_PATIENCE_S)
-
     def ensure_live(self, address: SessionAddress) -> None:
         return self._execute_write(
             lambda connection: _store_mutations.ensure_live(connection, address)
@@ -418,10 +316,44 @@ class SessionStore:
             patience_s=ACTIVITY_WRITE_PATIENCE_S,
         )
 
-    def append_messages(self, address: SessionAddress, messages: Sequence[ChatMessage]) -> None:
+    def append_messages(
+        self,
+        address: SessionAddress,
+        messages: Sequence[ChatMessage],
+        *,
+        run_id: str | None = None,
+        assistant_message_id: str | None = None,
+    ) -> None:
         return self._execute_write(
-            lambda connection: _store_mutations.append_messages(connection, address, messages),
+            lambda connection: _store_mutations.append_messages(
+                connection,
+                address,
+                messages,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
+            ),
             patience_s=TRANSCRIPT_WRITE_PATIENCE_S,
+        )
+
+    def start_tool(
+        self,
+        address: SessionAddress,
+        run_id: str,
+        assistant_id: str,
+        call_id: str,
+        started_at: str,
+    ) -> None:
+        from core.sessions import _store_runs
+
+        self._execute_write(
+            lambda connection: _store_runs.start_tool(
+                connection,
+                address,
+                run_id,
+                assistant_id,
+                call_id,
+                started_at,
+            )
         )
 
     def create_bound_temporary_session(
@@ -485,6 +417,8 @@ class SessionStore:
         messages: Sequence[ChatMessage],
         receipts: Sequence[tuple[int, str, str, str, str]],
         deduplicate_carrier: bool = False,
+        run_id: str | None = None,
+        assistant_message_id: str | None = None,
     ) -> None:
         return self._execute_write(
             lambda connection: _store_owned.append_messages_with_receipts(
@@ -495,6 +429,8 @@ class SessionStore:
                 messages=messages,
                 receipts=receipts,
                 deduplicate_carrier=deduplicate_carrier,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
             ),
             patience_s=TRANSCRIPT_WRITE_PATIENCE_S,
         )
@@ -524,6 +460,42 @@ class SessionStore:
                 connection, address, run_id=run_id, owner=owner, input_id=input_id
             )
         )
+
+    def start_run(
+        self,
+        address: SessionAddress,
+        *,
+        run_id: str,
+        work_id: str | None,
+        run_kind: str,
+        contributes_to_activity: bool,
+        started_at: str,
+    ) -> None:
+        from core.sessions import _store_runs
+
+        self._execute_write(
+            lambda connection: _store_runs.start_run(
+                connection,
+                address,
+                run_id=run_id,
+                work_id=work_id,
+                run_kind=run_kind,
+                contributes_to_activity=contributes_to_activity,
+                started_at=started_at,
+            )
+        )
+
+    def finish_run(self, address: SessionAddress, completion: SessionRunCompletion) -> JsonObject:
+        from core.sessions import _store_runs
+
+        return self._execute_write(
+            lambda connection: _store_runs.finish_run(connection, address, completion)
+        )
+
+    def recover_interrupted_runs(self) -> None:
+        from core.sessions import _store_runs
+
+        self._execute_write(_store_runs.recover_interrupted_runs)
 
     def record_run_start(self, address: SessionAddress, *, run_id: str) -> None:
         return self._execute_write(
@@ -698,6 +670,10 @@ class SessionStore:
         with self._runtime.read_ctx() as connection:
             return _store_history.reflection_runs(connection, address)
 
+    def run_messages(self, address: SessionAddress, run_id: str) -> list[ChatMessage]:
+        with self._runtime.read_ctx() as connection:
+            return _store_history.run_messages(connection, address, run_id)
+
     def run_summary(
         self,
         address: SessionAddress,
@@ -723,7 +699,7 @@ class SessionStore:
 
     def messages_since(
         self, address: SessionAddress, cursor: SessionReadCursor | None
-    ) -> tuple[list[ChatMessage], SessionReadCursor] | None:
+    ) -> SessionReadBatch | None:
         with self._runtime.read_ctx() as connection:
             return _store_history.messages_since(connection, address, cursor)
 

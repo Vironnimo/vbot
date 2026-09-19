@@ -185,6 +185,7 @@ describe('chat controller', () => {
     };
     const cancelRun = vi.fn().mockResolvedValue(cancelledRun);
     const loadChatHistory = vi.fn().mockResolvedValue({
+      runs: [{ run_id: 'run-cancelled', status: 'cancelled', complete: true }],
       active_run: null,
       messages: [
         {

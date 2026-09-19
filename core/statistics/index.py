@@ -33,7 +33,7 @@ _INDEX_FILENAME = "session-statistics.sqlite"
 _GLOBAL_SCOPE = ""
 # v3 replaces JSONL file cursors with canonical Session generations and
 # revisions. This is the one disposable-index bump from the released v2 shape.
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 _SQLITE_BUSY_TIMEOUT_MS = 1000
 
 
@@ -556,6 +556,8 @@ def _project_message(message: ChatMessage) -> JsonObject:
         "timestamp": message.timestamp,
         "role": message.role,
     }
+    if message.run_id is not None:
+        payload["run_id"] = message.run_id
     if message.role == "assistant":
         if isinstance(message.content, str) and message.content.strip():
             payload["content"] = "visible"

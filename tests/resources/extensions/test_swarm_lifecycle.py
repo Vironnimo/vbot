@@ -893,7 +893,8 @@ async def test_old_stop_retry_preserves_a_new_resume(lifecycle, tmp_path):
     resumed = await lifecycle.service.operation(
         "swarms.resume", {"swarm_id": started["swarm_id"], "request_id": "new-resume"}
     )
-    await asyncio.wait_for(adapter.started.wait(), timeout=5)
+    # Wait for the ordering barrier, allowing parallel SQLite fixture load.
+    await asyncio.wait_for(adapter.started.wait(), timeout=15)
     run = lifecycle.runtime.chat_run_manager.get(resumed["runs"][0]["run_id"])
     replay = await lifecycle.service.operation("swarms.stop", stop)
     assert replay == {**stopped, "replayed": True}
@@ -911,7 +912,7 @@ async def test_old_stop_retry_preserves_a_new_resume(lifecycle, tmp_path):
     latest = await lifecycle.service.operation(
         "swarms.resume", {"swarm_id": started["swarm_id"], "request_id": "latest-resume"}
     )
-    await asyncio.wait_for(adapter.started.wait(), timeout=5)
+    await asyncio.wait_for(adapter.started.wait(), timeout=15)
     current = lifecycle.runtime.chat_run_manager.get(latest["runs"][0]["run_id"])
     for operation, arguments, original in [
         ("swarms.stop", stop, stopped),

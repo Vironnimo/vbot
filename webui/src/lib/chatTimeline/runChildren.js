@@ -361,19 +361,26 @@ export function mergeSubAgentSessionStarted(assistantRun, event) {
 }
 
 function upsertToolRow(assistantRun, key, event, toolCall = {}) {
-  const existingTool = assistantRun.items.find(
+  const assistantMessageId = event?.payload?.assistant_message_id;
+  const existingTool = assistantRun.items.findLast(
     (item) =>
       item.type === 'tool_call' &&
+      (!assistantMessageId ||
+        !item.assistantMessageId ||
+        item.assistantMessageId === assistantMessageId) &&
+      !(event?.type === 'tool_call_delta' && item.resultEvent) &&
       (item.key === key || toolMatchesCall(item, toolCall)),
   );
   if (existingTool) {
     existingTool.key = moreStableToolKey(existingTool.key, key);
+    existingTool.assistantMessageId ??= assistantMessageId;
     return existingTool;
   }
 
   const sequence = event?.sequence ?? assistantRun.items.length;
   const tool = {
-    id: `tool-${assistantRun.id}-${key}`,
+    id: `tool-${assistantRun.id}-${key}-${sequence}`,
+    assistantMessageId,
     type: 'tool_call',
     key,
     sequence,

@@ -76,13 +76,9 @@ describe('authoritative Timeline synchronization', () => {
     expect(session.runEvents.some((event) => event.run_id === 'first')).toBe(
       true,
     );
-    expect(
-      runProjectionPersistedInHistory(
-        session.runEvents,
-        session.messages,
-        'first',
-      ),
-    ).toBe(false);
+    expect(runProjectionPersistedInHistory(session.historyRuns, 'first')).toBe(
+      false,
+    );
   });
 
   it('retains older pages and distinct occurrences of the same checkpoint on an incremental read', () => {
@@ -186,36 +182,18 @@ describe('authoritative Timeline synchronization', () => {
     expect(runs[1].items).toEqual([]);
   });
 
-  it('only retires manual Compaction at the confirmed record in the same generation', () => {
-    const events = [
-      {
-        run_id: 'compact',
-        type: 'run_completed',
-        payload: { history_checkpoint: { generation_id: 'g', sequence: 5 } },
-      },
-    ];
-    const checkpoint = {
-      id: 'same-id',
-      role: 'compaction_checkpoint',
-      history_sequence: 4,
-    };
-    expect(
-      runProjectionPersistedInHistory(events, [checkpoint], 'compact', 'g'),
-    ).toBe(false);
+  it('retires manual Compaction only when the snapshot confirms its complete Run', () => {
+    expect(runProjectionPersistedInHistory({}, 'compact')).toBe(false);
     expect(
       runProjectionPersistedInHistory(
-        events,
-        [{ ...checkpoint, history_sequence: 5 }],
+        { compact: { complete: false } },
         'compact',
-        'other',
       ),
     ).toBe(false);
     expect(
       runProjectionPersistedInHistory(
-        events,
-        [{ ...checkpoint, history_sequence: 5 }],
+        { compact: { complete: true } },
         'compact',
-        'g',
       ),
     ).toBe(true);
   });

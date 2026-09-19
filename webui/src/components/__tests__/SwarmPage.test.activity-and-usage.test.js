@@ -122,14 +122,17 @@ describe('SwarmPage', () => {
       messages: [],
     });
     bridge.readHistory.mockResolvedValue({
+      runs: [{ run_id: 'run-final-test', status: 'completed', complete: true }],
       messages: [
         {
+          history_run_id: 'run-final-test',
           id: 'msg-final-test',
           role: 'assistant',
           content: 'final-output-sentinel',
           timestamp: '2026-09-08T09:00:00+00:00',
         },
         {
+          history_run_id: 'run-final-test',
           id: 'summary-final-test',
           role: 'run_summary',
           run_id: 'run-final-test',
