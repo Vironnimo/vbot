@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-16T17:27:09.624534+00:00",
+  "fetched_at": "2026-09-19T18:07:14.238088+00:00",
   "models": {
     "aion-labs/aion-2.0": {
       "capabilities": {
@@ -5086,7 +5086,7 @@
       ],
       "context_window": 163840,
       "family": "deepseek",
-      "max_output_tokens": 16000,
+      "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -5690,6 +5690,65 @@
       },
       "name": "DeepSeek: DeepSeek V4 Flash 0731 (batch)"
     },
+    "deepseek/deepseek-v4-flash-0731:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "deepseek-flash",
+      "max_output_tokens": 393216,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "DeepSeek: DeepSeek V4 Flash 0731 (free)"
+    },
     "deepseek/deepseek-v4-flash-vision-exp": {
       "capabilities": {
         "input_modalities": [
@@ -5746,7 +5805,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek-flash",
-      "max_output_tokens": 943718,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -5862,7 +5921,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek-thinking",
-      "max_output_tokens": 393216,
+      "max_output_tokens": 384000,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -13994,58 +14053,6 @@
       },
       "name": "Mistral Large 2407"
     },
-    "mistralai/mistral-large-2512": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "file"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "max_tokens",
-          "presence_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "family": "mistral-large",
-      "max_output_tokens": 209715,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "Mistral: Mistral Large 3 2512"
-    },
     "mistralai/mistral-large-2512:batch": {
       "capabilities": {
         "input_modalities": [
@@ -14547,7 +14554,6 @@
           "temperature",
           "tool_choice",
           "tools",
-          "top_k",
           "top_p"
         ],
         "supported_voices": [],
@@ -16187,7 +16193,7 @@
       ],
       "context_window": 262144,
       "family": "nemotron",
-      "max_output_tokens": 32768,
+      "max_output_tokens": 182520,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -16422,7 +16428,7 @@
       ],
       "context_window": 262144,
       "family": "nemotron",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 235929,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -21113,9 +21119,6 @@
         "output_modalities": [
           "image"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
@@ -21219,9 +21222,6 @@
         "output_modalities": [
           "image"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "frequency_penalty",
           "logit_bias",
@@ -21369,7 +21369,7 @@
       ],
       "context_window": 131072,
       "family": "gpt-oss",
-      "max_output_tokens": 117964,
+      "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -22683,6 +22683,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
+          "logit_bias",
           "logprobs",
           "max_completion_tokens",
           "max_tokens",
@@ -23296,6 +23297,66 @@
         }
       },
       "name": "Poolside: Laguna XS 2.1 (free)"
+    },
+    "prism-ml/ternary-bonsai-2-27b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "medium",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": 32768,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "PrismML: Ternary Bonsai 2 27B"
     },
     "qwen/qwen-2.5-72b-instruct": {
       "capabilities": {
@@ -26461,6 +26522,66 @@
       },
       "name": "Qwen: Qwen3.8 27B"
     },
+    "qwen/qwen3.8-27b:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "max_tokens",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "family": "qwen",
+      "max_output_tokens": 235929,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+video->text"
+        }
+      },
+      "name": "Qwen: Qwen3.8 27B (free)"
+    },
     "qwen/qwen3.8-flash": {
       "capabilities": {
         "input_modalities": [
@@ -28967,50 +29088,6 @@
       },
       "name": "Sourceful: Riverflow V2.5 Pro (free)"
     },
-    "stealth/union-alpha": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "max_tokens",
-          "response_format",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "family": "alpha",
-      "max_output_tokens": 131072,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image->text"
-        }
-      },
-      "name": "Union Alpha"
-    },
     "stepfun/step-3.5-flash": {
       "capabilities": {
         "input_modalities": [
@@ -29963,6 +30040,77 @@
       },
       "name": "Thinking Machines: Inkling (free)"
     },
+    "typesafe/jev-1.13": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "decisions"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "decision"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 32000,
+      "max_output_tokens": 28800,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->decisions"
+        }
+      },
+      "name": "TypeSafe: Jev 1.13"
+    },
+    "unbiased/pareto": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [
+          "max_tokens",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": 131072,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "Pareto"
+    },
     "undi95/remm-slerp-l2-13b": {
       "capabilities": {
         "input_modalities": [
@@ -30023,7 +30171,14 @@
           "text"
         ],
         "reasoning": {
-          "control": "on_off",
+          "control": "levels",
+          "levels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -30033,6 +30188,7 @@
           "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
+          "reasoning_effort",
           "response_format",
           "structured_outputs",
           "temperature",
@@ -30071,7 +30227,16 @@
           "text"
         ],
         "reasoning": {
-          "control": "on_off",
+          "control": "levels",
+          "levels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -30081,6 +30246,7 @@
           "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
+          "reasoning_effort",
           "response_format",
           "structured_outputs",
           "temperature",
@@ -32096,7 +32262,7 @@
       ],
       "context_window": 1310720,
       "family": "glm",
-      "max_output_tokens": 943717,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -32131,7 +32297,6 @@
           "logprobs",
           "max_tokens",
           "min_p",
-          "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
           "reasoning_effort",
@@ -32230,6 +32395,63 @@
         }
       },
       "name": "Z.ai: GLM 5.3 Flash (batch)"
+    },
+    "z-ai/glm-5.3-flashx": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "glm",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+video->text"
+        }
+      },
+      "name": "Z.ai: GLM 5.3 FlashX"
     },
     "z-ai/glm-5.3:batch": {
       "capabilities": {
@@ -32624,7 +32846,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek-flash",
-      "max_output_tokens": 393216,
+      "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -32748,7 +32970,7 @@
       ],
       "context_window": 1310720,
       "family": "deepseek",
-      "max_output_tokens": 393216,
+      "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -33251,6 +33473,38 @@
       },
       "name": "OpenAI: GPT Terra Latest"
     },
+    "~typesafe/jev-latest": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "decisions"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "decision"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 32000,
+      "max_output_tokens": 28800,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->decisions"
+        }
+      },
+      "name": "TypeSafe: Jev Latest"
+    },
     "~x-ai/grok-latest": {
       "capabilities": {
         "input_modalities": [
@@ -33341,7 +33595,6 @@
           "logprobs",
           "max_tokens",
           "min_p",
-          "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
           "reasoning_effort",
@@ -33436,7 +33689,7 @@
       ],
       "context_window": 1310720,
       "family": "glm",
-      "max_output_tokens": 235929,
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text->text"

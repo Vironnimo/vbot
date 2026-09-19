@@ -319,22 +319,27 @@ class TestModelRegistryRealResources:
                 model = registry.get("opencode-go", model_id)
                 assert model.metadata["opencode_go"]["protocol"] == protocol
 
-    def test_union_alpha_gateway_facts_remain_independent(self):
+    def test_union_alpha_opencode_gateway_facts(self):
         registry = ModelRegistry.load(RESOURCES_DIR)
         go = registry.get("opencode-go", "union-alpha")
-        router = registry.get("openrouter", "stealth/union-alpha")
-        for model in (go, router):
-            assert model.context_window == 262_144
-            assert model.max_output_tokens == 131_072
-            assert model.capabilities.input_modalities == ("text", "image")
-            assert model.capabilities.tools is True
+        # OpenRouter retired stealth/union-alpha from its current catalog.
+        assert go.context_window == 262_144
+        assert go.max_output_tokens == 131_072
+        assert go.capabilities.input_modalities == ("text", "image")
+        assert go.capabilities.tools is True
         assert go.capabilities.reasoning.supported is True
         assert go.capabilities.reasoning.control is None
         assert go.metadata["opencode_go"] == {
             "protocol": "anthropic",
             "thinking_control": "provider_default",
         }
-        assert router.capabilities.reasoning.supported is False
+
+    @pytest.mark.parametrize("model_id", ["typesafe/jev-1.13", "~typesafe/jev-latest"])
+    def test_jev_is_a_decision_target_without_chat_capability(self, model_id):
+        model = ModelRegistry.load(RESOURCES_DIR).get("openrouter", model_id)
+        assert model.capabilities.input_modalities == ("text",)
+        assert model.capabilities.output_modalities == ("decisions",)
+        assert model.capabilities.task_types == ("decision",)
 
     def test_gpt6_and_deepseek41_profiles_load(self):
         registry = ModelRegistry.load(RESOURCES_DIR)

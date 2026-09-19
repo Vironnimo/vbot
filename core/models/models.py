@@ -87,6 +87,7 @@ MODEL_TASK_ORDER = (
     "music_generation",
     "text_to_speech",
     "text_embedding",
+    "decision",
     "video_generation",
 )
 
@@ -262,6 +263,8 @@ def derive_model_task_types(
         # Dedicated embedding models: output is a vector, not text/chat.
         # Mirror of the "speech" → text_to_speech alias.
         tasks.add("text_embedding")
+    if "decisions" in outputs:
+        tasks.add("decision")
     if "video" in outputs:
         tasks.add("video_generation")
 

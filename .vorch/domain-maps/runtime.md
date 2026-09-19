@@ -49,6 +49,8 @@ All service properties raise `RuntimeError` outside a started runtime, **except 
 - `file_read_state` - the shared read stamps and mutation locks behind read/apply_patch and chat `@`-mention snapshots.
 - `command_dispatcher` - the canonical stable dispatcher; server/accessor code must reuse `runtime.chat_loop` / `runtime.streaming_chat_loop` / `runtime.command_dispatcher` - no probing, no fallback construction (stub runtimes must provide them).
 
+`decisions` owns the Decision Task Model executor and independent experiment/control tasks. Runtime constructs it after TaskModelService, registers `evaluate`, and drains/cancels it on shutdown. Accessor navigation does not affect its lifecycle (`model_tasks/decisions.md`).
+
 ### Hot-reload seams
 
 Reload methods refresh already-wired consumers without restart. Provider/Model registry identities stay stable; Skill, Extension, and Recall registries can be replaced through the live callbacks and installation paths below:

@@ -23,7 +23,7 @@ export default Object.freeze({
   'settings.summary.providers': 'Accounts, credentials and available Models',
   'settings.summary.channels': 'Messaging accounts and access',
   'settings.summary.extensions': 'Installed capabilities and configuration',
-  'settings.summary.media': 'Speech, images and embeddings',
+  'settings.summary.media': 'Speech, images, embeddings and decisions',
   'settings.summary.voice': 'Microphone and voice activation',
   'settings.summary.server': 'Server and connected clients',
   'settings.summary.connection': 'Current server connection',
@@ -360,7 +360,7 @@ export default Object.freeze({
     'Optional names or terminology to help recognize your recording.',
   'settings.localSpeech.choices.auto': 'Automatic',
   'settings.specializedModels.subtitle':
-    'Task-specific model bindings for speech, images, video, music, and embeddings. These bindings are independent of agent and project defaults.',
+    'Task-specific model bindings for speech, images, video, music, embeddings, and decisions. These bindings are independent of agent and project defaults.',
   'settings.specializedModels.loading': 'Loading specialized model targets…',
   'settings.specializedModels.loadError':
     'Specialized model targets could not be loaded.',

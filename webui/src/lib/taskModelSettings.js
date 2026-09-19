@@ -109,6 +109,14 @@ export const TASK_MODEL_ROWS = Object.freeze([
   ...IMAGE_TASK_ROWS,
   ...GENERATED_MEDIA_TASK_ROWS,
   ...TEXT_EMBEDDING_TASK_ROWS,
+  {
+    taskType: 'decision',
+    titleKey: 'settings.specializedModels.decision',
+    titleFallback: 'Decision model',
+    descriptionKey: 'settings.specializedModels.decisionDescription',
+    descriptionFallback:
+      'Structured judgments for the evaluate Tool and Jev experiments.',
+  },
 ]);
 
 export function normalizeTaskModelSettings(settings) {
