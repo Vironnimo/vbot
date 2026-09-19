@@ -36,6 +36,7 @@ from core.model_tasks import (
     TaskModelService,
     VideoService,
 )
+from core.model_tasks.decisions import DecisionService
 from core.models.models import Model, ModelRegistry
 from core.projects import (
     AgentResolver,
@@ -148,6 +149,7 @@ class Runtime:
         self._video: VideoService | None = None
         self._music: MusicService | None = None
         self._embeddings: EmbeddingService | None = None
+        self._decisions: DecisionService | None = None
         self._storage: StorageManager | None = None
         self._attachment_store: AttachmentStore | None = None
         self._keep_awake: KeepAwakeController | None = None
@@ -371,6 +373,8 @@ class Runtime:
         if self._chat_sessions is not None:
             self._chat_sessions.close()
 
+        if self._decisions is not None:
+            self._decisions.close()
         if self._speech is not None:
             self._speech.close()
         self._clear_service_references()
@@ -401,6 +405,8 @@ class Runtime:
             await self._session_title_service.aclose()
         if self._chat_run_manager is not None:
             await self._chat_run_manager.aclose()
+        if self._decisions is not None:
+            await self._decisions.aclose()
         if self._speech is not None:
             await self._speech.aclose()
         if self._provider_usage is not None:
@@ -434,6 +440,7 @@ class Runtime:
         if self._calendar_service is not None:
             self._calendar_service.actions.stop()
         cleanup_actions = (
+            (self._decisions, "close"),
             (self._speech, "close"),
             (self._extensions, "fire_shutdown_blocking"),
             (self._channel_service, "stop"),
@@ -794,6 +801,10 @@ class Runtime:
 
     music: _StartedService[MusicService] = _StartedService(
         lambda runtime: runtime._music, "Music service not available"
+    )
+
+    decisions: _StartedService[DecisionService] = _StartedService(
+        lambda runtime: runtime._decisions, "Decision service not available"
     )
 
     embeddings: _StartedService[EmbeddingService] = _StartedService(

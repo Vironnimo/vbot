@@ -31,6 +31,12 @@
       section: 'work',
     },
     {
+      id: 'jev',
+      labelKey: 'navigation.jev',
+      labelFallback: 'Jev',
+      section: 'work',
+    },
+    {
       id: 'skills',
       labelKey: 'navigation.skills',
       labelFallback: 'Skills',
@@ -90,6 +96,7 @@
   import AgentsView from './components/AgentsView.svelte';
   import TerminalsView from './components/TerminalsView.svelte';
   import ProjectsView from './components/ProjectsView.svelte';
+  import JevView from './components/decisions/JevView.svelte';
   import CalendarView from './components/CalendarView.svelte';
   import CronView from './components/CronView.svelte';
   import SkillsView from './components/skills/SkillsView.svelte';
@@ -771,6 +778,8 @@
           {modelsRefreshToken}
           {projectsRefreshToken}
         />
+      {:else if activeViewId === 'jev'}
+        <JevView onNavigateToSettingsPanel={navigateToSettingsPanel} />
       {:else if activeViewId === 'calendar'}
         <CalendarView
           onToast={desktop.showToast}

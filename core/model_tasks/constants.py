@@ -9,6 +9,7 @@ TASK_IMAGE_GENERATION = "image_generation"
 TASK_VIDEO_GENERATION = "video_generation"
 TASK_MUSIC_GENERATION = "music_generation"
 TASK_TEXT_EMBEDDING = "text_embedding"
+TASK_DECISION = "decision"
 
 SUPPORTED_TASK_TYPES = frozenset(
     {
@@ -19,6 +20,7 @@ SUPPORTED_TASK_TYPES = frozenset(
         TASK_VIDEO_GENERATION,
         TASK_MUSIC_GENERATION,
         TASK_TEXT_EMBEDDING,
+        TASK_DECISION,
     }
 )
 

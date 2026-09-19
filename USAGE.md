@@ -716,6 +716,7 @@ Specialized bindings keep non-chat tasks independent from the Agent's primary Mo
 | `speech_to_text` | WebUI microphone input, audio attachments, and Desktop Voice transcription |
 | `text_to_speech` | Agent speech output and the speech synthesis endpoint |
 | `text_embedding` | semantic and hybrid Recall |
+| `decision` | structured judgments through the evaluate Tool and the Jev workspace |
 | `image_generation` | image generation and editing, including source-image workflows when the target supports them |
 
 The `image_generation` Tool writes generated files into a caller-owned `image-gen/` directory. Identity Agents always use `<Workspace>/image-gen/`, including when Rooted in a Project; Project Config Agents use `<Project cwd>/image-gen/`. The Tool returns the absolute local paths, and Chat exposes referenced files through signed `/api/files/` URLs without keeping a second image copy in the data directory.
@@ -729,6 +730,24 @@ vbot task-model option list image_generation openai/gpt-image-1::api-key
 vbot task-model set text_embedding openai/text-embedding-3-small::api-key
 vbot task-model clear text_embedding
 ```
+
+### Jev decisions and application control
+
+Configure an OpenRouter key, then select **Decision** in **Settings → Specialized Models**. Available targets include `typesafe/jev-1.13` and `~typesafe/jev-latest`; the latter follows upstream updates. If targets are missing, refresh the Model DB after configuring the key.
+
+Open **Jev** from the main navigation. Create a saved experiment or start from Support triage / Task requirements. Supply text or JSON and add focused questions: **Choice** selects a named option, **Score** rates ordered levels starting at zero, and **Noul** estimates yes on a zero-to-one scale. Explicit criteria help clarify meanings. Evaluate, inspect distributions/model/usage, compare history entries, or reuse a previous input. Every evaluation retains its own input and target. Confidence measures concentration of answers, not correctness; uncertain or missing evidence may produce intermediate values. This is not a deterministic field validator or a validated automatic LLM router.
+
+Agents with access to the `evaluate` Tool use the same configured Model. Their ordinary Chat Model remains independent. Jev currently accepts text/JSON, not screenshots or image attachments.
+
+For **Application control**, provide a goal and a state-reading command. Commands run on the **vBot host**, with an executable, one literal argument per line, and an absolute working directory. The observation command must print UTF-8 JSON with exactly these fields:
+
+```json
+{"state": {"current": 2, "target": 5}, "done": false}
+```
+
+Define at least two named Actions with descriptions and fixed commands; a no-op Action can leave the application unchanged. Jev selects an Action id, and vBot executes only the command you assigned. A Python script, an application's CLI, or an adapter contacting another machine can implement the commands. The application owns its state, permitted behavior and input handling. Jev does not generate command lines, and vBot contains no built-in game.
+
+Start control to repeat observation, decision and action. Switching tabs or closing the browser leaves it running; return to inspect progress or explicitly cancel. The configured delay is additional to command and Model latency. A maximum of zero means continue until stopped, `done: true`, or an error. Errors stop execution without automatically replaying actions. Server interruption does not resume a control automatically. An interrupted Action may already have taken effect; a new start always reads fresh state. History retains the latest steps and the cumulative completed count.
 
 ### Local speech recognition
 

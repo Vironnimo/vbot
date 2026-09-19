@@ -85,3 +85,5 @@ Read these only when your task matches - not by default.
 - Retired `edit` or `write` Tools and restoration boundaries -> `tools/edit.md`, `tools/write.md`
 - V4A patches, multi-file planning, tolerant patch parsing, or patch-specific results -> `tools/apply_patch.md`
 - Changing one concrete built-in Tool -> its per-tool spec (read only the one you change): `tools/read.md`, `tools/file_state.md` (shared read stamps/mutation locks/atomic replace), `tools/change_tracker.md` (run-delta statistics), `tools/search_files.md`, `tools/web_fetch.md`, `tools/web_search.md`, `tools/bash.md`, `tools/process.md`, `tools/terminal.md` (interactive PTY sessions), `tools/status.md`, `tools/memory.md`, `tools/image.md`, `tools/generated-media.md`, `tools/session_search.md`, `tools/history.md`, `tools/project.md`, `tools/skill.md` (+ `skill_manage` contract owned by `skills.md`), `tools/subagent.md`, `tools/cron.md`, `tools/calendar.md` (calendar domain: `calendar.md`), `tools/channel_send.md`, `tools/speech.md`
+
+- Structured decision judgments through the configured Decision Model -> `tools/evaluate.md`

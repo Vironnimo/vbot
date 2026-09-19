@@ -94,7 +94,7 @@
           subtitle: () =>
             t(
               'settings.specializedModels.subtitle',
-              'Task-specific model bindings for speech, image, and embedding tools. These bindings are independent of agent and project defaults.',
+              'Task-specific model bindings for speech, images, video, music, embeddings, and decisions. These bindings are independent of agent and project defaults.',
             ),
         },
         {
@@ -511,7 +511,10 @@
           'Installed capabilities and configuration',
         );
       case 'specialized_models':
-        return t('settings.summary.media', 'Speech, images and embeddings');
+        return t(
+          'settings.summary.media',
+          'Speech, images, embeddings and decisions',
+        );
       case 'voice':
         return t('settings.summary.voice', 'Microphone and voice activation');
       case 'general':

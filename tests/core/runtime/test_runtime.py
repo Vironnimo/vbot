@@ -41,6 +41,7 @@ CANONICAL_BUILTIN_TOOLS = [
     "bash",
     "calendar",
     "cron",
+    "evaluate",
     "generate_music",
     "generate_video",
     "history",
@@ -375,7 +376,7 @@ def test_builtin_provider_definitions_expose_model_visible_metadata_only(config:
     definitions_by_name = {definition["name"]: definition for definition in definitions}
 
     assert sorted(definitions_by_name) == [
-        name for name in CANONICAL_BUILTIN_TOOLS if name != "history"
+        name for name in CANONICAL_BUILTIN_TOOLS if name not in {"history", "evaluate"}
     ]
     for tool_name, definition in definitions_by_name.items():
         tool = runtime.tools.get(tool_name)

@@ -7,7 +7,7 @@ The single deep task module: bindings from specialized task types to concrete pr
 `core/model_tasks/` owns both layers of specialized task models:
 
 1. **Bindings & discovery** (`model_tasks.py` main file plus constants/local targets/options) - normalized settings, target ID parsing, credential-gated discovery, local target descriptors, backend-owned option schemas for the Settings UI.
-2. **Execution** - per-task services and their wire clients for speech, image, embeddings, video, and music. Bindings and execution change together when a task type is added - one module on purpose. Shared internals: `TaskBindingResolver` (binding lookup + options merge + target parse) and central artifact handling; image/video/music write to caller-owned directories selected by their Tools.
+2. **Execution** - per-task services and their wire clients for speech, image, embeddings, video, music, and decisions. Bindings and execution change together when a task type is added - one module on purpose. Shared internals: `TaskBindingResolver` (binding lookup + options merge + target parse) and central artifact handling; image/video/music write to caller-owned directories selected by their Tools.
 
 `options.py` owns option validation and task dispatch. Its internal `_option_types.py` holds field records and shared constructors; `_image_options.py` and `_media_options.py` build image and speech/video/music fields from existing Model facts. Public option imports and schema behavior remain unchanged.
 
@@ -17,7 +17,7 @@ Execution details live in child maps (`model_tasks/speech.md`, `image.md`, `embe
 
 The fixed accessor voice companion is a specialized execution client without a configurable Task Model binding; its separate transport and app-operation contract is in `model_tasks/live.md`.
 
-Supported task types (`constants.SUPPORTED_TASK_TYPES`): `speech_to_text`, `text_to_speech`, `image_understanding` (the text-output-from-image task behind route-gated `analyze_image`), `image_generation`, `video_generation`, `music_generation`, `text_embedding`.
+Supported task types (`constants.SUPPORTED_TASK_TYPES`): `speech_to_text`, `text_to_speech`, `image_understanding` (the text-output-from-image task behind route-gated `analyze_image`), `image_generation`, `video_generation`, `music_generation`, `text_embedding`, `decision`.
 
 Bindings persist under `model_tasks` keyed by task type: non-empty `target` + options object. Public updates are sparse (options-only updates keep the existing target; empty target removes; Storage drops the section when empty); validation runs on each changed complete resulting binding before persistence; unchanged bindings are no-ops even if live catalog changes have made their options stale, and a changed target starts options at `{}` rather than inheriting incompatible ones.
 
@@ -39,7 +39,7 @@ Artifact identity is owned by `artifacts.py` and the image writer: `img_`, `aud_
 - Option schemas are backend-owned render hints over Model-DB facts, never a hardcoded capability matrix. Accessors render field types generically (`text`, `textarea`, `select`, `number`, `boolean`, `json`) without provider-specific rules.
 - Changed binding options validate against the resolved target schema before persistence - including generic Settings surfaces; required fields may satisfy via schema defaults.
 - Per-model option **facts** live in `capabilities.task_options` (see `models.md`); this domain owns presentation only: enum -> select with leading Provider-default choice (forced-default exceptions get real values), range -> bounded number (collapsed/single-value enums skipped), boolean -> toggle or free-value number, string -> text. Runtime parameters and redundant shorthand fields never render. Models without facts fall back to conservative provider-level schemas.
-- Two pseudo-options: `provider_options` (passthrough rendered only when advertised, sent nested as `provider.options`) and universal `extra_options` escape hatch (adds non-empty provider-specific fields only; collisions with task-authored request fields fail locally as non-retryable Provider errors before send - helpers shared via the task client).
+- Two pseudo-options: `provider_options` (passthrough rendered only when advertised, sent nested as `provider.options`) and media-task `extra_options` escape hatch (adds non-empty provider-specific fields only; collisions with task-authored request fields fail locally as non-retryable Provider errors before send - helpers shared via the task client).
 - Wire shaping belongs to per-task wire clients; add a new workflow in order: confirm the task type constant, ensure discovery produces matching capability tags, add option fields only if the UI needs them, implement service + wire client pair, add a child map.
 
 ## Constraints & Gotchas
@@ -54,3 +54,5 @@ Artifact identity is owned by `artifacts.py` and the image writer: `img_`, `aud_
 ## References
 
 - Changing GPT-Live session creation, spoken app operation, or proactive Agent announcements -> `model_tasks/live.md`
+
+- Structured judgments, the evaluate Tool, Jev experiments, external application Actions and control lifecycle -> `model_tasks/decisions.md`

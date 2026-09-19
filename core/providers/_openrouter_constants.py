@@ -48,6 +48,7 @@ SUPPLEMENTARY_OUTPUT_MODALITIES = (
     "audio",
     "video",
     "embeddings",
+    "decisions",
 )
 
 IMAGE_MODELS_ENDPOINT = "/images/models"

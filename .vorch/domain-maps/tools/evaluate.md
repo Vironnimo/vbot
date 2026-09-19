@@ -1,0 +1,9 @@
+# Evaluate Tool
+
+`core/tools/evaluate.py` registers the flat execution-family Tool `evaluate(state, questions)` against the Runtime's shared DecisionService. It returns focused typed judgments from the configured Decision Task Model without starting an Agent Run or external application action. The canonical executor/experiment/control contract is `../model_tasks/decisions.md`.
+
+State accepts text, an object or an array. Questions are independent and batched against the same state; each has an id, `choice|score|noul` type, and complete instructions. Choice criteria map at least two labels to descriptions; score criteria list ordered descriptions from level zero; noul criteria may be omitted or explicitly describe `true` and `false`. No conversation context, images or explanation generation is implicit. The result contains `answers`, resolved `model`, and reported `usage` in the normal Tool envelope. Missing optional probabilities/cost are not invented.
+
+The Tool is registered consistently but only exposed when its Decision binding is usable through the implemented OpenRouter wire. Existing Tool Access Policy still applies. Unknown top-level fields fail instead of discarding requested behavior. Generic schema-guided representation repair remains at dispatch; arbitrary state object fields and text are preserved. Domain validation owns conditional criteria and finite bounds. Errors carry an actionable code/message and never advertise automatic retries after an uncertain Provider outcome. The Tool cannot configure or execute control commands.
+
+Tests: `tests/core/tools/test_evaluate.py` (actual registry dispatch, payload preservation, access/readiness), the executor tests listed in the canonical map, and first-use Luna probes with the exact production definition. No separate Skill is needed for a single self-contained evaluation operation.
