@@ -123,44 +123,53 @@ describe('chat state helpers', () => {
       duration_ms: 1250,
     };
 
-    loadHistory(sessionState, [
-      {
-        id: 'user-one',
-        role: 'user',
-        content: 'Run tool',
-        timestamp: '2026-05-03T14:30:00+00:00',
-      },
-      {
-        id: 'assistant-tool',
-        role: 'assistant',
-        content: null,
-        timestamp: '2026-05-03T14:30:00+00:00',
-        tool_calls: [{ id: 'call-one', name: 'read', arguments: {} }],
-      },
-      {
-        id: 'tool-one',
-        role: 'tool',
-        tool_call_id: 'call-one',
-        name: 'read',
-        content: '{"ok":true,"error":null,"data":{},"artifacts":[]}',
-        timestamp: '2026-05-03T14:30:02+00:00',
-        timing,
-      },
-      {
-        id: 'assistant-final',
-        role: 'assistant',
-        content: 'Done',
-        timestamp: '2026-05-03T14:30:03+00:00',
-      },
-      {
-        id: 'summary-one',
-        role: 'run_summary',
-        run_id: 'run-one',
-        status: 'completed',
-        timestamp: '2026-05-03T14:30:03+00:00',
-        timing,
-      },
-    ]);
+    loadHistory(
+      sessionState,
+      [
+        {
+          history_run_id: 'run-one',
+          id: 'user-one',
+          role: 'user',
+          content: 'Run tool',
+          timestamp: '2026-05-03T14:30:00+00:00',
+        },
+        {
+          history_run_id: 'run-one',
+          id: 'assistant-tool',
+          role: 'assistant',
+          content: null,
+          timestamp: '2026-05-03T14:30:00+00:00',
+          tool_calls: [{ id: 'call-one', name: 'read', arguments: {} }],
+        },
+        {
+          history_run_id: 'run-one',
+          id: 'tool-one',
+          role: 'tool',
+          tool_call_id: 'call-one',
+          name: 'read',
+          content: '{"ok":true,"error":null,"data":{},"artifacts":[]}',
+          timestamp: '2026-05-03T14:30:02+00:00',
+          timing,
+        },
+        {
+          history_run_id: 'run-one',
+          id: 'assistant-final',
+          role: 'assistant',
+          content: 'Done',
+          timestamp: '2026-05-03T14:30:03+00:00',
+        },
+        {
+          history_run_id: 'run-one',
+          id: 'summary-one',
+          role: 'run_summary',
+          run_id: 'run-one',
+          status: 'completed',
+          timestamp: '2026-05-03T14:30:03+00:00',
+          timing,
+        },
+      ],
+      { runs: [{ run_id: 'run-one', status: 'completed', complete: true }] },
+    );
 
     const assistantRun = visibleTimelineItemsForRender(sessionState).find(
       (item) => item.type === 'assistant_run',
@@ -341,7 +350,12 @@ describe('chat state helpers', () => {
     );
 
     loadHistory(sessionState, [
-      { id: 'user-one', role: 'user', content: 'Start background work' },
+      {
+        history_run_id: 'run-one',
+        id: 'user-one',
+        role: 'user',
+        content: 'Start background work',
+      },
       {
         id: 'assistant-tool-call',
         role: 'assistant',
@@ -399,13 +413,20 @@ describe('chat state helpers', () => {
     );
 
     loadHistory(sessionState, [
-      { id: 'user-one', role: 'user', content: 'Try the request' },
       {
+        history_run_id: 'run-one',
+        id: 'user-one',
+        role: 'user',
+        content: 'Try the request',
+      },
+      {
+        history_run_id: 'run-one',
         id: 'assistant-one',
         role: 'assistant',
         content: 'I will call the provider.',
       },
       {
+        history_run_id: 'run-one',
         id: 'error-one',
         role: 'error',
         error_kind: 'rate_limit',
@@ -589,8 +610,14 @@ describe('chat state helpers', () => {
     });
 
     loadHistory(sessionState, [
-      { id: 'user-one', role: 'user', content: 'Inspect the file' },
       {
+        history_run_id: 'run-one',
+        id: 'user-one',
+        role: 'user',
+        content: 'Inspect the file',
+      },
+      {
+        history_run_id: 'run-one',
         id: 'assistant-one',
         role: 'assistant',
         content: 'The file says A.',
@@ -667,6 +694,7 @@ describe('chat state helpers', () => {
 
     loadHistory(sessionState, [
       {
+        history_run_id: 'run-one',
         id: 'user-one',
         role: 'user',
         content: 'Investigate chat ordering.',

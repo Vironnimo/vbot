@@ -390,6 +390,7 @@ def bootstrap(runtime: Runtime) -> None:
             extensions=lambda: runtime._extensions,
             logger=runtime.logger,
         )
+        runtime._chat_sessions.recover_interrupted_runs()
         runtime._chat_run_manager = ChatRunManager(
             admission_validator=runtime._validate_temporary_admission
         )

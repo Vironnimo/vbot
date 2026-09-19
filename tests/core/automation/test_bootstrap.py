@@ -276,6 +276,7 @@ async def test_restart_reconciles_terminal_run_before_retry(
     created = creator.create_job(agent_id="main", prompt="Verify", mode="once")
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("main", session_id="bootstrap-session")
+    session = session.start_run("run-before-crash")
     session.append(
         ChatMessage.run_summary(
             run_id="run-before-crash",

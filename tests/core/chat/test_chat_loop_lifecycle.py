@@ -11,7 +11,6 @@ import pytest
 from core.chat.continuation import ContinuationTracker
 from core.providers.errors import ProviderTimeoutError
 from core.runs import RunAdmission, RunExecutionOwner, RunStatus
-from core.sessions import ChatSession
 from core.utils.retry import retry_async
 from tests.core.chat.chat_loop_support import (
     RecordingReflection,
@@ -152,7 +151,7 @@ async def test_ordinary_internal_run_does_not_consume_continuation(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_run_summary_write_failure_preserves_result_and_resolves_continuation(
+async def test_run_commit_failure_preserves_output_and_recoverable_continuation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -162,14 +161,11 @@ async def test_run_summary_write_failure_preserves_result_and_resolves_continuat
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     tracker = ContinuationTracker(session, run_id="run-before-restart", request="update vBot")
     await tracker.interrupt("process_restart")
-    append_async = ChatSession.append_async
 
-    async def fail_run_summary(self, message):
-        if message.role == "run_summary":
-            raise OSError("injected summary write failure")
-        await append_async(self, message)
+    async def fail_finish(*args):
+        raise OSError("injected Run transaction failure")
 
-    monkeypatch.setattr(ChatSession, "append_async", fail_run_summary)
+    monkeypatch.setattr(runtime.chat_sessions, "finish_run", fail_finish)
 
     run = await build_chat_loop(runtime).start_run(
         "coder",
@@ -178,12 +174,14 @@ async def test_run_summary_write_failure_preserves_result_and_resolves_continuat
         internal=True,
         resume_process_restart=True,
     )
-    result = await run.wait()
+    with pytest.raises(OSError):
+        await run.wait()
 
-    assert run.status is RunStatus.COMPLETED
-    assert result.content == "Verified"
-    assert session.load_continuation_records() == []
-    assert all(message.role != "run_summary" for message in session.load())
+    assert run.status is RunStatus.FAILED
+    assert run.events[-1].payload["history_persisted"] is False
+    assert any(message.content == "Verified" for message in session.load())
+    assert session.load_continuation_records()
+    assert session.find_run_summary(run_id=run.id) is None
 
 
 @pytest.mark.asyncio

@@ -9,7 +9,12 @@ from typing import TYPE_CHECKING, Any
 from core.chat.errors import ChatSessionError
 from core.sessions import _store_codec, _store_timeline, _store_values
 from core.sessions._io import _encode_chat_history_cursor
-from core.sessions._types import JsonObject, SessionChatHistorySnapshot, SessionMessagePage
+from core.sessions._types import (
+    JsonObject,
+    SessionChatHistorySnapshot,
+    SessionMessagePage,
+    SessionReadBatch,
+)
 from core.sessions.errors import (
     SessionPageCursorError,
     SessionStoreCorruptError,
@@ -61,8 +66,8 @@ def _session_usage_from_connection(
           COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({input_estimated}) = 0
             AND (a.cache_read_tokens IS NOT NULL OR a.cache_write_tokens IS NOT NULL)
             THEN COALESCE(a.input_tokens, 0) ELSE 0 END), 0) AS cache_input_tokens
-        FROM messages AS m
-        JOIN assistant_messages AS a ON a.message_key = m.message_key
+        FROM history_records AS m
+        JOIN assistant_messages AS a ON a.message_key = m.source_key
         WHERE m.session_key = ?
         """,
         (session_key,),
@@ -107,7 +112,9 @@ def _active_message_page_from_connection(
         if str(state["generation_id"]) != expected_generation_id:
             raise SessionPageCursorError("before cursor is invalid")
         before_row = connection.execute(
-            "SELECT m.seq FROM messages AS m WHERE " + " AND ".join(clauses) + " AND m.seq = ?",
+            "SELECT m.seq FROM history_records AS m WHERE "
+            + " AND ".join(clauses)
+            + " AND m.seq = ?",
             (*params, before_sequence),
         ).fetchone()
         if before_row is None:
@@ -115,7 +122,7 @@ def _active_message_page_from_connection(
         cutoff = int(before_row["seq"])
     elif before_message_id is not None:
         before_row = connection.execute(
-            "SELECT m.seq FROM messages AS m WHERE "
+            "SELECT m.seq FROM history_records AS m WHERE "
             + " AND ".join(clauses)
             + " AND m.message_id = ? ORDER BY m.seq LIMIT 1",
             (*params, before_message_id),
@@ -138,43 +145,33 @@ def _active_message_page_from_connection(
         return [], False, frozenset(), None
 
     page_floor = int(rows[0]["seq"])
-    earlier = connection.execute(
-        "SELECT 1 FROM messages AS m WHERE " + " AND ".join(clauses) + " AND m.seq < ? LIMIT 1",
-        (*params, page_floor),
-    ).fetchone()
-    if limit is not None and complete_run_segment and earlier is not None:
-        previous_summary = connection.execute(
-            "SELECT m.seq FROM messages AS m WHERE "
-            + " AND ".join(clauses)
-            + " AND m.role = 'run_summary' AND m.seq < ? ORDER BY m.seq DESC LIMIT 1",
-            (*params, page_floor),
+    if limit is not None and complete_run_segment and rows[0]["owner_run_id"] is not None:
+        boundary = connection.execute(
+            "SELECT start_sequence FROM runs WHERE session_key=? AND run_id=?",
+            (session_key, rows[0]["owner_run_id"]),
         ).fetchone()
-        should_expand = previous_summary is not None or any(
-            str(row["role"]) == "run_summary" for row in rows
-        )
-        if should_expand:
-            segment_floor = 0 if previous_summary is None else int(previous_summary["seq"]) + 1
+        assert boundary is not None
+        if int(boundary[0]) < page_floor:
             rows = connection.execute(
                 _store_values._message_records_sql(
                     where=" AND ".join([*clauses, "m.seq >= ?", "m.seq < ?"]),
                     order_by="ORDER BY m.seq",
                 ),
-                (*params, segment_floor, cutoff),
+                (*params, int(boundary[0]), cutoff),
             ).fetchall()
-            # The Run boundary may land on an excluded Note or inactive Message.
-            # Cursors must anchor the first row accepted by the same visibility
-            # predicate so the next page can validate and resume from it.
             page_floor = int(rows[0]["seq"])
 
     has_more = (
         connection.execute(
-            "SELECT 1 FROM messages AS m WHERE " + " AND ".join(clauses) + " AND m.seq < ? LIMIT 1",
+            "SELECT 1 FROM history_records AS m WHERE "
+            + " AND ".join(clauses)
+            + " AND m.seq < ? LIMIT 1",
             (*params, page_floor),
         ).fetchone()
         is not None
     )
     latest_takeover = connection.execute(
-        "SELECT MAX(seq) FROM messages WHERE session_key = ? AND active = 1 "
+        "SELECT MAX(seq) FROM history_records WHERE session_key = ? AND active = 1 "
         "AND role = 'agent_takeover'",
         (session_key,),
     ).fetchone()[0]
@@ -221,9 +218,9 @@ def _context_usage_rows_from_connection(
     anchor = connection.execute(
         """
         SELECT m.seq
-        FROM messages AS m
-        LEFT JOIN assistant_messages AS a ON a.message_key = m.message_key
-        LEFT JOIN compaction_checkpoints AS c ON c.message_key = m.message_key
+        FROM history_records AS m
+        LEFT JOIN assistant_messages AS a ON a.message_key = m.source_key
+        LEFT JOIN compaction_checkpoints AS c ON c.snapshot_key = m.message_key
         WHERE m.session_key = ? AND m.active = 1
           AND ((m.role = 'assistant' AND a.usage_present = 1)
             OR (m.role = 'compaction_checkpoint' AND c.context_tokens_after IS NOT NULL))
@@ -275,7 +272,7 @@ def _history_record_filter(
         )
         AND NOT EXISTS (
           SELECT 1 FROM tool_calls AS visible_call
-          WHERE visible_call.message_key = m.message_key
+          WHERE visible_call.message_key = m.source_key
             AND visible_call.name <> ?
         )
       )
@@ -293,7 +290,7 @@ def _history_snapshot_is_current(
     if str(state["generation_id"]) != expected_generation_id:
         return False
     checkpoint = connection.execute(
-        "SELECT 1 FROM messages WHERE session_key = ? AND active = 1 "
+        "SELECT 1 FROM history_records WHERE session_key = ? AND active = 1 "
         "AND role = 'compaction_checkpoint' AND seq = ?",
         (state["session_key"], snapshot_sequence),
     ).fetchone()
@@ -321,7 +318,7 @@ def active_user_message_count(
         raise ChatSessionError("user Message count limit must be positive")
     state = _store_values._require_live(connection, address)
     row = connection.execute(
-        "SELECT COUNT(*) FROM (SELECT 1 FROM messages WHERE session_key = ? "
+        "SELECT COUNT(*) FROM (SELECT 1 FROM history_records WHERE session_key = ? "
         "AND active = 1 AND role = 'user' LIMIT ?)",
         (state["session_key"], limit),
     ).fetchone()
@@ -423,6 +420,9 @@ def chat_history_snapshot(
         after_cursor=_encode_chat_history_cursor(generation, through),
         incremental=incremental,
         has_newer=through < int(state["message_count"]),
+        runs=_store_timeline.page_runs(
+            connection, state, page_rows, through=through, incremental=incremental
+        ),
     )
 
 
@@ -434,7 +434,7 @@ def status_snapshot(
     facts = connection.execute(
         "SELECT MIN(CASE WHEN seq = 0 THEN timestamp END) AS first_message_at, "
         "SUM(CASE WHEN role = 'user' THEN 1 ELSE 0 END) AS user_count "
-        "FROM messages WHERE session_key = ?",
+        "FROM history_records WHERE session_key = ?",
         (session_key,),
     ).fetchone()
     latest_row = connection.execute(
@@ -465,7 +465,7 @@ def history_snapshot(
     session_key = int(state["session_key"])
     if snapshot_sequence is None:
         upper = connection.execute(
-            "SELECT MAX(seq) FROM messages WHERE session_key = ? AND active = 1 "
+            "SELECT MAX(seq) FROM history_records WHERE session_key = ? AND active = 1 "
             "AND role = 'compaction_checkpoint'",
             (session_key,),
         ).fetchone()[0]
@@ -481,7 +481,7 @@ def history_snapshot(
         return None
     rows = connection.execute(
         "SELECT seq, message_id, timestamp, COALESCE(content, '') AS summary "
-        "FROM messages WHERE session_key = ? AND active = 1 "
+        "FROM history_records WHERE session_key = ? AND active = 1 "
         "AND role = 'compaction_checkpoint' AND seq <= ? ORDER BY seq",
         (session_key, snapshot_sequence),
     ).fetchall()
@@ -577,7 +577,7 @@ def history_section_stats(
     for lower_sequence, upper_sequence in sections:
         row = connection.execute(
             "WITH eligible AS ("
-            "SELECT m.seq, m.timestamp FROM messages AS m "
+            "SELECT m.seq, m.timestamp FROM history_records AS m "
             f"{_store_values._MESSAGE_RECORD_JOINS} WHERE m.session_key = ? AND m.active = 1 "
             "AND m.seq > ? AND m.seq < ? AND " + record_filter + "), bounds AS ("
             "SELECT COUNT(*) AS eligible_count, MIN(seq) AS first_seq, "
@@ -623,7 +623,7 @@ def history_around(
         return None
     exists = (
         connection.execute(
-            "SELECT 1 FROM messages WHERE session_key = ? AND active = 1 "
+            "SELECT 1 FROM history_records WHERE session_key = ? AND active = 1 "
             "AND message_id = ? LIMIT 1",
             (state["session_key"], message_id),
         ).fetchone()
@@ -680,13 +680,11 @@ def reflection_runs(connection: sqlite3.Connection, address: SessionAddress) -> 
            WHERE value IN ('reflection', 'memory_reflection', 'skill_reflection')
            ORDER BY key LIMIT 1) AS run_kind
         FROM sessions AS s
-        JOIN messages AS m ON m.message_key = (
-          SELECT message_key FROM messages
-          WHERE session_key = s.session_key AND role = 'run_summary'
-            AND seq >= json_extract(s.fork_source_json, '$.message_count')
-          ORDER BY seq LIMIT 1
+        JOIN runs AS r ON r.run_key = (
+          SELECT run_key FROM runs
+          WHERE session_key=s.session_key AND status<>'running' AND origin_generation_id IS NULL
+          ORDER BY start_sequence,run_key LIMIT 1
         )
-        JOIN run_summaries AS r ON r.message_key = m.message_key
         WHERE s.status = 'live' AND s.project_id = ? AND s.agent_id = ?
           AND json_extract(s.fork_source_json, '$.session_id') = ?
           AND json_extract(s.fork_source_json, '$.agent_id') = ?
@@ -707,6 +705,20 @@ def reflection_runs(connection: sqlite3.Connection, address: SessionAddress) -> 
         ),
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def run_messages(
+    connection: sqlite3.Connection, address: SessionAddress, run_id: str
+) -> list[ChatMessage]:
+    state = _store_values._require_live(connection, address)
+    rows = connection.execute(
+        _store_values._message_records_sql(
+            where="m.session_key=? AND m.owner_run_id=? AND m.active=1",
+            order_by="ORDER BY m.seq",
+        ),
+        (state["session_key"], run_id),
+    ).fetchall()
+    return [_store_codec.message_from_row(row) for row in rows]
 
 
 def run_summary(
@@ -759,38 +771,31 @@ def run_result(
     ).fetchone()
     if summary_row is None:
         return None
-    summary_seq = int(summary_row["seq"])
     if require_latest:
-        later = connection.execute(
-            "SELECT 1 FROM messages WHERE session_key = ? AND seq > ? "
-            "AND role IN ('user', 'assistant', 'tool', 'error') LIMIT 1",
-            (state["session_key"], summary_seq),
+        latest = connection.execute(
+            "SELECT run_id FROM runs WHERE session_key=? ORDER BY run_key DESC LIMIT 1",
+            (state["session_key"],),
         ).fetchone()
-        if later is not None:
+        if latest is None or latest["run_id"] != summary_row["run_id"]:
             return None
-    previous = connection.execute(
-        "SELECT MAX(seq) FROM messages WHERE session_key = ? AND role = 'run_summary' AND seq < ?",
-        (state["session_key"], summary_seq),
-    ).fetchone()[0]
-    previous_seq = -1 if previous is None else int(previous)
     assistant_row = connection.execute(
         _store_values._message_records_sql(
             where=(
-                "m.session_key = ? AND m.seq > ? AND m.seq < ? "
+                "m.session_key = ? AND m.owner_run_id = ? "
                 "AND m.role = 'assistant' AND (NULLIF(m.content, '') IS NOT NULL "
                 "OR (m.content_blocks_json IS NOT NULL "
                 "AND json_array_length(m.content_blocks_json) > 0))"
             ),
             order_by="ORDER BY m.seq DESC LIMIT 1",
         ),
-        (state["session_key"], previous_seq, summary_seq),
+        (state["session_key"], summary_row["run_id"]),
     ).fetchone()
     latest_tool = connection.execute(
-        "SELECT tc.name FROM messages AS m "
-        "JOIN tool_calls AS tc ON tc.message_key = m.message_key "
-        "WHERE m.session_key = ? AND m.seq > ? AND m.seq < ? "
+        "SELECT tc.name FROM history_records AS m "
+        "JOIN tool_calls AS tc ON tc.message_key = m.source_key "
+        "WHERE m.session_key = ? AND m.owner_run_id = ? "
         "ORDER BY m.seq DESC, tc.ordinal DESC LIMIT 1",
-        (state["session_key"], previous_seq, summary_seq),
+        (state["session_key"], summary_row["run_id"]),
     ).fetchone()
     return (
         None if assistant_row is None else _store_codec.message_from_row(assistant_row),
@@ -801,8 +806,8 @@ def run_result(
 
 def messages_since(
     connection: sqlite3.Connection, address: SessionAddress, cursor: SessionReadCursor | None
-) -> tuple[list[ChatMessage], SessionReadCursor] | None:
-    from core.sessions._types import SessionReadCursor
+) -> SessionReadBatch | None:
+    from core.sessions._types import SessionReadBatch, SessionReadCursor
 
     state = _store_values._require_live(connection, address)
     count = int(state["message_count"])
@@ -812,11 +817,13 @@ def messages_since(
     if cursor is not None:
         if cursor.generation_id != generation_id or not 0 <= cursor.next_seq <= count:
             return None
+        if cursor.next_seq < int(state["history_reset_sequence"]):
+            return None
         if cursor.next_seq == 0:
             anchor_id = None
         else:
             anchor = connection.execute(
-                "SELECT message_id FROM messages WHERE session_key = ? AND seq = ?",
+                "SELECT message_id FROM history_records WHERE session_key = ? AND seq = ?",
                 (state["session_key"], cursor.next_seq - 1),
             ).fetchone()
             anchor_id = None if anchor is None else anchor["message_id"]
@@ -830,9 +837,11 @@ def messages_since(
         ),
         (state["session_key"], start),
     ).fetchall()
-    return (
-        [_store_codec.message_from_row(row) for row in rows],
+    messages = tuple(_store_codec.message_from_row(row) for row in rows)
+    return SessionReadBatch(
+        messages,
         SessionReadCursor(generation_id, revision, count, count, last_id),
+        tuple(message for row, message in zip(rows, messages, strict=True) if row["active"]),
     )
 
 
@@ -843,7 +852,7 @@ def bookend_timestamps(
     if int(state["message_count"]) == 0:
         return None
     first = connection.execute(
-        "SELECT timestamp FROM messages WHERE session_key = ? AND seq = 0",
+        "SELECT timestamp FROM history_records WHERE session_key = ? AND seq = 0",
         (state["session_key"],),
     ).fetchone()
     if first is None or state["last_message_at"] is None:
@@ -870,7 +879,7 @@ def recall_context(
     no context rather than borrowing a different conversation block.
     """
     anchor = connection.execute(
-        "SELECT m.session_key, m.seq, m.role FROM messages m JOIN sessions s "
+        "SELECT m.session_key, m.seq, m.role FROM history_records m JOIN sessions s "
         "ON s.session_key = m.session_key WHERE s.project_id = ? AND s.agent_id = ? "
         "AND s.session_id = ? AND s.status = 'live' AND m.active = 1 "
         "AND m.message_id = ? ORDER BY m.seq DESC LIMIT 1",
@@ -880,9 +889,9 @@ def recall_context(
         return []
     key, seq = int(anchor["session_key"]), int(anchor["seq"])
     bounds = connection.execute(
-        "SELECT (SELECT MAX(seq) FROM messages WHERE session_key = ? AND active = 1 "
+        "SELECT (SELECT MAX(seq) FROM history_records WHERE session_key = ? AND active = 1 "
         "AND role = 'user' AND seq <= ?) AS first, "
-        "(SELECT MIN(seq) FROM messages WHERE session_key = ? AND active = 1 "
+        "(SELECT MIN(seq) FROM history_records WHERE session_key = ? AND active = 1 "
         "AND role = 'user' AND seq > ?) AS following",
         (key, seq, key, seq),
     ).fetchone()
@@ -894,8 +903,8 @@ def recall_context(
     rows = connection.execute(
         "SELECT seq, message_id, role, timestamp, "
         "substr(COALESCE(content, content_search, ''), 1, 801) AS text "
-        "FROM messages WHERE session_key = ? AND active = 1 AND seq != ? AND "
-        "(seq = ? OR seq = (SELECT MAX(seq) FROM messages WHERE session_key = ? "
+        "FROM history_records WHERE session_key = ? AND active = 1 AND seq != ? AND "
+        "(seq = ? OR seq = (SELECT MAX(seq) FROM history_records WHERE session_key = ? "
         "AND active = 1 AND role = 'assistant' AND seq > ? AND (? IS NULL OR seq < ?) "
         "AND length(COALESCE(content, content_search, '')) > 0)) ORDER BY seq",
         (key, seq, first, key, first, following, following),

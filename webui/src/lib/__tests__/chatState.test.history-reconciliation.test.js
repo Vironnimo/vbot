@@ -26,7 +26,12 @@ describe('chat state helpers', () => {
         role: 'assistant',
         content: 'Earlier saved output',
       };
-      const saved = { id: 'saved', role: 'assistant', content: 'Saved output' };
+      const saved = {
+        history_run_id: 'run-one',
+        id: 'saved',
+        role: 'assistant',
+        content: 'Saved output',
+      };
       startRun(session, { run_id: 'run-one' });
       appendRunEvent(session, {
         run_id: 'run-one',
@@ -114,6 +119,7 @@ describe('chat state helpers', () => {
       'session-one',
     );
     const assistant = {
+      history_run_id: 'run-one',
       id: 'saved',
       role: 'assistant',
       content: 'Inspecting',
@@ -178,8 +184,18 @@ describe('chat state helpers', () => {
       'alpha',
       'session-one',
     );
-    const first = { id: 'first', role: 'assistant', content: 'First step' };
-    const second = { id: 'second', role: 'assistant', content: 'Second step' };
+    const first = {
+      history_run_id: 'run-one',
+      id: 'first',
+      role: 'assistant',
+      content: 'First step',
+    };
+    const second = {
+      history_run_id: 'run-one',
+      id: 'second',
+      role: 'assistant',
+      content: 'Second step',
+    };
     loadHistory(session, [first]);
     startRun(session, { run_id: 'run-one' });
     appendRunEvent(session, {
@@ -214,16 +230,21 @@ describe('chat state helpers', () => {
         ),
       ).toBe(1);
 
-    loadHistory(session, [
-      first,
-      second,
-      {
-        id: 'summary',
-        role: 'run_summary',
-        run_id: 'run-one',
-        status: 'completed',
-      },
-    ]);
+    loadHistory(
+      session,
+      [
+        first,
+        second,
+        {
+          history_run_id: 'run-one',
+          id: 'summary',
+          role: 'run_summary',
+          run_id: 'run-one',
+          status: 'completed',
+        },
+      ],
+      { runs: [{ run_id: 'run-one', status: 'completed', complete: true }] },
+    );
 
     for (const message of [first, second])
       expect(
@@ -241,16 +262,19 @@ describe('chat state helpers', () => {
       'session-one',
     );
     const first = {
+      history_run_id: 'run-one',
       id: 'first',
       role: 'assistant',
       content: 'Before compaction',
     };
     const checkpoint = {
+      history_run_id: 'run-one',
       id: 'checkpoint',
       role: 'compaction_checkpoint',
       content: 'Checkpoint',
     };
     const second = {
+      history_run_id: 'run-one',
       id: 'second',
       role: 'assistant',
       content: 'After compaction',
@@ -375,8 +399,14 @@ describe('chat state helpers', () => {
     });
 
     loadHistory(sessionState, [
-      { id: 'user-one', role: 'user', content: 'Inspect the file' },
       {
+        history_run_id: 'run-one',
+        id: 'user-one',
+        role: 'user',
+        content: 'Inspect the file',
+      },
+      {
+        history_run_id: 'run-one',
         id: 'assistant-one',
         role: 'assistant',
         content: 'The file says A.',
@@ -604,22 +634,37 @@ describe('chat state helpers', () => {
       'session-one',
     );
 
-    loadHistory(sessionState, [
-      { id: 'user-one', role: 'user', content: 'Inspect the evidence' },
+    loadHistory(
+      sessionState,
+      [
+        {
+          history_run_id: 'run-cancelled',
+          id: 'user-one',
+          role: 'user',
+          content: 'Inspect the evidence',
+        },
+        {
+          history_run_id: 'run-cancelled',
+          id: 'assistant-reasoning',
+          role: 'assistant',
+          content: null,
+          reasoning: 'Inspect the evidence.',
+          interrupted: true,
+        },
+        {
+          history_run_id: 'run-cancelled',
+          id: 'summary-one',
+          role: 'run_summary',
+          run_id: 'run-cancelled',
+          status: 'cancelled',
+        },
+      ],
       {
-        id: 'assistant-reasoning',
-        role: 'assistant',
-        content: null,
-        reasoning: 'Inspect the evidence.',
-        interrupted: true,
+        runs: [
+          { run_id: 'run-cancelled', status: 'cancelled', complete: true },
+        ],
       },
-      {
-        id: 'summary-one',
-        role: 'run_summary',
-        run_id: 'run-cancelled',
-        status: 'cancelled',
-      },
-    ]);
+    );
 
     const assistantRun = visibleTimelineItemsForRender(sessionState).find(
       (item) => item.type === 'assistant_run',

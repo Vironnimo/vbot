@@ -12,41 +12,12 @@ import {
 import { appendLiveRunEvent } from './live.js';
 import { markPendingToolsCancelled } from './runChildren.js';
 
-// Only a canonical terminal record proves that the complete Run is in History.
-// Stable output IDs identify individual Messages, never completeness of a Run.
-export function runProjectionPersistedInHistory(
-  runEvents,
-  messages,
-  runId,
-  generation = '',
-) {
-  if (!runId) return false;
-  if (
-    (messages ?? []).some(
-      (message) => message.role === 'run_summary' && message.run_id === runId,
-    )
-  )
-    return true;
-  const checkpoint = (runEvents ?? []).find(
-    (event) => event.run_id === runId && event.type === 'run_completed',
-  )?.payload?.history_checkpoint;
-  return Boolean(
-    checkpoint &&
-    generation === checkpoint.generation_id &&
-    (messages ?? []).some(
-      (message) =>
-        message.role === 'compaction_checkpoint' &&
-        message.history_sequence === checkpoint.sequence,
-    ),
-  );
+// Completeness is an explicit database read fact from the same History snapshot.
+export function runProjectionPersistedInHistory(runs, runId) {
+  return Boolean(runId && runs?.[runId]?.complete);
 }
 
-export function pruneRunEventsPersistedInHistory(
-  runEvents,
-  messages,
-  activeRunId,
-  generation = '',
-) {
+export function pruneRunEventsPersistedInHistory(runEvents, runs, activeRunId) {
   const retired = new Set();
   const checked = new Set();
   for (const event of runEvents ?? []) {
@@ -55,12 +26,7 @@ export function pruneRunEventsPersistedInHistory(
     if (
       event.run_id !== activeRunId &&
       !retired.has(event.run_id) &&
-      runProjectionPersistedInHistory(
-        runEvents,
-        messages,
-        event.run_id,
-        generation,
-      )
+      runProjectionPersistedInHistory(runs, event.run_id)
     ) {
       retired.add(event.run_id);
     }
@@ -70,11 +36,7 @@ export function pruneRunEventsPersistedInHistory(
     : (runEvents ?? []);
 }
 
-export function reconcileTimeline(
-  sessionState,
-  liveItems,
-  runEvents = sessionState.runEvents,
-) {
+export function reconcileTimeline(sessionState, liveItems) {
   const messages = sessionState.messages ?? [];
   const retired = new Set(
     liveItems
@@ -83,12 +45,7 @@ export function reconcileTimeline(
           item.type === 'assistant_run' &&
           (item.status !== 'running' ||
             sessionState.currentRun?.runId !== item.runId) &&
-          runProjectionPersistedInHistory(
-            runEvents,
-            messages,
-            item.runId,
-            sessionState.historyGeneration,
-          ),
+          runProjectionPersistedInHistory(sessionState.historyRuns, item.runId),
       )
       .map((item) => item.runId),
   );
@@ -101,17 +58,7 @@ export function reconcileTimeline(
       .map((item) => [item.runId, item]),
   );
 
-  // A stable event also carries an exact Message reference. This joins errors
-  // and checkpoints without guessing from text, timestamps, or adjacent roles.
-  const eventOwners = new Map(
-    (runEvents ?? [])
-      .filter((event) => event.payload?.message?.id)
-      .map((event) => [event.payload.message.id, event.run_id]),
-  );
-  const owner = (message) =>
-    Object.hasOwn(message, 'history_run_id')
-      ? message.history_run_id
-      : eventOwners.get(message.id);
+  const owner = (message) => message.history_run_id;
   const owned = new Map();
   for (const message of messages) {
     const runId = owner(message);
@@ -218,7 +165,8 @@ function mergeRun(messages, liveRun) {
     // before it. Its preceding text draft belongs to that exact Message even
     // when a sparse replay omitted the stable Assistant event.
     if (child.type === 'tool_call')
-      phaseMessageId = toolMessages.get(child.toolCallId) ?? null;
+      phaseMessageId =
+        child.assistantMessageId ?? toolMessages.get(child.toolCallId) ?? null;
     else if (child.type === 'compaction_separator') phaseMessageId = null;
     else
       phaseMessageId =
@@ -260,7 +208,13 @@ function mergeRun(messages, liveRun) {
 function childrenMatch(saved, live, phaseMessageId) {
   if (saved.type !== live.type) return false;
   if (saved.type === 'tool_call')
-    return saved.toolCallId && saved.toolCallId === live.toolCallId;
+    return (
+      saved.toolCallId &&
+      saved.toolCallId === live.toolCallId &&
+      (!saved.assistantMessageId ||
+        !live.assistantMessageId ||
+        saved.assistantMessageId === live.assistantMessageId)
+    );
   if (saved.type === 'compaction_separator')
     return saved.message?.id && saved.message.id === live.message?.id;
   const ids = new Set(

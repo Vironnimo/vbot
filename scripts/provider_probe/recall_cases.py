@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from core.chat import ChatMessage
+from core.chat.messages import ToolCall
 from core.model_tasks import EmbeddingResult, EmbeddingSpaceIdentity
 from core.sessions import ChatSessionManager
 from core.storage.layout import initialize_data_directory
@@ -204,6 +205,12 @@ def seed_sessions(root: Path) -> ChatSessionManager:
         ],
         "session-diagnostic": [
             ChatMessage.user("Fuehre die Aurora-Diagnose aus.", timestamp=stamp),
+            ChatMessage.assistant(
+                model="fixture",
+                content=None,
+                timestamp=stamp,
+                tool_calls=[ToolCall(id="diagnostic", name="bash")],
+            ),
             ChatMessage.tool(
                 tool_call_id="diagnostic",
                 name="bash",
@@ -217,6 +224,12 @@ def seed_sessions(root: Path) -> ChatSessionManager:
         "session-transcript": [
             ChatMessage.user("Erste Frage: Welche Farbe?", timestamp=stamp),
             ChatMessage.assistant(model="fixture", content="Blau.", timestamp=stamp),
+            ChatMessage.assistant(
+                model="fixture",
+                content=None,
+                timestamp=stamp,
+                tool_calls=[ToolCall(id="color", name="bash")],
+            ),
             ChatMessage.tool(
                 tool_call_id="color",
                 name="bash",

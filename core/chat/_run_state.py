@@ -55,7 +55,6 @@ from core.sessions import (
     SessionAddress,
     SessionReadCursor,
     TemporarySessionBinding,
-    active_session_messages,
     editable_session_message_index,
     latest_project_tool_context_id,
 )
@@ -210,19 +209,20 @@ class _SessionSnapshot:
 
     messages: list[ChatMessage]
     cursor: SessionReadCursor
+    active_lineage: list[ChatMessage]
     pending_edit_message_id: str | None = None
 
     @property
     def active_messages(self) -> list[ChatMessage]:
         """Return current lineage, including an admitted edit not yet persisted."""
-        active = active_session_messages(self.messages)
+        active = self.active_lineage
         if self.pending_edit_message_id is None:
             return active
         target_index = editable_session_message_index(active, self.pending_edit_message_id)
         return active[:target_index]
 
     def begin_edit(self, message_id: str) -> None:
-        editable_session_message_index(active_session_messages(self.messages), message_id)
+        editable_session_message_index(self.active_lineage, message_id)
         self.pending_edit_message_id = message_id
 
     def commit_edit(self) -> None:
@@ -233,7 +233,11 @@ class _SessionSnapshot:
         batch = await session.load_since_async()
         if batch is None:
             raise AssertionError("A full Session snapshot must always produce a cursor")
-        return cls(messages=list(batch.messages), cursor=batch.cursor)
+        return cls(
+            messages=list(batch.messages),
+            cursor=batch.cursor,
+            active_lineage=list(batch.active_messages),
+        )
 
     async def refresh(self, session: ChatSession) -> None:
         batch = await session.load_since_async(self.cursor)
@@ -241,8 +245,10 @@ class _SessionSnapshot:
             replacement = await self.load(session)
             self.messages = replacement.messages
             self.cursor = replacement.cursor
+            self.active_lineage = replacement.active_lineage
             return
         self.messages.extend(batch.messages)
+        self.active_lineage.extend(batch.active_messages)
         self.cursor = batch.cursor
 
 

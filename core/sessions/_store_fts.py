@@ -119,7 +119,7 @@ def _fts_coverage_ok(
     missing_base = connection.execute(
         """
         SELECT 1
-        FROM messages AS m
+        FROM history_records AS m
         LEFT JOIN messages_fts_docsize AS indexed ON indexed.id = m.message_key
         WHERE (m.searchable = 1 AND m.active = 1 AND indexed.id IS NULL)
            OR ((m.searchable = 0 OR m.active = 0) AND indexed.id IS NOT NULL)
@@ -131,7 +131,7 @@ def _fts_coverage_ok(
     invalid_trigram = connection.execute(
         """
         SELECT 1
-        FROM messages AS m
+        FROM history_records AS m
         LEFT JOIN messages_fts_trigram_docsize AS indexed ON indexed.id = m.message_key
         WHERE (m.searchable = 1 AND m.active = 1 AND m.role <> 'tool' AND indexed.id IS NULL)
            OR ((m.searchable = 0 OR m.active = 0 OR m.role = 'tool') AND indexed.id IS NOT NULL)
@@ -247,7 +247,9 @@ def _ensure_fts_schema(connection: sqlite3.Connection) -> None:
         _set_fts_meta(connection, FTS_STALE_KEY, "rebuilding")
         _set_fts_meta(connection, FTS_DEGRADED_REASON_KEY, "FTS rebuild in progress")
         target = int(
-            connection.execute("SELECT COALESCE(MAX(message_key), 0) FROM messages").fetchone()[0]
+            connection.execute(
+                "SELECT COALESCE(MAX(message_key), 0) FROM history_records"
+            ).fetchone()[0]
         )
         _set_fts_meta(connection, FTS_TARGET_HIGH_WATER_KEY, str(target))
         if target == 0:
@@ -289,7 +291,9 @@ def _backfill_fts(connection: sqlite3.Connection) -> None:
     except ValueError:
         completed = 0
     target = int(
-        connection.execute("SELECT COALESCE(MAX(message_key), 0) FROM messages").fetchone()[0]
+        connection.execute("SELECT COALESCE(MAX(message_key), 0) FROM history_records").fetchone()[
+            0
+        ]
     )
     _set_fts_meta(connection, FTS_TARGET_HIGH_WATER_KEY, str(target))
     _set_fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY, str(completed))
@@ -298,9 +302,9 @@ def _backfill_fts(connection: sqlite3.Connection) -> None:
         target = max(
             target,
             int(
-                connection.execute("SELECT COALESCE(MAX(message_key), 0) FROM messages").fetchone()[
-                    0
-                ]
+                connection.execute(
+                    "SELECT COALESCE(MAX(message_key), 0) FROM history_records"
+                ).fetchone()[0]
             ),
         )
         _set_fts_meta(connection, FTS_TARGET_HIGH_WATER_KEY, str(target))
@@ -312,7 +316,7 @@ def _backfill_fts(connection: sqlite3.Connection) -> None:
                 SELECT m.message_key, m.role, m.searchable, m.active,
                        source.content, source.content_search, source.reasoning,
                        source.name, source.error_kind, source.tool_calls
-                FROM messages AS m
+                FROM history_records AS m
                 LEFT JOIN messages_fts_source AS source
                   ON source.message_key = m.message_key
                 WHERE m.message_key > ? AND m.message_key <= ?
@@ -380,7 +384,9 @@ def _finish_fts_rebuild(connection: sqlite3.Connection) -> None:
         connection.commit()
         return
     final_target = int(
-        connection.execute("SELECT COALESCE(MAX(message_key), 0) FROM messages").fetchone()[0]
+        connection.execute("SELECT COALESCE(MAX(message_key), 0) FROM history_records").fetchone()[
+            0
+        ]
     )
     _set_fts_meta(connection, FTS_TARGET_HIGH_WATER_KEY, str(final_target))
     _set_fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY, str(final_target))
@@ -405,7 +411,9 @@ def _mark_fts_write(connection: sqlite3.Connection) -> None:
     if not _fts_table_exists(connection) or _fts_meta(connection, FTS_STALE_KEY) is not None:
         return
     target = int(
-        connection.execute("SELECT COALESCE(MAX(message_key), 0) FROM messages").fetchone()[0]
+        connection.execute("SELECT COALESCE(MAX(message_key), 0) FROM history_records").fetchone()[
+            0
+        ]
     )
     _set_fts_meta(connection, FTS_TARGET_HIGH_WATER_KEY, str(target))
     _set_fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY, str(target))
@@ -416,7 +424,7 @@ def _insert_fts_message(connection: sqlite3.Connection, message_key: int) -> Non
     if not _fts_table_exists(connection) or _fts_meta(connection, FTS_STALE_KEY) is not None:
         return
     state = connection.execute(
-        "SELECT role, searchable, active FROM messages WHERE message_key = ?", (message_key,)
+        "SELECT role, searchable, active FROM history_records WHERE message_key = ?", (message_key,)
     ).fetchone()
     if state is None or not bool(state["searchable"]) or not bool(state["active"]):
         return
@@ -457,7 +465,7 @@ def _insert_fts_session(connection: sqlite3.Connection, session_key: int) -> Non
         SELECT source.message_key, source.content, source.content_search, source.reasoning,
                source.name, source.error_kind, source.tool_calls
         FROM messages_fts_source AS source
-        JOIN messages AS message ON message.message_key = source.message_key
+        JOIN history_records AS message ON message.message_key = source.message_key
         WHERE message.session_key = ? AND message.searchable = 1 AND message.active = 1
         """,
         (session_key,),
@@ -471,7 +479,7 @@ def _insert_fts_session(connection: sqlite3.Connection, session_key: int) -> Non
             SELECT source.message_key, source.content, source.content_search, source.name,
                    source.error_kind, source.tool_calls
             FROM messages_fts_trigram_source AS source
-            JOIN messages AS message ON message.message_key = source.message_key
+            JOIN history_records AS message ON message.message_key = source.message_key
             WHERE message.session_key = ? AND message.searchable = 1 AND message.active = 1
               AND message.role <> 'tool'
             """,
@@ -506,3 +514,12 @@ def _delete_fts_message(connection: sqlite3.Connection, message_key: int) -> Non
             """,
             (message_key,),
         )
+
+
+def _delete_fts_session(connection: sqlite3.Connection, session_key: int) -> None:
+    rows = connection.execute(
+        "SELECT message_key FROM history_records WHERE session_key=? AND active=1 AND searchable=1",
+        (session_key,),
+    ).fetchall()
+    for row in rows:
+        _delete_fts_message(connection, int(row[0]))

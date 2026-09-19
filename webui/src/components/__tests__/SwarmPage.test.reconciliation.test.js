@@ -149,10 +149,22 @@ it('retains older Session pages during invalidation and reconciles them on compl
     timestamp: '2026-09-09T10:00:00+00:00',
   });
   bridge.readHistory.mockImplementation(async (_swarm, _participant, query) => {
+    if (query.after === 'after-six')
+      return {
+        messages: [entry(6)],
+        incremental: true,
+        has_newer: false,
+        next_after: 'after-seven',
+        history_generation: 'generation',
+        runs: [],
+      };
     const first =
       query.before === 'oldest' ? 0 : query.before === 'middle' ? 2 : 4;
     return {
       messages: [entry(first), entry(first + 1)],
+      history_generation: 'generation',
+      next_after: 'after-six',
+      runs: [],
       has_more: first > 0,
       next_before: first === 4 ? 'middle' : first === 2 ? 'oldest' : null,
     };
@@ -191,10 +203,14 @@ it('retains older Session pages during invalidation and reconciles them on compl
     run_id: 'run-paged',
     sequence: 1,
   });
-  await vi.waitFor(() => expect(bridge.readHistory).toHaveBeenCalledTimes(6));
+  await vi.waitFor(() => expect(bridge.readHistory).toHaveBeenCalledTimes(4));
+  expect(bridge.readHistory).toHaveBeenLastCalledWith('swr-a', 'prt-a', {
+    limit: 100,
+    after: 'after-six',
+  });
   await tick();
   const text = document.querySelector('.history').textContent;
-  const positions = Array.from({ length: 6 }, (_, n) =>
+  const positions = Array.from({ length: 7 }, (_, n) =>
     text.indexOf(`history-sentinel-${n}`),
   );
   expect(positions.every((value) => value >= 0)).toBe(true);

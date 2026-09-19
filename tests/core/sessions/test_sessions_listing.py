@@ -71,7 +71,7 @@ async def test_reflection_runs_restore_only_own_review_summaries(
             },
         )
 
-    source.append(summary("inherited", "completed"))
+    source.start_run("inherited").append(summary("inherited", "completed"))
     fork = await manager.fork(
         source.address,
         target_project_id=project_id,
@@ -80,10 +80,10 @@ async def test_reflection_runs_restore_only_own_review_summaries(
     manager.record_run_kind(fork.address, RunKind.MEMORY_REFLECTION)
     # An admitted fork with only copied summaries must not fabricate a result.
     assert source.reflection_runs() == []
-    fork.append(summary("review", status))
+    fork.start_run("review").append(summary("review", status))
     # Later user work inside the review Session must not replace its review result.
     manager.record_run_kind(fork.address, RunKind.USER)
-    fork.append(summary("later-user", "completed"))
+    fork.start_run("later-user").append(summary("later-user", "completed"))
     other = manager.create("coder", session_id="other", project_id=project_id)
     other_fork = await manager.fork(
         other.address,
@@ -91,7 +91,7 @@ async def test_reflection_runs_restore_only_own_review_summaries(
         strip_meta_keys=SESSION_FORK_ALWAYS_STRIP_META_KEYS,
     )
     manager.record_run_kind(other_fork.address, RunKind.SKILL_REFLECTION)
-    other_fork.append(summary("other-review", "completed"))
+    other_fork.start_run("other-review").append(summary("other-review", "completed"))
     other_scope = manager.create("coder", session_id="source", project_id="different-project")
 
     def forbid_history(*args, **kwargs):

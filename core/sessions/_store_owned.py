@@ -122,6 +122,11 @@ def delete_temporary_group(
     """Delete only this owner's bound participant generations in one transaction."""
 
     def operation(connection: sqlite3.Connection) -> int:
+        for row in connection.execute(
+            "SELECT session_key FROM temporary_session_bindings WHERE owner_name=? AND group_id=?",
+            (owner_name, group_id),
+        ).fetchall():
+            _store_fts._delete_fts_session(connection, int(row[0]))
         return connection.execute(
             "DELETE FROM sessions WHERE session_key IN ("
             "SELECT session_key FROM temporary_session_bindings "
@@ -161,6 +166,8 @@ def append_messages_with_receipts(
     messages: Sequence[ChatMessage],
     receipts: Sequence[tuple[int, str, str, str, str]],
     deduplicate_carrier: bool = False,
+    run_id: str | None = None,
+    assistant_message_id: str | None = None,
 ) -> None:
     if not messages or type(deduplicate_carrier) is not bool:
         raise ChatSessionError("delivery receipt carriers are invalid")
@@ -234,7 +241,12 @@ def append_messages_with_receipts(
         new_messages = [] if deduplicate_carrier and existing_matching_receipt else list(messages)
         for index, message in enumerate(new_messages):
             _store_codec._insert_message(
-                connection, int(state["session_key"]), next_seq + index, message
+                connection,
+                int(state["session_key"]),
+                next_seq + index,
+                message,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
             )
         for carrier_index, receipt_id, content_hash, effect_kind, carrier_kind in new_receipts:
             connection.execute(
@@ -384,16 +396,11 @@ def owned_runs(
     values.append(limit)
     rows = connection.execute(
         "SELECT o.*, s.project_id, s.agent_id, s.session_id, "
-        "(SELECT rs.status FROM run_summaries rs JOIN messages m "
-        "ON m.message_key = rs.message_key WHERE m.session_key = o.session_key "
-        "AND rs.run_id = o.run_id AND m.seq >= o.start_sequence "
-        "ORDER BY m.seq DESC LIMIT 1) AS terminal_status, "
-        "(SELECT m.seq FROM run_summaries rs JOIN messages m "
-        "ON m.message_key = rs.message_key WHERE m.session_key = o.session_key "
-        "AND rs.run_id = o.run_id AND m.seq >= o.start_sequence "
-        "ORDER BY m.seq DESC LIMIT 1) AS terminal_sequence "
-        "FROM run_execution_owners o JOIN sessions s ON s.session_key = o.session_key "
-        "AND s.generation_id = o.generation_id WHERE "
+        "CASE WHEN r.status='running' THEN NULL ELSE r.status END AS terminal_status, "
+        "r.terminal_sequence AS terminal_sequence "
+        "FROM run_execution_owners o JOIN sessions s ON s.session_key=o.session_key "
+        "AND s.generation_id=o.generation_id JOIN runs r "
+        "ON r.session_key=o.session_key AND r.run_id=o.run_id WHERE "
         + " AND ".join(clauses)
         + " ORDER BY o.record_key LIMIT ?",
         values,
@@ -415,10 +422,10 @@ def run_start_boundaries(
     for address in unique:
         values.extend((address.project_id or "", address.agent_id, address.session_id))
     rows = connection.execute(
-        "SELECT s.project_id,s.agent_id,s.session_id,r.generation_id,r.run_id,r.start_sequence "
-        "FROM run_execution_starts r JOIN sessions s ON s.session_key=r.session_key "
-        "AND s.generation_id=r.generation_id WHERE " + clauses + " "
-        "ORDER BY s.project_id,s.agent_id,s.session_id,r.start_sequence,r.record_key",
+        "SELECT s.project_id,s.agent_id,s.session_id,s.generation_id,r.run_id,r.start_sequence "
+        "FROM runs r JOIN sessions s ON s.session_key=r.session_key "
+        "WHERE " + clauses + " "
+        "ORDER BY s.project_id,s.agent_id,s.session_id,r.start_sequence,r.run_key",
         values,
     ).fetchall()
     return cast(list[sqlite3.Row], rows)
@@ -428,17 +435,17 @@ def _record_run_start(
     connection: sqlite3.Connection, state: sqlite3.Row, run_id: str, error: str
 ) -> None:
     existing = connection.execute(
-        "SELECT generation_id,start_sequence FROM run_execution_starts "
-        "WHERE session_key=? AND run_id=?",
+        "SELECT start_sequence,status,origin_generation_id FROM runs WHERE session_key = ? AND run_id = ?",
         (state["session_key"], run_id),
     ).fetchone()
-    expected = (state["generation_id"], state["message_count"])
     if existing is not None:
-        if tuple(existing) != expected:
-            raise ChatSessionError(error)
+        if existing["status"] != "running" or existing["origin_generation_id"] is not None:
+            raise ChatSessionError("A settled or inherited Run cannot be admitted again")
         return
+    from datetime import UTC, datetime
+
     connection.execute(
-        "INSERT INTO run_execution_starts(session_key,generation_id,run_id,start_sequence) "
-        "VALUES(?,?,?,?)",
-        (state["session_key"], state["generation_id"], run_id, state["message_count"]),
+        "INSERT INTO runs(session_key, run_id, start_sequence, status, started_at) "
+        "VALUES (?, ?, ?, 'running', ?)",
+        (state["session_key"], run_id, state["message_count"], datetime.now(UTC).isoformat()),
     )

@@ -76,7 +76,7 @@ def descriptor_sources(
                 _store_values._message_records_sql(
                     where=(
                         f"m.session_key IN ({key_placeholders}) AND m.role = 'user' "
-                        "AND m.seq = (SELECT MIN(first.seq) FROM messages AS first "
+                        "AND m.seq = (SELECT MIN(first.seq) FROM history_records AS first "
                         "WHERE first.session_key = m.session_key AND first.role = 'user')"
                     ),
                     order_by="ORDER BY m.session_key",
@@ -266,7 +266,7 @@ def session_ids_with_messages(
         params.append(until.isoformat())
     rows = connection.execute(
         "SELECT DISTINCT s.session_id FROM sessions AS s "
-        "JOIN messages AS m ON m.session_key = s.session_key WHERE " + " AND ".join(clauses),
+        "JOIN history_records AS m ON m.session_key = s.session_key WHERE " + " AND ".join(clauses),
         params,
     ).fetchall()
     return {str(row["session_id"]) for row in rows}

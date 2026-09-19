@@ -128,7 +128,6 @@ class TestAgentTakeoverMessage:
             ("name", "get_weather"),
             ("error_kind", "provider_error"),
             ("projection", []),
-            ("run_id", "run-1"),
             ("status", "completed"),
         ],
     )

@@ -49,6 +49,7 @@ from core.sessions._types import (
     SessionListCursor,
     SessionListFilters,
     SessionListPage,
+    SessionRunCompletion,
     TemporarySessionBinding,
 )
 from core.sessions.errors import FtsHealth
@@ -58,6 +59,7 @@ from core.settings import is_valid_project_id
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
+    from core.runs import Run
 
 
 class ChatSessionManager:
@@ -251,6 +253,40 @@ class ChatSessionManager:
                 metadata[SESSION_RUN_KINDS_META_KEY] = [*values, run_kind.value]
 
         self._store.mutate_metadata(address, update)
+
+    def recover_interrupted_runs(self) -> None:
+        self._store.recover_interrupted_runs()
+
+    async def start_run(self, run: Run) -> None:
+        address = SessionAddress(
+            project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
+        )
+        await _run_session_io(
+            lambda: self._store.start_run(
+                address,
+                run_id=run.id,
+                work_id=run.work_id,
+                run_kind=run.run_kind.value,
+                contributes_to_activity=run.contributes_to_agent_activity,
+                started_at=run.created_at,
+            )
+        )
+
+    async def finish_run(self, run: Run, status: str, payload: JsonObject) -> JsonObject:
+        address = SessionAddress(
+            project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
+        )
+        completion = SessionRunCompletion(
+            run_id=run.id,
+            work_id=run.work_id,
+            status=status,
+            timing=payload["timing"],
+            iteration_count=run.iteration_count,
+            change_stats=payload.get("change_stats"),
+            completion_reason=run.cancel_reason,
+            contributes_to_activity=run.contributes_to_agent_activity,
+        )
+        return await _run_session_io(self._store.finish_run, address, completion)
 
     def record_terminal_run(
         self, address: SessionAddress, run_id: str, status: str, timestamp: str
@@ -604,6 +640,8 @@ class ChatSessionManager:
         messages: Sequence[ChatMessage],
         receipts: Sequence[tuple[int, str, str, str, str]],
         deduplicate_carrier: bool = False,
+        run_id: str | None = None,
+        assistant_message_id: str | None = None,
     ) -> None:
         await _run_session_io(
             lambda: self.append_messages_with_receipts(
@@ -613,6 +651,8 @@ class ChatSessionManager:
                 messages=messages,
                 receipts=receipts,
                 deduplicate_carrier=deduplicate_carrier,
+                run_id=run_id,
+                assistant_message_id=assistant_message_id,
             )
         )
 
@@ -625,6 +665,8 @@ class ChatSessionManager:
         messages: Sequence[ChatMessage],
         receipts: Sequence[tuple[int, str, str, str, str]],
         deduplicate_carrier: bool = False,
+        run_id: str | None = None,
+        assistant_message_id: str | None = None,
     ) -> None:
         self._store.append_messages_with_receipts(
             address,
@@ -633,6 +675,8 @@ class ChatSessionManager:
             messages=messages,
             receipts=receipts,
             deduplicate_carrier=deduplicate_carrier,
+            run_id=run_id,
+            assistant_message_id=assistant_message_id,
         )
 
     async def lookup_delivery_receipt(

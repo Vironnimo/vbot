@@ -18,6 +18,7 @@ from core.recall.passages import build_session_passages
 from core.sessions import ChatSession, ChatSessionManager
 from core.tools.session_search import session_search_handler
 from scripts.provider_probe.recall_cases import FixtureEmbeddings
+from tests.core.sessions.history_fixtures import append_tool_fixture
 from tests.core.tools.session_search_helpers import make_context, success
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
@@ -29,7 +30,11 @@ async def test_hit_includes_question_and_final_answer_without_tool_payload_or_fu
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="target", project_id="p1")
     question = ChatMessage.user("Which backup policy did we choose?")
-    interim = ChatMessage.assistant(model="test", content="Retention initially: seven days.")
+    interim = ChatMessage.assistant(
+        model="test",
+        content="Retention initially: seven days.",
+        tool_calls=[ToolCall(id="call", name="bash")],
+    )
     tool = ChatMessage.tool(
         tool_call_id="call", name="bash", content="private machine output" * 10000
     )
@@ -69,7 +74,9 @@ async def test_only_conversation_text_matches_before_candidate_limit(tmp_path: P
                 tool_calls=[ToolCall(id="call", name="needle", arguments={"needle": "metadata"})],
             )
         )
-    session.append(ChatMessage.tool(tool_call_id="call", name="bash", content="needle result"))
+    append_tool_fixture(
+        session, ChatMessage.tool(tool_call_id="call", name="bash", content="needle result")
+    )
     visible = ChatMessage.user("needle actual conversation")
     session.append(visible)
     backend = SqliteFtsRecallBackend(RecallBackendContext(tmp_path, sessions))

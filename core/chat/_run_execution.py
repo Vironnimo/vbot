@@ -62,6 +62,7 @@ from core.runs import (
     USER_MESSAGE_EVENT,
     Run,
     RunInterruptedError,
+    RunStatus,
 )
 from core.sessions import (
     ChatSession,
@@ -114,11 +115,33 @@ class RunExecution:
         run: Run,
         request: _RunRequest,
     ) -> ChatMessage:
+        extension_registry = self._dependencies.get_extension_registry()
+        binding = request.temporary_binding
+        if extension_registry is not None and binding is not None:
+
+            async def notify_owner(status: RunStatus) -> None:
+                await extension_registry.dispatch_session_run_finished(
+                    binding,
+                    self._dependencies.tools,
+                    SessionRequestContext(
+                        binding=binding,
+                        run_id=run.id,
+                        agent_id=run.agent_id,
+                        session_id=run.session_id,
+                        execution_owner=run.execution_owner,
+                    ),
+                    "success"
+                    if status == RunStatus.COMPLETED
+                    else "cancelled"
+                    if status == RunStatus.CANCELLED
+                    else "error",
+                )
+
+            run.add_completion_observer(notify_owner)
         project_id = run.project_id
         session_address = SessionAddress(
             project_id=project_id, agent_id=run.agent_id, session_id=run.session_id
         )
-        await self._dependencies.sessions.record_run_start_async(session_address, run_id=run.id)
         if run.execution_owner is not None:
             await self._dependencies.sessions.record_run_owner_async(
                 session_address,
@@ -126,7 +149,7 @@ class RunExecution:
                 owner=run.execution_owner,
                 input_id=run.execution_input_id,
             )
-        session = await self._dependencies.sessions.get_async(session_address)
+        session = (await self._dependencies.sessions.get_async(session_address)).for_run(run.id)
         await _CHAT_TRANSFORM_WORKERS.run(
             self._dependencies.sessions.record_run_kind,
             session_address,
@@ -146,7 +169,6 @@ class RunExecution:
                 recovered = await recover_continuation(
                     session,
                     active_run_id=run.id,
-                    canonical_messages=session_snapshot.active_messages,
                 )
             if request.internal and recovered is not None and recovered.cause != "process_restart":
                 recovered = None
@@ -501,13 +523,6 @@ class RunExecution:
                 run.input_token_total,
                 run.output_token_total,
             )
-            run_summary = ChatMessage.run_summary(
-                run_id=run.id,
-                work_id=run.work_id,
-                status=run_status,
-                timing=run_timing,
-                iteration_count=run.iteration_count,
-            )
             # Git-style change statistics for this run, computed from the
             # session-scoped content tracker (real before/after line diffs).
             # Peek first so an all-zero outcome persists explicitly and matches
@@ -518,50 +533,11 @@ class RunExecution:
                 change_stats = self._dependencies.change_tracker.peek_run_stats(run.session_id)
                 if change_stats is not None:
                     run.terminal_payload_extras["change_stats"] = change_stats
-                    object.__setattr__(run_summary, "change_stats", change_stats)
                 self._dependencies.change_tracker.take_run_stats(run.session_id)
             except Exception:
                 _LOGGER.warning(
                     "Failed to compute change statistics for run %s", run.id, exc_info=True
                 )
-            run_summary_persisted = False
-            owned_finalization_error: Exception | None = None
-            try:
-                await session.append_async(run_summary)
-                run_summary_persisted = True
-            except Exception as exc:
-                # The model/tool outcome is already established. A failed
-                # terminal annotation must not replace it or prevent the
-                # Continuation journal from being finalized below.
-                _LOGGER.warning("Failed to persist run summary for run %s", run.id, exc_info=True)
-                if run.execution_owner is not None or request.temporary_binding is not None:
-                    owned_finalization_error = exc
-                    outcome = "error"
-            if run_summary_persisted:
-                try:
-                    await context.session_snapshot.refresh(session)
-                except Exception:
-                    _LOGGER.warning(
-                        "Failed to refresh Session snapshot after run %s summary",
-                        run.id,
-                        exc_info=True,
-                    )
-            if run.contributes_to_agent_activity and run_summary_persisted:
-                try:
-                    await _CHAT_TRANSFORM_WORKERS.run(
-                        self._dependencies.sessions.record_terminal_run,
-                        session_address,
-                        run.id,
-                        run_status,
-                        run_summary.timestamp,
-                    )
-                except Exception:
-                    # The canonical Run result is already durable in the transcript.
-                    # A damaged activity sidecar must not turn successful agent work
-                    # into a failed Run, but the missing notification is diagnosable.
-                    _LOGGER.warning(
-                        "Failed to record unread completion for run %s", run.id, exc_info=True
-                    )
             if context.continuation_tracker is not None:
                 try:
                     if (
@@ -569,7 +545,7 @@ class RunExecution:
                         and completed_assistant is not None
                         and not completed_assistant.interrupted
                     ):
-                        await context.continuation_tracker.resolve()
+                        await context.continuation_tracker.prepare_completion()
                     else:
                         if outcome == "cancelled":
                             cause: ContinuationCause = (
@@ -616,28 +592,6 @@ class RunExecution:
                     add_note=session.add_note,
                 )
                 try:
-                    binding = request.temporary_binding
-                    if binding is not None:
-                        try:
-                            await extension_registry.dispatch_session_run_finished(
-                                binding,
-                                self._dependencies.tools,
-                                SessionRequestContext(
-                                    binding=binding,
-                                    run_id=run.id,
-                                    agent_id=run.agent_id,
-                                    session_id=run.session_id,
-                                    execution_owner=run.execution_owner,
-                                ),
-                                outcome,
-                            )
-                        except Exception as exc:
-                            owned_finalization_error = owned_finalization_error or exc
-                            _LOGGER.warning(
-                                "Session run-finished callback failed for run %s",
-                                run.id,
-                                exc_info=True,
-                            )
                     await extension_registry.dispatch_run_end(
                         extension_ctx,
                         session_id=run.session_id,
@@ -667,8 +621,6 @@ class RunExecution:
                     )
 
             await _close_adapter(target.adapter)
-            if owned_finalization_error is not None:
-                raise owned_finalization_error
 
     async def _advance_fallback_chain(
         self,

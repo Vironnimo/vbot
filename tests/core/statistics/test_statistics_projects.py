@@ -13,6 +13,7 @@ from core.statistics import (
     ProjectDirectory,
     StatisticsService,
 )
+from tests.core.sessions.history_fixtures import seed_history
 from tests.core.statistics.statistics_test_support import (
     BASE,
     _assistant,
@@ -32,8 +33,7 @@ def _write_project_session(
     session_id: str | None = None,
 ) -> str:
     session = manager.create(agent_id, session_id=session_id, project_id=project_id)
-    for message in messages:
-        session.append(message)
+    seed_history(session, messages)
     return session.id
 
 
@@ -155,7 +155,7 @@ def test_same_session_id_across_scopes_is_not_double_counted(tmp_path: Path) -> 
         ],
         session_id=shared_id,
     )
-    identity_session = manager.create("builder", session_id=shared_id)
+    identity_session = manager.create("builder", session_id=shared_id).start_run("i1")
     for message in [
         _assistant(model=model, at=BASE + timedelta(seconds=2)),
         _run_summary(
