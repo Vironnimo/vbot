@@ -45,14 +45,6 @@
     >
   </div>
   <div class="jev-field">
-    <label for={`${componentId}-id`}>{t('jev.questionId', 'Answer ID')}</label>
-    <TextField
-      id={`${componentId}-id`}
-      value={question.id}
-      onInput={(value) => patch({ id: value })}
-    />
-  </div>
-  <div class="jev-field">
     <label for={`${componentId}-instructions`}
       >{t('jev.question', 'Question')}</label
     >
@@ -77,7 +69,8 @@
     {#each Object.entries(question.criteria) as [key, description], i (i)}
       <div class="jev-criterion">
         <TextField
-          ariaLabel={t('jev.optionId', 'Option ID')}
+          ariaLabel={t('jev.optionLabel', 'Answer label')}
+          placeholder={t('jev.optionLabel', 'Answer label')}
           value={key}
           onInput={(value, event) => changeChoice(i, value, description, event)}
         />
