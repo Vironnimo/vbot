@@ -486,7 +486,7 @@ class ChatMessage:
         change_stats: JsonObject | None = None,
         timestamp: datetime | None = None,
     ) -> ChatMessage:
-        """Create an append-only run summary annotation."""
+        """Create a Timeline projection of a persisted Run completion."""
         return cls(
             id=_new_message_id(),
             timestamp=_format_timestamp(timestamp),

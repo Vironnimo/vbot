@@ -490,13 +490,22 @@ async def _extension_page_history(state: Any, params: JsonObject) -> JsonObject:
 def _temporary_history_projection(snapshot: Any, delivery: Any) -> JsonObject:
     """Use the ordinary client projection while withholding internal Session records."""
     messages = [
-        remove_opaque_provider_metadata(message.to_dict(), file_delivery=delivery)
-        for message in snapshot.page.messages
-        if getattr(message, "role", None) not in {"note", "history_edit"}
+        {
+            **remove_opaque_provider_metadata(message.to_dict(), file_delivery=delivery),
+            "history_sequence": snapshot.page.record_sequences[index],
+            "history_run_id": snapshot.page.record_run_ids[index],
+        }
+        for index, message in enumerate(snapshot.page.messages)
+        if message.role not in {"note", "history_edit"}
     ]
     response: JsonObject = {
         "messages": messages,
         "has_more": snapshot.page.has_more,
+        "runs": list(snapshot.runs),
+        "history_generation": snapshot.generation_id,
+        "next_after": snapshot.after_cursor,
+        "incremental": snapshot.incremental,
+        "has_newer": snapshot.has_newer,
         "session_usage": snapshot.session_usage,
         "context_usage": latest_session_context_usage(list(snapshot.context_messages)),
         "file_urls": _projected_file_urls(messages, delivery),

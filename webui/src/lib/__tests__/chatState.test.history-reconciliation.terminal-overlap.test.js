@@ -25,8 +25,14 @@ describe('chat state helpers', () => {
     });
 
     loadHistory(sessionState, [
-      { id: 'user-one', role: 'user', content: 'Inspect the file' },
       {
+        history_run_id: 'run-one',
+        id: 'user-one',
+        role: 'user',
+        content: 'Inspect the file',
+      },
+      {
+        history_run_id: 'run-one',
         id: 'assistant-one',
         role: 'assistant',
         content: 'The file says A.',
@@ -234,45 +240,59 @@ describe('chat state helpers', () => {
       'session-note-run',
     );
 
-    loadHistory(sessionState, [
-      { id: 'user-one', role: 'user', content: 'Run a non-blocking worker' },
-      {
-        id: 'assistant-spawn',
-        role: 'assistant',
-        content: null,
-        tool_calls: [
-          {
-            id: 'call-subagent',
-            name: 'subagent',
-            arguments: { agent_id: 'tester', background: true },
-          },
-        ],
-      },
-      {
-        id: 'tool-subagent',
-        role: 'tool',
-        tool_call_id: 'call-subagent',
-        name: 'subagent',
-        content: '{"ok":true}',
-      },
-      {
-        id: 'assistant-started',
-        role: 'assistant',
-        content: 'The worker is running.',
-      },
-      {
-        id: 'summary-one',
-        role: 'run_summary',
-        run_id: 'run-one',
-        status: 'completed',
-        timing: { duration_ms: 10 },
-      },
-      {
-        id: 'assistant-result',
-        role: 'assistant',
-        content: 'The worker finished: the answer is 42.',
-      },
-    ]);
+    loadHistory(
+      sessionState,
+      [
+        {
+          history_run_id: 'run-one',
+          id: 'user-one',
+          role: 'user',
+          content: 'Run a non-blocking worker',
+        },
+        {
+          history_run_id: 'run-one',
+          id: 'assistant-spawn',
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            {
+              id: 'call-subagent',
+              name: 'subagent',
+              arguments: { agent_id: 'tester', background: true },
+            },
+          ],
+        },
+        {
+          history_run_id: 'run-one',
+          id: 'tool-subagent',
+          role: 'tool',
+          tool_call_id: 'call-subagent',
+          name: 'subagent',
+          content: '{"ok":true}',
+        },
+        {
+          history_run_id: 'run-one',
+          id: 'assistant-started',
+          role: 'assistant',
+          content: 'The worker is running.',
+        },
+        {
+          history_run_id: 'run-one',
+          id: 'summary-one',
+          role: 'run_summary',
+          run_id: 'run-one',
+          status: 'completed',
+          timing: { duration_ms: 10 },
+        },
+        {
+          history_run_id: 'run-two',
+          id: 'assistant-result',
+          role: 'assistant',
+          content: 'The worker finished: the answer is 42.',
+        },
+      ],
+      { runs: [{ run_id: 'run-one', status: 'completed', complete: true }] },
+    );
 
     // Re-attach to the still-running note-triggered run (no user_message_persisted).
     startRun(sessionState, {
@@ -316,21 +336,32 @@ describe('chat state helpers', () => {
       'session-note-run-live',
     );
 
-    loadHistory(sessionState, [
-      { id: 'user-one', role: 'user', content: 'Run a non-blocking worker' },
-      {
-        id: 'assistant-started',
-        role: 'assistant',
-        content: 'The worker is running.',
-      },
-      {
-        id: 'summary-one',
-        role: 'run_summary',
-        run_id: 'run-one',
-        status: 'completed',
-        timing: { duration_ms: 10 },
-      },
-    ]);
+    loadHistory(
+      sessionState,
+      [
+        {
+          history_run_id: 'run-one',
+          id: 'user-one',
+          role: 'user',
+          content: 'Run a non-blocking worker',
+        },
+        {
+          history_run_id: 'run-one',
+          id: 'assistant-started',
+          role: 'assistant',
+          content: 'The worker is running.',
+        },
+        {
+          history_run_id: 'run-one',
+          id: 'summary-one',
+          role: 'run_summary',
+          run_id: 'run-one',
+          status: 'completed',
+          timing: { duration_ms: 10 },
+        },
+      ],
+      { runs: [{ run_id: 'run-one', status: 'completed', complete: true }] },
+    );
 
     startRun(sessionState, {
       run_id: 'run-two',

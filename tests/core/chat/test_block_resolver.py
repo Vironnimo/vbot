@@ -99,6 +99,9 @@ class _StubModels:
 
 class _StubRuntime:
     def __init__(self) -> None:
+        from core.runs import ChatRunManager
+
+        self.chat_run_manager = ChatRunManager()
         self.system_prompts = _StubPrompts()
         self.models = _StubModels()
         self.file_read_state = FileReadState()

@@ -26,45 +26,59 @@ describe('chat state helpers', () => {
       'session-ws-replay',
     );
 
-    loadHistory(sessionState, [
-      { id: 'user-one', role: 'user', content: 'Run a non-blocking worker' },
-      {
-        id: 'assistant-spawn',
-        role: 'assistant',
-        content: null,
-        tool_calls: [
-          {
-            id: 'call-subagent',
-            name: 'subagent',
-            arguments: { agent_id: 'tester', background: true },
-          },
-        ],
-      },
-      {
-        id: 'tool-subagent',
-        role: 'tool',
-        tool_call_id: 'call-subagent',
-        name: 'subagent',
-        content: '{"ok":true}',
-      },
-      {
-        id: 'assistant-started',
-        role: 'assistant',
-        content: 'The worker is running.',
-      },
-      {
-        id: 'summary-one',
-        role: 'run_summary',
-        run_id: 'run-one',
-        status: 'completed',
-        timing: { duration_ms: 10 },
-      },
-      {
-        id: 'assistant-result',
-        role: 'assistant',
-        content: 'The worker finished: the answer is 42.',
-      },
-    ]);
+    loadHistory(
+      sessionState,
+      [
+        {
+          history_run_id: 'run-one',
+          id: 'user-one',
+          role: 'user',
+          content: 'Run a non-blocking worker',
+        },
+        {
+          history_run_id: 'run-one',
+          id: 'assistant-spawn',
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            {
+              id: 'call-subagent',
+              name: 'subagent',
+              arguments: { agent_id: 'tester', background: true },
+            },
+          ],
+        },
+        {
+          history_run_id: 'run-one',
+          id: 'tool-subagent',
+          role: 'tool',
+          tool_call_id: 'call-subagent',
+          name: 'subagent',
+          content: '{"ok":true}',
+        },
+        {
+          history_run_id: 'run-one',
+          id: 'assistant-started',
+          role: 'assistant',
+          content: 'The worker is running.',
+        },
+        {
+          history_run_id: 'run-one',
+          id: 'summary-one',
+          role: 'run_summary',
+          run_id: 'run-one',
+          status: 'completed',
+          timing: { duration_ms: 10 },
+        },
+        {
+          history_run_id: 'run-two',
+          id: 'assistant-result',
+          role: 'assistant',
+          content: 'The worker finished: the answer is 42.',
+        },
+      ],
+      { runs: [{ run_id: 'run-one', status: 'completed', complete: true }] },
+    );
 
     // chat.history reports the still-running follow-up run as the active run.
     startRun(sessionState, {
@@ -172,17 +186,37 @@ describe('chat state helpers', () => {
       'alpha',
       'session-sparse-replay',
     );
-    loadHistory(sessionState, [
-      { id: 'user-one', role: 'user', content: 'First question' },
-      { id: 'assistant-one', role: 'assistant', content: 'First answer' },
-      {
-        id: 'summary-one',
-        role: 'run_summary',
-        run_id: 'run-one',
-        status: 'completed',
-      },
-      { id: 'user-two', role: 'user', content: 'Second question' },
-    ]);
+    loadHistory(
+      sessionState,
+      [
+        {
+          history_run_id: 'run-one',
+          id: 'user-one',
+          role: 'user',
+          content: 'First question',
+        },
+        {
+          history_run_id: 'run-one',
+          id: 'assistant-one',
+          role: 'assistant',
+          content: 'First answer',
+        },
+        {
+          history_run_id: 'run-one',
+          id: 'summary-one',
+          role: 'run_summary',
+          run_id: 'run-one',
+          status: 'completed',
+        },
+        {
+          history_run_id: 'run-two',
+          id: 'user-two',
+          role: 'user',
+          content: 'Second question',
+        },
+      ],
+      { runs: [{ run_id: 'run-one', status: 'completed', complete: true }] },
+    );
     startRun(sessionState, {
       run_id: 'run-two',
       sse_url: '/api/runs/run-two/events',
@@ -292,7 +326,12 @@ describe('chat state helpers', () => {
     });
 
     loadHistory(sessionState, [
-      { id: 'message-one', role: 'user', content: 'Hi' },
+      {
+        history_run_id: 'run-one',
+        id: 'message-one',
+        role: 'user',
+        content: 'Hi',
+      },
     ]);
 
     expect(sessionState.streamingRunEvents).toEqual([
@@ -335,15 +374,25 @@ describe('chat state helpers', () => {
       payload: { status: CHAT_STATUS_COMPLETED },
     });
 
-    loadHistory(sessionState, [
-      { id: 'message-one', role: 'assistant', content: 'Done' },
-      {
-        id: 'summary-one',
-        role: 'run_summary',
-        run_id: 'run-one',
-        status: CHAT_STATUS_COMPLETED,
-      },
-    ]);
+    loadHistory(
+      sessionState,
+      [
+        {
+          history_run_id: 'run-one',
+          id: 'message-one',
+          role: 'assistant',
+          content: 'Done',
+        },
+        {
+          history_run_id: 'run-one',
+          id: 'summary-one',
+          role: 'run_summary',
+          run_id: 'run-one',
+          status: CHAT_STATUS_COMPLETED,
+        },
+      ],
+      { runs: [{ run_id: 'run-one', complete: true }] },
+    );
 
     expect(sessionState.runEvents).toEqual([]);
     expect(sessionState.streamingRunEvents).toEqual([]);
@@ -395,17 +444,34 @@ describe('loadHistory run-event pruning during an active run (handoff3 B10)', ()
       ],
     });
 
-    loadHistory(sessionState, [
-      { id: 'user-one', role: 'user', content: 'Hi' },
-      { id: 'assistant-finished', role: 'assistant', content: 'Done.' },
+    loadHistory(
+      sessionState,
+      [
+        {
+          history_run_id: 'run-finished',
+          id: 'user-one',
+          role: 'user',
+          content: 'Hi',
+        },
+        {
+          history_run_id: 'run-finished',
+          id: 'assistant-finished',
+          role: 'assistant',
+          content: 'Done.',
+        },
+        {
+          history_run_id: 'run-finished',
+          id: 'summary-finished',
+          role: 'run_summary',
+          run_id: 'run-finished',
+          status: 'completed',
+        },
+        { id: 'user-two', role: 'user', content: 'Again' },
+      ],
       {
-        id: 'summary-finished',
-        role: 'run_summary',
-        run_id: 'run-finished',
-        status: 'completed',
+        runs: [{ run_id: 'run-finished', status: 'completed', complete: true }],
       },
-      { id: 'user-two', role: 'user', content: 'Again' },
-    ]);
+    );
 
     expect(sessionState.runEvents.map((event) => event.run_id)).toEqual([
       'run-active',

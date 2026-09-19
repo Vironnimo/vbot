@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from typing import Any, cast
 
+from core.chat.messages import ToolCall
 from core.providers.tool_schema import render_tool_definitions
 from core.tools.contracts import ToolContractError
 from scripts.provider_probe.common import PROJECT_ROOT
@@ -521,6 +522,12 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                         durable = await verify_decision_effect(store, sid, pid, name, result)
                     receipts = call_context._delivery_receipts
                     if success and receipts:
+                        assistant = ChatMessage.assistant(
+                            model=args.model,
+                            content=None,
+                            tool_calls=[ToolCall(id=call_context.tool_call_id, name=tool_name)],
+                        )
+                        await sessions.get(binding.address).append_async(assistant)
                         durable = all(
                             [not await store.reconcile_delivery(receipt[0]) for receipt in receipts]
                         )
@@ -528,6 +535,7 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                             binding.address,
                             generation_id=binding.generation_id,
                             owner_name="swarm",
+                            assistant_message_id=assistant.id,
                             messages=[
                                 ChatMessage.tool(
                                     tool_call_id=call_context.tool_call_id,
@@ -682,6 +690,12 @@ async def _probe_swarm_workflow(
                 continue
             finished = True
             break
+        assistant = ChatMessage.assistant(
+            model=args.model,
+            content=response.get("content"),
+            tool_calls=[ToolCall.from_dict(call) for call in calls],
+        )
+        await sessions.get(binding.address).append_async(assistant)
         carriers = []
         receipts: list[tuple[int, str, str, str, str]] = []
         for index, call in enumerate(calls):
@@ -730,6 +744,7 @@ async def _probe_swarm_workflow(
             binding.address,
             generation_id=binding.generation_id,
             owner_name="swarm",
+            assistant_message_id=assistant.id,
             messages=carriers,
             receipts=receipts,
         )

@@ -1,5 +1,7 @@
 """Tests for messages primitives."""
 
+from dataclasses import replace
+
 from core.chat.content_blocks import FileMentionBlock
 from core.chat.messages import ToolCallRejection
 from core.chat.output_files import AssistantFileReference
@@ -732,3 +734,10 @@ class TestReasoningTiming:
     def test_naive_timestamp_is_rejected(self):
         with pytest.raises(ChatMessageValidationError):
             ChatMessage.user("hello", timestamp=datetime(2026, 5, 3, 14, 30))
+
+
+def test_run_identity_is_persisted_but_not_sent_to_provider():
+    message = replace(ChatMessage.assistant(model="test/model", content="Answer"), run_id="run-one")
+    assert ChatMessage.from_dict(message.to_dict()).run_id == "run-one"
+    assert "run_id" not in _message_to_request_dict(message)
+    assert "run_id" not in _assistant_continuation_dict(message)

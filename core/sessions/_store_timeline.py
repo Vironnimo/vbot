@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import bisect
 import sqlite3
 from collections.abc import Sequence
 
 from core.sessions import _store_values
+from core.sessions._types import JsonObject
 
 
 def can_append(
@@ -20,14 +20,7 @@ def can_append(
     generation, sequence = after
     if generation != state["generation_id"] or not 0 <= sequence <= state["message_count"]:
         return False
-    return (
-        connection.execute(
-            "SELECT 1 FROM messages WHERE session_key = ? AND seq >= ? "
-            "AND role IN ('history_edit', 'agent_takeover') LIMIT 1",
-            (state["session_key"], sequence),
-        ).fetchone()
-        is None
-    )
+    return sequence >= int(state["history_reset_sequence"])
 
 
 def appended_rows(
@@ -55,69 +48,49 @@ def appended_rows(
 def record_run_ids(
     connection: sqlite3.Connection, state: sqlite3.Row, rows: Sequence[sqlite3.Row]
 ) -> tuple[str | None, ...]:
-    """Project canonical Run boundaries, without changing ChatMessage role fields.
+    """Run membership is written with each entity, never reconstructed."""
+    return tuple(row["owner_run_id"] for row in rows)
 
-    Recorded starts delimit current executions even without a visible User or
-    terminal annotation. Historical/forked segments have canonical summaries
-    but may have no admission record; their persisted summary boundaries remain
-    sufficient to identify the segment. Neither path inspects content or live
-    replay coverage.
-    """
-    if not rows:
+
+def page_runs(
+    connection: sqlite3.Connection,
+    state: sqlite3.Row,
+    rows: Sequence[sqlite3.Row],
+    *,
+    through: int,
+    incremental: bool,
+) -> tuple[JsonObject, ...]:
+    identities = {row["owner_run_id"] for row in rows if row["owner_run_id"] is not None}
+    if not identities:
         return ()
-    key = int(state["session_key"])
-    first, last = int(rows[0]["seq"]), int(rows[-1]["seq"])
-    starts = connection.execute(
-        "SELECT run_id, start_sequence FROM run_execution_starts "
-        "WHERE session_key = ? AND generation_id = ? AND start_sequence <= ? "
-        "AND start_sequence >= COALESCE((SELECT MAX(start_sequence) "
-        "FROM run_execution_starts WHERE session_key = ? AND generation_id = ? "
-        "AND start_sequence <= ?), 0) "
-        "ORDER BY start_sequence, record_key",
-        (key, state["generation_id"], last, key, state["generation_id"], first),
-    ).fetchall()
-    summaries = connection.execute(
-        "SELECT m.seq, r.run_id, s.start_sequence FROM messages m "
-        "JOIN run_summaries r ON r.message_key = m.message_key "
-        "LEFT JOIN run_execution_starts s ON s.session_key = m.session_key "
-        "AND s.run_id = r.run_id "
-        "WHERE m.session_key = ? AND m.role = 'run_summary' AND m.active = 1 "
-        "AND m.seq >= ? AND m.seq <= "
-        "COALESCE((SELECT MIN(seq) FROM messages WHERE session_key = ? "
-        "AND active = 1 AND role = 'run_summary' AND seq >= ?), ?) ORDER BY m.seq",
-        (key, first, key, last, last),
-    ).fetchall()
-    start_sequences = [int(row["start_sequence"]) for row in starts]
-    summary_sequences = [int(row["seq"]) for row in summaries]
-    # A recorded Run stops at its own summary, even if unrelated records are
-    # appended before the next Run. Include an earlier summary for this check.
-    ends = {
-        str(row["run_id"]): int(row["seq"])
-        for row in connection.execute(
-            "SELECT r.run_id, m.seq FROM messages m "
-            "JOIN run_summaries r ON r.message_key = m.message_key "
-            "WHERE m.session_key = ? AND m.role = 'run_summary' AND m.seq >= ? AND m.seq <= ?",
-            (key, start_sequences[0] if starts else first, last),
+    floor = min(int(row["seq"]) for row in rows)
+    result = []
+    for run_id in identities:
+        run = connection.execute(
+            "SELECT run_id,status,start_sequence,terminal_sequence FROM runs "
+            "WHERE session_key=? AND run_id=?",
+            (state["session_key"], run_id),
+        ).fetchone()
+        assert run is not None
+        terminal = run["terminal_sequence"]
+        result.append(
+            {
+                "run_id": run_id,
+                "status": run["status"],
+                "start_sequence": run["start_sequence"],
+                "terminal_sequence": terminal,
+                "complete": terminal is not None
+                and terminal < through
+                and (
+                    incremental
+                    or int(run["start_sequence"]) >= floor
+                    or not connection.execute(
+                        "SELECT 1 FROM history_records WHERE session_key=? "
+                        "AND owner_run_id=? AND active=1 AND seq<? "
+                        "AND role NOT IN ('system','note','history_edit') LIMIT 1",
+                        (state["session_key"], run_id, floor),
+                    ).fetchone()
+                ),
+            }
         )
-    }
-    result: list[str | None] = []
-    for row in rows:
-        sequence = int(row["seq"])
-        start_index = bisect.bisect_right(start_sequences, sequence) - 1
-        summary_index = bisect.bisect_left(summary_sequences, sequence)
-        run_id: str | None = None
-        if start_index >= 0:
-            candidate = str(starts[start_index]["run_id"])
-            if sequence <= ends.get(candidate, sequence):
-                run_id = candidate
-        if summary_index < len(summaries):
-            summary = summaries[summary_index]
-            if (
-                summary["start_sequence"] is None
-                and (start_index < 0 or summary["run_id"] == run_id)
-                or summary["start_sequence"] is not None
-                and sequence >= summary["start_sequence"]
-            ):
-                run_id = str(summary["run_id"])
-        result.append(run_id)
     return tuple(result)

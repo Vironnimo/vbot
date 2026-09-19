@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from core.chat import ChatMessage, ChatSessionError
+from core.chat.messages import ToolCall
 from core.sessions import (
     ChatSessionManager,
 )
@@ -55,7 +56,9 @@ async def test_temporary_binding_and_receipt_are_generation_scoped_and_idempoten
         receipts=[(0, "delivery-1", "hash", "note", "note")],
         deduplicate_carrier=True,
     )
-    assert [message.content for message in sessions.get(address).load()] == ["delivery"]
+    assert [
+        message.content for message in sessions.get(address).load() if message.role != "assistant"
+    ] == ["delivery"]
     receipt = await sessions.lookup_delivery_receipt(
         address, binding.generation_id, "swarm", "delivery-1"
     )
@@ -67,6 +70,17 @@ async def test_temporary_binding_and_receipt_are_generation_scoped_and_idempoten
         ChatMessage.tool(tool_call_id="two", name="second", content="tool-two"),
         ChatMessage.note("after-tools"),
     ]
+    sessions.get(address).append(
+        ChatMessage.assistant(
+            model="test",
+            content=None,
+            tool_calls=[
+                ToolCall(id=message.tool_call_id, name=message.name)
+                for message in tools_and_note
+                if message.role == "tool" and message.tool_call_id and message.name
+            ],
+        )
+    )
     sessions.append_messages_with_receipts(
         address,
         generation_id=binding.generation_id,
@@ -77,7 +91,9 @@ async def test_temporary_binding_and_receipt_are_generation_scoped_and_idempoten
             (1, "tool-2", "hash-2", "delivery", "tool"),
         ],
     )
-    assert [message.content for message in sessions.get(address).load()] == [
+    assert [
+        message.content for message in sessions.get(address).load() if message.role != "assistant"
+    ] == [
         "delivery",
         "tool-one",
         "tool-two",
@@ -87,13 +103,24 @@ async def test_temporary_binding_and_receipt_are_generation_scoped_and_idempoten
         address, binding.generation_id, "swarm", "tool-2"
     )
     assert tool_two_receipt is not None
-    assert tool_two_receipt.carrier_location == {"kind": "tool", "sequence": 2}
+    assert tool_two_receipt.carrier_location == {"kind": "tool", "sequence": 3}
 
     replayed_batch = [
         ChatMessage.tool(tool_call_id="one-retry", name="first", content="tool-one-retry"),
         ChatMessage.tool(tool_call_id="three", name="third", content="tool-three"),
         ChatMessage.note("after-retry"),
     ]
+    sessions.get(address).append(
+        ChatMessage.assistant(
+            model="test",
+            content=None,
+            tool_calls=[
+                ToolCall(id=message.tool_call_id, name=message.name)
+                for message in replayed_batch
+                if message.role == "tool" and message.tool_call_id and message.name
+            ],
+        )
+    )
     sessions.append_messages_with_receipts(
         address,
         generation_id=binding.generation_id,
@@ -104,7 +131,9 @@ async def test_temporary_binding_and_receipt_are_generation_scoped_and_idempoten
             (1, "tool-3", "hash-3", "delivery", "tool"),
         ],
     )
-    assert [message.content for message in sessions.get(address).load()][-3:] == [
+    assert [
+        message.content for message in sessions.get(address).load() if message.role != "assistant"
+    ][-3:] == [
         "tool-one-retry",
         "tool-three",
         "after-retry",
@@ -113,7 +142,7 @@ async def test_temporary_binding_and_receipt_are_generation_scoped_and_idempoten
         address, binding.generation_id, "swarm", "tool-3"
     )
     assert tool_three_receipt is not None
-    assert tool_three_receipt.carrier_location == {"kind": "tool", "sequence": 5}
+    assert tool_three_receipt.carrier_location == {"kind": "tool", "sequence": 7}
 
     with pytest.raises(ChatSessionError):
         sessions.append_messages_with_receipts(
@@ -126,7 +155,9 @@ async def test_temporary_binding_and_receipt_are_generation_scoped_and_idempoten
                 (1, "delivery-1", "different", "note", "note"),
             ],
         )
-    assert [message.content for message in sessions.get(address).load()] == [
+    assert [
+        message.content for message in sessions.get(address).load() if message.role != "assistant"
+    ] == [
         "delivery",
         "tool-one",
         "tool-two",

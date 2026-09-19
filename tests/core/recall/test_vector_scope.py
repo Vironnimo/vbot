@@ -18,6 +18,7 @@ from tests.core.recall.vector_helpers import (
     request,
     timestamp,
 )
+from tests.core.sessions.history_fixtures import append_tool_fixture
 
 pytestmark = pytest.mark.asyncio
 
@@ -126,13 +127,14 @@ async def test_vector_backend_does_not_match_its_own_search_output(tmp_path: Pat
 
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="selfref")
-    session.append(
+    append_tool_fixture(
+        session,
         ChatMessage.tool(
             tool_call_id="c1",
             name="session_search",
             content="I love bananas and fruit",
             timestamp=timestamp(1),
-        )
+        ),
     )
     session.append(ChatMessage.user("I bought some carrots", timestamp=timestamp(2)))
 

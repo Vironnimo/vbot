@@ -14,7 +14,6 @@ from core.extensions import (
 )
 from core.extensions.extensions import ExtensionDeclarations
 from core.extensions.operations import ExtensionOperations
-from core.sessions import ChatSession
 from core.tools import ToolRegistry, tool_success
 from core.tools.availability import ToolAccess
 from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime, build_chat_loop
@@ -182,16 +181,16 @@ async def test_bound_session_capability_delivers_once_and_ends_after_tool_batch(
         ),
     )
 
-    append = ChatSession.append_async
+    finish = runtime.chat_sessions.finish_run
 
-    async def append_with_failure(session, message):
-        if finalization_failure == "summary" and message.role == "run_summary":
+    async def finish_with_failure(*args):
+        if finalization_failure == "summary":
             raise OSError("summary-fixture")
-        return await append(session, message)
+        return await finish(*args)
 
-    monkeypatch.setattr(ChatSession, "append_async", append_with_failure)
+    monkeypatch.setattr(runtime.chat_sessions, "finish_run", finish_with_failure)
     run = await build_chat_loop(runtime).start_temporary_run(binding, "initial")
-    if finalization_failure:
+    if finalization_failure == "summary":
         with pytest.raises(OSError):
             await run.wait()
     else:
@@ -218,8 +217,10 @@ async def test_bound_session_capability_delivers_once_and_ends_after_tool_batch(
         )
         is not None
     )
-    assert finished == (["error"] if finalization_failure == "summary" else ["success"])
-    assert run.status == ("failed" if finalization_failure else "completed")
+    assert finished == ["error" if finalization_failure == "summary" else "success"]
+    if finalization_failure == "callback":
+        assert run.events[-1].payload["completion_notification_errors"] == ["callback-fixture"]
+    assert run.status == ("failed" if finalization_failure == "summary" else "completed")
     history = runtime.chat_sessions.get(binding.address).load()
     assert {message.tool_call_id for message in history if message.role == "tool"} == {
         "private-call",

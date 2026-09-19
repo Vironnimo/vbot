@@ -27,10 +27,7 @@ FTS_TABLE = "messages_fts"
 FTS_VIEW = "messages_fts_source"
 FTS_TRIGRAM_TABLE = "messages_fts_trigram"
 FTS_TRIGRAM_VIEW = "messages_fts_trigram_source"
-FTS_TRIGGERS = (
-    "messages_fts_delete",
-    "messages_fts_trigram_delete",
-)
+FTS_TRIGGERS: tuple[str, ...] = ()
 FTS_STALE_KEY = "fts_stale"
 FTS_GENERATION_KEY = "fts_rebuild_generation"
 FTS_TARGET_HIGH_WATER_KEY = "fts_rebuild_target_high_water"
@@ -62,6 +59,7 @@ CREATE TABLE sessions (
   archived_at TEXT,
   message_count INTEGER NOT NULL DEFAULT 0 CHECK (message_count >= 0),
   last_message_id TEXT,
+  history_reset_sequence INTEGER NOT NULL DEFAULT 0,
   history_revision INTEGER NOT NULL DEFAULT 0 CHECK (history_revision >= 0),
   state_revision INTEGER NOT NULL DEFAULT 0 CHECK (state_revision >= 0),
   metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json) AND json_type(metadata_json) = 'object'),
@@ -154,25 +152,46 @@ CREATE TABLE run_execution_owners (
 CREATE INDEX run_execution_owners_group
   ON run_execution_owners (owner_name, group_id, record_key);
 
-CREATE TABLE run_execution_starts (
-  record_key INTEGER PRIMARY KEY,
+CREATE TABLE runs (
+  run_key INTEGER PRIMARY KEY,
   session_key INTEGER NOT NULL,
-  generation_id TEXT NOT NULL,
   run_id TEXT NOT NULL,
-  start_sequence INTEGER NOT NULL CHECK (start_sequence >= 0),
+  work_id TEXT,
+  run_kind TEXT NOT NULL DEFAULT 'user',
+  contributes_to_activity INTEGER NOT NULL DEFAULT 1,
+  origin_generation_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed', 'cancelled', 'interrupted')),
+  started_at TEXT NOT NULL,
+  completed_at TEXT,
+  duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms >= 0),
+  start_sequence INTEGER NOT NULL,
+  terminal_sequence INTEGER,
+  terminal_id TEXT,
+  terminal_key INTEGER UNIQUE,
+  terminal_active INTEGER NOT NULL DEFAULT 1 CHECK (terminal_active IN (0, 1)),
+  completion_reason TEXT,
+  timing_extra_json TEXT,
+  iteration_count INTEGER,
+  changed_files INTEGER,
+  lines_added INTEGER,
+  lines_removed INTEGER,
+  change_stats_extra_json TEXT,
   UNIQUE (session_key, run_id),
-  FOREIGN KEY (session_key) REFERENCES sessions (session_key) ON DELETE CASCADE
+  FOREIGN KEY (session_key) REFERENCES sessions(session_key) ON DELETE CASCADE,
+  CHECK ((status = 'running') = (completed_at IS NULL)),
+  CHECK ((terminal_sequence IS NULL) = (terminal_id IS NULL))
 ) STRICT;
 
-CREATE INDEX run_execution_starts_session
-  ON run_execution_starts (session_key, generation_id, start_sequence);
+CREATE INDEX runs_by_session ON runs(session_key, start_sequence);
+CREATE INDEX runs_by_terminal ON runs(session_key, run_id, terminal_sequence);
 
 CREATE TABLE messages (
   message_key INTEGER PRIMARY KEY,
   session_key INTEGER NOT NULL,
   seq INTEGER NOT NULL CHECK (seq >= 0),
+  run_id TEXT,
   message_id TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('system', 'user', 'assistant', 'tool', 'note', 'error', 'compaction_checkpoint', 'run_summary', 'agent_takeover', 'history_edit')),
+  role TEXT NOT NULL CHECK (role IN ('system', 'user', 'assistant', 'note', 'error', 'agent_takeover')),
   timestamp TEXT NOT NULL,
   content TEXT,
   content_blocks_json TEXT CHECK (content_blocks_json IS NULL OR (json_valid(content_blocks_json) AND json_type(content_blocks_json) = 'array')),
@@ -183,8 +202,11 @@ CREATE TABLE messages (
   CHECK ((content IS NULL) OR (content_blocks_json IS NULL)),
   CHECK ((content_blocks_json IS NULL) = (content_search IS NULL)),
   UNIQUE (session_key, seq),
+  FOREIGN KEY (session_key, run_id) REFERENCES runs(session_key, run_id),
   FOREIGN KEY (session_key) REFERENCES sessions (session_key) ON DELETE CASCADE
 ) STRICT;
+
+CREATE INDEX messages_by_run ON messages(session_key, run_id, seq);
 
 CREATE INDEX messages_by_session_time
   ON messages (session_key, timestamp, seq);
@@ -240,41 +262,13 @@ CREATE TABLE tool_calls (
   rejection_fingerprint TEXT,
   argument_sequence_index INTEGER CHECK (argument_sequence_index IS NULL OR argument_sequence_index >= 0),
   argument_sequence_length INTEGER CHECK (argument_sequence_length IS NULL OR argument_sequence_length > 1),
-  CHECK ((rejection_code IS NULL) = (rejection_message IS NULL) AND (rejection_code IS NULL) = (rejection_fingerprint IS NULL)),
-  CHECK ((argument_sequence_index IS NULL) = (argument_sequence_length IS NULL)),
-  UNIQUE (message_key, ordinal),
-  FOREIGN KEY (message_key) REFERENCES messages (message_key) ON DELETE CASCADE
-) STRICT;
-
-CREATE INDEX tool_calls_by_public_id
-  ON tool_calls (tool_call_id, message_key);
-
-CREATE TABLE assistant_output_files (
-  message_key INTEGER NOT NULL,
-  ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
-  path TEXT NOT NULL,
-  line_index INTEGER NOT NULL CHECK (line_index >= 0),
-  start_index INTEGER CHECK (start_index IS NULL OR start_index >= 0),
-  end_index INTEGER CHECK (end_index IS NULL OR end_index > 0),
-  CHECK ((start_index IS NULL) = (end_index IS NULL)),
-  PRIMARY KEY (message_key, ordinal),
-  FOREIGN KEY (message_key) REFERENCES assistant_messages (message_key) ON DELETE CASCADE
-) STRICT, WITHOUT ROWID;
-
-CREATE TABLE user_message_senders (
-  message_key INTEGER PRIMARY KEY,
-  sender_id TEXT NOT NULL,
-  display_name TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
-  FOREIGN KEY (message_key) REFERENCES messages (message_key) ON DELETE CASCADE
-) STRICT;
-
-CREATE TABLE tool_messages (
-  message_key INTEGER PRIMARY KEY,
-  tool_call_key INTEGER,
-  tool_call_id TEXT NOT NULL,
-  name TEXT NOT NULL,
-  result_content TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'cancelled', 'failed', 'interrupted')),
+  result_id TEXT,
+  result_sequence INTEGER,
+  result_timestamp TEXT,
+  result_key INTEGER UNIQUE,
+  result_active INTEGER NOT NULL DEFAULT 1 CHECK (result_active IN (0, 1)),
+  result_content TEXT,
   result_ok INTEGER GENERATED ALWAYS AS (
     CASE
       WHEN json_valid(result_content)
@@ -307,12 +301,36 @@ CREATE TABLE tool_messages (
   duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms >= 0),
   timing_extra_json TEXT CHECK (timing_extra_json IS NULL OR (json_valid(timing_extra_json) AND json_type(timing_extra_json) = 'object')),
   display_json TEXT CHECK (display_json IS NULL OR (json_valid(display_json) AND json_type(display_json) = 'object')),
-  FOREIGN KEY (message_key) REFERENCES messages (message_key) ON DELETE CASCADE,
-  FOREIGN KEY (tool_call_key) REFERENCES tool_calls (tool_call_key)
+  CHECK ((rejection_code IS NULL) = (rejection_message IS NULL) AND (rejection_code IS NULL) = (rejection_fingerprint IS NULL)),
+  CHECK ((argument_sequence_index IS NULL) = (argument_sequence_length IS NULL)),
+  CHECK ((result_id IS NULL) = (result_sequence IS NULL)),
+  CHECK ((result_id IS NULL) = (result_content IS NULL)),
+  UNIQUE (message_key, ordinal),
+  FOREIGN KEY (message_key) REFERENCES messages (message_key) ON DELETE CASCADE
 ) STRICT;
 
-CREATE INDEX tool_messages_by_call
-  ON tool_messages (tool_call_key);
+CREATE INDEX tool_calls_by_public_id
+  ON tool_calls (tool_call_id, message_key);
+
+CREATE TABLE assistant_output_files (
+  message_key INTEGER NOT NULL,
+  ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+  path TEXT NOT NULL,
+  line_index INTEGER NOT NULL CHECK (line_index >= 0),
+  start_index INTEGER CHECK (start_index IS NULL OR start_index >= 0),
+  end_index INTEGER CHECK (end_index IS NULL OR end_index > 0),
+  CHECK ((start_index IS NULL) = (end_index IS NULL)),
+  PRIMARY KEY (message_key, ordinal),
+  FOREIGN KEY (message_key) REFERENCES assistant_messages (message_key) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE user_message_senders (
+  message_key INTEGER PRIMARY KEY,
+  sender_id TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
+  FOREIGN KEY (message_key) REFERENCES messages (message_key) ON DELETE CASCADE
+) STRICT;
 
 CREATE TABLE error_messages (
   message_key INTEGER PRIMARY KEY,
@@ -321,7 +339,14 @@ CREATE TABLE error_messages (
 ) STRICT;
 
 CREATE TABLE compaction_checkpoints (
-  message_key INTEGER PRIMARY KEY,
+  snapshot_key INTEGER PRIMARY KEY,
+  session_key INTEGER NOT NULL,
+  seq INTEGER NOT NULL,
+  run_id TEXT,
+  message_id TEXT NOT NULL,
+  timestamp TEXT NOT NULL,
+  content TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
   tail_boundary_id TEXT,
   projection_json TEXT CHECK (projection_json IS NULL OR (json_valid(projection_json) AND json_type(projection_json) = 'array')),
   policy TEXT,
@@ -333,41 +358,26 @@ CREATE TABLE compaction_checkpoints (
   usage_present INTEGER NOT NULL DEFAULT 0 CHECK (usage_present IN (0, 1)),
   usage_extra_json TEXT CHECK (usage_extra_json IS NULL OR (json_valid(usage_extra_json) AND json_type(usage_extra_json) = 'object')),
   CHECK ((context_tokens_before IS NULL) = (context_tokens_after IS NULL)),
-  FOREIGN KEY (message_key) REFERENCES messages (message_key) ON DELETE CASCADE
+  FOREIGN KEY (session_key) REFERENCES sessions (session_key) ON DELETE CASCADE,
+  FOREIGN KEY (session_key, run_id) REFERENCES runs(session_key, run_id)
 ) STRICT;
-
-CREATE TABLE run_summaries (
-  message_key INTEGER PRIMARY KEY,
-  run_id TEXT NOT NULL,
-  work_id TEXT,
-  status TEXT NOT NULL CHECK (status IN ('completed', 'failed', 'cancelled', 'interrupted')),
-  started_at TEXT NOT NULL,
-  completed_at TEXT NOT NULL,
-  duration_ms INTEGER NOT NULL CHECK (duration_ms >= 0),
-  timing_extra_json TEXT CHECK (timing_extra_json IS NULL OR (json_valid(timing_extra_json) AND json_type(timing_extra_json) = 'object')),
-  iteration_count INTEGER CHECK (iteration_count IS NULL OR iteration_count >= 0),
-  changed_files INTEGER CHECK (changed_files IS NULL OR changed_files >= 0),
-  lines_added INTEGER CHECK (lines_added IS NULL OR lines_added >= 0),
-  lines_removed INTEGER CHECK (lines_removed IS NULL OR lines_removed >= 0),
-  change_stats_extra_json TEXT CHECK (change_stats_extra_json IS NULL OR (json_valid(change_stats_extra_json) AND json_type(change_stats_extra_json) = 'object')),
-  FOREIGN KEY (message_key) REFERENCES messages (message_key) ON DELETE CASCADE
-) STRICT;
-
-CREATE INDEX run_summaries_by_run
-  ON run_summaries (run_id, message_key);
 
 CREATE TABLE run_change_paths (
-  message_key INTEGER NOT NULL,
+  run_key INTEGER NOT NULL,
   ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
   path TEXT NOT NULL,
-  PRIMARY KEY (message_key, ordinal),
-  FOREIGN KEY (message_key) REFERENCES run_summaries (message_key) ON DELETE CASCADE
+  PRIMARY KEY (run_key, ordinal),
+  FOREIGN KEY (run_key) REFERENCES runs (run_key) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE history_edits (
-  message_key INTEGER PRIMARY KEY,
+  edit_key INTEGER PRIMARY KEY,
+  session_key INTEGER NOT NULL,
+  seq INTEGER NOT NULL,
+  message_id TEXT NOT NULL,
+  timestamp TEXT NOT NULL,
   target_message_id TEXT NOT NULL,
-  FOREIGN KEY (message_key) REFERENCES messages (message_key) ON DELETE CASCADE
+  FOREIGN KEY (session_key) REFERENCES sessions(session_key) ON DELETE CASCADE
 ) STRICT;
 
 CREATE TABLE continuations (
@@ -416,6 +426,33 @@ CREATE TABLE continuation_operations (
   FOREIGN KEY (session_key) REFERENCES continuations (session_key) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;
 
+CREATE VIEW history_records AS
+SELECT m.message_key AS message_key, m.message_key AS source_key,
+       m.session_key, m.seq, m.message_id, m.role, m.timestamp, m.content,
+       m.content_blocks_json, m.content_search, m.model, m.active, m.searchable,
+       m.run_id AS owner_run_id
+FROM messages m
+UNION ALL
+SELECT t.result_key, NULL, m.session_key, t.result_sequence, t.result_id,
+       'tool', t.result_timestamp, t.result_content, NULL, NULL, NULL,
+       t.result_active, 1, m.run_id
+FROM tool_calls t JOIN messages m ON m.message_key = t.message_key
+WHERE t.result_id IS NOT NULL
+UNION ALL
+SELECT r.terminal_key, NULL, r.session_key, r.terminal_sequence, r.terminal_id,
+       'run_summary', r.completed_at, NULL, NULL, NULL, NULL,
+       r.terminal_active, 0, r.run_id
+FROM runs r WHERE r.terminal_sequence IS NOT NULL
+UNION ALL
+SELECT c.snapshot_key, NULL, c.session_key, c.seq, c.message_id,
+       'compaction_checkpoint', c.timestamp, c.content, NULL, NULL, NULL,
+       c.active, 1, c.run_id
+FROM compaction_checkpoints c
+UNION ALL
+SELECT e.edit_key, NULL, e.session_key, e.seq, e.message_id,
+       'history_edit', e.timestamp, NULL, NULL, NULL, NULL, 0, 0, NULL
+FROM history_edits e;
+
 """
 
 FTS_SQL = """
@@ -423,11 +460,11 @@ CREATE VIEW IF NOT EXISTS messages_fts_source AS
   SELECT m.message_key, COALESCE(m.content, t.result_content) AS content,
          m.content_search, a.reasoning, t.name, e.error_kind,
          (SELECT group_concat(tc.name || ' ' || tc.arguments_json, char(10))
-          FROM tool_calls AS tc WHERE tc.message_key = m.message_key) AS tool_calls
-  FROM messages AS m
-  LEFT JOIN assistant_messages AS a ON a.message_key = m.message_key
-  LEFT JOIN tool_messages AS t ON t.message_key = m.message_key
-  LEFT JOIN error_messages AS e ON e.message_key = m.message_key
+          FROM tool_calls AS tc WHERE tc.message_key = m.source_key) AS tool_calls
+  FROM history_records AS m
+  LEFT JOIN assistant_messages AS a ON a.message_key = m.source_key
+  LEFT JOIN tool_calls AS t ON t.result_key = m.message_key
+  LEFT JOIN error_messages AS e ON e.message_key = m.source_key
   WHERE m.searchable = 1 AND m.active = 1;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
@@ -442,17 +479,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
   tokenize='unicode61'
 );
 
-CREATE TRIGGER IF NOT EXISTS messages_fts_delete BEFORE DELETE ON messages
-WHEN old.searchable = 1 AND old.active = 1 BEGIN
-  INSERT INTO messages_fts(messages_fts, rowid, content, content_search, reasoning, name, error_kind, tool_calls)
-  SELECT 'delete', message_key, content, content_search, reasoning, name, error_kind, tool_calls
-  FROM messages_fts_source WHERE message_key = old.message_key;
-END;
 
 CREATE VIEW IF NOT EXISTS messages_fts_trigram_source AS
   SELECT message_key, content, content_search, name, error_kind, tool_calls
   FROM messages_fts_source
-  WHERE message_key IN (SELECT message_key FROM messages WHERE role <> 'tool');
+  WHERE message_key IN (SELECT message_key FROM history_records WHERE role <> 'tool');
 
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts_trigram USING fts5(
   content,
@@ -465,12 +496,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts_trigram USING fts5(
   tokenize='trigram'
 );
 
-CREATE TRIGGER IF NOT EXISTS messages_fts_trigram_delete BEFORE DELETE ON messages
-WHEN old.searchable = 1 AND old.active = 1 AND old.role <> 'tool' BEGIN
-  INSERT INTO messages_fts_trigram(messages_fts_trigram, rowid, content, content_search, name, error_kind, tool_calls)
-  SELECT 'delete', message_key, content, content_search, name, error_kind, tool_calls
-  FROM messages_fts_trigram_source WHERE message_key = old.message_key;
-END;
 """
 
 FTS_SQL_FALLBACK = """
@@ -478,11 +503,11 @@ CREATE VIEW IF NOT EXISTS messages_fts_source AS
   SELECT m.message_key, COALESCE(m.content, t.result_content) AS content,
          m.content_search, a.reasoning, t.name, e.error_kind,
          (SELECT group_concat(tc.name || ' ' || tc.arguments_json, char(10))
-          FROM tool_calls AS tc WHERE tc.message_key = m.message_key) AS tool_calls
-  FROM messages AS m
-  LEFT JOIN assistant_messages AS a ON a.message_key = m.message_key
-  LEFT JOIN tool_messages AS t ON t.message_key = m.message_key
-  LEFT JOIN error_messages AS e ON e.message_key = m.message_key
+          FROM tool_calls AS tc WHERE tc.message_key = m.source_key) AS tool_calls
+  FROM history_records AS m
+  LEFT JOIN assistant_messages AS a ON a.message_key = m.source_key
+  LEFT JOIN tool_calls AS t ON t.result_key = m.message_key
+  LEFT JOIN error_messages AS e ON e.message_key = m.source_key
   WHERE m.searchable = 1 AND m.active = 1;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
@@ -497,12 +522,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
   tokenize='unicode61'
 );
 
-CREATE TRIGGER IF NOT EXISTS messages_fts_delete BEFORE DELETE ON messages
-WHEN old.searchable = 1 AND old.active = 1 BEGIN
-  INSERT INTO messages_fts(messages_fts, rowid, content, content_search, reasoning, name, error_kind, tool_calls)
-  SELECT 'delete', message_key, content, content_search, reasoning, name, error_kind, tool_calls
-  FROM messages_fts_source WHERE message_key = old.message_key;
-END;
 """
 
 
@@ -779,7 +798,7 @@ def reconcile_schema(connection: sqlite3.Connection, *, schema_sql: str | None =
     Shape changes ADD COLUMN cannot express — a missing generated or
     primary-key column, a column type mismatch, a primary-key mismatch, a
     diverged unique index — raise ``SessionStoreCorruptError`` with an
-    offline-conversion instruction instead of serving a stale shape. Extra
+    schema diagnostic instead of serving a stale shape. Extra
     live objects and columns are tolerated.
 
     Returns the applied changes; empty when the database was already current.
@@ -832,12 +851,12 @@ def _missing_column_statements(
     ).fetchone()
     if live_sql_row is None or live_sql_row[0] is None:
         raise SessionStoreCorruptError(
-            f"Session database requires offline conversion: {table_name} has no declared SQL"
+            f"Invalid Session database schema: {table_name} has no declared SQL"
         )
     live_expressions, live_constraints, live_suffix = _table_declaration(str(live_sql_row[0]))
     if live_constraints != declared_constraints or live_suffix.lower() != declared_suffix.lower():
         raise SessionStoreCorruptError(
-            f"Session database requires offline conversion: {table_name} constraints or options "
+            f"Invalid Session database schema: {table_name} constraints or options "
             "do not match the declared shape"
         )
     live_types = {str(row[1]): str(row[2] or "") for row in live_rows}
@@ -854,7 +873,7 @@ def _missing_column_statements(
     ]
     if declared_pk != live_pk:
         raise SessionStoreCorruptError(
-            f"Session database requires offline conversion: {table_name} primary key "
+            f"Invalid Session database schema: {table_name} primary key "
             f"{live_pk} does not match declared {declared_pk}"
         )
     statements: list[tuple[str, str]] = []
@@ -870,7 +889,7 @@ def _missing_column_statements(
             continue
         if not column.addable:
             raise SessionStoreCorruptError(
-                f"Session database requires offline conversion: "
+                f"Invalid Session database schema: "
                 f"{table_name}.{column.name} is missing and cannot be added with ADD COLUMN"
             )
         statements.append(
@@ -901,7 +920,7 @@ def _verify_declared_shape(
         or not expression_matches
     ):
         raise SessionStoreCorruptError(
-            f"Session database requires offline conversion: {table_name}.{column.name} "
+            f"Invalid Session database schema: {table_name}.{column.name} "
             f"does not match the declared shape (live type {live_type or 'none'}, "
             f"generated {live_generated}; declared type {column.type_name or 'none'}, "
             f"generated {column.generated})"
@@ -944,6 +963,6 @@ def _missing_object_statements(
 def _verify_unique_index_shape(name: str, declared_text: str, live_text: str) -> None:
     if _normalized_ddl(live_text) != declared_text:
         raise SessionStoreCorruptError(
-            f"Session database requires offline conversion: unique index "
+            f"Invalid Session database schema: unique index "
             f"{name} does not match the declared definition"
         )

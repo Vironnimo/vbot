@@ -541,8 +541,7 @@ class SQLiteRuntime:
                         )
                     if version < SCHEMA_CONVERSION_FLOOR:
                         raise SessionStoreSchemaMismatchError(
-                            "Session database requires offline conversion: "
-                            f"schema version {version}"
+                            f"Invalid Session database schema: schema version {version}"
                         )
                     if expected_database_id is not None:
                         row = connection.execute(

@@ -19,6 +19,7 @@ from core.statistics import (
     StatisticsService,
 )
 from core.tools import tool_failure, tool_success
+from tests.core.sessions.history_fixtures import seed_history
 from tests.core.statistics.statistics_test_support import (
     BASE,
     _assistant,
@@ -194,8 +195,7 @@ def test_fork_counts_only_activity_appended_after_copied_history(tmp_path: Path)
             run_id="source-run",
         ),
     ]
-    for message in source_messages:
-        source.append(message)
+    seed_history(source, source_messages)
 
     fork = asyncio.run(
         manager.fork(SessionAddress(project_id=None, agent_id="main", session_id=source.id))
@@ -225,8 +225,7 @@ def test_fork_counts_only_activity_appended_after_copied_history(tmp_path: Path)
             run_id="fork-run",
         ),
     ]
-    for message in fork_messages:
-        fork.append(message)
+    seed_history(fork, fork_messages)
 
     report = service.report()
 
@@ -248,6 +247,7 @@ def test_fork_counts_only_activity_appended_after_copied_history(tmp_path: Path)
 def test_interrupted_runs_have_distinct_count_rate_and_daily_bucket(tmp_path: Path) -> None:
     service, manager = _service(tmp_path, ["main"])
     session = manager.create("main")
+    session = session.start_run("interrupted-run")
     session.append(ChatMessage.user("work", timestamp=BASE))
     session.append(
         _run_summary(

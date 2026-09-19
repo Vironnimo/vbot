@@ -400,7 +400,14 @@ class _HistoryDelivery:
 @pytest.mark.asyncio
 async def test_extension_page_history_projects_only_bound_visible_history() -> None:
     snapshot = SimpleNamespace(
+        runs=(),
+        generation_id="generation",
+        after_cursor="after",
+        incremental=False,
+        has_newer=False,
         page=SimpleNamespace(
+            record_sequences=(0, 1),
+            record_run_ids=("run", "run"),
             messages=(
                 _ProjectedMessage(
                     "assistant",
@@ -446,7 +453,19 @@ async def test_extension_page_history_projects_only_bound_visible_history() -> N
 
     assert result["ok"] is True
     assert result["result"] == {
-        "messages": [{"role": "assistant", "content": "[report](/api/files/capability.signature)"}],
+        "messages": [
+            {
+                "role": "assistant",
+                "content": "[report](/api/files/capability.signature)",
+                "history_sequence": 0,
+                "history_run_id": "run",
+            }
+        ],
+        "runs": [],
+        "history_generation": "generation",
+        "next_after": "after",
+        "incremental": False,
+        "has_newer": False,
         "has_more": False,
         "session_usage": {"input_tokens": 2},
         "context_usage": None,
@@ -843,6 +862,11 @@ def test_temporary_history_context_uses_canonical_tail_outside_visible_page():
     from server.rpc.extensions_methods import _temporary_history_projection
 
     snapshot = SimpleNamespace(
+        runs=(),
+        generation_id="generation",
+        after_cursor="after",
+        incremental=False,
+        has_newer=False,
         page=SimpleNamespace(messages=(), has_more=True, before_cursor="older"),
         session_usage={"input_tokens": 5000},
         context_messages=(

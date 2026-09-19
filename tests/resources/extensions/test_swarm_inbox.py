@@ -10,7 +10,7 @@ import pytest
 from core.chat.messages import ChatMessage
 from resources.extensions.swarm.store import SwarmStoreError
 from tests.resources.extensions.test_swarm_board import board as board_fixture
-from tests.resources.extensions.test_swarm_board import call
+from tests.resources.extensions.test_swarm_board import call, persist_carriers
 
 board = board_fixture
 
@@ -69,7 +69,8 @@ async def test_delivery_invalidates_pending_only_after_canonical_receipt(board, 
     assert error.value.code == "delivery_unacknowledged"
     assert not changes
     assert (await board.store.participant_status(sid, recipient))["pending_count"] == 1
-    await board.sessions.append_messages_with_receipts_async(
+    await persist_carriers(
+        board.sessions,
         binding.address,
         generation_id=binding.generation_id,
         owner_name="swarm",
@@ -113,7 +114,8 @@ async def test_inbox_delivers_oldest_pending_entries_with_a_durable_receipt(boar
     }
     receipt_id, content_hash, effect = context._delivery_receipts[0]
     binding = board.bindings[1]
-    await board.sessions.append_messages_with_receipts_async(
+    await persist_carriers(
+        board.sessions,
         binding.address,
         generation_id=binding.generation_id,
         owner_name="swarm",
@@ -142,7 +144,8 @@ async def test_wake_scan_does_not_replay_messages_read_during_a_run(board):
     assert [entry["text"] for entry in result["data"]["entries"]] == ["read-once-sentinel"]
     receipt_id, content_hash, effect = context._delivery_receipts[0]
     binding = board.bindings[1]
-    await board.sessions.append_messages_with_receipts_async(
+    await persist_carriers(
+        board.sessions,
         binding.address,
         generation_id=binding.generation_id,
         owner_name="swarm",
@@ -273,7 +276,8 @@ async def test_delivery_preserves_message_context_across_batches(board, delivery
             receipt = (0, receipt_id, content_hash, effect, "tool")
         batches.append([entry["sequence"] for entry in data["entries"]])
         entries.extend(data["entries"])
-        await board.sessions.append_messages_with_receipts_async(
+        await persist_carriers(
+            board.sessions,
             binding.address,
             generation_id=binding.generation_id,
             owner_name="swarm",
@@ -339,7 +343,8 @@ async def test_delayed_board_message_keeps_original_order_and_context(board):
     text = prepared.entries[0]
     automatic = json.loads(text[text.index("{") :])["entries"]
     assert [entry["id"] for entry in automatic] == [newer["post_id"]]
-    await board.sessions.append_messages_with_receipts_async(
+    await persist_carriers(
+        board.sessions,
         binding.address,
         generation_id=binding.generation_id,
         owner_name="swarm",

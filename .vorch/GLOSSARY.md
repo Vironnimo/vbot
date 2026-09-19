@@ -25,7 +25,7 @@ A system-owned persisted chat container belonging to exactly one Agent in its Id
 Curated durable facts in an Identity Agent's Workspace Markdown: `USER.md` for user scope, `MEMORY.md` for Agent scope. Managed by the Memory service and, when permitted, the `memory` Tool; `memory_prompt_mode` independently controls which files, if any, enter the prompt. Not scratch notes, Session history, or a broad search index; conversation recall uses Sessions and Tools such as `session_search`.
 
 ## Run
-One active Session execution: a user turn and all Model output, visible thinking blocks, Tool calls/results, and follow-up assistant output until completion, failure, or cancellation. Can span multiple Model/Tool steps; not an Agent, Session, or single Provider HTTP request.
+One Session execution with a durable identity and lifecycle: a user turn and all Model output, visible thinking blocks, Tool calls/results, and follow-up assistant output until completion, failure, interruption, or cancellation. Can span multiple Model/Tool steps; not an Agent, Session, or single Provider HTTP request.
 
 ## Agent Takeover
 Moving the current running Session, with the same id and full verbatim history, between Agents (personal or Team) via `/agent <addr> [task]`. Only the target retains ownership; it waits or immediately runs the optional task. No copy or summary: Handoff (`/handoff`) instead writes a summary into a fresh Session.
