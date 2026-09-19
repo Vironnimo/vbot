@@ -1,5 +1,59 @@
 {
   "models": {
+    "ai21/jamba-large": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 256000,
+      "family": "jamba",
+      "knowledge": "2024-08-22",
+      "last_updated": "2025-07-01",
+      "max_output_tokens": 4096,
+      "name": "Jamba Large",
+      "release_date": "2025-07-01",
+      "temperature": true
+    },
+    "ai21/jamba-mini": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 256000,
+      "family": "jamba",
+      "knowledge": "2024-08-22",
+      "last_updated": "2026-01-01",
+      "max_output_tokens": 4096,
+      "name": "Jamba Mini",
+      "release_date": "2026-01-01",
+      "temperature": true
+    },
     "aisingapore/gemma-sea-lion-v4-27b-it": {
       "capabilities": {
         "input_modalities": [
@@ -1355,6 +1409,31 @@
       "name": "Qwen3.8 Max Preview",
       "release_date": "2026-07-19",
       "temperature": true
+    },
+    "alibaba/qwen3.8-omni-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "audio",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "qwen",
+      "last_updated": "2026-09-17",
+      "max_output_tokens": 131072,
+      "name": "Qwen3.8 Omni Flash",
+      "release_date": "2026-09-17"
     },
     "alibaba/qwq-32b": {
       "capabilities": {
@@ -3638,7 +3717,7 @@
       },
       "context_window": 1000000,
       "family": "deepseek-flash",
-      "last_updated": "2026-08-21",
+      "last_updated": "2026-09-01",
       "max_output_tokens": 384000,
       "name": "DeepSeek V4 Flash Vision Exp",
       "release_date": "2026-08-21",
@@ -6994,6 +7073,27 @@
       "release_date": "2025-07-15",
       "temperature": true
     },
+    "mixedbread/toast-1": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 131000,
+      "last_updated": "2026-08-13",
+      "max_output_tokens": 4000,
+      "name": "Toast 1",
+      "release_date": "2026-08-13"
+    },
     "moonshotai/kimi-k2-thinking": {
       "capabilities": {
         "input_modalities": [
@@ -7210,6 +7310,32 @@
       "name": "Kimi K3",
       "release_date": "2026-07-16",
       "temperature": false
+    },
+    "motif-technologies/motif-3": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 262144,
+      "family": "motif",
+      "last_updated": "2026-08-07",
+      "max_output_tokens": 262144,
+      "name": "Motif 3",
+      "release_date": "2026-08-07",
+      "temperature": true
     },
     "nvidia/llama-3.1-nemotron-70b-instruct": {
       "capabilities": {
@@ -9063,6 +9189,54 @@
       "release_date": "2026-04-21",
       "temperature": false
     },
+    "openai/gpt-image-2.5-flare": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "family": "gpt-image",
+      "last_updated": "2026-09-08",
+      "max_output_tokens": 0,
+      "name": "GPT Image 2.5 Flare",
+      "release_date": "2026-09-08",
+      "temperature": false
+    },
+    "openai/gpt-image-2.5-sunburst": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "family": "gpt-image",
+      "last_updated": "2026-09-08",
+      "max_output_tokens": 0,
+      "name": "GPT Image 2.5 Sunburst",
+      "release_date": "2026-09-08",
+      "temperature": false
+    },
     "openai/gpt-oss-120b": {
       "capabilities": {
         "input_modalities": [
@@ -9784,6 +9958,52 @@
       "release_date": "2026-04-28",
       "temperature": true
     },
+    "quiverai/arrow-2": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 131072,
+      "last_updated": "2026-09-16",
+      "max_output_tokens": 65536,
+      "name": "Arrow 2",
+      "release_date": "2026-09-16"
+    },
+    "quiverai/arrow-2-telos": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1050000,
+      "last_updated": "2026-09-16",
+      "max_output_tokens": 65536,
+      "name": "Arrow 2 Telos",
+      "release_date": "2026-09-16"
+    },
     "sakana/fugu": {
       "capabilities": {
         "input_modalities": [
@@ -10267,6 +10487,54 @@
       "max_output_tokens": null,
       "name": "Trendyol Asure 12B",
       "release_date": "2026-02-19",
+      "temperature": true
+    },
+    "typesafe/jev-latest": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 64000,
+      "last_updated": "2026-09-15",
+      "max_output_tokens": 0,
+      "name": "Jev",
+      "release_date": "2026-09-15",
+      "temperature": false
+    },
+    "unbiased/pareto": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "last_updated": "2026-09-17",
+      "max_output_tokens": 131072,
+      "name": "Pareto",
+      "release_date": "2026-09-17",
       "temperature": true
     },
     "upstage/solar-pro2": {
@@ -10799,6 +11067,50 @@
       "max_output_tokens": 0,
       "name": "Grok Imagine Video 1.5",
       "release_date": "2026-05-30",
+      "temperature": false
+    },
+    "xai/grok-voice-stt-1.0": {
+      "capabilities": {
+        "input_modalities": [
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 15000,
+      "last_updated": "2026-08-04",
+      "max_output_tokens": 15000,
+      "name": "Grok Voice STT 1.0",
+      "release_date": "2026-08-04",
+      "temperature": false
+    },
+    "xai/grok-voice-tts-1.0": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "audio"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 15000,
+      "last_updated": "2026-07-31",
+      "max_output_tokens": 15000,
+      "name": "Grok Voice TTS 1.0",
+      "release_date": "2026-07-31",
       "temperature": false
     },
     "xiaomi/mimo-v2-flash": {
@@ -11467,6 +11779,29 @@
       "name": "GLM-5V-Turbo",
       "release_date": "2026-04-01",
       "temperature": true
+    },
+    "zhipuai/glm-image": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 10240,
+      "last_updated": "2026-01-19",
+      "max_output_tokens": 0,
+      "name": "GLM-Image",
+      "release_date": "2026-01-19",
+      "temperature": false
     }
   }
 }

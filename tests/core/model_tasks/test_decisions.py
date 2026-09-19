@@ -1,0 +1,138 @@
+import asyncio
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from core.model_tasks.decision_types import DecisionError
+from core.model_tasks.decisions import DecisionService
+
+
+def service(tmp_path):
+    bindings = SimpleNamespace(
+        binding_is_usable=lambda task: True,
+        binding_for=lambda task: SimpleNamespace(target="openrouter/typesafe/jev-1.13::api_key"),
+    )
+    return DecisionService(bindings, None, tmp_path / "decisions.db")
+
+
+async def finished(owner, identifier):
+    async with asyncio.timeout(5):
+        while (record := await owner.evaluation(identifier))["status"] == "running":
+            await asyncio.sleep(0.01)
+    return record
+
+
+@pytest.mark.asyncio
+async def test_disconnect_during_admission_still_starts_once(tmp_path, monkeypatch):
+    owner = service(tmp_path)
+    entered, release = asyncio.Event(), asyncio.Event()
+    evaluate = AsyncMock(return_value={"answers": {}})
+    monkeypatch.setattr(owner, "_evaluate", evaluate)
+    original = owner.get_experiment
+
+    async def delayed(identifier):
+        entered.set()
+        await release.wait()
+        return await original(identifier)
+
+    monkeypatch.setattr(owner, "get_experiment", delayed)
+    try:
+        exp = await owner.save_experiment(
+            {
+                "title": "Test",
+                "state": "same",
+                "questions": [{"id": "x", "type": "noul", "instructions": "Is this valid?"}],
+            }
+        )
+        request = asyncio.create_task(owner.start(exp["id"], 1, "same-request"))
+        await entered.wait()
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+        release.set()
+        record = await owner.start(exp["id"], 1, "same-request")
+        assert (await finished(owner, record["id"]))["status"] == "completed"
+        assert evaluate.await_count == 1
+        assert (await owner.start(exp["id"], 1, "same-request"))["id"] == record["id"]
+        with pytest.raises(DecisionError):
+            await owner.start(exp["id"], 1, "same-request", "control")
+    finally:
+        await owner.aclose()
+
+
+@pytest.mark.asyncio
+async def test_control_uses_only_fixed_commands_fresh_state_and_stops_on_done(
+    tmp_path, monkeypatch
+):
+    owner = service(tmp_path)
+    observation = {"argv": ["observe"], "cwd": str(tmp_path)}
+    action = {"argv": ["act", "literal; argument"], "cwd": str(tmp_path)}
+    calls = []
+
+    async def command(value, timeout):
+        calls.append(value)
+        if value == observation:
+            return json.dumps(
+                {"state": {"remaining": 1 if len(calls) == 1 else 0}, "done": len(calls) > 1}
+            )
+        return "applied"
+
+    monkeypatch.setattr("core.model_tasks.decisions.run_command", command)
+    evaluate = AsyncMock(return_value={"answers": {"action": {"type": "choice", "choice": "act"}}})
+    monkeypatch.setattr(owner, "_evaluate", evaluate)
+    draft = {
+        "title": "Control",
+        "state": "",
+        "questions": [],
+        "control": {
+            "instructions": "Finish work",
+            "observe": observation,
+            "actions": {
+                "act": {"description": "One step", "command": action},
+                "wait": {"description": "Wait", "command": None},
+            },
+            "interval_ms": 0,
+            "max_steps": 5,
+            "timeout_seconds": 10,
+        },
+    }
+    try:
+        exp = await owner.save_experiment(draft)
+        record = await owner.start(exp["id"], 1, "control", "control")
+        result = await finished(owner, record["id"])
+        assert result["status"] == "completed"
+        assert result["result"]["stop_reason"] == "application_done"
+        assert result["result"]["steps_completed"] == 1
+        assert calls == [observation, action, observation]
+        assert evaluate.await_args.args[1] == {"remaining": 1}
+    finally:
+        await owner.aclose()
+
+
+@pytest.mark.asyncio
+async def test_explicit_cancel_and_shutdown_retain_distinct_outcomes(tmp_path, monkeypatch):
+    owner = service(tmp_path)
+    entered = asyncio.Event()
+
+    async def evaluate(*args):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(owner, "_evaluate", evaluate)
+    exp = await owner.save_experiment(
+        {
+            "title": "Cancel",
+            "state": "",
+            "questions": [{"id": "x", "type": "noul", "instructions": "Question"}],
+        }
+    )
+    record = await owner.start(exp["id"], 1, "first")
+    await entered.wait()
+    assert (await owner.cancel(record["id"]))["status"] == "cancelled"
+    entered.clear()
+    second = await owner.start(exp["id"], 1, "second")
+    await entered.wait()
+    await owner.aclose()
+    assert owner._store.evaluation(second["id"])["status"] == "interrupted"

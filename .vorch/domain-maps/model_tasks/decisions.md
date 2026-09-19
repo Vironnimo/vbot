@@ -1,0 +1,40 @@
+# Decisions and Jev experiments
+
+`core/model_tasks/decisions.py::DecisionService` owns structured decisions and persistent experiments. It extends Task Models because Agents and the standalone Jev view need the same configured target, validation and Provider execution. `decision_store.py`, `decision_types.py`, `decision_actions.py`, and `decision_providers.py` are internal parts of this owner. External applications own their state and behavior; vBot contains no game engine or simulation.
+
+## Interfaces
+
+- Task binding: `decision`, currently OpenRouter API-key targets with `decisions` output. Discovery includes `GET /api/v1/models?output_modalities=decisions`; Jev is not a Chat Model.
+- Provider wire: `POST /api/alpha/decisions` at the configured OpenRouter origin, using the existing Connection credential and shared `ProviderTaskClient` retry/auth classification. Ambiguous outcomes are never automatically replayed.
+- Agent Tool: `evaluate(state, questions)`; contract in `../tools/evaluate.md`.
+- RPC: `decision.list/get/save/delete/history/start/result/cancel/evaluate` in `server/rpc/decision_methods.py`. `start` accepts `mode: evaluate|control` and a caller-generated request id. Direct `evaluate` returns an answer without creating experiment history.
+- WebUI: `components/decisions/JevView.svelte`, its editors/results, `lib/api/decisions.js`; navigation id `jev`.
+
+## Data and judgments
+
+State is text, a JSON object or a JSON array, preserved without interpreting embedded field names as Tool syntax. Questions have unique ids, a type, complete instructions, and optional type-specific criteria. Ids correlate answers and are not instructions. Choice uses at least two label-to-description entries; score uses a non-empty ordered array of descriptions, indexed from zero with possible interpolation; noul returns a yes value from zero to one and optionally accepts explicit `true`/`false` descriptions. Images and generated explanations are unsupported.
+
+Responses validate matching ids, types, labels, finite ranges, supplied distributions and token usage. Optional probabilities, confidence and cost remain absent if the Provider omits them. Confidence describes distribution concentration, not accuracy. Explicit criteria help interpretation but do not make judgments deterministic validation. Live September 2026 probes found uncertain noul answers for empty objects even when the question requested explicit evidence; exact missing-field checks belong in application code. Task-requirements examples are experiments, not a validated automatic Model router. Reference: [TypeSafe primitives](https://docs.typesafe.ai/primitives).
+
+## Persistence and lifecycle
+
+`<data-dir>/decisions.db` stores versioned drafts and immutable evaluation input/target snapshots. Saves/deletes require the current revision; conflicts do not overwrite newer edits. Incomplete but renderable drafts can be saved; execution validates the full relevant mode. A request id admits one evaluation and cannot be reused with a different experiment, revision or mode. Each experiment allows one active evaluation. Admission and execution are owned tasks, independent of RPC disconnection, browser visibility and navigation. The WebUI autosaves through the shared transition context and only destroys its polling on unmount.
+
+History pages contain up to 50 summaries with a sequence cursor. Full records are fetched separately. Controls retain the most recent 50 steps, trimming older steps to keep progress near 1 MB; completed step count remains cumulative. Cancel waits for command cleanup and records cancellation. Shutdown/restart records interruption, retains partial progress and never resumes/replays actions automatically. Deletion removes an experiment and its history only when inactive.
+
+## External application control
+
+An operator supplies a goal, observation command, named Actions, delay, maximum steps and command timeout. Commands contain literal `argv` plus an absolute `cwd` on the vBot host. The editor takes the executable separately and one literal argument per line. Scripts can contact another machine, but commands do not run on the browser device merely because it displays Jev.
+
+The observation command must emit UTF-8 JSON `{"state": ..., "done": false}` on stdout, with exactly these keys. `done: true` ends before another decision. Each Action contains a description and a fixed command, or null for a no-op. Jev receives the observed state, goal and descriptions; its selected id only looks up the operator-defined command. No Model data is interpolated into command arguments. Application constraints and permitted movements belong in the external adapter.
+
+Each step observes, decides, persists action intent, executes once, then waits the configured delay. A zero step limit means until explicitly stopped/application done/error. There is no overlap of successive actions. Output is bounded to 256 KB per stream, command execution has a timeout, and cancellation terminates the owned process tree. Invalid observations, command failures and Provider failures stop the control. An interrupted/failed action may already have affected the application; the UI labels unfinished action outcomes as unconfirmed and restarting begins with fresh observation.
+
+The delay is additional to observation, Provider and command latency, not a promised frame rate. One control owns a reusable HTTP connection pool, closed when it stops; authentication and retry semantics remain in the shared Task Model HTTP owner. No screen capture, vision preprocessing, global keyboard hook or built-in game is provided. Scripts/CLIs can implement input delivery to their application.
+
+## Verification owners
+
+- `tests/core/model_tasks/test_decision_{types,store,actions,providers}.py`, `test_decisions.py`: validation, revision conflicts, immutable snapshots, pagination, admission disconnection, idempotency, partial progress, exact command arguments, real subprocess timeout/cancellation and no ambiguous Provider replay.
+- `tests/core/tools/test_evaluate.py`, `tests/server/rpc/test_decision_methods.py`: production dispatch/access/readiness and RPC boundaries.
+- `components/decisions/__tests__/`: mounted autosave races, invalid JSON, explicit execution mode, navigation lifetime and view visibility.
+- Real Provider verification uses the production definitions through `scripts/probe_provider_tool_call.py` with OpenAI subscription Luna plus synthetic Jev evaluations; never put credentials or raw private state into repository fixtures.

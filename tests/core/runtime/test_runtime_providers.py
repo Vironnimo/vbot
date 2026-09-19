@@ -740,6 +740,7 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
         "calendar",
         "computer",
         "cron",
+        "evaluate",
         "generate_music",
         "generate_video",
         "ha_call_service",

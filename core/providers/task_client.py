@@ -14,6 +14,7 @@ Task-specific execution lives in the per-task ``*_providers`` wire clients in
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Protocol, Self, TypeVar
 from uuid import uuid4
@@ -207,6 +208,7 @@ class ProviderTaskClient:
         files: Any | None = None,
         headers: HeaderBuilder | None = None,
         retry_policy: TaskRequestRetryPolicy = DEFAULT_TASK_REQUEST_RETRY_POLICY,
+        http_client: httpx.AsyncClient | None = None,
     ) -> ParsedResultT:
         """POST to *endpoint*, classify the status, and parse the response.
 
@@ -216,16 +218,19 @@ class ProviderTaskClient:
         same way transient network/HTTP errors are when the endpoint is replay
         safe. Non-idempotent endpoints suppress ambiguous retries unless their
         policy declares an explicit safe status or verified idempotency header.
+        A supplied HTTP client is caller-owned and remains open after this call.
         """
 
         operation_key = uuid4().hex
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._connection.auth)
 
         async def _do_request() -> ParsedResultT:
-            async with httpx.AsyncClient(
-                base_url=self._base_url,
-                timeout=timeout,
-            ) as client:
+            context = (
+                nullcontext(http_client)
+                if http_client is not None
+                else httpx.AsyncClient(base_url=self._base_url, timeout=timeout)
+            )
+            async with context as client:
                 request_headers = dict(await (headers or self._headers)())
                 if retry_policy.idempotency_header_name is not None:
                     request_headers[retry_policy.idempotency_header_name] = operation_key
@@ -236,6 +241,7 @@ class ProviderTaskClient:
                         data=data,
                         files=files,
                         headers=request_headers,
+                        timeout=timeout,
                     )
                 except httpx.TransportError as exc:
                     raise _task_transport_error(

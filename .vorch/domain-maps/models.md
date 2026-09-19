@@ -85,3 +85,5 @@ Capabilities are facts about one model through one provider. `task_types` derive
 - `metadata` replaces wholesale at load (unlike one-level-deep `capabilities`).
 - Override-only models/providers load without a generated Provider entry when assembly supplies `name` and `capabilities.reasoning.supported`, directly or through a canonical join. A pin-only entry can therefore load through its canonical base; records still missing required fields are omitted with an "Ignoring invalid Model DB model ..." warning. Keep overrides minimal instead of duplicating inherited fields. Evidence: `core/models/models.py` unions Provider/Override ids before assembly; `tests/core/models/test_models.py` covers override-only models/providers.
 - Models are immutable after load - change layer files, then invalidate/reload; never mutate a loaded `Model`.
+
+The output modality `decisions` derives only the `decision` task type. It does not make a Model eligible for Chat. OpenRouter discovery fetches this modality separately; both the pinned Jev id and latest alias remain literal Provider wire ids (`model_tasks/decisions.md`).
