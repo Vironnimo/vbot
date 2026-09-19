@@ -136,17 +136,21 @@ def _parse(patch: str) -> list[_Operation]:
     hunk: _Hunk | None = None
     ended = False
     for number, line in enumerate(lines, 1):
-        if re.fullmatch(r"\*\*\*\s+Begin\s+Patch\s*", line) and not operations and current is None:
+        if re.fullmatch(r"\*\*\*\s+Begin\s+Patch\s*", line) and (current is None or ended):
+            current = None
+            hunk = None
+            ended = False
             continue
         if re.fullmatch(r"\*\*\*\s+End\s+Patch\s*", line):
             ended = True
             continue
-        if ended:
+        header = _HEADER.fullmatch(line)
+        if ended and not header:
             if not line.strip():
                 continue
             raise _PatchError("invalid_patch", line=number, text=line[:200])
-        header = _HEADER.fullmatch(line)
         if header:
+            ended = False
             action, path = header.groups()
             path = path.strip()
             destination = None
@@ -157,6 +161,15 @@ def _parse(patch: str) -> list[_Operation]:
                 destination = destination.strip()
             if not path or "\x00" in path or (destination and "\x00" in destination):
                 raise _PatchError("invalid_patch", line=number, text=line[:200])
+            # A repeated header before any Update body adds no operation.
+            if (
+                current is not None
+                and current.action == action.lower() == "update"
+                and current.path == path
+                and not current.hunks
+                and current.destination is None
+            ):
+                continue
             current = _Operation(action.lower(), path, destination)
             operations.append(current)
             hunk = None
@@ -184,6 +197,19 @@ def _parse(patch: str) -> list[_Operation]:
                 hint = hint.split("@@", 1)[0].strip()
             if re.fullmatch(r"-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?", hint):
                 hint = ""  # Unified-diff line numbers are advisory, never authority.
+            if (
+                hunk is not None
+                and hunk.lines
+                and all(prefix == " " for prefix, _ in hunk.lines)
+                and not hunk.eof
+                and not hunk.no_newline
+            ):
+                # A context-only block before another @@ is a locator for that
+                # edit, not a successful mutation that may be silently ignored.
+                anchor = "\n".join(text for _, text in hunk.lines)
+                if anchor.strip():
+                    hunk.hints.append(anchor)
+                hunk.lines = []
             if hunk is None or hunk.lines:
                 hunk = _Hunk()
                 current.hunks.append(hunk)
