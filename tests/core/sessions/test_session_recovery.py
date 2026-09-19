@@ -35,6 +35,39 @@ def _create_verified_snapshot(tmp_path: Path) -> tuple[Path, SessionAddress, Cha
     return snapshot, address, message
 
 
+@pytest.mark.parametrize("mode", ["manual", "incident", "automatic"])
+def test_restore_rejects_incompatible_shape_before_touching_canonical_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    from core.sessions import schema
+
+    snapshot, _address, _message = _create_verified_snapshot(tmp_path)
+    database = tmp_path / "sessions.db"
+    # The application changes its table contract while retaining schema version 1.
+    monkeypatch.setattr(
+        schema,
+        "SCHEMA_SQL",
+        schema.SCHEMA_SQL.replace(
+            "status IN ('live', 'archived')", "status IN ('live', 'archived', 'test')"
+        ),
+    )
+    if mode == "automatic":
+        database.write_bytes(b"damaged canonical database")
+    original = database.read_bytes()
+    if mode == "manual":
+        result = recovery_module.restore_snapshot(tmp_path, database, snapshot)
+    elif mode == "incident":
+        result = recovery_module.restore_snapshot_with_incident(
+            tmp_path, database, snapshot, cause="test"
+        )
+    else:
+        result = recovery_module.auto_restore_if_needed(tmp_path, database)
+    assert result is False
+    assert database.read_bytes() == original
+    assert not (tmp_path / "session-quarantine").exists()
+    assert recovery_module.read_recovery_incident(tmp_path) is None
+
+
 def test_identity_mismatch_recovers_from_a_compatible_snapshot_and_closes_connections(
     tmp_path: Path,
 ) -> None:
