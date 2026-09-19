@@ -786,7 +786,9 @@ def _first_sql_token(item: str) -> tuple[str, str]:
     return parts[0], parts[1]
 
 
-def reconcile_schema(connection: sqlite3.Connection, *, schema_sql: str | None = None) -> list[str]:
+def reconcile_schema(
+    connection: sqlite3.Connection, *, schema_sql: str | None = None, dry_run: bool = False
+) -> list[str]:
     """Bring an existing database up to the declared schema, additively.
 
     The declared DDL is the single source of truth: missing addable columns
@@ -802,6 +804,8 @@ def reconcile_schema(connection: sqlite3.Connection, *, schema_sql: str | None =
     live objects and columns are tolerated.
 
     Returns the applied changes; empty when the database was already current.
+    With dry_run, validate compatibility and return planned changes without
+    writing. Recovery uses this on a snapshot before replacing canonical data.
     """
     declared = declared_schema(schema_sql or SCHEMA_SQL)
     applied: list[tuple[str, str]] = []
@@ -826,6 +830,8 @@ def reconcile_schema(connection: sqlite3.Connection, *, schema_sql: str | None =
         )
     if not applied:
         return []
+    if dry_run:
+        return [change for _statement, change in applied]
     connection.executescript(
         "BEGIN IMMEDIATE;\n" + "\n".join(statement for statement, _change in applied) + "\nCOMMIT;"
     )

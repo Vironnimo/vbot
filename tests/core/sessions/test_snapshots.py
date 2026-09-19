@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
 from collections.abc import Callable
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +15,11 @@ import pytest
 from core.chat import ChatMessage
 from core.sessions import ChatSessionManager
 from core.sessions import snapshots as snapshots_module
-from core.sessions.errors import SessionStoreCorruptError, SessionStoreUnavailableError
+from core.sessions.errors import (
+    SessionStorageFormatError,
+    SessionStoreCorruptError,
+    SessionStoreUnavailableError,
+)
 from core.sessions.format import read_session_store_marker
 from core.sessions.recovery import (
     acknowledge_recovery_incident,
@@ -22,10 +28,59 @@ from core.sessions.recovery import (
 )
 from core.sessions.snapshots import (
     SNAPSHOT_MANIFEST_NAME,
+    create_offline_snapshot,
     create_snapshot,
     list_snapshots,
     snapshot_summaries,
 )
+
+
+@pytest.mark.parametrize("invalid_identity", [False, True])
+def test_offline_snapshot_copies_wal_and_verifies_identity(tmp_path, invalid_identity):
+    from core.sessions.schema import required_journal_mode
+
+    if required_journal_mode(sqlite3.sqlite_version_info) != "wal":
+        pytest.skip("This SQLite build cannot safely write WAL")
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("agent", session_id="offline").append(ChatMessage.user("retained"))
+    sessions.close()
+    marker = read_session_store_marker(tmp_path)
+    assert marker is not None
+    database = tmp_path / "sessions.db"
+    with closing(sqlite3.connect(database)) as writer:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        # A committed relation unknown to the loaded application remains in WAL.
+        writer.execute("CREATE TABLE snapshot_probe(value TEXT NOT NULL)")
+        writer.execute("INSERT INTO snapshot_probe VALUES ('committed in WAL')")
+        writer.commit()
+        snapshot = create_offline_snapshot(
+            tmp_path,
+            database,
+            database_id="0" * 32 if invalid_identity else str(marker["database_id"]),
+            reason="update",
+        )
+        if invalid_identity:
+            assert snapshot is None
+            assert list_snapshots(tmp_path) == []
+        else:
+            assert snapshot is not None
+            with closing(sqlite3.connect(snapshot / "sessions.db")) as saved:
+                assert saved.execute("SELECT value FROM snapshot_probe").fetchone() == (
+                    "committed in WAL",
+                )
+        assert writer.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 1
+
+
+def test_offline_snapshot_respects_incomplete_maintenance(tmp_path):
+    from core.sessions.format import MAINTENANCE_GUARD_FILE_NAME
+
+    (tmp_path / MAINTENANCE_GUARD_FILE_NAME).write_text("{}", encoding="utf8")
+    with pytest.raises(SessionStorageFormatError):
+        create_offline_snapshot(
+            tmp_path, tmp_path / "sessions.db", database_id="0" * 32, reason="update"
+        )
+    assert not (tmp_path / "session-snapshots").exists()
 
 
 @pytest.mark.parametrize("suffix", [b"\x1a", b"\r\n\x1a", b"\x00\xff"])
