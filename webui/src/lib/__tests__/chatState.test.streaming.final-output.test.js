@@ -377,7 +377,13 @@ describe('chat state helpers', () => {
       payload: { message: reportedMultiStepMessages()[0] },
     });
     appendReportedLiveRunEvents(sessionState, 'run-reported-overlap', 2);
-    loadHistory(sessionState, reportedMultiStepMessages());
+    loadHistory(
+      sessionState,
+      reportedMultiStepMessages().map((message) => ({
+        ...message,
+        history_run_id: 'run-reported-overlap',
+      })),
+    );
 
     const timelineItems = visibleTimelineItemsForRender(sessionState);
     const assistantRun = timelineItems[1];

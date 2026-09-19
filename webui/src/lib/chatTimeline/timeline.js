@@ -1,14 +1,7 @@
 import { t } from '../i18n.js';
-import {
-  mergeTimelineItems,
-  stripTimelineSequence,
-  normalizedIterationCount,
-} from './model.js';
+import { stripTimelineSequence, normalizedIterationCount } from './model.js';
 import { historyTimelineItems } from './history.js';
-import {
-  selectTrackedRunTimelineSource,
-  dropPersistedInactiveLiveRuns,
-} from './reconciliation.js';
+import { reconcileTimeline } from './reconciliation.js';
 import { liveTimelineItems } from './live.js';
 
 export function visibleTimelineItemsForRender(sessionState) {
@@ -55,7 +48,7 @@ export function assistantRunChildProgressKey(child) {
 // longer change: non-delta run events are appended exactly once
 // (appendRunEvent dedups by run_id + sequence) and never mutated. A terminal
 // Run may temporarily retain deltas while canonical output is still in flight,
-// so that group stays uncached until History or the next Run clears them.
+// so that group stays uncached until History confirms their persistence.
 // Reusing every other terminal Run's projection across the ≤33 ms streaming
 // flushes keeps the per-flush rebuild cost bound to the active Run instead of
 // growing with Session age (handoff3 B10).
@@ -75,29 +68,25 @@ function buildVisibleTimelineItems(sessionState, runEvents) {
     return [];
   }
 
-  const historyItems = historyTimelineItems(sessionState.messages);
-  const liveItems = dropPersistedInactiveLiveRuns(
-    liveTimelineItems(runEvents, liveRunProjectionCache(sessionState)),
-    sessionState.messages,
-    sessionState.currentRun?.runId ?? null,
+  const liveItems = liveTimelineItems(
+    runEvents,
+    liveRunProjectionCache(sessionState),
   );
   applyCurrentRunIterationCount(liveItems, sessionState.currentRun);
-  const reconciledItems = shouldSelectTrackedRunSource(sessionState, runEvents)
-    ? selectTrackedRunTimelineSource(
-        sessionState,
-        historyItems,
-        liveItems,
-        runEvents,
-      )
-    : mergeTimelineItems(historyItems, liveItems);
+  const reconciledItems =
+    runEvents.length > 0
+      ? reconcileTimeline(sessionState, liveItems, runEvents)
+      : historyTimelineItems(sessionState.messages);
 
   const persistedMessageIds = new Set(
     reconciledItems
       .filter((item) => item.type === 'message' && !item.liveErrorRunId)
-      .map((item) => item.id),
+      .map((item) => item.message?.id ?? item.id),
   );
   const visibleItems = reconciledItems.filter(
-    (item) => !item.liveErrorRunId || !persistedMessageIds.has(item.id),
+    (item) =>
+      !item.liveErrorRunId ||
+      !persistedMessageIds.has(item.message?.id ?? item.id),
   );
   return visibleItems.flatMap((item) =>
     isCompactionOnlyRunItem(item)
@@ -171,6 +160,8 @@ function applyCurrentRunIterationCount(liveItems, currentRun) {
     (item) => item?.type === 'assistant_run' && item.runId === currentRun.runId,
   );
   if (assistantRun) {
+    assistantRun.startTimestamp =
+      currentRun.startedAt ?? assistantRun.startTimestamp;
     assistantRun.iterationCount = iterationCount;
   }
 }
@@ -212,15 +203,4 @@ function streamEventLatestSequence(event) {
     return event._streamLatestSequence;
   }
   return event?.sequence;
-}
-
-function shouldSelectTrackedRunSource(
-  sessionState,
-  runEvents = sessionState?.runEvents,
-) {
-  return (
-    Boolean(sessionState?.currentRun?.runId) &&
-    Array.isArray(runEvents) &&
-    runEvents.length > 0
-  );
 }
