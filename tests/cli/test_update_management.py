@@ -23,6 +23,7 @@ from cli.update_management import (
     run_update,
 )
 from core.chat import ChatMessage, ChatSessionManager
+from core.sessions.errors import SessionStoreSchemaMismatchError
 from core.sessions.format import write_bootstrap_marker
 from tests.cli.update_management_test_support import (
     ScriptedRunner,
@@ -52,6 +53,15 @@ def test_update_snapshot_preflight_captures_current_format_store_when_server_is_
     manager = ChatSessionManager(tmp_path)
     manager.create("coder", session_id="session-one").append(ChatMessage.user("protected"))
     manager.close()
+
+    # An updater still runs the previous release after an offline conversion.
+    # Its Runtime must not inspect/reconcile the converted database to back it up.
+    def incompatible_runtime(*_args, **_kwargs):
+        raise SessionStoreSchemaMismatchError("The loaded Runtime uses a different shape")
+
+    monkeypatch.setattr(
+        "core.sessions.store.SessionStore._reconcile_open_database", incompatible_runtime
+    )
     instance = ServerInstance(
         host="127.0.0.1",
         port=8420,

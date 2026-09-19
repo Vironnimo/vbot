@@ -6,7 +6,7 @@ import json
 import os
 import sqlite3
 import uuid
-from contextlib import suppress
+from contextlib import closing, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -90,6 +90,18 @@ def quarantine_database(database_path: Path) -> QuarantineResult:
     return _quarantine_database(Path(database_path))
 
 
+def _snapshot_schema_compatible(database_source: Path) -> bool:
+    """Reject incompatible application shapes before any recovery mutation."""
+    from core.sessions.schema import reconcile_schema
+
+    try:
+        with closing(sqlite3.connect(readonly_sqlite_uri(database_source), uri=True)) as source:
+            reconcile_schema(source, dry_run=True)
+        return True
+    except (sqlite3.Error, SessionStoreCorruptError, OSError):
+        return False
+
+
 def _restore_snapshot_locked(
     data_dir: Path,
     database_path: Path,
@@ -99,6 +111,8 @@ def _restore_snapshot_locked(
     if parsed is None:
         return False
     manifest, database_source = parsed
+    if not _snapshot_schema_compatible(database_source):
+        return False
     marker_id = None
     try:
         from core.sessions.format import read_session_store_marker
@@ -241,7 +255,9 @@ def _restore_snapshot_with_incident_locked(
     parsed = snapshots._read_manifest(snapshot_dir, data_dir)
     if parsed is None:
         return False
-    manifest, _database_source = parsed
+    manifest, database_source = parsed
+    if not _snapshot_schema_compatible(database_source):
+        return False
     pending = _pending_incident_for_snapshot(data_dir, manifest.snapshot_id)
     incident_id = str(pending["incident_id"]) if pending else uuid.uuid4().hex
     write_recovery_incident(
