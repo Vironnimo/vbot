@@ -334,7 +334,7 @@ with a fixed scheduling window that continuous traffic cannot postpone. The
 overview reloads Board, Usage, or audit data only for the visible tab; selecting
 a tab loads its current data independently of hidden reports. Activity retains
 the existing History and live subscription while its participant's Run identity
-and active state are unchanged. A new Run or terminal state reconciles History;
+and active state are unchanged. A new Run or terminal state reconciles History through the generation/sequence append cursor, preserving older loaded pages;
 subscription failures remain retryable on a later invalidation. Coverage:
 `SwarmPage.test.performance.test.js` and `SwarmPage.test.reconciliation.test.js`.
 
@@ -351,7 +351,7 @@ Swarm Activity retains one shared Chat event projection, compresses deltas and
 flushes live updates in 33 ms batches. Initial replay is buffered through the
 server-reported `replay_through_sequence` before replacing displayed History;
 opening a long-running Session therefore does not visibly replay its old steps.
-Canonical Run Summaries retire retained live output; stale History or active
+The shared Chat Timeline uses explicit complete Run descriptors to retire retained live output; stale History or active
 snapshots cannot erase newer output or restart a settled subscription. In-flight
 inspection survives peer invalidations, and Thinking disclosure state belongs to
 the inspected Session. Tests: `SwarmPage.test.streaming.test.js` and the existing

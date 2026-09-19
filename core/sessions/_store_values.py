@@ -245,9 +245,9 @@ def _session_list_visibility_sql(
 
 _MESSAGE_INSERT = """
     INSERT INTO messages (
-        session_key, seq, message_id, role, timestamp, content,
-        content_blocks_json, content_search, model, active, searchable
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        message_key, session_key, seq, message_id, role, timestamp, content,
+        content_blocks_json, content_search, model, active, searchable, run_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 _MESSAGE_RECORD_COLUMNS = """
     m.*,
@@ -295,7 +295,7 @@ _MESSAGE_RECORD_COLUMNS = """
     c.compaction_duration_ms,
     c.usage_present AS compaction_usage_present,
     c.usage_extra_json AS compaction_usage_extra_json,
-    r.run_id,
+    m.owner_run_id AS run_id,
     r.work_id,
     r.status,
     r.started_at AS run_started_at,
@@ -308,7 +308,7 @@ _MESSAGE_RECORD_COLUMNS = """
     r.lines_removed,
     r.change_stats_extra_json,
     h.target_message_id,
-    CASE WHEN EXISTS (SELECT 1 FROM tool_calls AS tc WHERE tc.message_key = m.message_key)
+    CASE WHEN EXISTS (SELECT 1 FROM tool_calls AS tc WHERE tc.message_key = m.source_key)
          THEN (SELECT json_group_array(json_array(
                     ordered.tool_call_id,
                     ordered.name,
@@ -319,41 +319,40 @@ _MESSAGE_RECORD_COLUMNS = """
                     ordered.argument_sequence_index,
                     ordered.argument_sequence_length
                 ))
-               FROM (SELECT * FROM tool_calls WHERE message_key = m.message_key ORDER BY ordinal) AS ordered)
+               FROM (SELECT * FROM tool_calls WHERE message_key = m.source_key ORDER BY ordinal) AS ordered)
          ELSE NULL END AS tool_call_rows_json,
-    CASE WHEN EXISTS (SELECT 1 FROM assistant_output_files AS f WHERE f.message_key = m.message_key)
+    CASE WHEN EXISTS (SELECT 1 FROM assistant_output_files AS f WHERE f.message_key = m.source_key)
          THEN (SELECT json_group_array(json_array(
                     ordered.path,
                     ordered.line_index,
                     ordered.start_index,
                     ordered.end_index
                 ))
-               FROM (SELECT * FROM assistant_output_files WHERE message_key = m.message_key ORDER BY ordinal) AS ordered)
+               FROM (SELECT * FROM assistant_output_files WHERE message_key = m.source_key ORDER BY ordinal) AS ordered)
          ELSE NULL END AS output_file_rows_json,
-    CASE WHEN EXISTS (SELECT 1 FROM run_change_paths AS p WHERE p.message_key = m.message_key)
+    CASE WHEN EXISTS (SELECT 1 FROM run_change_paths AS p WHERE p.run_key = r.run_key)
          THEN (SELECT json_group_array(ordered.path)
-               FROM (SELECT path FROM run_change_paths WHERE message_key = m.message_key ORDER BY ordinal) AS ordered)
+               FROM (SELECT path FROM run_change_paths WHERE run_key = r.run_key ORDER BY ordinal) AS ordered)
          ELSE NULL END AS change_paths_json
 """
 _MESSAGE_RECORD_JOINS = """
-    LEFT JOIN assistant_messages AS a ON a.message_key = m.message_key
-    LEFT JOIN tool_messages AS t ON t.message_key = m.message_key
-    LEFT JOIN user_message_senders AS u ON u.message_key = m.message_key
-    LEFT JOIN error_messages AS e ON e.message_key = m.message_key
-    LEFT JOIN compaction_checkpoints AS c ON c.message_key = m.message_key
-    LEFT JOIN run_summaries AS r ON r.message_key = m.message_key
-    LEFT JOIN history_edits AS h ON h.message_key = m.message_key
+    LEFT JOIN assistant_messages AS a ON a.message_key = m.source_key
+    LEFT JOIN tool_calls AS t ON t.result_key = m.message_key
+    LEFT JOIN user_message_senders AS u ON u.message_key = m.source_key
+    LEFT JOIN error_messages AS e ON e.message_key = m.source_key
+    LEFT JOIN compaction_checkpoints AS c ON c.snapshot_key = m.message_key
+    LEFT JOIN runs AS r ON r.terminal_key = m.message_key
+    LEFT JOIN history_edits AS h ON h.edit_key = m.message_key
 """
 
 
 def _message_records_sql(*, where: str, order_by: str = "") -> str:
     return (
-        f"SELECT {_MESSAGE_RECORD_COLUMNS} FROM messages AS m "
+        f"SELECT {_MESSAGE_RECORD_COLUMNS} FROM history_records AS m "
         f"{_MESSAGE_RECORD_JOINS} WHERE {where} {order_by}"
     )
 
 
-_OFFLINE_IMPORT_CACHE_KIB = 262_144
 _SEARCH_RESULT_LIMIT = 1_000
 _CANONICAL_SEARCH_SCAN_LIMIT = 10_000
 
@@ -499,3 +498,11 @@ def _touch_state(connection: sqlite3.Connection, session_key: int) -> None:
         "UPDATE sessions SET state_revision = state_revision + 1 WHERE session_key = ?",
         (session_key,),
     )
+
+
+def _allocate_history_key(connection: sqlite3.Connection) -> int:
+    row = connection.execute(
+        "INSERT INTO store_meta(key, value) VALUES ('history_identity', '1') "
+        "ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1 RETURNING value"
+    ).fetchone()
+    return int(row[0])

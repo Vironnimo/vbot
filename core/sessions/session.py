@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 from collections import deque
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from core.chat.errors import ChatSessionError
@@ -35,18 +36,38 @@ if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
 
 
+@dataclass
+class _SessionBuffers:
+    pending_notes: deque[ChatMessage] = field(default_factory=deque)
+    defer_notes: bool = False
+    deferred_note_messages: list[ChatMessage] = field(default_factory=list)
+    activated_skill_contents: dict[str, str] = field(default_factory=dict)
+    activated_skill_cache_loaded: bool = False
+    lock: threading.RLock = field(default_factory=threading.RLock)
+
+
 class ChatSession:
     """Path-free Session handle backed by the canonical SQLite store."""
 
-    def __init__(self, store: SessionStore, address: SessionAddress) -> None:
+    def __init__(
+        self, store: SessionStore, address: SessionAddress, *, run_id: str | None = None
+    ) -> None:
         self._store = store
         self.address = address
-        self._pending_notes: deque[ChatMessage] = deque()
-        self._defer_notes = False
-        self._deferred_note_messages: list[ChatMessage] = []
-        self._activated_skill_contents: dict[str, str] = {}
-        self._activated_skill_cache_loaded = False
-        self._state_lock = threading.RLock()
+        self.run_id = run_id
+        self.assistant_message_id: str | None = None
+        self._buffers = _SessionBuffers()
+
+    def start_run(self, run_id: str) -> ChatSession:
+        """Admit an execution and return its explicitly bound Session writer."""
+        self._store.record_run_start(self.address, run_id=run_id)
+        return self.for_run(run_id)
+
+    def for_run(self, run_id: str) -> ChatSession:
+        """Bind writes to a Run while sharing the Session's pending context."""
+        handle = ChatSession(self._store, self.address, run_id=run_id)
+        handle._buffers = self._buffers
+        return handle
 
     @property
     def id(self) -> str:
@@ -56,11 +77,30 @@ class ChatSession:
         self.append_many([message])
 
     def append_many(self, messages: list[ChatMessage]) -> None:
-        self._store.append_messages(self.address, messages)
+        self._store.append_messages(
+            self.address,
+            messages,
+            run_id=self.run_id,
+            assistant_message_id=self.assistant_message_id,
+        )
         if any(message.role == "compaction_checkpoint" for message in messages):
-            with self._state_lock:
-                self._activated_skill_contents = current_skill_activation_contents(self.load())
-                self._activated_skill_cache_loaded = True
+            with self._buffers.lock:
+                self._buffers.activated_skill_contents = current_skill_activation_contents(
+                    self.load()
+                )
+                self._buffers.activated_skill_cache_loaded = True
+
+    async def start_tool_async(self, call_id: str, started_at: str) -> None:
+        if not self.run_id or not self.assistant_message_id:
+            raise ChatSessionError("Tool execution requires its Run and Assistant identity")
+        await _run_session_io(
+            self._store.start_tool,
+            self.address,
+            self.run_id,
+            self.assistant_message_id,
+            call_id,
+            started_at,
+        )
 
     async def append_async(self, message: ChatMessage) -> None:
         await _run_session_io(self.append, message)
@@ -92,14 +132,14 @@ class ChatSession:
         await _run_session_io(self.clear_continuation)
 
     def begin_defer_notes(self) -> None:
-        with self._state_lock:
-            self._defer_notes = True
+        with self._buffers.lock:
+            self._buffers.defer_notes = True
 
     def _take_deferred_notes(self) -> list[ChatMessage]:
-        with self._state_lock:
-            notes = list(self._deferred_note_messages)
-            self._deferred_note_messages.clear()
-            self._defer_notes = False
+        with self._buffers.lock:
+            notes = list(self._buffers.deferred_note_messages)
+            self._buffers.deferred_note_messages.clear()
+            self._buffers.defer_notes = False
             return notes
 
     def take_deferred_notes(self) -> list[ChatMessage]:
@@ -115,11 +155,11 @@ class ChatSession:
         from core.chat.messages import ChatMessage
 
         note = ChatMessage.note(content)
-        with self._state_lock:
-            deferred = self._defer_notes
+        with self._buffers.lock:
+            deferred = self._buffers.defer_notes
             if deferred:
-                self._deferred_note_messages.append(note)
-            self._pending_notes.append(note)
+                self._buffers.deferred_note_messages.append(note)
+            self._buffers.pending_notes.append(note)
         if not deferred:
             self.append(note)
 
@@ -127,25 +167,27 @@ class ChatSession:
         await _run_session_io(self.add_note, content)
 
     def drain_pending_notes(self) -> list[ChatMessage]:
-        with self._state_lock:
-            notes = list(self._pending_notes)
-            self._pending_notes.clear()
+        with self._buffers.lock:
+            notes = list(self._buffers.pending_notes)
+            self._buffers.pending_notes.clear()
             return notes
 
     def _load_activated_skill_contents(self) -> dict[str, str]:
-        with self._state_lock:
-            if not self._activated_skill_cache_loaded:
-                self._activated_skill_contents = current_skill_activation_contents(self.load())
-                self._activated_skill_cache_loaded = True
-            return dict(self._activated_skill_contents)
+        with self._buffers.lock:
+            if not self._buffers.activated_skill_cache_loaded:
+                self._buffers.activated_skill_contents = current_skill_activation_contents(
+                    self.load()
+                )
+                self._buffers.activated_skill_cache_loaded = True
+            return dict(self._buffers.activated_skill_contents)
 
     def register_skill_activation(self, name: str, content: str) -> bool:
         active = self._load_activated_skill_contents()
-        with self._state_lock:
+        with self._buffers.lock:
             if active.get(name) == content:
                 return False
-            self._activated_skill_contents[name] = content
-            self._activated_skill_cache_loaded = True
+            self._buffers.activated_skill_contents[name] = content
+            self._buffers.activated_skill_cache_loaded = True
             return True
 
     def activate_skill_context(self, name: str, data: JsonObject) -> bool:
@@ -163,9 +205,9 @@ class ChatSession:
         if messages is None:
             return self._load_activated_skill_contents()
         current = current_skill_activation_contents(messages)
-        with self._state_lock:
-            self._activated_skill_contents = dict(current)
-            self._activated_skill_cache_loaded = True
+        with self._buffers.lock:
+            self._buffers.activated_skill_contents = dict(current)
+            self._buffers.activated_skill_cache_loaded = True
         return dict(current)
 
     def bookend_timestamps(self) -> tuple[str, str] | None:
@@ -359,6 +401,9 @@ class ChatSession:
     def reflection_runs(self) -> list[JsonObject]:
         return self._store.reflection_runs(self.address)
 
+    async def load_run_messages_async(self, run_id: str) -> list[ChatMessage]:
+        return await _run_session_io(self._store.run_messages, self.address, run_id)
+
     def find_run_summary(
         self,
         *,
@@ -386,8 +431,7 @@ class ChatSession:
         return SessionRunResult(assistant, summary, latest_tool_name)
 
     def load_since(self, cursor: SessionReadCursor | None = None) -> SessionReadBatch | None:
-        result = self._store.messages_since(self.address, cursor)
-        return None if result is None else SessionReadBatch(tuple(result[0]), result[1])
+        return self._store.messages_since(self.address, cursor)
 
     async def load_since_async(
         self, cursor: SessionReadCursor | None = None

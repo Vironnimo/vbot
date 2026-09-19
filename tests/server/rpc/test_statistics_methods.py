@@ -100,6 +100,7 @@ def _state(tmp_path: Path, agent_ids: list[str]) -> tuple[SimpleNamespace, ChatS
 
 def _seed_session(manager: ChatSessionManager, agent_id: str) -> None:
     session = manager.create(agent_id)
+    session = session.start_run("r1")
     session.append(
         ChatMessage.assistant(
             model="openrouter/anthropic/claude-sonnet-4",
@@ -258,6 +259,7 @@ def test_report_includes_project_sessions_under_address_form(tmp_path: Path) -> 
     repo.mkdir()
     state.runtime.projects.create("vbot", "vBot", repo)
     project_session = manager.create("builder", project_id="vbot")
+    project_session = project_session.start_run("p1")
     project_session.append(
         ChatMessage.assistant(model="openai/gpt-5", content="hi", timestamp=BASE)
     )

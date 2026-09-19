@@ -15,6 +15,7 @@ from core.statistics import (
     AgentDirectory,
     StatisticsService,
 )
+from tests.core.sessions.history_fixtures import seed_history
 
 BASE = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
 
@@ -127,8 +128,7 @@ def _compaction(
 
 def _write_session(manager: ChatSessionManager, agent_id: str, messages: list[ChatMessage]) -> str:
     session = manager.create(agent_id)
-    for message in messages:
-        session.append(message)
+    seed_history(session, messages)
     return session.id
 
 

@@ -223,7 +223,8 @@ class _Aggregator:
         activity_messages = _session_activity_messages(messages, summary)
         in_window = [message for message in activity_messages if self._in_window(message.timestamp)]
 
-        current: list[ChatMessage] = []
+        groups: dict[str, list[ChatMessage]] = {}
+        completed: set[str] = set()
         current_model: str | None = None
         session_runs = 0
         session_tool_calls = 0
@@ -239,8 +240,11 @@ class _Aggregator:
             if message.role == "compaction_checkpoint":
                 self._record_compaction(agent_id, session_id, message)
             if message.role == "run_summary":
-                self._record_run(agent, agent_id, session_id, current, message)
-                current = []
+                self._record_run(
+                    agent, agent_id, session_id, groups.get(message.run_id or "", []), message
+                )
+                if message.run_id:
+                    completed.add(message.run_id)
                 session_runs += 1
                 continue
 
@@ -249,10 +253,12 @@ class _Aggregator:
                 current_model = _provider_model_key(message.model)
             if message.role == "tool":
                 session_tool_calls += 1
-            current.append(message)
+            if message.run_id:
+                groups.setdefault(message.run_id, []).append(message)
 
-        if _group_is_open(current):
-            self._open_run_groups += 1
+        self._open_run_groups += sum(
+            _group_is_open(group) for run_id, group in groups.items() if run_id not in completed
+        )
 
         if session_runs:
             self._runs_per_session.append(SessionRunCount(agent_id, session_id, session_runs))

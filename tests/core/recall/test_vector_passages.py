@@ -17,6 +17,7 @@ from tests.core.recall.vector_helpers import (
     request,
     timestamp,
 )
+from tests.core.sessions.history_fixtures import append_tool_fixture
 
 pytestmark = pytest.mark.asyncio
 
@@ -152,7 +153,9 @@ async def test_vector_backend_drops_chunks_when_session_no_longer_produces_any(
 
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="becomes-empty")
-    session.append(ChatMessage.user("I love bananas and fruit", timestamp=timestamp(1)))
+    session.start_run("r2").append(
+        ChatMessage.user("I love bananas and fruit", timestamp=timestamp(1))
+    )
     embeddings = _StubEmbeddings()
 
     recall = backend(tmp_path, sessions, embeddings=embeddings)
@@ -219,10 +222,13 @@ async def test_vector_backend_never_surfaces_run_summary_as_a_match(tmp_path: Pa
     }
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="mixed")
+    session = session.start_run("r1")
     session.append(
         ChatMessage.run_summary(run_id="r1", status="completed", timing=timing, iteration_count=1)
     )
-    session.append(ChatMessage.user("I love bananas and fruit", timestamp=timestamp(1)))
+    session.start_run("r2").append(
+        ChatMessage.user("I love bananas and fruit", timestamp=timestamp(1))
+    )
 
     data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search_page(
         request(query="fruit", limit=5)
@@ -248,13 +254,14 @@ async def test_vector_backend_default_search_snippet_is_conversation_not_tool_he
     session = sessions.create("coder", session_id="mixed")
     # Tool result first → it is the chunk's recorded anchor and the head of the
     # chunk headline. Its text carries the "fruit" signal so the chunk matches.
-    session.append(
+    append_tool_fixture(
+        session,
         ChatMessage.tool(
             tool_call_id="c1",
             name="bash",
             content="banana fruit raw ansi terminal dump",
             timestamp=timestamp(1),
-        )
+        ),
     )
     session.append(ChatMessage.user("I love fruit too", timestamp=timestamp(2)))
 

@@ -35,18 +35,6 @@ async def test_reflections_restore_running_and_durable_reviews(tmp_path: Path) -
 
     async def execute(run):
         await release.wait()
-        fork.append(
-            ChatMessage.run_summary(
-                run_id=run.id,
-                status="completed",
-                iteration_count=1,
-                timing={
-                    "started_at": run.created_at,
-                    "completed_at": run.created_at,
-                    "duration_ms": 0,
-                },
-            )
-        )
         return "done"
 
     run = await state.chat_runs.start(
@@ -357,6 +345,7 @@ async def test_chat_history_includes_tool_timing_and_run_summary(tmp_path: Path)
         "completed_at": "2026-05-03T14:30:02+00:00",
         "duration_ms": 1000,
     }
+    session = session.start_run("run-one")
     session.append(ChatMessage.user(content="Run this"))
     session.append(
         ChatMessage.assistant(
@@ -450,6 +439,7 @@ async def test_chat_history_incremental_projection_and_edit_reset(tmp_path: Path
     state = make_state(tmp_path, StubAdapter())
     session = state.runtime.chat_sessions.create("coder", session_id="timeline")
     await state.runtime.chat_sessions.record_run_start_async(session.address, run_id="run-one")
+    session = session.for_run("run-one")
     user = ChatMessage.user("question")
     session.append(user)
 

@@ -219,6 +219,7 @@ def _message_to_request_dict(
     agent_model: str | None = None,
 ) -> JsonObject:
     data = message.to_dict()
+    data.pop("run_id", None)
     if data.get("role") == "assistant":
         if not _replays_assistant_reasoning(message, replay_policy, agent_model):
             data.pop("reasoning", None)
@@ -352,6 +353,7 @@ def _assistant_continuation_dict(
     ``none`` replay policy even the live turn loses its reasoning fields.
     """
     data = message.to_dict()
+    data.pop("run_id", None)
     data.pop("usage", None)
     data.pop("timing", None)
     data.pop("tool_display", None)

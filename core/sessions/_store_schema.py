@@ -30,7 +30,7 @@ def _reconcile_open_database(
     version = int(connection.execute("PRAGMA user_version").fetchone()[0])
     if version != 0 and version < SCHEMA_CONVERSION_FLOOR:
         raise SessionStoreSchemaMismatchError(
-            f"Session database schema {version} requires the offline converter"
+            f"Unsupported Session database schema {version}; expected {SCHEMA_VERSION}"
         )
     applied = reconcile_schema(connection)
     if applied:
@@ -103,8 +103,8 @@ def _verify_connection(connection: sqlite3.Connection, path: Path) -> None:
             "messages",
             "assistant_messages",
             "tool_calls",
-            "tool_messages",
-            "run_summaries",
+            "history_records",
+            "runs",
             "continuations",
         ):
             connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()

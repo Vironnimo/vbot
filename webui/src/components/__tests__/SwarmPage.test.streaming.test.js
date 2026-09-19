@@ -41,6 +41,7 @@ async function openActivity(bridge) {
   await vi.waitFor(() => expect(bridge.subscribeRun).toHaveBeenCalled());
 }
 const message = (id, role, content) => ({
+  history_run_id: 'run-stream',
   id,
   role,
   content,

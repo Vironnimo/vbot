@@ -13,6 +13,20 @@ if TYPE_CHECKING:
 
 
 JsonObject = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SessionRunCompletion:
+    run_id: str
+    status: str
+    timing: JsonObject
+    iteration_count: int
+    work_id: str | None = None
+    change_stats: JsonObject | None = None
+    completion_reason: str | None = None
+    contributes_to_activity: bool = True
+
+
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 SESSION_TITLE_KEY = "title"
 SESSION_AUTO_TITLE_KEY = "auto_title"
@@ -117,6 +131,7 @@ class SessionReadCursor:
 class SessionReadBatch:
     messages: tuple[ChatMessage, ...]
     cursor: SessionReadCursor
+    active_messages: tuple[ChatMessage, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -139,6 +154,7 @@ class SessionChatHistorySnapshot:
     after_cursor: str = ""
     incremental: bool = False
     has_newer: bool = False
+    runs: tuple[JsonObject, ...] = ()
 
 
 @dataclass(frozen=True)
