@@ -14,7 +14,7 @@ import sqlite3
 import time
 import uuid
 from collections.abc import Callable
-from contextlib import suppress
+from contextlib import closing, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -496,6 +496,40 @@ def _write_manifest(path: Path, manifest: SnapshotManifest) -> None:
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _fsync_file(path)
+
+
+def create_offline_snapshot(
+    data_dir: Path,
+    database_path: Path,
+    *,
+    database_id: str,
+    reason: str,
+) -> Path | None:
+    """Capture existing SQLite state without opening or reconciling a Runtime store.
+
+    The lifecycle caller owns stopped-server admission. The updater's loaded
+    code can differ from the database's application shape; snapshotting must
+    neither reconcile that shape nor invoke Runtime recovery on the source.
+    """
+    from core.sessions.format import validate_session_store_paths
+
+    validate_session_store_paths(data_dir, database_path)
+
+    def backup(destination: Path) -> None:
+        with (
+            closing(sqlite3.connect(readonly_sqlite_uri(database_path), uri=True)) as source,
+            closing(sqlite3.connect(destination)) as target,
+        ):
+            source.execute("PRAGMA query_only=ON")
+            source.backup(target, pages=256, sleep=0.01)
+
+    return create_snapshot(
+        data_dir,
+        database_path,
+        backup,
+        database_id=database_id,
+        reason=reason,
+    )
 
 
 def create_snapshot(
