@@ -10,6 +10,10 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   in the `files` family with one required `patch` string. It is an ordinary
   Provider-neutral function Tool, not a Provider-native patch operation. The
   open model-facing schema is backed by handler-owned unknown-field validation.
+- The owner-selected argument repair accepts `input` as the patch-text alias,
+  ordinary field formatting and shared call wrappers. Equal aliases coalesce;
+  conflicting aliases (including placeholder text) and unsupported fields fail
+  before mutation. Patch contents remain literal. The canonical schema stays `patch`.
 - The definition leads with file editing and complete replacement/insertion examples,
   then Add/Delete/Move headers, batching, insertion-after and EOF targeting.
   Detailed continuation guidance belongs in
@@ -53,11 +57,14 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 ## Matching and recovery
 
 - Canonical framing is `*** Begin Patch` / `*** End Patch`; one enclosing
-  Markdown patch/diff fence, repeated leading Begin markers, and omitted framing
-  are tolerated. Body line prefixes retain their meaning even when content spells
-  a patch marker.
+  Markdown patch/diff fence, repeated leading Begin markers, omitted framing,
+  and successive frames (with or without another Begin before a file header)
+  are tolerated. Every frame is parsed before mutation. Body line prefixes retain
+  their meaning even when content spells a patch marker.
   Missing context prefixes and omitted `@@` are accepted; unknown operation
-  headers, unframed prose, and non-empty text after End Patch are rejected.
+  headers, unframed prose, and body text after End Patch without a new file header
+  are rejected. Identical adjacent Update headers before a body coalesce; a
+  different empty Update target is not discarded.
   Explicit `@@` hunks following Move File use Update-plus-Move semantics.
 - Add bodies tolerate missing `+` prefixes, including blank lines, preserving the
   entire unprefixed line and its indentation. A bare opening `@@` is tolerated.
@@ -108,8 +115,12 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   doubled quote/backslash escapes absent from the actual target.
   Surplus blank boundary context can be dropped after the full locator misses.
   Blank lines explicitly marked for deletion remain meaningful operations.
-- Context-only intermediate hunks are ignored; an entirely context-only patch
-  fails with `no_changes` and explains that context locates an edit but supplies
+- Context-only blocks before another `@@` become ordered precise locator hints
+  for that next hunk, including multiline context. Missing or ambiguous anchors
+  fail without falling back to a different location; duplicate matches after
+  the anchor remain ambiguous. Anchors do not leak into subsequent edits or files.
+  An entirely context-only patch fails with `no_changes` and explains that
+  context locates an edit but supplies
   no insertion/removal. It never invents omitted replacement content or reports
   success. Identical old/new line sequences are no-ops only when located. A unique
   precise post-state with at least four shared non-whitespace context characters
@@ -158,6 +169,8 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   and insertion, shared locks across Sessions, bounded replacement retry and
   source/destination drift. `test_file_state.py` includes a real Windows reader
   handle without delete sharing, not just injected exceptions.
+- `test_apply_patch_session_regressions.py` covers Session-derived concatenated
+  frames, repeated headers, argument aliases/conflicts and preserved context anchors.
 - Existing fuzzy-match, file-state, Runtime and Provider-schema
   tests cover the shared boundaries.
   `tests/core/providers/test_ollama.py` verifies intact patch arguments through
