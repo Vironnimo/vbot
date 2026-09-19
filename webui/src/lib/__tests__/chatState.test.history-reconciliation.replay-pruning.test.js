@@ -18,9 +18,8 @@ describe('chat state helpers', () => {
     // spawned a non-blocking sub-agent) into runEvents next to the still-active
     // note-triggered follow-up run. The parent run carries its own
     // user_message_persisted plus assistant output, all already in history.
-    // selectTrackedRunTimelineSource only reconciles the active run, so without
-    // the inactive-run drop the parent turn (user message + first assistant
-    // block) renders a second time from the replayed live events.
+    // Its canonical summary must retire that replay even while another Run
+    // is active, so the parent User/Assistant block appears only once.
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -375,7 +374,7 @@ describe('loadHistory run-event pruning during an active run (handoff3 B10)', ()
     });
   }
 
-  it('drops events of a finished run whose output the loaded history persists, keeping the active run', () => {
+  it('retires a summarized Run while retaining the active Run', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -399,6 +398,12 @@ describe('loadHistory run-event pruning during an active run (handoff3 B10)', ()
     loadHistory(sessionState, [
       { id: 'user-one', role: 'user', content: 'Hi' },
       { id: 'assistant-finished', role: 'assistant', content: 'Done.' },
+      {
+        id: 'summary-finished',
+        role: 'run_summary',
+        run_id: 'run-finished',
+        status: 'completed',
+      },
       { id: 'user-two', role: 'user', content: 'Again' },
     ]);
 

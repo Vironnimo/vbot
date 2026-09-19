@@ -658,3 +658,106 @@ it('invalidates a pending Queue read when a newer connection snapshot arrives', 
   expect(session.queue).toEqual([]);
   controller.destroy();
 });
+
+it('syncs from the cursor without discarding previously loaded older pages', async () => {
+  const loadChatHistory = vi
+    .fn()
+    .mockResolvedValueOnce({
+      history_generation: 'g',
+      next_after: 'after-2',
+      messages: [
+        { id: 'two', role: 'user', content: 'Two', history_sequence: 1 },
+      ],
+      has_more: true,
+      next_before: 'before-1',
+    })
+    .mockResolvedValueOnce({
+      history_generation: 'g',
+      messages: [
+        { id: 'one', role: 'user', content: 'One', history_sequence: 0 },
+      ],
+      has_more: false,
+    })
+    .mockResolvedValueOnce({
+      history_generation: 'g',
+      next_after: 'after-3',
+      incremental: true,
+      has_newer: true,
+      messages: [
+        { id: 'three', role: 'user', content: 'Three', history_sequence: 2 },
+      ],
+    })
+    .mockResolvedValueOnce({
+      history_generation: 'g',
+      next_after: 'after-4',
+      incremental: true,
+      has_newer: false,
+      messages: [
+        { id: 'four', role: 'user', content: 'Four', history_sequence: 3 },
+      ],
+    });
+  const { controller, chatState } = setup({
+    operationOverrides: { loadChatHistory },
+  });
+  await controller.loadHistoryForSession('alpha', 'session');
+  const session = ensureSessionState(chatState, 'alpha', 'session');
+  await controller.loadOlderHistory(session);
+  await controller.loadHistoryForSession('alpha', 'session');
+  expect(loadChatHistory.mock.calls[2][0]).toMatchObject({ after: 'after-2' });
+  expect(loadChatHistory.mock.calls[3][0]).toMatchObject({ after: 'after-3' });
+  expect(session.messages.map((message) => message.id)).toEqual([
+    'one',
+    'two',
+    'three',
+    'four',
+  ]);
+  expect(session.historyAfter).toBe('after-4');
+  expect(session.hasOlderHistory).toBe(false);
+  controller.destroy();
+});
+
+it('replaces a collected delta when a concurrent edit invalidates its cursor', async () => {
+  const loadChatHistory = vi
+    .fn()
+    .mockResolvedValueOnce({
+      history_generation: 'g',
+      next_after: 'a',
+      messages: [
+        { id: 'old', role: 'user', content: 'Old', history_sequence: 0 },
+      ],
+    })
+    .mockResolvedValueOnce({
+      history_generation: 'g',
+      next_after: 'b',
+      incremental: true,
+      has_newer: true,
+      messages: [
+        {
+          id: 'stale',
+          role: 'assistant',
+          content: 'Stale',
+          history_sequence: 1,
+        },
+      ],
+    })
+    .mockResolvedValueOnce({
+      history_generation: 'g',
+      next_after: 'c',
+      history_reset: true,
+      incremental: false,
+      messages: [
+        { id: 'new', role: 'user', content: 'New', history_sequence: 3 },
+      ],
+    });
+  const { controller, chatState } = setup({
+    operationOverrides: { loadChatHistory },
+  });
+  await controller.loadHistoryForSession('alpha', 'session');
+  await controller.loadHistoryForSession('alpha', 'session');
+  expect(
+    ensureSessionState(chatState, 'alpha', 'session').messages.map(
+      (message) => message.id,
+    ),
+  ).toEqual(['new']);
+  controller.destroy();
+});

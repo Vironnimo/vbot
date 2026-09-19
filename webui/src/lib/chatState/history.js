@@ -10,42 +10,87 @@ import {
 } from './sessionState.js';
 
 export function loadHistory(sessionState, messages, options = {}) {
-  const visibleMessages = Array.isArray(messages)
+  const incomingMessages = Array.isArray(messages)
     ? messages.filter(isVisibleHistoryMessage)
     : [];
-  const retainLiveRunProjection = shouldRetainLiveRunProjection(
-    sessionState,
-    visibleMessages,
+  const changedGeneration = Boolean(
+    sessionState.historyGeneration &&
+    options.generation &&
+    options.generation !== sessionState.historyGeneration,
   );
-  // While a Run is active, or its just-finished output is newer than the
-  // arriving History snapshot, retained events survive the reload. Events of
-  // other Runs whose output the fresh History now persists are dead weight:
-  // render-time dedup drops them anyway, so prune them here (handoff3 B10).
-  const retainedRunEvents = retainLiveRunProjection
-    ? pruneRunEventsPersistedInHistory(
-        sessionState.runEvents,
+  const incremental = options.incremental === true && !changedGeneration;
+  const visibleMessages = incremental
+    ? mergeHistoryRecords(sessionState.messages, incomingMessages)
+    : incomingMessages;
+  const activeRunId = isRunActive(sessionState)
+    ? sessionState.currentRun?.runId
+    : null;
+  const keepGeneration = (event) =>
+    !changedGeneration &&
+    (!options.reset || event.run_id === options.activeRunId);
+  const retainedRunEvents = changedGeneration
+    ? []
+    : pruneRunEventsPersistedInHistory(
+        sessionState.runEvents.filter(keepGeneration),
         visibleMessages,
-        sessionState.currentRun?.runId ?? null,
-      )
-    : [];
-  const retainedStreamingRunEvents = retainLiveRunProjection
-    ? sessionState.streamingRunEvents
-    : [];
+        activeRunId,
+        options.generation,
+      );
+  const retainedStreamingRunEvents = changedGeneration
+    ? []
+    : sessionState.streamingRunEvents
+        .filter(keepGeneration)
+        .filter(
+          (event) =>
+            event.run_id === activeRunId ||
+            !runProjectionPersistedInHistory(
+              sessionState.runEvents,
+              visibleMessages,
+              event.run_id,
+              options.generation,
+            ),
+        );
+  const retainLiveRunProjection =
+    !changedGeneration &&
+    (isRunActive(sessionState) ||
+      retainedRunEvents.length > 0 ||
+      retainedStreamingRunEvents.length > 0);
   const retainedStreamingPhase = retainLiveRunProjection
     ? sessionState.streamingPhase
     : 0;
+  const retainedRunIds = new Set([
+    activeRunId,
+    ...retainedRunEvents.map((event) => event.run_id),
+    ...retainedStreamingRunEvents.map((event) => event.run_id),
+  ]);
   const retainedSeenStreamingEventKeys = retainLiveRunProjection
-    ? sessionState.seenStreamingEventKeys
+    ? new Set(
+        [...sessionState.seenStreamingEventKeys].filter((key) =>
+          retainedRunIds.has(key.split(':').slice(0, -2).join(':')),
+        ),
+      )
     : new Set();
   sessionState.messages = visibleMessages;
+  if (
+    changedGeneration ||
+    (options.reset && sessionState.currentRun?.runId !== options.activeRunId)
+  ) {
+    sessionState.currentRun = null;
+    sessionState.status = CHAT_STATUS_IDLE;
+  }
+  sessionState.historyGeneration =
+    options.generation ?? sessionState.historyGeneration;
+  sessionState.historyAfter = options.nextAfter ?? '';
   sessionState.historySnapshotVersion =
     (sessionState.historySnapshotVersion ?? 0) + 1;
   sessionState.historyLoaded = true;
-  sessionState.hasOlderHistory = options.hasMore === true;
-  sessionState.historyBefore =
-    options.hasMore === true && typeof options.nextBefore === 'string'
-      ? options.nextBefore
-      : '';
+  if (!incremental) {
+    sessionState.hasOlderHistory = options.hasMore === true;
+    sessionState.historyBefore =
+      options.hasMore === true && typeof options.nextBefore === 'string'
+        ? options.nextBefore
+        : '';
+  }
   sessionState.runEvents = retainedRunEvents;
   sessionState.streamingRunEvents = retainedStreamingRunEvents;
   sessionState.streamingPhase = retainedStreamingPhase;
@@ -73,16 +118,18 @@ export function loadHistory(sessionState, messages, options = {}) {
   return sessionState;
 }
 
-function shouldRetainLiveRunProjection(sessionState, messages) {
-  if (isRunActive(sessionState)) {
-    return true;
-  }
-
-  const runId = sessionState?.currentRun?.runId;
-  return (
-    hasRetainedTerminalRunProjection(sessionState) &&
-    !runProjectionPersistedInHistory(sessionState.runEvents, messages, runId)
+function mergeHistoryRecords(existing, incoming) {
+  const records = new Map(
+    (existing ?? []).map((message) => [recordKey(message), message]),
   );
+  for (const message of incoming) records.set(recordKey(message), message);
+  return [...records.values()];
+}
+
+function recordKey(message) {
+  return Number.isInteger(message.history_sequence)
+    ? message.history_sequence
+    : message.id;
 }
 
 export function hasRetainedTerminalRunProjection(sessionState) {
@@ -112,15 +159,11 @@ export function attachableHistoryRun(sessionState, activeRun) {
 }
 
 export function prependHistory(sessionState, messages, options = {}) {
-  const existingIds = new Set(
-    (sessionState.messages ?? [])
-      .map((message) => message?.id)
-      .filter((id) => typeof id === 'string' && id.length > 0),
-  );
+  const existingIds = new Set((sessionState.messages ?? []).map(recordKey));
   const olderMessages = Array.isArray(messages)
     ? messages
         .filter(isVisibleHistoryMessage)
-        .filter((message) => !message?.id || !existingIds.has(message.id))
+        .filter((message) => !existingIds.has(recordKey(message)))
     : [];
 
   sessionState.messages = [...olderMessages, ...(sessionState.messages ?? [])];
@@ -154,6 +197,7 @@ export function truncateSessionForEdit(sessionState, messageId, acceptedRunId) {
     return false;
   }
   sessionState.messages = sessionState.messages.slice(0, targetIndex);
+  sessionState.historyAfter = '';
   sessionState.historySnapshotVersion =
     (sessionState.historySnapshotVersion ?? 0) + 1;
   sessionState.runEvents = sessionState.runEvents.filter(

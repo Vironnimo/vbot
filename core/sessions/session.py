@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 
 from core.chat.errors import ChatSessionError
 from core.sessions._io import (
-    _encode_chat_history_cursor,
     _run_session_io,
 )
 from core.sessions._metadata import _decode_chat_history_cursor
@@ -21,7 +20,6 @@ from core.sessions._types import (
     SessionHistoryRecord,
     SessionHistorySectionStats,
     SessionHistorySnapshot,
-    SessionMessagePage,
     SessionReadBatch,
     SessionReadCursor,
     SessionRunResult,
@@ -199,25 +197,22 @@ class ChatSession:
         *,
         limit: int | None,
         before: str | None = None,
+        after: str | None = None,
         excluded_roles: Sequence[str] = (),
         complete_run_segment: bool = False,
         background_roles: Sequence[str] = (),
         background_tool_names: Sequence[str] = (),
     ) -> SessionChatHistorySnapshot:
         decoded_cursor = None if before is None else _decode_chat_history_cursor(before)
+        if before is not None and after is not None:
+            raise ChatSessionError("before and after cannot be combined")
+        after_cursor = None if after is None else _decode_chat_history_cursor(after)
+        if after is not None and after_cursor is None:
+            raise ChatSessionError("after must be a history cursor")
         before_message_id = before if decoded_cursor is None else None
         expected_generation_id = None if decoded_cursor is None else decoded_cursor[0]
         before_sequence = None if decoded_cursor is None else decoded_cursor[1]
-        (
-            messages,
-            has_more,
-            editable_ids,
-            usage,
-            context_messages,
-            background_messages,
-            generation_id,
-            page_floor,
-        ) = self._store.chat_history_snapshot(
+        return self._store.chat_history_snapshot(
             self.address,
             limit=limit,
             before_message_id=before_message_id,
@@ -227,21 +222,7 @@ class ChatSession:
             complete_run_segment=complete_run_segment,
             background_roles=background_roles,
             background_tool_names=background_tool_names,
-        )
-        return SessionChatHistorySnapshot(
-            page=SessionMessagePage(
-                tuple(messages),
-                has_more,
-                editable_ids,
-                (
-                    _encode_chat_history_cursor(generation_id, page_floor)
-                    if has_more and page_floor is not None
-                    else None
-                ),
-            ),
-            session_usage=usage,
-            context_messages=tuple(context_messages),
-            background_messages=tuple(background_messages),
+            after=after_cursor,
         )
 
     def status_snapshot(self) -> SessionStatusSnapshot:
