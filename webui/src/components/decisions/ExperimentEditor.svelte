@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy, untrack } from 'svelte';
   import Button from '../ui/Button.svelte';
+  import TabList from '../ui/TabList.svelte';
   import TextField from '../ui/TextField.svelte';
   import TextArea from '../ui/TextArea.svelte';
   import ControlEditor from './ControlEditor.svelte';
@@ -53,7 +54,10 @@
   let saved = $state(false);
   let saving = $state(false);
   let busy = $state(false);
+  let panel = $state('setup');
+  let panelChosen = false;
   let history = $state([]);
+  let active = $derived(history.find((item) => item.status === 'running'));
   let before = $state(null);
   let selected = $state(null);
   let comparison = $state(null);
@@ -72,6 +76,7 @@
   const transitions = useAutosaveContext();
   const unregister = transitions.register(autosave.participant);
   $effect(() => {
+    if (hasChanges()) panelChosen = true;
     autosave.scheduleRun();
   });
 
@@ -181,6 +186,7 @@
         mode,
       );
       pendingStart = null;
+      panel = 'results';
       await loadHistory();
     } catch (failure) {
       error = failure.message;
@@ -214,6 +220,8 @@
   }
 
   function restore() {
+    panel = 'setup';
+    mode = selected.snapshot.mode;
     const source = selected.snapshot;
     draft = {
       title: source.title,
@@ -228,7 +236,10 @@
   }
 
   onMount(() => {
-    void loadHistory();
+    void loadHistory().then(() => {
+      if (!destroyed && !panelChosen && !hasChanges() && history.length)
+        panel = 'results';
+    });
   });
   onDestroy(() => {
     destroyed = true;
@@ -240,7 +251,57 @@
 </script>
 
 <div class="jev-editor">
-  <section class="jev-inputs">
+  <div class="jev-editor-bar">
+    <TabList
+      idPrefix={`${componentId}-panels`}
+      ariaLabel={t('jev.experimentSections', 'Experiment sections')}
+      items={[
+        { id: 'setup', label: t('jev.setup', 'Setup') },
+        { id: 'results', label: t('jev.results', 'Results') },
+      ]}
+      value={panel}
+      onChange={(value) => {
+        panelChosen = true;
+        panel = value;
+      }}
+    />
+    <div class="jev-actions">
+      {#if active}
+        <Button disabled={busy} onClick={cancel}
+          >{(selected?.id === active.id ? selected.snapshot.mode : mode) ===
+          'control'
+            ? t('jev.stopControl', 'Stop control')
+            : t('jev.cancel', 'Cancel evaluation')}</Button
+        >
+      {:else}
+        <Button
+          variant="primary"
+          disabled={busy || !available}
+          onClick={evaluate}
+          >{mode === 'control'
+            ? t('jev.startControl', 'Start control')
+            : panel === 'results'
+              ? t('jev.evaluateSetup', 'Evaluate setup')
+              : t('jev.evaluate', 'Evaluate')}</Button
+        >
+      {/if}
+    </div>
+  </div>
+  {#if error}<p class="jev-error" role="alert">{error}</p>{/if}
+  {#if conflict}<Button onClick={reloadSaved}
+      >{t(
+        'jev.reloadSaved',
+        'Discard local edits and reload saved version',
+      )}</Button
+    >{/if}
+  <div
+    class="jev-inputs"
+    role="tabpanel"
+    id={`${componentId}-panels-panel-setup`}
+    aria-labelledby={`${componentId}-panels-tab-setup`}
+    hidden={panel !== 'setup'}
+    tabindex="0"
+  >
     <div class="jev-field">
       <label for={`${componentId}-title`}
         >{t('jev.title', 'Experiment title')}</label
@@ -283,7 +344,11 @@
       />
     {:else}
       <div class="jev-row">
-        <h3>{t('jev.state', 'State')}</h3>
+        <h3>
+          <label for={`${componentId}-state`}
+            >{t('jev.stateInput', 'State · What Jev reads')}</label
+          >
+        </h3>
         <div class="jev-actions">
           <Button
             variant={jsonMode ? 'tertiary' : 'secondary'}
@@ -300,17 +365,25 @@
       <p class="jev-help">
         {t(
           'jev.stateHelp',
-          'Everything Jev needs to judge your questions. This input is sent once for all questions.',
+          'The text or data to evaluate. Every question below refers to this same state. Edit it to try a different situation.',
         )}
       </p>
       <TextArea
+        id={`${componentId}-state`}
         ariaLabel={t('jev.state', 'State')}
+        class="jev-state-input"
         value={stateText}
-        rows={8}
+        rows={6}
         code={jsonMode}
         onInput={(value) => (stateText = value)}
       />
       <h3>{t('jev.questions', 'Questions')}</h3>
+      <p class="jev-help">
+        {t(
+          'jev.questionsAboutState',
+          'Each question is answered independently using the state above.',
+        )}
+      </p>
       {#each draft.questions as question, index (index)}
         <QuestionEditor
           {question}
@@ -335,13 +408,6 @@
         >
       </div>
     {/if}
-    {#if error}<p class="jev-error" role="alert">{error}</p>{/if}
-    {#if conflict}<Button onClick={reloadSaved}
-        >{t(
-          'jev.reloadSaved',
-          'Discard local edits and reload saved version',
-        )}</Button
-      >{/if}
     <div class="jev-row jev-submit">
       <span class="jev-help" role="status"
         >{saving
@@ -355,67 +421,61 @@
         onClick={() => autosave.participant.runSave('manual', { force: true })}
         >{t('jev.save', 'Save')}</Button
       >
-      {#if history.some((item) => item.status === 'running')}
-        <Button disabled={busy} onClick={cancel}
-          >{mode === 'control'
-            ? t('jev.stopControl', 'Stop control')
-            : t('jev.cancel', 'Cancel evaluation')}</Button
-        >
-      {:else}
-        <Button
-          variant="primary"
-          disabled={busy || !available}
-          onClick={evaluate}
-          >{mode === 'control'
-            ? t('jev.startControl', 'Start control')
-            : t('jev.evaluate', 'Evaluate')}</Button
-        >
-      {/if}
     </div>
-  </section>
-  <section class="jev-history">
-    <div class="jev-row">
-      <h3>{t('jev.history', 'Evaluation history')}</h3>
-      <Button variant="tertiary" onClick={() => loadHistory()}
-        >{t('jev.refresh', 'Refresh')}</Button
-      >
-    </div>
-    <p class="jev-help">
-      {t(
-        'jev.historyHelp',
-        'Each result keeps its original input and model. Compare two results, or reuse a previous input.',
-      )}
-    </p>
-    {#if historyError}<p role="alert">{historyError}</p>{/if}
-    {#if !history.length}<div class="jev-empty">
+  </div>
+  <div
+    class="jev-history"
+    role="tabpanel"
+    id={`${componentId}-panels-panel-results`}
+    aria-labelledby={`${componentId}-panels-tab-results`}
+    hidden={panel !== 'results'}
+    tabindex="0"
+  >
+    {#if historyError}<p role="alert">{historyError}</p>
+      <Button onClick={() => loadHistory()}>{t('common.retry', 'Retry')}</Button
+      >{/if}
+    {#if !history.length && !historyError}<div class="jev-empty">
         {t(
           'jev.noResults',
           'Evaluate your questions to see their answers here.',
         )}
       </div>{/if}
-    <div class="jev-history-list">
-      {#each history as item (item.id)}
-        <div class="jev-row">
-          <Button
-            variant={selected?.id === item.id ? 'secondary' : 'tertiary'}
-            onClick={() => inspect(item.id)}
-            >{formatDateTimeInApplicationZone(item.created_at, undefined, {
-              dateStyle: 'short',
-              timeStyle: 'medium',
-            })} · {t(`jev.status.${item.status}`, item.status)}</Button
-          >
-          <Button
-            variant="tertiary"
-            disabled={selected?.id === item.id}
-            onClick={() => inspect(item.id, true)}
-            >{t('jev.compare', 'Compare')}</Button
-          >
+    {#if history.length}<details class="jev-history-picker">
+        <summary
+          >{t('jev.history', 'Evaluation history')} · {history.length}</summary
+        >
+        <p class="jev-help">
+          {t(
+            'jev.historyHelp',
+            'Each result keeps its original input and model. Compare two results, or reuse a previous input.',
+          )}
+        </p>
+        <div class="jev-history-list">
+          {#each history as item (item.id)}
+            <div class="jev-row">
+              <Button
+                variant={selected?.id === item.id ? 'secondary' : 'tertiary'}
+                onClick={() => inspect(item.id)}
+                >{formatDateTimeInApplicationZone(item.created_at, undefined, {
+                  dateStyle: 'short',
+                  timeStyle: 'medium',
+                })} · {t(`jev.status.${item.status}`, item.status)}</Button
+              >
+              <Button
+                variant="tertiary"
+                disabled={selected?.id === item.id}
+                onClick={() => inspect(item.id, true)}
+                >{t('jev.compare', 'Compare')}</Button
+              >
+            </div>
+          {/each}
+          {#if before}<Button
+              variant="tertiary"
+              onClick={() => loadHistory(true)}
+              >{t('jev.loadMore', 'Load older results')}</Button
+            >{/if}
         </div>
-      {/each}
-      {#if before}<Button variant="tertiary" onClick={() => loadHistory(true)}
-          >{t('jev.loadMore', 'Load older results')}</Button
-        >{/if}
-    </div>
+      </details>{/if}
     {#if selected}<div class="jev-actions">
         <Button variant="tertiary" onClick={restore}
           >{t('jev.reuse', 'Reuse this input')}</Button
@@ -438,5 +498,5 @@
           record={comparison}
         />{/if}
     </div>
-  </section>
+  </div>
 </div>

@@ -29,35 +29,37 @@
   display: flex;
 }
 .jev-library {
-  width: 225px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 20px 14px;
-  border-right: 1px solid var(--border);
+  flex: 1;
+  min-width: 0;
   overflow: auto;
+  padding: 24px;
 }
-.jev-experiments,
-.jev-library-footer {
+.jev-library-content {
+  max-width: 960px;
+  margin: 0 auto;
+}
+.jev-experiments {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  margin: 20px 0 36px;
 }
 .jev-experiments button {
   justify-content: flex-start;
   text-align: left;
   white-space: normal;
   overflow-wrap: anywhere;
+  padding: 14px;
 }
-.jev-library-footer {
-  margin-top: auto;
-  padding-top: 28px;
+.jev-examples {
+  border-top: 1px solid var(--border);
+  padding-top: 20px;
 }
-.jev-library h3 {
-  font-size: var(--fs-sm);
-  color: var(--text-med);
-  margin: 0 0 4px;
+.jev-example {
+  margin: 20px 0;
+}
+.jev-example p {
+  margin-top: 8px;
 }
 .jev-main {
   min-width: 0;
@@ -81,18 +83,39 @@
 .jev-editor {
   flex: 1;
   min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(320px, 1fr) minmax(300px, 1fr);
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
+}
+.jev-editor-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  gap: 12px;
+  padding: 0 26px;
+  border-bottom: 1px solid var(--border);
+}
+.jev-editor-bar .tab-list {
+  border-bottom: 0;
 }
 .jev-inputs,
 .jev-history {
-  min-width: 0;
-  padding: 22px;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 24px max(26px, calc((100% - 960px) / 2));
   overflow: auto;
 }
-.jev-inputs {
-  border-right: 1px solid var(--border);
+.jev-state-input {
+  min-height: 150px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-md);
+  line-height: 1.7;
+}
+.jev-state-input.text-area--code {
+  font-family: var(--font-mono);
 }
 .jev-inputs h3,
 .jev-history h3 {
@@ -146,10 +169,6 @@
   grid-template-columns: 22px minmax(0, 1fr) auto;
 }
 .jev-submit {
-  position: sticky;
-  bottom: 0;
-  background: var(--bg);
-  z-index: 1;
   margin-top: 22px;
   padding: 14px 0;
   border-top: 1px solid var(--border);
@@ -240,64 +259,30 @@
   color: var(--text-med);
   text-align: center;
 }
-.jev-welcome {
-  max-width: 670px;
-  margin: 9vh auto;
-  padding: 30px;
-}
-.jev-welcome h2 {
-  font-size: 30px;
-  font-weight: 500;
-  line-height: 1.3;
-}
-.jev-welcome p {
-  color: var(--text-med);
-  line-height: 1.8;
-  margin-bottom: 20px;
-}
-.jev-eyebrow {
-  color: var(--accent);
-  font-size: var(--fs-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-}
 .jev-dialog-body {
   padding: 8px 24px 24px;
 }
-@media (max-width: 1150px) {
-  .jev-main {
-    overflow: auto;
-  }
-  .jev-editor {
-    flex: none;
-    overflow: visible;
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .jev-inputs,
-  .jev-history {
-    overflow: visible;
-  }
-  .jev-inputs {
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-  }
-}
 @media (max-width: 650px) {
-  .jev-workspace {
-    flex-direction: column;
-  }
-  .jev-library {
-    width: auto;
-    max-height: 220px;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-  }
-  .jev-library-footer {
-    padding-top: 0;
-  }
   .jev-header {
     padding: 14px;
+    gap: 12px;
   }
+  .jev-header p {
+    display: none;
+  }
+  .jev-toolbar {
+    flex-wrap: wrap;
+    padding: 8px 14px;
+  }
+  .jev-toolbar > span {
+    flex-basis: calc(100% - 150px);
+  }
+  .jev-editor-bar {
+    padding: 0 14px;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .jev-library,
   .jev-inputs,
   .jev-history {
     padding: 14px;
@@ -305,4 +290,58 @@
   .jev-comparison {
     grid-template-columns: minmax(0, 1fr);
   }
+  .jev-criterion:not(.jev-level) {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .jev-criterion:not(.jev-level) > :first-child {
+    grid-column: 1;
+  }
+  .jev-criterion:not(.jev-level) > :nth-child(2) {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .jev-criterion:not(.jev-level) > button {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+}
+
+.jev-state-preview {
+  margin: 16px 0;
+  padding: 14px 16px;
+  border-left: 2px solid var(--border-2);
+  background: var(--surface);
+}
+.jev-state-preview .jev-help {
+  margin: 0;
+}
+.jev-state-excerpt {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  margin: 10px 0;
+  line-height: 1.6;
+}
+.jev-state-dialog.modal {
+  width: min(900px, calc(100vw - 28px));
+  max-width: 900px;
+}
+.jev-state-reader {
+  padding: 0 24px 20px;
+}
+.jev-state-full.text-area {
+  height: 55dvh;
+  min-height: 100px;
+  resize: none;
+}
+
+.jev-history-picker {
+  margin-bottom: 12px;
+}
+.jev-history-picker > summary {
+  cursor: pointer;
+  padding: 6px 0;
+  color: var(--text-med);
 }

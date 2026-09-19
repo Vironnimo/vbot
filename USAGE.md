@@ -737,6 +737,8 @@ Configure an OpenRouter key, then select **Decision** in **Settings → Speciali
 
 Open **Jev** from the main navigation. Create a saved experiment or start from Support triage / Task requirements. Supply text or JSON and add focused questions: **Choice** selects a named option, **Score** rates ordered levels starting at zero, and **Noul** estimates yes on a zero-to-one scale. Explicit criteria help clarify meanings. Evaluate, inspect distributions/model/usage, compare history entries, or reuse a previous input. Every evaluation retains its own input and target. Confidence measures concentration of answers, not correctness; uncertain or missing evidence may produce intermediate values. This is not a deterministic field validator or a validated automatic LLM router.
 
+Experiments open in a single workspace with **Setup** and **Results** tabs. Existing evaluations open on Results. Each result shows a short preview of the state used for that evaluation; **View full state** opens the complete text or JSON in a scrollable reader with Copy. Comparing results keeps each state's preview beside its own answers. Question identifiers are managed automatically. Setup edits autosave; the optional Save action sits after the fields.
+
 Agents with access to the `evaluate` Tool use the same configured Model. Their ordinary Chat Model remains independent. Jev currently accepts text/JSON, not screenshots or image attachments.
 
 For **Application control**, provide a goal and a state-reading command. Commands run on the **vBot host**, with an executable, one literal argument per line, and an absolute working directory. The observation command must print UTF-8 JSON with exactly these fields:
