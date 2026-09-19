@@ -60,11 +60,26 @@ it('shows the workspace under the real shell cascade and opens a saved example',
     'flex',
   );
   const button = [...document.querySelectorAll('button')].find(
-    (node) => node.textContent.trim() === 'Open support triage example',
+    (node) => node.textContent.trim() === 'Support triage',
   );
   button.click();
   await settle();
   expect(api.saveDecisionExperiment).toHaveBeenCalledOnce();
   expect(document.querySelectorAll('.jev-question')).toHaveLength(3);
   expect(document.querySelector('.jev-editor')).not.toBeNull();
+  expect(document.querySelector('.jev-library')).toBeNull();
+  expect(document.querySelector('[aria-label="State"]').value).toBe(
+    api.saveDecisionExperiment.mock.calls[0][0].state,
+  );
+  expect(document.querySelector('[aria-label="Answer ID"]')).toBeNull();
+  expect(['', 'static']).toContain(
+    getComputedStyle(document.querySelector('.jev-submit')).position,
+  );
+  expect(document.querySelector('.jev-history').hidden).toBe(true);
+  [...document.querySelectorAll('button')]
+    .find((node) => node.textContent.includes('←'))
+    .click();
+  await settle();
+  expect(document.querySelector('.jev-library')).not.toBeNull();
+  expect(document.querySelector('.jev-editor')).toBeNull();
 });
