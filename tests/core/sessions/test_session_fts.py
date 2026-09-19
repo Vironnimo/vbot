@@ -356,6 +356,54 @@ def test_malformed_fts_progress_uses_canonical_search_without_hiding_matches(
         sessions.close()
 
 
+def test_fts_rebuild_reads_content_only_inside_current_batch(tmp_path: Path, monkeypatch) -> None:
+    from core.sessions import _store_fts as store_module
+
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("agent", session_id="bounded-rebuild")
+    session.append_many([ChatMessage.user(f"bounded content {index}") for index in range(100)])
+    sessions.close()
+    observed: set[int] = set()
+
+    def observe(key: int, content: str) -> str:
+        observed.add(key)
+        return content
+
+    def stop_after_read(stage: str, _high_water: int) -> None:
+        if stage == "before_batch_commit":
+            raise RuntimeError("test batch read complete")
+
+    monkeypatch.setattr(store_module, "_FTS_BATCH_SIZE", 5)
+    monkeypatch.setattr(store_module, "_FTS_REBUILD_HOOK", stop_after_read)
+    with sqlite3.connect(tmp_path / "sessions.db") as connection:
+        connection.row_factory = sqlite3.Row
+        connection.create_function("observe_content", 2, observe)
+        original = connection.execute(
+            "SELECT sql FROM sqlite_schema WHERE name='messages_fts_source'"
+        ).fetchone()[0]
+        connection.execute(original.replace("messages_fts_source", "unobserved_fts_source", 1))
+        connection.execute("DROP VIEW messages_fts_source")
+        connection.execute(
+            "CREATE VIEW messages_fts_source AS SELECT message_key, "
+            "observe_content(message_key, content) AS content, content_search, "
+            "reasoning, name, error_kind, tool_calls FROM unobserved_fts_source"
+        )
+        connection.execute(
+            "UPDATE store_meta SET value='0' WHERE key=?",
+            (store_module.FTS_COMPLETED_HIGH_WATER_KEY,),
+        )
+        connection.commit()
+        first_batch = {
+            row[0]
+            for row in connection.execute(
+                "SELECT message_key FROM history_records ORDER BY message_key LIMIT 5"
+            )
+        }
+        with pytest.raises(RuntimeError, match="test batch read complete"):
+            store_module._backfill_fts(connection)
+    assert observed == first_batch
+
+
 def test_fts_rebuild_resumes_after_an_interrupted_batch(tmp_path: Path, monkeypatch) -> None:
     from core.sessions import _store_fts as store_module
 
