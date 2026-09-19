@@ -62,6 +62,23 @@ def test_relational_session_store_uses_initial_schema() -> None:
     assert FTS_STORAGE_VERSION == 1
 
 
+def test_schema_dry_run_plans_additions_without_writing(tmp_path) -> None:
+    connection = _create_current_database(tmp_path / "sessions.db")
+    try:
+        connection.execute("PRAGMA query_only=ON")
+        extended_schema = SCHEMA_SQL + "\nCREATE TABLE dry_run_probe(value TEXT) STRICT;"
+        planned = reconcile_schema(connection, schema_sql=extended_schema, dry_run=True)
+        assert planned
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_schema WHERE name='dry_run_probe'"
+            ).fetchone()
+            is None
+        )
+    finally:
+        connection.close()
+
+
 @pytest.mark.parametrize(
     ("version_info", "expected"),
     [

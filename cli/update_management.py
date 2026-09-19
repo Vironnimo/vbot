@@ -122,24 +122,17 @@ def _ensure_update_session_snapshot(instance: ServerInstance) -> _Step:
             return _Step(False, "update: pre-update Session snapshot response was incomplete")
         return _Step(True, f"pre-update Session snapshot: {snapshot_id}")
 
-    from core.sessions.snapshots import create_snapshot
-    from core.sessions.store import SessionStore
+    from core.sessions.snapshots import create_offline_snapshot
 
-    store = None
     try:
-        store = SessionStore(database)
-        snapshot = create_snapshot(
+        snapshot = create_offline_snapshot(
             data_dir,
             database,
-            store.backup,
             database_id=str(marker["database_id"]),
             reason="update",
         )
     except Exception as exc:
         return _Step(False, f"update: offline Session snapshot failed: {exc}")
-    finally:
-        if store is not None:
-            store.close()
     if snapshot is None:
         return _Step(False, "update: offline Session snapshot was not verified")
     return _Step(True, f"pre-update Session snapshot: {snapshot.name}")
