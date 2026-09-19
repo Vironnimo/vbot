@@ -29,6 +29,7 @@ from core.model_tasks import (
     TaskModelService,
     VideoService,
 )
+from core.model_tasks.decisions import DecisionService
 from core.models.models import ModelRegistry
 from core.projects import ProjectStore, build_agent_resolver
 from core.prompts import (
@@ -102,6 +103,7 @@ from core.tools import (
 )
 from core.tools.calendar import register_calendar_tool
 from core.tools.cron import register_cron_tool
+from core.tools.evaluate import register_evaluate_tool
 from core.tools.process_manager import ProcessManager
 from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
@@ -219,6 +221,9 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._video = VideoService(runtime._model_tasks, runtime)
         runtime._music = MusicService(runtime._model_tasks, runtime)
         runtime._embeddings = EmbeddingService(runtime._model_tasks, runtime)
+        runtime._decisions = DecisionService(
+            runtime._model_tasks, runtime, runtime._storage.layout.decisions_db
+        )
         # Sessions are a canonical service: it opens and verifies one database
         # before any Agent lifecycle operation can create or validate a Session.
         # Partial startup must close every Session resource in reverse order so a
@@ -268,6 +273,7 @@ def bootstrap(runtime: Runtime) -> None:
         )
         register_process_tool(runtime._tools, runtime._process_manager)
         register_text_to_speech_tool(runtime._tools, runtime._speech)
+        register_evaluate_tool(runtime._tools, runtime._decisions)
         register_analyze_image_tool(runtime._tools, runtime._image)
         register_image_generation_tool(runtime._tools, runtime._image)
         register_generate_video_tool(runtime._tools, runtime._video)
