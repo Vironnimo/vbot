@@ -68,7 +68,7 @@ describe('chat state helpers', () => {
     expect(visibleTimelineItemsForRender(sessionState)).toEqual([
       expect.objectContaining({ id: 'user-one', type: 'message' }),
       expect.objectContaining({
-        id: 'history-run-assistant-one',
+        id: 'assistant-run-run-one',
         type: 'assistant_run',
         status: CHAT_STATUS_COMPLETED,
         outputs: [expect.objectContaining({ content: 'The file says A.' })],
@@ -88,28 +88,31 @@ describe('chat state helpers', () => {
       status: CHAT_STATUS_RUNNING,
     });
 
-    loadHistory(sessionState, [
-      { id: 'user-one', role: 'user', content: 'Finish the investigation' },
-      {
-        id: 'assistant-at-entry',
-        role: 'assistant',
-        content: null,
-        tool_calls: [
-          {
-            id: 'call-at-entry',
-            name: 'read',
-            arguments: { path: 'before.txt' },
-          },
-        ],
-      },
-      {
-        id: 'tool-at-entry',
-        role: 'tool',
-        tool_call_id: 'call-at-entry',
-        name: 'read',
-        content: 'before',
-      },
-    ]);
+    loadHistory(
+      sessionState,
+      [
+        { id: 'user-one', role: 'user', content: 'Finish the investigation' },
+        {
+          id: 'assistant-at-entry',
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            {
+              id: 'call-at-entry',
+              name: 'read',
+              arguments: { path: 'before.txt' },
+            },
+          ],
+        },
+        {
+          id: 'tool-at-entry',
+          role: 'tool',
+          tool_call_id: 'call-at-entry',
+          name: 'read',
+          content: 'before',
+        },
+      ].map((message) => ({ ...message, history_run_id: 'run-one' })),
+    );
 
     appendRunEvent(sessionState, {
       type: 'user_message_persisted',

@@ -121,13 +121,14 @@ async def _chat_run_result(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
-    supported_fields = {"agent_id", "session_id", "limit", "before"}
+    supported_fields = {"agent_id", "session_id", "limit", "before", "after"}
     _reject_unsupported(params, supported_fields, "chat.history")
 
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _optional_string(params, "session_id")
     limit = _optional_positive_integer(params, "limit", max_value=MAX_CHAT_HISTORY_LIMIT)
     before = _optional_string(params, "before")
+    after = _optional_string(params, "after")
     try:
         active_session_id = await _CHAT_RPC_WORKERS.run(
             _resolve_history_session_id,
@@ -151,6 +152,7 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
                 session.read_chat_history_snapshot,
                 limit=limit,
                 before=before,
+                after=after,
                 excluded_roles=("note", "history_edit"),
                 complete_run_segment=True,
                 background_roles=("note", "tool"),
@@ -188,6 +190,11 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         "agent_id": agent_id,
         "session_id": active_session_id,
         "messages": projection.messages,
+        "history_generation": history.generation_id,
+        "next_after": history.after_cursor,
+        "incremental": history.incremental,
+        "history_reset": after is not None and not history.incremental,
+        "has_newer": history.has_newer,
         "has_more": projection.has_more,
         "background_bash_statuses": projection.background_bash_statuses,
         # Whole-session provider-reported token fields — the page above may be a
@@ -266,8 +273,10 @@ def _project_chat_history(
         {
             **_visible_message(message, file_delivery=file_delivery),
             **({"editable": True} if message.id in page.editable_message_ids else {}),
+            **({"history_sequence": page.record_sequences[index]} if page.record_sequences else {}),
+            **({"history_run_id": page.record_run_ids[index]} if page.record_run_ids else {}),
         }
-        for message in page.messages
+        for index, message in enumerate(page.messages)
     ]
     return _ChatHistoryProjection(
         messages=messages,
