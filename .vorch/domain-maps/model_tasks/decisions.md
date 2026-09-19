@@ -16,6 +16,10 @@ State is text, a JSON object or a JSON array, preserved without interpreting emb
 
 Responses validate matching ids, types, labels, finite ranges, supplied distributions and token usage. Optional probabilities, confidence and cost remain absent if the Provider omits them. Confidence describes distribution concentration, not accuracy. Explicit criteria help interpretation but do not make judgments deterministic validation. Live September 2026 probes found uncertain noul answers for empty objects even when the question requested explicit evidence; exact missing-field checks belong in application code. Task-requirements examples are experiments, not a validated automatic Model router. Reference: [TypeSafe primitives](https://docs.typesafe.ai/primitives).
 
+## Experiment presentation
+
+The Jev overview opens one experiment in a full-width workspace with Setup and Results tabs; existing evaluations open on Results. Evaluation cards show a bounded state excerpt above the answers with character count and an explicit full-state reader. The reader opens the immutable snapshot in a bounded, read-only dialog; comparisons and control steps each retain their own state preview. Question ids remain internal correlations: the UI allocates and preserves them, and labels results by question number. Save stays after the fields in normal content flow; execution controls occupy a separate non-overlapping toolbar. User constraints: no floating Save overlay, no four-column workspace, and no unbounded state dump in results.
+
 ## Persistence and lifecycle
 
 `<data-dir>/decisions.db` stores versioned drafts and immutable evaluation input/target snapshots. Saves/deletes require the current revision; conflicts do not overwrite newer edits. Incomplete but renderable drafts can be saved; execution validates the full relevant mode. A request id admits one evaluation and cannot be reused with a different experiment, revision or mode. Each experiment allows one active evaluation. Admission and execution are owned tasks, independent of RPC disconnection, browser visibility and navigation. The WebUI autosaves through the shared transition context and only destroys its polling on unmount.
@@ -36,5 +40,5 @@ The delay is additional to observation, Provider and command latency, not a prom
 
 - `tests/core/model_tasks/test_decision_{types,store,actions,providers}.py`, `test_decisions.py`: validation, revision conflicts, immutable snapshots, pagination, admission disconnection, idempotency, partial progress, exact command arguments, real subprocess timeout/cancellation and no ambiguous Provider replay.
 - `tests/core/tools/test_evaluate.py`, `tests/server/rpc/test_decision_methods.py`: production dispatch/access/readiness and RPC boundaries.
-- `components/decisions/__tests__/`: mounted autosave races, invalid JSON, explicit execution mode, navigation lifetime and view visibility.
+- `components/decisions/__tests__/`: mounted autosave races, invalid JSON, explicit execution mode, navigation lifetime, internal question ids, snapshot-specific comparisons, bounded large-state previews/readers, and view visibility.
 - Real Provider verification uses the production definitions through `scripts/probe_provider_tool_call.py` with OpenAI subscription Luna plus synthetic Jev evaluations; never put credentials or raw private state into repository fixtures.

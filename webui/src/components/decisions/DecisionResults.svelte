@@ -1,6 +1,7 @@
 <script>
   import { formatDateTimeInApplicationZone } from '$lib/dateTimePrefs.svelte.js';
   import { t } from '$lib/i18n.js';
+  import StatePreview from './StatePreview.svelte';
   let { record } = $props();
   const percent = (n) => `${(n * 100).toFixed(1)}%`;
 </script>
@@ -28,6 +29,9 @@
         )}
       </p>
     {/if}
+    {#if record.snapshot.mode !== 'control'}
+      <StatePreview state={record.snapshot.state} />
+    {/if}
     {#if record.result?.mode === 'control'}
       <p>
         {t('jev.stepsCompleted', 'Completed steps')}: {record.result
@@ -48,6 +52,10 @@
               ? t('jev.actionUnconfirmed', 'Action outcome unconfirmed')
               : t(`jev.status.${step.status}`, step.status)}
           </p>
+          <StatePreview
+            state={step.state}
+            label={t('jev.observedState', 'Observed state')}
+          />
           <details>
             <summary
               >{t(
@@ -83,11 +91,15 @@
         >
       </div>
       <p class="jev-help jev-model">{record.result.model}</p>
-      {#each record.snapshot.questions as question (question.id)}
+      {#each record.snapshot.questions as question, index (question.id)}
         {@const answer = record.result.answers[question.id]}
         <article class="jev-answer">
           <div class="jev-row">
-            <strong>{question.id}</strong><span class="jev-answer-value"
+            <strong
+              >{t('jev.questionNumber', 'Question {number}', {
+                number: index + 1,
+              })}</strong
+            ><span class="jev-answer-value"
               >{answer.type === 'noul'
                 ? percent(answer.noul)
                 : answer.type === 'choice'

@@ -41,7 +41,6 @@
       experiments = result.experiments;
       available = result.available;
       error = '';
-      if (!experiment && experiments.length) await select(experiments[0].id);
     } catch (failure) {
       if (!destroyed) error = failure.message;
     } finally {
@@ -120,12 +119,12 @@
   <header class="jev-header">
     <div>
       <h2>Jev</h2>
-      <p>
-        {t(
-          'jev.subtitle',
-          'Ask focused questions. Inspect decisions. Connect actions.',
-        )}
-      </p>
+      {#if !experiment}<p>
+          {t(
+            'jev.subtitle',
+            'Ask focused questions. Inspect decisions. Connect actions.',
+          )}
+        </p>{/if}
     </div>
     <Button
       variant="tertiary"
@@ -139,46 +138,25 @@
         'Select a Decision model in Specialized Models to evaluate questions or start a control. You can prepare experiments now.',
       )}
     </div>{/if}
-  {#if error}<p class="jev-error" role="alert">{error}</p>{/if}
+  {#if error}<p class="jev-error" role="alert">{error}</p>
+    {#if !experiment}<Button onClick={refresh}
+        >{t('common.retry', 'Retry')}</Button
+      >{/if}{/if}
   <div class="jev-workspace">
-    <aside class="jev-library" aria-label={t('jev.experiments', 'Experiments')}>
-      <Button variant="primary" disabled={busy} onClick={() => create('blank')}
-        >{t('jev.new', 'New experiment')}</Button
-      >
-      <TextField
-        ariaLabel={t('jev.search', 'Search experiments')}
-        placeholder={t('jev.search', 'Search experiments')}
-        value={query}
-        onInput={(value) => (query = value)}
-      />
-      {#if loading}<p role="status">{t('jev.loading', 'Loading…')}</p>{/if}
-      <div class="jev-experiments">
-        {#each filtered as item (item.id)}
-          <Button
-            variant={experiment?.id === item.id ? 'secondary' : 'tertiary'}
-            aria-pressed={experiment?.id === item.id}
-            onClick={() => select(item.id)}>{item.title}</Button
-          >
-        {/each}
-      </div>
-      <div class="jev-library-footer">
-        <h3>{t('jev.examples', 'Start from an example')}</h3>
-        <Button disabled={busy} onClick={() => create('triage')}
-          >{t('jev.example.triage', 'Support triage')}</Button
-        >
-        <Button disabled={busy} onClick={() => create('routing')}
-          >{t('jev.example.routing', 'Task requirements')}</Button
-        >
-        <Button variant="tertiary" onClick={refresh}
-          >{t('jev.refresh', 'Refresh')}</Button
-        >
-      </div>
-    </aside>
-    <main class="jev-main">
-      {#if experiment}
+    {#if experiment}
+      <main class="jev-main">
         <div class="jev-toolbar">
-          <span>{t('jev.experiments', 'Experiments')} / {experiment.title}</span
+          <Button
+            variant="tertiary"
+            onClick={() =>
+              transitions.requestTransition(() => {
+                experiment = null;
+                void refresh();
+              })}
           >
+            ← {t('jev.experiments', 'Experiments')}
+          </Button>
+          <span>{experiment.title}</span>
           <Button
             variant="tertiary"
             disabled={busy}
@@ -192,36 +170,86 @@
             >{t('jev.delete', 'Delete')}</Button
           >
         </div>
-        {#key `${experiment.id}:${selectionVersion}`}<ExperimentEditor
+        {#key `${experiment.id}:${selectionVersion}`}
+          <ExperimentEditor
             {experiment}
             onSaved={saved}
             onReload={() => select(experiment.id)}
             {available}
-          />{/key}
-      {:else if !loading}
-        <div class="jev-welcome">
-          <div class="jev-eyebrow">
-            {t('jev.playground', 'Decision playground')}
+          />
+        {/key}
+      </main>
+    {:else}
+      <main
+        class="jev-library"
+        aria-label={t('jev.experiments', 'Experiments')}
+      >
+        <div class="jev-library-content">
+          <div class="jev-row">
+            <h2>{t('jev.experiments', 'Experiments')}</h2>
+            <Button
+              variant="primary"
+              disabled={busy}
+              onClick={() => create('blank')}
+              >{t('jev.new', 'New experiment')}</Button
+            >
           </div>
-          <h2>{t('jev.welcome', 'Give Jev something to decide.')}</h2>
-          <p>
+          <p class="jev-help">
             {t(
-              'jev.welcomeHelp',
-              'Supply text or JSON and define choices, a rating scale, or a yes/no question. Every evaluation keeps its input, answers, model and usage for comparison.',
+              'jev.libraryHelp',
+              'Give Jev text or JSON, ask focused questions, and compare its answers. Each experiment keeps its setup and results.',
             )}
           </p>
-          <p>
-            {t(
-              'jev.controlIntro',
-              'For application control, connect a state-reading command and named actions. Jev chooses an action; vBot runs the command you assigned to it.',
-            )}
-          </p>
-          <Button variant="primary" onClick={() => create('triage')}
-            >{t('jev.tryExample', 'Open support triage example')}</Button
-          >
+          <TextField
+            ariaLabel={t('jev.search', 'Search experiments')}
+            placeholder={t('jev.search', 'Search experiments')}
+            value={query}
+            onInput={(value) => (query = value)}
+          />
+          {#if loading}<p role="status">{t('jev.loading', 'Loading…')}</p>{/if}
+          <div class="jev-experiments">
+            {#each filtered as item (item.id)}
+              <Button onClick={() => select(item.id)}>{item.title}</Button>
+            {/each}
+            {#if !loading && !filtered.length}
+              <p class="jev-help">
+                {query
+                  ? t('jev.noMatchingExperiments', 'No matching experiments.')
+                  : t(
+                      'jev.noExperiments',
+                      'Create an experiment or try one of the examples below.',
+                    )}
+              </p>
+            {/if}
+          </div>
+          <div class="jev-examples">
+            <h3>{t('jev.examples', 'Start from an example')}</h3>
+            <div class="jev-example">
+              <Button disabled={busy} onClick={() => create('triage')}
+                >{t('jev.example.triage', 'Support triage')}</Button
+              >
+              <p class="jev-help">
+                {t(
+                  'jev.triageDescription',
+                  'Read a sample support message, classify the issue, rate its urgency, and check for a workaround.',
+                )}
+              </p>
+            </div>
+            <div class="jev-example">
+              <Button disabled={busy} onClick={() => create('routing')}
+                >{t('jev.example.routing', 'Task requirements')}</Button
+              >
+              <p class="jev-help">
+                {t(
+                  'jev.routingDescription',
+                  'Read a sample development task and assess its complexity, need for code, and possible consequences.',
+                )}
+              </p>
+            </div>
+          </div>
         </div>
-      {/if}
-    </main>
+      </main>
+    {/if}
   </div>
 </div>
 {#if deleting}
