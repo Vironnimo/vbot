@@ -24,6 +24,7 @@ import {
 import { isPlainObject } from '../values.js';
 import {
   freezeStreamingReasoningEstimates,
+  appendSteeringMessage,
   appendTextSection,
   appendToolDelta,
   mergeToolStarted,
@@ -82,7 +83,9 @@ export function liveTimelineItems(runEvents, projectionCache = null) {
           event,
           arrivalIndex,
         );
-        runGroup.userItem = eventItem;
+        if (event.payload?.queue_item_id || runGroup.userItem)
+          runGroup.events.push(event);
+        else runGroup.userItem = eventItem;
         continue;
       }
 
@@ -199,6 +202,10 @@ function buildLiveAssistantRunItem(runKey, events) {
 }
 
 export function appendLiveRunEvent(assistantRun, event) {
+  if (event.type === 'user_message_persisted' && event.payload?.message) {
+    appendSteeringMessage(assistantRun, event.payload.message, event);
+    return;
+  }
   if (event.type === 'run_started') {
     assistantRun.startTimestamp =
       event.timestamp ?? assistantRun.startTimestamp;

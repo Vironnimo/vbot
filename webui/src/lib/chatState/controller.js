@@ -19,6 +19,7 @@ import {
   showProject as requestShowProject,
   startChatRun as requestStartChatRun,
   updateQueueItem as requestUpdateQueueItem,
+  steerQueueItem as requestSteerQueueItem,
 } from '../api.js';
 import { createChatChildTasks } from './childTasks.js';
 import { formatAgentAddress, parseAgentAddress } from '../agentAddress.js';
@@ -54,8 +55,6 @@ const HISTORY_INITIAL_LIMIT = 100;
 
 const HISTORY_OLDER_LIMIT = 50;
 
-const QUEUE_DISPLAY_CONTENT_LIMIT = 500;
-
 function defaultChatOperations() {
   return {
     cancelProcess: (...args) => requestCancelProcess(...args),
@@ -78,6 +77,7 @@ function defaultChatOperations() {
     showProject: (...args) => requestShowProject(...args),
     startChatRun: (...args) => requestStartChatRun(...args),
     updateQueueItem: (...args) => requestUpdateQueueItem(...args),
+    steerQueueItem: (...args) => requestSteerQueueItem(...args),
   };
 }
 
@@ -629,6 +629,26 @@ export function createChatController({
     }
   }
 
+  async function steerQueued(sessionState, itemId) {
+    const runId = sessionState?.currentRun?.runId;
+    if (!runId) return false;
+    sessionState.actionError = '';
+    try {
+      await operations.steerQueueItem(
+        sessionState.agentId,
+        sessionState.sessionId,
+        itemId,
+        runId,
+      );
+      await syncSessionQueue(sessionState);
+      return true;
+    } catch (error) {
+      sessionState.actionError = `${translate('queue.steerError', 'Message could not be steered.')} ${errorMessage(error)}`;
+      await syncSessionQueue(sessionState);
+      return false;
+    }
+  }
+
   async function removeQueued(sessionState, queuedMessageId) {
     if (!sessionState) {
       return;
@@ -668,9 +688,7 @@ export function createChatController({
         { fileMentions: normalizedFileMentions },
       );
       updateQueuedMessageContent(sessionState, queuedMessageId, newContent, {
-        editable:
-          normalizedFileMentions.length === 0 &&
-          newContent.length <= QUEUE_DISPLAY_CONTENT_LIMIT,
+        editable: normalizedFileMentions.length === 0,
       });
       return true;
     } catch (error) {
@@ -946,6 +964,7 @@ export function createChatController({
     reconcileSubAgentRows,
     refreshAgentActivity,
     removeQueued,
+    steerQueued,
     sendMessage,
     syncSessionQueue,
     updateQueued,

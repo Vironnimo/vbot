@@ -880,6 +880,8 @@
             <QueuedMessages
               queuedMessages={target.activeSessionState?.queue ?? []}
               onRemoveQueuedMessage={actions.handleRemoveQueuedMessage}
+              onSteerQueuedMessage={actions.handleSteerQueuedMessage}
+              canSteer={target.activeSessionState?.status === 'running'}
               onEditQueuedMessage={actions.handleEditQueuedMessage}
             />
           </div>

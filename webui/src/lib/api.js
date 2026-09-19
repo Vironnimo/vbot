@@ -166,6 +166,7 @@ export {
   cancelProcess,
   removeFromQueue,
   updateQueueItem,
+  steerQueueItem,
 } from './api/chat.js';
 export {
   listTerminals,
