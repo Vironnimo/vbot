@@ -182,6 +182,9 @@ class QueuedRunItem:
     internal: bool
     future: asyncio.Future[Run]
     editable: bool = False
+    steerable: bool = False
+    steering_run_id: str | None = None
+    steering_in_flight: bool = field(default=False, repr=False)
     admission: RunAdmission = field(default_factory=RunAdmission, repr=False)
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     waiting_scope: str | None = field(default=None, repr=False)
@@ -191,7 +194,9 @@ class QueuedRunItem:
         return {
             "id": self.item_id,
             "content": self.display_content,
-            "editable": self.editable,
+            "editable": self.editable and self.steering_run_id is None,
+            "steerable": self.steerable,
+            "steering": self.steering_run_id is not None,
             "internal": self.internal,
             RUN_KIND_FIELD: self.admission.run_kind.value,
             "created_at": self.created_at,
@@ -320,6 +325,7 @@ class Run:
         self._cancel_cleanup_futures: set[asyncio.Future[Any]] = set()
         self._cancel_cleanup_expired = False
         self._started_from_queue_item_id: str | None = None
+        self.accepts_steering = False
         # Executor-supplied extras merged into every terminal event payload
         # (e.g. the chat loop's end-of-run session usage totals). Filled by the
         # executor before it returns/raises; the manager merges it alongside

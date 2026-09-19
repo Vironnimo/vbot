@@ -38,6 +38,14 @@ Sibling Tool Calls from one Assistant turn execute concurrently by default withi
 
 Auto-compaction runs only at safe completed Model boundaries. Summary+Tail may compact after a complete Tool cycle or final Assistant response; Continuation waits for a final Assistant response so it does not split work whose next action is still unknown. The Session write lock ends at the durable Assistant/Tool boundary before Compaction planning or Model I/O begins. Automatic checkpoint persistence is a later cursor-validated conditional append; a concurrent out-of-band message aborts the stale checkpoint, and a same-Run path rebuilds its uncompacted request from current Session history before the next Model step. Compaction mechanics and policy live in `compaction.md`.
 
+## User steering
+
+Ordinary queued User inputs advertise steering eligibility; Channel/sender-bearing input, internal work, execution-owner bindings, overrides, and requests with special Tool policy or hooks cannot be merged into another execution. `_queued_input.py` retains the immutable queued executor and owns Chat's steering persistence/request rebuild helpers. `Run.accepts_steering` is enabled only for ordinary User Runs. `chat.queue_steer` requires the intended Run id, so a stale click cannot steer its successor.
+
+Before each Model request, under the Session write lock and outside Tool dispatch, Chat delivers selected Queue items in FIFO order. Each item becomes a normal User message with the current Run membership, original content/input origin, and Session image references. The append and Queue acknowledgement finish together before honoring cancellation; failed appends retain the item. The existing `user_message_persisted` event carries its `queue_item_id` for live Queue retirement. Request rebuilding uses ordinary media/Skill handling, preserves live Tool media and Continuation context, and retains the active Model and execution policy. Steering does not cancel Provider generation or a Tool batch.
+
+After a final Assistant response, a pending steer forces another iteration. Otherwise Chat synchronously closes steering admission before terminal Compaction/cleanup; later clicks fail without removing queued content. Cancel/error leaves undelivered inputs in the ordinary Queue. Tests: `test_chat_loop_steering.py`, `tests/core/runs/test_runs_queue.py`, and `tests/server/rpc/test_chat_methods_queue.py`.
+
 ## Model and Connection resolution
 
 Agent Model strings use `<provider>/<model-id>[::<connection-local-id>[:<account-id>]]`. `core/chat/model_resolution.py` parses the optional pin. An explicit pin is used verbatim; an unpinned Model selects the first usable Provider Connection permitted by the Model's `connections` allowlist. A non-empty allowlist with no usable matching Connection fails instead of routing through a forbidden Connection. Unknown Model ids are left for the Provider API to reject after Provider/Connection validation.

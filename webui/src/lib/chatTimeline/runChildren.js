@@ -480,3 +480,22 @@ function parseResult(result) {
     return result;
   }
 }
+
+export function appendSteeringMessage(run, message, event = null) {
+  if (
+    run.items.some(
+      (child) =>
+        child.type === 'user_message' && child.message?.id === message.id,
+    )
+  )
+    return;
+  run.items.push({
+    id: `steer-${message.id}`,
+    type: 'user_message',
+    message,
+    content: message.content,
+    timestamp: message.timestamp,
+    sequence: event?.sequence ?? run.items.length,
+    events: event ? [event] : [],
+  });
+}

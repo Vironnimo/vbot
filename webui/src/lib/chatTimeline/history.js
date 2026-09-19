@@ -13,6 +13,7 @@ import {
 } from './model.js';
 import {
   appendTextSection,
+  appendSteeringMessage,
   mergeToolStarted,
   mergeToolResult,
   toolResultCancelledByUser,
@@ -86,6 +87,16 @@ export function historyTimelineItems(messages) {
       continue;
     }
 
+    if (
+      message?.role === 'user' &&
+      activeAssistantRun &&
+      message.history_run_id &&
+      message.history_run_id === activeRecordRunId
+    ) {
+      appendSteeringMessage(activeAssistantRun, message);
+      previousVisibleRole = 'user';
+      continue;
+    }
     if (message?.role === 'user') {
       pushActiveAssistantRun(timelineItems, activeAssistantRun);
       activeAssistantRun = null;

@@ -15,6 +15,35 @@ import {
 } from '../chatState.js';
 
 describe('chat state helpers', () => {
+  it('does not resurrect delivered steering input from an older Queue response', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    const queued = {
+      id: 'queue-steer',
+      content: 'Correction',
+      steerable: true,
+    };
+    addServerQueuedMessage(sessionState, queued);
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      sequence: 2,
+      payload: {
+        queue_item_id: queued.id,
+        message: { id: 'steered-user', role: 'user', content: queued.content },
+      },
+    });
+    expect(sessionState.queue).toEqual([]);
+
+    syncQueueFromServer(sessionState, [
+      queued,
+      { id: 'queue-later', content: 'Later' },
+    ]);
+    expect(sessionState.queue.map((item) => item.id)).toEqual(['queue-later']);
+  });
+
   it('test_syncQueueFromServer_replaces_entire_queue', () => {
     const sessionState = ensureSessionState(
       createChatState(),
@@ -26,6 +55,8 @@ describe('chat state helpers', () => {
       id: 'queue-old',
       content: 'Old message',
       created_at: '2026-05-21T00:00:00+00:00',
+      steerable: false,
+      steering: false,
     });
     syncQueueFromServer(sessionState, [
       {
@@ -33,12 +64,16 @@ describe('chat state helpers', () => {
         content: 'First message',
         editable: true,
         created_at: '2026-05-22T01:00:00+00:00',
+        steerable: false,
+        steering: false,
       },
       {
         id: 'queue-2',
         content: 'Second message',
         editable: false,
         created_at: '2026-05-22T01:01:00+00:00',
+        steerable: false,
+        steering: false,
       },
     ]);
 
@@ -48,12 +83,16 @@ describe('chat state helpers', () => {
         content: 'First message',
         editable: true,
         created_at: '2026-05-22T01:00:00+00:00',
+        steerable: false,
+        steering: false,
       },
       {
         id: 'queue-2',
         content: 'Second message',
         editable: false,
         created_at: '2026-05-22T01:01:00+00:00',
+        steerable: false,
+        steering: false,
       },
     ]);
   });
@@ -69,11 +108,15 @@ describe('chat state helpers', () => {
       id: 'queue-1',
       content: 'First message',
       created_at: '2026-05-22T01:00:00+00:00',
+      steerable: false,
+      steering: false,
     });
     addServerQueuedMessage(sessionState, {
       id: 'queue-2',
       content: 'Second message',
       created_at: '2026-05-22T01:01:00+00:00',
+      steerable: false,
+      steering: false,
     });
 
     expect(sessionState.queue.map((item) => item.id)).toEqual([
@@ -94,6 +137,8 @@ describe('chat state helpers', () => {
       content: 'Original content',
       editable: true,
       created_at: '2026-05-22T01:00:00+00:00',
+      steerable: false,
+      steering: false,
     });
 
     const updated = updateQueuedMessageContent(
@@ -122,11 +167,15 @@ describe('chat state helpers', () => {
       id: 'queue-1',
       content: 'First message',
       created_at: '2026-05-22T01:00:00+00:00',
+      steerable: false,
+      steering: false,
     });
     addServerQueuedMessage(sessionState, {
       id: 'queue-2',
       content: 'Second message',
       created_at: '2026-05-22T01:01:00+00:00',
+      steerable: false,
+      steering: false,
     });
 
     expect(removeQueuedMessage(sessionState, 'queue-1')).toBe(true);
@@ -136,6 +185,8 @@ describe('chat state helpers', () => {
         content: 'Second message',
         editable: false,
         created_at: '2026-05-22T01:01:00+00:00',
+        steerable: false,
+        steering: false,
       },
     ]);
     expect(removeQueuedMessage(sessionState, 'queue-missing')).toBe(false);
@@ -154,6 +205,8 @@ describe('chat state helpers', () => {
       id: 'queue-one',
       content: 'Waiting message',
       created_at: '2026-05-22T01:00:00+00:00',
+      steerable: false,
+      steering: false,
     });
     expect(isSessionEmpty(sessionState)).toBe(false);
 
