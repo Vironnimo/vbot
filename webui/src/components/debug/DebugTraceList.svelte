@@ -1,371 +1,280 @@
 <script>
   import { activeLocaleTag, t } from '$lib/i18n.js';
   import { formatDateTimeInApplicationZone } from '$lib/dateTimePrefs.svelte.js';
+  import { filterTraces, traceStatusTone } from '$lib/debugView.js';
   import { tooltip } from '$lib/tooltip.js';
+  import Button from '../ui/Button.svelte';
 
   let { traces = [], selectedTraceId = '', onSelect = () => {} } = $props();
+  let query = $state('');
+  let status = $state('all');
+  let provider = $state('');
+  let visible = $derived(filterTraces(traces, query, status, provider));
+  let providers = $derived(
+    [...new Set(traces.map((trace) => trace.provider_id))].sort(),
+  );
 
-  let expandedTraceIds = $state({});
-
-  function isTraceExpanded(traceId) {
-    return Boolean(traceId && expandedTraceIds[traceId]);
+  function resetFilters() {
+    query = '';
+    status = 'all';
+    provider = '';
   }
-
-  function toggleTraceExpanded(traceId) {
-    if (!traceId) {
-      return;
-    }
-    expandedTraceIds = {
-      ...expandedTraceIds,
-      [traceId]: !expandedTraceIds[traceId],
-    };
+  function timestamp(value) {
+    return (
+      formatDateTimeInApplicationZone(value, activeLocaleTag(), {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      }) ||
+      value ||
+      '—'
+    );
   }
-
-  function statusTone(statusCode) {
-    if (statusCode === null || statusCode === undefined) {
-      return '';
-    }
-    if (statusCode >= 200 && statusCode < 300) {
-      return 'debug-trace__status--ok';
-    }
-    if (statusCode >= 400 && statusCode < 500) {
-      return 'debug-trace__status--warn';
-    }
-    if (statusCode >= 500) {
-      return 'debug-trace__status--error';
-    }
-    return '';
-  }
-
-  function formatDuration(milliseconds) {
-    if (milliseconds === null || milliseconds === undefined) {
-      return '—';
-    }
-    if (milliseconds < 1000) {
-      return `${milliseconds}ms`;
-    }
-    return `${(milliseconds / 1000).toFixed(1)}s`;
-  }
-
-  function formatTimestamp(timestamp) {
-    if (!timestamp) {
-      return '—';
-    }
-    try {
-      const date = new Date(timestamp);
-      if (Number.isNaN(date.getTime())) {
-        return timestamp;
-      }
-      return formatDateTimeInApplicationZone(date, activeLocaleTag(), {
-        dateStyle: 'medium',
-        timeStyle: 'medium',
-      });
-    } catch {
-      return timestamp;
-    }
-  }
-
-  function traceProviderLabel(trace) {
-    return trace?.provider_id || '—';
-  }
-
-  function traceModelLabel(trace) {
-    return trace?.model_id || '—';
+  function duration(value) {
+    return value == null
+      ? '—'
+      : `${new Intl.NumberFormat(activeLocaleTag(), { maximumFractionDigits: 1 }).format(value / 1000)} s`;
   }
 </script>
 
-<div class="debug-view__trace-panel">
-  <div class="debug-view__trace-header">
-    <span class="debug-view__section-label">
-      {t('debug.traceList', 'Traces')}
-    </span>
+<aside
+  class="debug-view__trace-panel"
+  aria-label={t('debug.traceList', 'Traces')}
+>
+  <div class="trace-filters">
+    <input
+      type="search"
+      bind:value={query}
+      aria-label={t('debug.searchTraces', 'Search traces')}
+      placeholder={t(
+        'debug.searchPlaceholder',
+        'Model, Provider, URL or trace ID…',
+      )}
+    />
+    <div class="trace-filter-row">
+      <select
+        bind:value={status}
+        aria-label={t('debug.statusFilter', 'Status filter')}
+      >
+        <option value="all">{t('debug.allStatuses', 'All statuses')}</option>
+        <option value="ok">{t('debug.statusOk', 'HTTP 2xx / WS 101')}</option>
+        <option value="error"
+          >{t('debug.statusErrors', 'HTTP 4xx / 5xx')}</option
+        >
+        <option value="unknown"
+          >{t('debug.statusOther', 'Other / no status')}</option
+        >
+      </select>
+      <select
+        bind:value={provider}
+        aria-label={t('debug.modelProbe.provider', 'Provider')}
+      >
+        <option value="">{t('debug.allProviders', 'All Providers')}</option>
+        {#each providers as item (item)}<option value={item}
+            >{item || '—'}</option
+          >{/each}
+      </select>
+    </div>
+    <div class="trace-count" aria-live="polite">
+      {t('debug.visibleCount', '{count} of {total} traces', {
+        count: visible.length,
+        total: traces.length,
+      })}
+      <span>{t('debug.newestFirst', 'Newest first')}</span>
+    </div>
   </div>
-
   <div
     class="debug-view__trace-list"
     role="list"
     aria-label={t('debug.traceList', 'Traces')}
   >
-    {#each traces as trace (trace.trace_id)}
+    {#each visible as trace (trace.trace_id)}
       <div
         role="listitem"
-        class={`debug-trace ${selectedTraceId === trace.trace_id ? 'debug-trace--selected' : ''} ${isTraceExpanded(trace.trace_id) ? 'debug-trace--expanded' : ''}`}
+        class="debug-trace"
+        class:debug-trace--selected={selectedTraceId === trace.trace_id}
         data-trace-id={trace.trace_id}
       >
         <button
           type="button"
           class="debug-trace__row"
-          aria-label={`${t('debug.traceList', 'Traces')}: ${traceProviderLabel(trace)} ${traceModelLabel(trace)}`}
           aria-pressed={selectedTraceId === trace.trace_id}
           onclick={() => onSelect(trace.trace_id)}
         >
-          <span class="debug-trace__timestamp">
-            {formatTimestamp(trace.timestamp)}
+          <span class="trace-topline">
+            <span
+              class="debug-trace__model"
+              use:tooltip={trace.model_id || trace.type}
+              >{trace.model_id || t('debug.modelProbe', 'Model Probe')}</span
+            >
+            <span
+              class="trace-status"
+              data-tone={traceStatusTone(trace.status_code)}
+              >{trace.status_code ?? '—'}</span
+            >
           </span>
-          <span
-            class="debug-trace__provider"
-            use:tooltip={trace.provider_id ?? ''}
+          <span class="trace-middle">
+            <span class="debug-trace__provider" use:tooltip={trace.provider_id}
+              >{trace.provider_id || '—'}</span
+            >
+            <span>{trace.method || '—'}</span>
+          </span>
+          <span class="trace-bottom"
+            ><time datetime={trace.timestamp}>{timestamp(trace.timestamp)}</time
+            ><span>{duration(trace.duration_ms)}</span></span
           >
-            {traceProviderLabel(trace)}
-          </span>
-          <span class="debug-trace__model" use:tooltip={trace.model_id ?? ''}>
-            {traceModelLabel(trace)}
-          </span>
-          <span class="debug-trace__method">
-            {trace.method || '—'}
-          </span>
-          <span class={`debug-trace__status ${statusTone(trace.status_code)}`}>
-            {trace.status_code !== null && trace.status_code !== undefined
-              ? trace.status_code
-              : '—'}
-          </span>
-          <span class="debug-trace__duration">
-            {formatDuration(trace.duration_ms)}
-          </span>
         </button>
-        <button
-          type="button"
-          class="debug-trace__expand"
-          aria-expanded={isTraceExpanded(trace.trace_id)}
-          aria-label={isTraceExpanded(trace.trace_id)
-            ? t('debug.collapseRow', 'Collapse row')
-            : t('debug.expandRow', 'Expand row')}
-          use:tooltip={isTraceExpanded(trace.trace_id)
-            ? t('debug.collapseRow', 'Collapse row')
-            : t('debug.expandRow', 'Expand row')}
-          onclick={(event) => {
-            event.stopPropagation();
-            toggleTraceExpanded(trace.trace_id);
-          }}
+      </div>
+    {:else}
+      <div class="trace-no-matches">
+        <p>{t('debug.noMatches', 'No traces match these filters.')}</p>
+        <Button variant="tertiary" onClick={resetFilters}
+          >{t('debug.resetFilters', 'Reset filters')}</Button
         >
-          {isTraceExpanded(trace.trace_id) ? '−' : '+'}
-        </button>
       </div>
     {/each}
   </div>
-</div>
+</aside>
 
 <style>
   .debug-view__trace-panel {
     display: flex;
-    min-width: 0;
-    width: 380px;
-    min-height: 0;
-    flex-shrink: 0;
     flex-direction: column;
-  }
-
-  .debug-view__trace-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 8px;
-  }
-
-  .debug-view__section-label {
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .debug-view__trace-list {
-    display: flex;
+    width: 310px;
+    flex: 0 0 310px;
     min-height: 0;
-    flex: 1;
-    flex-direction: column;
-    gap: 4px;
-    overflow: auto;
-    padding-right: 4px;
-  }
-
-  .debug-trace {
-    display: flex;
-    box-sizing: border-box;
     min-width: 0;
-    width: 100%;
-    align-items: stretch;
-    border: 1px solid var(--border);
-    border-left-width: 3px;
-    border-left-color: var(--border-2);
-    border-radius: var(--r-sm);
-    color: inherit;
-    background: var(--surface);
-    font-family: var(--font-mono);
-    font-size: 11px;
+    border-right: 1px solid var(--border);
+    background: var(--secondary-surface);
   }
-
-  .debug-trace:hover {
-    border-color: var(--border-2);
-  }
-
-  .debug-trace--selected {
-    border-left-color: var(--accent);
-    border-color: rgba(232, 135, 10, 0.28);
-    background: var(--accent-pale);
-  }
-
-  .debug-trace__row {
+  .trace-filters {
+    padding: 16px 14px 12px;
     display: grid;
-    box-sizing: border-box;
+    gap: 10px;
+  }
+  input,
+  select {
+    width: 100%;
     min-width: 0;
-    flex: 1;
-    grid-template-columns:
-      minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.2fr)
-      minmax(0, auto) minmax(0, auto) minmax(0, auto);
-    align-items: center;
-    gap: 6px;
-    padding: 7px 10px;
-    border: none;
-    border-radius: 0;
-    color: inherit;
-    background: transparent;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    line-height: 1.4;
-    text-align: left;
-    cursor: pointer;
+    padding: 9px 10px;
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-md);
+    color: var(--text-hi);
+    background: var(--surface);
+    font: inherit;
+    font-size: var(--fs-body-sm);
   }
-
-  .debug-trace__row:hover {
-    background: var(--surface-2);
+  input::placeholder {
+    color: var(--text-med);
   }
-
-  .debug-trace--selected .debug-trace__row:hover {
-    background: var(--accent-16);
-  }
-
-  .debug-trace__row:focus-visible {
-    outline: 2px solid var(--accent-40);
+  input:focus-visible,
+  select:focus-visible,
+  button:focus-visible {
+    outline: 2px solid var(--accent);
     outline-offset: -2px;
   }
-
-  .debug-trace__expand {
+  .trace-filter-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .trace-count,
+  .trace-bottom,
+  .trace-middle {
     display: flex;
-    min-width: 26px;
-    align-self: stretch;
-    align-items: center;
-    justify-content: center;
-    border: none;
-    border-left: 1px solid var(--border);
-    border-radius: 0;
-    color: var(--text-lo);
+    justify-content: space-between;
+    gap: 10px;
+    color: var(--text-med);
+    font-size: var(--fs-label-sm);
+  }
+  .trace-count {
+    padding-top: 3px;
+  }
+  .debug-view__trace-list {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 0 8px 8px;
+  }
+  .debug-trace {
+    margin-bottom: 3px;
+    border-radius: var(--r-md);
+    border: 1px solid transparent;
+    border-left: 3px solid transparent;
+  }
+  .debug-trace:hover {
+    background: var(--surface);
+  }
+  .debug-trace--selected {
+    background: var(--accent-08);
+    border-color: var(--accent-22);
+    border-left-color: var(--accent);
+  }
+  .debug-trace__row {
+    display: grid;
+    width: 100%;
+    gap: 7px;
+    padding: 12px 10px;
+    border: 0;
     background: transparent;
-    font-family: var(--font-mono);
-    font-size: 12px;
-    line-height: 1;
+    color: var(--text-hi);
+    text-align: left;
     cursor: pointer;
+    font: inherit;
   }
-
-  .debug-trace__expand:hover,
-  .debug-trace__expand:focus-visible {
-    color: var(--accent);
-    background: var(--accent-06);
+  .trace-topline {
+    display: flex;
+    align-items: center;
+    gap: 10px;
   }
-
-  .debug-trace--selected .debug-trace__expand {
-    border-left-color: rgba(232, 135, 10, 0.28);
+  .debug-trace__model {
+    flex: 1;
+    font-weight: 500;
+    font-size: var(--fs-body-lg);
   }
-
-  .debug-trace--expanded .debug-trace__timestamp,
-  .debug-trace--expanded .debug-trace__provider,
-  .debug-trace--expanded .debug-trace__model,
-  .debug-trace--expanded .debug-trace__method,
-  .debug-trace--expanded .debug-trace__duration {
-    overflow: visible;
-    text-overflow: clip;
-    white-space: normal;
-    word-break: break-all;
-  }
-
-  .debug-trace__timestamp,
-  .debug-trace__provider,
   .debug-trace__model,
-  .debug-trace__method,
-  .debug-trace__duration {
+  .debug-trace__provider {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-
-  .debug-trace__timestamp {
-    color: var(--text-lo);
-    font-size: 10.5px;
+  .trace-middle {
+    font-size: var(--fs-body-sm);
   }
-
-  .debug-trace__provider,
-  .debug-trace__model {
+  .trace-bottom {
+    font-variant-numeric: tabular-nums;
+  }
+  .trace-status {
     color: var(--text-med);
+    font: var(--fs-mono-sm) var(--font-mono);
   }
-
-  .debug-trace__method {
-    color: var(--text-lo);
-    text-transform: uppercase;
-  }
-
-  .debug-trace__status {
-    justify-self: center;
-    padding: 2px 6px;
-    border-radius: 12px;
-    color: var(--text-hi);
-    background: var(--surface-3);
-    font-size: 10px;
-    font-weight: 500;
-  }
-
-  .debug-trace__status--ok {
+  .trace-status[data-tone='ok'] {
     color: var(--green);
-    background: rgba(74, 222, 128, 0.12);
   }
-
-  .debug-trace__status--warn {
-    color: var(--amber);
-    background: rgba(245, 158, 11, 0.12);
-  }
-
-  .debug-trace__status--error {
+  .trace-status[data-tone='error'] {
     color: var(--red);
-    background: rgba(252, 129, 129, 0.12);
   }
-
-  .debug-trace__duration {
-    color: var(--text-lo);
-    text-align: right;
+  .trace-no-matches {
+    display: grid;
+    gap: 12px;
+    padding: 24px 12px;
+    color: var(--text-med);
+    font-size: var(--fs-body-md);
   }
-
-  @media (max-width: 1080px) {
+  @media (max-width: 1000px) {
+    .debug-view__trace-panel {
+      width: 260px;
+      flex-basis: 260px;
+    }
+  }
+  @media (max-width: 760px) {
     .debug-view__trace-panel {
       width: 100%;
-      max-height: 280px;
-    }
-  }
-
-  @media (max-width: 860px) {
-    .debug-trace__row {
-      grid-template-columns: minmax(0, 1fr) minmax(0, auto);
-      gap: 4px;
-    }
-
-    .debug-trace__timestamp {
-      grid-column: 1;
-      grid-row: 1;
-    }
-
-    .debug-trace__provider,
-    .debug-trace__model,
-    .debug-trace__method {
-      grid-column: 1;
-      grid-row: auto;
-      white-space: normal;
-    }
-
-    .debug-trace__status,
-    .debug-trace__duration {
-      grid-column: 2;
-      grid-row: 1;
+      flex: 1;
+      border-right: 0;
     }
   }
 </style>
