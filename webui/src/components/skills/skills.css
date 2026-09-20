@@ -372,6 +372,61 @@
 .skills-mobile-nav {
   display: none;
 }
+.skills-install-modal.modal {
+  width: min(620px, 100%);
+}
+.skills-install-body .skills-field-help {
+  margin: 0;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+}
+.skills-install-options summary {
+  cursor: pointer;
+  color: var(--text-med);
+}
+.skills-install-options .skills-field {
+  margin-top: 14px;
+}
+.skills-install-file {
+  width: 100%;
+  color: var(--text-hi);
+  font: inherit;
+}
+.skills-install-file::file-selector-button {
+  padding: 8px 12px;
+  margin-right: 12px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-hi);
+  font: inherit;
+  cursor: pointer;
+}
+.skills-install-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  overflow-wrap: anywhere;
+}
+.skills-install-preview h3,
+.skills-install-preview p {
+  margin: 0;
+}
+.skills-install-replace {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.skills-install-alternatives {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .skills-editor-modal.modal {
   width: 760px;
 }

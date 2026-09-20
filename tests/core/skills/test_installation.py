@@ -46,6 +46,32 @@ def archive(
     return path
 
 
+def test_upload_and_preview_digest_guard_share_installation_rules(tmp_path):
+    source = archive(tmp_path, FILES)
+    target = tmp_path / "skills"
+    authoring = SkillAuthoringService()
+    preview = authoring.install(target, "received.skill", archive=source.read_bytes(), dry_run=True)
+    assert preview.operation == "preview"
+    assert preview.source == "upload:received.skill"
+    assert not target.exists()
+    changed = archive(tmp_path, {**FILES, "templates/guide.md": b"Changed upstream"})
+    with pytest.raises(SkillAuthoringError):
+        authoring.install(
+            target, "received.skill", archive=changed.read_bytes(), expected_sha256=preview.sha256
+        )
+    assert not target.exists()
+    source = archive(tmp_path, FILES)
+    result = authoring.install(
+        target, "received.skill", archive=source.read_bytes(), expected_sha256=preview.sha256
+    )
+    assert result.operation == "installed"
+    assert (target / "research/assets/template.bin").read_bytes() == FILES["assets/template.bin"]
+    assert (
+        json.loads((target / "research/.vbot-install.json").read_bytes())["source"]
+        == "upload:received.skill"
+    )
+
+
 @pytest.mark.parametrize(
     "tar,prefix", [(False, "research/"), (False, ""), (True, "research/"), (True, "./")]
 )

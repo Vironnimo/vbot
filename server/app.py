@@ -23,6 +23,7 @@ from core.model_tasks import (
 )
 from core.model_tasks.speech_types import SpeechProgress
 from core.runs import RunNotFoundError
+from core.skills import SKILL_ARCHIVE_MAX_BYTES
 from core.tools.terminal_manager import TerminalNotFoundError
 from core.utils.config import Config
 from core.utils.server_control import (
@@ -86,9 +87,10 @@ from server._streams import (
     _unregister_ws_client,
 )
 from server.file_delivery import PREVIEW_URL_PREFIX
-from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST
+from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.methods import dispatch_rpc
 from server.rpc.operations_methods import FILE_PREVIEW_WORKERS
+from server.rpc.skill_methods import install_skill_upload
 
 JsonObject = dict[str, Any]
 
@@ -352,6 +354,31 @@ def create_app(
                 "ok": False,
                 "error": {"code": RPC_ERROR_INTERNAL, "message": "Internal server error"},
             }
+
+    @app.post("/api/skills/install")
+    async def upload_skill(request: Request) -> JsonObject:
+        params: JsonObject = dict(request.query_params)
+        if set(params) - {"scope", "path", "replace", "dry_run", "expected_sha256"}:
+            raise HTTPException(status_code=422, detail="Unsupported Skill upload parameters")
+        for key in ("replace", "dry_run"):
+            if key in params:
+                if params[key] not in {"true", "false"}:
+                    raise HTTPException(status_code=422, detail=f"{key} must be true or false")
+                params[key] = params[key] == "true"
+        file = await _parse_upload_file_with_limit(
+            request, max_size_bytes=SKILL_ARCHIVE_MAX_BYTES, upload_kind="Skill archive"
+        )
+        try:
+            data = await _read_upload_file_with_limit(
+                file, max_size_bytes=SKILL_ARCHIVE_MAX_BYTES, upload_kind="Skill archive"
+            )
+            return await install_skill_upload(
+                request.app.state, params, data=data, filename=file.filename or "upload.skill"
+            )
+        except RpcError as error:
+            raise HTTPException(status_code=400, detail=error.message) from error
+        finally:
+            await file.close()
 
     @app.post("/api/upload")
     async def upload_attachment(request: Request) -> JsonObject:

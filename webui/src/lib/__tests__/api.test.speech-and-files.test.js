@@ -9,8 +9,75 @@ import {
   transcribeSpeech,
   previewSpeech,
   uploadAttachment,
+  installSkillArchive,
+  installSkill,
 } from '../api.js';
 import { jsonResponse } from './api.support.js';
+
+describe('Skill installation transport', () => {
+  it('uses RPC for source links and multipart HTTP for client archives', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ ok: true, result: { operation: 'preview' } }),
+      );
+    await installSkill(
+      {
+        source: 'https://example.test/demo.skill',
+        scope: 'global',
+        dry_run: true,
+      },
+      { fetch },
+    );
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({
+      method: 'skill.install',
+      params: {
+        source: 'https://example.test/demo.skill',
+        scope: 'global',
+        dry_run: true,
+      },
+    });
+    fetch.mockResolvedValue(
+      jsonResponse({ operation: 'installed', name: 'demo' }),
+    );
+    const file = new File(['archive-sentinel'], 'demo.skill');
+    const signal = new AbortController().signal;
+    const result = await installSkillArchive(
+      file,
+      { scope: 'agent:main', path: 'skills/demo', dry_run: false },
+      { fetch, signal },
+    );
+    const [url, request] = fetch.mock.calls[1];
+    expect(url).toBe(
+      '/api/skills/install?scope=agent%3Amain&path=skills%2Fdemo&dry_run=false',
+    );
+    expect(request.body).toBeInstanceOf(FormData);
+    expect(await request.body.get('file').text()).toBe('archive-sentinel');
+    expect(request.signal).toBe(signal);
+    expect(result.operation).toBe('installed');
+  });
+  it('surfaces upload failures and rejects malformed success responses', async () => {
+    const file = new Blob(['archive']);
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse(
+          { detail: 'upload-error-sentinel' },
+          { ok: false, status: 413 },
+        ),
+      );
+    await expect(
+      installSkillArchive(file, { scope: 'global' }, { fetch }),
+    ).rejects.toMatchObject({
+      code: RPC_ERROR_HTTP,
+      message: 'upload-error-sentinel',
+    });
+    fetch.mockResolvedValue(jsonResponse({}));
+    await expect(
+      installSkillArchive(file, {}, { fetch }),
+    ).rejects.toMatchObject({ code: RPC_ERROR_RESPONSE });
+  });
+});
 
 describe('transcribeSpeech()', () => {
   it('reports streamed phases before returning the final transcript, across chunk boundaries', async () => {
