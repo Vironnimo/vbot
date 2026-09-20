@@ -14,6 +14,7 @@ from core.providers._http_shared import (
     build_streaming_request,
     classify_http_status,
     decode_response_json,
+    format_http_error_detail,
     wrap_network_error,
 )
 from core.providers.adapter import ModelLookup
@@ -44,6 +45,7 @@ from core.providers.reasoning import (
     remove_reasoning_kwargs,
 )
 from core.providers.token_getter import TokenGetter
+from core.utils.http_status import parse_retry_after
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 
@@ -123,6 +125,35 @@ def _raise_if_permanent_rate_limit(status_code: int, detail: str) -> None:
     )
 
 
+def _raise_if_upstream_json_failure(
+    status_code: int,
+    detail: str,
+    response_headers: httpx.Headers,
+) -> None:
+    """Recover the observed gateway failure without relaxing ordinary auth errors."""
+    if status_code != 403:
+        return
+    try:
+        body = json.loads(detail.removeprefix(f"{status_code} "))
+    except json.JSONDecodeError:
+        return
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict) or (
+        error.get("type") != "server_error"
+        or error.get("code") != "server_error"
+        or error.get("message")
+        != "Upstream request failed: [server_error] Upstream response was not valid JSON"
+    ):
+        return
+    # Live Go responses use 403 for this upstream failure despite subsequent
+    # successful requests with the same credentials. Keep recovery in the
+    # existing caller-owned budget rather than adding another retry loop.
+    upstream_error = ProviderError(f"Provider error: {detail}", retryable=True)
+    upstream_error.status_code = status_code
+    upstream_error.retry_after = parse_retry_after(response_headers)
+    raise upstream_error
+
+
 def _opencode_request_headers(request_kwargs: dict[str, Any]) -> dict[str, str]:
     session_id = request_kwargs.pop(OPENCODE_SESSION_ID_KWARG, None)
     if not isinstance(session_id, str) or not session_id:
@@ -199,6 +230,12 @@ class OpenCodeGoResponsesPolicy:
 class _OpenCodeGoMessagesAdapter(AnthropicCompatibleAdapter):
     """OpenCode Go's Anthropic Messages wire adapter."""
 
+    @staticmethod
+    def _build_error_detail(status_code: int, response_body: str = "") -> str:
+        # Gateway classification needs the structured code as well as the type
+        # and message. Preserve the complete body on this wire too.
+        return format_http_error_detail(status_code, response_body)
+
     def _apply_reasoning(
         self,
         payload: dict[str, Any],
@@ -240,6 +277,7 @@ class _OpenCodeGoMessagesAdapter(AnthropicCompatibleAdapter):
         detail: str,
         response_headers: httpx.Headers,
     ) -> None:
+        _raise_if_upstream_json_failure(status_code, detail, response_headers)
         _raise_if_permanent_rate_limit(status_code, detail)
         super()._classify_http_status(
             status_code,
@@ -480,6 +518,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         detail: str,
         response_headers: httpx.Headers,
     ) -> None:
+        _raise_if_upstream_json_failure(status_code, detail, response_headers)
         _raise_if_permanent_rate_limit(status_code, detail)
         super()._classify_http_status(
             status_code,
@@ -589,6 +628,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         detail: str,
         response_headers: httpx.Headers,
     ) -> None:
+        _raise_if_upstream_json_failure(status_code, detail, response_headers)
         _raise_if_permanent_rate_limit(status_code, detail)
         classify_http_status(
             status_code,
