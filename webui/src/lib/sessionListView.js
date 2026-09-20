@@ -9,11 +9,12 @@ const BACKGROUND_ONLY_RUN_KINDS = new Set([
 ]);
 
 // Category toggles that reveal hidden-by-default sessions. `allAgents` is a
-// filter-dropdown toggle too, but it changes which sessions are loaded rather
+// scope toggle; it changes which sessions are loaded rather
 // than how the loaded list is classified, so the view helpers ignore it.
 export function createSessionListFilters() {
   return {
     allAgents: false,
+    channels: false,
     subagents: false,
     memoryReflections: false,
     skillReflections: false,
@@ -231,16 +232,24 @@ export function visibleSessionsForSelection(
 }
 
 export function isSessionHiddenByDefault(session) {
-  return isSubAgentSession(session) || isBackgroundOnlySession(session);
+  return (
+    isChannelSession(session) ||
+    isSubAgentSession(session) ||
+    isBackgroundOnlySession(session)
+  );
+}
+
+function isChannelSession(session) {
+  return (
+    asOptionalText(session?.platform) !== null &&
+    asOptionalText(session?.platform_conv_id) !== null
+  );
 }
 
 export function isBackgroundOnlySession(session) {
   const runKinds = normalizeRunKinds(session?.run_kinds);
-  const isChannelSession =
-    asOptionalText(session?.platform) !== null &&
-    asOptionalText(session?.platform_conv_id) !== null;
   return (
-    !isChannelSession &&
+    !isChannelSession(session) &&
     runKinds.length > 0 &&
     runKinds.every((runKind) => BACKGROUND_ONLY_RUN_KINDS.has(runKind))
   );
@@ -250,6 +259,9 @@ export function isBackgroundOnlySession(session) {
 // enabled. A combined reflection review covers both dimensions, so it matches
 // either reflection toggle.
 function isHiddenCategoryEnabled(session, filters) {
+  if (isChannelSession(session) && !filters.channels) {
+    return false;
+  }
   if (isSubAgentSession(session)) {
     return filters.subagents;
   }
@@ -272,6 +284,7 @@ function normalizeFilters(filters) {
   }
   return {
     allAgents: filters.allAgents === true,
+    channels: filters.channels === true,
     subagents: filters.subagents === true,
     memoryReflections: filters.memoryReflections === true,
     skillReflections: filters.skillReflections === true,

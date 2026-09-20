@@ -265,6 +265,7 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
             "include_memory_reflections",
             "include_skill_reflections",
             "include_cron",
+            "include_channels",
             "required_session",
         },
         "session.list",
@@ -316,6 +317,7 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
         ),
         include_skill_reflections=_optional_bool(params, "include_skill_reflections", default=True),
         include_cron=_optional_bool(params, "include_cron", default=True),
+        include_channels=_optional_bool(params, "include_channels", default=True),
     )
 
     def load_sessions() -> tuple[list[JsonObject], SessionListCursor | None, int]:

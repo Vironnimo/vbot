@@ -346,3 +346,35 @@ def test_session_list_filters_execution_categories_in_sql(manager) -> None:
         "channel-cron",
         "unknown-kind",
     }
+
+
+@pytest.mark.parametrize("include_channels", [False, True])
+def test_channel_filter_counts_pages_and_preserves_required_session(manager, include_channels):
+    for index, session_id in enumerate(["old", "telegram", "new", "discord"]):
+        address = _address("coder", session_id)
+        manager._store.create(address, created_at=f"2026-09-01T00:0{index}:00+00:00")
+        if session_id in {"telegram", "discord"}:
+            manager.set_metadata(
+                address,
+                {"platform": session_id, "platform_conv_id": "chat-1", "run_kinds": ["cron"]},
+            )
+    filters = SessionListFilters(include_channels=include_channels, include_cron=False)
+    first = manager.list_summaries_page([(None, "coder")], limit=1, filters=filters)
+    assert first.total_count == (4 if include_channels else 2)
+    assert first.sessions[0]["id"] == ("discord" if include_channels else "new")
+    assert first.next_cursor is not None
+    second = manager.list_summaries_page(
+        [(None, "coder")], limit=10, cursor=first.next_cursor, filters=filters
+    )
+    assert [row["id"] for row in second.sessions] == (
+        ["new", "telegram", "old"] if include_channels else ["old"]
+    )
+    assert second.next_cursor is None
+    required = manager.list_summaries_page(
+        [(None, "coder")], limit=1, filters=filters, required_address=_address("coder", "telegram")
+    )
+    assert [row["id"] for row in required.sessions] == (
+        ["discord", "telegram"] if include_channels else ["new", "telegram"]
+    )
+    assert required.total_count == (4 if include_channels else 3)
+    assert required.next_cursor == first.next_cursor

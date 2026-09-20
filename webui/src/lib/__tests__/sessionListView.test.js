@@ -29,10 +29,19 @@ describe('Session filter storage', () => {
     const setItem = vi.fn();
     vi.stubGlobal('localStorage', {
       getItem: () =>
-        JSON.stringify({ cron: true, allAgents: 'true', extra: true }),
+        JSON.stringify({
+          cron: true,
+          channels: true,
+          allAgents: 'true',
+          extra: true,
+        }),
       setItem,
     });
-    const expected = { ...createSessionListFilters(), cron: true };
+    const expected = {
+      ...createSessionListFilters(),
+      cron: true,
+      channels: true,
+    };
     expect(loadSessionListFilters(0)).toEqual(expected);
     saveSessionListFilters(1, { ...expected, extra: true });
     expect(setItem).toHaveBeenCalledWith(
@@ -408,19 +417,45 @@ describe('sessionListView helpers', () => {
 
     expect(
       visibleSessionsForSelection(next.sessions).map((session) => session.id),
-    ).toEqual(['channel-session', 'mixed-session', 'user-session']);
+    ).toEqual(['mixed-session', 'user-session']);
 
     expect(
       visibleSessionsForSelection(next.sessions, {
         filters: createSessionListFilters(),
       }).map((session) => session.id),
-    ).toEqual(['channel-session', 'mixed-session', 'user-session']);
+    ).toEqual(['mixed-session', 'user-session']);
 
     expect(
       isSessionHiddenByDefault(
         next.sessions.find((session) => session.id === 'subagent-session'),
       ),
     ).toBe(true);
+  });
+
+  it('reveals channels independently and retains the selected channel', () => {
+    const { sessions } = applySessionList(createSessionListState(), [
+      { id: 'ordinary' },
+      {
+        id: 'telegram',
+        platform: 'telegram',
+        platform_conv_id: '1',
+        run_kinds: ['cron'],
+      },
+      { id: 'discord', platform: 'discord', platform_conv_id: '2' },
+    ]);
+    const ids = (options) =>
+      visibleSessionsForSelection(sessions, options).map((row) => row.id);
+    expect(ids()).toEqual(['ordinary']);
+    expect(ids({ filters: { channels: true } })).toEqual([
+      'discord',
+      'ordinary',
+      'telegram',
+    ]);
+    expect(ids({ filters: { cron: true } })).toEqual(['ordinary']);
+    expect(ids({ selectedSessionId: 'telegram' })).toEqual([
+      'ordinary',
+      'telegram',
+    ]);
   });
 
   it('reveals each hidden category through its own filter toggle', () => {

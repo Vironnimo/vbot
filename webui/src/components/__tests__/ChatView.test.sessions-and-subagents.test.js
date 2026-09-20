@@ -552,6 +552,14 @@ describe('ChatView', () => {
     expect(sessionsButton).toBeTruthy();
     sessionsButton.click();
 
+    flushSync();
+    document.querySelector('button[aria-label="Session list filters"]').click();
+    flushSync();
+    document
+      .querySelector('[role="switch"][aria-label="Show channels"]')
+      .click();
+    flushSync();
+
     await waitForCondition(
       () => document.body.textContent.includes('telegram/12345'),
       100,

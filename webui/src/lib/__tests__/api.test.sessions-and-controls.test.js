@@ -90,6 +90,7 @@ describe('listSessions()', () => {
         includeMemoryReflections: false,
         includeSkillReflections: true,
         includeCron: false,
+        includeChannels: false,
         requiredSession: { agentId: 'alpha', sessionId: 'session-1' },
       },
       { fetch: fetchFunction },
@@ -105,6 +106,7 @@ describe('listSessions()', () => {
         include_memory_reflections: false,
         include_skill_reflections: true,
         include_cron: false,
+        include_channels: false,
         required_session: { agent_id: 'alpha', session_id: 'session-1' },
       },
     });

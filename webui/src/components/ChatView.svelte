@@ -25,7 +25,7 @@
   import ComputerUseControl from './ComputerUseControl.svelte';
   import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
   import { reflectionTaskRows } from '../lib/chatTimelinePresentation.js';
-  import { onMount, untrack } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import { listConnections, listModels, subscribeRunEvents } from '$lib/api.js';
   import { getDraft } from '$lib/composerMemory.js';
   import { agentNeedsModel } from '$lib/onboarding.js';
@@ -691,15 +691,23 @@
         class="chat-view__surface"
         style={`--chat-overlay-height: ${layout.footerOverlayHeight}px; --chat-scrollbar-width: ${layout.chatScrollbarWidth}px`}
       >
-        <div class="chat-view__session-bar">
+        {#snippet sessionControls()}
           <Button
             variant="secondary"
             class={`chat-view__session-toggle${
               showSessionDrawer ? ' chat-view__session-toggle--active' : ''
             }`}
             disabled={!target.activeAgent}
-            onClick={() => {
+            aria-expanded={showSessionDrawer}
+            onClick={async (event) => {
+              const surface = event.currentTarget.closest(
+                '.chat-view__surface',
+              );
               showSessionDrawer = !showSessionDrawer;
+              await tick();
+              surface
+                ?.querySelector('.chat-view__session-toggle')
+                ?.focus({ preventScroll: true });
             }}
           >
             {t('sessions.title', 'Sessions')}
@@ -725,9 +733,15 @@
             ></span>
             {@render workspaceActions()}
           {/if}
-        </div>
+        {/snippet}
+        {#if !showSessionDrawer}
+          <div class="chat-view__session-bar">
+            {@render sessionControls()}
+          </div>
+        {/if}
         {#if showSessionDrawer}
           <SessionListDrawer
+            headerControls={sessionControls}
             agentId={target.activeAgentAddress}
             currentSessionId={navigation.viewingSessionId ||
               target.activeAgent.current_session_id}

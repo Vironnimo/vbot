@@ -464,6 +464,7 @@ class ChatSessionManager:
             include_memory_reflections=selected_filters.include_memory_reflections,
             include_skill_reflections=selected_filters.include_skill_reflections,
             include_cron=selected_filters.include_cron,
+            include_channels=selected_filters.include_channels,
             required_address=required_address,
         )
         summaries = [_session_list_summary_from_state(row) for row in rows]
