@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any, Literal, Protocol, cast
 
@@ -28,6 +28,7 @@ from core.chat.wire_shaping import (
     SYSTEM_REMINDER_OPEN_TAG,
     _notes_to_request_messages,
 )
+from core.models.pricing import TokenPricing, price_usage
 from core.providers.adapter import TERMINAL_OUTCOME_STOP, estimate_wire_request_input_tokens
 from core.sessions import SessionAddress, current_skill_activation_contents, skill_tool_activation
 from core.utils.errors import VBotError
@@ -295,7 +296,10 @@ class CompactionService:
         self,
         strategies: tuple[CompactionStrategy, ...] | CompactionStrategy | None = None,
         triggers: dict[str, CompactionTrigger] | None = None,
+        *,
+        pricing_lookup: Callable[[str], TokenPricing | None] | None = None,
     ) -> None:
+        self._pricing_lookup = pricing_lookup
         if strategies is None:
             resolved_strategies: tuple[CompactionStrategy, ...] = (
                 SummarizationStrategy(),
@@ -380,6 +384,8 @@ class CompactionService:
         minimum_reclaim_tokens: int = 0,
         summary_temperature: float | None = None,
         active_temperature: float | None = None,
+        summary_model_reference: str | None = None,
+        active_model_reference: str | None = None,
     ) -> ChatMessage:
         """Execute at most one Model request and persist its assembled projection."""
         if trigger not in COMPACTION_TRIGGERS:
@@ -399,6 +405,7 @@ class CompactionService:
             )
             plan = prepared.plan
             response: JsonObject | None = None
+            model_call: JsonObject | None = None
             if plan.model_messages is not None:
                 adapter, model_id = _plan_model_target(
                     plan,
@@ -438,12 +445,28 @@ class CompactionService:
                 response = await _send_streaming_model_request(
                     adapter, model_messages, request_options
                 )
-            return await _COMPACTION_WORKERS.run(
+                reference = (
+                    summary_model_reference
+                    if plan.model_target == "summary"
+                    else active_model_reference
+                )
+                usage = dict(response.get("usage") or {})
+                pricing = (
+                    self._pricing_lookup(reference) if self._pricing_lookup and reference else None
+                )
+                usage["cost"] = price_usage(usage, pricing)
+                model_call = {"model": reference, "usage": usage}
+            checkpoint = await _COMPACTION_WORKERS.run(
                 _finalize_compaction,
                 prepared,
                 response=response,
                 minimum_reclaim_tokens=minimum_reclaim_tokens,
             )
+            if model_call is not None:
+                checkpoint = replace(
+                    checkpoint, usage={**(checkpoint.usage or {}), "model_call": model_call}
+                )
+            return checkpoint
         except CompactionError:
             raise
         except Exception as exc:

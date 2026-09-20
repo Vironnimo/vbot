@@ -445,6 +445,7 @@ class AgenticProgression:
                     messages_for_request,
                     output_cwd,
                     int(request_context_usage["tokens"]),
+                    self._dependencies.models.pricing_for(target.model_reference),
                 )
                 assistant_request_message = await _CHAT_TRANSFORM_WORKERS.run(
                     _assistant_continuation_dict,

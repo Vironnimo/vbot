@@ -178,6 +178,56 @@ function makeReport(overrides = {}) {
         },
       },
     },
+    costs: {
+      totals: {
+        calls: 6,
+        reported_calls: 2,
+        estimated_calls: 3,
+        unpriced_calls: 1,
+        retrospective_calls: 2,
+        reported_usd: 0.012,
+        estimated_usd: 0.043,
+      },
+      models: [
+        {
+          model: 'openrouter/anthropic/claude-sonnet-4',
+          totals: {
+            calls: 6,
+            reported_usd: 0.012,
+            estimated_usd: 0.043,
+            unpriced_calls: 1,
+          },
+        },
+      ],
+      daily: [
+        {
+          date: '2026-06-13',
+          totals: {
+            reported_usd: 0.012,
+            estimated_usd: 0.043,
+            unpriced_calls: 1,
+          },
+        },
+      ],
+      top_sessions: [],
+      recent_calls: [
+        {
+          timestamp: '2026-06-13T09:00:00Z',
+          model: 'openrouter/anthropic/claude-sonnet-4',
+          agent_id: 'main',
+          session_id: 's1',
+          session_title: 'Cost example',
+          kind: 'chat',
+          input_tokens: 1000,
+          output_tokens: 200,
+          cache_read_tokens: null,
+          estimated_tokens: false,
+          retrospective: false,
+          cost: { amount_usd: 0, source: 'provider' },
+        },
+      ],
+      compactions: { calls: 1, reported_usd: null, estimated_usd: 0.001 },
+    },
     runs: {
       total_runs: 4,
       open_run_groups: 1,
@@ -217,6 +267,35 @@ function makeReport(overrides = {}) {
       ],
     },
     compactions: {
+      context: {
+        observations: 4,
+        average_before_tokens: 95000,
+        average_after_tokens: 40000,
+        p50_after_tokens: 38000,
+        p95_after_tokens: 50000,
+        reduction_ratio: 0.5789,
+        non_shrinking: 1,
+        average_steps_between: 8,
+        interval_observations: 3,
+        rapid_recompactions: 1,
+        average_duration_ms: 3500,
+        p95_duration_ms: 5000,
+        duration_observations: 4,
+        average_next_input_tokens: 42000,
+        next_input_observations: 3,
+      },
+      recent: [
+        {
+          timestamp: '2026-06-13T09:00:00Z',
+          agent_id: 'main',
+          session_id: 'compacted-session',
+          strategy: 'summary_tail',
+          before_tokens: 95000,
+          after_tokens: 40000,
+          duration_ms: null,
+          steps_since_previous: null,
+        },
+      ],
       total_compactions: 5,
       sessions_with_compactions: 2,
       average_per_compacted_session: 2.5,
@@ -471,7 +550,9 @@ async function waitForCondition(predicate, attempts = 50) {
 }
 
 async function waitForOverview() {
-  await waitForCondition(() => document.querySelector('.stats-health__track'));
+  await waitForCondition(() =>
+    document.querySelector('.stats-grid--hero .stats-card__value'),
+  );
 }
 
 function buttonNamed(key) {

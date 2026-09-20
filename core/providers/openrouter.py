@@ -119,6 +119,24 @@ __all__ = [
 ]
 
 
+def _openrouter_usage_extras(raw: Any) -> dict[str, Any]:
+    """OpenRouter credits are USD; never substitute upstream/BYOK costs."""
+    from core.models.pricing import nonnegative_amount
+
+    if not isinstance(raw, Mapping):
+        return {}
+    extras: dict[str, Any] = {}
+    cost = nonnegative_amount(raw.get("cost"))
+    if cost is not None:
+        extras["reported_cost_usd"] = cost
+    details = raw.get("prompt_tokens_details") or raw.get("input_tokens_details")
+    if isinstance(details, Mapping):
+        write = details.get("cache_write_tokens")
+        if isinstance(write, int) and not isinstance(write, bool) and write >= 0:
+            extras["cache_write_tokens"] = write
+    return extras
+
+
 class OpenRouterAdapter(OpenAICompatibleAdapter):
     """OpenAI-compatible adapter with OpenRouter-specific behavior."""
 
@@ -183,6 +201,8 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             normalized = normalize_responses_response(response)
         else:
             normalized = super().normalize_response(response, model_id=model_id)
+        if isinstance(normalized.get("usage"), dict):
+            normalized["usage"].update(_openrouter_usage_extras(response.get("usage")))
         reasoning = normalized.get("reasoning")
         if isinstance(reasoning, str) and reasoning:
             # Non-streaming counterpart of the streamed newline-run collapse:
@@ -213,6 +233,9 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             tool_call_slots,
             normalization_state=normalization_state,
         )
+        for delta in normalized:
+            if delta.get("type") == "usage":
+                delta.update(_openrouter_usage_extras(raw_chunk.get("usage")))
         return _collapse_reasoning_delta_texts(normalized, normalization_state)
 
     def _classify_http_status(
@@ -357,6 +380,10 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                 ):
                     if delta.get("type") == "finish":
                         seen_finish_delta = True
+                    if delta.get("type") == "usage":
+                        delta.update(
+                            _openrouter_usage_extras((state.completed_response or {}).get("usage"))
+                        )
                     yield delta
                 event_lines = []
             if event_lines:
@@ -366,6 +393,10 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                 ):
                     if delta.get("type") == "finish":
                         seen_finish_delta = True
+                    if delta.get("type") == "usage":
+                        delta.update(
+                            _openrouter_usage_extras((state.completed_response or {}).get("usage"))
+                        )
                     yield delta
             if not seen_finish_delta:
                 raise NetworkError("Stream ended without response completion event")

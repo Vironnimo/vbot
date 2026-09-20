@@ -60,7 +60,14 @@
       "context_window": 256000,
       "family": "codestral",
       "max_output_tokens": 4096,
-      "name": "codestral-2508"
+      "name": "codestral-2508",
+      "pricing": {
+        "rates": {
+          "input": 0.3,
+          "output": 0.9
+        },
+        "source": "models.dev:mistral/codestral-latest"
+      }
     },
     "labs-leanstral-1-5": {
       "capabilities": {
@@ -164,7 +171,14 @@
       "context_window": 262144,
       "family": "magistral-medium",
       "max_output_tokens": 16384,
-      "name": "mistral-medium-latest"
+      "name": "mistral-medium-latest",
+      "pricing": {
+        "rates": {
+          "input": 2.0,
+          "output": 5.0
+        },
+        "source": "models.dev:mistral/magistral-medium-latest"
+      }
     },
     "magistral-small-latest": {
       "capabilities": {
@@ -336,7 +350,14 @@
       "context_window": 131072,
       "family": "ministral",
       "max_output_tokens": 128000,
-      "name": "ministral-3b-2512"
+      "name": "ministral-3b-2512",
+      "pricing": {
+        "rates": {
+          "input": 0.04,
+          "output": 0.04
+        },
+        "source": "models.dev:mistral/ministral-3b-latest"
+      }
     },
     "ministral-8b-2512": {
       "capabilities": {
@@ -405,7 +426,14 @@
       "context_window": 262144,
       "family": "ministral",
       "max_output_tokens": 128000,
-      "name": "ministral-8b-2512"
+      "name": "ministral-8b-2512",
+      "pricing": {
+        "rates": {
+          "input": 0.1,
+          "output": 0.1
+        },
+        "source": "models.dev:mistral/ministral-8b-latest"
+      }
     },
     "mistral-code-fim-latest": {
       "capabilities": {
@@ -536,7 +564,14 @@
       "context_window": 262144,
       "family": "mistral-medium",
       "max_output_tokens": 262144,
-      "name": "mistral-medium-latest"
+      "name": "mistral-medium-latest",
+      "pricing": {
+        "rates": {
+          "input": 1.5,
+          "output": 7.5
+        },
+        "source": "models.dev:mistral/mistral-medium-2604"
+      }
     },
     "mistral-medium-3": {
       "capabilities": {
@@ -707,7 +742,14 @@
       "context_window": 262144,
       "family": "mistral-medium",
       "max_output_tokens": 262144,
-      "name": "mistral-medium-latest"
+      "name": "mistral-medium-latest",
+      "pricing": {
+        "rates": {
+          "input": 1.5,
+          "output": 7.5
+        },
+        "source": "models.dev:mistral/mistral-medium-latest"
+      }
     },
     "mistral-small-2603": {
       "canonical": "mistral/mistral-small-2603",
@@ -741,7 +783,14 @@
       "context_window": 262144,
       "family": "mistral-small",
       "max_output_tokens": 256000,
-      "name": "mistral-small-2603"
+      "name": "mistral-small-2603",
+      "pricing": {
+        "rates": {
+          "input": 0.15,
+          "output": 0.6
+        },
+        "source": "models.dev:mistral/mistral-small-2603"
+      }
     },
     "mistral-small-latest": {
       "canonical": "mistral/mistral-small-latest",
@@ -775,7 +824,14 @@
       "context_window": 262144,
       "family": "mistral-small",
       "max_output_tokens": 256000,
-      "name": "mistral-small-2603"
+      "name": "mistral-small-2603",
+      "pricing": {
+        "rates": {
+          "input": 0.15,
+          "output": 0.6
+        },
+        "source": "models.dev:mistral/mistral-small-latest"
+      }
     },
     "mistral-vibe-cli-fast": {
       "capabilities": {
@@ -942,7 +998,14 @@
       "context_window": 32768,
       "family": "voxtral",
       "max_output_tokens": 32000,
-      "name": "voxtral-small-2507"
+      "name": "voxtral-small-2507",
+      "pricing": {
+        "rates": {
+          "input": 0.1,
+          "output": 0.3
+        },
+        "source": "models.dev:mistral/voxtral-small-latest"
+      }
     }
   },
   "provider_id": "mistral",

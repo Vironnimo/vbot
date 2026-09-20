@@ -15935,31 +15935,6 @@
         }
       ]
     },
-    "typesafe/jev-latest": {
-      "attachment": false,
-      "description": "System One model for fast, typed probabilistic decisions over text or structured state",
-      "id": "typesafe/jev-latest",
-      "last_updated": "2026-09-15",
-      "limit": {
-        "context": 64000,
-        "output": 0
-      },
-      "modalities": {
-        "input": [
-          "text"
-        ],
-        "output": [
-          "text"
-        ]
-      },
-      "name": "Jev",
-      "open_weights": false,
-      "reasoning": false,
-      "release_date": "2026-09-15",
-      "structured_output": true,
-      "temperature": false,
-      "tool_call": false
-    },
     "unbiased/pareto": {
       "attachment": true,
       "description": "Blended multimodal model that runs multiple language models in parallel and returns a synthesized answer",
@@ -63881,36 +63856,6 @@
           "temperature": false,
           "tool_call": true
         },
-        "typesafe/jev": {
-          "attachment": false,
-          "cost": {
-            "cache_read": 0,
-            "input": 0.042,
-            "output": 0
-          },
-          "description": "System One model for fast, typed probabilistic decisions over text or structured state",
-          "id": "typesafe/jev",
-          "last_updated": "2026-09-15",
-          "limit": {
-            "context": 32000,
-            "output": 0
-          },
-          "modalities": {
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "name": "Jev",
-          "open_weights": false,
-          "reasoning": false,
-          "release_date": "2026-09-15",
-          "structured_output": true,
-          "temperature": false,
-          "tool_call": false
-        },
         "unbiased/pareto": {
           "attachment": true,
           "cost": {
@@ -73106,6 +73051,55 @@
           "release_date": "2026-08-03",
           "structured_output": true,
           "temperature": true,
+          "tool_call": true
+        },
+        "qwen/qwen3.8-omni-flash": {
+          "attachment": true,
+          "cost": {
+            "cache_read": 0.016,
+            "cache_write": 0.13,
+            "input": 0.13,
+            "output": 0.43
+          },
+          "description": "Qwen omni model for text, vision, audio, and multimodal agent tasks",
+          "family": "qwen",
+          "id": "qwen/qwen3.8-omni-flash",
+          "last_updated": "2026-09-17",
+          "limit": {
+            "context": 1000000,
+            "output": 131072
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "audio",
+              "video"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "name": "Qwen3.8 Omni Flash",
+          "open_weights": false,
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "toggle"
+            },
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "medium",
+                "xhigh"
+              ]
+            },
+            {
+              "type": "budget_tokens"
+            }
+          ],
+          "release_date": "2026-09-17",
           "tool_call": true
         },
         "tencent/hy3": {
@@ -133279,7 +133273,7 @@
               "text"
             ]
           },
-          "name": "Baidu: ERNIE 4.5 VL 424B A47B ",
+          "name": "Baidu: ERNIE 4.5 VL 424B A47B  (retires Oct 8)",
           "open_weights": false,
           "reasoning": true,
           "reasoning_options": [
@@ -133974,7 +133968,7 @@
               "text"
             ]
           },
-          "name": "DeepSeek: R1 Distill Llama 70B",
+          "name": "DeepSeek: R1 Distill Llama 70B (retires Sep 28)",
           "open_weights": false,
           "reasoning": true,
           "reasoning_options": [
@@ -134014,7 +134008,7 @@
               "text"
             ]
           },
-          "name": "DeepSeek: DeepSeek V3.1 Terminus",
+          "name": "DeepSeek: DeepSeek V3.1 Terminus (retires Sep 28)",
           "open_weights": false,
           "reasoning": true,
           "reasoning_options": [
@@ -134094,7 +134088,7 @@
               "text"
             ]
           },
-          "name": "DeepSeek: DeepSeek V3.2 Exp",
+          "name": "DeepSeek: DeepSeek V3.2 Exp (retires Sep 28)",
           "open_weights": false,
           "reasoning": true,
           "reasoning_options": [
@@ -134178,48 +134172,6 @@
             ]
           },
           "name": "DeepSeek V4 Flash 0731",
-          "open_weights": true,
-          "reasoning": true,
-          "reasoning_options": [
-            {
-              "type": "effort",
-              "values": [
-                "none",
-                "low",
-                "high",
-                "max"
-              ]
-            }
-          ],
-          "release_date": "2026-07-31",
-          "structured_output": true,
-          "temperature": true,
-          "tool_call": true
-        },
-        "deepseek/deepseek-v4-flash-0731:free": {
-          "attachment": false,
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "description": "DeepSeek V4 Flash 0731 is a sparse mixture-of-experts model from DeepSeek, with 13B active parameters out of 284B total. This re-post-trained revision is suited for coding, reasoning, and agent workflows....",
-          "family": "deepseek-flash",
-          "id": "deepseek/deepseek-v4-flash-0731:free",
-          "knowledge": "2025-05",
-          "last_updated": "2026-07-31",
-          "limit": {
-            "context": 1048576,
-            "output": 393216
-          },
-          "modalities": {
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "name": "DeepSeek: DeepSeek V4 Flash 0731 (free)",
           "open_weights": true,
           "reasoning": true,
           "reasoning_options": [
@@ -136740,7 +136692,7 @@
           "last_updated": "2026-08-10",
           "limit": {
             "context": 131072,
-            "output": 117964
+            "output": 16384
           },
           "modalities": {
             "input": [
@@ -137861,7 +137813,7 @@
           "release_date": "2025-03-17",
           "structured_output": false,
           "temperature": true,
-          "tool_call": false
+          "tool_call": true
         },
         "mistralai/mistral-small-3.2-24b-instruct": {
           "attachment": true,
@@ -142986,8 +142938,8 @@
           "id": "qwen/qwen3.5-35b-a3b",
           "last_updated": "2026-02-23",
           "limit": {
-            "context": 262144,
-            "output": 65536
+            "context": 256000,
+            "output": 16384
           },
           "modalities": {
             "input": [
@@ -143068,8 +143020,8 @@
           "id": "qwen/qwen3.5-9b",
           "last_updated": "2026-02-23",
           "limit": {
-            "context": 262144,
-            "output": 235929
+            "context": 256000,
+            "output": 32768
           },
           "modalities": {
             "input": [
@@ -146457,9 +146409,9 @@
         "~deepseek/deepseek-pro-latest": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.018396,
-            "input": 0.57816,
-            "output": 1.73448
+            "cache_read": 0.017136,
+            "input": 0.53856,
+            "output": 1.61568
           },
           "description": "This model always redirects to the latest model in the DeepSeek Pro family.",
           "family": "deepseek",
@@ -146965,7 +146917,7 @@
           "last_updated": "2026-08-27",
           "limit": {
             "context": 1048576,
-            "output": 131072
+            "output": 943718
           },
           "modalities": {
             "input": [
@@ -146998,9 +146950,9 @@
         "~z-ai/glm-latest": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.16562,
-            "input": 0.8918,
-            "output": 2.8028
+            "cache_read": 0.15444,
+            "input": 0.8316,
+            "output": 2.6136
           },
           "description": "This model always redirects to the latest GLM model from Z.ai.",
           "family": "glm",
@@ -160708,7 +160660,7 @@
         "baidu/deepseek-v4-flash": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.044,
+            "cache_read": 0.014,
             "input": 0.44,
             "output": 1.32
           },
@@ -160757,7 +160709,7 @@
         "baidu/deepseek-v4-pro": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.132,
+            "cache_read": 0.042,
             "input": 1.32,
             "output": 3.96
           },
@@ -160800,6 +160752,53 @@
           ],
           "release_date": "2026-04-24",
           "structured_output": false,
+          "temperature": true,
+          "tool_call": true
+        },
+        "baidu/deepseek-v4.1-flash": {
+          "attachment": true,
+          "cost": {
+            "cache_read": 0.006,
+            "input": 0.3,
+            "output": 1.2
+          },
+          "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+          "family": "deepseek-flash",
+          "id": "baidu/deepseek-v4.1-flash",
+          "knowledge": "2025-05",
+          "last_updated": "2026-09-10",
+          "limit": {
+            "context": 1048576,
+            "output": 393216
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "name": "DeepSeek V4.1 Flash (Baidu)",
+          "open_weights": true,
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ]
+            }
+          ],
+          "release_date": "2026-09-10",
+          "structured_output": true,
           "temperature": true,
           "tool_call": true
         },
@@ -189638,40 +189637,6 @@
           "temperature": true,
           "tool_call": false
         },
-        "TEE/deepseek-v4-flash": {
-          "attachment": false,
-          "cost": {
-            "cache_read": 0.04,
-            "input": 0.2,
-            "output": 0.4
-          },
-          "description": "Fast DeepSeek V4 lane for economical reasoning, coding, and long-context work",
-          "family": "deepseek-flash",
-          "id": "TEE/deepseek-v4-flash",
-          "knowledge": "2025-05",
-          "last_updated": "2026-04-24",
-          "limit": {
-            "context": 1048576,
-            "input": 1048576,
-            "output": 393216
-          },
-          "modalities": {
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "name": "DeepSeek V4 Flash TEE",
-          "open_weights": true,
-          "reasoning": true,
-          "reasoning_options": [],
-          "release_date": "2026-04-24",
-          "structured_output": true,
-          "temperature": true,
-          "tool_call": true
-        },
         "TEE/deepseek-v4.1-flash": {
           "attachment": true,
           "cost": {
@@ -194866,9 +194831,9 @@
         "deepseek/deepseek-v4.1-flash": {
           "attachment": true,
           "cost": {
-            "cache_read": 0.003,
-            "input": 0.1,
-            "output": 0.4
+            "cache_read": 0.006,
+            "input": 0.13,
+            "output": 0.52
           },
           "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
           "family": "deepseek-flash",
@@ -194911,9 +194876,9 @@
         "deepseek/deepseek-v4.1-flash:thinking": {
           "attachment": true,
           "cost": {
-            "cache_read": 0.003,
-            "input": 0.1,
-            "output": 0.4
+            "cache_read": 0.006,
+            "input": 0.13,
+            "output": 0.52
           },
           "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
           "family": "deepseek-flash",
@@ -204313,7 +204278,7 @@
           "reasoning": false,
           "release_date": "2024-01-01",
           "structured_output": false,
-          "tool_call": false
+          "tool_call": true
         },
         "qwen/qwen3-235b-a22b": {
           "attachment": true,
@@ -204411,7 +204376,7 @@
           "release_date": "2025-04-28",
           "structured_output": false,
           "temperature": true,
-          "tool_call": false
+          "tool_call": true
         },
         "qwen/qwen3-30b-a3b-instruct-2507": {
           "attachment": false,
@@ -204507,7 +204472,7 @@
           "reasoning": false,
           "release_date": "2024-01-01",
           "structured_output": false,
-          "tool_call": false
+          "tool_call": true
         },
         "qwen/qwen3-coder": {
           "attachment": false,
@@ -206091,9 +206056,9 @@
         "qwen/qwen3.8-27b-uncensored": {
           "attachment": true,
           "cost": {
-            "cache_read": 0.18,
-            "input": 0.2,
-            "output": 1.7
+            "cache_read": 0.125,
+            "input": 0.15,
+            "output": 1.2
           },
           "description": "Qwen 3.8 27B Uncensored is an NVFP4 open-weight multimodal model LoRA-tuned for fewer refusals across chat, coding, reasoning, tool use, and long-context work.",
           "family": "qwen",
@@ -206124,9 +206089,9 @@
         "qwen/qwen3.8-27b-uncensored:thinking": {
           "attachment": true,
           "cost": {
-            "cache_read": 0.18,
-            "input": 0.2,
-            "output": 1.7
+            "cache_read": 0.125,
+            "input": 0.15,
+            "output": 1.2
           },
           "description": "Qwen 3.8 27B Uncensored with thinking enabled for more deliberate creative work, coding, multimodal analysis, tool use, and long-context problem solving.",
           "family": "qwen",
@@ -206889,6 +206854,49 @@
           "release_date": "2026-05-29",
           "structured_output": true,
           "temperature": true,
+          "tool_call": true
+        },
+        "stepfun/step-5-preview": {
+          "attachment": true,
+          "cost": {
+            "cache_read": 0.05,
+            "input": 1,
+            "output": 2.7
+          },
+          "description": "Step 5 Preview is StepFun's 600B sparse MoE frontier model for production-scale agents, activating 27B parameters per token. It is built for software engineering, long-horizon tool use, research, professional knowledge work, and finance, with native text, image, and video understanding and a 1M-token context window. ⚠️ Note: This model routes through StepFun, so privacy and logging guarantees may be limited.",
+          "family": "step",
+          "id": "stepfun/step-5-preview",
+          "last_updated": "2026-09-20",
+          "limit": {
+            "context": 1000000,
+            "input": 1000000,
+            "output": 1000000
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "name": "Step 5 Preview",
+          "open_weights": false,
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "low",
+                "medium",
+                "high"
+              ]
+            }
+          ],
+          "release_date": "2026-09-20",
+          "structured_output": true,
           "tool_call": true
         },
         "tencent/hy3": {
@@ -234640,93 +234648,6 @@
           "temperature": true,
           "tool_call": true
         },
-        "jev-1.13": {
-          "attachment": false,
-          "cost": {
-            "input": 0.042,
-            "output": 0
-          },
-          "description": "System One model for fast, typed probabilistic decisions over text or structured state",
-          "id": "jev-1.13",
-          "last_updated": "2026-09-15",
-          "limit": {
-            "context": 64000,
-            "output": 0
-          },
-          "modalities": {
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "name": "Jev 1.13",
-          "open_weights": false,
-          "reasoning": false,
-          "release_date": "2026-09-15",
-          "structured_output": true,
-          "temperature": false,
-          "tool_call": false
-        },
-        "jev-1.13-free": {
-          "attachment": false,
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "description": "System One model for fast, typed probabilistic decisions over text or structured state",
-          "id": "jev-1.13-free",
-          "last_updated": "2026-09-15",
-          "limit": {
-            "context": 64000,
-            "output": 0
-          },
-          "modalities": {
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "name": "Jev 1.13 Free",
-          "open_weights": false,
-          "reasoning": false,
-          "release_date": "2026-09-15",
-          "structured_output": true,
-          "temperature": false,
-          "tool_call": false
-        },
-        "jev-latest": {
-          "attachment": false,
-          "cost": {
-            "input": 0.042,
-            "output": 0
-          },
-          "description": "System One model for fast, typed probabilistic decisions over text or structured state",
-          "id": "jev-latest",
-          "last_updated": "2026-09-15",
-          "limit": {
-            "context": 64000,
-            "output": 0
-          },
-          "modalities": {
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "name": "Jev",
-          "open_weights": false,
-          "reasoning": false,
-          "release_date": "2026-09-15",
-          "structured_output": true,
-          "temperature": false,
-          "tool_call": false
-        },
         "kimi-k2": {
           "attachment": false,
           "cost": {
@@ -236318,7 +236239,7 @@
     },
     "opencode-go": {
       "api": "https://opencode.ai/zen/go/v1",
-      "doc": "https://opencode.ai/docs/zen",
+      "doc": "https://opencode.ai/docs/go",
       "env": [
         "OPENCODE_API_KEY"
       ],
@@ -237349,7 +237270,8 @@
         "minimax-m2.5": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.03,
+            "cache_read": 0.06,
+            "cache_write": 0.375,
             "input": 0.3,
             "output": 1.2
           },
@@ -237386,6 +237308,7 @@
           "attachment": false,
           "cost": {
             "cache_read": 0.06,
+            "cache_write": 0.375,
             "input": 0.3,
             "output": 1.2
           },
@@ -240108,9 +240031,9 @@
         "deepseek/deepseek-v4-flash": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.008232,
-            "input": 0.04116,
-            "output": 0.08232
+            "cache_read": 0.007112,
+            "input": 0.03556,
+            "output": 0.07112
           },
           "description": "Fast DeepSeek V4 lane for economical reasoning, coding, and long-context work",
           "family": "deepseek-flash",
@@ -240177,50 +240100,6 @@
             ]
           },
           "name": "DeepSeek V4 Flash 0731",
-          "open_weights": true,
-          "reasoning": true,
-          "reasoning_options": [
-            {
-              "type": "toggle"
-            },
-            {
-              "type": "effort",
-              "values": [
-                "low",
-                "high",
-                "max"
-              ]
-            }
-          ],
-          "release_date": "2026-07-31",
-          "structured_output": true,
-          "temperature": true,
-          "tool_call": true
-        },
-        "deepseek/deepseek-v4-flash-0731:free": {
-          "attachment": false,
-          "cost": {
-            "input": 0,
-            "output": 0
-          },
-          "description": "Fast DeepSeek model for efficient chat, coding help, and agent loops",
-          "family": "deepseek-flash",
-          "id": "deepseek/deepseek-v4-flash-0731:free",
-          "knowledge": "2025-05",
-          "last_updated": "2026-07-31",
-          "limit": {
-            "context": 1048576,
-            "output": 393216
-          },
-          "modalities": {
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "name": "DeepSeek V4 Flash 0731 (free)",
           "open_weights": true,
           "reasoning": true,
           "reasoning_options": [
@@ -240336,9 +240215,9 @@
         "deepseek/deepseek-v4-pro-0813": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.018396,
-            "input": 0.57816,
-            "output": 1.73448
+            "cache_read": 0.017136,
+            "input": 0.53856,
+            "output": 1.61568
           },
           "description": "DeepSeek V4 Pro snapshot with million-token context and support for thinking and non-thinking modes",
           "family": "deepseek-thinking",
@@ -242667,8 +242546,8 @@
           "attachment": true,
           "cost": {
             "cache_read": 0.04,
-            "input": 0.35,
-            "output": 1.5
+            "input": 0.3,
+            "output": 1.2
           },
           "description": "Muse Glimmer is a 30-billion-parameter open-weight multimodal model from Meta Superintelligence Labs, distilled from Muse Spark for always-on local agents, tool use, coding, and image understanding.",
           "family": "muse",
@@ -242677,7 +242556,7 @@
           "last_updated": "2026-08-10",
           "limit": {
             "context": 131072,
-            "output": 117964
+            "output": 16384
           },
           "modalities": {
             "input": [
@@ -243782,7 +243661,7 @@
           "release_date": "2025-03-17",
           "structured_output": false,
           "temperature": true,
-          "tool_call": false
+          "tool_call": true
         },
         "mistralai/mistral-small-3.2-24b-instruct": {
           "attachment": true,
@@ -249103,8 +248982,9 @@
         "qwen/qwen3.5-35b-a3b": {
           "attachment": true,
           "cost": {
-            "input": 0.1625,
-            "output": 1.3
+            "cache_read": 0.15625,
+            "input": 0.3125,
+            "output": 1.25
           },
           "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
           "family": "qwen",
@@ -249112,7 +248992,7 @@
           "last_updated": "2026-02-23",
           "limit": {
             "context": 262144,
-            "output": 65536
+            "output": 16384
           },
           "modalities": {
             "input": [
@@ -249187,7 +249067,7 @@
           "last_updated": "2026-02-23",
           "limit": {
             "context": 262144,
-            "output": 235929
+            "output": 32768
           },
           "modalities": {
             "input": [
@@ -249791,8 +249671,8 @@
         "qwen/qwen3.8-27b": {
           "attachment": true,
           "cost": {
-            "cache_read": 0.15,
-            "input": 0.214,
+            "cache_read": 0.085,
+            "input": 0.2,
             "output": 2.55
           },
           "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
@@ -251979,9 +251859,9 @@
         "z-ai/glm-5.2": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.10296,
-            "input": 0.5544,
-            "output": 1.7424
+            "cache_read": 0.12064,
+            "input": 0.6496,
+            "output": 2.0416
           },
           "description": "Open flagship GLM for long-horizon coding agents and million-token context work",
           "family": "glm",
@@ -252461,9 +252341,9 @@
         "~deepseek/deepseek-pro-latest": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.018396,
-            "input": 0.57816,
-            "output": 1.73448
+            "cache_read": 0.017136,
+            "input": 0.53856,
+            "output": 1.61568
           },
           "description": "Flagship DeepSeek model for coding, reasoning, and agentic work",
           "family": "deepseek",
@@ -253085,7 +252965,7 @@
           "last_updated": "2026-08-27",
           "limit": {
             "context": 1310720,
-            "output": 131072
+            "output": 943718
           },
           "modalities": {
             "input": [
@@ -253118,9 +252998,9 @@
         "~z-ai/glm-latest": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.16562,
-            "input": 0.8918,
-            "output": 2.8028
+            "cache_read": 0.15444,
+            "input": 0.8316,
+            "output": 2.6136
           },
           "description": "Flagship GLM model for hybrid reasoning, coding, and agentic engineering",
           "family": "glm",
@@ -317332,6 +317212,36 @@
           "temperature": true,
           "tool_call": true
         },
+        "stepfun/step-5-preview": {
+          "attachment": true,
+          "cost": {
+            "cache_read": 0.05,
+            "input": 1,
+            "output": 2.7
+          },
+          "description": "StepFun flash model for efficient multimodal reasoning, coding, and tool use",
+          "family": "step",
+          "id": "stepfun/step-5-preview",
+          "last_updated": "2026-09-20",
+          "limit": {
+            "context": 1000000,
+            "output": 1000000
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "name": "Step 5 Preview",
+          "open_weights": false,
+          "reasoning": false,
+          "release_date": "2026-09-20",
+          "tool_call": false
+        },
         "tencent/hy-mt2-lite": {
           "attachment": false,
           "cost": {
@@ -317586,35 +317496,6 @@
           "release_date": "2026-07-30",
           "temperature": true,
           "tool_call": true
-        },
-        "typesafe-ai/jev": {
-          "attachment": false,
-          "cost": {
-            "input": 0.042,
-            "output": 0
-          },
-          "description": "System One model for fast, typed probabilistic decisions over text or structured state",
-          "id": "typesafe-ai/jev",
-          "last_updated": "2026-09-15",
-          "limit": {
-            "context": 32000,
-            "output": 0
-          },
-          "modalities": {
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "name": "Jev",
-          "open_weights": false,
-          "reasoning": false,
-          "release_date": "2026-09-15",
-          "structured_output": true,
-          "temperature": false,
-          "tool_call": false
         },
         "voyage/rerank-2.5": {
           "attachment": false,
@@ -320111,35 +319992,6 @@
           "structured_output": true,
           "temperature": false,
           "tool_call": true
-        },
-        "jev": {
-          "attachment": false,
-          "cost": {
-            "input": 0.042,
-            "output": 0
-          },
-          "description": "System One model for fast, typed probabilistic decisions over text or structured state",
-          "id": "jev",
-          "last_updated": "2026-09-15",
-          "limit": {
-            "context": 64000,
-            "output": 0
-          },
-          "modalities": {
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "name": "Jev",
-          "open_weights": false,
-          "reasoning": false,
-          "release_date": "2026-09-15",
-          "structured_output": true,
-          "temperature": false,
-          "tool_call": false
         },
         "kimi-k3": {
           "attachment": true,

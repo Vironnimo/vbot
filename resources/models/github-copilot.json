@@ -59,7 +59,16 @@
           }
         }
       },
-      "name": "Claude Haiku 4.5"
+      "name": "Claude Haiku 4.5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1,
+          "cache_write": 1.25,
+          "input": 1.0,
+          "output": 5.0
+        },
+        "source": "models.dev:github-copilot/claude-haiku-4.5"
+      }
     },
     "claude-opus-4.5": {
       "capabilities": {
@@ -196,7 +205,16 @@
           }
         }
       },
-      "name": "Claude Opus 4.7"
+      "name": "Claude Opus 4.7",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.5,
+          "cache_write": 6.25,
+          "input": 5.0,
+          "output": 25.0
+        },
+        "source": "models.dev:github-copilot/claude-opus-4.7"
+      }
     },
     "claude-opus-4.8": {
       "capabilities": {
@@ -273,7 +291,16 @@
           }
         }
       },
-      "name": "Claude Opus 4.8"
+      "name": "Claude Opus 4.8",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.5,
+          "cache_write": 6.25,
+          "input": 5.0,
+          "output": 25.0
+        },
+        "source": "models.dev:github-copilot/claude-opus-4.8"
+      }
     },
     "claude-sonnet-4.5": {
       "capabilities": {
@@ -408,7 +435,16 @@
           }
         }
       },
-      "name": "Claude Sonnet 4.6"
+      "name": "Claude Sonnet 4.6",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.3,
+          "cache_write": 3.75,
+          "input": 3.0,
+          "output": 15.0
+        },
+        "source": "models.dev:github-copilot/claude-sonnet-4.6"
+      }
     },
     "gemini-3.1-pro-preview": {
       "capabilities": {
@@ -550,7 +586,15 @@
           }
         }
       },
-      "name": "Gemini 3.5 Flash"
+      "name": "Gemini 3.5 Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.15,
+          "input": 1.5,
+          "output": 9.0
+        },
+        "source": "models.dev:github-copilot/gemini-3.5-flash"
+      }
     },
     "gpt-5-mini": {
       "capabilities": {
@@ -621,7 +665,15 @@
           }
         }
       },
-      "name": "GPT-5 mini"
+      "name": "GPT-5 mini",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.025,
+          "input": 0.25,
+          "output": 2.0
+        },
+        "source": "models.dev:github-copilot/gpt-5-mini"
+      }
     },
     "gpt-5.3-codex": {
       "capabilities": {
@@ -693,7 +745,15 @@
           }
         }
       },
-      "name": "GPT-5.3-Codex"
+      "name": "GPT-5.3-Codex",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.175,
+          "input": 1.75,
+          "output": 14.0
+        },
+        "source": "models.dev:github-copilot/gpt-5.3-codex"
+      }
     },
     "gpt-5.4": {
       "capabilities": {
@@ -768,7 +828,26 @@
           }
         }
       },
-      "name": "GPT-5.4"
+      "name": "GPT-5.4",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.25,
+          "input": 2.5,
+          "output": 15.0,
+          "tiers": [
+            {
+              "cache_read": 0.5,
+              "input": 5.0,
+              "output": 22.5,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:github-copilot/gpt-5.4"
+      }
     },
     "gpt-5.4-mini": {
       "capabilities": {
@@ -842,7 +921,15 @@
           }
         }
       },
-      "name": "GPT-5.4 mini"
+      "name": "GPT-5.4 mini",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.075,
+          "input": 0.75,
+          "output": 4.5
+        },
+        "source": "models.dev:github-copilot/gpt-5.4-mini"
+      }
     },
     "gpt-5.5": {
       "capabilities": {
@@ -916,7 +1003,26 @@
           }
         }
       },
-      "name": "GPT-5.5"
+      "name": "GPT-5.5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.5,
+          "input": 5.0,
+          "output": 30.0,
+          "tiers": [
+            {
+              "cache_read": 1.0,
+              "input": 10.0,
+              "output": 45.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:github-copilot/gpt-5.5"
+      }
     },
     "oswe-vscode-prime": {
       "capabilities": {

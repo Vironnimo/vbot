@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from core.statistics._costs import CostsSection
 
 from core.statistics.skills import (
     SkillsSection,
@@ -88,6 +91,9 @@ class UsageTotals:
     # provider without cache reporting as 0%.
     cache_turns: int
     cache_input_tokens: int
+    model_calls: int = 0
+    compaction_calls: int = 0
+    unreported_calls: int = 0
 
 
 @dataclass(frozen=True)
@@ -303,6 +309,9 @@ class RunsSection:
 class CompactionStrategyCount:
     strategy: str
     compactions: int
+    average_before_tokens: float | None = None
+    average_after_tokens: float | None = None
+    reduction_ratio: float | None = None
 
 
 @dataclass(frozen=True)
@@ -324,6 +333,39 @@ class CompactionSessionStat:
 
 
 @dataclass(frozen=True)
+class CompactionContextStats:
+    observations: int
+    average_before_tokens: float | None
+    average_after_tokens: float | None
+    p50_after_tokens: float | None
+    p95_after_tokens: float | None
+    reduction_ratio: float | None
+    non_shrinking: int
+    average_duration_ms: float | None
+    p95_duration_ms: float | None
+    duration_observations: int
+    average_steps_between: float | None
+    interval_observations: int
+    rapid_recompactions: int
+    average_next_input_tokens: float | None
+    next_input_observations: int
+
+
+@dataclass(frozen=True)
+class CompactionObservation:
+    agent_id: str
+    session_id: str
+    session_title: str | None
+    timestamp: str
+    strategy: str
+    before_tokens: int | None
+    after_tokens: int | None
+    duration_ms: int | None
+    steps_since_previous: int | None
+    next_input_tokens: int | None
+
+
+@dataclass(frozen=True)
 class CompactionsSection:
     total_compactions: int
     sessions_with_compactions: int
@@ -334,6 +376,8 @@ class CompactionsSection:
     by_strategy: list[CompactionStrategyCount]
     reclaim: CompactionReclaimStats
     top_sessions: list[CompactionSessionStat]
+    context: CompactionContextStats
+    recent: list[CompactionObservation]
 
 
 @dataclass(frozen=True)
@@ -401,6 +445,7 @@ class StatisticsReport:
     errors: ErrorsSection
     tools: ToolsSection
     skills: SkillsSection
+    costs: CostsSection
 
     def to_dict(self) -> JsonObject:
         """Return a JSON-serializable dictionary of the whole report."""

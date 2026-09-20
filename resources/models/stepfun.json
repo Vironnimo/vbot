@@ -1,9 +1,7 @@
 {
-  "provider_id": "stepfun",
   "models": {
     "step-3.5-flash": {
       "canonical": "stepfun/step-3.5-flash",
-      "connections": ["direct-api", "step-plan"],
       "capabilities": {
         "json_mode": true,
         "reasoning": {
@@ -22,22 +20,36 @@
           "top_p"
         ]
       },
+      "connections": [
+        "direct-api",
+        "step-plan"
+      ],
       "metadata": {
         "stepfun": {
           "prompt_cache": "automatic",
           "prompt_cache_min_tokens": 256
         }
+      },
+      "pricing": {
+        "rates": {
+          "cache_read": 0.02,
+          "input": 0.1,
+          "output": 0.3
+        },
+        "source": "models.dev:stepfun/step-3.5-flash"
       }
     },
     "step-3.5-flash-2603": {
       "canonical": "stepfun/step-3.5-flash-2603",
-      "connections": ["direct-api", "step-plan"],
       "capabilities": {
         "json_mode": true,
         "reasoning": {
-          "supported": true,
           "control": "levels",
-          "levels": ["low", "high"]
+          "levels": [
+            "low",
+            "high"
+          ],
+          "supported": true
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -53,22 +65,37 @@
           "top_p"
         ]
       },
+      "connections": [
+        "direct-api",
+        "step-plan"
+      ],
       "metadata": {
         "stepfun": {
           "prompt_cache": "automatic",
           "prompt_cache_min_tokens": 256
         }
+      },
+      "pricing": {
+        "rates": {
+          "cache_read": 0.02,
+          "input": 0.1,
+          "output": 0.3
+        },
+        "source": "models.dev:stepfun/step-3.5-flash-2603"
       }
     },
     "step-3.7-flash": {
       "canonical": "stepfun/step-3.7-flash",
-      "connections": ["direct-api", "step-plan"],
       "capabilities": {
         "json_mode": true,
         "reasoning": {
-          "supported": true,
           "control": "levels",
-          "levels": ["low", "medium", "high"]
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -84,27 +111,43 @@
           "top_p"
         ]
       },
+      "connections": [
+        "direct-api",
+        "step-plan"
+      ],
       "metadata": {
         "stepfun": {
           "prompt_cache": "automatic",
           "prompt_cache_min_tokens": 256
         }
+      },
+      "pricing": {
+        "rates": {
+          "cache_read": 0.037,
+          "input": 0.185,
+          "output": 1.11
+        },
+        "source": "models.dev:stepfun/step-3.7-flash"
       }
     },
     "step-router-v1": {
-      "name": "Step Router V1 (Step Plan routing)",
-      "connections": ["step-plan"],
       "capabilities": {
-        "vision": false,
-        "tools": true,
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
-          "supported": true,
           "control": "levels",
-          "levels": ["low", "medium", "high"]
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
         },
-        "input_modalities": ["text"],
-        "output_modalities": ["text"],
         "supported_parameters": [
           "frequency_penalty",
           "max_tokens",
@@ -117,17 +160,27 @@
           "tool_choice",
           "tools",
           "top_p"
-        ]
+        ],
+        "tools": true,
+        "vision": false
       },
+      "connections": [
+        "step-plan"
+      ],
       "context_window": 256000,
       "max_output_tokens": 250000,
       "metadata": {
         "stepfun": {
           "prompt_cache": "automatic",
           "prompt_cache_min_tokens": 256,
-          "routes_between": ["deepseek-v4-pro", "step-3.7-flash"]
+          "routes_between": [
+            "deepseek-v4-pro",
+            "step-3.7-flash"
+          ]
         }
-      }
+      },
+      "name": "Step Router V1 (Step Plan routing)"
     }
-  }
+  },
+  "provider_id": "stepfun"
 }

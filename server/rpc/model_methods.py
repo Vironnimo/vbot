@@ -434,7 +434,7 @@ async def _refresh_global_model_db(runtime: Any, resources_dir: Path) -> JsonObj
         refreshed_providers.extend(successes)
         refresh_errors.extend(errors)
 
-    canonical_result = await _refresh_canonical_layer_if_possible(catalog, resources_dir)
+    canonical_result = await _refresh_canonical_layer_if_possible(catalog, resources_dir, runtime)
     provider_count, model_count = _summarize_refreshed_providers(refreshed_providers)
     result: JsonObject = {
         "providers": refreshed_providers,
@@ -450,6 +450,7 @@ async def _refresh_global_model_db(runtime: Any, resources_dir: Path) -> JsonObj
 async def _refresh_canonical_layer_if_possible(
     catalog: ModelsDevCatalog | None,
     resources_dir: Path,
+    runtime: Any,
 ) -> JsonObject | None:
     """Project the canonical layer when a catalog is available; else ``None``.
 
@@ -459,7 +460,14 @@ async def _refresh_canonical_layer_if_possible(
 
     if catalog is None:
         return None
-    return await refresh_canonical_layer(resources_dir, catalog=catalog)
+    return await refresh_canonical_layer(
+        resources_dir,
+        catalog=catalog,
+        provider_catalog_ids={
+            provider_id: runtime.providers.get(provider_id).effective_models_dev_id()
+            for provider_id in runtime.providers.list_ids()
+        },
+    )
 
 
 async def _refresh_provider_model_db(
@@ -495,7 +503,7 @@ async def _refresh_provider_model_db(
             RPC_ERROR_DOMAIN,
             f"Provider credentials not found for provider '{provider_id}'",
         )
-    await _refresh_canonical_layer_if_possible(catalog, resources_dir)
+    await _refresh_canonical_layer_if_possible(catalog, resources_dir, runtime)
     result = dict(successes[0])
     if errors:
         result["errors"] = errors
