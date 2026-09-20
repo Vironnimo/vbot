@@ -1,3 +1,4 @@
+import { formatCost, formatOptionalTokens } from '../statisticsView.js';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -151,11 +152,11 @@ describe('statisticsView formatting', () => {
     expect(STATISTICS_SUB_VIEWS).toEqual([
       'overview',
       'usage',
-      'runs',
       'compactions',
+      'limits',
+      'runs',
       'tools',
       'skills',
-      'limits',
     ]);
     expect(DAILY_GRANULARITIES).toEqual(['day', 'week', 'month']);
     expect(USAGE_HISTORY_RANGES).toEqual(['24h', '7d', '30d', 'all']);
@@ -755,5 +756,17 @@ describe('rollupSkillActivationsByAgent', () => {
         { name: 'c', by_agent: [{ key: '', count: 9 }] },
       ]),
     ).toEqual([]);
+  });
+});
+
+describe('cost formatting', () => {
+  it('distinguishes absent, free, and tiny charges', () => {
+    expect(formatCost(null)).toBe('—');
+    expect(formatCost(0)).toBe('$0.00');
+    expect(formatCost(0.0000084)).toBe('<$0.0001');
+    expect(formatCost(0.0000084, 'en', { exact: true })).toBe('$0.0000084');
+    expect(formatCost(-1)).toBe('—');
+    expect(formatOptionalTokens(null)).toBe('—');
+    expect(formatOptionalTokens(0)).toBe('0');
   });
 });

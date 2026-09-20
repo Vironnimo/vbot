@@ -47,6 +47,7 @@ from core.models.models import (
     REASONING_CONTROL_LEVELS,
     REASONING_CONTROL_ON_OFF,
 )
+from core.models.pricing import TokenPricing
 from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.reasoning import THINKING_EFFORT_ORDER
 from core.utils.errors import VBotError
@@ -331,6 +332,7 @@ async def refresh_canonical_layer(
     *,
     client: httpx.AsyncClient | None = None,
     catalog: ModelsDevCatalog | None = None,
+    provider_catalog_ids: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Fetch + project the canonical layer (``models.json`` + raw dump + seeds).
 
@@ -345,6 +347,8 @@ async def refresh_canonical_layer(
         client: Optional injected HTTP client (tests pass a mock transport).
         catalog: Optional pre-fetched catalog to reuse instead of fetching
             (e.g. when a per-provider refresh already fetched it this run).
+        provider_catalog_ids: Provider ids mapped to their public catalog ids;
+            refreshes prices in existing generated Provider files without credentials.
 
     Returns:
         ``{"model_count", "lifted_ladders", "hand_path_reasoning", "raw_path"}``.
@@ -355,6 +359,7 @@ async def refresh_canonical_layer(
     raw_path = write_raw_catalog(resolved_catalog, models_dir)
     projected = project_canonical_models(resolved_catalog)
     write_canonical_models(projected, models_dir)
+    _refresh_provider_prices(models_dir, resolved_catalog, provider_catalog_ids or {})
     seed_canonical_overrides_structure(models_dir)
 
     lifted, hand_path_reasoning = _ladder_lift_counts(resolved_catalog)
@@ -364,6 +369,29 @@ async def refresh_canonical_layer(
         "hand_path_reasoning": hand_path_reasoning,
         "raw_path": str(raw_path),
     }
+
+
+def _refresh_provider_prices(
+    models_dir: Path, catalog: ModelsDevCatalog, provider_ids: Mapping[str, str]
+) -> None:
+    """Refresh public prices even when a Provider lacks discovery credentials."""
+    for provider_id, catalog_id in provider_ids.items():
+        path = models_dir / f"{provider_id}.json"
+        if not path.is_file():
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        for wire_id, record in payload.get("models", {}).items():
+            pricing = provider_pricing(catalog, models_dev_id=catalog_id, wire_id=wire_id)
+            if pricing is not None:
+                record["pricing"] = pricing
+            elif isinstance(record.get("pricing"), dict) and str(
+                record["pricing"].get("source", "")
+            ).startswith("models.dev:"):
+                record.pop("pricing")
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
 
 
 def _ladder_lift_counts(catalog: ModelsDevCatalog) -> tuple[int, int]:
@@ -699,6 +727,18 @@ def provider_family(
     return family if isinstance(family, str) and family else None
 
 
+def provider_pricing(
+    catalog: ModelsDevCatalog, *, models_dev_id: str, wire_id: str
+) -> dict[str, Any] | None:
+    """Project this exact Provider's rates in USD per million tokens."""
+    entry = catalog.provider_model(models_dev_id, wire_id)
+    pricing = TokenPricing.from_cost(
+        entry.get("cost") if entry is not None else None,
+        source=f"models.dev:{models_dev_id}/{wire_id}",
+    )
+    return pricing.to_dict() if pricing is not None else None
+
+
 # ---------------------------------------------------------------------------
 # Canonical projection internals
 # ---------------------------------------------------------------------------
@@ -774,6 +814,10 @@ def _project_canonical_model(
     for field_name in _CANONICAL_KEEP_FIELDS:
         if field_name in model:
             record[field_name] = model[field_name]
+    lab, _, wire_id = canonical_id.partition("/")
+    pricing = provider_pricing(catalog, models_dev_id=lab, wire_id=wire_id)
+    if pricing is not None:
+        record["pricing"] = pricing
     return record
 
 

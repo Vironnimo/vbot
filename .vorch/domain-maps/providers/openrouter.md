@@ -11,6 +11,21 @@ OpenAI-compatible Provider with OpenRouter-specific reasoning, per-Model Chat Co
 - Catalog endpoint: `GET /models`
 - Routing catalogs: `GET /providers` for base Provider slugs and `GET /models/{author}/{slug}/endpoints` for one Model's exact endpoint tags, exposed to Settings through `provider.routing_options`
 
+## Usage cost normalization (2026-09-20)
+
+OpenRouter `usage.cost` becomes canonical `reported_cost_usd` on both Chat Completions and Responses, streaming and non-streaming. Only finite non-negative numeric values are accepted; explicit zero is preserved. `cost_details.upstream_inference_cost` is not the amount charged to the OpenRouter account and is never substituted. Optional `prompt_tokens_details.cache_write_tokens` / `input_tokens_details.cache_write_tokens` is retained separately from cache reads. No request or routing policy changed.
+
+Official contract: https://openrouter.ai/docs/cookbook/administration/usage-accounting (read 2026-09-20). The following short synthetic requests exercised the actual Adapter, shared stream accumulator, completed Assistant preparation, SQLite save/reopen, and Statistics index. They verify cost transport for these exact Models and shapes, not other Models, discounted billing agreements, Tools, or modality pricing.
+
+| Connection | Model | Endpoint | Shape | Input/output tokens | Reported USD | Result |
+| --- | --- | --- | --- | --- | --- | --- |
+| api-key | google/gemini-2.5-flash-lite | POST /chat/completions | non-streaming | 6/26 | 0.000011 | persisted unchanged |
+| api-key | google/gemini-2.5-flash-lite | POST /chat/completions | streaming | 6/29 | 0.0000122 | persisted unchanged |
+| api-key | openai/gpt-5.6-luna | POST /responses | non-streaming, store=false, minimal | 12/5 | 0.0000084 | persisted unchanged |
+| api-key | openai/gpt-5.6-luna | POST /responses | streaming, store=false, minimal | 12/5 | 0.0000084 | persisted unchanged |
+
+Tests: `tests/core/providers/test_openrouter_costs.py` protects both wires, zero cost, invalid values, and cache-write preservation. Generic estimation is owned by `models.md`; report coverage is owned by `statistics.md`.
+
 ## Provider Routing
 
 - `settings.providers.openrouter.routing` stores one complete `default` policy and sparse complete policies keyed by exact OpenRouter wire Model id under `models`. Each policy is `{ mode, providers, blocked, allow_fallbacks }`; modes are `automatic`, `allowed`, and `ordered`.

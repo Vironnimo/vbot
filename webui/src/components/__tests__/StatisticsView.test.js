@@ -23,25 +23,17 @@ describe('StatisticsView', () => {
     await waitForOverview();
 
     expect(rpcMock).toHaveBeenCalledWith('statistics.report', {});
-    expect(
-      document.querySelector('.stats-health__hero strong')?.textContent,
-    ).toBe('75.0%');
     expect(document.querySelectorAll('.stats-activity__col')).toHaveLength(30);
-    expect(document.querySelectorAll('.stats-health__segment')).toHaveLength(4);
-    expect(document.querySelector('.stats-donut')).toBeNull();
-    expect(
-      document.querySelectorAll('.stats-activity__legend .stats-legend'),
-    ).toHaveLength(4);
     expect(
       [
         ...document.querySelectorAll('.stats-grid--hero .stats-card__value'),
       ].map((node) => node.textContent),
-    ).toEqual(['4', '1,200', '7', '1']);
-    expect(cardValue('statistics.overview.chatMessages')).toBe('11');
-    expect(cardValue('statistics.overview.activeDays')).toBe('2');
-    expect(cardValue('statistics.overview.toolRunShare')).toBe('50.0%');
-    expect(document.querySelectorAll('.stats-bars')).toHaveLength(2);
-    expect(document.body.textContent).toContain('main');
+    ).toEqual(['1,200', '$0.012', '$0.043', '10.0%']);
+    expect(cardValue('statistics.compactions.averageAfter')).toBe('40,000');
+    expect(document.body.textContent).toContain('Calls without a price');
+    expect(document.body.textContent).toContain(
+      'openrouter/anthropic/claude-sonnet-4',
+    );
     expect(document.querySelector('.stats-view.view-frame')).toBeTruthy();
     expect(document.querySelector('.stats-view .view-header')).toBeTruthy();
     expect(
@@ -93,7 +85,9 @@ describe('StatisticsView', () => {
         buttonNamed('statistics.range.7d').getAttribute('aria-pressed') ===
         'true',
     );
-    expect(cardValue('statistics.col.input')).toBe('321');
+    expect(
+      document.querySelector('.stats-columns .stats-card__value').textContent,
+    ).toBe('321');
     expect(
       document.querySelectorAll('.stats-token-chart .stats-activity__col'),
     ).toHaveLength(7);
@@ -119,7 +113,7 @@ describe('StatisticsView', () => {
     buttonNamed('statistics.range.30d').click();
     await waitForCondition(() => document.querySelector('.banner--error'));
     expect(document.body.textContent).toContain('report-error-sentinel');
-    expect(cardValue('statistics.overview.runs')).toBe('4');
+    expect(cardValue('statistics.usage.measuredTokens')).toBe('1,200');
     expect(
       buttonNamed('statistics.range.all').getAttribute('aria-pressed'),
     ).toBe('true');
@@ -154,7 +148,9 @@ describe('StatisticsView', () => {
         point.querySelector('.stats-activity__bar').style.height,
       ),
     ).toBeCloseTo(82.3333);
-    const details = document.querySelector('.stats-panel details');
+    const details = document
+      .querySelector('.stats-token-chart')
+      .parentElement.querySelector('details');
     details.querySelector('summary').click();
     expect(details.open).toBe(true);
     expect(
@@ -216,7 +212,7 @@ describe('StatisticsView', () => {
     expect(
       buttonNamed('statistics.granularity.month').getAttribute('aria-pressed'),
     ).toBe('true');
-    document.querySelector('.stats-links button').click();
+    buttonNamed('statistics.overview.inspectCompactions').click();
     flushSync();
     expect(document.querySelector('[role="tabpanel"]').id).toBe(
       'statistics-subviews-panel-compactions',
@@ -224,9 +220,9 @@ describe('StatisticsView', () => {
     expect(rpcMock).toHaveBeenCalledTimes(1);
   });
 
-  it('shows a period-specific empty state when all Runs are older than the selected window', async () => {
+  it('shows an empty token chart when usage is older than the chart window', async () => {
     const report = makeReport();
-    report.overview.daily_trend = [
+    report.usage.daily = [
       {
         date: '2026-04-01',
         runs: 4,
@@ -245,31 +241,28 @@ describe('StatisticsView', () => {
     expect(document.querySelector('.stats-activity')).toBeNull();
   });
 
-  it('renders unavailable outcome shares instead of a misleading zero percent with no Runs', async () => {
+  it('keeps unknown costs and cache coverage distinct from a reported free call', async () => {
     const report = makeReport();
-    report.overview.total_runs = 0;
-    report.overview.run_status = {
-      completed: 0,
-      failed: 0,
-      cancelled: 0,
-      interrupted: 0,
-    };
-    report.overview.daily_trend = [];
+    report.costs.totals.reported_usd = 0;
+    report.costs.totals.estimated_usd = null;
+    report.usage.totals.cache_turns = 0;
+    report.usage.totals.cache_input_tokens = 0;
     rpcMock.mockResolvedValue(report);
-
     suite.mountedComponent = mount(StatisticsView, { target: document.body });
-    await waitForCondition(() =>
-      document.querySelector('.stats-health__hero strong'),
+    await waitForOverview();
+    expect(cardValue('statistics.cost.reported')).toBe('$0.00');
+    expect(cardValue('statistics.cost.estimated')).toBe('—');
+    expect(cardValue('statistics.usage.cacheHitRate')).toBe('—');
+    buttonNamed('statistics.subview.usage').click();
+    flushSync();
+    const call = document.querySelector('.stats-call');
+    call.querySelector('summary').click();
+    expect(call.open).toBe(true);
+    expect(call.textContent).toContain('Cost example');
+    expect(call.textContent).toContain('$0.00');
+    expect(call.querySelectorAll('.stats-card__value')[2].textContent).toBe(
+      '—',
     );
-
-    expect(
-      document.querySelector('.stats-health__hero strong').textContent,
-    ).toBe('—');
-    expect(
-      [...document.querySelectorAll('.stats-health__share')].map((share) =>
-        share.textContent.trim(),
-      ),
-    ).toEqual(['—', '—', '—', '—']);
   });
 
   it('switches to the usage sub-view and badges estimated tokens', async () => {
@@ -279,7 +272,7 @@ describe('StatisticsView', () => {
     await waitForOverview();
 
     const usageTab = [...document.querySelectorAll('.tab-list__tab')].find(
-      (button) => button.textContent.trim() === 'Usage',
+      (button) => button.textContent.trim() === 'Usage & costs',
     );
     usageTab.click();
     flushSync();
@@ -303,16 +296,14 @@ describe('StatisticsView', () => {
     await waitForOverview();
 
     const usageTab = [...document.querySelectorAll('.tab-list__tab')].find(
-      (button) => button.textContent.trim() === 'Usage',
+      (button) => button.textContent.trim() === 'Usage & costs',
     );
     usageTab.click();
     flushSync();
 
     // totals: 50 read of 500 cache-reporting input → 10.0%
     expect(cardValue('statistics.usage.cacheHitRate')).toBe('10.0%');
-    expect(document.querySelectorAll('.stats-panel .stats-table')).toHaveLength(
-      5,
-    );
+    expect(document.body.textContent).toContain('Cost by Model');
     // The incident table shows the collapsed turn's expectation vs. reality.
     expect(document.body.textContent).toContain('9,000');
   });
@@ -350,14 +341,13 @@ describe('StatisticsView', () => {
     compactionsTab.click();
     flushSync();
 
-    expect(document.body.textContent).toContain('220,000');
+    expect(cardValue('statistics.compactions.averageAfter')).toBe('40,000');
+    expect(cardValue('statistics.compactions.p95After')).toBe('50,000');
+    expect(cardValue('statistics.compactions.reduction')).toBe('57.9%');
+    expect(cardValue('statistics.compactions.steps')).toBe('8');
     expect(document.body.textContent).toContain('summary_tail');
     expect(document.body.textContent).toContain('compacted-session');
-    expect(document.body.textContent).toContain('150,000');
-    expect(document.querySelectorAll('.stats-panel .stats-grid')).toHaveLength(
-      2,
-    );
-    expect(document.querySelector('.stats-panel .stats-table')).toBeTruthy();
+    expect(document.body.textContent).toContain('95,000 → 40,000');
   });
 
   it('renders the tools sub-view without exposing arguments', async () => {

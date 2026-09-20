@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
 from core.chat.messages import ChatMessage
+from core.models.pricing import TokenPricing
 from core.projects.address import format_agent_address
 from core.sessions import (
     OwnedRunRecord,
@@ -87,11 +88,14 @@ class StatisticsService:
         agents: AgentDirectory,
         projects: ProjectDirectory | None = None,
         skill_inventory: SkillInventorySource | None = None,
+        *,
+        pricing_lookup: Callable[[str], TokenPricing | None] | None = None,
     ) -> None:
         self._sessions = chat_sessions
         self._agents = agents
         self._projects = projects
         self._skill_inventory = skill_inventory
+        self._pricing_lookup = pricing_lookup
         self._index = StatisticsIndex(Path(chat_sessions.data_dir))
 
     def warm_index(self) -> None:
@@ -102,7 +106,7 @@ class StatisticsService:
         self, *, since: datetime | None = None, until: datetime | None = None
     ) -> StatisticsReport:
         """Reconcile all Session scopes and return the aggregated report."""
-        aggregator = _Aggregator(since=since, until=until)
+        aggregator = _Aggregator(since=since, until=until, pricing_lookup=self._pricing_lookup)
         scopes = self._statistics_scopes()
         snapshot = self._indexed_snapshot(scopes)
         for scope in scopes:

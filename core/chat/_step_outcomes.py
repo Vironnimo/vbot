@@ -15,6 +15,7 @@ from core.chat.messages import (
 )
 from core.chat.output_files import resolve_assistant_file_references
 from core.chat.wire_shaping import _complete_usage_with_estimates
+from core.models.pricing import TokenPricing, price_usage
 from core.providers.adapter import (
     TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
     TERMINAL_OUTCOME_STOP,
@@ -61,12 +62,16 @@ def _prepare_completed_assistant(
     request_messages: list[JsonObject],
     output_cwd: Path | None,
     estimated_input_tokens: int,
+    pricing: TokenPricing | None = None,
 ) -> ChatMessage:
     """Fill estimated Usage and resolve output-file references off the Event Loop."""
     completed = _complete_usage_with_estimates(
         assistant_message,
         request_messages,
         estimated_input_tokens=estimated_input_tokens,
+    )
+    completed = replace(
+        completed, usage={**(completed.usage or {}), "cost": price_usage(completed.usage, pricing)}
     )
     return _with_assistant_output_files(completed, cwd=output_cwd)
 

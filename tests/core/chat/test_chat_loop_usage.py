@@ -27,7 +27,7 @@ JsonObject = dict[str, Any]
 
 def usage_counters(usage: JsonObject | None) -> JsonObject:
     assert usage is not None
-    return {key: value for key, value in usage.items() if key != "context_usage"}
+    return {key: value for key, value in usage.items() if key not in {"context_usage", "cost"}}
 
 
 @pytest.mark.asyncio
@@ -478,3 +478,30 @@ async def test_measured_context_below_window_does_not_trip_the_guard(
 
     assert assistant.content == "Sunny"
     assert len(adapter.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_completed_response_saves_price_snapshot_with_usage(tmp_path: Path, monkeypatch):
+    from core.models.pricing import TokenPricing
+
+    agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": "Hello",
+                "tool_calls": None,
+                "usage": {"input_tokens": 1000, "output_tokens": 100, "cache_read_tokens": 500},
+            }
+        ]
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    pricing = TokenPricing.from_cost(
+        {"input": 2, "output": 8, "cache_read": 0.2}, source="models.dev:openai/gpt-4.1"
+    )
+    monkeypatch.setattr(runtime.models, "pricing_for", lambda _: pricing)
+    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="cost-snapshot")
+    assert assistant.usage is not None
+    assert assistant.usage["cost"]["amount_usd"] == pytest.approx(0.0019)
+    assert assistant.usage["cost"]["source"] == "catalog"
+    persisted = runtime.chat_sessions.get(session_address("coder", "cost-snapshot")).load()[1]
+    assert persisted.usage["cost"] == assistant.usage["cost"]
