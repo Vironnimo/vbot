@@ -7,48 +7,55 @@ search permission consolidation, or result continuation.
 
 `core/tools/search_files.py` owns the single `search_files` Tool, registration,
 normalization, orchestration, and display. Its private `_search_*` modules own
-option parsing, native execution, ignore rules, candidate selection, and results;
-these are implementation units of the existing Tools owner, not public services.
+argument/option parsing, native execution, ignore rules, candidate selection, and
+results; these are implementation units of the existing Tools owner, not public services.
 The async handler offloads the complete operation through `run_tool_worker`.
 
-Seven advertised fields: required `action` (`content`, `paths`, `help`), plus
-`patterns`, `paths`, `options`, `kind`, `limit`, and `offset`. Patterns and literal
-roots are arrays. Content patterns are ORed regexes by default; `-F` selects
-literal matching. Path patterns are ORed anchored root-relative globs. An omitted
-paths array searches `effective_cwd`; explicit empty roots reject. Relative roots
-use that cwd, absolute roots are allowed, and symlink spelling stays usable.
-`kind` applies only to paths (`files`, `directories`, `all`, default all), including
-empty directories. Omitting path patterns lists every eligible entry.
+Three advertised fields: required `args`, plus `limit` and `offset`. `args` is a
+ripgrep argument vector, without an executable name, shell quoting, or shell
+expansion. `_search_arguments.py` separates patterns, options, and literal roots:
+content search uses the first operand as its regex and subsequent operands as
+roots; `-F` selects literal matching. Repeated `-e`/`--regexp` patterns are ORed
+and make every operand a root. Options may precede or follow operands; `--` ends
+option parsing. Option values remain literal even when they resemble other flags.
 
-`options` is a token array parsed by `_search_options.py`, never a shell command
-or unrestricted native passthrough. The catalog owns aliases, arity, repeat/order
+`--files`, `--dirs`, and `--entries` select file, directory, and combined discovery;
+they are mutually exclusive, all operands are roots, and `-g` filters names.
+Directory discovery includes empty directories. No roots means `effective_cwd`;
+explicit empty roots and stdin reject. Relative roots use that cwd, absolute roots
+are allowed, and symlink spelling stays usable. Omitting name filters lists every
+eligible entry. `--help` and `--type-list` provide on-demand references.
+
+The option catalog in `_search_options.py` owns aliases, arity, repeat/order
 semantics, native forwarding, applicability, validation, and on-demand help.
+This is a bounded search interface, never a shell command or unrestricted native
+passthrough. The old `action`/`patterns`/`paths`/`options`/`kind` fields are no longer
+part of the callable interface; historical persisted rows remain readable.
 Supported families cover case/literal/word/line matching, PCRE2 and multiline,
 contexts, file/count/absence/quiet output, globs and types, ignores, hidden paths,
 symlinks, depth/size/filesystem limits, ordering, encoding, CRLF/NUL, binary
-handling, and diagnostics. Unknown flags, operands in the wrong field,
-or incompatible effects reject with a correction. Plain source coordinates and
+handling, and diagnostics. Unknown flags, missing operands, or incompatible
+effects reject with a correction. Plain source coordinates and
 formatting are fixed; formatting flags already satisfied by output are accepted.
 
-Common scalar/container/boolean encodings use shared repair. Explicit aliases
-include `pattern`, `path`, and `args`; familiar grep fields and known flag keys
-convert only when their effects do not conflict with `options`. A standalone
-flag followed by `true` is accepted; `false` requires its explicit reverse flag.
-Never drop an unknown effect or silently override a separate explicit constraint.
+Common scalar/container encodings and known call wrappers use shared repair;
+`argv` is an unadvertised alias for `args`. Conflicting aliases and unknown effects
+reject. Arguments such as `true`, `false`, `rg`, literal quotes, and shell syntax
+remain search payloads, never executable prefixes or flag booleans. Complete
+content/path examples in the definition teach the canonical first call.
 
-Before shared scalar-array conversion, the owning `patterns` normalizer recognizes
+Before shared scalar-array conversion, the owning `args` normalizer recognizes
 double-quoted encoded lists. It preserves regex backslashes omitted from their
-JSON escaping, such as field text `["findMe\("]`, rather than executing the whole
-list as a broad regex character class. Broken list syntax or malformed lists with
-ambiguous JSON control/unicode escapes require correction. Valid encoded JSON and
+JSON escaping, such as field text `["-e","findMe\("]`. Broken list syntax or malformed
+lists with ambiguous JSON control/unicode escapes require correction. Valid encoded JSON and
 members of actual arrays retain their existing semantics, including literal quotes
-and character classes. Normalization also covers aliases and call wrappers before
-checking conflicts. It never strips quotes from a scalar search pattern.
+and character classes. It never splits a shell command string into arguments or
+strips quotes from a scalar search pattern.
 
 ## Selection Contract
 
-Both actions share traversal, union/deduplication, filters, and ignores. Hidden
-paths are included by default. `.git` files and directories are always excluded.
+Content and path searches share traversal, union/deduplication, filters, and ignores.
+Hidden paths are included by default. `.git` files and directories are always excluded.
 Explicit ignored roots opt their subtree into searching. Other ignore sources,
 from lower to higher precedence: global Git excludes and repository info/exclude,
 applicable `.gitignore` files, `.ignore`, `.rgignore`, then extra ignore files.
@@ -56,11 +63,13 @@ Nearest repository boundaries include worktree pointer files and common excludes
 Controls can disable sources individually; unreadable rules never silently widen
 the scope. Positive vBot filters narrow selection and cannot override ignores.
 
-Path globs are case-insensitive unless explicitly changed: `*.py` is top-level,
-`**/*.py` includes every depth. Bare `-g '*.py'` filters basenames at any depth.
+Name globs are case-insensitive unless explicitly changed. Bare `-g '*.py'` filters
+basenames at any depth; globs containing `/` are root-relative, so `-g './*.py'`
+selects top-level files. `-i`/`-s` control content case in content searches and glob
+case in path discovery; explicit glob-case options also remain available.
 Brace alternatives and character classes are supported. Ordered positive and
 negative `-g`/`--iglob` filters apply to roots independently; negatives can exclude
-directory descendants. File type/size filters on path searches require kind=files.
+directory descendants. File type/size filters on path searches require `--files`.
 Overlapping roots deduplicate lexical paths; following symlinks remains opt-in
 except an explicit root, preserves its spelling, and detects ancestor loops.
 
@@ -100,8 +109,8 @@ Independent bounds cover 50 KiB content output, 8 MiB native protocol records,
 bounded pipe queues/stderr, 512 MiB child RSS, candidate storage (128 MiB), one
 million observed entries, glob expansion, and process arguments. Failures and
 exhausted bounds report actionable scope reductions. No persistent search handle
-or candidate database survives the call. UI display includes patterns, roots, and
-a result-count fact; detail views retain warnings and continuation metadata.
+or candidate database survives the call. UI display includes the argument vector
+and a result-count fact; detail views retain warnings and continuation metadata.
 
 ## Native Dependency and Permissions
 
@@ -135,7 +144,8 @@ and Tool row integration tests. Tests execute the private native engine.
 
 `scripts/probe_provider_tool_call.py --scenario search_files` exposes production
 definitions to a fresh Model and dispatches its calls against disposable fixtures,
-checking independently prescribed results. `--search-case <id>` selects one case;
-the workflow covers natural requests, option combinations, repairs, and rejection.
+checking independently prescribed results. `--search-case <id>` selects one case,
+and comma-separated ids select a subset. The workflow separates natural first-use
+requests from exact-call conformance, including options, repairs, and rejection.
 The old shared walker in `core/tools/search.py` remains for Chat file mentions;
 its UI discovery contract is separate from search_files.

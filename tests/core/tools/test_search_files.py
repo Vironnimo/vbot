@@ -28,7 +28,24 @@ def context(root: Path, **kwargs) -> ToolContext:
 
 
 def search(root: Path, **arguments):
-    result = search_files_handler(context(root), arguments)
+    # Fixture notation keeps the engine cases readable; each runs the public argv Tool.
+    action = arguments.pop("action", "content")
+    kind = arguments.pop("kind", "all")
+    patterns = arguments.pop("patterns", [])
+    options = arguments.pop("options", [])
+    paths = arguments.pop("paths", [])
+    tokens = list(options)
+    if "--type-list" not in tokens:
+        if action == "paths":
+            tokens.append({"all": "--entries", "files": "--files", "directories": "--dirs"}[kind])
+            for pattern in patterns:
+                tokens.extend(["-g", "./" + pattern])
+        else:
+            for pattern in patterns:
+                tokens.extend(["-e", pattern])
+    if paths:
+        tokens.extend(["--", *paths])
+    result = search_files_handler(context(root), {"args": tokens, **arguments})
     assert result["ok"], result
     return result["data"]
 
@@ -249,23 +266,17 @@ def test_binary_encodings_and_existence(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "arguments",
     [
-        {"action": "missing"},
-        {"action": "content"},
-        {"action": "paths", "patterns": []},
-        {"action": "paths", "paths": []},
-        {"action": "paths", "paths": ["missing", "."]},
-        {"action": "paths", "options": ["-n"]},
-        {"action": "paths", "options": ["-tpy"]},
-        {"action": "content", "patterns": ["run"], "kind": "files"},
-        {"action": "content", "patterns": ["run"], "options": ["-C", "2", "-l"]},
-        {"action": "paths", "options": ["--pre", "anything"]},
-        {"action": "content", "patterns": ["run"], "options": ["-i"], "ignore_case": False},
-        {"action": "content", "patterns": ["run"], "-n": False},
-        {"action": "content", "patterns": ["run"], "unknown_feature": True},
-        {"action": "content", "patterns": ["run"], "pattern": "other"},
-        {"action": "help", "paths": ["missing"]},
-        {"action": "paths", "limit": 0},
-        {"action": "paths", "offset": -1},
+        {"args": []},
+        {"args": ["--files", "missing", "."]},
+        {"args": ["--dirs", "-tpy"]},
+        {"args": ["--files", "--dirs"]},
+        {"args": ["--dirs", "-e", "run"]},
+        {"args": ["run", "-C", "2", "-l"]},
+        {"args": ["--files", "--pre", "anything"]},
+        {"args": ["run"], "unknown_feature": True},
+        {"args": ["--help", "missing"]},
+        {"args": ["--files"], "limit": 0},
+        {"args": ["--files"], "offset": -1},
     ],
 )
 def test_invalid_calls_preserve_constraints(tree: Path, arguments) -> None:
@@ -275,7 +286,7 @@ def test_invalid_calls_preserve_constraints(tree: Path, arguments) -> None:
 
 
 def test_native_validation_even_with_no_candidates(tmp_path: Path) -> None:
-    result = search_files_handler(context(tmp_path), {"action": "content", "patterns": ["["]})
+    result = search_files_handler(context(tmp_path), {"args": ["["]})
     assert result["ok"] is False
     assert "regex" in result["error"]["message"]
 
@@ -283,9 +294,7 @@ def test_native_validation_even_with_no_candidates(tmp_path: Path) -> None:
 def test_timeout_and_user_cancel(tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import core.tools.search as shared
 
-    result = search_files_handler(
-        context(tree, cancel_check_hook=lambda: True), {"action": "content", "patterns": ["run"]}
-    )
+    result = search_files_handler(context(tree, cancel_check_hook=lambda: True), {"args": ["run"]})
     assert result["error"]["code"] == "cancelled_by_user"
     monkeypatch.setattr(shared, "SEARCH_TIMEOUT_SECONDS", -1)
     assert search(tree, action="paths")["complete"] is False
@@ -295,13 +304,13 @@ def test_schema_and_registry_repairs(tree: Path) -> None:
     registry = ToolRegistry()
     register_search_files_tool(registry)
     definition = registry.provider_definitions(["search_files"])[0]
-    assert len(definition["parameters"]["properties"]) == 7
-    assert definition["parameters"]["required"] == ["action"]
+    assert len(definition["parameters"]["properties"]) == 3
+    assert definition["parameters"]["required"] == ["args"]
     assert "additionalProperties" not in definition["parameters"]
     result = asyncio.run(
         registry.dispatch(
             context(tree),
-            {"operation": "Content", "pattern": "run", "path": "tests", "limit": "1", "-n": "true"},
+            {"argv": ["-n", "run", "tests"], "limit": "1"},
         )
     )
     assert result["data"]["content"] == "tests/b.PY:1:run"

@@ -103,7 +103,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--wire", choices=("auto", "openai", "anthropic"), default="auto")
     parser.add_argument("--scenario", choices=PROBE_SCENARIOS, default="direct_required")
     parser.add_argument("--terminal-case", default="all")
-    parser.add_argument("--search-case", default="all")
+    parser.add_argument(
+        "--search-case", default="all", help="Search case ids, comma-separated, or all."
+    )
     parser.add_argument("--swarm-case", default="all")
     parser.add_argument("--reflection-case", default="all")
     parser.add_argument("--recall-case", default="all")
