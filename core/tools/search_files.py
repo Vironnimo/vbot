@@ -356,8 +356,9 @@ SEARCH_FILES_TOOL_PARAMETERS: JsonObject = {
                 "One ripgrep argument per item, without shell quoting or a shell command. "
                 "Regex pattern first, then literal search roots; -F selects literal text. "
                 "Repeat -e for multiple patterns. With --files/--dirs/--entries, all operands "
-                "are roots. Search roots may be relative to the working directory or absolute. "
-                "Omit roots to search the working directory."
+                "are roots. Relative search paths resolve against the working directory. "
+                "Use absolute paths to search elsewhere. "
+                "Omit paths to search the working directory."
             ),
         },
         "limit": {
