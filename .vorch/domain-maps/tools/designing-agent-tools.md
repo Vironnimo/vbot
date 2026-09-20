@@ -33,7 +33,7 @@ Apply the same efficiency during redesign and testing: deterministic tests cover
 - Schema types and names do not explain how arguments work together. Repeat a schema fact only when it resolves a likely misunderstanding about the requested effect.
 - Do not describe handler internals, libraries, storage layout, UI rendering, logging, telemetry, or validation machinery unless the Model must account for it when calling the Tool.
 - Mention result behavior only when it affects Tool choice, pagination, follow-up calls, or safe use.
-- Do not reference another Tool unless that Tool is guaranteed to be available in the same Model context. Availability-dependent guidance belongs in a dynamically gated prompt block.
+- Cross-Tool guidance must not direct an Agent to an unavailable Tool. Gate context-specific guidance by availability, or make a simple preference explicitly conditional on the other Tool being available, retaining a valid fallback.
 
 ## Choose the Public Shape
 
@@ -161,7 +161,7 @@ The shared `operation_envelope_schema`, `extract_tool_operation`, `action_schema
 ## Change and Verification Discipline
 
 - Start an audit from actual delivered definitions, arguments, results, and the Agent's following decisions. Deduplicate persisted copies of calls. Investigate successful but empty, noisy, or truncated results as well as explicit errors; verify suspected false positives and false negatives against independent evidence. Separate proven defects from uncertain task outcomes or historical file state.
-- Change exactly one Tool at a time. Shared Tool infrastructure may change with it only when that Tool requires the change, and every other Tool's verified behavior stays intact.
+- Keep changes independently reviewable around the intended workflow. A coordinated change to competing Tools, such as search and Bash selection guidance, should be verified together. Unrelated Tool behavior must remain intact.
 - Keep the repository releaseable after every Tool change.
 - Before changing a Tool's public contract, inventory every accepted shape, default, permission rule, and persisted or UI consumer.
 - After the change, recheck Provider rendering and the non-strict invariant, schema fingerprints, Tool descriptions, `ToolDisplay`, prompts, E2E fake-provider calls, and any generated Tool catalogs, and update the owning Tool map plus any documentation that teaches the call shape.
@@ -171,7 +171,7 @@ The shared `operation_envelope_schema`, `extract_tool_operation`, `action_schema
 - Provider conformance probes may prescribe arguments to isolate serialization, streaming, or schema transport. Label them as transport/conformance evidence. They cannot establish Tool choice, first-use understanding, or end-to-end task success.
 - Black-box Model evaluations supply only a natural user goal, production definitions/prompts, realistic state and the competing Tools normally available. Keep expected Tool names, actions, argument shapes, grading criteria and the suspected fix outside Model context. Never force a Tool, demand one call, teach the answer in a test-only reminder, or hide Bash to make search selection pass. Exercise common tasks, defaults, recovery, continuation and cases where another Tool is appropriate. Use genuine results through completion and judge the requested outcome, including final claims; equivalent valid call sequences are allowed.
 - Repeat fresh trials with fixed settings, compare unchanged cases before/after when possible, and keep task variants out of tuning. Preserve all attempts and diagnostic responses, including no-call replies, timeouts, wrong selections and retries. Report first-attempt success separately from recovery and final outcome, with denominators; reruns or changed thinking effort never erase failures. Fixture limitations and unresolved failures remain explicit. `--scenario tool_first_use` in `scripts/probe_provider_tool_call.py` owns search/delegation task evaluations; the older exact-call scenarios remain conformance probes.
-- Commit each fully verified Tool as its own cohesive releaseable change before editing the next Tool.
+- Commit each verified Tool or coordinated workflow change as a cohesive releaseable unit before moving to unrelated Tool work.
 - Quality gates: a scoped non-mutating pass (`python scripts/quality.py --check <paths>`) while working and before any intermediate commit; the full gate (`python scripts/quality.py`) once, before the final commit that closes the task. Tool work adds no separate gate schedule.
 
 ## Token Cost Comparisons

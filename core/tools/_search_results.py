@@ -83,7 +83,7 @@ class ResultPage:
 
     def data(self, *, complete: bool, warnings: list[str], quiet: bool = False) -> dict[str, Any]:
         content = "\n".join(self.lines)
-        data: dict[str, Any] = {"content": content, "complete": complete}
+        data: dict[str, Any] = {"content": content, "complete": complete and not self.more}
         if quiet:
             data["matched"] = True if self.matched else False if complete else None
             data["content"] = (

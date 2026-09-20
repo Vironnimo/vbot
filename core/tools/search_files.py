@@ -13,7 +13,7 @@ from typing import Any
 from core.tools._argument_repair import normalize_call_arguments
 from core.tools._search_arguments import parse_search_args
 from core.tools._search_execution import content_events, file_types, validate_patterns
-from core.tools._search_options import help_text, parse_options
+from core.tools._search_options import SearchOptions, help_text, parse_options
 from core.tools._search_results import ResultPage, path_label, render_events
 from core.tools._search_selection import FileSelection
 from core.tools._tool_context import _path_argument
@@ -98,6 +98,37 @@ def _strings(arguments: JsonObject, name: str, default: list[str]) -> list[str]:
     return value
 
 
+def _page_argument(
+    arguments: JsonObject,
+    options: SearchOptions,
+    name: str,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    values = [int(value) for value in options.values(name)]
+    if name in arguments:
+        values.append(
+            optional_int(
+                arguments[name],
+                field_name=name,
+                default=default,
+                minimum=minimum,
+                maximum=maximum,
+            )
+        )
+    if len(set(values)) > 1:
+        raise ValueError(f"Conflicting {name} values; provide one intended page.")
+    return optional_int(
+        values[0] if values else None,
+        field_name=name,
+        default=default,
+        minimum=minimum,
+        maximum=maximum,
+    )
+
+
 def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     try:
         arguments = normalize_search_arguments(arguments)
@@ -135,17 +166,15 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
                 for p in roots_input
             )
         )
-        limit = optional_int(
-            arguments.get("limit"), field_name="limit", default=100, minimum=1, maximum=10000
-        )
-        offset = optional_int(
-            arguments.get("offset"), field_name="offset", default=0, minimum=0, maximum=1000000
-        )
+        limit = _page_argument(arguments, options, "limit", default=100, minimum=1, maximum=10000)
+        offset = _page_argument(arguments, options, "offset", default=0, minimum=0, maximum=1000000)
         if max(options.context) > 10000:
             raise ValueError(
                 "Context is limited to 10000 lines per side; use read for larger file sections."
             )
-        if options.enabled("quiet") and ("limit" in arguments or "offset" in arguments):
+        if options.enabled("quiet") and any(
+            name in arguments or options.values(name) for name in ("limit", "offset")
+        ):
             raise ValueError("Existence searches (-q) do not paginate; omit limit and offset.")
         if reference != "types":
             for root in roots:
@@ -305,7 +334,8 @@ def register_search_files_tool(registry: ToolRegistry) -> None:
 
 
 SEARCH_FILES_TOOL_DESCRIPTION = (
-    "Search file contents or discover paths using ripgrep arguments. "
+    "Search file contents or list files and directories. Use this instead of shell "
+    "commands for searching or listing paths; accepts ripgrep arguments. "
     'Content: ["-F","computeDamage(","src"]. Files: ["--files","-g","*.py","src"]. '
     "Use --dirs for directories (including empty ones), or --entries for both. "
     "Name filters use -g, case-insensitive by default; globs without / match at any depth. "

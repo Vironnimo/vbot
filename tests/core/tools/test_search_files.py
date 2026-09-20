@@ -135,9 +135,11 @@ def test_context_and_paging(tree: Path) -> None:
     first = search(tree, **args)
     assert first["content"] == "src/a.py:1-before\nsrc/a.py:2:run run\nsrc/a.py:3-after"
     assert first["next_offset"] == 1
+    assert first["complete"] is False
     second = search(tree, **args, offset=first["next_offset"])
     assert second["content"] == "tests/b.PY:1:run"
     assert "next_offset" not in second
+    assert second["complete"] is True
     beyond = search(tree, **args, offset=50)
     assert "offset 50" in beyond["content"]
 

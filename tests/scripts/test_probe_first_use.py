@@ -1,5 +1,6 @@
 """The acceptance harness must detect failures instead of teaching a passing call."""
 
+import sys
 from argparse import Namespace
 from pathlib import Path
 
@@ -163,3 +164,25 @@ async def test_timeout_retains_prior_response_and_call():
     assert not result["passed"]
     assert result["exception"]["type"] == "TimeoutError"
     assert len(result["responses"]) == len(result["calls"]) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell fixture commands")
+@pytest.mark.parametrize("label", ["EXIT=", "EXIT_CODE:", "EXITCODE=", "Exit code: "])
+async def test_shell_control_accepts_harmless_exit_labels(tmp_path, label):
+    fixture = FirstUseFixture(tmp_path)
+    fixture.write({"check.py": "print('CHECK-42 passed')\n"})
+    try:
+        result = await fixture.dispatch(
+            {
+                "name": "bash",
+                "arguments": {"command": f'python check.py; Write-Output "{label}$LASTEXITCODE"'},
+            },
+            shell_task=True,
+        )
+        assert result["ok"], result
+        assert result["data"]["exit_code"] == 0
+        assert "CHECK-42 passed" in result["data"]["output"]
+        assert label + "0" in result["data"]["output"]
+    finally:
+        await fixture.close()
