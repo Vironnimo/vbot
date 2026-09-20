@@ -1,0 +1,174 @@
+"""Real dispatch accepts direct delegation without guessing a different effect."""
+
+from __future__ import annotations
+
+import asyncio
+import copy
+from dataclasses import replace
+from types import SimpleNamespace
+
+import pytest
+import pytest_asyncio
+
+from core.chat import ChatMessage
+from core.sessions import SessionAddress
+from core.subagents import SubAgentCoordinator
+from core.tools.subagent import register_subagent_tools
+from core.tools.tools import ToolRegistry
+
+from .subagent_test_support import (
+    FakeRunManager,
+    RecordingTriggerService,
+    make_context,
+    make_runtime,
+)
+
+BRIEF = 'Read-only review of src/a.py. Preserve literal {"action":"CANCEL"}.\nReference R-17.'
+
+
+@pytest_asyncio.fixture
+async def dispatch_runtime(tmp_path):
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    triggers = RecordingTriggerService()
+    coordinator = SubAgentCoordinator(runtime, triggers, sessions=runtime.chat_sessions)
+    registry = ToolRegistry()
+    register_subagent_tools(registry, coordinator)
+    yield SimpleNamespace(
+        manager=manager,
+        runtime=runtime,
+        registry=registry,
+        triggers=triggers,
+        context=make_context(),
+    )
+    for _, _, _, run in manager.started:
+        run.mark_completed(ChatMessage.assistant(model="fixture", content="done"))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    for delivery in triggers.deliveries.values():
+        delivery.cancel()
+    runtime.chat_sessions.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments,target",
+    [
+        ({"content": BRIEF}, "parent"),
+        ({"agent_id": "worker", "content": BRIEF, "description": "Review source"}, "worker"),
+        ({"arguments": {"Agent-ID": "worker", "content": BRIEF}}, "worker"),
+        ({"request": {"operation": "RUN", "content": BRIEF}}, "parent"),
+        ({"run": {"content": BRIEF}}, "parent"),
+        ({"action": "run", "content": BRIEF}, "parent"),
+    ],
+)
+async def test_direct_delegation_reaches_exact_agent_with_unchanged_payload(
+    dispatch_runtime, arguments, target
+):
+    fixture = dispatch_runtime
+    before = copy.deepcopy(arguments)
+    result = await fixture.registry.dispatch(fixture.context, arguments)
+    assert result["ok"], result
+    assert arguments == before
+    assert len(fixture.manager.started) == 1
+    agent, session, executor, run = fixture.manager.started[0]
+    assert agent == target == result["data"]["agent_id"]
+    assert session == result["data"]["session_id"]
+    received = await executor(run)
+    assert received.content == f"handled: {BRIEF}"
+    metadata = fixture.runtime.chat_sessions.get_metadata(
+        SessionAddress(project_id=None, agent_id=target, session_id=session)
+    )
+    assert metadata["is_subagent_session"]
+    assert metadata["subagent_parent"]["session_id"] == fixture.context.session_id
+
+
+@pytest.mark.asyncio
+async def test_omitted_action_continues_exact_owning_session(dispatch_runtime):
+    fixture = dispatch_runtime
+    session = fixture.runtime.chat_sessions.create("worker")
+    result = await fixture.registry.dispatch(
+        fixture.context, {"agent_id": "worker", "session_id": session.id, "content": BRIEF}
+    )
+    assert result["ok"], result
+    assert result["data"]["session_id"] == session.id
+    assert fixture.manager.started[0][:2] == ("worker", session.id)
+    assert len(fixture.runtime.chat_sessions.list("worker")) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("effort", ["", "none", "high"])
+async def test_direct_delegation_preserves_run_overrides(dispatch_runtime, effort):
+    fixture = dispatch_runtime
+    result = await fixture.registry.dispatch(
+        fixture.context,
+        {"content": BRIEF, "model": "openai/test-model", "thinking_effort": effort},
+    )
+    assert result["ok"], result
+    overrides = fixture.runtime.streaming_chat_loop.seen_agent_overrides[-1]
+    assert overrides.model == "openai/test-model"
+    assert overrides.thinking_effort == (effort or None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {},
+        {"description": "Review source"},
+        {"content": ""},
+        {"content": " "},
+        {"content": BRIEF, "action": None},
+        {"content": BRIEF, "action": ""},
+        {"content": BRIEF, "action": "rn"},
+        {"content": BRIEF, "action": "status"},
+        {"content": BRIEF, "action": "cancel"},
+        {"id": "existing-work"},
+        {"id": "existing-work", "content": BRIEF},
+        {"content": BRIEF, "agent_id": ""},
+        {"content": BRIEF, "agent_id": "  "},
+        {"content": BRIEF, "agent_id": None},
+        {"content": BRIEF, "session_id": "existing-session"},
+        {"content": BRIEF, "session_id": "", "agent_id": "worker"},
+        {"content": BRIEF, "session_id": "  ", "agent_id": "worker"},
+        {"content": BRIEF, "agent_id": "workre"},
+        {"content": BRIEF, "agent_id": "worker", "Agent-ID": "parent"},
+        {"content": BRIEF, "action": "run", "operation": "cancel"},
+        {"content": BRIEF, "background": False},
+        {"content": BRIEF, "priority": "high"},
+        {"content": BRIEF, "run_id": "private-run"},
+    ],
+)
+async def test_ambiguity_and_unsupported_constraints_never_start_work(dispatch_runtime, arguments):
+    fixture = dispatch_runtime
+    before = copy.deepcopy(arguments)
+    try:
+        result = await fixture.registry.dispatch(fixture.context, arguments)
+    except ValueError:
+        pass
+    else:
+        assert not result["ok"], result
+    assert arguments == before
+    assert fixture.manager.started == []
+    assert fixture.manager.enqueued == []
+    assert fixture.runtime.chat_sessions.list("parent") == []
+    assert fixture.runtime.chat_sessions.list("worker") == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_status_without_work_remains_an_observation(dispatch_runtime):
+    fixture = dispatch_runtime
+    result = await fixture.registry.dispatch(fixture.context, {"action": "status"})
+    assert result["data"] == {"subagents": []}
+    assert fixture.manager.started == []
+
+
+@pytest.mark.asyncio
+async def test_omitted_action_does_not_bypass_target_authorization(dispatch_runtime):
+    fixture = dispatch_runtime
+    context = replace(fixture.context, tool_settings={"subagent": {"allowed_agents": []}})
+    result = await fixture.registry.dispatch(context, {"content": BRIEF, "agent_id": "worker"})
+    assert result["error"]["code"] == "agent_not_allowed"
+    assert fixture.runtime.agent_resolver.calls == []
+    assert fixture.manager.started == []
+    assert fixture.runtime.chat_sessions.list("worker") == []

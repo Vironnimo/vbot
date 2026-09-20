@@ -4,13 +4,14 @@ Registers the single public `subagent` Tool and delegates lifecycle orchestratio
 
 ## Data Model
 
-- `core.tools.subagent` owns the Tool name, description, flat JSON Schema, display metadata, registration, and Tool-owned System Prompt block.
+- `core.tools.subagent` owns the Tool name, description, flat JSON Schema, argument normalization, display metadata, registration, and Tool-owned System Prompt block.
 - `SubAgentCoordinator` in `core/subagents/` owns admission, queueing, status, cancellation, batch tracking, automatic delivery, and Agent-facing result shaping.
 
 ## Interfaces
 
 - Tool name: `subagent`.
-- Schema: one open flat object requiring `action: "run" | "status" | "cancel"`, with optional siblings `content`, `description`, `agent_id`, `session_id`, `model`, `thinking_effort`, and `id`. `description` is a strongly preferred 3-5 word task title with no model-facing length constraint. The handler requires `content` for `run`, requires `agent_id` when continuing `session_id`, requires `id` for `cancel`, and rejects unknown or action-inapplicable fields. The model-facing schema emits no branch or conditional keywords and no `additionalProperties`. Legacy `request`, `operation`, `background`, `run_id`, and `queue_item_id` fields are not public.
+- Schema: one open flat object with optional `action: "run" | "status" | "cancel"` and siblings `content`, `description`, `agent_id`, `session_id`, `model`, `thinking_effort`, and `id`. Omitted action means `run`; a valid `content` therefore delegates directly. Status and cancellation remain explicit; an id without action rejects rather than guessing a lifecycle operation. `description` is an optional task title, falling back to the start of content. The handler requires `content` for `run`, `agent_id` with `session_id`, and `id` for `cancel`, and rejects unknown or action-inapplicable fields. The model-facing schema emits no branch or conditional keywords and no `additionalProperties`.
+- Before schema validation, the Tool owner repairs established field/enum formatting, `operation` as an action alias, and known `request`/`arguments`/action-key wrappers. Conflicting aliases reject; payload text and external ids stay unchanged. Empty/null model or thinking-effort selections inherit the target Agent; explicit invalid action, Agent or Session selections never become omission. `background`, `run_id`, `queue_item_id` and unknown feature fields remain invalid. `tests/core/tools/test_subagent_first_use.py` exercises actual registration/dispatch, exact receiving targets and payloads, and rejection before side effects; it does not use the older test helper that supplied action automatically.
 - Result identity: every admitted `run` returns one stable `id`. Agent-facing results never expose the internal Run or Queue handle, including queued, running, terminal, and cancelled results.
 - Delivery: a depth-0 caller receives `delivery: "automatic"` and an immediate queued/running descriptor; a nested caller receives `delivery: "inline"` only after completion. The caller cannot override this policy. At depth 0, every result ready when the current Parent Run ends is combined with other Bash/Sub-Agent completions in one automatic follow-up Run; unfinished work is delivered later. The descriptor's behavioral `note` differs by state: a queued spawn names the busy Session and the automatic start; a running spawn states the background contract.
 - Display: `run` summaries prefer the short `description`, fall back to the `content` preview, and then show the optional target Agent; `status`/`cancel` summaries show the action and public id when supplied. `content` remains hidden from expanded argument details.
@@ -22,7 +23,7 @@ Registers the single public `subagent` Tool and delegates lifecycle orchestratio
 - Authorization applies to `run` immediately after canonical address parsing and before target lookup, Session work, quota reservation, or queueing. `status` and `cancel` recover their already-authorized target from an id owned by the same Parent Agent Session and Project. Provider-schema narrowing and Tool visibility are guidance; `SubAgentCoordinator` remains the security boundary.
 - `run` without `session_id` creates a new persisted Session whose automatic title is the whitespace-normalized `description`, or the normalized beginning of `content` when `description` is blank/omitted, capped at 48 characters. Continuing an existing Session requires both its exact `session_id` and owning `agent_id` and never retitles that Session; manual titles therefore remain stable.
 - `content` is a self-contained delegation brief when `run` creates a new Session: it carries the goal, relevant context, scope, constraints, and expected result. A continuation with `session_id` may rely on that Sub-Agent Session's existing history and should carry the follow-up instruction plus any new context.
-- `model` and `thinking_effort` are optional Run-local overrides for only the newly admitted Child Run. Missing fields inherit the freshly resolved target Agent; `thinking_effort: ""` selects the Provider default and `"none"` disables Reasoning. Overrides never mutate or become defaults for the target Agent, Project, or Session and do not flow into later continuations or nested calls.
+- `model` and `thinking_effort` are optional Run-local overrides for only the newly admitted Child Run. Missing or empty selections inherit the freshly resolved target Agent; `"none"` explicitly disables Reasoning. An empty effort does not clear a configured Agent effort to the Provider default. Overrides never mutate or become defaults for the target Agent, Project, or Session and do not flow into later continuations or nested calls.
 - Busy target Sessions enqueue a follow-up Run through `ChatRunManager` without changing the public id.
 - Successful `run` results carry `activity_note` with its concrete path when an activity file is allocated, and no separate `activity_file` field. Status snapshots keep `activity_file`, never carry the activity note, and carry a behavioral `note` while queued or running that names automatic delivery and how to wait for the result.
 - `status` is non-blocking: queued/running work returns immediately, while terminal output is accepted only from the exact Run or a matching terminal Run Summary. Intermediate Assistant output without that Summary is not completion.
@@ -35,3 +36,14 @@ Registers the single public `subagent` Tool and delegates lifecycle orchestratio
 - Cancelling the calling Run cascades only to nested foreground children; top-level background children survive. `action: "cancel"` is the separate Agent-controlled path and remains usable from a later Run in the same Parent Session while the process-local tracker owns the id.
 - Completed entries are pruned after inline fetch or durable automatic delivery, so Agents should not poll top-level work merely to wait. A terminal `status` result durably persisted first withdraws its pending automatic notice. Each completion section names the public id and includes the complete final output, status, and activity path.
 - The `tool:subagent` System Prompt block lists additional allowed targets and renders context-specific execution guidance from `nesting_depth`: top-level callers are told that vBot monitors the work and notifies them with the result once the Sub-Agent finishes, and that they may continue other work or finish their turn to wait for a result; nested callers are told that the Tool waits inline.
+
+## Verification
+
+`scripts/probe_provider_tool_call.py --scenario tool_first_use --first-use-tool subagent`
+supplies natural delegation, parallel review, nested result, status, cancellation,
+continuation and unavailable-target tasks with competing Tools and production
+definitions/prompts. Real Sessions, Runs, queueing and dispatch receive the requests;
+only the child's Model work is a deterministic receiver. Seeded lifecycle cases are
+continuation tests, not first-use trials. All attempts, calls, results and final
+claims are retained with `--first-use-report`; exact-call Provider scenarios remain
+separate conformance evidence.
