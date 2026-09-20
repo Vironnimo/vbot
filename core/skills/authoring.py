@@ -18,7 +18,7 @@ from typing import Any, Literal
 import yaml
 
 from core.skills._installation import SkillInstallResult, install_package
-from core.skills._packages import PackageError
+from core.skills._packages import MAX_DOWNLOAD_BYTES, PackageError
 from core.skills.requirements import (
     REQUIREMENTS_METADATA_KEY,
     RequirementParseError,
@@ -39,6 +39,7 @@ from core.utils.errors import VBotError
 
 PROVENANCE_AUTHOR_KEY = "author"
 PROVENANCE_SOURCE_KEY = "source"
+SKILL_ARCHIVE_MAX_BYTES = MAX_DOWNLOAD_BYTES
 
 SkillAuthor = Literal["agent", "human"]
 _VALID_AUTHORS: tuple[SkillAuthor, ...] = ("agent", "human")
@@ -113,12 +114,22 @@ class SkillAuthoringService:
         ref: str | None = None,
         replace: bool = False,
         dry_run: bool = False,
+        archive: bytes | None = None,
+        expected_sha256: str | None = None,
     ) -> SkillInstallResult:
-        """Install one complete package without executing any of its contents."""
+        """Install a source or uploaded archive (source is its filename), never executing it."""
         self._reject_protected(self._resolve(target_root))
         try:
             return install_package(
-                self, target_root, source, path=path, ref=ref, replace=replace, dry_run=dry_run
+                self,
+                target_root,
+                source,
+                path=path,
+                ref=ref,
+                replace=replace,
+                dry_run=dry_run,
+                archive=archive,
+                expected_sha256=expected_sha256,
             )
         except PackageError as error:
             raise SkillAuthoringError(str(error)) from error

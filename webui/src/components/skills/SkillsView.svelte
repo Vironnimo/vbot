@@ -6,6 +6,7 @@
   import Dropdown from '../Dropdown.svelte';
   import Banner from '../ui/Banner.svelte';
   import SkillDirectoryEditor from './SkillDirectoryEditor.svelte';
+  import SkillInstallDialog from './SkillInstallDialog.svelte';
   import TextField from '../ui/TextField.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
@@ -88,6 +89,7 @@
   let inventoryVersion = 0;
   let inspectVersion = 0;
   let disposed = false;
+  let pendingInstallSelection = null;
   onDestroy(() => {
     disposed = true;
     inventoryVersion++;
@@ -98,6 +100,8 @@
   // selected receiver agent ids
 
   let showDirectories = $state(false);
+  let showInstall = $state(false);
+  let installScope = $state('global');
   let directoryEditor = $state();
   let collections = $derived(skillCollections(inventory, agents, t));
   let collection = $derived(collections.find((item) => item.key === scope));
@@ -133,6 +137,7 @@
   ]);
 
   function clearSelection() {
+    pendingInstallSelection = null;
     selectedId = null;
     inspected = null;
     inspectError = '';
@@ -160,6 +165,7 @@
   }
 
   async function openSkill(entry, focus = true) {
+    pendingInstallSelection = null;
     selectedId = entry.id;
     if (inspected?.id !== entry.id) inspected = null;
     inspectError = '';
@@ -226,7 +232,21 @@
       inventory = Array.isArray(result?.skills) ? result.skills : [];
       staleShared = result?.stale_shared ?? [];
       policyDiagnostics = result?.policy_diagnostics ?? [];
-      if (selectedId) {
+      const installedEntry =
+        pendingInstallSelection &&
+        inventory.find(
+          (entry) =>
+            entry.name === pendingInstallSelection.name &&
+            entry.editable_scope === pendingInstallSelection.scope,
+        );
+      if (installedEntry) {
+        pendingInstallSelection = null;
+        const index = filtered.findIndex(
+          (entry) => entry.id === installedEntry.id,
+        );
+        page = Math.max(0, Math.floor(index / SKILL_PAGE_SIZE));
+        void openSkill(installedEntry);
+      } else if (selectedId) {
         const entry = inventory.find((item) => item.id === selectedId);
         if (!entry) clearSelection();
         else if (!actions.editing) void openSkill(entry, false);
@@ -249,6 +269,34 @@
       await tick();
       directoryEditor?.focusNewDirectory();
     }
+  }
+
+  function openInstall() {
+    installScope = scope.startsWith('agent:') ? scope : 'global';
+    showInstall = true;
+  }
+
+  async function installed(result) {
+    showInstall = false;
+    changeScope(result.scope);
+    searchQuery = '';
+    statusFilter = 'all';
+    // A later resource event can supersede our refresh; the winning inventory
+    // response still fulfills this selection unless the user navigates away.
+    pendingInstallSelection = { name: result.name, scope: result.scope };
+    onToast({
+      title: t(
+        result.operation === 'unchanged'
+          ? 'skills.install.unchanged'
+          : 'skills.install.success',
+        '',
+        { name: result.name },
+      ),
+      variant: 'success',
+    });
+    if (result.warnings?.length)
+      onToast({ title: result.warnings.join('\n'), variant: 'warn' });
+    await loadInventory();
   }
 </script>
 
@@ -454,6 +502,11 @@
         />
         <div class="skills-create-secondary">
           <Button
+            variant="secondary"
+            disabled={actions.busy}
+            onClick={openInstall}>{t('skills.install.title')}</Button
+          >
+          <Button
             variant="tertiary"
             disabled={actions.busy}
             onClick={actions.openCreateModal}>{t('skills.createCustom')}</Button
@@ -468,7 +521,8 @@
           icon
           ariaLabel={t('skills.addSkills')}
           tooltip={t('skills.addSkills')}
-          onClick={() => openDirectories(true)}
+          disabled={actions.busy}
+          onClick={openInstall}
         >
           <svg
             width="18"
@@ -736,6 +790,24 @@
     {/if}
   </div>
 </section>
+
+{#if showInstall}
+  <SkillInstallDialog
+    initialScope={installScope}
+    scopeOptions={actions.scopeOptions}
+    onClose={() => (showInstall = false)}
+    onInstalled={installed}
+    onLocations={() => {
+      showInstall = false;
+      void openDirectories(true);
+    }}
+    onCreate={(targetScope) => {
+      showInstall = false;
+      actions.openCreateModal();
+      actions.createScope = targetScope;
+    }}
+  />
+{/if}
 
 {#if actions.showCreateModal}
   <Modal

@@ -653,7 +653,9 @@ An Agent can load a Skill through the `skill` Tool. Users can explicitly trigger
 
 The WebUI and RPC Skill manager can author global and private Identity Agent Skills. Project Skills remain repository-owned and are edited through normal file Tools. Bundled Skills are read-only. `/learn` is an Identity-Agent authoring workflow over the same validated Skill core.
 
-Install a complete Skill from a directory, `.skill`/ZIP/TAR archive, archive-download URL, or public GitHub repository/Skill directory:
+In **Configure -> Skills**, use the **+** beside search to install a Skill. Paste a link or upload a `.skill`, ZIP or TAR archive from your computer, choose global or private Agent storage, and check the source. If it contains several Skills, select one. The preview shows the destination and any existing copy; replacing a different package requires an explicit choice. After installation the manager opens the saved Skill. The same dialog links to folder setup and custom Skill creation.
+
+The CLI also installs a complete Skill from a directory, `.skill`/ZIP/TAR archive, archive-download URL, or public GitHub repository/Skill directory:
 
 ```bash
 vbot skill install ./research.skill --scope agent:coder
