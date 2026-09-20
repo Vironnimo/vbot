@@ -87,6 +87,27 @@ async def test_correct_result_with_false_final_claim_fails():
 
 
 @pytest.mark.asyncio
+async def test_reading_known_file_is_valid_matching_line_evidence():
+    adapter = Responses(
+        call("read", {"path": "src/recipes.py"}),
+        {"content": "src/recipes.py:2:def add_recipe(title):"},
+    )
+    result = await first_use_trial(adapter, settings(), case("search_symbols"), 1)
+    assert result["first_attempt_success"], result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("args", [["unrelated", "src"], ["retired_handler", "tests"]])
+async def test_absence_claim_requires_correct_pattern_and_scope(args):
+    adapter = Responses(
+        call("search_files", {"args": args}),
+        {"content": "No references to retired_handler under src."},
+    )
+    result = await first_use_trial(adapter, settings(), case("search_absent"), 1)
+    assert not result["passed"]
+
+
+@pytest.mark.asyncio
 async def test_shell_fallback_is_recorded_and_not_replaced_or_reprompted():
     adapter = Responses(call("bash", {"command": "rg add_recipe src"}))
     result = await first_use_trial(adapter, settings(), case("search_symbols"), 1)

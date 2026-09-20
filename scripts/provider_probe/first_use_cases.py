@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 BASE_FILES = {
@@ -240,6 +241,19 @@ def assess(
                     # --column is a valid alternative presentation of matching lines.
                     line = re.sub(r"^(.*?:\d+):\d+:(?=\D)", r"\1:", line)
                     actual.add(line)
+            # Reading a known file is also valid evidence for matching-line tasks.
+            # The oracle checks the requested facts, not an exact Tool sequence.
+            for call in successful:
+                if call["name"] != "read":
+                    continue
+                path = (fixture.cwd / call["arguments"]["path"]).resolve()
+                if not path.is_relative_to(fixture.repo):
+                    continue
+                label = path.relative_to(fixture.repo).as_posix()
+                for line in call["result"]["data"].get("content", "").splitlines():
+                    match = re.match(r"(\d+)\| (.*)", line)
+                    if match:
+                        actual.add(f"{label}:{match[1]}:{match[2]}")
             if (
                 case["id"] == "search_count"
                 and raw_lines
@@ -248,6 +262,29 @@ def assess(
                 counts = Counter(re.sub(r":\d+(?::\d+)?:alpha$", "", line) for line in raw_lines)
                 actual = {f"{path}:{count}" for path, count in counts.items()}
             outcome = case["rows"].issubset(actual)
+            if case["id"] == "search_absent":
+                # Empty output alone proves nothing about the intended query/scope.
+                scope = fixture.repo / "src"
+                absence_verified = False
+                for call in selected:
+                    data = call["result"]["data"]
+                    try:
+                        covers_pattern = any(
+                            re.search(pattern, "retired_handler")
+                            for pattern in data.get("patterns", [])
+                        )
+                    except re.error:
+                        covers_pattern = False
+                    covers_scope = any(
+                        scope.is_relative_to(Path(root)) for root in data.get("searched_paths", [])
+                    )
+                    absence_verified |= bool(
+                        covers_pattern
+                        and covers_scope
+                        and data.get("complete")
+                        and (data.get("matched") is False or data.get("content") == "No results.")
+                    )
+                outcome = absence_verified
             answer = final.replace("\\", "/").replace("`", "")
             final_ok = True
             for row in case["rows"]:
