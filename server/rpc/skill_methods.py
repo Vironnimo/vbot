@@ -140,8 +140,18 @@ async def _skill_create(state: Any, params: JsonObject) -> JsonObject:
     )
 
 
-async def _skill_install(state: Any, params: JsonObject) -> JsonObject:
-    unknown = set(params) - {"scope", "source", "path", "ref", "replace", "dry_run"}
+async def _skill_install(
+    state: Any, params: JsonObject, *, archive: bytes | None = None
+) -> JsonObject:
+    unknown = set(params) - {
+        "scope",
+        "source",
+        "path",
+        "ref",
+        "replace",
+        "dry_run",
+        "expected_sha256",
+    }
     if unknown:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "Unsupported Skill installation parameters")
     scope = await _SKILL_READ_WORKERS.run(_validated_scope, state, params)
@@ -150,6 +160,14 @@ async def _skill_install(state: Any, params: JsonObject) -> JsonObject:
     ref = _required_string(params, "ref") if "ref" in params else None
     replace = _required_bool(params, "replace") if "replace" in params else False
     dry_run = _required_bool(params, "dry_run") if "dry_run" in params else False
+    expected_sha256 = (
+        _required_string(params, "expected_sha256") if "expected_sha256" in params else None
+    )
+    if expected_sha256 is not None and (
+        len(expected_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in expected_sha256)
+    ):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "expected_sha256 must be a SHA-256 digest")
     try:
         result = await _SKILL_READ_WORKERS.run(
             state.runtime.skill_authoring.install,
@@ -159,6 +177,8 @@ async def _skill_install(state: Any, params: JsonObject) -> JsonObject:
             ref=ref,
             replace=replace,
             dry_run=dry_run,
+            archive=archive,
+            expected_sha256=expected_sha256,
         )
     except (SkillAuthoringError, OSError) as error:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
@@ -177,6 +197,17 @@ async def _skill_install(state: Any, params: JsonObject) -> JsonObject:
             )
             publish_resource_changed(state, RESOURCE_KIND_SKILLS)
     return {**result.to_dict(), "scope": scope}
+
+
+async def install_skill_upload(
+    state: Any, params: JsonObject, *, data: bytes, filename: str
+) -> JsonObject:
+    """Binary HTTP ingress, sharing RPC validation, serialization and publication."""
+
+    async def install(state: Any, params: JsonObject) -> JsonObject:
+        return await _skill_install(state, params, archive=data)
+
+    return await _serialized_skill_mutation(install)(state, {**params, "source": filename})
 
 
 async def _skill_update(state: Any, params: JsonObject) -> JsonObject:
@@ -318,7 +349,7 @@ def _share_skill_policy(state: Any, params: JsonObject) -> JsonObject:
 
 def _serialized_skill_mutation(
     handler: Callable[[Any, JsonObject], Awaitable[JsonObject]],
-) -> RpcMethodHandler:
+) -> Callable[[Any, JsonObject], Awaitable[JsonObject]]:
     """Keep persisted writes and loop-owned refresh in one cancellation-safe sequence."""
 
     async def run(state: Any, params: JsonObject) -> JsonObject:

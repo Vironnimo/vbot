@@ -8,6 +8,41 @@ export default Object.freeze({
   'skills.instructionsPlaceholder':
     'Explain the steps, conventions, and checks.',
   'skills.addSkills': 'Add skills',
+  'skills.install.title': 'Install a skill',
+  'skills.install.sourceType': 'Skill source',
+  'skills.install.linkTab': 'From a link',
+  'skills.install.fileTab': 'Upload a file',
+  'skills.install.source': 'Link or server path',
+  'skills.install.linkHelp':
+    'Paste a download, GitHub, skills.sh or ClawHub link, or an absolute folder or archive path on the vBot server.',
+  'skills.install.file': 'Skill archive',
+  'skills.install.fileHelp':
+    '.skill, ZIP or TAR, up to 64 MiB. The complete package will be uploaded to vBot.',
+  'skills.install.tooLarge':
+    'The archive exceeds 64 MiB. Choose a smaller package.',
+  'skills.install.destination': 'Install for',
+  'skills.install.options': 'Source options',
+  'skills.install.path': 'Folder inside the package (optional)',
+  'skills.install.pathHelp': 'Leave blank to find skills automatically.',
+  'skills.install.ref': 'GitHub branch, tag or commit (optional)',
+  'skills.install.choose': 'Choose a skill from this source',
+  'skills.install.preview': 'Installation preview',
+  'skills.install.summary': '{count} files · {scope}',
+  'skills.install.summaryOne': '1 file · {scope}',
+  'skills.install.unchanged':
+    'This exact package is already installed in the selected location.',
+  'skills.install.replace':
+    'Replace the existing “{name}” skill in this location',
+  'skills.install.replaceHelp':
+    'This replaces the entire package, including any local changes.',
+  'skills.install.check': 'Check source',
+  'skills.install.checking': 'Checking the source…',
+  'skills.install.installing': 'Installing the skill…',
+  'skills.install.action': 'Install skill',
+  'skills.install.replaceAction': 'Replace skill',
+  'skills.install.show': 'Show installed skill',
+  'skills.install.success': 'Skill “{name}” installed.',
+  'skills.install.locations': 'Add a skill folder…',
   'skills.createCustom': 'Create a custom skill…',
   'skills.ownerLabel': 'Agent: {name}',
   'skills.projectLabel': 'Project: {name}',
@@ -33,7 +68,7 @@ export default Object.freeze({
   'skills.sharedSubtitle':
     'Original skills shared by their owners with other Agents.',
   'skills.librarySubtitle':
-    'Manage access, share Skills, or add an existing collection.',
+    'Install Skills, manage access, and share them with Agents.',
   'skills.searchLibrary': 'Search names, descriptions, or owners…',
   'skills.filter.label': 'Filter by status',
   'skills.filter.all': 'All statuses',
@@ -47,7 +82,7 @@ export default Object.freeze({
     'Try fewer words or clear the status filter. Choose All skills to search every collection.',
   'skills.noCollectionSkills': 'No skills in this collection',
   'skills.noCollectionSkillsHelp':
-    'Add a Skill folder or share an existing Skill with this Agent.',
+    'Use + to install a Skill or add a folder with existing Skills.',
   'skills.notes': 'Notes',
   'skills.previousPage': 'Previous page',
   'skills.nextPage': 'Next page',

@@ -63,6 +63,7 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
         : call('skill.list', params),
     readSkills: (scope) => call('skill.read', { scope }),
     createSkill: (params) => call('skill.create', params),
+    installSkill: (params) => call('skill.install', params),
     updateSkill: (params) => call('skill.update', params),
     deleteSkill: (scope, name) => call('skill.delete', { scope, name }),
     skillInventory: () => call('skill.inventory'),

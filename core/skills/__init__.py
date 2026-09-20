@@ -1,6 +1,7 @@
 """core.skills — local skill metadata registry."""
 
 from core.skills.authoring import (
+    SKILL_ARCHIVE_MAX_BYTES,
     SkillAuthor,
     SkillAuthoringError,
     SkillAuthoringService,
@@ -33,6 +34,7 @@ from core.skills.skills import (
 )
 
 __all__ = [
+    "SKILL_ARCHIVE_MAX_BYTES",
     "FRONT_MATTER_DELIMITER",
     "POLICY_SCHEMA_VERSION",
     "SKILL_ORIGIN_AGENT",
