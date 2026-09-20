@@ -3,10 +3,10 @@
 Write data-dir skill scopes for the UI/accessors: ``global`` (the user-curated
 ``<data_dir>/skills``) or ``agent:<agent_id>`` (a chosen agent's private home).
 Never the project/repo scope — those are repo files authored with the ordinary
-file tools. All writes go through the one validated authoring service with
-``author="human"`` provenance, then the matching scoped invalidation so the change
-is live without a restart. Validation failures surface the authoring diagnostics as
-an ``invalid_request`` error.
+file tools. All writes go through the one validated authoring service, then scoped
+invalidation so the change is live without a restart. Authored documents use
+``author="human"`` provenance; package imports preserve the source document.
+Validation failures surface authoring diagnostics as an ``invalid_request`` error.
 
 The manager surface (``skill.inventory`` / ``skill.set_disabled`` / ``skill.share``)
 reads every source without exclusions and mutates the Skills domain's policy file;
@@ -138,6 +138,45 @@ async def _skill_create(state: Any, params: JsonObject) -> JsonObject:
             root, name, content, author=_HUMAN_AUTHOR, source=source
         ),
     )
+
+
+async def _skill_install(state: Any, params: JsonObject) -> JsonObject:
+    unknown = set(params) - {"scope", "source", "path", "ref", "replace", "dry_run"}
+    if unknown:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Unsupported Skill installation parameters")
+    scope = await _SKILL_READ_WORKERS.run(_validated_scope, state, params)
+    source = _required_string(params, "source")
+    path = _required_string(params, "path") if "path" in params else None
+    ref = _required_string(params, "ref") if "ref" in params else None
+    replace = _required_bool(params, "replace") if "replace" in params else False
+    dry_run = _required_bool(params, "dry_run") if "dry_run" in params else False
+    try:
+        result = await _SKILL_READ_WORKERS.run(
+            state.runtime.skill_authoring.install,
+            _scope_root(state, scope),
+            source,
+            path=path,
+            ref=ref,
+            replace=replace,
+            dry_run=dry_run,
+        )
+    except (SkillAuthoringError, OSError) as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+    if result.operation in {"installed", "replaced", "unchanged"}:
+        # Replacing a shared owner's package must refresh its receivers as well.
+        if scope == _GLOBAL_SCOPE:
+            await state.runtime.reload_skills_async()
+        else:
+            state.runtime.invalidate_agent_skills(None)
+        if result.operation != "unchanged":
+            _LOGGER.info(
+                "Skill installed (skill=%s scope=%s operation=%s)",
+                result.name,
+                scope,
+                result.operation,
+            )
+            publish_resource_changed(state, RESOURCE_KIND_SKILLS)
+    return {**result.to_dict(), "scope": scope}
 
 
 async def _skill_update(state: Any, params: JsonObject) -> JsonObject:
@@ -309,6 +348,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
     return {
         "skill.read": _skill_read,
         "skill.create": _serialized_skill_mutation(_skill_create),
+        "skill.install": _serialized_skill_mutation(_skill_install),
         "skill.update": _serialized_skill_mutation(_skill_update),
         "skill.delete": _serialized_skill_mutation(_skill_delete),
         "skill.write_file": _serialized_skill_mutation(_skill_write_file),

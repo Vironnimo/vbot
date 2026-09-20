@@ -14,6 +14,7 @@ from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.skill_methods import (
     _skill_create,
     _skill_delete,
+    _skill_install,
     _skill_read,
     _skill_remove_file,
     _skill_update,
@@ -54,6 +55,69 @@ class _SkillRuntime:
 def _state(tmp_path: Path, known_agents: set[str] | None = None) -> Any:
     known = known_agents if known_agents is not None else {"builder"}
     return SimpleNamespace(runtime=_SkillRuntime(tmp_path, known))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["global", "agent:builder"])
+async def test_install_publishes_complete_package_and_invalidates_live_scopes(tmp_path, scope):
+    state = _state(tmp_path)
+    source = tmp_path / "package"
+    source.mkdir()
+    (source / "SKILL.md").write_text(_skill_md())
+    (source / "assets").mkdir()
+    (source / "assets/template.bin").write_bytes(b"\x00\xff")
+    result = await method_handlers()["skill.install"](
+        state, {"scope": scope, "source": str(source)}
+    )
+    assert result["name"] == "demo"
+    assert result["operation"] == "installed"
+    assert result["files"] == 2
+    root = (
+        state.runtime.global_skills_dir
+        if scope == "global"
+        else state.runtime.agent_skills_dir("builder")
+    )
+    assert (root / "demo/assets/template.bin").read_bytes() == b"\x00\xff"
+    assert state.runtime.reload_calls == (1 if scope == "global" else 0)
+    assert state.runtime.invalidated == ([] if scope == "global" else [None])
+
+
+@pytest.mark.asyncio
+async def test_install_preview_does_not_invalidate_or_write(tmp_path):
+    state = _state(tmp_path)
+    source = tmp_path / "package"
+    source.mkdir()
+    (source / "SKILL.md").write_text(_skill_md())
+    result = await _skill_install(
+        state, {"scope": "agent:builder", "source": str(source), "dry_run": True}
+    )
+    assert result["operation"] == "preview"
+    assert not state.runtime.agent_skills_dir("builder").exists()
+    assert state.runtime.invalidated == []
+    assert state.runtime.reload_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"scope": "project:demo"},
+        {"scope": "agent:unknown"},
+        {"scope": "agent:../escape"},
+        {"scope": "global", "replace": "false"},
+        {"scope": "global", "dry_run": 1},
+        {"scope": "global", "path": ""},
+        {"scope": "global", "ref": None},
+        {"scope": "global", "unknown_option": True},
+    ],
+)
+async def test_install_rejects_invalid_target_or_flags_before_reading_source(tmp_path, params):
+    state = _state(tmp_path)
+    with pytest.raises(RpcError) as error:
+        await _skill_install(state, {"source": "https://example.org/download.skill", **params})
+    assert error.value.code == RPC_ERROR_INVALID_REQUEST
+    assert state.runtime.reload_calls == 0
+    assert state.runtime.invalidated == []
 
 
 @pytest.mark.asyncio
@@ -222,6 +286,7 @@ def test_method_handlers_registered() -> None:
     handlers = method_handlers()
     assert set(handlers) == {
         "skill.read",
+        "skill.install",
         "skill.create",
         "skill.update",
         "skill.delete",
@@ -239,6 +304,7 @@ def test_method_handlers_registered() -> None:
     ("method", "owner_method", "params"),
     [
         ("skill.create", "create", {"name": "new", "content": _skill_md("new")}),
+        ("skill.install", "install", {}),
         ("skill.update", "edit", {"name": "demo", "content": _skill_md()}),
         ("skill.delete", "delete", {"name": "demo"}),
         ("skill.write_file", "write_file", {"name": "demo", "path": "scripts/a.py", "content": ""}),
@@ -260,6 +326,11 @@ async def test_skill_rpc_io_yields_and_refreshes_on_loop(
     from server.rpc.methods import dispatch_rpc
 
     state = _state(tmp_path)
+    if method == "skill.install":
+        source = tmp_path / "package"
+        source.mkdir()
+        (source / "SKILL.md").write_text(_skill_md("imported"))
+        params = {"source": str(source)}
     await _skill_create(state, {"scope": "global", "name": "demo", "content": _skill_md()})
     await _skill_write_file(
         state, {"scope": "global", "name": "demo", "path": "scripts/a.py", "content": ""}

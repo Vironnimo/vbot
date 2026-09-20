@@ -1,6 +1,6 @@
 ---
 name: vbot-cli
-description: "Configure and operate vBot: Agents, Projects, Sessions, Settings, Skills, Memory, prompts, Providers and Models, Channels, scheduling, Extension authoring and management, MCP, server lifecycle, updates, storage recovery, and diagnostics. Use for changes to the application itself, investigating its current configuration or health, and extended Session search and transcript retrieval."
+description: "Configure and operate vBot: Agents, Projects, Sessions, Settings, Skill installation from links or archives, Memory, prompts, Providers and Models, Channels, scheduling, Extension authoring and management, MCP, server lifecycle, updates, storage recovery, and diagnostics. Use for changes to the application itself, investigating its current configuration or health, and extended Session search and transcript retrieval."
 ---
 
 # vBot CLI
@@ -35,7 +35,7 @@ For a focused question about a past conversation, use `session_search` and answe
 | First Telegram setup and chat-id discovery | `references/telegram-setup.md` |
 | Recurring or one-time scheduled Runs | `references/cron.md` |
 | Runs after startup, including restart continuation | `references/bootstrap.md` |
-| Skill inspection, authoring, sharing and disable policy | `references/skills.md` |
+| Install a Skill from a link, archive or folder; inspect, author, share or disable Skills | `references/skills.md` |
 | Pinned Memory for an Identity Agent | `references/memory.md` |
 | Logs, Provider traces and Session usage statistics | `references/diagnostics.md` |
 | Server start/stop/restart, update, uninstall, Autostart, Desktop, Doctor | `references/server.md` |

@@ -6,6 +6,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
+
+from core.skills import SkillAuthoringService
 from core.skills.skills import SkillRegistry
 from core.tools import (
     SKILL_TOOL_NAME,
@@ -643,6 +646,7 @@ def test_bundled_playwright_activation_and_each_reference(tmp_path: Path) -> Non
     expected = sorted(
         path.relative_to(package).as_posix() for path in (package / "references").glob("*.md")
     )
+    expected.extend(["LICENSE", "UPSTREAM.json"])
     assert data["resource_files"]["files"] == expected
     for relative in expected:
         result = asyncio.run(
@@ -699,3 +703,56 @@ def test_vbot_skill_extension_links_resolve_inside_the_package() -> None:
             resolved = (source.parent / target).resolve()
             assert resolved.is_relative_to(package), (relative, link)
             assert resolved.exists(), (relative, link)
+
+
+def test_installed_package_exposes_nonconventional_resources_through_dispatch(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "SKILL.md").write_text(
+        "---\nname: imported\ndescription: Imported guide\n---\n"
+        "Read GUIDE.md and templates/example.md.\n"
+    )
+    (source / "GUIDE.md").write_text("The complete guide.")
+    (source / "templates").mkdir()
+    (source / "templates/example.md").write_text("Example text.")
+    target = tmp_path / "skills"
+    SkillAuthoringService().install(target, str(source))
+    registry = SkillRegistry.load(target)
+    tools = ToolRegistry()
+    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
+    context = _context(tmp_path)
+    activated = asyncio.run(async_dispatch(tools, context, {"name": "imported"}))
+    assert activated["ok"]
+    assert activated["data"]["resource_files"]["files"] == ["GUIDE.md", "templates/example.md"]
+    for relative, text in [
+        ("GUIDE.md", "The complete guide."),
+        ("templates/example.md", "Example text."),
+    ]:
+        result = asyncio.run(
+            async_dispatch(tools, context, {"name": "imported", "file_path": relative})
+        )
+        assert result["ok"]
+        assert result["data"]["status"] == "file_loaded"
+        assert result["data"]["content"] == text
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "../outside",
+        "/absolute",
+        "references/../../outside",
+        "C:/outside",
+        ".vbot-install.json",
+        ".git/config",
+        "templates/NUL.txt",
+    ],
+)
+def test_extended_package_reads_keep_containment_and_internal_file_boundary(tmp_path, relative):
+    registry = SkillRegistry.load(_skills_dir(tmp_path))
+    tools = ToolRegistry()
+    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
+    result = asyncio.run(
+        async_dispatch(tools, _context(tmp_path), {"name": "debugging", "file_path": relative})
+    )
+    assert result["ok"] is False

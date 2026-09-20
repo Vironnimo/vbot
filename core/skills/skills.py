@@ -562,19 +562,35 @@ def _read_skill_metadata(skill_file: Path) -> tuple[SkillMetadata | None, Valida
 
 
 def _scan_skill_resources(skill_dir: Path) -> list[str]:
-    """Return relative file paths under activation-time skill resource directories."""
+    """List regular package resources, including non-conventional support directories."""
+    import os
+
+    from core.skills._packages import excluded, is_redirect
+
+    def ordinary_entry(path: Path) -> bool:
+        try:
+            return not is_redirect(path)
+        except OSError:
+            # A concurrent package replacement can remove an enumerated entry.
+            return False
+
     resources: list[str] = []
-    for resource_directory in RESOURCE_DIRECTORIES:
-        root = skill_dir / resource_directory
-        if not root.is_dir():
-            continue
-        for resource_path in sorted(
-            path
-            for path in root.rglob("*")
-            if path.is_file() and "__pycache__" not in path.relative_to(root).parts
-        ):
-            resources.append(resource_path.relative_to(skill_dir).as_posix())
-    return resources
+    for directory, subdirs, filenames in os.walk(skill_dir, followlinks=False):
+        base = Path(directory)
+        subdirs[:] = [
+            name for name in subdirs if not excluded(name) and ordinary_entry(base / name)
+        ]
+        for name in filenames:
+            path = base / name
+            relative = path.relative_to(skill_dir).as_posix()
+            if relative == SKILL_FILENAME or excluded(relative) or not ordinary_entry(path):
+                continue
+            if path.is_file():
+                resources.append(relative)
+    order = {directory: index for index, directory in enumerate(RESOURCE_DIRECTORIES)}
+    return sorted(
+        resources, key=lambda value: (order.get(value.split("/", 1)[0], len(order)), value)
+    )
 
 
 def _field_to_string(value: Any) -> str:

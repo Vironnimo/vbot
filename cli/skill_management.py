@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping, Sequence
 from difflib import get_close_matches
+from pathlib import Path
 from typing import Any
 
 from cli.formatting import record_fields
@@ -11,6 +13,113 @@ from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
+
+
+def skill_install(
+    instance: ServerInstance,
+    source: str,
+    scope: str,
+    *,
+    path: str | None = None,
+    ref: str | None = None,
+    dry_run: bool = False,
+    replace: bool = False,
+    confirm: bool = False,
+) -> CommandResult:
+    """Import a package through the server's shared Skill write owner."""
+    if replace and not confirm and not dry_run:
+        return CommandResult(
+            ok=False,
+            instance=instance,
+            message=(
+                "Replacing a complete Skill requires --replace --yes; "
+                "inspect it with --dry-run first."
+            ),
+        )
+    local = instance.host in {"127.0.0.1", "localhost", "::1", "0.0.0.0", "::"}
+    if scope == "own":
+        agent_id = os.environ.get("VBOT_RUN_AGENT_ID", "").strip()
+        if (
+            not local
+            or not agent_id
+            or not os.environ.get("VBOT_RUN_SESSION_ID")
+            or os.environ.get("VBOT_RUN_PROJECT_ID")
+        ):
+            return CommandResult(
+                ok=False,
+                instance=instance,
+                message=(
+                    "--scope own requires an Identity Agent's vBot Run on this server. "
+                    "Use --scope global or --scope agent:<id> for an explicit target."
+                ),
+            )
+        scope = f"agent:{agent_id}"
+    if local and not source.lower().startswith(("http://", "https://")):
+        source = str(Path(source).expanduser().absolute())
+    # Remote paths are server-native, not parsed with the client's OS path grammar.
+    params: dict[str, Any] = {
+        "scope": scope,
+        "source": source,
+        "replace": replace,
+        "dry_run": dry_run,
+    }
+    if path is not None:
+        params["path"] = path
+    if ref is not None:
+        params["ref"] = ref
+    payload = _rpc_call(instance, "skill.install", params)
+    if not payload.ok:
+        return payload.to_command_result()
+    data = payload.data
+    operation = data.get("operation")
+    if operation not in {"installed", "replaced", "unchanged", "preview", "candidates"}:
+        return CommandResult(
+            ok=False,
+            instance=instance,
+            message=(
+                "Skill install returned no valid outcome; inspect skill inventory before retrying."
+            ),
+        )
+    lines = [
+        f"{operation} skill {data.get('name') or 'packages'}",
+        f"scope: {scope}",
+        f"source: {data.get('source', '-')}",
+    ]
+    if data.get("name"):
+        lines.extend(
+            [
+                f"path: {data.get('package_path')}",
+                f"files: {data.get('files')}",
+                f"sha256: {data.get('sha256')}",
+            ]
+        )
+    candidates = data.get("candidates")
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if isinstance(candidate, dict):
+                lines.append(
+                    f"- {candidate.get('path')}: {candidate.get('name')} - "
+                    f"{candidate.get('description')}"
+                )
+                if "exists" in candidate:
+                    lines.append(
+                        f"  exists: {candidate['exists']}; unchanged: {candidate.get('unchanged')}"
+                    )
+    if operation in {"preview", "candidates"}:
+        lines.append(
+            "No files were written. Select --path when needed, then omit --dry-run to install."
+        )
+    else:
+        lines.append(
+            "Package saved and Skill catalog refreshed. Availability still follows disable "
+            "policy, requirements and the Agent's Skill selection; "
+            "check the skill Tool in the target Agent."
+        )
+    warnings = _string_list(data.get("warnings"))
+    lines.extend(f"warning: {warning}" for warning in warnings)
+    return CommandResult(
+        ok=True, instance=instance, message="\n".join(lines), attention=tuple(warnings)
+    )
 
 
 def list_skills(instance: ServerInstance) -> CommandResult:
