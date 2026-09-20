@@ -551,6 +551,7 @@ describe('SessionListDrawer', () => {
       target: document.body,
       props: {
         agentId: 'alpha',
+        initialFilters: { channels: true },
         currentSessionId: 'telegram-session',
       },
     });
@@ -762,12 +763,15 @@ describe('SessionListDrawer', () => {
     expect(listSessionsMock.mock.calls[0][0]).toBe('alpha');
     expect(document.body.textContent).not.toContain('Beta');
 
-    openFilterMenu();
-    filterSwitch('All agents').click();
+    const allAgents = document.querySelector('button[aria-label="All agents"]');
+    expect(allAgents.getAttribute('aria-pressed')).toBe('false');
+    allAgents.click();
     flushSync();
 
     await waitForCondition(() => listSessionsMock.mock.calls.length === 2);
     expect(listSessionsMock.mock.calls[1][0]).toEqual(['alpha', 'beta']);
+    expect(allAgents.getAttribute('aria-pressed')).toBe('true');
+    expect(document.querySelector('.session-drawer__filter-count')).toBeNull();
     expect(listSessionsMock.mock.calls[1][1]).toMatchObject({ limit: 35 });
     await waitForCondition(
       () => document.querySelectorAll('.session-row').length === 2,
@@ -783,6 +787,57 @@ describe('SessionListDrawer', () => {
       'session-beta',
       'beta',
       false,
+    );
+  });
+
+  it('requests channels only when enabled and persists the filter choice', async () => {
+    const onFiltersChange = vi.fn();
+    listSessionsMock.mockImplementation(async (_agents, query) => ({
+      sessions: [
+        { id: 'ordinary', title: 'Ordinary session' },
+        ...(query.includeChannels
+          ? [
+              {
+                id: 'telegram',
+                title: 'Telegram session',
+                platform: 'telegram',
+                platform_conv_id: '1',
+              },
+            ]
+          : []),
+      ],
+    }));
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: { agentId: 'alpha', onFiltersChange },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.querySelectorAll('.session-row').length === 1,
+    );
+    expect(listSessionsMock.mock.calls[0][1].includeChannels).toBe(false);
+    openFilterMenu();
+    expect(
+      document.querySelector('[role="switch"][aria-label="All agents"]'),
+    ).toBeNull();
+    filterSwitch('Show channels').click();
+    flushSync();
+    await waitForCondition(
+      () => document.querySelectorAll('.session-row').length === 2,
+    );
+    expect(listSessionsMock.mock.calls.at(-1)[1].includeChannels).toBe(true);
+    expect(onFiltersChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ channels: true }),
+    );
+    expect(
+      document
+        .querySelector('.session-drawer__filter-count')
+        .textContent.trim(),
+    ).toBe('1');
+    filterSwitch('Show channels').click();
+    flushSync();
+    await waitForCondition(
+      () => document.querySelectorAll('.session-row').length === 1,
     );
   });
 

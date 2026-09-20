@@ -168,6 +168,7 @@ def list_summary_rows(
     include_memory_reflections: bool,
     include_skill_reflections: bool,
     include_cron: bool,
+    include_channels: bool,
     required_address: SessionAddress | None,
 ) -> tuple[list[sqlite3.Row], sqlite3.Row | None, int, bool]:
     """Read one bounded, globally ordered Session-list page from normalized columns."""
@@ -185,6 +186,7 @@ def list_summary_rows(
         include_memory_reflections=include_memory_reflections,
         include_skill_reflections=include_skill_reflections,
         include_cron=include_cron,
+        include_channels=include_channels,
     )
     base_where = f"status = 'live' AND {scope_sql}"
     page_where = ""

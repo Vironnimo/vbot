@@ -37,7 +37,7 @@
 .chat-view__session-bar {
   position: absolute;
   top: 12px;
-  left: 12px;
+  left: 6px;
   z-index: 2;
   display: flex;
   align-items: stretch;
