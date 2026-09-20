@@ -582,8 +582,8 @@ class TestScanSkillResources:
         (skill_dir / "scripts" / "__pycache__" / "run.pyc").write_bytes(b"cache")
         (skill_dir / "references" / "guide.md").write_text("", encoding="utf-8")
         (skill_dir / "assets" / "template.html").write_text("", encoding="utf-8")
-        (skill_dir / "notes" / "ignored.md").parent.mkdir()
-        (skill_dir / "notes" / "ignored.md").write_text("", encoding="utf-8")
+        (skill_dir / "notes" / "guide.md").parent.mkdir()
+        (skill_dir / "notes" / "guide.md").write_text("", encoding="utf-8")
 
         resources = _scan_skill_resources(skill_dir)
 
@@ -592,6 +592,7 @@ class TestScanSkillResources:
             "scripts/run.py",
             "references/guide.md",
             "assets/template.html",
+            "notes/guide.md",
         ]
 
     def test_returns_empty_list_when_resource_directories_are_missing(self, tmp_path: Path) -> None:

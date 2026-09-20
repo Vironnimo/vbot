@@ -653,6 +653,18 @@ An Agent can load a Skill through the `skill` Tool. Users can explicitly trigger
 
 The WebUI and RPC Skill manager can author global and private Identity Agent Skills. Project Skills remain repository-owned and are edited through normal file Tools. Bundled Skills are read-only. `/learn` is an Identity-Agent authoring workflow over the same validated Skill core.
 
+Install a complete Skill from a directory, `.skill`/ZIP/TAR archive, archive-download URL, or public GitHub repository/Skill directory:
+
+```bash
+vbot skill install ./research.skill --scope agent:coder
+vbot skill install https://github.com/owner/repo/tree/main/skills/research --scope global
+vbot skill install https://github.com/owner/repo --scope global --dry-run
+```
+
+Use `--path <directory>` when a source contains multiple Skills. `--dry-run` validates without writing; an identical package is unchanged, while replacing different files requires `--replace --yes` and removes local modifications too. Public skills.sh and ClawHub Skill links are also supported; other catalogs can supply their repository or archive-download link. Installation preserves supporting files and binary assets without running scripts or installing dependencies. Local paths refer to the server machine; a remote CLI does not upload client files.
+
+An Identity Agent can follow the bundled `vbot-cli` Skill and install for itself with `--scope own`, including while a Project is loaded. Outside a Run, use `agent:<id>` or `global` explicitly. Private Skills become available to their owner subject to requirements and disable policy; global installs retain the Agent's existing Skill selection. Installation does not grant Tools or credentials. Use `skill inventory` to inspect saved packages and the Agent's `skill` Tool to verify its effective catalog. Uninstall with `skill delete <name> --scope global|agent:<id> --yes`.
+
 Tools are runtime capabilities exposed according to Agent, Project, Extension, and Settings policy. Inspect the public catalog and one Agent's complete System Prompt with:
 
 ```bash
@@ -663,7 +675,7 @@ vbot skill create librarian --scope agent:coder --file SKILL.md
 vbot prompt preview coder
 ```
 
-The CLI Skill manager authors only global and private Identity Agent scopes; `inventory` exposes package ids and editable scopes; `inspect <inventory-id>` reads the complete original Skill even for read-only sources. It supports `read`, `create`, `update`, `delete`, `file write`, and `file remove`. Project Skills stay repository-owned and bundled Skills stay read-only. The Prompt manager likewise supports default and `agent:<id>` scopes, custom user blocks, and complete layout order/enabled-state updates. Use `prompt show <block-id>` to read the full content before an update.
+The CLI Skill manager authors only global and private Identity Agent scopes; `inventory` exposes package ids and editable scopes; `inspect <inventory-id>` reads the complete original Skill even for read-only sources. It supports `install`, `read`, `create`, `update`, `delete`, `file write`, and `file remove`. Project Skills stay repository-owned and bundled Skills stay read-only. The Prompt manager likewise supports default and `agent:<id>` scopes, custom user blocks, and complete layout order/enabled-state updates. Use `prompt show <block-id>` to read the full content before an update.
 
 The `subagent` Tool delegates a bounded task to an authorized Identity or Project Agent in a child Session. Identity Agents may be allowed to target all Agents or an explicit list; Project Agents remain confined to their own Team. Foreground work returns directly, while top-level background work completes asynchronously and wakes the parent with the finished results. Nested Sub-Agents run in the foreground, and background Bash is unavailable inside a Sub-Agent so work cannot be stranded after the child Session ends.
 
@@ -1073,7 +1085,7 @@ Installed commands use `vbot`. From a source checkout, `python cli/main.py` and 
 | Sessions | `session list`, `session create`, `session fork`, `session rename`, `session policy set`, `session delete`, `session channel link` |
 | Session store | `session-store status`, `session-store snapshot list|create|verify|restore`, `session-store incident acknowledge` |
 | Channels | `channel add`, `channel list`, `channel update`, `channel token set`, `channel enable`, `channel disable`, `channel status`, `channel identity`, `channel access`, `channel admin grant`, `channel admin revoke`, `channel whatsapp setup/status/pair`, `channel remove` |
-| Tools and Skills | `tool list`, `skill list`, `skill inventory`, `skill inspect`, `skill read`, `skill enable`, `skill disable`, `skill share`, `skill unshare`, `skill create`, `skill update`, `skill delete`, `skill file write`, `skill file remove` |
+| Tools and Skills | `tool list`, `skill list`, `skill inventory`, `skill inspect`, `skill install`, `skill read`, `skill enable`, `skill disable`, `skill share`, `skill unshare`, `skill create`, `skill update`, `skill delete`, `skill file write`, `skill file remove` |
 | Memory | `memory list`, `memory add`, `memory replace`, `memory remove` |
 | System Prompt | `prompt list`, `prompt show`, `prompt update`, `prompt reset`, `prompt create`, `prompt remove`, `prompt layout set`, `prompt layout reset`, `prompt preview` |
 | Providers | `provider list`, `provider status`, `provider usage`, `provider history list`, `provider history clear`, `provider custom list`, `provider custom save`, `provider custom delete`, `provider key set`, `provider key unset`, `provider enable`, `provider disable`, `provider connect`, `provider disconnect`, `provider connection status` |

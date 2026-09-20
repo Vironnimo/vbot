@@ -25,6 +25,130 @@ def make_instance(tmp_path: Path, *, port: int = 8420) -> ServerInstance:
     )
 
 
+def test_parse_skill_install_flags():
+    args = cli_main.parse_args(
+        [
+            "skill",
+            "install",
+            "./research.skill",
+            "--scope",
+            "own",
+            "--path",
+            "skills/research",
+            "--ref",
+            "feature/docs",
+            "--replace",
+            "--yes",
+            "--dry-run",
+        ]
+    )
+    assert (args.area, args.command, args.source, args.scope) == (
+        "skill",
+        "install",
+        "./research.skill",
+        "own",
+    )
+    assert args.path == "skills/research"
+    assert args.ref == "feature/docs"
+    assert args.replace and args.yes and args.dry_run
+
+
+def test_install_for_current_agent_preserves_source_and_scope(tmp_path, monkeypatch):
+    monkeypatch.setenv("VBOT_RUN_AGENT_ID", "builder")
+    monkeypatch.setenv("VBOT_RUN_SESSION_ID", "ses_test")
+    monkeypatch.delenv("VBOT_RUN_PROJECT_ID", raising=False)
+    calls = []
+
+    def post(url, *, json, **kwargs):
+        calls.append(json)
+        assert kwargs["trust_env"] is False
+        assert kwargs["timeout"].read is None
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "operation": "installed",
+                    "name": "research",
+                    "source": "https://example.org/research.skill",
+                    "files": 3,
+                    "package_path": ".",
+                    "sha256": "a" * 64,
+                    "warnings": [],
+                },
+            },
+        )
+
+    monkeypatch.setattr(skill_management.httpx, "post", post)
+    result = skill_management.skill_install(
+        make_instance(tmp_path), "https://example.org/research.skill", "own"
+    )
+    assert result.ok
+    assert calls == [
+        {
+            "method": "skill.install",
+            "params": {
+                "scope": "agent:builder",
+                "source": "https://example.org/research.skill",
+                "replace": False,
+                "dry_run": False,
+            },
+        }
+    ]
+
+
+@pytest.mark.parametrize("project_id,agent_id", [("project", "builder"), ("", "")])
+def test_own_scope_without_identity_run_does_not_fall_back_to_global(
+    tmp_path, monkeypatch, project_id, agent_id
+):
+    monkeypatch.setenv("VBOT_RUN_AGENT_ID", agent_id)
+    monkeypatch.setenv("VBOT_RUN_SESSION_ID", "ses_test")
+    monkeypatch.setenv("VBOT_RUN_PROJECT_ID", project_id)
+    monkeypatch.setattr(
+        skill_management.httpx, "post", lambda *a, **kw: pytest.fail("No RPC expected")
+    )
+    assert not skill_management.skill_install(
+        make_instance(tmp_path), "https://example.org/research.skill", "own"
+    ).ok
+
+
+def test_replace_requires_confirmation_before_rpc(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        skill_management.httpx, "post", lambda *a, **kw: pytest.fail("No RPC expected")
+    )
+    assert not skill_management.skill_install(
+        make_instance(tmp_path), "https://example.org/research.skill", "global", replace=True
+    ).ok
+
+
+def test_local_relative_source_is_resolved_before_rpc(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    calls = []
+
+    def post(url, *, json, **kwargs):
+        calls.append(json)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "operation": "preview",
+                    "name": "research",
+                    "candidates": [],
+                    "warnings": [],
+                },
+            },
+        )
+
+    monkeypatch.setattr(skill_management.httpx, "post", post)
+    result = skill_management.skill_install(
+        make_instance(tmp_path), "./research.skill", "global", dry_run=True
+    )
+    assert result.ok
+    assert calls[0]["params"]["source"] == str(tmp_path / "research.skill")
+    assert not (tmp_path / "research.skill").exists()
+
+
 @pytest.mark.parametrize("listing", [{"ok": True, "result": {}}, {"ok": False}])
 def test_failed_share_inventory_lookup_does_not_claim_no_private_skills(
     tmp_path, monkeypatch, listing
