@@ -1,13 +1,13 @@
 .session-drawer {
   position: absolute;
-  top: 12px;
-  left: 6px;
+  top: var(--session-controls-inset, 6px);
+  left: var(--session-controls-inset, 6px);
   /* Above the floating composer overlay (z-index 3): the expanded drawer
        reaches into that region and must never be covered by its scrim. */
   z-index: 4;
   display: flex;
   width: min(290px, calc(100% - 12px));
-  max-height: calc(100% - 24px);
+  max-height: calc(100% - 2 * var(--session-controls-inset, 6px));
   flex-direction: column;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
@@ -60,19 +60,6 @@
   display: flex;
   align-items: stretch;
   min-width: 0;
-}
-
-.session-drawer__controls .chat-view__session-bar-divider {
-  display: none;
-}
-
-.session-drawer__controls .btn-secondary.chat-view__session-toggle {
-  padding: 5px 8px;
-}
-
-.session-drawer__controls .btn-secondary.btn-icon {
-  width: 28px;
-  min-width: 28px;
 }
 
 .session-drawer__title {
@@ -497,14 +484,14 @@
 
 @media (max-width: 640px) {
   .session-drawer {
+    top: var(--session-controls-inset, 8px);
     left: 8px;
     right: 8px;
     width: auto;
     max-height: 60%;
   }
 
-  .session-drawer__icon-button,
-  .session-drawer__controls .btn-secondary.btn-icon {
+  .session-drawer__icon-button {
     width: 40px;
     min-width: 40px;
     height: 40px;
