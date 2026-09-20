@@ -554,8 +554,7 @@ def parse_options(tokens: list[str], *, action: str, kind: str) -> SearchOptions
         index += 1
         if not token.startswith("-") or token == "--":
             raise ValueError(
-                f"Unexpected options operand {token!r}; "
-                "put patterns in patterns and roots in paths."
+                f"Unexpected option value {token!r}; use args=['--help'] for search syntax."
             )
         pending: list[tuple[str, str | None]] = []
         if token.startswith("--"):
@@ -578,11 +577,21 @@ def parse_options(tokens: list[str], *, action: str, kind: str) -> SearchOptions
         for name, inline in pending:
             option = BY_NAME.get(name)
             if option is None:
-                raise ValueError(
-                    f"Unsupported search option {name!r}. Use action='help' for supported options."
-                )
+                raise ValueError(f"Unsupported search option {name!r}. Use args=['--help'].")
+            if (
+                action == "paths"
+                and option.key == "case"
+                and option.value in {"ignore", "sensitive"}
+            ):
+                option = BY_NAME[
+                    "--glob-case-insensitive"
+                    if option.value == "ignore"
+                    else "--no-glob-case-insensitive"
+                ]
             if action == "paths" and option.content_only:
-                raise ValueError(f"{name} applies only to action='content'.")
+                raise ValueError(
+                    f"{name} searches contents; omit --files/--dirs/--entries to use it."
+                )
             if option.argument:
                 if inline is None:
                     if index >= len(tokens):
@@ -603,7 +612,7 @@ def parse_options(tokens: list[str], *, action: str, kind: str) -> SearchOptions
                     if boolean == "false":
                         raise ValueError(
                             f"{name} false needs an explicit supported reverse flag; "
-                            "see action='help'."
+                            "see args=['--help']."
                         )
                 value = option.value
             _validate_value(option, value)
@@ -614,7 +623,7 @@ def parse_options(tokens: list[str], *, action: str, kind: str) -> SearchOptions
         and any(option.key in {"size", "type", "type_not"} for option, _ in result.entries)
     ):
         raise ValueError(
-            "File type and size filters require kind='files'; they cannot select directories."
+            "File type and size filters require --files; they cannot select directories."
         )
     if any(result.context) and (
         result.get("output") or result.enabled("only") or result.enabled("quiet")
@@ -660,23 +669,25 @@ def size_bytes(value: str) -> int:
 
 def help_text() -> str:
     lines = [
-        "Search options (each option and value is a separate options item).",
+        "Pass one ripgrep argument per args item; no shell quoting or expansion.",
+        "Content: ['-w', 'TODO', 'src']. Literal: ['-F', 'call(', 'src'].",
+        "Repeat -e/--regexp for OR patterns. -- ends option parsing.",
+        "Paths: ['--files', '-g', '*.py', 'src']; --dirs finds directories; --entries finds both.",
         "Repeated flags follow their documented order; repeated globs are ordered filters.",
         (
             "Defaults: regex, case-sensitive content, hidden included, ignores"
             " honored, no symlink following."
         ),
+        "Name globs are case-insensitive. Globs without / match basenames at every depth;",
+        "globs with / are root-relative. Use './*.py' for top-level files only.",
+        "Positive filters never override ignore rules.",
         (
-            "Path globs are root-relative and case-insensitive; positive filte"
-            "rs never override ignore rules."
+            "Content-only flags are marked [content]; -i/-s also control name case. "
+            "File type/size filters require --files for paths."
         ),
         (
-            "Content-only flags are marked [content]. File type/size filters r"
-            "equire kind=files for paths."
-        ),
-        (
-            "patterns and paths accept multiple values. Use action=paths with "
-            "kind=directories for empty directories too."
+            "Roots are literal files/directories; omit them for cwd. "
+            "--dirs includes empty directories."
         ),
     ]
     sections = {
@@ -700,10 +711,9 @@ def help_text() -> str:
     lines.extend(
         [
             "\nExamples:",
-            '{"action":"content","patterns":["run"],"paths":["src","tests"],'
-            '"options":["-w","-g","*.py","-C","2"]}',
-            '{"action":"paths","patterns":["**/migrations"],"kind":"directories"}',
-            '{"action":"content","patterns":["error"],"options":["-F","-i","-l","-u"]}',
+            '{"args":["-w","-g","*.py","-C","2","run","src","tests"]}',
+            '{"args":["--dirs","-g","migrations"]}',
+            '{"args":["-F","-i","-l","-u","error"]}',
         ]
     )
     return "\n".join(lines)

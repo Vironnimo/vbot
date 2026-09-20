@@ -5,7 +5,30 @@ from contextlib import contextmanager
 
 import pytest
 
-from scripts.provider_probe.workflow_search_files import _case, search_cases
+from scripts.provider_probe.workflow_search_files import _case, _probe_search_files, search_cases
+
+
+@pytest.mark.asyncio
+async def test_search_probe_rejects_unknown_case_before_any_model_request():
+    with pytest.raises(ValueError):
+        await _probe_search_files(object(), Namespace(search_case="content_defaults,unknown"))
+
+
+@pytest.mark.asyncio
+async def test_search_probe_selects_every_requested_case(monkeypatch):
+    calls = []
+
+    async def evaluate(_adapter, _args, case):
+        calls.append(case["id"])
+        return {"case": case["id"], "passed": True}
+
+    monkeypatch.setattr("scripts.provider_probe.workflow_search_files._case", evaluate)
+    result = await _probe_search_files(
+        object(), Namespace(search_case="natural_recipe_call,natural_name_only")
+    )
+    assert set(calls) == {"natural_recipe_call", "natural_name_only"}
+    assert result["cases"] == 2
+    assert result["passed"]
 
 
 @pytest.mark.asyncio
@@ -49,7 +72,7 @@ async def test_search_probe_resolves_fixture_root_before_checking_scope(
     )
     case = {
         "id": "resolved_root",
-        "arguments": {"action": "content", "patterns": ["beta"], "paths": [path]},
+        "arguments": {"args": ["beta", path]},
         "content": "src/a.py:2:beta",
     }
 
