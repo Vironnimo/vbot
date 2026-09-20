@@ -19,6 +19,15 @@ import { setupChatTimelinePresentationSuite } from './chatTimelinePresentation.s
 describe('chatTimelinePresentation', () => {
   setupChatTimelinePresentationSuite();
 
+  it('summarizes ripgrep search arguments', () => {
+    expect(
+      toolArgumentSummary({
+        name: 'search_files',
+        arguments: { args: ['-F', 'call(', 'src'] },
+      }),
+    ).toBe('-F call( src');
+  });
+
   it('summarizes search pattern arrays and retains continuation metadata', () => {
     expect(
       toolArgumentSummary({

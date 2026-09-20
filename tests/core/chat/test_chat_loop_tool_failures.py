@@ -94,12 +94,12 @@ async def test_registered_search_tools_execute_and_persist_envelopes(
                     {
                         "id": "call_paths",
                         "name": "search_files",
-                        "arguments": {"action": "paths", "patterns": ["**/*.txt"]},
+                        "arguments": {"args": ["--files", "-g", "*.txt"]},
                     },
                     {
                         "id": "call_content",
                         "name": "search_files",
-                        "arguments": {"action": "content", "patterns": ["alpha"]},
+                        "arguments": {"args": ["alpha"]},
                     },
                 ],
             },
@@ -166,7 +166,7 @@ async def test_registered_search_tools_respect_agent_allowlist(tmp_path: Path) -
                     {
                         "id": "call_content",
                         "name": "search_files",
-                        "arguments": {"action": "content", "patterns": ["alpha"]},
+                        "arguments": {"args": ["alpha"]},
                     }
                 ],
             },

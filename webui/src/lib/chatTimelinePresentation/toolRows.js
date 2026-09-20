@@ -27,7 +27,7 @@ const TOOL_DISPLAY_ARGS = {
   write: ['path'],
   edit: ['path'],
   bash: ['command'],
-  search_files: ['patterns', 'paths', 'action'],
+  search_files: ['args', 'patterns', 'paths', 'action'],
   glob: ['pattern'],
   grep: ['pattern', 'path'],
   subagent: ['action', 'id', 'agent_id', 'content'],
@@ -314,6 +314,9 @@ function humanReadableToolLabel(toolName, argumentsValue) {
   }
 
   if (toolName === 'search_files') {
+    if (Array.isArray(args.args)) {
+      return args.args.filter((value) => typeof value === 'string').join(' ');
+    }
     return (
       ['patterns', 'paths']
         .map((key) =>
