@@ -86,13 +86,17 @@ def _shell_syntax_notes() -> str:
 
 BASH_TOOL_DESCRIPTION = (
     "Run an unattended shell command and capture its output, such as scripts, builds, "
-    "non-interactive Git, file operations, and servers. No interactive input or live screen "
+    "non-interactive Git, file operations, and servers. "
+    "For file discovery and content search, use search_files when available. "
+    "No interactive input or live screen "
     "is available; provide input through files or pipelines. Never manually detach or "
     "daemonize commands." + _shell_syntax_notes()
 )
 BASH_SUBAGENT_TOOL_DESCRIPTION = (
     "Run an unattended shell command and wait for its output, such as scripts, builds, "
-    "non-interactive Git, and file operations. Background execution is unavailable. "
+    "non-interactive Git, and file operations. "
+    "For file discovery and content search, use search_files when available. "
+    "Background execution is unavailable. "
     "No interactive input or live screen is available; provide input through files or "
     "pipelines. Never manually detach or daemonize commands." + _shell_syntax_notes()
 )

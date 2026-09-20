@@ -6,6 +6,10 @@ This is the design map for the agent-facing part of every Tool: the model-facing
 
 A Tool definition helps a fresh Agent choose a capability, supply a complete request, and achieve the intended result. Optimize the whole task: correct effects and useful evidence first, clear first-use guidance next, then unnecessary context and call cost. A shorter definition that causes empty operations, misleading results, or extra discovery calls is an unsuccessful optimization. Provider portability must preserve these semantics.
 
+Start with the user task and the observable outcome the Tool should enable. Its current name, schema, parameters, description, results and division into Tools are revisable design choices, not constraints to preserve. Prefer the simplest complete workflow an Agent can use independently; recurring errors may call for redesign rather than another instruction sentence. Judge context footprint across definitions, arguments, results and repeated history together with unnecessary discovery, execution, verification, recovery and continuation calls. Preserve correctness and needed guidance while reducing that total cost.
+
+Apply the same efficiency during redesign and testing: deterministic tests cover known argument/runtime variants; focused Model trials resolve actual uncertainty about Tool choice and use. Batch independent checks, reuse relevant evidence and expand trials for observed failures or uncertainty. Do not use exhaustive exact-JSON Model matrices as a usability gate or repeatedly rerun unchanged passing checks.
+
 ## Model Contract and Runtime Contract
 
 - The model-facing Tool definition describes only what the Model needs to choose and call the Tool.
@@ -29,7 +33,7 @@ A Tool definition helps a fresh Agent choose a capability, supply a complete req
 - Schema types and names do not explain how arguments work together. Repeat a schema fact only when it resolves a likely misunderstanding about the requested effect.
 - Do not describe handler internals, libraries, storage layout, UI rendering, logging, telemetry, or validation machinery unless the Model must account for it when calling the Tool.
 - Mention result behavior only when it affects Tool choice, pagination, follow-up calls, or safe use.
-- Do not reference another Tool unless that Tool is guaranteed to be available in the same Model context. Availability-dependent guidance belongs in a dynamically gated prompt block.
+- Cross-Tool guidance must not direct an Agent to an unavailable Tool. Gate context-specific guidance by availability, or make a simple preference explicitly conditional on the other Tool being available, retaining a valid fallback.
 
 ## Choose the Public Shape
 
@@ -38,13 +42,13 @@ Use this decision order:
 1. **One behavior:** expose its arguments directly in one open flat object. A Tool named `channel_send` that only sends should accept delivery fields directly; `action: "send"` would repeat the Tool name.
 2. **One repeatable independent behavior:** use one required plural array of compact operation objects when batching materially reduces Agent roundtrips. State ordering semantics in the array description, preserve input order, keep per-operation options on each item, and report indexed outcomes.
 3. **One behavior with optional targeting or selection:** keep direct optional target fields and validate their dependencies. `status()` checks the current Session, `status(session_id)` checks another Session for the same Agent, and `status(agent_id, session_id)` changes the owner and Session; these are target variants, not actions.
-4. **Several genuinely different behaviors:** require one top-level `action` enum and place every action argument beside it. CRUD, lifecycle transitions, and read-versus-mutate behavior normally qualify. `memory(action, scope, content?, entry_id?)` and `history(action, ...)` are the reference shape.
+4. **Several genuinely different behaviors:** use one top-level `action` enum and place every action argument beside it. Require an explicit choice when omission cannot identify the intended behavior. A common action may have a documented omission default when its validated inputs unambiguously express that task, as `subagent(content)` delegates. CRUD and read-versus-mutate behavior normally require explicit actions; `memory(action, scope, content?, entry_id?)` and `history(action, ...)` are reference shapes.
 
 Do not expose `request.operation`, an operation-key object such as `{"create": {...}}`, a stringified nested request, or several mutually exclusive booleans that encode actions. Do not infer a behavioral mode from an arbitrary combination of optional fields when a required `action` would state it directly.
 
 Action Tool mechanics:
 
-- Represent an Action Tool as one flat object. Make `action` a required string enum whose description names every action in operational language.
+- Represent an Action Tool as one flat object. Its `action` string enum names the actions in operational language; make it required unless the common-action default above applies. Explicit invalid values never become omission.
 - Put all arguments used by any action in the same `properties` object.
 - Leave action-dependent arguments out of the root `required` list and state their action dependency briefly in their descriptions.
 - Do not represent actions with `oneOf`, `anyOf`, `allOf`, conditional schemas, or duplicated per-action object branches.
@@ -138,7 +142,7 @@ Example:
 
 ## Writing the Texts
 
-The model-facing texts decide whether a Tool gets chosen and called correctly; the handler behind them is secondary. Three surfaces share one craft: the description selects the Tool, the parameter descriptions steer the call, the result and error texts steer the loop.
+The model-facing texts guide Tool choice and invocation; the handler and returned evidence establish whether the intended effect actually occurred. The description selects the Tool, parameter descriptions steer the call, and result/error texts guide continuation. Verify these surfaces together.
 
 - Write for a fresh Agent with no project context: self-contained, only concepts the Agent can observe or act on. Explain the available behavior and the next valid action, and never name a hidden implementation category merely to explain an exclusion.
 - All three surfaces are runtime Agent-facing text. Follow `AGENTS.md` -> Communication with the user -> Present Agent-facing text changes for review presentation.
@@ -157,15 +161,17 @@ The shared `operation_envelope_schema`, `extract_tool_operation`, `action_schema
 ## Change and Verification Discipline
 
 - Start an audit from actual delivered definitions, arguments, results, and the Agent's following decisions. Deduplicate persisted copies of calls. Investigate successful but empty, noisy, or truncated results as well as explicit errors; verify suspected false positives and false negatives against independent evidence. Separate proven defects from uncertain task outcomes or historical file state.
-- Change exactly one Tool at a time. Shared Tool infrastructure may change with it only when that Tool requires the change, and every other Tool's verified behavior stays intact.
+- Keep changes independently reviewable around the intended workflow. A coordinated change to competing Tools, such as search and Bash selection guidance, should be verified together. Unrelated Tool behavior must remain intact.
 - Keep the repository releaseable after every Tool change.
 - Before changing a Tool's public contract, inventory every accepted shape, default, permission rule, and persisted or UI consumer.
 - After the change, recheck Provider rendering and the non-strict invariant, schema fingerprints, Tool descriptions, `ToolDisplay`, prompts, E2E fake-provider calls, and any generated Tool catalogs, and update the owning Tool map plus any documentation that teaches the call shape.
-- Before moving to the next Tool, run its focused local tests and complete the Luna call matrix, and pass its current production definition directly to Luna through `scripts/probe_provider_tool_call.py`. A live installation round-trip is not required for model-facing schema verification.
+- Before moving to the next Tool, run its focused dispatch tests and live black-box task evaluations with its production definitions and prompts. A live installation round-trip is not required. The three evidence layers below are separate; transport conformance never substitutes for usability.
 - For Luna probes, select `--provider openai --connection openai:subscription` explicitly. Do not run Luna through OpenCode Go or inherit the probe script's default Provider.
-- The Luna matrix must exercise every action or mode, every optional-parameter omission that selects a default, every materially different explicit value, recoverable Agent mistakes, and requests whose ambiguity or invalid intended operation requires rejection. Judge recoverable calls by independently specified intended targets, values, constraints, and actual effects, not byte-for-byte invocation equality. Pair each repair family with nearby different and conflicting calls; success flags and expectations computed by the same normalizer do not prove correctness.
-- A Tool change is verified only when every matrix call produces a satisfactory Tool Call and runtime result. Documentation or schema inspection alone is not verification.
-- Commit each fully verified Tool as its own cohesive releaseable change before editing the next Tool.
+- Deterministic production-dispatch tests cover every action/mode, consequential default, explicit value, recoverable representation, and ambiguous or unsupported request. Pair each repair with nearby different and conflicting inputs. Assert independently specified receiving targets, payloads, scope and effects. Do not ask a Model to reproduce malformed JSON as a substitute for these tests.
+- Provider conformance probes may prescribe arguments to isolate serialization, streaming, or schema transport. Label them as transport/conformance evidence. They cannot establish Tool choice, first-use understanding, or end-to-end task success.
+- Black-box Model evaluations supply only a natural user goal, production definitions/prompts, realistic state and the competing Tools normally available. Keep expected Tool names, actions, argument shapes, grading criteria and the suspected fix outside Model context. Never force a Tool, demand one call, teach the answer in a test-only reminder, or hide Bash to make search selection pass. Exercise common tasks, defaults, recovery, continuation and cases where another Tool is appropriate. Use genuine results through completion and judge the requested outcome, including final claims; equivalent valid call sequences are allowed.
+- Repeat fresh trials with fixed settings, compare unchanged cases before/after when possible, and keep task variants out of tuning. Preserve all attempts and diagnostic responses, including no-call replies, timeouts, wrong selections and retries. Report first-attempt success separately from recovery and final outcome, with denominators; reruns or changed thinking effort never erase failures. Fixture limitations and unresolved failures remain explicit. `--scenario tool_first_use` in `scripts/probe_provider_tool_call.py` owns search/delegation task evaluations; the older exact-call scenarios remain conformance probes.
+- Commit each verified Tool or coordinated workflow change as a cohesive releaseable unit before moving to unrelated Tool work.
 - Quality gates: a scoped non-mutating pass (`python scripts/quality.py --check <paths>`) while working and before any intermediate commit; the full gate (`python scripts/quality.py`) once, before the final commit that closes the task. Tool work adds no separate gate schedule.
 
 ## Token Cost Comparisons
@@ -183,11 +189,11 @@ Before accepting a Tool definition, verify all of the following:
 - Every optional parameter tells the Model when to omit it; omission results appear only when they affect that decision.
 - No `additionalProperties` keyword is present in the model-facing schema.
 - No non-numeric JSON Schema `default` is present.
-- Every Action Tool has one flat object and only `action` is unconditionally required unless another field is truly required by every action.
+- Every Action Tool has one flat object. `action` is required unless it has a documented unambiguous default; other root-required fields must be required by every action.
 - Parameter descriptions contain no duplicated schema facts or runtime internals.
 - Every parameter still has enough description for the Model to use it correctly.
 - Cross-Tool guidance cannot point to an unavailable Tool.
 - The handler independently validates conditional requirements and applies all defaults.
 - The Provider wire explicitly remains non-strict where the Provider supports strict Tool calling.
 - Before/after definition tokens and the measurement basis are reported; any claimed workflow savings have matched-task evidence.
-- Focused tests and the complete Luna call matrix pass before another Tool is changed.
+- Focused dispatch tests and black-box task evaluations verify the intended outcome before another Tool is changed; conformance probes remain separate evidence.

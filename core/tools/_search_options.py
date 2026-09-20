@@ -32,6 +32,10 @@ def _option(
 
 
 OPTIONS = (
+    _option("--limit", "limit", "Page size, equivalent to the limit field.", argument=True),
+    _option(
+        "--offset", "offset", "Results to skip, equivalent to the offset field.", argument=True
+    ),
     _option(
         "-i --ignore-case",
         "case",
@@ -638,7 +642,10 @@ def parse_options(tokens: list[str], *, action: str, kind: str) -> SearchOptions
 
 
 def _validate_value(option: Option, value: str) -> None:
-    if option.key in {"before", "after", "context", "depth", "max_count"} and not value.isdecimal():
+    if (
+        option.key in {"before", "after", "context", "depth", "max_count", "limit", "offset"}
+        and not value.isdecimal()
+    ):
         raise ValueError(f"{option.names[0]} requires a nonnegative integer.")
     if option.key == "engine" and value not in {"default", "pcre2", "auto"}:
         raise ValueError("--engine must be default, pcre2, or auto.")

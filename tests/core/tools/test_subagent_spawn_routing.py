@@ -67,7 +67,7 @@ async def test_register_subagent_tools_registers_one_flat_public_tool() -> None:
         "thinking_effort",
         "id",
     }
-    assert subagent.parameters["required"] == ["action"]
+    assert subagent.parameters["required"] == []
     assert properties["action"]["enum"] == ["run", "status", "cancel"]
     assert all(
         isinstance(property_schema.get("description"), str) and property_schema["description"]

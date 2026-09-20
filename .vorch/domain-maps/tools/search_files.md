@@ -11,7 +11,8 @@ argument/option parsing, native execution, ignore rules, candidate selection, an
 results; these are implementation units of the existing Tools owner, not public services.
 The async handler offloads the complete operation through `run_tool_worker`.
 
-Three advertised fields: required `args`, plus `limit` and `offset`. `args` is a
+The definition directs file/content discovery to this Tool instead of shell
+rg/grep/find/ls. Three advertised fields: required `args`, plus `limit` and `offset`. `args` is a
 ripgrep argument vector, without an executable name, shell quoting, or shell
 expansion. `_search_arguments.py` separates patterns, options, and literal roots:
 content search uses the first operand as its regex and subsequent operands as
@@ -84,8 +85,9 @@ Success returns `data.content` and `complete`. Paths are relative to effective c
 when possible, absolute otherwise; directory rows end in `/`. Content includes
 source line numbers, and occurrence output adds byte columns. No matches is success.
 Quiet returns `matched=true/false`, or null when an incomplete scan proves neither.
-`complete` describes scan completion, not whether the returned page contains all
-matches; a successful complete scan may still return `next_offset`. When no result
+`complete` is true only when the scan completed and no further result page remains.
+A paginated result has `complete=false` and `next_offset`; an interrupted scan also
+has `complete=false` with diagnostic warnings. When no result
 was observed, `searched_paths` contains absolute resolved roots with forward slashes
 and `patterns` contains the actual interpreted patterns, including literal quotes.
 When investigating false negatives, check the effective cwd, literal quote or
@@ -93,7 +95,10 @@ escape characters in patterns, and subsequent narrowed searches before attributi
 the outcome to the native engine.
 
 `limit` defaults to 100 (maximum 10,000); `offset` defaults to zero (maximum
-1,000,000). Logical matches or path/count rows define pages; context does not
+1,000,000). The equivalent `--limit`/`--offset` args options are accepted too;
+duplicate field/flag values must agree, and option-value or post-`--` payloads
+retain their literal meaning. These page controls never reach the native engine.
+Logical matches or path/count rows define pages; context does not
 consume match slots. `next_offset` and a continuation instruction appear when
 another result was observed. Continuation repeats a live query; filesystem edits
 can change page boundaries. Long lines contain marked excerpts around the match;
@@ -142,10 +147,13 @@ literal-payload, conflict, and empty-scope regressions in `test_search_files_rec
 `tests/scripts/test_probe_search_files.py`, plus runtime, scanner, Chat, packaging,
 and Tool row integration tests. Tests execute the private native engine.
 
-`scripts/probe_provider_tool_call.py --scenario search_files` exposes production
-definitions to a fresh Model and dispatches its calls against disposable fixtures,
-checking independently prescribed results. `--search-case <id>` selects one case,
-and comma-separated ids select a subset. The workflow separates natural first-use
-requests from exact-call conformance, including options, repairs, and rejection.
+`scripts/probe_provider_tool_call.py --scenario tool_first_use --first-use-tool search_files`
+evaluates natural user tasks with production definitions/prompts, competing Tools,
+real disposable files and dispatch through the final answer. It checks discovery,
+matching, counts, completeness, working-directory scope and appropriate read/shell
+choices. `--repetitions` repeats fresh trials; `--first-use-report` retains every
+attempt and response. `--scenario search_files` remains guided single-Tool
+conformance, including options, repairs and rejection; it cannot establish Tool
+choice or independent first-use reliability. Its `--search-case` selects case ids.
 The old shared walker in `core/tools/search.py` remains for Chat file mentions;
 its UI discovery contract is separate from search_files.
