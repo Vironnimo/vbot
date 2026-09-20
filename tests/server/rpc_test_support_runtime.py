@@ -356,6 +356,9 @@ class StubRuntime:
             for connection in provider.connections
         )
 
+    def resolve_environment_credential(self, key: str) -> str:
+        return self._credential_value(key)
+
     def _credential_value(self, key: str) -> str:
         if key in os.environ:
             return os.environ[key]

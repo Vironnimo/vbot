@@ -169,6 +169,37 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                 "backend": "sqlite_fts",
                 "available_backends": ["hybrid", "sqlite_fts", "vector"],
             },
+            "web_fetch": {
+                "provider": "direct",
+                "mode": "fallback",
+                "available_providers": ["direct", "firecrawl", "tavily", "exa", "parallel"],
+                "services": [
+                    {
+                        "id": "firecrawl",
+                        "api_key_env": "FIRECRAWL_API_KEY",
+                        "configured": False,
+                        "pricing_url": "https://www.firecrawl.dev/pricing",
+                    },
+                    {
+                        "id": "tavily",
+                        "api_key_env": "TAVILY_API_KEY",
+                        "configured": False,
+                        "pricing_url": "https://docs.tavily.com/documentation/api-credits",
+                    },
+                    {
+                        "id": "exa",
+                        "api_key_env": "EXA_API_KEY",
+                        "configured": False,
+                        "pricing_url": "https://exa.ai/pricing",
+                    },
+                    {
+                        "id": "parallel",
+                        "api_key_env": "PARALLEL_API_KEY",
+                        "configured": False,
+                        "pricing_url": "https://docs.parallel.ai/getting-started/pricing",
+                    },
+                ],
+            },
             "web_search": {
                 "provider": "brave",
                 "available_providers": [

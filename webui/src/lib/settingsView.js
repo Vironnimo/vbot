@@ -57,6 +57,8 @@ export {
   buildRecallSettingsPayload,
   buildRecallBackendOptions,
   getWebSearchSettings,
+  getWebFetchSettings,
+  buildWebFetchSettingsPayload,
   buildWebSearchSettingsPayload,
   buildWebSearchProviderOptions,
 } from './settingsView/retrieval.js';

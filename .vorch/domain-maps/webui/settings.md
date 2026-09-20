@@ -22,6 +22,10 @@ Cross-cutting value coercion for JSON-derived data lives in `webui/src/lib/value
 
 `SettingsMcpPanel.svelte` keeps MCP configuration and inspector composition; its uniquely named presentation rules live in adjacent `mcp.css`.
 
+## Web Fetch settings
+
+`SettingsWebFetchPanel.svelte` is a Tools & Media feature next to Web Search. It uses shared autosave and preserves newer drafts during saves. The backend advertises extraction services; the panel edits only `web_fetch.provider` and `web_fetch.mode`. Direct fetching is the default. Opting into a service reveals fallback/preferred routing, the URL-sharing and billing explanation, credential presence/setup, and the official pricing link. Credential values never enter this form. Pure payload helpers live in `settingsView/retrieval.js`; coverage is in `SettingsWebFetchPanel.test.js`.
+
 ## Providers and models
 
 - Specialized Model options render directly below the selected target without a per-target disclosure. Local speech setup and the visibly labeled TTS preview follow those fields. `SettingsSpecializedModelsPanel.test.js` covers initial Qwen/Chatterbox visibility, field order, edits and target changes; `LocalSpeechSupport.test.js` covers the preview label and generation lifecycle.
