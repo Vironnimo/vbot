@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from tzlocal import get_localzone_name
 
+from core.fetch_config import parse_web_fetch_settings
 from core.model_tasks import SUPPORTED_TASK_TYPES, TASK_TEXT_EMBEDDING
 from core.model_tasks.constants import (
     SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS,
@@ -91,6 +92,7 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "model_tasks",
         "providers",
         "web_search",
+        "web_fetch",
         "extensions",
         "reflection",
         "local_models",
@@ -189,6 +191,12 @@ def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
 
     if "providers" in params:
         parsed_update["providers"] = _parse_providers_update(params["providers"])
+
+    if "web_fetch" in params:
+        try:
+            parsed_update["web_fetch"] = parse_web_fetch_settings(params["web_fetch"], partial=True)
+        except ValueError as error:
+            raise SettingsValidationError(str(error)) from error
 
     if "web_search" in params:
         parsed_update["web_search"] = _parse_web_search_update(params["web_search"])

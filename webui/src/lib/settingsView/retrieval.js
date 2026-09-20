@@ -115,6 +115,18 @@ export function getWebSearchSettings(settings) {
   return normalizeWebSearchSettings(settings);
 }
 
+export function getWebFetchSettings(settings) {
+  const value = settings?.web_fetch ?? {};
+  return {
+    provider: typeof value.provider === 'string' ? value.provider : 'direct',
+    mode: value.mode === 'prefer' ? 'prefer' : 'fallback',
+  };
+}
+
+export function buildWebFetchSettingsPayload(value) {
+  return { web_fetch: getWebFetchSettings({ web_fetch: value }) };
+}
+
 export function buildWebSearchSettingsPayload(formValues) {
   const normalized = normalizeWebSearchSettings({ web_search: formValues });
 

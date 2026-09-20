@@ -43,7 +43,8 @@ def test_make_session_requests_browser_impersonation(monkeypatch: pytest.MonkeyP
     session = web_fetch_module._make_session()
 
     assert isinstance(session, _StreamingSession)
-    constructor.assert_called_once_with(impersonate=web_fetch_module._IMPERSONATE_TARGET)
+    assert constructor.call_args.kwargs["impersonate"] == web_fetch_module._IMPERSONATE_TARGET
+    assert "text/markdown" in constructor.call_args.kwargs["headers"]["Accept"]
 
 
 @pytest.mark.asyncio
@@ -119,17 +120,12 @@ def test_register_web_fetch_tool_schema() -> None:
 
     parameters = definition["parameters"]
     assert parameters["type"] == "object"
-    assert parameters["required"] == ["url"]
+    assert not parameters.get("required")
     assert "additionalProperties" not in parameters
-    assert set(parameters["properties"]) == {"url", "output"}
-    output = parameters["properties"]["output"]
-    assert output["type"] == "string"
-    assert output["enum"] == ["markdown", "text", "raw"]
-    assert isinstance(output["description"], str)
-    assert output["description"]
+    assert set(parameters["properties"]) == {"url", "ref", "find"}
 
 
-def test_web_fetch_openai_wire_preserves_optional_output_and_disables_strict_mode() -> None:
+def test_web_fetch_openai_wire_exposes_reading_actions_without_backend_controls() -> None:
     [definition] = render_tool_definitions(
         [
             {
@@ -142,10 +138,10 @@ def test_web_fetch_openai_wire_preserves_optional_output_and_disables_strict_mod
     )
 
     parameters = definition["parameters"]
-    assert parameters["required"] == ["url"]
+    assert not parameters.get("required")
     assert definition["strict"] is False
     assert "additionalProperties" not in parameters
-    assert parameters["properties"]["output"]["enum"] == ["markdown", "text", "raw"]
+    assert set(parameters["properties"]) == {"url", "ref", "find"}
 
 
 @pytest.mark.asyncio

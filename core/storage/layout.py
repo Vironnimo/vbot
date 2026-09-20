@@ -21,6 +21,7 @@ DATA_DIRECTORY_RELATIVE_PATHS = (
     Path("artifacts/temp/bash"),
     Path("artifacts/temp/subagents"),
     Path("artifacts/temp/terminals"),
+    Path("artifacts/temp/web_fetch"),
     Path("statistics"),
     Path("statistics/provider-usage"),
     Path("agents"),

@@ -28,6 +28,7 @@ from core.settings.normalizers import (
     normalize_skill_directories,
     normalize_speech_settings,
     normalize_subagent_integer,
+    normalize_web_fetch_settings,
     normalize_web_search_settings,
     validate_supported_agent_default_fields,
 )
@@ -290,6 +291,12 @@ def apply_server_settings(
         "keep_awake": settings.get("keep_awake") is True,
         "timezone": effective_timezone_name(settings),
     }
+
+
+def apply_web_fetch_settings(settings: dict[str, Any], value: Mapping[str, Any]) -> dict[str, Any]:
+    current = normalize_web_fetch_settings(settings.get("web_fetch"))
+    settings["web_fetch"] = normalize_web_fetch_settings({**current, **value})
+    return dict(settings["web_fetch"])
 
 
 def apply_web_search_settings(

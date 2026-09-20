@@ -1,416 +1,240 @@
-"""Readable HTML extraction and Markdown rendering."""
+"""Conservative HTML cleanup and readable, structure-preserving extraction."""
 
 from __future__ import annotations
 
 import re
-from urllib.parse import urljoin
+from typing import Any
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Comment, Tag
-from bs4.element import NavigableString, PageElement
+from markdownify import MarkdownConverter
 
-_STRIP_TAGS: frozenset[str] = frozenset(
-    {
-        "script",
-        "style",
-        "noscript",
-        "svg",
-        "iframe",
-        "object",
-        "embed",
-        "canvas",
-        "map",
-        "source",
-        "template",
-    }
-)
-
-
-_JUNK_PATTERNS: re.Pattern[str] = re.compile(
-    r"cookie[-_]?(?:bar|banner|consent|notice|popup|overlay)"
-    r"|gdpr|consent[-_]?(?:bar|banner|modal)"
-    r"|ad[-_]?(?:banner|slot|wrapper|container|unit)"
-    r"|popup[-_]?overlay|modal[-_]?backdrop"
-    r"|newsletter[-_]?(?:signup|popup|modal)",
+_NOISE = re.compile(
+    r"^(?:cookie[-_]?(?:bar|banner|consent|notice|popup|overlay)"
+    r"|consent[-_]?(?:bar|banner|modal)|ad[-_]?(?:banner|slot|wrapper|container|unit)"
+    r"|popup[-_]?overlay|modal[-_]?backdrop|newsletter[-_]?(?:signup|popup|modal))$",
     re.IGNORECASE,
 )
-
-
-_MULTI_SPACE: re.Pattern[str] = re.compile(r"[ \t]+")
-
-
-_MULTI_NEWLINE: re.Pattern[str] = re.compile(r"\n{3,}")
-
-
-_BLOCK_NAMES: frozenset[str] = frozenset(
-    {
-        "p",
-        "div",
-        "section",
-        "blockquote",
-        "figcaption",
-        "dt",
-        "dd",
-        "header",
-        "footer",
-        "nav",
-        "aside",
-        "main",
-        "article",
-        "figure",
-    }
+_HIDDEN = re.compile(
+    ("(?:^|;)\\s*(?:display\\s*:\\s*none|visibility\\s*:\\s*hidden)\\s*(?:!important\\s*)?(?:;|$)"),
+    re.I,
 )
+_STRIP = {"script", "style", "template", "head", "object", "embed"}
+_MAX_HTML_CHARS = 4_000_000
+_MAX_NODES = 100_000
+_MAX_DEPTH = 200
 
 
-_HEADING_NAMES: frozenset[str] = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
+def _attr(node: Tag, name: str) -> str:
+    value = node.get(name, "")
+    return " ".join(str(item) for item in value) if isinstance(value, list) else str(value or "")
 
 
-_CHILD_BLOCK_NAMES: frozenset[str] = (
-    _BLOCK_NAMES | _HEADING_NAMES | frozenset({"ul", "ol", "table", "pre"})
-)
-
-
-_SELF_RENDERED_TAGS: frozenset[str] = _HEADING_NAMES | frozenset({"a", "img", "pre", "tr", "li"})
-
-
-# Link targets that must never surface as Markdown links: fragment-only and
-# javascript: URIs. URL schemes are case-insensitive, so the prefix check is
-# lower-cased — a mixed-case "JaVaScRiPt:" would otherwise slip through.
-_SKIP_LINK_PREFIXES: tuple[str, ...] = ("#", "javascript:")
-
-
-def _attr_to_text(value: object) -> str:
-    if value is None:
+def _safe_url(value: str, base: str) -> str:
+    value = value.strip()
+    if not value or value.startswith("#"):
         return ""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, (list, tuple, set)):
-        return " ".join(str(part) for part in value)
-    return str(value)
+    absolute = urljoin(base, value)
+    if urlparse(absolute).scheme.lower() not in {"https", "http", "mailto", "tel"}:
+        return ""
+    return absolute
 
 
-def _is_live(node: object) -> bool:
-    """Return True if a tag has not been decomposed or detached."""
-    return isinstance(node, Tag) and node.attrs is not None
+class _Converter(MarkdownConverter):
+    """Keep code fences safe and spanning table cells unambiguous."""
+
+    def __init__(self, *, include_links: bool = True, **options: Any) -> None:
+        super().__init__(**options)
+        self.include_links = include_links
+
+    def convert_pre(self, el, text, parent_tags):
+        code = text.strip("\n")
+        if not code:
+            return ""
+        fence = "`" * max(3, max((len(m[0]) + 1 for m in re.finditer(r"`+", code)), default=3))
+        language = ""
+        for node in (el, el.find("code")):
+            if isinstance(node, Tag):
+                match = re.search(r"(?:language|lang)-([\w+-]+)", _attr(node, "class"))
+                if match:
+                    language = match[1]
+                    break
+        return f"\n\n{fence}{language}\n{code}\n{fence}\n\n"
+
+    def convert_td(self, el, text, parent_tags):
+        spans = [
+            f"{key}={el[key]}" for key in ("rowspan", "colspan") if _attr(el, key) not in {"", "1"}
+        ]
+        label = f" [{', '.join(spans)}]" if spans else ""
+        return " " + text.strip().replace("\n", " / ").replace("|", r"\|") + label + " |"
+
+    convert_th = convert_td
+
+    def convert_br(self, el, text, parent_tags):
+        if "pre" in parent_tags:
+            return "\n" + text
+        return super().convert_br(el, text, parent_tags)
+
+    def convert_img(self, el, text, parent_tags):
+        if not self.include_links:
+            return _attr(el, "alt")
+        return super().convert_img(el, text, parent_tags)
 
 
-def _has_junk_attr(node: object) -> bool:
-    """Return True if a tag class/id matches known junk patterns."""
-    if not isinstance(node, Tag):
-        return False
+def _metadata(soup: BeautifulSoup) -> dict[str, str]:
+    result: dict[str, str] = {}
+    title = soup.select_one("head > title") or soup.find("title")
+    if isinstance(title, Tag) and not title.find_parent("svg"):
+        result["title"] = title.get_text(" ", strip=True)[:500]
+    for key, selectors in {
+        "title": ['meta[property="og:title"]'],
+        "description": ['meta[name="description"]', 'meta[property="og:description"]'],
+        "published": ['meta[property="article:published_time"]'],
+        "author": ['meta[name="author"]'],
+    }.items():
+        for selector in selectors:
+            tag = soup.select_one(selector)
+            if isinstance(tag, Tag) and key not in result:
+                value = _attr(tag, "content").strip()
+                if value:
+                    result[key] = value[:1000]
+    return result
 
-    for attr in ("class", "id"):
-        text = _attr_to_text(node.get(attr)).strip()
-        if not text:
+
+def _clean(soup: BeautifulSoup, base: str) -> None:
+    # Token boundaries matter: thread/download containers and articles about
+    # GDPR are content, not ad containers or consent dialogs.
+    for node in list(soup.find_all(True)):
+        if node.attrs is None:
             continue
-        if _JUNK_PATTERNS.search(text):
-            return True
-    return False
-
-
-def _strip_noise(root: BeautifulSoup | Tag) -> None:
-    """Remove non-text elements from the soup tree in-place."""
-    for comment in list(root.find_all(string=lambda t: isinstance(t, Comment))):
+        tokens = (_attr(node, "id") + " " + _attr(node, "class")).split()
+        hidden = (
+            node.has_attr("hidden")
+            or _attr(node, "aria-hidden").lower() == "true"
+            or _HIDDEN.search(_attr(node, "style"))
+        )
+        if node.name in _STRIP or hidden or any(_NOISE.fullmatch(token) for token in tokens):
+            node.decompose()
+            continue
+        if node.name in {"canvas", "svg", "iframe"}:
+            label = _attr(node, "aria-label") or _attr(node, "title")
+            if not label:
+                title = node.find("title")
+                label = title.get_text(" ", strip=True) if isinstance(title, Tag) else ""
+            if not label:
+                label = node.get_text(" ", strip=True)[:1000]
+            href = _safe_url(_attr(node, "src"), base) if node.name == "iframe" else ""
+            node.replace_with(
+                f" [Embedded {node.name}: {label or 'visual content'}"
+                f"{': ' + href if href else ''}] "
+            )
+        elif node.name == "img":
+            src = _attr(node, "src")
+            if not src or src.lower().startswith("data:"):
+                src = _attr(node, "data-src") or _attr(node, "data-lazy-src") or src
+            if not src:
+                src = (
+                    (_attr(node, "srcset") or _attr(node, "data-srcset"))
+                    .split(",")[0]
+                    .strip()
+                    .split(" ")[0]
+                )
+            node["src"] = _safe_url(src, base)
+            node["alt"] = (_attr(node, "alt") or _attr(node, "title") or "Image")[:500]
+            if not node["src"]:
+                node.replace_with(f" [Image: {node['alt']}; embedded image omitted] ")
+        elif node.name == "a":
+            target = _safe_url(_attr(node, "href"), base)
+            if target:
+                node["href"] = target
+                node.attrs.pop("title", None)
+            else:
+                node.attrs.pop("href", None)
+    for comment in list(soup.find_all(string=lambda value: isinstance(value, Comment))):
         comment.extract()
 
-    for tag_name in _STRIP_TAGS:
-        for tag in list(root.find_all(tag_name)):
-            if _is_live(tag):
-                tag.decompose()
 
-    for tag in list(root.select("[hidden]")):
-        if _is_live(tag):
-            tag.decompose()
-    for tag in list(root.select('[aria-hidden="true"]')):
-        if _is_live(tag):
-            tag.decompose()
+def extract_views(
+    html: str, url: str, include_links: bool = True
+) -> tuple[str, str, dict[str, str], list[str]]:
+    """Return main content, complete cleaned page, metadata, and limitations.
 
-    junk = [node for node in root.find_all(True) if _is_live(node) and _has_junk_attr(node)]
-    for tag in junk:
-        if _is_live(tag):
-            tag.decompose()
-
-
-def _heading_prefix(tag_name: str) -> str:
-    """Map h1-h6 to markdown-style heading prefixes."""
-    if tag_name and tag_name[0] == "h" and len(tag_name) == 2 and tag_name[1].isdigit():
-        level = int(tag_name[1])
-        if 1 <= level <= 6:
-            return "#" * level + " "
-    return ""
-
-
-def _render_inline(node: Tag, base_url: str, include_links: bool) -> str:
-    """Render inline content preserving links, code, images, and breaks."""
-    parts: list[str] = []
-
-    for child in node.children:
-        if isinstance(child, NavigableString):
-            text = str(child).replace("\r", "").replace("\n", " ")
-            text = _MULTI_SPACE.sub(" ", text)
-            parts.append(text)
-            continue
-
-        if not isinstance(child, Tag):
-            continue
-
-        child_name = child.name
-
-        if child_name == "a":
-            inner = _render_inline(child, base_url, include_links).strip()
-            if not include_links:
-                if inner:
-                    parts.append(inner)
-                continue
-            href = _attr_to_text(child.get("href", "")).strip()
-            if href and not href.lower().startswith(_SKIP_LINK_PREFIXES):
-                absolute = urljoin(base_url, href)
-                if inner and inner != absolute:
-                    parts.append(f"[{inner}]({absolute})")
-                elif inner:
-                    parts.append(inner)
-                else:
-                    parts.append(absolute)
-            elif inner:
-                parts.append(inner)
-            continue
-
-        if child_name == "code":
-            if child.parent and child.parent.name == "pre":
-                continue
-            inner = child.get_text().strip()
-            if inner:
-                parts.append(f"`{inner}`")
-            continue
-
-        if child_name == "img":
-            alt = _attr_to_text(child.get("alt", "")).strip()
-            src = _attr_to_text(child.get("src", "")).strip()
-            if alt and (src or not include_links):
-                if include_links and src:
-                    parts.append(f"![{alt}]({urljoin(base_url, src)})")
-                else:
-                    parts.append(alt)
-            continue
-
-        if child_name == "br":
-            parts.append("\n")
-            continue
-
-        if child_name in _STRIP_TAGS:
-            continue
-
-        parts.append(_render_inline(child, base_url, include_links))
-
-    result = "".join(parts)
-    result = _MULTI_SPACE.sub(" ", result)
-    return result.strip()
-
-
-def _render_inline_oneline(node: Tag, base_url: str, include_links: bool) -> str:
-    """Render inline content on one line by collapsing line breaks."""
-    text = _render_inline(node, base_url, include_links).replace("\n", " ")
-    return _MULTI_SPACE.sub(" ", text).strip()
-
-
-def _render_tag(tag: Tag, base_url: str, include_links: bool) -> str:
-    """Render a single tag to plain text with lightweight markdown hints."""
-    name = tag.name
-
-    if name in _HEADING_NAMES:
-        text = _render_inline_oneline(tag, base_url, include_links)
-        return f"\n\n{_heading_prefix(name)}{text}\n" if text else ""
-
-    if name == "a":
-        inner = _render_inline(tag, base_url, include_links)
-        if not include_links:
-            return inner or ""
-        href = _attr_to_text(tag.get("href", "")).strip()
-        if href and not href.lower().startswith(_SKIP_LINK_PREFIXES):
-            absolute = urljoin(base_url, href)
-            if inner and inner != absolute:
-                return f"[{inner}]({absolute})"
-            if inner:
-                return inner
-            return absolute
-        return inner or ""
-
-    if name == "img":
-        alt = _attr_to_text(tag.get("alt", "")).strip()
-        src = _attr_to_text(tag.get("src", "")).strip()
-        if alt and include_links and src:
-            return f"![{alt}]({urljoin(base_url, src)})"
-        if alt:
-            return alt
-        return ""
-
-    if name == "pre":
-        code = tag.get_text()
-        return f"\n\n```\n{code.strip()}\n```\n" if code.strip() else ""
-
-    if name == "code":
-        if tag.parent and tag.parent.name == "pre":
-            return ""
-        text = tag.get_text()
-        return f"`{text.strip()}`" if text.strip() else ""
-
-    if name == "li":
-        text = _render_inline_oneline(tag, base_url, include_links)
-        return f"\n- {text}" if text else ""
-
-    if name == "tr":
-        cells = tag.find_all(["td", "th"], recursive=False)
-        rendered = [
-            _render_inline_oneline(cell, base_url, include_links)
-            for cell in cells
-            if isinstance(cell, Tag)
-        ]
-        if any(rendered_cell for rendered_cell in rendered):
-            return f"\n| {' | '.join(rendered)} |"
-        return ""
-
-    if name in _BLOCK_NAMES:
-        text = _render_inline(tag, base_url, include_links)
-        if text:
-            prefix = "> " if name == "blockquote" else ""
-            return f"\n\n{prefix}{text}"
-        return ""
-
-    if name == "hr":
-        return "\n\n---\n"
-    if name == "br":
-        return "\n"
-
-    return ""
-
-
-def _tree_to_text(root: BeautifulSoup | Tag, base_url: str, include_links: bool) -> str:
-    """Walk the DOM tree and produce clean text."""
-    parts: list[str] = []
-
-    def _walk(node: PageElement | BeautifulSoup) -> None:
-        if isinstance(node, NavigableString):
-            text = _MULTI_SPACE.sub(" ", str(node))
-            if text.strip():
-                parts.append(text)
-            return
-
-        if isinstance(node, BeautifulSoup):
-            for child in node.children:
-                if isinstance(child, (PageElement, BeautifulSoup)):
-                    _walk(child)
-            return
-
-        if not isinstance(node, Tag):
-            return
-
-        name = node.name
-
-        if name in _SELF_RENDERED_TAGS:
-            rendered = _render_tag(node, base_url, include_links)
-            if rendered:
-                parts.append(rendered)
-            return
-
-        if name in _BLOCK_NAMES:
-            has_child_blocks = any(
-                isinstance(child, Tag) and child.name in _CHILD_BLOCK_NAMES
-                for child in node.children
-            )
-            if not has_child_blocks:
-                rendered = _render_tag(node, base_url, include_links)
-                if rendered:
-                    parts.append(rendered)
-                return
-            for child in node.children:
-                _walk(child)
-            return
-
-        if name == "code":
-            rendered = _render_tag(node, base_url, include_links)
-            if rendered:
-                parts.append(rendered)
-            return
-
-        if name == "table":
-            for row in node.find_all("tr"):
-                if not isinstance(row, Tag):
-                    continue
-                if row.find_parent("table") is not node:
-                    continue
-                rendered = _render_tag(row, base_url, include_links)
-                if rendered:
-                    parts.append(rendered)
-            parts.append("\n")
-            return
-
-        if name in ("ul", "ol"):
-            for list_item in node.find_all("li", recursive=False):
-                if not isinstance(list_item, Tag):
-                    continue
-                rendered = _render_tag(list_item, base_url, include_links)
-                if rendered:
-                    parts.append(rendered)
-            parts.append("\n")
-            return
-
-        if name in ("hr", "br"):
-            rendered = _render_tag(node, base_url, include_links)
-            if rendered:
-                parts.append(rendered)
-            return
-
-        for child in node.children:
-            _walk(child)
-
-    _walk(root)
-    return "".join(parts)
-
-
-def _extract_metadata(soup: BeautifulSoup) -> dict[str, str]:
-    """Extract title and description metadata from the document."""
-    metadata: dict[str, str] = {}
-
-    title_tag = soup.find("title")
-    if isinstance(title_tag, Tag):
-        title = title_tag.get_text(strip=True)
-        if title:
-            metadata["title"] = title
-
-    if "title" not in metadata:
-        og_title_tag = soup.find("meta", attrs={"property": "og:title"})
-        if isinstance(og_title_tag, Tag):
-            og_title = _attr_to_text(og_title_tag.get("content", "")).strip()
-            if og_title:
-                metadata["title"] = og_title
-
-    description = ""
-    description_tag = soup.find("meta", attrs={"name": "description"})
-    if isinstance(description_tag, Tag):
-        description = _attr_to_text(description_tag.get("content", "")).strip()
-
-    if not description:
-        og_description_tag = soup.find("meta", attrs={"property": "og:description"})
-        if isinstance(og_description_tag, Tag):
-            og_description = _attr_to_text(og_description_tag.get("content", "")).strip()
-            if og_description:
-                description = og_description
-
-    if description:
-        metadata["description"] = description
-
-    return metadata
+    Semantic main/article selection reduces navigation without making omitted
+    sections inaccessible. No article scoring or LLM summary can discard facts.
+    """
+    warnings: list[str] = []
+    if len(html) > _MAX_HTML_CHARS:
+        warnings.append(
+            "HTML exceeded the 4,000,000-character extraction limit; saved content is partial."
+        )
+        html = html[:_MAX_HTML_CHARS]
+    soup = BeautifulSoup(html.lstrip("\ufeff \t\r\n"), "html.parser")
+    metadata = _metadata(soup)
+    base_tag = soup.find("base", href=True)
+    base = _safe_url(_attr(base_tag, "href"), url) if isinstance(base_tag, Tag) else url
+    base = base or url
+    # Bound recursive conversion independently of the download limit.
+    stack: list[tuple[Tag, int]] = [(soup, 0)]
+    count = 0
+    excessive = False
+    while stack:
+        node, depth = stack.pop()
+        count += 1
+        if depth > _MAX_DEPTH or count > _MAX_NODES:
+            excessive = True
+            break
+        stack.extend((child, depth + 1) for child in node.children if isinstance(child, Tag))
+    _clean(soup, base)
+    body = soup.body or soup
+    if excessive:
+        text = body.get_text("\n", strip=True)
+        return (
+            text,
+            text,
+            metadata,
+            warnings + [("Complex HTML: text retained, layout and link targets unavailable.")],
+        )
+    converter = _Converter(
+        heading_style="ATX",
+        bullets="-",
+        strip=[] if include_links else ["a"],
+        keep_inline_images_in=["td", "th", "h1", "h2"],
+        escape_underscores=False,
+        include_links=include_links,
+    )
+    page = str(converter.convert_soup(body)).strip()
+    candidates = body.select("main, [role=main]")
+    if not candidates:
+        candidates = body.select("article")
+    # Keep every top-level candidate (e.g. a discussion with multiple posts).
+    candidate_ids = {id(node) for node in candidates}
+    selected = [
+        node
+        for node in candidates
+        if not any(id(parent) in candidate_ids for parent in node.parents)
+    ]
+    main = "\n\n".join(str(converter.convert_soup(node)).strip() for node in selected).strip()
+    if not main:
+        # Keep complementary content in the already-rendered page view.
+        selectors = (
+            "nav, header, footer, aside, [role=navigation], [role=banner], [role=contentinfo]"
+        )
+        for node in list(body.select(selectors)):
+            if node.attrs is not None:
+                node.decompose()
+        main = str(converter.convert_soup(body)).strip() or page
+    if "[Embedded " in page:
+        warnings.append(
+            "Embedded or interactive content is represented by labels/links, not rendered."
+        )
+    if main != page:
+        warnings.append(
+            "Main content shown; find also searches the other saved sections of the page."
+        )
+    return main, page, metadata, warnings
 
 
 def extract_content(html: str, url: str, include_links: bool = True) -> tuple[str, dict[str, str]]:
-    """Convert HTML to clean text while preserving textual information."""
-    soup = BeautifulSoup(html, "html.parser")
-    metadata = _extract_metadata(soup)
-
-    body_candidate = soup.find("body")
-    body: BeautifulSoup | Tag = body_candidate if isinstance(body_candidate, Tag) else soup
-    _strip_noise(body)
-
-    text = _tree_to_text(body, url, include_links)
-    text = _MULTI_NEWLINE.sub("\n\n", text).strip()
-
-    return text, metadata
+    """Compatibility entry point returning the complete cleaned page."""
+    _, page, metadata, _ = extract_views(html, url, include_links)
+    return page, metadata

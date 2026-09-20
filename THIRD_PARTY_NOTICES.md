@@ -67,6 +67,10 @@ The Desktop wakeword pipeline uses [python-soxr](https://github.com/dofuuz/pytho
 The `terminal` Tool uses [pyte](https://github.com/selectel/pyte), distributed under the GNU Lesser General Public License v3, as an in-memory VT terminal emulator. It uses [pywinpty](https://github.com/andfoy/pywinpty), distributed under the MIT License, for ConPTY access on Windows and [ptyprocess](https://github.com/pexpect/ptyprocess), distributed under the ISC License, for PTY process control on POSIX systems. The WebUI Terminals surface uses [xterm.js](https://github.com/xtermjs/xterm.js), including `@xterm/xterm` and `@xterm/addon-fit`, distributed under the MIT License, for browser-side VT rendering and responsive fitting. These libraries remain separately installed dependencies; their source distributions and license texts are available from the linked upstream projects and installed package metadata.
 
 
+## Web page extraction
+
+The `web_fetch` Tool uses [markdownify](https://github.com/matthewwithanm/python-markdownify), distributed under the MIT License, to preserve HTML structure in readable Markdown. It remains a separately installed dependency; its source distribution and license text are available from the upstream project and installed package metadata.
+
 ## MCP client
 
 The bundled MCP Extension uses the official [Model Context Protocol Python SDK](https://github.com/modelcontextprotocol/python-sdk), distributed under the MIT License. It remains a separately installed dependency; its source distribution and license text are available from the upstream project and installed package metadata.

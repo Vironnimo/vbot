@@ -57,7 +57,7 @@ async def test_web_fetch_handler_reddit_challenge_page_signals_not_retryable(
 
     error = assert_failure_envelope(result, "request_error")
     assert error["retryable"] is False
-    assert "web_search" in error["message"]
+    assert "another source" in error["message"]
 
 
 @pytest.mark.asyncio
@@ -100,7 +100,7 @@ async def test_web_fetch_handler_reddit_login_wall_signals_not_retryable(
 
     error = assert_failure_envelope(result, "request_error")
     assert error["retryable"] is False
-    assert "web_search" in error["message"]
+    assert "another source" in error["message"]
 
 
 @pytest.mark.asyncio

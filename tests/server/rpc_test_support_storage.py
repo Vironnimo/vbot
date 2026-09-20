@@ -13,6 +13,7 @@ from core.settings.normalizers import (
     normalize_agent_defaults,
     normalize_extensions_settings,
     normalize_speech_settings,
+    normalize_web_fetch_settings,
 )
 from core.settings.settings import parse_openrouter_routing
 from core.storage import DataDirectoryLayout, StorageError
@@ -129,6 +130,9 @@ class StubStorage:
         if not isinstance(backend, str) or not backend.strip():
             return {"backend": "sqlite_fts"}
         return {"backend": backend.strip()}
+
+    def load_web_fetch_settings(self) -> JsonObject:
+        return normalize_web_fetch_settings(self._settings.get("web_fetch"))
 
     def load_web_search_settings(self) -> JsonObject:
         stored = self._settings.get("web_search")
@@ -350,6 +354,12 @@ class StubStorage:
                 )
         if "recall" in settings_update:
             updated_sections["recall"] = self._apply_recall_settings(settings_update["recall"])
+        if "web_fetch" in settings_update:
+            value = normalize_web_fetch_settings(
+                {**self.load_web_fetch_settings(), **settings_update["web_fetch"]}
+            )
+            self._settings["web_fetch"] = value
+            updated_sections["web_fetch"] = value
         if "web_search" in settings_update:
             updated_sections["web_search"] = self._apply_web_search_settings(
                 settings_update["web_search"]

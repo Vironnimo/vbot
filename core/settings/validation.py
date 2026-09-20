@@ -30,6 +30,7 @@ from core.config_validation import (
 from core.config_validation import (
     warn_unknown_keys as _warn_unknown_keys,
 )
+from core.fetch_config import parse_web_fetch_settings
 from core.model_tasks import SUPPORTED_TASK_TYPES
 from core.model_tasks.constants import (
     SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS,
@@ -90,6 +91,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "subagent_timeout_minutes",
         "timezone",
         "web_search",
+        "web_fetch",
     }
 )
 PORT_SETTING_KEYS = frozenset({"PORT", "SERVER_PORT", "port", "server_port"})
@@ -279,6 +281,11 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
     _validate_recall(diagnostics, data.get("recall"))
     _validate_extensions(diagnostics, data.get("extensions"))
     _validate_web_search(diagnostics, data.get("web_search"))
+    if "web_fetch" in data:
+        try:
+            parse_web_fetch_settings(data["web_fetch"])
+        except ValueError as error:
+            _error(diagnostics, "$.web_fetch", str(error))
     _validate_model_tasks(diagnostics, data.get("model_tasks"))
     _validate_debug(diagnostics, data.get("debug"))
     _validate_reflection(diagnostics, data.get("reflection"))

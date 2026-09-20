@@ -265,7 +265,13 @@ def bootstrap(runtime: Runtime) -> None:
         register_apply_patch_tool(runtime._tools, file_state=runtime._file_state)
         register_search_files_tool(runtime._tools)
         register_memory_tool(runtime._tools, runtime._memory_service)
-        register_web_fetch_tool(runtime._tools, attachment_store=runtime._attachment_store)
+        register_web_fetch_tool(
+            runtime._tools,
+            attachment_store=runtime._attachment_store,
+            temporary_files=runtime._storage.temporary_files,
+            credential_resolver=runtime.resolve_environment_credential,
+            settings_loader=runtime._storage.load_web_fetch_settings,
+        )
         register_web_search_tool(
             runtime._tools,
             runtime.resolve_environment_credential,
