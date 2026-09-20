@@ -216,6 +216,47 @@ def _add_skill_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     skill_subparsers = skill_parser.add_subparsers(dest="command", required=True)
     _add_command_parser(skill_subparsers, "list", SKILL_HELP["list"], example="skill list")
 
+    install = _add_command_parser(
+        skill_subparsers,
+        "install",
+        "Install a complete Skill from an archive, directory or URL",
+        example="skill install ./example.skill --scope agent:assistant",
+    )
+    install.add_argument(
+        "source",
+        help="Server-local directory/archive, download URL, GitHub, skills.sh or ClawHub link",
+    )
+    install.add_argument(
+        "--scope",
+        required=True,
+        metavar="<own|global|agent:id>",
+        help=(
+            "own selects this Run's Identity Agent; global or agent:<id> selects an explicit scope"
+        ),
+    )
+    install.add_argument(
+        "--path", help="Exact package directory within the source; use --dry-run to list choices"
+    )
+    install.add_argument(
+        "--ref",
+        help="GitHub branch, tag or commit; use the complete value for branches containing '/'",
+    )
+    install.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Inspect packages and destination conflicts without writing",
+    )
+    install.add_argument(
+        "--replace",
+        action="store_true",
+        help="Replace an existing package, including local edits; requires --yes",
+    )
+    install.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm complete package replacement when --replace is supplied",
+    )
+
     _add_command_parser(
         skill_subparsers, "inventory", SKILL_HELP["inventory"], example="skill inventory"
     )

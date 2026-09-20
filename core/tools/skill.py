@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from core.skills import SkillAuthoringError, normalize_skill_file_path
+from core.skills._packages import PackageError, excluded, package_path
 from core.skills.requirements import environment_requirement_names
 from core.skills.skill_validator import split_skill_document
 from core.skills.skills import (
@@ -74,10 +74,9 @@ _SKILL_NAME_PARAMETER: JsonObject = {
 _SKILL_FILE_PATH_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    "pattern": r"^(SKILL\.md|(?:scripts|references|assets)/.+)$",
     "description": (
-        "Path of a file inside the Skill package: a file under scripts, references, "
-        "or assets, or 'SKILL.md' itself. Omit to load the named Skill."
+        "Relative path of a UTF-8 file inside the Skill package, including 'SKILL.md'. "
+        "Omit to load the named Skill."
     ),
 }
 SKILL_TOOL_PARAMETERS: JsonObject = {
@@ -355,13 +354,17 @@ def _load_skill_content_with_env(
 def load_skill_file(skill_name: str, skill_file: Path, file_path: str) -> JsonObject:
     """Read one UTF-8 package file by skill-relative path."""
     try:
-        normalized = normalize_skill_file_path(file_path)
-    except SkillAuthoringError as error:
+        normalized = package_path(file_path.replace("\\", "/"))
+        if excluded(normalized):
+            raise PackageError("Internal or generated package files are not Skill resources.")
+    except PackageError as error:
         raise ValueError(f"Illegal file path for skill '{skill_name}': {file_path}") from error
     skill_directory = skill_file.resolve().parent
     candidate = skill_directory.joinpath(*PurePosixPath(normalized).parts).resolve()
     try:
-        candidate.relative_to(skill_directory)
+        resolved_relative = candidate.relative_to(skill_directory).as_posix()
+        if excluded(resolved_relative):
+            raise ValueError("Internal or generated package files are not Skill resources.")
     except ValueError as error:
         raise ValueError(f"Illegal file path for skill '{skill_name}': {file_path}") from error
     if not candidate.is_file():

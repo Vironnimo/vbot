@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,6 +13,7 @@ from core.runtime.runtime import Runtime
 from core.skills.skills import SKILL_ORIGIN_GLOBAL
 from core.tools.tools import ToolNotFoundError
 from core.utils.config import Config
+from server.rpc.skill_methods import method_handlers
 from tests.core.runtime.runtime_test_support import (
     _authorize_session_store,
 )
@@ -20,6 +22,51 @@ from tests.core.runtime.runtime_test_support import (
 )
 
 RELOADED_SKILL_NAME = "runtime-reloaded-skill"
+
+
+def test_install_private_global_and_replace_shared_skill_refresh_live_visibility(config, tmp_path):
+    runtime = Runtime(config)
+    runtime.start()
+    source = tmp_path / "incoming"
+    source.mkdir()
+    document = "---\nname: imported\ndescription: First description.\n---\nBody\n"
+    (source / "SKILL.md").write_text(document)
+    try:
+        runtime.agents.create("receiver", "Receiver", allowed_skills=["imported"])
+        runtime.agents.update("main", allowed_skills=[])
+        runtime.skills_for(None, "main")
+        runtime.skills_for(None, "receiver")
+        state = SimpleNamespace(runtime=runtime)
+        install = method_handlers()["skill.install"]
+        asyncio.run(install(state, {"source": str(source), "scope": "agent:main"}))
+        assert [item.name for item in runtime.skills_for(None, "main").filter_allowed([])] == [
+            "imported"
+        ]
+        assert "imported" not in {
+            item.name for item in runtime.skills_for(None, "receiver").list_all()
+        }
+        runtime.skill_policy.set_shared("main", "imported", shared=True, receivers=["receiver"])
+        runtime.invalidate_agent_skills(None)
+        assert (
+            runtime.skills_for(None, "receiver").get("imported").description == "First description."
+        )
+        (source / "SKILL.md").write_text(document.replace("First", "Updated"))
+        asyncio.run(install(state, {"source": str(source), "scope": "agent:main", "replace": True}))
+        assert (
+            runtime.skills_for(None, "receiver").get("imported").description
+            == "Updated description."
+        )
+        (source / "SKILL.md").write_text(document.replace("imported", "global-import"))
+        asyncio.run(install(state, {"source": str(source), "scope": "global"}))
+        assert runtime.skills_for(None, "main").get("global-import")
+        assert "global-import" not in {
+            item.name for item in runtime.skills_for(None, "main").filter_allowed([])
+        }
+        runtime.skill_policy.set_disabled("imported", disabled=True)
+        runtime.reload_skills()
+        assert "imported" not in {item.name for item in runtime.skills_for(None, "main").list_all()}
+    finally:
+        runtime.stop()
 
 
 def test_reload_skills_updates_system_prompt_skill_registry(config: Config, tmp_path: Path):
