@@ -880,6 +880,18 @@ Model sources and licenses: [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS)
 (Apache-2.0) and [Chatterbox](https://github.com/resemble-ai/chatterbox) (MIT).
 See [Third-party notices](THIRD_PARTY_NOTICES.md#local-speech-models).
 
+### Web page reading and extraction services
+
+The `web_fetch` Tool reads public pages, extracts document text, and shows image URLs to vision-capable Models. Long pages arrive as compact excerpts with saved references for further reading and searching. Those follow-up reads do not fetch again. References stay available to the same Agent in the same Session for 72 hours.
+
+Under **Settings → Tools & Media → Web Fetch**, choose **Direct (no service)** or opt into Firecrawl, Tavily, Exa, or Parallel. Direct fetching is the default and requires no extraction-service account. Optional services can improve results on blocked or JavaScript-heavy pages:
+
+- **Only when direct fetch fails** sends failed, blocked or unreadable pages to the selected service.
+- **Prefer this service** uses it first for page URLs and tries direct fetching if it fails.
+- Set the displayed API-key variable in the `.env` file in the vBot data directory. Firecrawl, Tavily and Exa share their keys with Web Search; Parallel uses `PARALLEL_API_KEY`. Key presence alone does not enable a service.
+
+The selected service receives requested URLs and may charge for extraction. Free allowances, paid rates and rendering capabilities vary; check [Firecrawl pricing](https://www.firecrawl.dev/pricing), [Tavily credits](https://docs.tavily.com/documentation/api-credits), [Exa pricing](https://exa.ai/pricing), or [Parallel pricing](https://docs.parallel.ai/getting-started/pricing). Saved-page reading and searching do not incur another service request. Pages requiring authentication or interactive challenges can still fail; the Tool reports missing content instead of claiming a complete extraction.
+
 ## Channels
 
 Telegram, Discord, Slack, Mattermost and WhatsApp Channels route inbound messages to one Identity Agent. Project Agents cannot own a Channel. Add bot credentials to the process environment or `<data-dir>/.env`, then configure the token variable name rather than the token itself:

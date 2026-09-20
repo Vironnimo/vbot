@@ -15,6 +15,7 @@
   import SettingsSessionTitlesPanel from './settings/SettingsSessionTitlesPanel.svelte';
   import SettingsSpecializedModelsPanel from './settings/SettingsSpecializedModelsPanel.svelte';
   import SettingsSubAgentsPanel from './settings/SettingsSubAgentsPanel.svelte';
+  import SettingsWebFetchPanel from './settings/SettingsWebFetchPanel.svelte';
   import SettingsWebSearchPanel from './settings/SettingsWebSearchPanel.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
@@ -125,6 +126,15 @@
             ),
         },
         {
+          id: 'web_fetch',
+          label: () => t('settings.webFetch.title', 'Web Fetch'),
+          subtitle: () =>
+            t(
+              'settings.webFetch.subtitle',
+              'Page reading and optional extraction services.',
+            ),
+        },
+        {
           id: 'web_search',
           label: () => t('settings.webSearch.title', 'Web Search'),
           subtitle: () =>
@@ -229,9 +239,13 @@
           'settings.categories.toolsDescription',
           'Set up speech, images, web search and delegation.',
         ),
-      sections: ['specialized_models', 'voice', 'web_search', 'subagents'].map(
-        (id) => catalog.get(id),
-      ),
+      sections: [
+        'specialized_models',
+        'voice',
+        'web_search',
+        'web_fetch',
+        'subagents',
+      ].map((id) => catalog.get(id)),
     },
     {
       id: 'connections',
@@ -488,6 +502,11 @@
           : t('settings.summary.historySearch', 'Session history search');
       case 'reflection':
         return onOff(settings?.reflection?.enabled !== false);
+      case 'web_fetch':
+        return settings?.web_fetch?.provider === 'direct' ||
+          !settings?.web_fetch?.provider
+          ? t('settings.webFetch.direct', 'Direct (no service)')
+          : settings.web_fetch.provider;
       case 'web_search':
         return (
           settings?.web_search?.provider ||
@@ -651,6 +670,13 @@
       {agents}
       {settings}
       wakewordAvailable={desktopCapabilities?.wakeword === true}
+      onCommit={commitSettings}
+      {onToast}
+      onError={(message) => reportSettingsError(message)}
+    />
+  {:else if panelId === 'web_fetch'}
+    <SettingsWebFetchPanel
+      {settings}
       onCommit={commitSettings}
       {onToast}
       onError={(message) => reportSettingsError(message)}

@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, cast
 
+from core.fetch_config import parse_web_fetch_settings
 from core.model_tasks import SUPPORTED_TASK_TYPES
 from core.model_tasks.constants import (
     DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS,
@@ -446,6 +447,13 @@ def _normalize_reflection_interval(key: str, value: Any) -> int:
     return value
 
 
+def normalize_web_fetch_settings(value: Any) -> dict[str, Any]:
+    try:
+        return parse_web_fetch_settings({} if value is None else value)
+    except ValueError as error:
+        raise StorageError(str(error)) from error
+
+
 def normalize_web_search_settings(web_search: Any) -> dict[str, Any]:
     """Return the normalized web search provider settings section."""
 
@@ -637,5 +645,6 @@ __all__ = [
     "normalize_subagent_integer",
     "normalize_transcription_audio_settings",
     "normalize_web_search_settings",
+    "normalize_web_fetch_settings",
     "validate_supported_agent_default_fields",
 ]

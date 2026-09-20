@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.fetch_config import WEB_FETCH_MODES, WEB_FETCH_PROVIDERS
 from core.model_tasks.constants import (
     DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS,
     SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS,
@@ -309,6 +310,20 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         "Model steps between automatic Skill reflections.",
         default=REFLECTION_SETTING_DEFAULTS["skill_model_step_interval"],
         minimum=1,
+    ),
+    _static(
+        "web_fetch.provider",
+        "string",
+        "Optional extraction service for web_fetch; direct uses no service.",
+        default="direct",
+        allowed_values=WEB_FETCH_PROVIDERS,
+    ),
+    _static(
+        "web_fetch.mode",
+        "string",
+        "Use the selected service on direct-fetch failures or prefer it for pages.",
+        default="fallback",
+        allowed_values=WEB_FETCH_MODES,
     ),
     _static(
         "web_search.provider",
