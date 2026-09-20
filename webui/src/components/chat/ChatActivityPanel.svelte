@@ -30,6 +30,10 @@
   } = $props();
 
   let open = $state(false);
+  let bashExpanded = $state(null);
+  let defaultBashOpen = $derived(
+    subagentTasks.length === 0 && reflectionTasks.length === 0,
+  );
   const cancellingTaskIds = new SvelteSet();
   let tasks = $derived(
     backgroundTasks(
@@ -43,8 +47,12 @@
   let activeTasks = $derived(
     tasks.filter((task) => task.dotStatus === 'running'),
   );
-  let finishedTasks = $derived(
-    tasks.filter((task) => task.dotStatus !== 'running'),
+  let subagentTasks = $derived(
+    tasks.filter((task) => task.kind === 'subagent'),
+  );
+  let bashTasks = $derived(tasks.filter((task) => task.kind === 'bash'));
+  let activeBashCount = $derived(
+    bashTasks.filter((task) => task.dotStatus === 'running').length,
   );
   let activeReflections = $derived(
     reflectionTasks.filter((row) => row.status === 'running'),
@@ -60,7 +68,9 @@
   let sessionStatsTooltip = $derived(changeStatsTooltip(sessionStats));
   let sessionStatsLabel = $derived(changeStatsLabel(sessionStats));
 
-  const panelId = 'chat-activity-panel';
+  const panelId = $props.id();
+  const runningLabel = (count) =>
+    t('chat.activity.runningCount', '{count} running', { count });
 
   const togglePanel = () => {
     open = !open;
@@ -72,6 +82,10 @@
 
   const handleKeydown = (event) => {
     if (open && event.key === 'Escape') {
+      const railElement = document.getElementById(`${panelId}-toggle`);
+      if (railElement?.parentElement?.contains(document.activeElement)) {
+        railElement.focus();
+      }
       closePanel();
     }
   };
@@ -227,20 +241,18 @@
     class:chat-activity__status--failed={task.dotStatus === 'failed'}
     class:chat-activity__status--cancelled={task.dotStatus === 'cancelled'}
     data-status={task.dotStatus}
+    use:tooltip={statusLabel(task.dotStatus)}
     aria-hidden="true"
   >
     {#if task.dotStatus === 'running'}
-      <svg viewBox="0 0 16 16" width="14" height="14">
-        <circle cx="8" cy="8" r="5" />
-        <path d="M8 3a5 5 0 0 1 5 5" />
-      </svg>
+      <span class="chat-activity__working-dot"></span>
     {:else if task.dotStatus === 'success'}
       <svg viewBox="0 0 16 16" width="14" height="14">
         <path d="m3.5 8.2 2.8 2.8 6.2-6.2" />
       </svg>
     {:else if task.dotStatus === 'cancelled'}
       <svg viewBox="0 0 16 16" width="14" height="14">
-        <path d="m4.5 4.5 7 7m0-7-7 7" />
+        <path d="M4 8h8" />
       </svg>
     {:else if task.dotStatus === 'failed'}
       <svg viewBox="0 0 16 16" width="14" height="14">
@@ -280,8 +292,7 @@
       class="chat-activity__task-row chat-activity__task-row--bash"
       aria-label={taskLabel(task)}
     >
-      <span class="chat-activity__bash-mark" aria-hidden="true">$</span>
-      <span class="chat-activity__task-name">
+      <span class="chat-activity__task-name" use:tooltip={task.command}>
         {task.command}
         {#if task.timeLabel}
           <span class="chat-activity__task-time">· {task.timeLabel}</span>
@@ -296,10 +307,22 @@
         variant="tertiary"
         class="chat-activity__task-link"
         ariaLabel={taskLabel(task)}
+        aria-describedby={task.preview
+          ? `${panelId}-${task.id}-preview`
+          : undefined}
+        tooltip={task.preview}
         disabled={!task.target}
         onClick={() => task.target && onNavigateToSubAgent(task.target)}
       >
-        <span class="chat-activity__task-name">{task.agentId}</span>
+        <span class="chat-activity__task-copy">
+          <span class="chat-activity__task-name">{task.agentId}</span>
+          {#if task.preview}
+            <span
+              id={`${panelId}-${task.id}-preview`}
+              class="chat-activity__task-preview">{task.preview}</span
+            >
+          {/if}
+        </span>
       </Button>
       {@render statusIcon(task)}
       {@render cancelButton(task)}
@@ -316,22 +339,6 @@
       disabled={!row.sessionId}
       onClick={() => row.sessionId && onOpenReflection(row)}
     >
-      <span class="chat-activity__reflection-mark" aria-hidden="true">
-        <svg
-          viewBox="0 0 14 14"
-          width="11"
-          height="11"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.35"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <path d="M10.9 6.9A4.1 4.1 0 1 1 9.65 4" />
-          <path d="M9.65 1.9V4h-2.1" />
-          <path d="M11.1 1.7v2.2M10 2.8h2.2" />
-        </svg>
-      </span>
       <span class="chat-activity__task-name">
         {reflectionScopeLabel(row)}
         {#if row.status === 'running' && reflectionElapsedLabel(row.startedAt, nowMs)}
@@ -347,6 +354,7 @@
 
 <div class:chat-activity--open={open} class="chat-activity">
   <Button
+    id={`${panelId}-toggle`}
     variant="tertiary"
     class="chat-activity__rail"
     ariaLabel={railLabel}
@@ -355,165 +363,182 @@
     aria-controls={panelId}
     onClick={togglePanel}
   >
-    <span class="chat-activity__rail-mark">
-      <svg
-        class="chat-activity__rail-arrow"
-        viewBox="0 0 16 16"
-        width="12"
-        height="12"
-        aria-hidden="true"
-      >
-        <path d="M10 3 5 8l5 5" />
-      </svg>
-      {#if runningTaskCount > 0}
-        <span class="chat-activity__rail-dot" aria-hidden="true"></span>
-      {/if}
-    </span>
+    <svg
+      class="chat-activity__rail-arrow"
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      aria-hidden="true"
+    >
+      <path d="m10 4-4 4 4 4" />
+    </svg>
+    {#if runningTaskCount > 0}
+      <span class="chat-activity__rail-dot" aria-hidden="true"></span>
+    {/if}
   </Button>
 
   {#if open}
     <aside
       id={panelId}
       class="chat-activity__panel"
-      aria-labelledby="chat-activity-title"
+      aria-labelledby={`${panelId}-title`}
     >
       <header class="chat-activity__header">
-        <h2 id="chat-activity-title" class="chat-activity__title">
+        <h2 id={`${panelId}-title`} class="chat-activity__title">
           {t('chat.activity.title', 'Session')}
         </h2>
       </header>
 
-      {#if parentSession}
-        <section
-          class="chat-activity__parent"
-          aria-labelledby="chat-activity-parent-title"
-        >
-          <h3
-            id="chat-activity-parent-title"
-            class="chat-activity__group-title"
+      <div class="chat-activity__body">
+        {#if parentSession}
+          <section
+            class="chat-activity__parent"
+            aria-labelledby={`${panelId}-parent-title`}
           >
-            {t('chat.activity.parentSession', 'Parent Session')}
-          </h3>
-          <Button
-            variant="tertiary"
-            class="chat-activity__parent-link"
-            ariaLabel={parentSessionLabel()}
-            onClick={() => onNavigateToParentSession(parentSession.target)}
-          >
-            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-              <path d="M6.5 4 2.5 8l4 4" />
-              <path d="M3 8h6.25a4.25 4.25 0 0 1 4.25 4.25V13" />
-            </svg>
-            <span class="chat-activity__parent-name">
-              {parentSession.displayName}
-            </span>
-          </Button>
-        </section>
-      {/if}
+            <h3
+              id={`${panelId}-parent-title`}
+              class="chat-activity__group-title"
+            >
+              {t('chat.activity.parentSession', 'Parent Session')}
+            </h3>
+            <Button
+              variant="tertiary"
+              class="chat-activity__parent-link"
+              ariaLabel={parentSessionLabel()}
+              onClick={() => onNavigateToParentSession(parentSession.target)}
+            >
+              <svg
+                viewBox="0 0 16 16"
+                width="14"
+                height="14"
+                aria-hidden="true"
+              >
+                <path d="M6.5 4 2.5 8l4 4" />
+                <path d="M3 8h6.25a4.25 4.25 0 0 1 4.25 4.25V13" />
+              </svg>
+              <span class="chat-activity__parent-name">
+                {parentSession.displayName}
+              </span>
+            </Button>
+          </section>
+        {/if}
 
-      <section
-        class="chat-activity__stats"
-        aria-labelledby="chat-activity-stats-title"
-      >
-        <h3 id="chat-activity-stats-title" class="chat-activity__group-title">
-          {t('chat.activity.statsTitle', 'Session stats')}
-        </h3>
-        {#if sessionStats}
-          <!-- The change block is focusable so keyboard users reach the
+        <section
+          class="chat-activity__stats"
+          aria-labelledby={`${panelId}-stats-title`}
+        >
+          <h3 id={`${panelId}-stats-title`} class="chat-activity__group-title">
+            {t('chat.activity.statsTitle', 'Session stats')}
+          </h3>
+          {#if sessionStats}
+            <!-- The change block is focusable so keyboard users reach the
                file-list tooltip; the aria-label already carries the full
                summary for screen readers. -->
-          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-          <p
-            class="chat-activity__stats-value"
-            aria-label={sessionStatsLabel}
-            use:tooltip={sessionStatsTooltip}
-            tabindex="0"
-          >
-            {#each sessionStatsParts as changePart (changePart.kind)}
-              <span
-                class="chat-activity__stats-part"
-                class:chat-activity__stats-part--added={changePart.kind ===
-                  'added'}
-                class:chat-activity__stats-part--removed={changePart.kind ===
-                  'removed'}>{changePart.text}</span
-              >
-            {/each}
-          </p>
-        {:else}
-          <p class="chat-activity__stats-empty">
-            {t('chat.activity.statsEmpty', 'No changes yet')}
-          </p>
-        {/if}
-      </section>
-
-      <div class="chat-activity__tasks">
-        {#if tasks.length === 0 && reflectionTasks.length === 0}
-          <p class="chat-activity__empty">
-            {t('chat.activity.empty', 'No background tasks')}
-          </p>
-        {:else}
-          {#if activeTasks.length > 0 || activeReflections.length > 0}
-            <section
-              class="chat-activity__group chat-activity__group--active"
-              aria-labelledby="chat-activity-active-title"
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+            <p
+              class="chat-activity__stats-value"
+              aria-label={sessionStatsLabel}
+              use:tooltip={sessionStatsTooltip}
+              tabindex="0"
             >
-              <h3
-                id="chat-activity-active-title"
-                class="chat-activity__group-title"
+              {#each sessionStatsParts as changePart (changePart.kind)}
+                <span
+                  class="chat-activity__stats-part"
+                  class:chat-activity__stats-part--added={changePart.kind ===
+                    'added'}
+                  class:chat-activity__stats-part--removed={changePart.kind ===
+                    'removed'}>{changePart.text}</span
+                >
+              {/each}
+            </p>
+          {:else}
+            <p class="chat-activity__stats-empty">
+              {t('chat.activity.statsEmpty', 'No changes yet')}
+            </p>
+          {/if}
+        </section>
+
+        <div class="chat-activity__tasks">
+          {#if tasks.length === 0 && reflectionTasks.length === 0}
+            <p class="chat-activity__empty">
+              {t('chat.activity.empty', 'No background tasks')}
+            </p>
+          {:else}
+            {#if subagentTasks.length > 0}
+              <section
+                class="chat-activity__group chat-activity__group--subagents"
+                aria-labelledby={`${panelId}-subagents`}
               >
-                {t('chat.activity.active', 'Active')}
-              </h3>
-              {#if activeTasks.length > 0}
+                <h3
+                  id={`${panelId}-subagents`}
+                  class="chat-activity__group-title"
+                >
+                  {t('chat.activity.subagents', 'Subagent Runs')}
+                  <span class="chat-activity__count"
+                    >{subagentTasks.length}</span
+                  >
+                </h3>
                 <ul class="chat-activity__task-list">
-                  {#each activeTasks as task (task.id)}
+                  {#each subagentTasks as task (task.id)}
                     <li>{@render taskRow(task)}</li>
                   {/each}
                 </ul>
-              {/if}
-              {#if activeReflections.length > 0}
-                <h4 class="chat-activity__subsection-title">
+              </section>
+            {/if}
+            {#if reflectionTasks.length > 0}
+              <section
+                class="chat-activity__group chat-activity__group--reflections"
+                aria-labelledby={`${panelId}-reflections`}
+              >
+                <h3
+                  id={`${panelId}-reflections`}
+                  class="chat-activity__group-title"
+                >
                   {t('chat.activity.reflections', 'Reflections')}
-                </h4>
+                  <span class="chat-activity__count"
+                    >{reflectionTasks.length}</span
+                  >
+                </h3>
                 <ul class="chat-activity__task-list">
-                  {#each activeReflections as row (row.runId)}
+                  {#each [...activeReflections, ...finishedReflections] as row (row.runId)}
                     <li>{@render reflectionRow(row)}</li>
                   {/each}
                 </ul>
-              {/if}
-            </section>
-          {/if}
-
-          {#if finishedTasks.length > 0 || finishedReflections.length > 0}
-            <section
-              class="chat-activity__group chat-activity__group--finished"
-              aria-labelledby="chat-activity-finished-title"
-            >
-              <h3
-                id="chat-activity-finished-title"
-                class="chat-activity__group-title"
+              </section>
+            {/if}
+            {#if bashTasks.length > 0}
+              <details
+                class="chat-activity__group chat-activity__group--bash"
+                bind:open={
+                  () => bashExpanded ?? defaultBashOpen,
+                  (value) => (bashExpanded = value)
+                }
               >
-                {t('chat.activity.finished', 'Finished')}
-              </h3>
-              {#if finishedTasks.length > 0}
+                <summary class="chat-activity__group-title">
+                  <svg
+                    class="chat-activity__disclosure"
+                    viewBox="0 0 16 16"
+                    width="12"
+                    height="12"
+                    aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg
+                  >
+                  {t('chat.activity.bash', 'Bash')}
+                  <span class="chat-activity__count">{bashTasks.length}</span>
+                  {#if activeBashCount > 0}
+                    <span class="chat-activity__running-count"
+                      >{runningLabel(activeBashCount)}</span
+                    >
+                  {/if}
+                </summary>
                 <ul class="chat-activity__task-list">
-                  {#each finishedTasks as task (task.id)}
+                  {#each bashTasks as task (task.id)}
                     <li>{@render taskRow(task)}</li>
                   {/each}
                 </ul>
-              {/if}
-              {#if finishedReflections.length > 0}
-                <h4 class="chat-activity__subsection-title">
-                  {t('chat.activity.reflections', 'Reflections')}
-                </h4>
-                <ul class="chat-activity__task-list">
-                  {#each finishedReflections as row (row.runId)}
-                    <li>{@render reflectionRow(row)}</li>
-                  {/each}
-                </ul>
-              {/if}
-            </section>
+              </details>
+            {/if}
           {/if}
-        {/if}
+        </div>
       </div>
     </aside>
   {/if}
@@ -521,149 +546,116 @@
 
 <style>
   .chat-activity {
-    --chat-activity-rail-width: 26px;
-
     position: absolute;
     z-index: 30;
     top: 50%;
     right: 8px;
-    display: flex;
-    width: var(--chat-activity-rail-width);
-    height: clamp(132px, 30%, 220px);
-    min-height: 0;
-    overflow: hidden;
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    background: color-mix(in srgb, var(--secondary-surface) 94%, transparent);
-    box-shadow: var(--floating-elevation);
+    width: 24px;
+    height: 40px;
     transform: translateY(-50%);
-    transition:
-      width 180ms ease,
-      height 180ms ease,
-      border-color 120ms ease;
   }
 
   .chat-activity--open {
-    width: min(276px, calc(100% - 24px));
-    height: clamp(210px, 48%, 360px);
-    border-color: var(--border-2);
-  }
-
-  :global(.chat-activity__rail) {
-    width: var(--chat-activity-rail-width);
-    min-width: var(--chat-activity-rail-width);
-    height: 100%;
-    padding: 0;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-  }
-
-  :global(.chat-activity__rail:hover),
-  :global(.chat-activity__rail:focus-visible) {
-    color: var(--text-med);
-    background: var(--surface-2);
-  }
-
-  .chat-activity__rail-mark {
     display: flex;
     align-items: center;
-    gap: 6px;
-    writing-mode: vertical-rl;
+    width: min(308px, calc(100% - 40px));
+    height: min(480px, calc(100% - 24px));
   }
 
+  :global(.chat-activity__rail.btn-tertiary) {
+    position: absolute;
+    top: 50%;
+    right: 0;
+    display: flex;
+    width: 24px;
+    min-width: 24px;
+    height: 40px;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--secondary-surface);
+    color: var(--text-med);
+    transform: translateY(-50%);
+  }
+
+  .chat-activity--open :global(.chat-activity__rail.btn-tertiary) {
+    right: 100%;
+    width: 20px;
+    min-width: 20px;
+    border-right: 0;
+    border-radius: var(--r-sm) 0 0 var(--r-sm);
+  }
+
+  :global(.chat-activity__rail.btn-tertiary:hover) {
+    color: var(--text-hi);
+    background: var(--surface-2);
+  }
   .chat-activity__rail-arrow {
+    flex: 0 0 14px;
+  }
+
+  .chat-activity__rail-arrow,
+  .chat-activity__disclosure {
     fill: none;
     stroke: currentColor;
+    stroke-width: 1.5;
     stroke-linecap: round;
     stroke-linejoin: round;
-    stroke-width: 1.5;
-    transition: transform 150ms ease;
   }
-
   .chat-activity--open .chat-activity__rail-arrow {
     transform: rotate(180deg);
   }
-
   .chat-activity__rail-dot {
-    width: 5px;
-    height: 5px;
+    position: absolute;
+    top: 5px;
+    right: 4px;
+    width: 4px;
+    height: 4px;
     border-radius: 50%;
     background: var(--amber);
   }
-
   .chat-activity__panel {
     display: flex;
-    min-width: 0;
+    width: 100%;
+    max-height: 100%;
     min-height: 0;
-    flex: 1;
     flex-direction: column;
-    border-left: 1px solid var(--border);
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
     background: var(--secondary-surface);
-    animation: chat-activity-enter 150ms ease-out;
+    box-shadow: var(--floating-elevation);
   }
-
   .chat-activity__header {
-    display: flex;
-    min-height: 42px;
-    flex-shrink: 0;
-    align-items: center;
-    padding: 0 12px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface);
+    flex: 0 0 auto;
+    padding: 14px 16px 8px;
   }
-
-  .chat-activity__title,
-  .chat-activity__empty {
-    margin: 0;
-  }
-
   .chat-activity__title {
+    margin: 0;
     color: var(--text-hi);
     font-family: var(--font-ui);
-    font-size: var(--fs-body-sm);
+    font-size: var(--fs-body-md);
     font-weight: 600;
   }
-
-  .chat-activity__tasks {
+  .chat-activity__body {
     min-height: 0;
-    flex: 1;
     overflow-y: auto;
-    padding: 5px;
+    padding: 0 8px 10px;
+    scrollbar-width: thin;
   }
-
   .chat-activity__parent {
-    flex: 0 0 auto;
-    padding: 5px;
-    border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
   }
-
-  .chat-activity__parent .chat-activity__group-title {
-    padding-bottom: 2px;
-  }
-
   :global(.chat-activity__parent-link.btn-tertiary) {
     width: 100%;
-    min-height: 30px;
     justify-content: flex-start;
     gap: 8px;
-    padding: 5px 8px;
-    border-color: transparent;
-    border-radius: var(--r-sm);
+    padding: 6px 8px;
+    border: 0;
     color: var(--text-med);
-    text-align: left;
   }
-
-  :global(.chat-activity__parent-link.btn-tertiary:hover) {
-    border-color: transparent;
-    background: var(--surface-2);
-    color: var(--text-hi);
-  }
-
-  :global(.chat-activity__parent-link.btn-tertiary:focus-visible) {
-    box-shadow: inset 0 0 0 1px var(--accent);
-  }
-
   :global(.chat-activity__parent-link svg) {
     flex: 0 0 14px;
     fill: none;
@@ -672,133 +664,101 @@
     stroke-linejoin: round;
     stroke-width: 1.5;
   }
-
   .chat-activity__parent-name {
-    min-width: 0;
     overflow: hidden;
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-sm);
-    font-weight: 500;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-
   .chat-activity__stats {
-    flex: 0 0 auto;
-    padding: 5px 5px 0;
+    padding-bottom: 12px;
   }
-
-  .chat-activity__stats .chat-activity__group-title {
-    padding-bottom: 2px;
-  }
-
   .chat-activity__stats-value,
   .chat-activity__stats-empty {
     margin: 0;
-    padding: 5px 8px;
+    padding: 4px 8px;
     font-family: var(--font-mono);
     font-size: var(--fs-mono-sm);
+    color: var(--text-med);
   }
-
   .chat-activity__stats-value {
-    display: inline-flex;
-    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
     gap: 4px;
     border-radius: var(--r-sm);
-    color: var(--text-med);
     cursor: default;
   }
-
-  .chat-activity__stats-value:focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 2px var(--accent-16);
-  }
-
   .chat-activity__stats-part--added {
     color: var(--green);
   }
-
   .chat-activity__stats-part--removed {
     color: var(--red);
   }
-
-  .chat-activity__stats-empty {
-    color: var(--text-lo);
-  }
-
   .chat-activity__empty {
-    padding: 9px 8px;
-    color: var(--text-lo);
-    font-family: var(--font-ui);
+    margin: 0;
+    padding: 8px;
+    color: var(--text-med);
     font-size: var(--fs-body-sm);
   }
-
+  .chat-activity__group + .chat-activity__group {
+    margin-top: 16px;
+  }
+  .chat-activity__group-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 0;
+    padding: 6px 8px;
+    color: var(--text-med);
+    font-family: var(--font-ui);
+    font-size: var(--fs-body-sm);
+    font-weight: 500;
+  }
+  .chat-activity__count {
+    font-size: var(--fs-mono-xs);
+    font-family: var(--font-mono);
+    font-weight: 400;
+  }
+  .chat-activity__running-count {
+    margin-left: auto;
+    color: var(--amber);
+    font-size: var(--fs-mono-xs);
+    font-weight: 400;
+  }
+  summary.chat-activity__group-title {
+    cursor: pointer;
+    list-style: none;
+    border-radius: var(--r-sm);
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  summary:hover {
+    background: var(--surface-2);
+    color: var(--text-hi);
+  }
+  details[open] .chat-activity__disclosure {
+    transform: rotate(90deg);
+  }
   .chat-activity__task-list {
     margin: 0;
     padding: 0;
     list-style: none;
   }
-
-  .chat-activity__group + .chat-activity__group {
-    margin-top: 5px;
-    padding-top: 5px;
-    border-top: 1px solid var(--border);
-  }
-
-  .chat-activity__group-title {
-    margin: 0;
-    padding: 5px 8px 4px;
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
-    font-weight: 500;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-  }
-
-  .chat-activity__subsection-title {
-    margin: 0;
-    padding: 4px 8px 2px;
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
-    font-weight: 400;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-  }
-
-  .chat-activity__reflection-mark {
-    display: inline-flex;
-    width: 10px;
-    flex: 0 0 10px;
-    align-items: center;
-    justify-content: center;
-    color: var(--text-lo);
-  }
-
-  .chat-activity__reflection-elapsed {
-    color: var(--text-lo);
-  }
-
-  .chat-activity__task-time {
-    color: var(--text-lo);
-  }
-
-  .chat-activity__task-list li + li {
-    border-top: 1px solid var(--border);
-  }
-
   .chat-activity__task-row {
     display: flex;
     width: 100%;
     min-height: 34px;
     align-items: center;
     gap: 6px;
-    padding: 5px 8px;
+    padding: 6px 8px;
+    border-radius: var(--r-sm);
     color: var(--text-med);
     text-align: left;
   }
-
+  .chat-activity__task-row:has(:global(button:hover)),
+  .chat-activity__task-row:focus-within {
+    background: var(--surface-2);
+  }
   :global(.chat-activity__task-link.btn-tertiary) {
     min-width: 0;
     min-height: 24px;
@@ -807,42 +767,49 @@
     padding: 0;
     border: 0;
     border-radius: var(--r-sm);
-    color: var(--text-med);
+    color: var(--text-hi);
     text-align: left;
   }
-
   :global(.chat-activity__task-link.btn-tertiary:hover) {
-    color: var(--text-hi);
     background: transparent;
   }
-
-  :global(.chat-activity__task-link.btn-tertiary:focus-visible) {
-    box-shadow: inset 0 0 0 1px var(--accent);
-  }
-
-  .chat-activity__task-row--bash {
-    cursor: default;
-  }
-
-  .chat-activity__bash-mark {
-    width: 10px;
-    flex: 0 0 10px;
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-sm);
-  }
-
-  .chat-activity__task-name {
-    flex: 1;
+  .chat-activity__task-copy {
+    display: flex;
     min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .chat-activity__task-name {
+    min-width: 0;
+    flex: 1;
     overflow: hidden;
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-sm);
-    font-weight: 500;
     text-overflow: ellipsis;
     white-space: nowrap;
+    font-size: var(--fs-body-sm);
+    font-weight: 500;
   }
-
+  .chat-activity__task-preview {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    color: var(--text-med);
+    font-family: var(--font-ui);
+    font-size: var(--fs-body-sm);
+    line-height: 1.4;
+    font-weight: 400;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+  .chat-activity__task-row--bash .chat-activity__task-name {
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-xs);
+  }
+  .chat-activity__task-time,
+  .chat-activity__reflection-elapsed {
+    color: var(--text-med);
+    font-weight: 400;
+  }
   :global(.chat-activity__cancel.btn-danger.btn-icon) {
     width: 24px;
     min-width: 24px;
@@ -851,21 +818,19 @@
     flex: 0 0 24px;
     border-color: transparent;
     background: transparent;
+    color: var(--text-med);
   }
-
   :global(.chat-activity__cancel.btn-danger.btn-icon:hover),
   :global(.chat-activity__cancel.btn-danger.btn-icon:focus-visible) {
-    border-color: rgba(252, 129, 129, 0.35);
-    background: rgba(252, 129, 129, 0.1);
+    background: var(--surface-3);
+    color: var(--red);
   }
-
   :global(.chat-activity__cancel svg) {
     fill: none;
     stroke: currentColor;
     stroke-linecap: round;
     stroke-width: 1.7;
   }
-
   .chat-activity__status {
     display: inline-flex;
     width: 18px;
@@ -873,9 +838,8 @@
     flex: 0 0 18px;
     align-items: center;
     justify-content: center;
-    color: var(--text-lo);
+    color: var(--text-med);
   }
-
   .chat-activity__status svg {
     fill: none;
     stroke: currentColor;
@@ -883,73 +847,35 @@
     stroke-linejoin: round;
     stroke-width: 1.6;
   }
-
-  .chat-activity__status--running {
-    color: var(--amber);
+  .chat-activity__working-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--amber);
   }
-
-  .chat-activity__status--running circle {
-    opacity: 0.22;
-  }
-
-  .chat-activity__status--running path {
-    animation: chat-activity-spin 950ms linear infinite;
-    transform-origin: center;
-  }
-
   .chat-activity__status--success {
     color: var(--green);
   }
-
   .chat-activity__status--failed {
     color: var(--red);
   }
-
-  .chat-activity__status--cancelled {
-    color: var(--text-lo);
+  :global(.chat-activity__rail.btn-tertiary:focus-visible),
+  summary:focus-visible,
+  .chat-activity__stats-value:focus-visible,
+  :global(.chat-activity__task-link.btn-tertiary:focus-visible),
+  :global(.chat-activity__parent-link.btn-tertiary:focus-visible) {
+    outline: 1px solid var(--accent);
+    outline-offset: -1px;
   }
-
-  @keyframes chat-activity-enter {
-    from {
-      opacity: 0;
-      transform: translateX(8px);
-    }
-    to {
-      opacity: 1;
-      transform: translateX(0);
-    }
-  }
-
-  @keyframes chat-activity-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
   @media (max-width: 640px) {
     .chat-activity {
-      --chat-activity-rail-width: 32px;
       right: 6px;
-      height: clamp(120px, 30%, 190px);
     }
-
+    :global(.chat-activity__rail.btn-tertiary) {
+      height: 44px;
+    }
     .chat-activity--open {
-      width: min(268px, calc(100% - 16px));
-      height: clamp(200px, 50%, 320px);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .chat-activity,
-    .chat-activity__panel {
-      transition: none;
-      animation: none;
-    }
-
-    .chat-activity__rail-arrow,
-    .chat-activity__status--running path {
-      transition: none;
-      animation: none;
+      width: min(308px, calc(100% - 40px));
     }
   }
 </style>

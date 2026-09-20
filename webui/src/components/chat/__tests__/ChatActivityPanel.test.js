@@ -166,23 +166,32 @@ describe('ChatActivityPanel', () => {
     flushSync();
 
     expect(rail.getAttribute('aria-expanded')).toBe('true');
-    expect(document.querySelector('#chat-activity-title')).not.toBeNull();
+    expect(document.querySelector('.chat-activity__title')).not.toBeNull();
     const rows = [...document.querySelectorAll('.chat-activity__task-row')];
     expect(rows).toHaveLength(6);
-    const activeGroup = document.querySelector('.chat-activity__group--active');
-    const finishedGroup = document.querySelector(
-      '.chat-activity__group--finished',
+    const subagents = document.querySelector(
+      '.chat-activity__group--subagents',
     );
-    expect(activeGroup.querySelector('h3')).not.toBeNull();
-    expect(
-      activeGroup.querySelectorAll('.chat-activity__task-row'),
-    ).toHaveLength(2);
-    expect(finishedGroup.querySelector('h3')).not.toBeNull();
-    expect(
-      finishedGroup.querySelectorAll('.chat-activity__task-row'),
-    ).toHaveLength(4);
+    const bash = document.querySelector('.chat-activity__group--bash');
+    expect(subagents.querySelectorAll('.chat-activity__task-row')).toHaveLength(
+      4,
+    );
+    expect(bash.querySelectorAll('.chat-activity__task-row')).toHaveLength(2);
+    expect([...document.querySelectorAll('.chat-activity__group')]).toEqual([
+      subagents,
+      bash,
+    ]);
+    expect(bash.open).toBe(false);
+    expect(bash.querySelector('.chat-activity__running-count')).not.toBeNull();
+    bash.querySelector('summary').click();
+    expect(bash.open).toBe(true);
+    expect(subagents.querySelector('[data-status]').dataset.status).toBe(
+      'running',
+    );
     const runningSubAgentRow = rows.find(
-      (row) => row.textContent.trim() === 'builder',
+      (row) =>
+        row.querySelector('.chat-activity__task-name')?.textContent.trim() ===
+        'builder',
     );
     const runningSubAgentLink = runningSubAgentRow.querySelector(
       '.chat-activity__task-link',
@@ -194,7 +203,9 @@ describe('ChatActivityPanel', () => {
       runningSubAgentRow.querySelector('[data-status="running"]'),
     ).not.toBeNull();
     const completedRow = rows.find(
-      (row) => row.textContent.trim() === 'reviewer',
+      (row) =>
+        row.querySelector('.chat-activity__task-name')?.textContent.trim() ===
+        'reviewer',
     );
     expect(
       completedRow
@@ -205,7 +216,9 @@ describe('ChatActivityPanel', () => {
       completedRow.querySelector('[data-status="success"]'),
     ).not.toBeNull();
     const cancelledRow = rows.find(
-      (row) => row.textContent.trim() === 'writer',
+      (row) =>
+        row.querySelector('.chat-activity__task-name')?.textContent.trim() ===
+        'writer',
     );
     expect(
       cancelledRow
@@ -215,7 +228,11 @@ describe('ChatActivityPanel', () => {
     expect(
       cancelledRow.querySelector('[data-status="cancelled"]'),
     ).not.toBeNull();
-    const failedRow = rows.find((row) => row.textContent.trim() === 'tester');
+    const failedRow = rows.find(
+      (row) =>
+        row.querySelector('.chat-activity__task-name')?.textContent.trim() ===
+        'tester',
+    );
     expect(
       failedRow
         .querySelector('.chat-activity__task-link')
@@ -226,7 +243,7 @@ describe('ChatActivityPanel', () => {
       row.textContent.includes('npm run dev'),
     );
     expect(runningBashRow.tagName).toBe('DIV');
-    expect(runningBashRow.textContent.replace(/\s+/g, '')).toBe('$npmrundev');
+    expect(runningBashRow.textContent.replace(/\s+/g, '')).toBe('npmrundev');
     expect(runningBashRow.getAttribute('aria-label')).toBe(
       'Bash · npm run dev · Working',
     );
@@ -256,7 +273,10 @@ describe('ChatActivityPanel', () => {
     ).toBe('Cancel Bash background process · npm run dev');
     expect(cancelledRow.querySelector('.chat-activity__cancel')).toBeNull();
     expect(failedBashRow.querySelector('.chat-activity__cancel')).toBeNull();
-    expect(document.body.textContent).not.toContain('Implement the sidebar');
+    expect(
+      runningSubAgentRow.querySelector('.chat-activity__task-preview')
+        .textContent,
+    ).toBe('Implement the sidebar');
     expect(document.body.textContent).not.toContain('View session');
     expect(document.body.textContent).not.toContain('Run foreground checks');
 
@@ -281,6 +301,73 @@ describe('ChatActivityPanel', () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     flushSync();
     expect(document.querySelector('.chat-activity__panel')).toBeNull();
+  });
+
+  it('preserves the Bash disclosure choice while running work updates the clock', async () => {
+    vi.useFakeTimers();
+    try {
+      mountedComponent = mount(ChatActivityPanel, {
+        target: document.body,
+        props: {
+          timelineItems: [
+            {
+              id: 'run',
+              type: 'assistant_run',
+              items: [
+                subAgentTask({
+                  id: 'a',
+                  agentId: 'alba',
+                  content: 'Review',
+                  status: 'running',
+                }),
+                backgroundBashTask({ id: 'b', command: 'npm run dev' }),
+              ],
+            },
+          ],
+        },
+      });
+      flushSync();
+      document.querySelector('.chat-activity__rail').click();
+      flushSync();
+      const bash = document.querySelector('details');
+      expect(bash.open).toBe(false);
+      bash.querySelector('summary').click();
+      await vi.advanceTimersByTimeAsync(1100);
+      flushSync();
+      expect(bash.open).toBe(true);
+      bash.querySelector('summary').click();
+      await vi.advanceTimersByTimeAsync(1100);
+      flushSync();
+      expect(bash.open).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps panel identities separate in split Chat and restores focus on Escape', async () => {
+    mountedComponent = mount(ChatActivityPanel, { target: document.body });
+    const second = mount(ChatActivityPanel, { target: document.body });
+    try {
+      flushSync();
+      const toggles = [...document.querySelectorAll('.chat-activity__rail')];
+      toggles.forEach((button) => button.click());
+      flushSync();
+      const panels = [...document.querySelectorAll('.chat-activity__panel')];
+      expect(new Set(panels.map((panel) => panel.id)).size).toBe(2);
+      panels.forEach((panel, index) => {
+        expect(toggles[index].getAttribute('aria-controls')).toBe(panel.id);
+        expect(
+          document.getElementById(panel.getAttribute('aria-labelledby')),
+        ).not.toBeNull();
+      });
+      panels[1].setAttribute('tabindex', '-1');
+      panels[1].focus();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      flushSync();
+      expect(document.activeElement).toBe(toggles[1]);
+    } finally {
+      await unmount(second);
+    }
   });
 
   it('shows a calm empty state when the Session has no background work', () => {
@@ -366,7 +453,7 @@ describe('ChatActivityPanel', () => {
     flushSync();
 
     expect(
-      document.querySelector('#chat-activity-parent-title').textContent.trim(),
+      document.querySelector('.chat-activity__parent h3').textContent.trim(),
     ).toBe('Parent Session');
     const parentLink = document.querySelector('.chat-activity__parent-link');
     expect(parentLink.textContent.trim()).toBe('Original research');
@@ -379,7 +466,7 @@ describe('ChatActivityPanel', () => {
     expect(navigateToParent).toHaveBeenCalledWith(target);
   });
 
-  it('omits an empty Active group when every task is finished', () => {
+  it('keeps completed Subagent Runs visible without a separate status group', () => {
     mountedComponent = mount(ChatActivityPanel, {
       target: document.body,
       props: {
@@ -406,7 +493,7 @@ describe('ChatActivityPanel', () => {
 
     expect(document.querySelector('.chat-activity__group--active')).toBeNull();
     expect(
-      document.querySelector('.chat-activity__group--finished h3'),
+      document.querySelector('.chat-activity__group--subagents h3'),
     ).toBeTruthy();
   });
 
@@ -573,25 +660,15 @@ describe('ChatActivityPanel', () => {
     document.querySelector('.chat-activity__rail').click();
     flushSync();
 
-    const activeGroup = document.querySelector('.chat-activity__group--active');
-    const finishedGroup = document.querySelector(
-      '.chat-activity__group--finished',
+    const reflections = document.querySelector(
+      '.chat-activity__group--reflections',
     );
-    const activeSubsection = activeGroup.querySelector(
-      '.chat-activity__subsection-title',
-    );
-    const finishedSubsection = finishedGroup.querySelector(
-      '.chat-activity__subsection-title',
-    );
-    expect(activeSubsection.textContent.trim()).toBe('Reflections');
-    expect(finishedSubsection.textContent.trim()).toBe('Reflections');
     expect(
-      activeGroup.querySelectorAll('.chat-activity__task-row'),
-    ).toHaveLength(1);
-    expect(
-      finishedGroup.querySelectorAll('.chat-activity__task-row'),
-    ).toHaveLength(1);
-
+      reflections.querySelectorAll('.chat-activity__task-row'),
+    ).toHaveLength(2);
+    expect(reflections.querySelector('[data-status]').dataset.status).toBe(
+      'running',
+    );
     const rows = [...document.querySelectorAll('.chat-activity__task-row')];
     const runningRow = rows.find((row) =>
       row.textContent.includes('Memory review'),
