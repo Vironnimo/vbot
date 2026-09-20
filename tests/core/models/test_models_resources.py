@@ -293,6 +293,7 @@ class TestModelRegistryRealResources:
                 "kimi-k2.6",
                 "longcat-2.0",
                 "deepseek-flash",
+                "deepseek-v4.1-flash",
                 "deepseek-v4-pro",
                 "deepseek-v4-flash",
                 "deepseek-v4-flash-vision-exp",
@@ -313,7 +314,7 @@ class TestModelRegistryRealResources:
                 "qwen3.6-plus",
             ),
         }
-        assert sum(len(model_ids) for model_ids in expected_by_protocol.values()) == 29
+        assert sum(len(model_ids) for model_ids in expected_by_protocol.values()) == 30
         for protocol, model_ids in expected_by_protocol.items():
             for model_id in model_ids:
                 model = registry.get("opencode-go", model_id)
@@ -341,7 +342,7 @@ class TestModelRegistryRealResources:
         assert model.capabilities.output_modalities == ("decisions",)
         assert model.capabilities.task_types == ("decision",)
 
-    def test_gpt6_and_deepseek41_profiles_load(self):
+    def test_gpt6_profile_loads(self):
         registry = ModelRegistry.load(RESOURCES_DIR)
         gpt = registry.get("openai", "gpt-6-astra")
         assert gpt.connections == ("subscription",)
@@ -353,12 +354,17 @@ class TestModelRegistryRealResources:
             "minimum_reasoning_effort": "low",
         }
 
-        deepseek = registry.get("opencode-go", "deepseek-flash")
+    @pytest.mark.parametrize("model_id", ["deepseek-flash", "deepseek-v4.1-flash"])
+    def test_deepseek41_profiles_load(self, model_id):
+        registry = ModelRegistry.load(RESOURCES_DIR)
+        deepseek = registry.get("opencode-go", model_id)
         assert deepseek.name == "DeepSeek V4.1 Flash"
         assert deepseek.context_window == 1_000_000
         assert deepseek.max_output_tokens == 384_000
         assert deepseek.capabilities.reasoning.levels == ("low", "high", "max")
         assert deepseek.capabilities.tools is True
+        assert deepseek.capabilities.input_modalities == ("text", "image")
+        assert deepseek.capabilities.vision is True
         assert deepseek.metadata["opencode_go"] == {
             "protocol": "openai",
             "reasoning_response_field": "reasoning_content",
