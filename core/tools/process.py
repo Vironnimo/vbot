@@ -278,7 +278,7 @@ def shape_process_output(
 def _truncation_marker(log_file: str | None) -> str:
     if log_file is None:
         return "[earlier output truncated]\n"
-    return f"[earlier output truncated — complete output in {log_file}; grep/read it]\n"
+    return f"[earlier output truncated — complete output in {log_file}]\n"
 
 
 def _acknowledge_completion_after_persistence(

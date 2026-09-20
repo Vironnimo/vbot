@@ -45,7 +45,7 @@ New process ids use `proc_` plus 12 lowercase base32 characters; allocation chec
 
 - Access is isolated by `ToolContext.project_id` plus `ToolContext.agent_id`; missing, cross-agent, and same-id-different-Project processes use not-found semantics.
 - `cancel_scope(run.id)` kills all active processes started by tools in that Run.
-- Combined in-memory output buffers are capped. Detailed `status` returns the newest output tail without advancing Bash's internal polling cursor and points to `log_file` for the complete retained record when available.
+- Combined in-memory output buffers are capped. Detailed `status` returns the newest output tail without advancing Bash's internal polling cursor and points to `log_file` for the complete retained record when available. The shared Bash/Process truncation marker names that file without prescribing shell grep or assuming another Tool is available.
 - Core Tool subprocesses must use `subprocess_creation_flags`: the managed command, Bash environment probe, ripgrep search, and Windows `taskkill` helpers stay windowless when vBot runs without a parent console, while managed commands retain their separate process group for tree cancellation.
 - Runtime shutdown remains the primary owner and explicitly kills every tracked process tree. Job close, guardian pipe EOF, and the systemd cgroup are crash-only backstops that prevent an obsolete Runtime's children from becoming untracked; they do not create durable or reattachable handles.
 - The in-memory finished-process TTL and the complete-output file retention are separate: evicting a `TrackedProcess` does not remove its 72-hour temporary log.

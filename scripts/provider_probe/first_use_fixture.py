@@ -199,7 +199,7 @@ class FirstUseFixture:
             if not re.fullmatch(
                 r"""(?:python|python3)(?:\.exe)?\s+["']?(?:\.[/\\])?check\.py["']?"""
                 r"""(?:;\s*(?:(?:echo|Write-Output)\s+)?["']?"""
-                r"""(?:EXIT(?: CODE)?[:= ]*)?\$LASTEXITCODE["']?)?""",
+                r"""[\w :=-]*\$LASTEXITCODE["']?)?""",
                 command,
                 re.I,
             ):

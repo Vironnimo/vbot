@@ -100,6 +100,27 @@ def first_use_cases() -> list[dict[str, Any]]:
             "final_contains": "ORCHID-73",
         },
         {
+            "id": "search_hidden_config",
+            "tool": "search_files",
+            "task": (
+                "Find where cache_timeout is configured in this directory, including dotfiles. "
+                "Show matching lines with paths and line numbers."
+            ),
+            "files": {".settings.ini": "cache_timeout = 37\n"},
+            "rows": {".settings.ini:1:cache_timeout = 37"},
+        },
+        {
+            "id": "search_exclusions",
+            "tool": "search_files",
+            "task": (
+                "Find every ERROR line in this directory except those under vendor. "
+                "Include file paths and line numbers."
+            ),
+            "files": {"app.log": "ERROR startup\n", "vendor/build.log": "ERROR external\n"},
+            "rows": {"app.log:1:ERROR startup"},
+            "final_excludes": ["ERROR external"],
+        },
+        {
             "id": "shell_control",
             "tool": "search_files",
             "expected_tool": "bash",
@@ -249,6 +270,9 @@ def assess(
                             bool(re.search(r"\b" + rest[0] + r"\b", answer)) and rest[1] in answer
                         )
             outcome = outcome and final_ok
+            outcome = outcome and all(
+                value not in final for value in case.get("final_excludes", [])
+            )
             details = {
                 "missing_rows": sorted(case["rows"] - actual),
                 "unexpected_rows": sorted(actual - case["rows"]),
