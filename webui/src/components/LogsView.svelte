@@ -711,9 +711,9 @@
       minmax(154px, auto) minmax(60px, auto) var(--logs-logger-width)
       minmax(0, 1fr) auto;
     align-items: center;
-    gap: 10px;
+    gap: 4px 10px;
     min-width: 0;
-    padding: 3px 10px;
+    padding: 1px 10px;
     border-left: 3px solid var(--border-2);
   }
 
@@ -779,12 +779,12 @@
     line-height: 1.4;
   }
 
-  /* The shared CopyButton renders a 30px tertiary icon button; shrink it for the
-     dense log row and reveal it only while the row is hovered or the button has
-     keyboard focus. It is a child component, so it is targeted through :global. */
+  /* Override the shared button's minimum height as well as its dimensions so
+     the copy control does not stretch dense log rows, even while hidden. */
   .logs-entry :global(.logs-entry__copy) {
-    width: auto;
-    height: auto;
+    width: 24px;
+    height: 24px;
+    min-height: 24px;
     padding: 2px;
     justify-self: end;
     opacity: 0;
