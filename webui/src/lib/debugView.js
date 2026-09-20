@@ -295,7 +295,9 @@ export function retainSelectedTrace(state) {
   if (selectedId === null) {
     return null;
   }
-  return traces.find((trace) => trace.trace_id === selectedId) ?? null;
+  return traces.some((trace) => trace.trace_id === selectedId)
+    ? currentSelection
+    : null;
 }
 
 export function isJsonParseableText(value) {
@@ -406,6 +408,57 @@ function resolveNonNegativeInteger(value, fallback) {
 }
 
 function resolveNullableInteger(value) {
+  if (value === null || value === undefined || value === '') return null;
   const numberValue = Number(value);
   return Number.isInteger(numberValue) ? numberValue : null;
+}
+
+// The list index does not contain capture errors: a missing status is unknown,
+// and even a 2xx/101 response may have failed later while streaming.
+export function traceStatusTone(status) {
+  if (status === null || status === undefined) return 'unknown';
+  if (status >= 400) return 'error';
+  if ((status >= 200 && status < 300) || status === 101) return 'ok';
+  return 'unknown';
+}
+
+export function filterTraces(
+  traces,
+  query = '',
+  status = 'all',
+  provider = '',
+) {
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return traces.filter((trace) => {
+    if (provider && trace.provider_id !== provider) return false;
+    if (status !== 'all' && traceStatusTone(trace.status_code) !== status)
+      return false;
+    const haystack = [
+      trace.trace_id,
+      trace.provider_id,
+      trace.model_id,
+      trace.method,
+      trace.url,
+      trace.timestamp,
+      trace.status_code,
+      trace.type,
+    ]
+      .join(' ')
+      .toLowerCase();
+    return words.every((word) => haystack.includes(word));
+  });
+}
+
+export function bodyMatchOffsets(text, query) {
+  if (!query) return [];
+  const matches = [];
+  // Case-sensitive matching keeps offsets exact even for Unicode case mappings.
+  for (
+    let at = text.indexOf(query);
+    at !== -1;
+    at = text.indexOf(query, at + query.length)
+  ) {
+    matches.push(at);
+  }
+  return matches;
 }

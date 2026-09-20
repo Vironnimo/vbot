@@ -1,140 +1,139 @@
 <script>
+  import { t, activeLocaleTag } from '$lib/i18n.js';
+  import { formatDateTimeInApplicationZone } from '$lib/dateTimePrefs.svelte.js';
+  import { formatHeadersForDisplay, traceStatusTone } from '$lib/debugView.js';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import CopyButton from '../ui/CopyButton.svelte';
   import TabList from '../ui/TabList.svelte';
-  import { t } from '$lib/i18n.js';
-  import {
-    DEBUG_TAB_FORMATTED,
-    DEBUG_TAB_RAW,
-    formattedBodyText,
-    formatHeadersForDisplay,
-    hasParseableBody,
-    rawBodyText,
-  } from '$lib/debugView.js';
+  import DebugBody from './DebugBody.svelte';
 
   let {
     trace = null,
     loading = false,
     error = '',
     onRetry = () => {},
+    onBack = () => {},
   } = $props();
-
-  const DETAIL_TABS = Object.freeze([
-    { id: 'metadata', labelKey: 'debug.metadata', labelFallback: 'Metadata' },
-    { id: 'request', labelKey: 'debug.request', labelFallback: 'Request' },
-    { id: 'response', labelKey: 'debug.response', labelFallback: 'Response' },
+  let detailTab = $state('request');
+  let tabs = $derived([
+    { id: 'request', label: t('debug.request', 'Request') },
+    { id: 'response', label: t('debug.response', 'Response') },
+    { id: 'metadata', label: t('debug.metadata', 'Metadata') },
   ]);
-  const BODY_TABS = Object.freeze([
-    {
-      id: DEBUG_TAB_RAW,
-      labelKey: 'debug.streamRaw',
-      labelFallback: 'Raw',
-    },
-    {
-      id: DEBUG_TAB_FORMATTED,
-      labelKey: 'debug.streamParsed',
-      labelFallback: 'Parsed',
-    },
-  ]);
-
-  let detailTab = $state('metadata');
-  let requestBodyView = $state(DEBUG_TAB_RAW);
-  let responseBodyView = $state(DEBUG_TAB_RAW);
-  let isRequestBodyFormatted = $derived(
-    requestBodyView === DEBUG_TAB_FORMATTED,
+  let exchange = $derived(
+    detailTab === 'response' ? trace?.response : trace?.request,
   );
-  let isResponseBodyFormatted = $derived(
-    responseBodyView === DEBUG_TAB_FORMATTED,
+  let headers = $derived(formatHeadersForDisplay(exchange?.headers));
+  let traceJson = $derived(JSON.stringify(trace, null, 2));
+  let timestamp = $derived(
+    trace
+      ? formatDateTimeInApplicationZone(trace.timestamp, activeLocaleTag(), {
+          dateStyle: 'medium',
+          timeStyle: 'medium',
+        }) || trace.timestamp
+      : '',
   );
-  let requestBodyParseable = $derived(hasParseableBody(trace?.request?.body));
-  let responseBodyParseable = $derived(hasParseableBody(trace?.response?.body));
-  let detailTabs = $derived(
-    DETAIL_TABS.map((tab) => ({
-      id: tab.id,
-      label: t(tab.labelKey, tab.labelFallback),
-    })),
-  );
-  let bodyTabs = $derived(
-    BODY_TABS.map((tab) => ({
-      id: tab.id,
-      label: t(tab.labelKey, tab.labelFallback),
-    })),
+  let duration = $derived(
+    trace?.duration_ms == null
+      ? '—'
+      : `${new Intl.NumberFormat(activeLocaleTag(), { maximumFractionDigits: 2 }).format(trace.duration_ms / 1000)} s`,
   );
 
-  function formatDuration(milliseconds) {
-    if (milliseconds === null || milliseconds === undefined) {
-      return '—';
-    }
-    if (milliseconds < 1000) {
-      return `${milliseconds}ms`;
-    }
-    return `${(milliseconds / 1000).toFixed(1)}s`;
-  }
-
-  function metadataField(label, value) {
-    return { label, value: value ?? '—' };
-  }
-
-  function metadataFields(selectedTrace) {
-    if (!selectedTrace) {
-      return [];
-    }
-    const context = selectedTrace.context ?? {};
-    const fields = [
-      metadataField('trace_id', selectedTrace.trace_id),
-      metadataField('type', selectedTrace.type),
-      metadataField('run_id', context.run_id),
-      metadataField('agent_id', context.agent_id),
-      metadataField('session_id', context.session_id),
-      metadataField('provider_id', selectedTrace.provider_id),
-      metadataField('model_id', selectedTrace.model_id),
-      metadataField('connection_id', context.connection_id),
-      metadataField('iteration', context.iteration_number),
-      metadataField('streaming', context.streaming ? 'true' : 'false'),
-      metadataField('duration', formatDuration(selectedTrace.duration_ms)),
-    ];
-    if (selectedTrace.error) {
-      fields.push(
-        metadataField(
-          'error',
-          `${selectedTrace.error.type}: ${selectedTrace.error.message}`,
-        ),
-      );
-    }
-    return fields;
-  }
-
-  function retry() {
-    detailTab = 'metadata';
-    requestBodyView = DEBUG_TAB_RAW;
-    responseBodyView = DEBUG_TAB_RAW;
-    onRetry();
+  function downloadTrace() {
+    const url = URL.createObjectURL(
+      new Blob([traceJson], { type: 'application/json' }),
+    );
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `trace-${trace.trace_id}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
   }
 </script>
 
-<div class="debug-view__detail-panel">
+<section
+  class="debug-view__detail-panel"
+  aria-label={t('debug.traceDetail', 'Trace detail')}
+>
+  <div class="detail-back">
+    <Button variant="tertiary" onClick={onBack}
+      >← {t('debug.backToTraces', 'Back to traces')}</Button
+    >
+  </div>
   {#if loading}
-    <Banner variant="neutral" class="debug-view__detail-loading">
-      {t('common.loading', 'Loading\u2026')}
-    </Banner>
+    <div class="detail-message">
+      <Banner variant="neutral">{t('common.loading', 'Loading…')}</Banner>
+    </div>
   {:else if error}
-    <Banner variant="error" aria-live="polite">
-      <span>{error}</span>
-      <Button variant="secondary" onClick={retry}>
-        {t('common.retry', 'Retry')}
-      </Button>
-    </Banner>
+    <div class="detail-message">
+      <Banner variant="error" aria-live="polite"
+        ><span>{error}</span><Button variant="secondary" onClick={onRetry}
+          >{t('common.retry', 'Retry')}</Button
+        ></Banner
+      >
+    </div>
   {:else if trace}
+    <header class="detail-header">
+      <div class="detail-heading-row">
+        <h3>{trace.model_id || t('debug.modelProbe', 'Model Probe')}</h3>
+        <CopyButton
+          text={traceJson}
+          label={t('debug.copyTrace', 'Copy complete trace')}
+        />
+        <Button
+          variant="tertiary"
+          icon
+          ariaLabel={t('debug.downloadTrace', 'Download complete trace')}
+          tooltip={t('debug.downloadTrace', 'Download complete trace')}
+          onClick={downloadTrace}
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            aria-hidden="true"
+            ><path d="M12 3v12m-5-5 5 5 5-5M5 16v5h14v-5" /></svg
+          >
+        </Button>
+      </div>
+      <div class="detail-facts">
+        <span>{trace.provider_id || '—'}</span><time datetime={trace.timestamp}
+          >{timestamp}</time
+        >
+        <span
+          class="detail-status"
+          data-tone={trace.error
+            ? 'error'
+            : traceStatusTone(trace.response?.status_code)}
+          >{t('debug.responseStatus', 'Status')}
+          {trace.response?.status_code ?? '—'}</span
+        >
+        <span>{duration}</span>
+      </div>
+      <div class="detail-endpoint">
+        <span>{trace.request?.method || '—'}</span><code
+          >{trace.request?.url || '—'}</code
+        ><CopyButton
+          text={trace.request?.url || ''}
+          label={t('debug.copyUrl', 'Copy URL')}
+        />
+      </div>
+      {#if trace.error}<Banner variant="error"
+          ><strong>{trace.error.type}</strong> {trace.error.message}</Banner
+        >{/if}
+    </header>
     <TabList
-      items={detailTabs}
+      items={tabs}
       value={detailTab}
       ariaLabel={t('debug.traceDetail', 'Trace detail')}
-      density="compact"
       idPrefix="debug-detail"
       class="debug-view__detail-tab-list"
       onChange={(value) => (detailTab = value)}
     />
-
     <div
       class="debug-view__detail-body"
       role="tabpanel"
@@ -142,233 +141,224 @@
       aria-labelledby={`debug-detail-tab-${detailTab}`}
     >
       {#if detailTab === 'metadata'}
-        <div class="debug-view__metadata-grid">
-          {#each metadataFields(trace) as field (field.label)}
-            <span class="debug-view__metadata-label">{field.label}</span>
-            <span class="debug-view__metadata-value">
-              {String(field.value)}
-            </span>
+        <dl class="detail-metadata">
+          {#each Object.entries(trace).filter(([key]) => !['request', 'response'].includes(key)) as [name, value] (name)}
+            <div>
+              <dt>{name}</dt>
+              <dd>
+                <pre>{value !== null && typeof value === 'object'
+                    ? JSON.stringify(value, null, 2)
+                    : String(value ?? '—')}</pre>
+              </dd>
+            </div>
           {/each}
-        </div>
-      {:else if detailTab === 'request'}
-        <div class="debug-view__detail-section">
-          <h4 class="debug-view__detail-heading">
-            {t('debug.requestMethod', 'Method')}
-          </h4>
-          <pre class="debug-view__code-block">{trace.request?.method ||
-              '—'}</pre>
-        </div>
-        <div class="debug-view__detail-section">
-          <h4 class="debug-view__detail-heading">
-            {t('debug.requestUrl', 'URL')}
-          </h4>
-          <pre class="debug-view__code-block">{trace.request?.url || '—'}</pre>
-        </div>
-        <div class="debug-view__detail-section">
-          <h4 class="debug-view__detail-heading">
-            {t('debug.requestHeaders', 'Headers')}
-          </h4>
-          <pre class="debug-view__code-block">{formatHeadersForDisplay(
-              trace.request?.headers ?? null,
-            ) || '—'}</pre>
-        </div>
-        <div class="debug-view__detail-section">
-          <div class="debug-view__detail-heading-row">
-            <h4 class="debug-view__detail-heading">
-              {t('debug.requestBody', 'Body')}
-            </h4>
-            {#if requestBodyParseable}
-              <TabList
-                items={bodyTabs}
-                value={requestBodyView}
-                ariaLabel={t('debug.requestBody', 'Body')}
-                appearance="segmented"
-                density="compact"
-                idPrefix="debug-request-body"
-                class="debug-view__body-tab-list"
-                onChange={(value) => (requestBodyView = value)}
+        </dl>
+      {:else}
+        {#key detailTab}
+          <details class="detail-headers debug-view__detail-section">
+            <summary
+              ><span class="debug-view__detail-heading"
+                >{t('debug.requestHeaders', 'Headers')}</span
+              ><span>{Object.keys(exchange?.headers ?? {}).length}</span
+              ></summary
+            >
+            <div class="headers-content">
+              <pre>{headers || '—'}</pre>
+              <CopyButton
+                text={headers}
+                label={t('debug.copyHeaders', 'Copy headers')}
               />
-            {/if}
-          </div>
-          <div
-            role={requestBodyParseable ? 'tabpanel' : undefined}
-            id={requestBodyParseable
-              ? `debug-request-body-panel-${requestBodyView}`
-              : undefined}
-            aria-labelledby={requestBodyParseable
-              ? `debug-request-body-tab-${requestBodyView}`
-              : undefined}
-          >
-            <pre
-              class={`debug-view__code-block ${isRequestBodyFormatted ? 'debug-view__code-block--formatted' : 'debug-view__code-block--raw'}`}>{isRequestBodyFormatted
-                ? formattedBodyText(trace.request?.body) || '—'
-                : rawBodyText(trace.request?.body) || '—'}</pre>
-          </div>
-        </div>
-      {:else if detailTab === 'response'}
-        <div class="debug-view__detail-section">
-          <h4 class="debug-view__detail-heading">
-            {t('debug.responseStatus', 'Status')}
-          </h4>
-          <pre class="debug-view__code-block">{trace.response?.status_code ??
-              '—'}</pre>
-        </div>
-        <div class="debug-view__detail-section">
-          <h4 class="debug-view__detail-heading">
-            {t('debug.responseHeaders', 'Headers')}
-          </h4>
-          <pre class="debug-view__code-block">{formatHeadersForDisplay(
-              trace.response?.headers ?? null,
-            ) || '—'}</pre>
-        </div>
-        <div class="debug-view__detail-section">
-          <div class="debug-view__detail-heading-row">
-            <h4 class="debug-view__detail-heading">
-              {t('debug.responseBody', 'Body')}
-            </h4>
-            {#if responseBodyParseable}
-              <TabList
-                items={bodyTabs}
-                value={responseBodyView}
-                ariaLabel={t('debug.responseBody', 'Body')}
-                appearance="segmented"
-                density="compact"
-                idPrefix="debug-response-body"
-                class="debug-view__body-tab-list"
-                onChange={(value) => (responseBodyView = value)}
-              />
-            {/if}
-          </div>
-          <div
-            role={responseBodyParseable ? 'tabpanel' : undefined}
-            id={responseBodyParseable
-              ? `debug-response-body-panel-${responseBodyView}`
-              : undefined}
-            aria-labelledby={responseBodyParseable
-              ? `debug-response-body-tab-${responseBodyView}`
-              : undefined}
-          >
-            <pre
-              class={`debug-view__code-block ${isResponseBodyFormatted ? 'debug-view__code-block--formatted' : 'debug-view__code-block--raw'}`}>{isResponseBodyFormatted
-                ? formattedBodyText(trace.response?.body) || '—'
-                : rawBodyText(trace.response?.body) || '—'}</pre>
-          </div>
-        </div>
+            </div>
+          </details>
+          <DebugBody
+            body={exchange?.body}
+            idPrefix={`debug-${detailTab}-body`}
+          />
+        {/key}
       {/if}
     </div>
+  {:else}
+    <div class="detail-message detail-placeholder">
+      <svg
+        width="36"
+        height="36"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1"
+        aria-hidden="true"
+        ><path d="m8 6-6 6 6 6m8-12 6 6-6 6M14 3l-4 18" /></svg
+      >
+      <h3>{t('debug.selectTrace', 'Select a trace to inspect')}</h3>
+      <p>
+        {t(
+          'debug.selectTraceHint',
+          'Read the request, inspect the response and access the complete captured payload.',
+        )}
+      </p>
+    </div>
   {/if}
-</div>
+</section>
 
 <style>
   .debug-view__detail-panel {
     display: flex;
+    flex-direction: column;
     min-width: 0;
     min-height: 0;
     flex: 1;
-    flex-direction: column;
     overflow: hidden;
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
     background: var(--surface);
   }
-
-  :global(.debug-view__detail-loading) {
-    align-self: center;
-    width: min(calc(100% - 28px), 560px);
-    margin-block: auto;
+  .detail-back {
+    display: none;
   }
-
+  .detail-header {
+    padding: 18px 20px 8px;
+    display: grid;
+    gap: 10px;
+    max-height: 38%;
+    overflow: auto;
+    flex-shrink: 0;
+  }
+  .detail-heading-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  h3 {
+    color: var(--text-hi);
+    font-size: var(--fs-heading-sm);
+    font-weight: 500;
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+  .detail-heading-row h3 {
+    margin-right: auto;
+  }
+  .detail-facts {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+    font-variant-numeric: tabular-nums;
+  }
+  .detail-status[data-tone='ok'] {
+    color: var(--green);
+  }
+  .detail-status[data-tone='error'] {
+    color: var(--red);
+  }
+  .detail-endpoint {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    color: var(--text-med);
+    font: var(--fs-mono-sm)/1.7 var(--font-mono);
+  }
+  .detail-endpoint > span {
+    color: var(--accent);
+    padding-block: 5px;
+  }
+  .detail-endpoint code {
+    min-width: 0;
+    flex: 1;
+    overflow-wrap: anywhere;
+    padding-block: 5px;
+  }
   :global(.debug-view__detail-tab-list) {
-    padding: 8px 10px 0;
+    padding-inline: 20px;
+    flex-shrink: 0;
   }
-
   .debug-view__detail-body {
+    display: flex;
+    flex-direction: column;
     min-height: 0;
     flex: 1;
+  }
+  .detail-headers {
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+    max-height: 35%;
     overflow: auto;
-    padding: 14px;
   }
-
-  .debug-view__detail-section {
-    margin-bottom: 16px;
-  }
-
-  .debug-view__detail-section:last-child {
-    margin-bottom: 0;
-  }
-
-  .debug-view__detail-heading {
-    margin: 0 0 6px;
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .debug-view__detail-heading-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-    margin-bottom: 6px;
-  }
-
-  .debug-view__detail-heading-row .debug-view__detail-heading {
-    margin: 0;
-  }
-
-  .debug-view__metadata-grid {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    align-items: baseline;
-    gap: 6px 16px;
-  }
-
-  .debug-view__metadata-label {
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    font-weight: 500;
-  }
-
-  .debug-view__metadata-value {
-    color: var(--text-hi);
-    font-family: var(--font-mono);
-    font-size: 12px;
-    word-break: break-all;
-  }
-
-  .debug-view__code-block {
-    box-sizing: border-box;
-    max-width: 100%;
-    max-height: 400px;
-    margin: 0;
-    overflow: auto;
-    overflow-y: auto;
-    padding: 10px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
+  summary {
+    cursor: pointer;
+    padding: 12px 20px;
     color: var(--text-med);
-    background: var(--bg);
+    font-size: var(--fs-body-sm);
+  }
+  summary > span + span {
+    margin-left: 10px;
     font-family: var(--font-mono);
-    font-size: 11.5px;
-    line-height: 1.55;
-    user-select: text;
-    -webkit-user-select: text;
   }
-
-  .debug-view__code-block--raw {
-    overflow-wrap: normal;
-    white-space: pre;
-    word-break: normal;
+  summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
-
-  .debug-view__code-block--formatted {
-    overflow-wrap: anywhere;
+  .headers-content {
+    display: flex;
+    gap: 8px;
+    padding: 0 20px 16px;
+  }
+  pre {
+    margin: 0;
     white-space: pre-wrap;
-    word-break: break-word;
+    overflow-wrap: anywhere;
+    color: var(--text-hi);
+    font: var(--fs-mono-sm)/1.7 var(--font-mono);
+  }
+  .headers-content pre {
+    flex: 1;
+    min-width: 0;
+  }
+  .detail-metadata {
+    overflow: auto;
+    padding: 12px 20px 24px;
+  }
+  .detail-metadata > div {
+    display: grid;
+    grid-template-columns: 130px minmax(0, 1fr);
+    gap: 14px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  dt {
+    font: var(--fs-mono-sm) var(--font-mono);
+    color: var(--text-med);
+  }
+  dd {
+    min-width: 0;
+  }
+  .detail-message {
+    margin: auto;
+    padding: 28px;
+    max-width: 520px;
+  }
+  .detail-placeholder {
+    display: grid;
+    justify-items: start;
+    gap: 16px;
+    color: var(--text-med);
+    font-size: var(--fs-body-lg);
+    line-height: 1.7;
+  }
+  .detail-placeholder svg {
+    color: var(--accent);
+  }
+  @media (max-width: 760px) {
+    .detail-back {
+      display: block;
+      padding: 6px 10px 0;
+    }
+    .detail-header {
+      padding: 10px 14px;
+    }
+    .detail-metadata > div {
+      grid-template-columns: 1fr;
+      gap: 6px;
+    }
   }
 </style>
