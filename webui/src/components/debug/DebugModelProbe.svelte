@@ -13,7 +13,7 @@
   } from '$lib/debugView.js';
   import { t } from '$lib/i18n.js';
 
-  let { viewState } = $props();
+  let { viewState = $bindable() } = $props();
 
   let connectionOptions = $derived(modelProbeConnectionOptions(viewState));
   let canProbe = $derived(modelProbeCanProbe(viewState));

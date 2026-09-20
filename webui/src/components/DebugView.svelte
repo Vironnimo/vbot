@@ -1,5 +1,10 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
+  import {
+    createDebouncedAutosave,
+    useAutosaveContext,
+    autosaveInput,
+  } from '../lib/autosave.js';
 
   import {
     debugStatus,
@@ -36,7 +41,12 @@
   let status = $state({ enabled: false, traceLimit: 50, traceCount: 0 });
   let showClearConfirm = $state(false);
   let traceLimitInput = $state(50);
-  let traceLimitDirty = $state(false);
+  let settingsReady = $state(false);
+  let limitError = $state('');
+  let listRequestToken = 0;
+  let retentionRevision = 0;
+  let disposed = false;
+  let clearing = $state(false);
   let loadingDetail = $state(false);
   let detailError = $state('');
   let detailRequestToken = $state(0);
@@ -44,6 +54,25 @@
 
   let hasTraces = $derived(viewState.traces.length > 0);
   let hasSelection = $derived(viewState.selectedTrace !== null);
+
+  const autosave = createDebouncedAutosave({
+    getSnapshot: () => traceLimitInput,
+    hasChanges: () =>
+      settingsReady && Number(traceLimitInput) !== status.traceLimit,
+    save: saveTraceLimit,
+  });
+  const unregister = useAutosaveContext().register(autosave.participant);
+  $effect(() => {
+    if (settingsReady) autosave.scheduleRun();
+    return () => autosave.cancelPendingTimer();
+  });
+  onDestroy(() => {
+    disposed = true;
+    listRequestToken += 1;
+    detailRequestToken += 1;
+    autosave.cancelPendingTimer();
+    unregister();
+  });
 
   onMount(() => {
     loadAll();
@@ -63,6 +92,8 @@
   });
 
   async function loadAll() {
+    const token = ++listRequestToken;
+    const revision = retentionRevision;
     viewState.loading = true;
     viewState.error = '';
 
@@ -73,20 +104,25 @@
         loadSettings(),
       ]);
 
+      if (disposed || token !== listRequestToken) return;
+      const keepDraft = settingsReady && autosave.participant.hasPending();
       const nextStatus = applyDebugStatus(viewState, statusResult);
+      if (revision !== retentionRevision)
+        nextStatus.traceLimit = status.traceLimit;
       status = nextStatus;
-      traceLimitInput = nextStatus.traceLimit;
-      traceLimitDirty = false;
+      if (!keepDraft) traceLimitInput = nextStatus.traceLimit;
+      settingsReady = true;
 
       applyTraceList(viewState, traceResult);
       applyModelProbeProviders(viewState, settingsResult);
     } catch (error) {
+      if (disposed || token !== listRequestToken) return;
       viewState.error = errorMessageText(
         error,
         t('errors.generic', 'Something went wrong. Try again.'),
       );
     } finally {
-      viewState.loading = false;
+      if (token === listRequestToken) viewState.loading = false;
     }
   }
 
@@ -141,13 +177,30 @@
   }
 
   async function refreshTraces() {
+    if (clearing) return;
+    if (!settingsReady) return loadAll();
+    const token = ++listRequestToken;
+    const revision = retentionRevision;
     try {
-      const result = await debugTraceList();
+      const [result, statusResult] = await Promise.all([
+        debugTraceList(),
+        debugStatus(),
+      ]);
+      if (disposed || token !== listRequestToken) return;
+      const draftWasClean = !autosave.participant.hasPending();
       applyTraceList(viewState, result);
-
-      const statusResult = await debugStatus();
-      status = applyDebugStatus(viewState, statusResult);
+      if (!viewState.selectedTrace) {
+        detailRequestToken += 1;
+        loadingDetail = false;
+        detailError = '';
+      }
+      const nextStatus = applyDebugStatus(viewState, statusResult);
+      if (revision !== retentionRevision)
+        nextStatus.traceLimit = status.traceLimit;
+      status = nextStatus;
+      if (draftWasClean) traceLimitInput = status.traceLimit;
     } catch (error) {
+      if (disposed || token !== listRequestToken) return;
       viewState.error = errorMessageText(
         error,
         t('errors.generic', 'Something went wrong. Try again.'),
@@ -170,12 +223,20 @@
 
     try {
       const result = await debugTraceGet(traceId);
-      if (requestToken !== detailRequestToken) {
+      if (
+        disposed ||
+        requestToken !== detailRequestToken ||
+        viewState.selectedTrace?.trace_id !== traceId
+      ) {
         return;
       }
       applyTraceDetail(viewState, result);
     } catch (error) {
-      if (requestToken !== detailRequestToken) {
+      if (
+        disposed ||
+        requestToken !== detailRequestToken ||
+        viewState.selectedTrace?.trace_id !== traceId
+      ) {
         return;
       }
       detailError = errorMessageText(
@@ -190,56 +251,77 @@
   }
 
   async function handleClearTraces() {
+    let cleared = false;
     showClearConfirm = false;
     viewState.error = '';
+    clearing = true;
+    listRequestToken += 1;
+    detailRequestToken += 1;
+    loadingDetail = false;
+    detailError = '';
 
     try {
       await debugTraceClear();
+      if (disposed) return;
       clearTracesApplied(viewState);
+      cleared = true;
       status = { ...status, traceCount: 0 };
     } catch (error) {
       viewState.error = errorMessageText(
         error,
         t('errors.generic', 'Something went wrong. Try again.'),
       );
+    } finally {
+      clearing = false;
+      if (cleared && !disposed) await refreshTraces();
     }
   }
 
-  async function handleTraceLimitChange() {
-    const value = Math.min(
-      TRACE_LIMIT_MAX,
-      Math.max(TRACE_LIMIT_MIN, traceLimitInput),
-    );
-    traceLimitInput = value;
-    traceLimitDirty = false;
-
+  async function saveTraceLimit() {
+    const submitted = traceLimitInput;
+    const value = Number(submitted);
+    if (
+      !Number.isInteger(value) ||
+      value < TRACE_LIMIT_MIN ||
+      value > TRACE_LIMIT_MAX
+    ) {
+      limitError = t(
+        'debug.limitInvalid',
+        'Enter a whole number from 1 to 500.',
+      );
+      return false;
+    }
+    limitError = '';
+    retentionRevision += 1;
     try {
-      await updateSettings({
-        debug: { trace_limit: value },
-      });
-      status = { ...status, traceLimit: value };
-      await refreshTraces();
+      const result = await updateSettings({ debug: { trace_limit: value } });
+      status = { ...status, traceLimit: result?.debug?.trace_limit ?? value };
+      if (traceLimitInput === submitted) traceLimitInput = status.traceLimit;
+      return true;
     } catch (error) {
-      viewState.error = errorMessageText(
+      limitError = errorMessageText(
         error,
         t('errors.generic', 'Something went wrong. Try again.'),
       );
+      return false;
+    } finally {
+      retentionRevision += 1;
     }
   }
 
-  function handleTraceLimitInput(event) {
-    const raw = Number(event.currentTarget.value);
-    if (Number.isNaN(raw)) {
-      return;
-    }
-    traceLimitInput = raw;
-    traceLimitDirty = raw !== status.traceLimit;
-  }
-
-  function handleLimitKeyDown(event) {
-    if (event.key === 'Enter') {
-      handleTraceLimitChange();
-    }
+  async function backToTraces() {
+    const previousId = viewState.selectedTrace?.trace_id;
+    viewState.selectedTrace = null;
+    detailRequestToken += 1;
+    loadingDetail = false;
+    await tick();
+    const row = [...document.querySelectorAll('.debug-trace')].find(
+      (item) => item.dataset.traceId === previousId,
+    );
+    (
+      row?.querySelector('button') ??
+      document.querySelector('.trace-filters input')
+    )?.focus();
   }
 
   function errorMessageText(error, fallback) {
@@ -253,141 +335,155 @@
   }
 </script>
 
-<section class="debug-view view-frame" aria-labelledby="debug-title">
-  <header class="debug-view__header view-header">
-    <div class="view-header__intro">
-      <p class="debug-view__eyebrow view-header__eyebrow">
-        {t('debug.eyebrow', 'Provider wire traces')}
-      </p>
-      <h2 id="debug-title" class="debug-view__title view-header__title">
-        {t('debug.title', 'Debug')}
-      </h2>
-      <p class="debug-view__subtitle view-header__subtitle">
-        {t(
-          'debug.subtitle',
-          'Inspect captured provider requests and responses, and probe model endpoints.',
-        )}
-      </p>
+<section
+  class="debug-view view-frame"
+  class:debug-view--inspecting={hasSelection}
+  aria-labelledby="debug-title"
+>
+  <header class="view-header debug-header">
+    <div class="debug-heading">
+      <h2 id="debug-title">{t('debug.title', 'Debug')}</h2>
+      <span class="capture-state" class:capture-state--enabled={status.enabled}>
+        <span aria-hidden="true">●</span>
+        {status.enabled
+          ? t('debug.captureEnabled', 'Capture enabled')
+          : t('debug.captureDisabled', 'Capture disabled')}
+      </span>
     </div>
+    <p>
+      {t(
+        'debug.inspectorSubtitle',
+        'Explore exactly what was sent to the Provider and what came back.',
+      )}
+    </p>
   </header>
 
-  <div class="debug-view__status-bar view-toolbar view-toolbar--split">
-    <div class="debug-view__status-info">
-      <Badge variant="neutral">
-        {t('debug.statusCount', '{count} / {limit} traces', {
-          count: status.traceCount,
-          limit: status.traceLimit,
-        })}
-      </Badge>
-    </div>
-
-    <div class="debug-view__status-controls">
-      <label class="debug-view__limit-field">
-        <span class="debug-view__limit-label view-toolbar__label">
-          {t('debug.traceLimit', 'Trace limit')}
-        </span>
-        <input
-          class="debug-view__limit-input"
-          type="number"
-          min={TRACE_LIMIT_MIN}
-          max={TRACE_LIMIT_MAX}
-          value={traceLimitInput}
-          oninput={handleTraceLimitInput}
-          onkeydown={handleLimitKeyDown}
-          onblur={handleTraceLimitChange}
-          aria-label={t('debug.traceLimit', 'Trace limit')}
-          disabled={viewState.loading}
-        />
-      </label>
-
-      {#if traceLimitDirty}
-        <Button
-          variant="primary"
-          class="debug-view__apply-btn"
-          onClick={handleTraceLimitChange}
-        >
-          {t('common.save', 'Save')}
-        </Button>
-      {/if}
-
-      {#if showClearConfirm}
-        <span class="debug-view__confirm-text">
-          {t('debug.clearConfirm', 'Clear all traces? This cannot be undone.')}
-        </span>
-        <Button
-          variant="secondary"
-          class="debug-view__confirm-btn debug-view__confirm-btn--danger"
-          onClick={handleClearTraces}
-        >
-          {t('common.confirm', 'Confirm')}
-        </Button>
-        <Button variant="secondary" onClick={() => (showClearConfirm = false)}>
-          {t('common.cancel', 'Cancel')}
-        </Button>
-      {:else}
-        <Button
-          variant="secondary"
-          class="debug-view__clear-btn"
-          onClick={() => (showClearConfirm = true)}
-          disabled={!hasTraces}
-        >
-          {t('common.clear', 'Clear')}
-        </Button>
-      {/if}
-    </div>
-  </div>
-
-  <div class="debug-view__warning" role="alert">
-    <span class="debug-view__warning-text">
-      {t(
-        'debug.localWarning',
-        'Debug traces are stored locally. Provider requests and responses are captured in full, including raw prompt content sent to models. Secret values like API keys and tokens are automatically redacted.',
-      )}
-    </span>
+  <div class="debug-utilities view-toolbar view-toolbar--split">
+    <Badge variant="neutral"
+      >{t('debug.statusCount', '{count} / {limit} traces', {
+        count: status.traceCount,
+        limit: status.traceLimit,
+      })}</Badge
+    >
+    <span class="debug-local-note"
+      >{t(
+        'debug.fullCapture',
+        'Stored locally · full request and response bodies',
+      )}</span
+    >
+    <details class="debug-storage">
+      <summary>{t('debug.captureAndStorage', 'Capture & storage')}</summary>
+      <div class="debug-storage-content">
+        <p>
+          {t(
+            'debug.capturePrivacy',
+            'Bodies are stored in full, including prompts. Recognized secret headers and URL parameters are redacted; body content is not redacted.',
+          )}
+        </p>
+        <label
+          >{t('debug.traceLimit', 'Trace limit')}
+          <input
+            type="number"
+            min="1"
+            max="500"
+            step="1"
+            use:autosaveInput
+            value={traceLimitInput}
+            oninput={(event) => {
+              traceLimitInput = event.currentTarget.value;
+              limitError = '';
+            }}
+            onkeydown={(event) => {
+              if (event.key === 'Enter')
+                void autosave.participant.runSave('manual');
+            }}
+            aria-label={t('debug.traceLimit', 'Trace limit')}
+          />
+        </label>
+        {#if limitError}<Banner variant="error">{limitError}</Banner>{/if}
+        <div class="storage-actions">
+          <Button
+            variant="tertiary"
+            disabled={!hasTraces || clearing}
+            onClick={() => (showClearConfirm = !showClearConfirm)}
+            >{t('debug.clearAll', 'Clear all traces')}</Button
+          >
+          <Button
+            variant="tertiary"
+            onClick={() => autosave.participant.runSave('manual')}
+            >{t('common.save', 'Save')}</Button
+          >
+        </div>
+        {#if showClearConfirm}
+          <p>
+            {t(
+              'debug.clearConfirm',
+              'Clear all traces? This cannot be undone.',
+            )}
+          </p>
+          <div class="storage-actions">
+            <Button
+              variant="danger"
+              disabled={clearing}
+              onClick={handleClearTraces}
+              >{t('common.confirm', 'Confirm')}</Button
+            ><Button
+              variant="secondary"
+              onClick={() => (showClearConfirm = false)}
+              >{t('common.cancel', 'Cancel')}</Button
+            >
+          </div>
+        {/if}
+      </div>
+    </details>
   </div>
 
   {#if viewState.error}
-    <Banner variant="error" aria-live="polite">
-      <span>{viewState.error}</span>
-      <Button variant="secondary" onClick={loadAll}>
-        {t('common.retry', 'Retry')}
-      </Button>
-    </Banner>
+    <Banner variant="error" aria-live="polite"
+      ><span>{viewState.error}</span><Button
+        variant="secondary"
+        onClick={loadAll}>{t('common.retry', 'Retry')}</Button
+      ></Banner
+    >
   {/if}
 
   {#if viewState.loading}
-    <Banner variant="neutral">{t('common.loading', 'Loading\u2026')}</Banner>
+    <Banner variant="neutral">{t('common.loading', 'Loading…')}</Banner>
   {:else if !hasTraces}
     <EmptyState
       fill
       title={t('debug.emptyHeader', 'No traces captured yet')}
       description={t(
         'debug.emptyState',
-        'No traces captured yet. Enable debug mode in Settings and send a message to start recording provider requests and responses.',
+        'Enable debug mode in Settings and send a message to start recording provider requests and responses.',
       )}
     />
   {:else}
-    <div class="debug-view__main">
+    <div
+      class="debug-view__main"
+      class:debug-view__main--selected={hasSelection}
+    >
       <DebugTraceList
         traces={viewState.traces}
         selectedTraceId={viewState.selectedTrace?.trace_id ?? ''}
         onSelect={handleTraceSelect}
       />
-
-      {#if hasSelection}
-        {#key detailRequestToken}
-          <DebugTraceDetail
-            trace={viewState.selectedTrace}
-            loading={loadingDetail}
-            error={detailError}
-            onRetry={() => handleTraceSelect(viewState.selectedTrace.trace_id)}
-          />
-        {/key}
-      {/if}
+      {#key detailRequestToken}
+        <DebugTraceDetail
+          trace={viewState.selectedTrace}
+          loading={loadingDetail}
+          error={detailError}
+          onRetry={() => handleTraceSelect(viewState.selectedTrace.trace_id)}
+          onBack={backToTraces}
+        />
+      {/key}
     </div>
   {/if}
 
-  <DebugModelProbe {viewState} />
+  <details class="debug-probe-disclosure">
+    <summary>{t('debug.modelProbe', 'Model Probe')}</summary>
+    <div class="debug-probe-content"><DebugModelProbe bind:viewState /></div>
+  </details>
 </section>
 
 <style>
@@ -400,102 +496,123 @@
     overflow: hidden;
     background: var(--bg);
   }
-
-  .debug-view__status-info {
-    display: flex;
-    align-items: center;
-    gap: 10px;
+  .debug-header {
+    display: block;
+    flex-shrink: 0;
   }
-
-  .debug-view__status-controls {
+  .debug-heading {
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  h2 {
+    margin: 0;
+    font-size: var(--fs-heading-lg);
+    font-weight: 500;
+    color: var(--text-hi);
+  }
+  .debug-header p {
+    margin: 6px 0 0;
+    color: var(--text-med);
+    font-size: var(--fs-body-md);
+    line-height: 1.6;
+  }
+  .capture-state {
+    color: var(--text-med);
+    font-size: var(--fs-label-sm);
+  }
+  .capture-state > span {
+    margin-right: 4px;
+  }
+  .capture-state--enabled > span {
+    color: var(--green);
+  }
+  .debug-utilities {
+    justify-content: flex-start;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+  .debug-local-note {
+    color: var(--text-med);
+    font-size: var(--fs-label-sm);
+  }
+  .debug-storage {
+    font-size: var(--fs-body-sm);
+  }
+  summary {
+    cursor: pointer;
+    color: var(--text-med);
+  }
+  summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 4px;
+  }
+  .debug-storage[open] {
+    flex-basis: 100%;
+  }
+  .debug-storage-content {
+    display: grid;
+    gap: 10px;
+    padding: 12px 0 4px;
+    color: var(--text-med);
+    max-height: 240px;
+    overflow: auto;
+    max-width: 700px;
+    line-height: 1.6;
+  }
+  .debug-storage label {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--text-hi);
+  }
+  .debug-storage input {
+    width: 88px;
+    padding: 6px 10px;
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-sm);
+    background: var(--surface);
+    color: var(--text-hi);
+  }
+  .storage-actions {
+    display: flex;
+    justify-content: space-between;
     gap: 8px;
   }
-
-  .debug-view__limit-field {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .debug-view__limit-input {
-    width: 72px;
-    padding: 4px 8px;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-md);
-    color: var(--text-hi);
-    background: var(--surface-2);
-    font-family: var(--font-mono);
-    font-size: 12px;
-    text-align: right;
-  }
-
-  .debug-view__limit-input:focus-visible {
-    border-color: var(--accent-40);
-    box-shadow: var(--focus-ring);
-    outline: none;
-  }
-
-  :global(.debug-view__apply-btn) {
-    padding: 4px 10px;
-    font-size: 12px;
-  }
-
-  .debug-view__confirm-text {
-    color: var(--amber);
-    font-size: 12px;
-    line-height: 1.4;
-  }
-
-  :global(.debug-view__confirm-btn--danger):hover,
-  :global(.debug-view__confirm-btn--danger):focus-visible {
-    border-color: var(--red);
-    color: var(--red);
-    background: rgba(252, 129, 129, 0.07);
-  }
-
-  :global(.debug-view__clear-btn):disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .debug-view__warning {
-    padding: 10px 14px;
-    border: 1px solid rgba(245, 158, 11, 0.22);
-    border-radius: var(--r-md);
-    background: rgba(245, 158, 11, 0.06);
-  }
-
-  .debug-view__warning-text {
-    color: var(--amber);
-    font-size: 12px;
-    line-height: 1.5;
-  }
-
   .debug-view__main {
     display: flex;
     min-height: 0;
     flex: 1;
-    gap: 14px;
     overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
   }
-
-  @media (max-width: 1080px) {
-    .debug-view__main {
-      flex-direction: column;
-    }
+  .debug-probe-disclosure {
+    flex-shrink: 0;
+    font-size: var(--fs-body-sm);
   }
-
-  @media (max-width: 640px) {
-    .debug-view__status-bar {
-      align-items: stretch;
-      flex-direction: column;
+  .debug-probe-content {
+    max-height: 32vh;
+    overflow: auto;
+    padding-top: 12px;
+  }
+  @media (max-width: 760px) {
+    .debug-view--inspecting .debug-header,
+    .debug-view--inspecting .debug-utilities {
+      display: none;
     }
-
-    .debug-view__status-controls {
-      justify-content: flex-start;
+    .debug-local-note {
+      display: none;
+    }
+    .debug-view__main:not(.debug-view__main--selected)
+      :global(.debug-view__detail-panel) {
+      display: none;
+    }
+    .debug-view__main--selected :global(.debug-view__trace-panel) {
+      display: none;
     }
   }
 </style>

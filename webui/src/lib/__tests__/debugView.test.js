@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  filterTraces,
+  traceStatusTone,
+  bodyMatchOffsets,
   applyDebugStatus,
   applyModelProbeProviders,
   applyModelProbeResult,
@@ -603,3 +606,62 @@ function traceEntry(traceId) {
     type: 'provider_request',
   };
 }
+
+describe('debug inspector projections', () => {
+  it('keeps null status and duration unknown instead of converting them to zero', () => {
+    expect(
+      normalizeTraceEntry({
+        trace_id: 'a',
+        status_code: null,
+        duration_ms: null,
+      }),
+    ).toMatchObject({ status_code: null, duration_ms: null });
+    expect(traceStatusTone(null)).toBe('unknown');
+    expect(traceStatusTone(101)).toBe('ok');
+    expect(traceStatusTone(429)).toBe('error');
+  });
+  it('searches metadata case-insensitively and intersects status and Provider filters', () => {
+    const traces = [
+      {
+        trace_id: 'a',
+        provider_id: 'openai',
+        model_id: 'gpt',
+        status_code: 200,
+        url: '/responses',
+      },
+      {
+        trace_id: 'b',
+        provider_id: 'openai',
+        model_id: 'gpt',
+        status_code: 429,
+        url: '/responses',
+      },
+      {
+        trace_id: 'c',
+        provider_id: 'other',
+        model_id: 'gpt',
+        status_code: null,
+      },
+    ];
+    expect(filterTraces(traces, 'GPT /RESPONSES', 'error', 'openai')).toEqual([
+      traces[1],
+    ]);
+    expect(filterTraces(traces, '', 'unknown')).toEqual([traces[2]]);
+  });
+  it('preserves the complete selected payload across metadata-only list refreshes', () => {
+    const state = createDebugViewState();
+    const trace = {
+      trace_id: 'a',
+      request: { body: 'verbatim' },
+      response: { body: 'full response' },
+    };
+    applyTraceDetail(state, { trace });
+    applyTraceList(state, { traces: [{ trace_id: 'a' }] });
+    expect(state.selectedTrace).toBe(trace);
+  });
+  it('finds literal Unicode and punctuation without regular expressions or offset changes', () => {
+    expect(bodyMatchOffsets('İ [x] 😀 [x]', '[x]')).toEqual([2, 9]);
+    expect(bodyMatchOffsets('aaaa', 'aa')).toEqual([0, 2]);
+    expect(bodyMatchOffsets('data', '')).toEqual([]);
+  });
+});
