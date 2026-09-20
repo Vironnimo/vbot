@@ -137,6 +137,10 @@ Logs uses compact Mono rows with timestamp, level, logger, and message, plus sem
 
 The AppShell server-availability popup is a global floating surface with connection state, details, and Retry; Desktop can also offer Switch server. Navigation stays available while server-dependent content is inert. A short grace period avoids transient flashes, and recovery briefly displays success. Timing, suppression of duplicate errors, reconnect, and Desktop capability behavior belong to `app-shell.md` and `settings.md`.
 
+### Debug
+
+The Debug inspector pairs a filterable trace list with a full-height reading pane. List entries give the Model prominence and separate Provider/method and time/duration; code status is colored without claiming stream success. Request opens first, with Response and Metadata beside it. Endpoint, timestamp, status, duration and capture errors remain above the tabs; headers are disclosed separately. JSON has lazy expandable fields and readable multiline strings, plus Formatted JSON and exact Raw alternatives. Body search, line wrapping, raw Copy and complete-trace Copy/download sit near their content. Capture/storage and Model Probe stay in secondary disclosures; narrow screens show either list or detail with Back and focus restoration. On narrow screens the selected detail also hides the page introduction and storage toolbar to preserve reading space. Owners and raw-data contracts: `../debug.md`.
+
 ### Swarms
 
 The bundled Swarm page currently uses a Secondary pane for Swarms and grouped Runs. The Swarm editor has Overview/System Prompt/Tools & Skills/Communication topics; Run setup selects Swarm, working directory, and goal. Saved editors autosave and retain a small in-flow manual Save action. Operational views have their own refresh behavior.

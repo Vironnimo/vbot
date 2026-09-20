@@ -122,50 +122,43 @@ describe('DebugView', () => {
     );
   });
 
-  it('toggles a row-level full-value expand affordance and switches off when clicked again', async () => {
-    debugTraceListMock.mockResolvedValue({
-      traces: [
-        traceListEntry({
-          trace_id: 'trace-expand',
-          provider_id: 'openai',
-          model_id: 'gpt-5.2',
-        }),
-      ],
+  it('combines list search, status and Provider filters without changing the inspected trace', async () => {
+    const a = traceListEntry({ trace_id: 'a' });
+    const b = traceListEntry({
+      trace_id: 'b',
+      provider_id: 'anthropic',
+      model_id: 'claude',
+      status_code: 429,
     });
-
+    debugTraceListMock.mockResolvedValue({ traces: [a, b] });
+    debugTraceGetMock.mockResolvedValue({ trace: fullTraceFixture(a) });
     mountedComponent = mount(DebugView, { target: document.body });
+    await waitForText('claude');
+    clickTraceRow('a');
+    await switchToDetailTabWhenReady('Request');
+    const search = document.querySelector('.trace-filters input');
+    search.value = 'CLAUDE';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
-
-    await waitForText('gpt-5.2');
-
-    const row = document.querySelector('.debug-trace');
-    expect(row?.classList.contains('debug-trace--expanded')).toBe(false);
-
-    const expandButton = document.querySelector('.debug-trace__expand');
-    expect(expandButton).toBeTruthy();
-    expect(expandButton?.getAttribute('aria-expanded')).toBe('false');
-
-    expandButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(document.querySelectorAll('.debug-trace')).toHaveLength(1);
+    expect(document.querySelector('.debug-trace').dataset.traceId).toBe('b');
+    expect(document.querySelector('.detail-header h3').textContent).toBe(
+      a.model_id,
+    );
+    const status = document.querySelector('.trace-filters select');
+    status.value = 'ok';
+    status.dispatchEvent(new Event('change', { bubbles: true }));
     flushSync();
-
-    expect(row?.classList.contains('debug-trace--expanded')).toBe(true);
-    expect(
-      document
-        .querySelector('.debug-trace__expand')
-        ?.getAttribute('aria-expanded'),
-    ).toBe('true');
-
-    document
-      .querySelector('.debug-trace__expand')
-      ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(document.querySelectorAll('.debug-trace')).toHaveLength(0);
+    document.querySelector('.trace-no-matches button').click();
     flushSync();
-
-    expect(row?.classList.contains('debug-trace--expanded')).toBe(false);
-    expect(
-      document
-        .querySelector('.debug-trace__expand')
-        ?.getAttribute('aria-expanded'),
-    ).toBe('false');
+    expect(document.querySelectorAll('.debug-trace')).toHaveLength(2);
+    const provider = document.querySelectorAll('.trace-filters select')[1];
+    provider.value = 'anthropic';
+    provider.dispatchEvent(new Event('change', { bubbles: true }));
+    flushSync();
+    expect(document.querySelectorAll('.debug-trace')).toHaveLength(1);
+    expect(document.querySelector('.debug-trace').dataset.traceId).toBe('b');
   });
 
   it('keeps the latest selection visible when an earlier click resolves after a later click', async () => {
@@ -241,7 +234,7 @@ describe('DebugView', () => {
     expect(getBodyBlockText()).not.toContain('"trace":"a"');
   });
 
-  it('shows raw and formatted request body panes with the raw view selected by default', async () => {
+  it('opens the Request in readable JSON and preserves exact raw and formatted alternatives', async () => {
     const trace = traceListEntry({
       trace_id: 'trace-body',
       provider_id: 'openai',
@@ -269,7 +262,20 @@ describe('DebugView', () => {
     await waitForText('gpt-5.2');
 
     clickTraceRow('trace-body');
-    flushSync();
+    await waitForCondition(() =>
+      document.querySelector('.debug-view__body-tab-list'),
+    );
+    expect(
+      document
+        .querySelector('#debug-detail-tab-request')
+        .getAttribute('aria-selected'),
+    ).toBe('true');
+    expect(
+      document
+        .querySelector('#debug-request-body-tab-readable')
+        .getAttribute('aria-selected'),
+    ).toBe('true');
+    expect(document.querySelector('.json-string').textContent).toBe('hi');
     await switchToDetailTabWhenReady('Request');
     flushSync();
     await waitForBodyText('"prompt":"hi"');
@@ -285,9 +291,9 @@ describe('DebugView', () => {
     const tabs = Array.from(
       document.querySelectorAll('.debug-view__body-tab-list .tab-list__tab'),
     );
-    expect(tabs).toHaveLength(2);
-    expect(tabs[0]?.textContent?.trim()).toBe('Raw');
-    expect(tabs[1]?.textContent?.trim()).toBe('Parsed');
+    expect(tabs).toHaveLength(3);
+    expect(tabs[0]?.getAttribute('id')).toContain('readable');
+    expect(tabs[2]?.getAttribute('aria-selected')).toBe('true');
 
     tabs[1]?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     flushSync();
@@ -340,7 +346,7 @@ describe('DebugView', () => {
     expect(getBodyBlock()?.textContent).toBe(
       'this is plain text that is not JSON',
     );
-    expect(getBodyBlock()?.parentElement?.getAttribute('role')).toBeNull();
+    expect(getBodyBlock()?.parentElement?.getAttribute('role')).toBe('region');
   });
 
   it('shows the aggregate streaming response body under the Response tab and exposes no Stream Events tab', async () => {
@@ -384,7 +390,7 @@ describe('DebugView', () => {
     const tabLabels = Array.from(
       document.querySelectorAll('.debug-view__detail-tab-list .tab-list__tab'),
     ).map((tab) => tab.textContent?.trim() ?? '');
-    expect(tabLabels).toEqual(['Metadata', 'Request', 'Response']);
+    expect(tabLabels).toEqual(['Request', 'Response', 'Metadata']);
     expect(tabLabels).not.toContain('Stream Events');
 
     await waitForBodyText('data: [DONE]');
@@ -450,6 +456,7 @@ describe('DebugView', () => {
     );
 
     expect(getSelectedTraceId()).toBe('trace-keep');
+    expect(getBodyBlockText()).toBe('{"x":1}');
   });
 
   it('clears the selection when refreshTraces returns a list without the selected id', async () => {
@@ -520,6 +527,169 @@ describe('DebugView', () => {
     expect(getHeadersBlockText()).toBe('—');
     flushSync();
     expect(getHeadersBlockText()).toBe('—');
+  });
+
+  it('shows a capture failure even if the HTTP status was successful, and retries detail loading', async () => {
+    const entry = traceListEntry();
+    const trace = {
+      ...fullTraceFixture(entry),
+      error: { type: 'ReadError', message: 'test-owned-stream-error' },
+    };
+    debugTraceListMock.mockResolvedValue({ traces: [entry] });
+    debugTraceGetMock
+      .mockRejectedValueOnce(new Error('test-owned-load-error'))
+      .mockResolvedValueOnce({ trace });
+    mountedComponent = mount(DebugView, { target: document.body });
+    await waitForText(entry.model_id);
+    clickTraceRow(entry.trace_id);
+    await waitForText('test-owned-load-error');
+    document
+      .querySelector('.debug-view__detail-panel button.btn-secondary')
+      .click();
+    await waitForText('test-owned-stream-error');
+    expect(document.querySelector('.detail-status').dataset.tone).toBe('error');
+    expect(debugTraceGetMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not resurrect a cleared trace when its pending detail arrives', async () => {
+    const entry = traceListEntry();
+    let resolveDetail;
+    debugTraceListMock.mockResolvedValueOnce({ traces: [entry] });
+    debugTraceGetMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveDetail = resolve;
+      }),
+    );
+    mountedComponent = mount(DebugView, { target: document.body });
+    await waitForText(entry.model_id);
+    clickTraceRow(entry.trace_id);
+    flushSync();
+    [...document.querySelectorAll('.storage-actions button')]
+      .find((button) => button.textContent.trim() === 'Clear all traces')
+      .click();
+    flushSync();
+    [...document.querySelectorAll('.storage-actions button')]
+      .find((button) => button.textContent.trim() === 'Confirm')
+      .click();
+    await waitForCondition(() =>
+      document.querySelector('.debug-view .empty-state'),
+    );
+    resolveDetail({ trace: fullTraceFixture(entry) });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync();
+    expect(document.querySelector('.debug-view__detail-panel')).toBeNull();
+    expect(debugTraceClearMock).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a failed clear visible without dropping the inspected payload', async () => {
+    const entry = traceListEntry();
+    debugTraceListMock.mockResolvedValue({ traces: [entry] });
+    debugTraceGetMock.mockResolvedValue({
+      trace: fullTraceFixture(entry, {
+        request: { body: 'test-owned-retained-body' },
+      }),
+    });
+    debugTraceClearMock.mockRejectedValueOnce(
+      new Error('test-owned-clear-error'),
+    );
+    mountedComponent = mount(DebugView, { target: document.body });
+    await waitForText(entry.model_id);
+    clickTraceRow(entry.trace_id);
+    await switchToDetailTabWhenReady('Request');
+    [...document.querySelectorAll('.storage-actions button')]
+      .find((button) => button.textContent.trim() === 'Clear all traces')
+      .click();
+    flushSync();
+    [...document.querySelectorAll('.storage-actions button')]
+      .find((button) => button.textContent.trim() === 'Confirm')
+      .click();
+    await waitForText('test-owned-clear-error');
+    expect(getBodyBlockText()).toBe('test-owned-retained-body');
+    expect(debugTraceListMock).toHaveBeenCalledOnce();
+  });
+
+  it('preserves a newer retention draft through a slow save and validates before submission', async () => {
+    let resolveSave;
+    rpcMock.mockImplementation(async (method) => {
+      if (method === 'settings.get') return { providers: { items: [] } };
+      if (method === 'settings.update')
+        return new Promise((resolve) => {
+          resolveSave = resolve;
+        });
+      throw new Error(method);
+    });
+    mountedComponent = mount(DebugView, { target: document.body });
+    await waitForCondition(() =>
+      document.querySelector('.debug-view .empty-state'),
+    );
+    const input = document.querySelector('input[type="number"]');
+    const save = [...document.querySelectorAll('.storage-actions button')].find(
+      (button) => button.textContent.trim() === 'Save',
+    );
+    input.value = '0';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    save.click();
+    await waitForCondition(() =>
+      document.querySelector('.debug-storage-content .banner--error'),
+    );
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'settings.update'),
+    ).toHaveLength(0);
+    input.value = '75';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    save.click();
+    await waitForCondition(() => resolveSave);
+    input.value = '100';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    resolveSave({ debug: { trace_limit: 75 } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync();
+    expect(input.value).toBe('100');
+    expect(rpcMock).toHaveBeenCalledWith('settings.update', {
+      debug: { trace_limit: 75 },
+    });
+  });
+
+  it('does not overwrite saved retention with an older status refresh', async () => {
+    const props = reactiveProps({ debugTracesRefreshToken: 0 });
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'settings.get') return { providers: { items: [] } };
+      if (method === 'settings.update') return params;
+      throw new Error(method);
+    });
+    mountedComponent = mount(DebugView, { target: document.body, props });
+    await waitForCondition(() =>
+      document.querySelector('.debug-view .empty-state'),
+    );
+    let resolveStatus;
+    debugStatusMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveStatus = resolve;
+        }),
+    );
+    props.debugTracesRefreshToken += 1;
+    await waitForCondition(() => resolveStatus);
+    const input = document.querySelector('input[type="number"]');
+    input.value = '75';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    [...document.querySelectorAll('.storage-actions button')]
+      .find((button) => button.textContent.trim() === 'Save')
+      .click();
+    await waitForCondition(() =>
+      document.querySelector('.debug-utilities').textContent.includes('/ 75'),
+    );
+    resolveStatus({ enabled: true, trace_limit: 50, trace_count: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync();
+    expect(input.value).toBe('75');
+    expect(document.querySelector('.debug-utilities').textContent).toContain(
+      '/ 75',
+    );
   });
 
   it('pretty-prints the probe raw response when it is JSON', async () => {
@@ -690,6 +860,11 @@ async function switchToDetailTabWhenReady(label, attempts = 40) {
     ).find((button) => button.textContent?.trim() === label);
     if (tab) {
       tab.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      flushSync();
+      const rawTab = document.querySelector(
+        '.debug-view__body-tab-list [id$="-tab-raw"]',
+      );
+      rawTab?.click();
       flushSync();
       return;
     }
