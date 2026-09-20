@@ -94,6 +94,7 @@ export function listSessions(agentIds, query = {}, options = {}) {
     ['includeMemoryReflections', 'include_memory_reflections'],
     ['includeSkillReflections', 'include_skill_reflections'],
     ['includeCron', 'include_cron'],
+    ['includeChannels', 'include_channels'],
   ]) {
     if (typeof query[queryKey] === 'boolean') {
       params[rpcKey] = query[queryKey];

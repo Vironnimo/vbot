@@ -250,6 +250,7 @@ export default Object.freeze({
   'sessions.filtersAria': 'Session list filters',
   'sessions.filtersActive': '{count} active filters',
   'sessions.filters.allAgents': 'All agents',
+  'sessions.filters.channels': 'Show channels',
   'sessions.filters.subagents': 'Subagent runs',
   'sessions.filters.memoryReflections': 'Memory reflections',
   'sessions.filters.skillReflections': 'Skill reflections',
@@ -260,7 +261,7 @@ export default Object.freeze({
   'sessions.no_sessions_all': 'No sessions found.',
   'sessions.noImportantTitle': 'No important sessions',
   'sessions.noImportantDescription':
-    'Use the filters to browse Subagent, Reflection, and Cron sessions.',
+    'Use the filters to browse Channel, Subagent, Reflection, and Cron sessions.',
   'sessions.unreadCompletion': 'Unread',
   'sessions.unreadCompletionHint': 'This Session has an unread result.',
   'sessions.fork': 'Fork',

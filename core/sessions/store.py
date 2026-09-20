@@ -766,6 +766,7 @@ class SessionStore:
         include_memory_reflections: bool,
         include_skill_reflections: bool,
         include_cron: bool,
+        include_channels: bool,
         required_address: SessionAddress | None,
     ) -> tuple[list[sqlite3.Row], sqlite3.Row | None, int, bool]:
         with self._runtime.read_ctx() as connection:
@@ -778,6 +779,7 @@ class SessionStore:
                 include_memory_reflections=include_memory_reflections,
                 include_skill_reflections=include_skill_reflections,
                 include_cron=include_cron,
+                include_channels=include_channels,
                 required_address=required_address,
             )
 

@@ -14,7 +14,7 @@ Reflection reviews surface as a "Reflections" subsection inside both Activity-pa
 
 `chatTimeline.js` keeps the public projection interface while internal `lib/chatTimeline/` files own persisted History, live events, ordered child construction and History/live reconciliation. `chatTimelinePresentation.js` keeps its public formatting surface; internal `lib/chatTimelinePresentation/` modules own messages/attachments, Tool rows, child-Run status/result projections, activity and shared time formatting. Both dependency graphs are acyclic; callers continue through the existing public modules.
 
-`SessionListDrawer.svelte` keeps list loading/pagination, filters and selection. Its internal `components/sessions/actions.svelte.js` owns rename, deletion and Compaction Policy edit lifecycles; `menus.svelte.js` owns the row/filter popovers; `presentation.js` holds row labels and timestamps. The shared Session-list API and parent navigation callbacks are unchanged.
+`SessionListDrawer.svelte` keeps list loading/pagination, filters and selection. Its compact header renders ChatView's shared Session/New/Split controls once, with a direct All agents toggle beside the category filter. Channel Sessions are hidden by default through the persisted `channels` filter and server-side `include_channels`; the required selected Session remains visible. All agents is independent of the category count. Its internal `components/sessions/actions.svelte.js` owns rename, deletion and Compaction Policy edit lifecycles; `menus.svelte.js` owns the row/filter popovers; `presentation.js` holds row labels and timestamps. The shared Session-list API and parent navigation callbacks are unchanged.
 
 ## Selection and Sessions
 
