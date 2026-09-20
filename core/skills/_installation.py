@@ -20,9 +20,11 @@ from core.skills._packages import (
     is_redirect,
     package_path,
     package_roots,
+    read_archive,
     read_directory,
+    unwrap_archive,
 )
-from core.skills._sources import load_source
+from core.skills._sources import SkillSource, load_source
 from core.skills.requirements import RequirementParseError, parse_vbot_requirements
 from core.skills.skill_validator import (
     normalize_and_validate_skill_metadata,
@@ -112,8 +114,19 @@ def install_package(
     ref: str | None = None,
     replace: bool = False,
     dry_run: bool = False,
+    archive: bytes | None = None,
+    expected_sha256: str | None = None,
 ) -> SkillInstallResult:
-    bundle = load_source(source, ref=ref)
+    if archive is None:
+        bundle = load_source(source, ref=ref)
+    else:
+        if ref is not None:
+            raise PackageError("A Git revision cannot be used with an uploaded archive.")
+        filename = source.replace("\\", "/").rsplit("/", 1)[-1]
+        package_path(filename)
+        bundle = SkillSource(
+            unwrap_archive(read_archive(archive)), f"upload:{filename}", Path(filename).stem
+        )
     if path is not None and bundle.path is not None and path.strip("/") != bundle.path.strip("/"):
         raise PackageError("--path conflicts with the directory in the supplied source link.")
     selection = path if path is not None else bundle.path
@@ -155,6 +168,10 @@ def install_package(
         if file_path.startswith(prefix)
     }
     sha256 = _digest(files)
+    if expected_sha256 is not None and sha256 != expected_sha256:
+        raise PackageError(
+            "The source changed since the preview. Check the source again before installing."
+        )
     with authoring._write_lock:
         destination = authoring._skill_dir(target_root, name)
         # Do not resolve an existing redirect into another package, even within this root.

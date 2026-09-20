@@ -123,6 +123,15 @@ export function createSkill(params = {}, options = {}) {
   return rpc('skill.create', params, options);
 }
 
+export function installSkill(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Skill installation must be an object',
+    'skill.install',
+  );
+  return rpc('skill.install', params, options);
+}
+
 export function updateSkill(params = {}, options = {}) {
   requirePlainObject(params, 'Skill payload must be an object', 'skill.update');
   return rpc('skill.update', params, options);

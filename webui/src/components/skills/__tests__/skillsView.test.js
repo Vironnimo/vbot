@@ -133,6 +133,70 @@ async function render() {
 }
 
 describe('Skills manager', () => {
+  it.each([false, true])(
+    'opens the installed package even if an event supersedes its refresh (%s)',
+    async (superseded) => {
+      let deferInventory = false;
+      const pendingReads = [];
+      await render();
+      collection('Main');
+      click(button('Add skills'));
+      input(
+        document.querySelector('#skill-install-source'),
+        'https://example.test/demo.skill',
+      );
+      rpcMock.mockImplementation(async (method, params) => {
+        if (method === 'skill.install') {
+          if (params.dry_run)
+            return {
+              operation: 'preview',
+              name: 'demo',
+              package_path: '.',
+              files: 2,
+              sha256: 'a'.repeat(64),
+              candidates: [{ exists: false }],
+            };
+          inventory = [...inventory, entry('installed-private', 'demo')];
+          return { operation: 'installed', scope: 'agent:main', name: 'demo' };
+        }
+        if (method === 'skill.inventory') {
+          if (deferInventory)
+            return new Promise((resolve) => pendingReads.push(resolve));
+          return { skills: inventory };
+        }
+        if (method === 'skill.inspect')
+          return { id: params.id, content: 'installed-instructions-sentinel' };
+        return {};
+      });
+      click(button(t('skills.install.check')));
+      await settle();
+      notifySkillsChanged();
+      await settle();
+      expect(document.querySelector('#skill-install-source').value).toBe(
+        'https://example.test/demo.skill',
+      );
+      deferInventory = superseded;
+      click(button(t('skills.install.action')));
+      await settle();
+      if (superseded) {
+        notifySkillsChanged();
+        await settle();
+        expect(pendingReads).toHaveLength(2);
+        pendingReads[0]({ skills: inventory });
+        await settle();
+        pendingReads[1]({ skills: inventory });
+      }
+      await settle();
+      expect(rpcMock).toHaveBeenCalledWith(
+        'skill.install',
+        expect.objectContaining({ scope: 'agent:main', dry_run: false }),
+      );
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      expect(document.querySelector('.skills-content').textContent).toContain(
+        'installed-instructions-sentinel',
+      );
+    },
+  );
   it('keeps the content beside source navigation with the application styles', async () => {
     const styles = document.createElement('style');
     styles.textContent = ['../skills.css', '../../../styles/app.css']
@@ -209,6 +273,7 @@ describe('Skills manager', () => {
     );
     collection('All skills');
     click(button('Add skills'));
+    click(button('Add a skill folder…'));
     await settle();
     expect(document.activeElement.value).toBe('/draft/location');
   });
@@ -492,9 +557,11 @@ describe('Skills manager', () => {
     expect(detail.querySelector('.skills-description')).toBeNull();
     expect(detail.querySelector('.skills-management')).toBeNull();
   });
-  it('opens folder setup from the primary action without showing an authoring form', async () => {
+  it('opens folder setup from the installation dialog without showing an authoring form', async () => {
     await render();
     click(button('Add skills'));
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    click(button('Add a skill folder…'));
     const directories = document.querySelector('.skills-directories');
     expect(directories.hidden).toBe(false);
     await settle();
@@ -512,6 +579,7 @@ describe('Skills manager', () => {
   it('refreshes the list immediately after connecting a Skill folder', async () => {
     await render();
     click(button('Add skills'));
+    click(button('Add a skill folder…'));
     rpcMock.mockImplementation(async (method, params) => {
       if (method === 'settings.update') {
         inventory = [

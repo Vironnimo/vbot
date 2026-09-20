@@ -25,6 +25,55 @@ const ATTACHMENT_BASE_ENDPOINT = '/api/attachments';
 
 const SPEECH_TRANSCRIBE_ENDPOINT = '/api/speech/transcribe';
 
+export async function installSkillArchive(file, params = {}, options = {}) {
+  const method = 'install_skill_archive';
+  requirePlainObject(params, 'Skill installation must be an object', method);
+  if (!(file instanceof Blob)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Choose a Skill archive',
+      { method },
+    );
+  }
+  const body = new FormData();
+  body.append('file', file, file.name || 'upload.skill');
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value != null) query.set(key, String(value));
+  }
+  let response;
+  try {
+    response = await (options.fetch ?? globalThis.fetch)(
+      buildHttpUrl(`/api/skills/install?${query}`, options.baseUrl),
+      { method: 'POST', body, signal: options.signal },
+    );
+  } catch (cause) {
+    throw new ApiClientError(
+      RPC_ERROR_NETWORK,
+      'Skill upload failed before a response arrived',
+      { method, cause },
+    );
+  }
+  const payload = await readJsonHttpPayload(response, method);
+  if (!response.ok) {
+    throw new ApiClientError(
+      RPC_ERROR_HTTP,
+      isNonEmptyString(payload?.detail)
+        ? payload.detail
+        : `Skill upload failed with HTTP ${response.status}`,
+      { method, status: response.status },
+    );
+  }
+  if (!isPlainObject(payload) || !isNonEmptyString(payload.operation)) {
+    throw new ApiClientError(
+      RPC_ERROR_RESPONSE,
+      'Invalid Skill installation response',
+      { method },
+    );
+  }
+  return payload;
+}
+
 export async function uploadAttachment(file, options = {}) {
   if (!file || typeof file !== 'object') {
     throw new ApiClientError(
