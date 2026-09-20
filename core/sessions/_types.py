@@ -218,6 +218,7 @@ class SessionListFilters:
     include_memory_reflections: bool = True
     include_skill_reflections: bool = True
     include_cron: bool = True
+    include_channels: bool = True
 
 
 @dataclass(frozen=True)

@@ -111,6 +111,7 @@ async def test_list_batches_agents_and_passes_bounded_filter_contract() -> None:
             "include_memory_reflections": False,
             "include_skill_reflections": False,
             "include_cron": False,
+            "include_channels": False,
             "required_session": {"agent_id": "builder", "session_id": "s1"},
         },
     )
@@ -128,6 +129,7 @@ async def test_list_batches_agents_and_passes_bounded_filter_contract() -> None:
     assert call["scopes"] == [(None, "builder"), ("vbot", "reviewer")]
     assert call["limit"] == 35
     assert call["filters"].include_subagents is False
+    assert call["filters"].include_channels is False
     assert call["required_address"] == SessionAddress(None, "builder", "s1")
 
 

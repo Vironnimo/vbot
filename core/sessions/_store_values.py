@@ -214,6 +214,7 @@ def _session_list_visibility_sql(
     include_memory_reflections: bool,
     include_skill_reflections: bool,
     include_cron: bool,
+    include_channels: bool,
 ) -> tuple[str, list[Any]]:
     is_subagent = (
         "((list_visibility_mask & "
@@ -229,10 +230,13 @@ def _session_list_visibility_sql(
     visible = (
         "NOT EXISTS (SELECT 1 FROM temporary_session_bindings AS owner_binding "
         "WHERE owner_binding.session_key = sessions.session_key) AND "
+        "(? = 1 OR COALESCE(TRIM(platform), '') = '' "
+        "OR COALESCE(TRIM(platform_conv_id), '') = '') AND "
         f"(({is_subagent} AND ? = 1) OR (NOT {is_subagent} AND "
         f"(NOT {is_background} OR ({background_enabled}))))"
     )
     params: list[Any] = [
+        int(include_channels),
         int(include_subagents),
         int(include_cron),
         int(include_memory_reflections),

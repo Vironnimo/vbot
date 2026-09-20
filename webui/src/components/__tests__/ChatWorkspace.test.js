@@ -167,6 +167,8 @@ describe('ChatWorkspace', () => {
       }
       action(0, 'Sessions');
       const firstDrawer = pane(0).querySelector('.session-drawer');
+      firstDrawer.querySelector('button[aria-label="All agents"]').click();
+      flushSync();
       firstDrawer.querySelector('.session-drawer__filter-trigger').click();
       flushSync();
       const switches = () => [
@@ -197,6 +199,7 @@ describe('ChatWorkspace', () => {
           includeMemoryReflections: true,
           includeSkillReflections: true,
           includeCron: true,
+          includeChannels: true,
         }),
       );
       const secondDrawer = pane(1).querySelector('.session-drawer');
@@ -240,6 +243,8 @@ describe('ChatWorkspace', () => {
     };
     await start(false);
     openFilters(0);
+    button(pane(0), 'All agents').click();
+    flushSync();
     for (const toggle of switches()) {
       toggle.click();
       flushSync();
@@ -248,6 +253,8 @@ describe('ChatWorkspace', () => {
     action(0, 'Split view');
     await waitForCondition(() => button(pane(1), 'Sessions'), 100);
     openFilters(1);
+    button(pane(1), 'All agents').click();
+    flushSync();
     for (const toggle of switches()) {
       toggle.click();
       flushSync();
@@ -269,6 +276,7 @@ describe('ChatWorkspace', () => {
         includeMemoryReflections: true,
         includeSkillReflections: true,
         includeCron: true,
+        includeChannels: true,
       }),
     );
     action(0, 'Sessions');
@@ -428,7 +436,9 @@ describe('ChatWorkspace', () => {
       expect(pane(index).querySelector('.chat-workspace__toolbar')).toBeNull();
       expect(pane(index).querySelector('[role="tablist"]')).toBeNull();
       expect(
-        button(pane(index), 'Close area').closest('.chat-view__session-bar'),
+        button(pane(index), 'Close area').closest(
+          '.chat-view__session-bar, .session-drawer__controls',
+        ),
       ).not.toBeNull();
     }
     mockPreviewOpening();

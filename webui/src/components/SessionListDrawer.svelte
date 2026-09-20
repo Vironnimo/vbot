@@ -37,6 +37,7 @@
   const SESSION_DISPLAY_INCREMENT = 20;
 
   let {
+    headerControls,
     agentId = '',
     currentSessionId = '',
     // Bumped by ChatView on `resource_changed(kind:"sessions")` so a new or
@@ -82,9 +83,10 @@
   });
 
   let sessionState = $state(createSessionListState());
-  let filters = $state(
-    untrack(() => initialFilters) ?? createSessionListFilters(),
-  );
+  let filters = $state({
+    ...createSessionListFilters(),
+    ...untrack(() => initialFilters),
+  });
   let sessionsWithLiveActivity = $derived(
     overlayLiveSessionActivity(sessionState.sessions, liveActivity, agentId),
   );
@@ -103,7 +105,7 @@
     Math.max(totalSessionCount - visibleSessions.length, 0),
   );
   let activeFilterCount = $derived(
-    Number(filters.allAgents) +
+    Number(filters.channels) +
       Number(filters.subagents) +
       Number(filters.memoryReflections) +
       Number(filters.skillReflections) +
@@ -127,9 +129,9 @@
 
   const SESSION_FILTER_ROWS = [
     {
-      key: 'allAgents',
-      labelKey: 'sessions.filters.allAgents',
-      labelFallback: 'All agents',
+      key: 'channels',
+      labelKey: 'sessions.filters.channels',
+      labelFallback: 'Show channels',
     },
     {
       key: 'subagents',
@@ -165,6 +167,7 @@
       filters.allAgents
         ? rosterAgents.map((entry) => entry.address).join('|')
         : '',
+      Number(filters.channels),
       Number(filters.subagents),
       Number(filters.memoryReflections),
       Number(filters.skillReflections),
@@ -303,6 +306,7 @@
       includeMemoryReflections: filters.memoryReflections,
       includeSkillReflections: filters.skillReflections,
       includeCron: filters.cron,
+      includeChannels: filters.channels === true,
       requiredSession: requiredSessionId
         ? { agentId: asText(agentId), sessionId: requiredSessionId }
         : null,
@@ -451,11 +455,40 @@
 
 <aside class="session-drawer" aria-label={t('sessions.title', 'Sessions')}>
   <div class="session-drawer__header">
-    <h3 class="session-drawer__title">{t('sessions.title', 'Sessions')}</h3>
+    <div class="session-drawer__controls">
+      {#if headerControls}
+        {@render headerControls()}
+      {:else}
+        <h3 class="session-drawer__title">{t('sessions.title', 'Sessions')}</h3>
+      {/if}
+    </div>
     <div class="session-drawer__filter">
       <button
         type="button"
-        class="session-drawer__filter-trigger"
+        class="session-drawer__icon-button session-drawer__all-agents"
+        class:session-drawer__filter-trigger--active={filters.allAgents}
+        aria-label={t('sessions.filters.allAgents', 'All agents')}
+        aria-pressed={filters.allAgents}
+        use:tooltip={t('sessions.filters.allAgents', 'All agents')}
+        onclick={() => setFilter('allAgents', !filters.allAgents)}
+      >
+        <svg
+          viewBox="0 0 20 20"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          aria-hidden="true"
+        >
+          <circle cx="7" cy="6" r="2.5" />
+          <path
+            d="M2 16v-1.5a5 5 0 0 1 10 0V16M13 3.7a2.5 2.5 0 0 1 0 4.6M15 10a4 4 0 0 1 3 4v2"
+          />
+        </svg>
+      </button>
+      <button
+        type="button"
+        class="session-drawer__icon-button session-drawer__filter-trigger"
         class:session-drawer__filter-trigger--active={activeFilterCount > 0}
         class:session-drawer__filter-trigger--open={menus.filterMenuOpen}
         aria-label={t('sessions.filtersAria', 'Session list filters')}
@@ -550,7 +583,7 @@
       title={t('sessions.noImportantTitle', 'No important sessions')}
       description={t(
         'sessions.noImportantDescription',
-        'Use the filters to browse Subagent, Reflection, and Cron sessions.',
+        'Use the filters to browse Channel, Subagent, Reflection, and Cron sessions.',
       )}
     />
   {:else}
