@@ -888,7 +888,8 @@ async def test_compaction_engine_leaves_context_projection_for_chat() -> None:
     )
 
     assert result.usage is not None
-    assert set(result.usage) == {"compacted_token_count"}
+    assert set(result.usage) == {"compacted_token_count", "model_call"}
+    assert result.usage["model_call"]["usage"]["cost"]["source"] == "unknown"
 
 
 @pytest.mark.asyncio

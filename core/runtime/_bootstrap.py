@@ -404,7 +404,8 @@ def bootstrap(runtime: Runtime) -> None:
         if runtime._attachment_store is None:
             raise RuntimeError("Attachment store not available")
         resolver = ContentBlockResolver(runtime._attachment_store, transcriber=runtime._speech)
-        compaction_service = CompactionService()
+        assert runtime._models is not None
+        compaction_service = CompactionService(pricing_lookup=runtime._models.pricing_for)
         # The reflection service starts review runs through the runtime's
         # streaming loop lazily at review time, so constructing it before the
         # loops is safe — the loops only need its notify hook.

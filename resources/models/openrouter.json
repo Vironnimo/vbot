@@ -41,7 +41,15 @@
           "modality": "text->text"
         }
       },
-      "name": "AionLabs: Aion-2.0"
+      "name": "AionLabs: Aion-2.0",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "input": 0.8,
+          "output": 1.6
+        },
+        "source": "models.dev:openrouter/aion-labs/aion-2.0"
+      }
     },
     "aion-labs/aion-3.0": {
       "capabilities": {
@@ -83,7 +91,15 @@
           "modality": "text->text"
         }
       },
-      "name": "AionLabs: Aion-3.0"
+      "name": "AionLabs: Aion-3.0",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.75,
+          "input": 3.0,
+          "output": 6.0
+        },
+        "source": "models.dev:openrouter/aion-labs/aion-3.0"
+      }
     },
     "aion-labs/aion-3.0-mini": {
       "capabilities": {
@@ -125,7 +141,15 @@
           "modality": "text->text"
         }
       },
-      "name": "AionLabs: Aion-3.0-Mini"
+      "name": "AionLabs: Aion-3.0-Mini",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.18,
+          "input": 0.7,
+          "output": 1.4
+        },
+        "source": "models.dev:openrouter/aion-labs/aion-3.0-mini"
+      }
     },
     "aion-labs/aion-rp-llama-3.1-8b": {
       "capabilities": {
@@ -163,7 +187,14 @@
           "modality": "text->text"
         }
       },
-      "name": "AionLabs: Aion-RP 1.0 (8B)"
+      "name": "AionLabs: Aion-RP 1.0 (8B)",
+      "pricing": {
+        "rates": {
+          "input": 0.8,
+          "output": 1.6
+        },
+        "source": "models.dev:openrouter/aion-labs/aion-rp-llama-3.1-8b"
+      }
     },
     "alibaba/happyhorse-1.0": {
       "capabilities": {
@@ -851,7 +882,14 @@
           "modality": "text+image+file+video->text"
         }
       },
-      "name": "Amazon: Nova 2 Lite"
+      "name": "Amazon: Nova 2 Lite",
+      "pricing": {
+        "rates": {
+          "input": 0.3,
+          "output": 2.5
+        },
+        "source": "models.dev:openrouter/amazon/nova-2-lite-v1"
+      }
     },
     "amazon/nova-lite-v1": {
       "capabilities": {
@@ -895,7 +933,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Amazon: Nova Lite 1.0"
+      "name": "Amazon: Nova Lite 1.0",
+      "pricing": {
+        "rates": {
+          "input": 0.06,
+          "output": 0.24
+        },
+        "source": "models.dev:openrouter/amazon/nova-lite-v1"
+      }
     },
     "amazon/nova-micro-v1": {
       "capabilities": {
@@ -936,7 +981,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Amazon: Nova Micro 1.0"
+      "name": "Amazon: Nova Micro 1.0",
+      "pricing": {
+        "rates": {
+          "input": 0.035,
+          "output": 0.14
+        },
+        "source": "models.dev:openrouter/amazon/nova-micro-v1"
+      }
     },
     "amazon/nova-premier-v1": {
       "capabilities": {
@@ -980,7 +1032,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Amazon: Nova Premier 1.0"
+      "name": "Amazon: Nova Premier 1.0",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.625,
+          "input": 2.5,
+          "output": 12.5
+        },
+        "source": "models.dev:openrouter/amazon/nova-premier-v1"
+      }
     },
     "amazon/nova-pro-v1": {
       "capabilities": {
@@ -1024,7 +1084,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Amazon: Nova Pro 1.0"
+      "name": "Amazon: Nova Pro 1.0",
+      "pricing": {
+        "rates": {
+          "input": 0.8,
+          "output": 3.2
+        },
+        "source": "models.dev:openrouter/amazon/nova-pro-v1"
+      }
     },
     "anthracite-org/magnum-v4-72b": {
       "capabilities": {
@@ -1074,7 +1141,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Magnum v4 72B"
+      "name": "Magnum v4 72B",
+      "pricing": {
+        "rates": {
+          "input": 2.5,
+          "output": 5.0
+        },
+        "source": "models.dev:openrouter/anthracite-org/magnum-v4-72b"
+      }
     },
     "anthropic/claude-3-haiku": {
       "capabilities": {
@@ -1119,7 +1193,16 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Anthropic: Claude 3 Haiku"
+      "name": "Anthropic: Claude 3 Haiku",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.03,
+          "cache_write": 0.3,
+          "input": 0.25,
+          "output": 1.25
+        },
+        "source": "models.dev:openrouter/anthropic/claude-3-haiku"
+      }
     },
     "anthropic/claude-fable-5": {
       "capabilities": {
@@ -1179,7 +1262,16 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Anthropic: Claude Fable 5"
+      "name": "Anthropic: Claude Fable 5",
+      "pricing": {
+        "rates": {
+          "cache_read": 1.0,
+          "cache_write": 12.5,
+          "input": 10.0,
+          "output": 50.0
+        },
+        "source": "models.dev:openrouter/anthropic/claude-fable-5"
+      }
     },
     "anthropic/claude-fable-5.1": {
       "capabilities": {
@@ -1238,7 +1330,16 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Anthropic: Claude Fable 5.1"
+      "name": "Anthropic: Claude Fable 5.1",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.25,
+          "cache_write": 12.5,
+          "input": 10.0,
+          "output": 50.0
+        },
+        "source": "models.dev:openrouter/anthropic/claude-fable-5.1"
+      }
     },
     "anthropic/claude-fable-5.1:batch": {
       "capabilities": {
@@ -1392,7 +1493,16 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Anthropic: Claude Haiku 4.5"
+      "name": "Anthropic: Claude Haiku 4.5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1,
+          "cache_write": 1.25,
+          "input": 1.0,
+          "output": 5.0
+        },
+        "source": "models.dev:openrouter/anthropic/claude-haiku-4.5"
+      }
     },
     "anthropic/claude-haiku-4.5:batch": {
       "capabilities": {
@@ -1493,7 +1603,16 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Anthropic: Claude Opus 4"
+      "name": "Anthropic: Claude Opus 4",
+      "pricing": {
+        "rates": {
+          "cache_read": 1.5,
+          "cache_write": 18.75,
+          "input": 15.0,
+          "output": 75.0
+        },
+        "source": "models.dev:openrouter/anthropic/claude-opus-4"
+      }
     },
     "anthropic/claude-opus-4.1": {
       "capabilities": {
@@ -1544,7 +1663,16 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Anthropic: Claude Opus 4.1"
+      "name": "Anthropic: Claude Opus 4.1",
+      "pricing": {
+        "rates": {
+          "cache_read": 1.5,
+          "cache_write": 18.75,
+          "input": 15.0,
+          "output": 75.0
+        },
+        "source": "models.dev:openrouter/anthropic/claude-opus-4.1"
+      }
     },
     "anthropic/claude-opus-4.1:batch": {
       "capabilities": {
@@ -1647,7 +1775,16 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Anthropic: Claude Opus 4.5"
+      "name": "Anthropic: Claude Opus 4.5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.5,
+          "cache_write": 6.25,
+          "input": 5.0,
+          "output": 25.0
+        },
+        "source": "models.dev:openrouter/anthropic/claude-opus-4.5"
+      }
     },
     "anthropic/claude-opus-4.5:batch": {
       "capabilities": {
@@ -1759,7 +1896,28 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Anthropic: Claude Opus 4.6"
+      "name": "Anthropic: Claude Opus 4.6",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.5,
+          "cache_write": 6.25,
+          "input": 5.0,
+          "output": 25.0,
+          "tiers": [
+            {
+              "cache_read": 1.0,
+              "cache_write": 12.5,
+              "input": 10.0,
+              "output": 37.5,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/anthropic/claude-opus-4.6"
+      }
     },
     "anthropic/claude-opus-4.6:batch": {
       "capabilities": {
@@ -1871,7 +2029,28 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Anthropic: Claude Opus 4.7"
+      "name": "Anthropic: Claude Opus 4.7",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.5,
+          "cache_write": 6.25,
+          "input": 5.0,
+          "output": 25.0,
+          "tiers": [
+            {
+              "cache_read": 1.0,
+              "cache_write": 12.5,
+              "input": 10.0,
+              "output": 37.5,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/anthropic/claude-opus-4.7"
+      }
     },
     "anthropic/claude-opus-4.7:batch": {
       "capabilities": {
@@ -1982,7 +2161,16 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Anthropic: Claude Opus 4.8"
+      "name": "Anthropic: Claude Opus 4.8",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.5,
+          "cache_write": 6.25,
+          "input": 5.0,
+          "output": 25.0
+        },
+        "source": "models.dev:openrouter/anthropic/claude-opus-4.8"
+      }
     },
     "anthropic/claude-opus-4.8:batch": {
       "capabilities": {
@@ -2093,7 +2281,16 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Anthropic: Claude Opus 5"
+      "name": "Anthropic: Claude Opus 5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.5,
+          "cache_write": 6.25,
+          "input": 5.0,
+          "output": 25.0
+        },
+        "source": "models.dev:openrouter/anthropic/claude-opus-5"
+      }
     },
     "anthropic/claude-opus-5:batch": {
       "capabilities": {
@@ -2194,7 +2391,28 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Anthropic: Claude Sonnet 4"
+      "name": "Anthropic: Claude Sonnet 4",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.3,
+          "cache_write": 3.75,
+          "input": 3.0,
+          "output": 15.0,
+          "tiers": [
+            {
+              "cache_read": 0.6,
+              "cache_write": 7.5,
+              "input": 6.0,
+              "output": 22.5,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/anthropic/claude-sonnet-4"
+      }
     },
     "anthropic/claude-sonnet-4.5": {
       "capabilities": {
@@ -2248,7 +2466,28 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Anthropic: Claude Sonnet 4.5"
+      "name": "Anthropic: Claude Sonnet 4.5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.3,
+          "cache_write": 3.75,
+          "input": 3.0,
+          "output": 15.0,
+          "tiers": [
+            {
+              "cache_read": 0.6,
+              "cache_write": 7.5,
+              "input": 6.0,
+              "output": 22.5,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/anthropic/claude-sonnet-4.5"
+      }
     },
     "anthropic/claude-sonnet-4.5:batch": {
       "capabilities": {
@@ -2361,7 +2600,28 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Anthropic: Claude Sonnet 4.6"
+      "name": "Anthropic: Claude Sonnet 4.6",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.3,
+          "cache_write": 3.75,
+          "input": 3.0,
+          "output": 15.0,
+          "tiers": [
+            {
+              "cache_read": 0.6,
+              "cache_write": 7.5,
+              "input": 6.0,
+              "output": 22.5,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/anthropic/claude-sonnet-4.6"
+      }
     },
     "anthropic/claude-sonnet-4.6:batch": {
       "capabilities": {
@@ -2473,7 +2733,16 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Anthropic: Claude Sonnet 5"
+      "name": "Anthropic: Claude Sonnet 5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 10.0
+        },
+        "source": "models.dev:openrouter/anthropic/claude-sonnet-5"
+      }
     },
     "anthropic/claude-sonnet-5:batch": {
       "capabilities": {
@@ -2604,7 +2873,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Arcee AI: Trinity Large Thinking"
+      "name": "Arcee AI: Trinity Large Thinking",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.06,
+          "input": 0.25,
+          "output": 0.8
+        },
+        "source": "models.dev:openrouter/arcee-ai/trinity-large-thinking"
+      }
     },
     "baai/bge-base-en-v1.5": {
       "capabilities": {
@@ -2750,7 +3027,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Baidu: ERNIE 4.5 VL 424B A47B "
+      "name": "Baidu: ERNIE 4.5 VL 424B A47B ",
+      "pricing": {
+        "rates": {
+          "input": 0.42,
+          "output": 1.25
+        },
+        "source": "models.dev:openrouter/baidu/ernie-4.5-vl-424b-a47b"
+      }
     },
     "black-forest-labs/flux-3-video": {
       "capabilities": {
@@ -3309,7 +3593,24 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "ByteDance Seed: Seed 1.6"
+      "name": "ByteDance Seed: Seed 1.6",
+      "pricing": {
+        "rates": {
+          "input": 0.25,
+          "output": 2.0,
+          "tiers": [
+            {
+              "input": 0.5,
+              "output": 4.0,
+              "tier": {
+                "size": 128000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/bytedance-seed/seed-1.6"
+      }
     },
     "bytedance-seed/seed-1.6-flash": {
       "capabilities": {
@@ -3362,7 +3663,24 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "ByteDance Seed: Seed 1.6 Flash"
+      "name": "ByteDance Seed: Seed 1.6 Flash",
+      "pricing": {
+        "rates": {
+          "input": 0.075,
+          "output": 0.3,
+          "tiers": [
+            {
+              "input": 0.1,
+              "output": 0.8,
+              "tier": {
+                "size": 128000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/bytedance-seed/seed-1.6-flash"
+      }
     },
     "bytedance-seed/seed-2-1-turbo": {
       "capabilities": {
@@ -3415,7 +3733,14 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "ByteDance Seed: Seed 2.1 Turbo"
+      "name": "ByteDance Seed: Seed 2.1 Turbo",
+      "pricing": {
+        "rates": {
+          "input": 0.5,
+          "output": 2.5
+        },
+        "source": "models.dev:openrouter/bytedance-seed/seed-2-1-turbo"
+      }
     },
     "bytedance-seed/seed-2.0-code": {
       "capabilities": {
@@ -3474,7 +3799,24 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "ByteDance Seed: Seed-2.0-Code"
+      "name": "ByteDance Seed: Seed-2.0-Code",
+      "pricing": {
+        "rates": {
+          "input": 0.5,
+          "output": 3.0,
+          "tiers": [
+            {
+              "input": 1.0,
+              "output": 6.0,
+              "tier": {
+                "size": 128000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/bytedance-seed/seed-2.0-code"
+      }
     },
     "bytedance-seed/seed-2.0-lite": {
       "capabilities": {
@@ -3534,7 +3876,24 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "ByteDance Seed: Seed-2.0-Lite"
+      "name": "ByteDance Seed: Seed-2.0-Lite",
+      "pricing": {
+        "rates": {
+          "input": 0.25,
+          "output": 2.0,
+          "tiers": [
+            {
+              "input": 0.5,
+              "output": 4.0,
+              "tier": {
+                "size": 128000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/bytedance-seed/seed-2.0-lite"
+      }
     },
     "bytedance-seed/seed-2.0-mini": {
       "capabilities": {
@@ -3594,7 +3953,24 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "ByteDance Seed: Seed-2.0-Mini"
+      "name": "ByteDance Seed: Seed-2.0-Mini",
+      "pricing": {
+        "rates": {
+          "input": 0.1,
+          "output": 0.4,
+          "tiers": [
+            {
+              "input": 0.2,
+              "output": 0.8,
+              "tier": {
+                "size": 128000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/bytedance-seed/seed-2.0-mini"
+      }
     },
     "bytedance-seed/seedream-4.5": {
       "capabilities": {
@@ -4510,7 +4886,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "ByteDance: UI-TARS 7B "
+      "name": "ByteDance: UI-TARS 7B ",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1,
+          "input": 0.1,
+          "output": 0.2
+        },
+        "source": "models.dev:openrouter/bytedance/ui-tars-1.5-7b"
+      }
     },
     "canopylabs/orpheus-3b-0.1-ft": {
       "capabilities": {
@@ -4594,7 +4978,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Venice: Uncensored"
+      "name": "Venice: Uncensored",
+      "pricing": {
+        "rates": {
+          "input": 0.2,
+          "output": 0.9
+        },
+        "source": "models.dev:openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition"
+      }
     },
     "cohere/command-a": {
       "capabilities": {
@@ -4639,7 +5030,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Cohere: Command A"
+      "name": "Cohere: Command A",
+      "pricing": {
+        "rates": {
+          "input": 2.5,
+          "output": 10.0
+        },
+        "source": "models.dev:openrouter/cohere/command-a"
+      }
     },
     "cohere/command-r-08-2024": {
       "capabilities": {
@@ -4683,7 +5081,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Cohere: Command R (08-2024)"
+      "name": "Cohere: Command R (08-2024)",
+      "pricing": {
+        "rates": {
+          "input": 0.15,
+          "output": 0.6
+        },
+        "source": "models.dev:openrouter/cohere/command-r-08-2024"
+      }
     },
     "cohere/command-r-plus-08-2024": {
       "capabilities": {
@@ -4727,7 +5132,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Cohere: Command R+ (08-2024)"
+      "name": "Cohere: Command R+ (08-2024)",
+      "pricing": {
+        "rates": {
+          "input": 2.5,
+          "output": 10.0
+        },
+        "source": "models.dev:openrouter/cohere/command-r-plus-08-2024"
+      }
     },
     "cohere/command-r7b-12-2024": {
       "capabilities": {
@@ -4769,7 +5181,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Cohere: Command R7B (12-2024)"
+      "name": "Cohere: Command R7B (12-2024)",
+      "pricing": {
+        "rates": {
+          "input": 0.0375,
+          "output": 0.15
+        },
+        "source": "models.dev:openrouter/cohere/command-r7b-12-2024"
+      }
     },
     "cohere/north-mini-code:free": {
       "capabilities": {
@@ -4817,7 +5236,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Cohere: North Mini Code (free)"
+      "name": "Cohere: North Mini Code (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/cohere/north-mini-code:free"
+      }
     },
     "deepgram/aura-2": {
       "capabilities": {
@@ -5092,7 +5518,14 @@
           "modality": "text->text"
         }
       },
-      "name": "DeepSeek: DeepSeek V3"
+      "name": "DeepSeek: DeepSeek V3",
+      "pricing": {
+        "rates": {
+          "input": 0.32,
+          "output": 0.89
+        },
+        "source": "models.dev:openrouter/deepseek/deepseek-chat"
+      }
     },
     "deepseek/deepseek-chat-v3-0324": {
       "capabilities": {
@@ -5144,7 +5577,14 @@
           "modality": "text->text"
         }
       },
-      "name": "DeepSeek: DeepSeek V3 0324"
+      "name": "DeepSeek: DeepSeek V3 0324",
+      "pricing": {
+        "rates": {
+          "input": 0.25,
+          "output": 1.0
+        },
+        "source": "models.dev:openrouter/deepseek/deepseek-chat-v3-0324"
+      }
     },
     "deepseek/deepseek-chat-v3.1": {
       "capabilities": {
@@ -5199,7 +5639,15 @@
           "modality": "text->text"
         }
       },
-      "name": "DeepSeek: DeepSeek V3.1"
+      "name": "DeepSeek: DeepSeek V3.1",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.13,
+          "input": 0.25,
+          "output": 0.95
+        },
+        "source": "models.dev:openrouter/deepseek/deepseek-chat-v3.1"
+      }
     },
     "deepseek/deepseek-r1": {
       "capabilities": {
@@ -5245,7 +5693,14 @@
           "modality": "text->text"
         }
       },
-      "name": "DeepSeek: R1"
+      "name": "DeepSeek: R1",
+      "pricing": {
+        "rates": {
+          "input": 0.7,
+          "output": 2.5
+        },
+        "source": "models.dev:openrouter/deepseek/deepseek-r1"
+      }
     },
     "deepseek/deepseek-r1-0528": {
       "capabilities": {
@@ -5299,7 +5754,15 @@
           "modality": "text->text"
         }
       },
-      "name": "DeepSeek: R1 0528"
+      "name": "DeepSeek: R1 0528",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.35,
+          "input": 0.5,
+          "output": 2.15
+        },
+        "source": "models.dev:openrouter/deepseek/deepseek-r1-0528"
+      }
     },
     "deepseek/deepseek-r1-distill-llama-70b": {
       "capabilities": {
@@ -5346,7 +5809,14 @@
           "modality": "text->text"
         }
       },
-      "name": "DeepSeek: R1 Distill Llama 70B"
+      "name": "DeepSeek: R1 Distill Llama 70B",
+      "pricing": {
+        "rates": {
+          "input": 0.8,
+          "output": 0.8
+        },
+        "source": "models.dev:openrouter/deepseek/deepseek-r1-distill-llama-70b"
+      }
     },
     "deepseek/deepseek-v3.1-terminus": {
       "capabilities": {
@@ -5399,7 +5869,15 @@
           "modality": "text->text"
         }
       },
-      "name": "DeepSeek: DeepSeek V3.1 Terminus"
+      "name": "DeepSeek: DeepSeek V3.1 Terminus",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.135,
+          "input": 0.27,
+          "output": 1.0
+        },
+        "source": "models.dev:openrouter/deepseek/deepseek-v3.1-terminus"
+      }
     },
     "deepseek/deepseek-v3.2": {
       "capabilities": {
@@ -5454,7 +5932,15 @@
           "modality": "text->text"
         }
       },
-      "name": "DeepSeek: DeepSeek V3.2"
+      "name": "DeepSeek: DeepSeek V3.2",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1345,
+          "input": 0.269,
+          "output": 0.4
+        },
+        "source": "models.dev:openrouter/deepseek/deepseek-v3.2"
+      }
     },
     "deepseek/deepseek-v3.2-exp": {
       "capabilities": {
@@ -5509,7 +5995,14 @@
           "modality": "text->text"
         }
       },
-      "name": "DeepSeek: DeepSeek V3.2 Exp"
+      "name": "DeepSeek: DeepSeek V3.2 Exp",
+      "pricing": {
+        "rates": {
+          "input": 0.27,
+          "output": 0.41
+        },
+        "source": "models.dev:openrouter/deepseek/deepseek-v3.2-exp"
+      }
     },
     "deepseek/deepseek-v4-flash": {
       "capabilities": {
@@ -5572,7 +6065,15 @@
           "reasoning_response_field": "reasoning_content"
         }
       },
-      "name": "DeepSeek: DeepSeek V4 Flash 0423"
+      "name": "DeepSeek: DeepSeek V4 Flash 0423",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.007112,
+          "input": 0.03556,
+          "output": 0.07112
+        },
+        "source": "models.dev:openrouter/deepseek/deepseek-v4-flash"
+      }
     },
     "deepseek/deepseek-v4-flash-0731": {
       "capabilities": {
@@ -5635,7 +6136,15 @@
           "modality": "text->text"
         }
       },
-      "name": "DeepSeek: DeepSeek V4 Flash 0731"
+      "name": "DeepSeek: DeepSeek V4 Flash 0731",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.016,
+          "input": 0.04,
+          "output": 0.08
+        },
+        "source": "models.dev:openrouter/deepseek/deepseek-v4-flash-0731"
+      }
     },
     "deepseek/deepseek-v4-flash-0731:batch": {
       "capabilities": {
@@ -5811,7 +6320,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "DeepSeek: DeepSeek V4 Flash Vision Exp"
+      "name": "DeepSeek: DeepSeek V4 Flash Vision Exp",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.00686,
+          "input": 0.2156,
+          "output": 0.6468
+        },
+        "source": "models.dev:openrouter/deepseek/deepseek-v4-flash-vision-exp"
+      }
     },
     "deepseek/deepseek-v4-flash-vision-exp:batch": {
       "capabilities": {
@@ -5928,7 +6445,15 @@
           "reasoning_response_field": "reasoning_content"
         }
       },
-      "name": "DeepSeek: DeepSeek V4 Pro 0423"
+      "name": "DeepSeek: DeepSeek V4 Pro 0423",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.035192,
+          "input": 0.422298,
+          "output": 0.844596
+        },
+        "source": "models.dev:openrouter/deepseek/deepseek-v4-pro"
+      }
     },
     "deepseek/deepseek-v4-pro-0813": {
       "capabilities": {
@@ -5989,7 +6514,15 @@
           "modality": "text->text"
         }
       },
-      "name": "DeepSeek: DeepSeek V4 Pro 0813"
+      "name": "DeepSeek: DeepSeek V4 Pro 0813",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.017136,
+          "input": 0.53856,
+          "output": 1.61568
+        },
+        "source": "models.dev:openrouter/deepseek/deepseek-v4-pro-0813"
+      }
     },
     "deepseek/deepseek-v4-pro-0813:batch": {
       "capabilities": {
@@ -6106,7 +6639,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "DeepSeek: DeepSeek V4.1 Flash"
+      "name": "DeepSeek: DeepSeek V4.1 Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.003,
+          "input": 0.15,
+          "output": 0.6
+        },
+        "source": "models.dev:openrouter/deepseek/deepseek-v4.1-flash"
+      }
     },
     "dots-studio/dots-3-note-preview:free": {
       "capabilities": {
@@ -6153,7 +6694,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Dots Studio: Dots3-Note Preview (free)"
+      "name": "Dots Studio: Dots3-Note Preview (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/dots-studio/dots-3-note-preview:free"
+      }
     },
     "fish-audio/s1": {
       "capabilities": {
@@ -6412,7 +6960,17 @@
           "modality": "text+image+file+audio+video->text"
         }
       },
-      "name": "Google: Gemini 2.5 Flash"
+      "name": "Google: Gemini 2.5 Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.03,
+          "cache_write": 0.083333,
+          "input": 0.3,
+          "output": 2.5,
+          "reasoning": 2.5
+        },
+        "source": "models.dev:openrouter/google/gemini-2.5-flash"
+      }
     },
     "google/gemini-2.5-flash-image": {
       "capabilities": {
@@ -6501,7 +7059,16 @@
           "modality": "text+image->text+image"
         }
       },
-      "name": "Google: Nano Banana (Gemini 2.5 Flash Image)"
+      "name": "Google: Nano Banana (Gemini 2.5 Flash Image)",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.03,
+          "cache_write": 0.083333,
+          "input": 0.3,
+          "output": 2.5
+        },
+        "source": "models.dev:openrouter/google/gemini-2.5-flash-image"
+      }
     },
     "google/gemini-2.5-flash-lite": {
       "capabilities": {
@@ -6560,7 +7127,17 @@
           "modality": "text+image+file+audio+video->text"
         }
       },
-      "name": "Google: Gemini 2.5 Flash Lite"
+      "name": "Google: Gemini 2.5 Flash Lite",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.01,
+          "cache_write": 0.083333,
+          "input": 0.1,
+          "output": 0.4,
+          "reasoning": 0.4
+        },
+        "source": "models.dev:openrouter/google/gemini-2.5-flash-lite"
+      }
     },
     "google/gemini-2.5-flash-lite:batch": {
       "capabilities": {
@@ -6734,7 +7311,30 @@
           "modality": "text+image+file+audio+video->text"
         }
       },
-      "name": "Google: Gemini 2.5 Pro"
+      "name": "Google: Gemini 2.5 Pro",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.125,
+          "cache_write": 0.375,
+          "input": 1.25,
+          "output": 10.0,
+          "reasoning": 10.0,
+          "tiers": [
+            {
+              "cache_read": 0.25,
+              "cache_write": 0.375,
+              "input": 2.5,
+              "output": 15.0,
+              "reasoning": 10.0,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/google/gemini-2.5-pro"
+      }
     },
     "google/gemini-2.5-pro-preview": {
       "capabilities": {
@@ -6791,7 +7391,30 @@
           "modality": "text+image+file+audio->text"
         }
       },
-      "name": "Google: Gemini 2.5 Pro Preview 06-05"
+      "name": "Google: Gemini 2.5 Pro Preview 06-05",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.125,
+          "cache_write": 0.375,
+          "input": 1.25,
+          "output": 10.0,
+          "reasoning": 10.0,
+          "tiers": [
+            {
+              "cache_read": 0.25,
+              "cache_write": 0.375,
+              "input": 2.5,
+              "output": 15.0,
+              "reasoning": 10.0,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/google/gemini-2.5-pro-preview"
+      }
     },
     "google/gemini-2.5-pro:batch": {
       "capabilities": {
@@ -6915,7 +7538,17 @@
           "reasoning_response_field": "reasoning_details"
         }
       },
-      "name": "Google: Gemini 3 Flash Preview"
+      "name": "Google: Gemini 3 Flash Preview",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.05,
+          "cache_write": 0.083333,
+          "input": 0.5,
+          "output": 3.0,
+          "reasoning": 3.0
+        },
+        "source": "models.dev:openrouter/google/gemini-3-flash-preview"
+      }
     },
     "google/gemini-3-flash-preview:batch": {
       "capabilities": {
@@ -7068,7 +7701,17 @@
           "modality": "text+image->text+image"
         }
       },
-      "name": "Google: Nano Banana Pro (Gemini 3 Pro Image)"
+      "name": "Google: Nano Banana Pro (Gemini 3 Pro Image)",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 0.375,
+          "input": 2.0,
+          "output": 12.0,
+          "reasoning": 12.0
+        },
+        "source": "models.dev:openrouter/google/gemini-3-pro-image"
+      }
     },
     "google/gemini-3-pro-image-preview": {
       "capabilities": {
@@ -7161,7 +7804,17 @@
           "modality": "text+image->text+image"
         }
       },
-      "name": "Google: Nano Banana Pro (Gemini 3 Pro Image Preview)"
+      "name": "Google: Nano Banana Pro (Gemini 3 Pro Image Preview)",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 0.375,
+          "input": 2.0,
+          "output": 12.0,
+          "reasoning": 12.0
+        },
+        "source": "models.dev:openrouter/google/gemini-3-pro-image-preview"
+      }
     },
     "google/gemini-3.1-flash-image": {
       "capabilities": {
@@ -7267,7 +7920,14 @@
           "modality": "text+image->text+image"
         }
       },
-      "name": "Google: Nano Banana 2 (Gemini 3.1 Flash Image)"
+      "name": "Google: Nano Banana 2 (Gemini 3.1 Flash Image)",
+      "pricing": {
+        "rates": {
+          "input": 0.5,
+          "output": 3.0
+        },
+        "source": "models.dev:openrouter/google/gemini-3.1-flash-image"
+      }
     },
     "google/gemini-3.1-flash-image-preview": {
       "capabilities": {
@@ -7370,7 +8030,14 @@
           "modality": "text+image->text+image"
         }
       },
-      "name": "Google: Nano Banana 2 (Gemini 3.1 Flash Image Preview)"
+      "name": "Google: Nano Banana 2 (Gemini 3.1 Flash Image Preview)",
+      "pricing": {
+        "rates": {
+          "input": 0.5,
+          "output": 3.0
+        },
+        "source": "models.dev:openrouter/google/gemini-3.1-flash-image-preview"
+      }
     },
     "google/gemini-3.1-flash-lite": {
       "capabilities": {
@@ -7436,7 +8103,17 @@
           "modality": "text+image+file+audio+video->text"
         }
       },
-      "name": "Google: Gemini 3.1 Flash Lite"
+      "name": "Google: Gemini 3.1 Flash Lite",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.025,
+          "cache_write": 0.083333,
+          "input": 0.25,
+          "output": 1.5,
+          "reasoning": 1.5
+        },
+        "source": "models.dev:openrouter/google/gemini-3.1-flash-lite"
+      }
     },
     "google/gemini-3.1-flash-lite-image": {
       "capabilities": {
@@ -7538,7 +8215,14 @@
           "modality": "text+image->text+image"
         }
       },
-      "name": "Google: Nano Banana 2 Lite (Gemini 3.1 Flash Lite Image)"
+      "name": "Google: Nano Banana 2 Lite (Gemini 3.1 Flash Lite Image)",
+      "pricing": {
+        "rates": {
+          "input": 0.25,
+          "output": 1.5
+        },
+        "source": "models.dev:openrouter/google/gemini-3.1-flash-lite-image"
+      }
     },
     "google/gemini-3.1-flash-lite-preview": {
       "capabilities": {
@@ -7603,7 +8287,17 @@
           "modality": "text+image+file+audio+video->text"
         }
       },
-      "name": "Google: Gemini 3.1 Flash Lite Preview"
+      "name": "Google: Gemini 3.1 Flash Lite Preview",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.025,
+          "cache_write": 0.083333,
+          "input": 0.25,
+          "output": 1.5,
+          "reasoning": 1.5
+        },
+        "source": "models.dev:openrouter/google/gemini-3.1-flash-lite-preview"
+      }
     },
     "google/gemini-3.1-flash-lite:batch": {
       "capabilities": {
@@ -7788,7 +8482,30 @@
           "reasoning_response_field": "reasoning_details"
         }
       },
-      "name": "Google: Gemini 3.1 Pro Preview"
+      "name": "Google: Gemini 3.1 Pro Preview",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 0.375,
+          "input": 2.0,
+          "output": 12.0,
+          "reasoning": 12.0,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "cache_write": 0.375,
+              "input": 4.0,
+              "output": 18.0,
+              "reasoning": 12.0,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/google/gemini-3.1-pro-preview"
+      }
     },
     "google/gemini-3.1-pro-preview-customtools": {
       "capabilities": {
@@ -7853,7 +8570,30 @@
           "reasoning_response_field": "reasoning_details"
         }
       },
-      "name": "Google: Gemini 3.1 Pro Preview Custom Tools"
+      "name": "Google: Gemini 3.1 Pro Preview Custom Tools",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 0.375,
+          "input": 2.0,
+          "output": 12.0,
+          "reasoning": 12.0,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "cache_write": 0.375,
+              "input": 4.0,
+              "output": 18.0,
+              "reasoning": 12.0,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/google/gemini-3.1-pro-preview-customtools"
+      }
     },
     "google/gemini-3.1-pro-preview:batch": {
       "capabilities": {
@@ -7977,7 +8717,17 @@
           "modality": "text+image+file+audio+video->text"
         }
       },
-      "name": "Google: Gemini 3.5 Flash"
+      "name": "Google: Gemini 3.5 Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.15,
+          "cache_write": 0.083333,
+          "input": 1.5,
+          "output": 9.0,
+          "reasoning": 9.0
+        },
+        "source": "models.dev:openrouter/google/gemini-3.5-flash"
+      }
     },
     "google/gemini-3.5-flash-lite": {
       "capabilities": {
@@ -8043,7 +8793,17 @@
           "modality": "text+image+file+audio+video->text"
         }
       },
-      "name": "Google: Gemini 3.5 Flash Lite"
+      "name": "Google: Gemini 3.5 Flash Lite",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.03,
+          "cache_write": 0.083333,
+          "input": 0.3,
+          "output": 2.5,
+          "reasoning": 2.5
+        },
+        "source": "models.dev:openrouter/google/gemini-3.5-flash-lite"
+      }
     },
     "google/gemini-3.5-flash-lite:batch": {
       "capabilities": {
@@ -8223,7 +8983,17 @@
           "modality": "text+image+file+audio+video->text"
         }
       },
-      "name": "Google: Gemini 3.6 Flash"
+      "name": "Google: Gemini 3.6 Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.075,
+          "cache_write": 0.041667,
+          "input": 0.75,
+          "output": 3.75,
+          "reasoning": 3.75
+        },
+        "source": "models.dev:openrouter/google/gemini-3.6-flash"
+      }
     },
     "google/gemini-3.6-flash:batch": {
       "capabilities": {
@@ -8344,7 +9114,17 @@
           "modality": "text+image+file+audio+video->text"
         }
       },
-      "name": "Google: Gemini 3.7 Flash"
+      "name": "Google: Gemini 3.7 Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.075,
+          "cache_write": 0.041667,
+          "input": 0.75,
+          "output": 3.75,
+          "reasoning": 3.75
+        },
+        "source": "models.dev:openrouter/google/gemini-3.7-flash"
+      }
     },
     "google/gemini-3.7-flash:batch": {
       "capabilities": {
@@ -8465,7 +9245,17 @@
           "modality": "text+image+file+audio+video->text"
         }
       },
-      "name": "Google: Gemini 3.8 Flash"
+      "name": "Google: Gemini 3.8 Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.075,
+          "cache_write": 0.041667,
+          "input": 0.75,
+          "output": 3.75,
+          "reasoning": 3.75
+        },
+        "source": "models.dev:openrouter/google/gemini-3.8-flash"
+      }
     },
     "google/gemini-3.8-flash:batch": {
       "capabilities": {
@@ -8712,7 +9502,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Google: Gemma 2 27B"
+      "name": "Google: Gemma 2 27B",
+      "pricing": {
+        "rates": {
+          "input": 0.65,
+          "output": 0.65
+        },
+        "source": "models.dev:openrouter/google/gemma-2-27b-it"
+      }
     },
     "google/gemma-3-12b-it": {
       "capabilities": {
@@ -8762,7 +9559,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Google: Gemma 3 12B"
+      "name": "Google: Gemma 3 12B",
+      "pricing": {
+        "rates": {
+          "input": 0.05,
+          "output": 0.15
+        },
+        "source": "models.dev:openrouter/google/gemma-3-12b-it"
+      }
     },
     "google/gemma-3-27b-it": {
       "capabilities": {
@@ -8814,7 +9618,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Google: Gemma 3 27B"
+      "name": "Google: Gemma 3 27B",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.04,
+          "input": 0.08,
+          "output": 0.45
+        },
+        "source": "models.dev:openrouter/google/gemma-3-27b-it"
+      }
     },
     "google/gemma-3-4b-it": {
       "capabilities": {
@@ -8862,7 +9674,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Google: Gemma 3 4B"
+      "name": "Google: Gemma 3 4B",
+      "pricing": {
+        "rates": {
+          "input": 0.05,
+          "output": 0.1
+        },
+        "source": "models.dev:openrouter/google/gemma-3-4b-it"
+      }
     },
     "google/gemma-4-26b-a4b-it": {
       "capabilities": {
@@ -8923,7 +9742,15 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Google: Gemma 4 26B A4B "
+      "name": "Google: Gemma 4 26B A4B ",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.05,
+          "input": 0.09,
+          "output": 0.3
+        },
+        "source": "models.dev:openrouter/google/gemma-4-26b-a4b-it"
+      }
     },
     "google/gemma-4-26b-a4b-it:free": {
       "capabilities": {
@@ -8974,7 +9801,14 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Google: Gemma 4 26B A4B  (free)"
+      "name": "Google: Gemma 4 26B A4B  (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/google/gemma-4-26b-a4b-it:free"
+      }
     },
     "google/gemma-4-31b-it": {
       "capabilities": {
@@ -9035,7 +9869,15 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Google: Gemma 4 31B"
+      "name": "Google: Gemma 4 31B",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.05,
+          "input": 0.09,
+          "output": 0.34
+        },
+        "source": "models.dev:openrouter/google/gemma-4-31b-it"
+      }
     },
     "google/gemma-4-31b-it:free": {
       "capabilities": {
@@ -9086,7 +9928,14 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Google: Gemma 4 31B (free)"
+      "name": "Google: Gemma 4 31B (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/google/gemma-4-31b-it:free"
+      }
     },
     "google/lyria-3-clip-preview": {
       "capabilities": {
@@ -9129,7 +9978,14 @@
           "modality": "text+image->text+audio"
         }
       },
-      "name": "Google: Lyria 3 Clip Preview"
+      "name": "Google: Lyria 3 Clip Preview",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/google/lyria-3-clip-preview"
+      }
     },
     "google/lyria-3-pro-preview": {
       "capabilities": {
@@ -9172,7 +10028,14 @@
           "modality": "text+image->text+audio"
         }
       },
-      "name": "Google: Lyria 3 Pro Preview"
+      "name": "Google: Lyria 3 Pro Preview",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/google/lyria-3-pro-preview"
+      }
     },
     "google/veo-3.1": {
       "capabilities": {
@@ -9510,7 +10373,14 @@
           "modality": "text->text"
         }
       },
-      "name": "MythoMax 13B"
+      "name": "MythoMax 13B",
+      "pricing": {
+        "rates": {
+          "input": 0.08,
+          "output": 0.11
+        },
+        "source": "models.dev:openrouter/gryphe/mythomax-l2-13b"
+      }
     },
     "hexgrad/kokoro-82m": {
       "capabilities": {
@@ -9715,7 +10585,14 @@
           "modality": "text->text"
         }
       },
-      "name": "IBM: Granite 4.0 Micro"
+      "name": "IBM: Granite 4.0 Micro",
+      "pricing": {
+        "rates": {
+          "input": 0.017,
+          "output": 0.112
+        },
+        "source": "models.dev:openrouter/ibm-granite/granite-4.0-h-micro"
+      }
     },
     "ibm-granite/granite-4.2-8b": {
       "capabilities": {
@@ -9776,7 +10653,15 @@
           "modality": "text->text"
         }
       },
-      "name": "IBM: Granite 4.2 8B"
+      "name": "IBM: Granite 4.2 8B",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.015,
+          "input": 0.06,
+          "output": 0.25
+        },
+        "source": "models.dev:openrouter/ibm-granite/granite-4.2-8b"
+      }
     },
     "inception/mercury-2": {
       "capabilities": {
@@ -9828,7 +10713,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Inception: Mercury 2"
+      "name": "Inception: Mercury 2",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.025,
+          "input": 0.25,
+          "output": 0.75
+        },
+        "source": "models.dev:openrouter/inception/mercury-2"
+      }
     },
     "inception/mercury-2.5": {
       "capabilities": {
@@ -9880,7 +10773,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Inception: Mercury 2.5"
+      "name": "Inception: Mercury 2.5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.004,
+          "input": 0.04,
+          "output": 0.15
+        },
+        "source": "models.dev:openrouter/inception/mercury-2.5"
+      }
     },
     "inclusionai/ling-3.0-flash": {
       "capabilities": {
@@ -9934,7 +10835,15 @@
           "modality": "text->text"
         }
       },
-      "name": "inclusionAI: Ling 3.0 Flash"
+      "name": "inclusionAI: Ling 3.0 Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0042,
+          "input": 0.021,
+          "output": 0.063
+        },
+        "source": "models.dev:openrouter/inclusionai/ling-3.0-flash"
+      }
     },
     "inclusionai/ling-3.0-flash-fin": {
       "capabilities": {
@@ -9986,7 +10895,15 @@
           "modality": "text->text"
         }
       },
-      "name": "inclusionAI: Ling 3.0 Flash Fin"
+      "name": "inclusionAI: Ling 3.0 Flash Fin",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.012,
+          "input": 0.06,
+          "output": 0.18
+        },
+        "source": "models.dev:openrouter/inclusionai/ling-3.0-flash-fin"
+      }
     },
     "inclusionai/ling-3.0-flash-fin:free": {
       "capabilities": {
@@ -10037,7 +10954,14 @@
           "modality": "text->text"
         }
       },
-      "name": "inclusionAI: Ling 3.0 Flash Fin (free)"
+      "name": "inclusionAI: Ling 3.0 Flash Fin (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/inclusionai/ling-3.0-flash-fin:free"
+      }
     },
     "inclusionai/ling-3.0-flash-sante:free": {
       "capabilities": {
@@ -10088,7 +11012,14 @@
           "modality": "text->text"
         }
       },
-      "name": "inclusionAI: Ling 3.0 Flash Sante (free)"
+      "name": "inclusionAI: Ling 3.0 Flash Sante (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/inclusionai/ling-3.0-flash-sante:free"
+      }
     },
     "inclusionai/ling-3.0-flash-vl": {
       "capabilities": {
@@ -10147,7 +11078,15 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "inclusionAI: Ling 3.0 Flash VL"
+      "name": "inclusionAI: Ling 3.0 Flash VL",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.012,
+          "input": 0.06,
+          "output": 0.18
+        },
+        "source": "models.dev:openrouter/inclusionai/ling-3.0-flash-vl"
+      }
     },
     "inclusionai/ling-3.0-flash-vl:free": {
       "capabilities": {
@@ -10204,7 +11143,14 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "inclusionAI: Ling 3.0 Flash VL (free)"
+      "name": "inclusionAI: Ling 3.0 Flash VL (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/inclusionai/ling-3.0-flash-vl:free"
+      }
     },
     "inference-net/schematron-v2-small": {
       "capabilities": {
@@ -10250,7 +11196,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Inference.net: Schematron V2 Small"
+      "name": "Inference.net: Schematron V2 Small",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.05,
+          "input": 0.05,
+          "output": 0.23
+        },
+        "source": "models.dev:openrouter/inference-net/schematron-v2-small"
+      }
     },
     "inference-net/schematron-v2-turbo": {
       "capabilities": {
@@ -10296,7 +11250,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Inference.net: Schematron V2 Turbo"
+      "name": "Inference.net: Schematron V2 Turbo",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.03,
+          "input": 0.03,
+          "output": 0.15
+        },
+        "source": "models.dev:openrouter/inference-net/schematron-v2-turbo"
+      }
     },
     "intfloat/e5-base-v2": {
       "capabilities": {
@@ -10676,7 +11638,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Kwaipilot: KAT-Coder-Pro V2"
+      "name": "Kwaipilot: KAT-Coder-Pro V2",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.06,
+          "input": 0.3,
+          "output": 1.2
+        },
+        "source": "models.dev:openrouter/kwaipilot/kat-coder-pro-v2"
+      }
     },
     "kwaipilot/kat-coder-pro-v2.5": {
       "capabilities": {
@@ -10726,7 +11696,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Kwaipilot: KAT-Coder-Pro V2.5"
+      "name": "Kwaipilot: KAT-Coder-Pro V2.5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.15,
+          "input": 0.74,
+          "output": 2.96
+        },
+        "source": "models.dev:openrouter/kwaipilot/kat-coder-pro-v2.5"
+      }
     },
     "kwaivgi/kling-v3.0-pro": {
       "capabilities": {
@@ -11052,7 +12030,14 @@
           "modality": "text->text"
         }
       },
-      "name": "LiquidAI: LFM2.5-2.6B (free)"
+      "name": "LiquidAI: LFM2.5-2.6B (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/liquid/lfm-2.5-2.6b:free"
+      }
     },
     "liquid/lfm-2.5-embedding-350m:free": {
       "capabilities": {
@@ -11134,7 +12119,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Mancer: Weaver (alpha)"
+      "name": "Mancer: Weaver (alpha)",
+      "pricing": {
+        "rates": {
+          "input": 0.4,
+          "output": 0.75
+        },
+        "source": "models.dev:openrouter/mancer/weaver"
+      }
     },
     "meituan/longcat-2.0": {
       "capabilities": {
@@ -11185,7 +12177,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Meituan: LongCat 2.0"
+      "name": "Meituan: LongCat 2.0",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.006,
+          "input": 0.3,
+          "output": 1.2
+        },
+        "source": "models.dev:openrouter/meituan/longcat-2.0"
+      }
     },
     "meta-llama/llama-3.1-70b-instruct": {
       "capabilities": {
@@ -11235,7 +12235,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Meta: Llama 3.1 70B Instruct"
+      "name": "Meta: Llama 3.1 70B Instruct",
+      "pricing": {
+        "rates": {
+          "input": 0.4,
+          "output": 0.4
+        },
+        "source": "models.dev:openrouter/meta-llama/llama-3.1-70b-instruct"
+      }
     },
     "meta-llama/llama-3.1-8b-instruct": {
       "capabilities": {
@@ -11287,7 +12294,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Meta: Llama 3.1 8B Instruct"
+      "name": "Meta: Llama 3.1 8B Instruct",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.025,
+          "input": 0.05,
+          "output": 0.08
+        },
+        "source": "models.dev:openrouter/meta-llama/llama-3.1-8b-instruct"
+      }
     },
     "meta-llama/llama-3.2-1b-instruct": {
       "capabilities": {
@@ -11333,7 +12348,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Meta: Llama 3.2 1B Instruct"
+      "name": "Meta: Llama 3.2 1B Instruct",
+      "pricing": {
+        "rates": {
+          "input": 0.027,
+          "output": 0.201
+        },
+        "source": "models.dev:openrouter/meta-llama/llama-3.2-1b-instruct"
+      }
     },
     "meta-llama/llama-3.2-3b-instruct": {
       "capabilities": {
@@ -11382,7 +12404,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Meta: Llama 3.2 3B Instruct"
+      "name": "Meta: Llama 3.2 3B Instruct",
+      "pricing": {
+        "rates": {
+          "input": 0.05,
+          "output": 0.33
+        },
+        "source": "models.dev:openrouter/meta-llama/llama-3.2-3b-instruct"
+      }
     },
     "meta-llama/llama-3.3-70b-instruct": {
       "capabilities": {
@@ -11434,7 +12463,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Meta: Llama 3.3 70B Instruct"
+      "name": "Meta: Llama 3.3 70B Instruct",
+      "pricing": {
+        "rates": {
+          "input": 0.1,
+          "output": 0.32
+        },
+        "source": "models.dev:openrouter/meta-llama/llama-3.3-70b-instruct"
+      }
     },
     "meta-llama/llama-4-maverick": {
       "capabilities": {
@@ -11489,7 +12525,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Meta: Llama 4 Maverick"
+      "name": "Meta: Llama 4 Maverick",
+      "pricing": {
+        "rates": {
+          "input": 0.1875,
+          "output": 0.6525
+        },
+        "source": "models.dev:openrouter/meta-llama/llama-4-maverick"
+      }
     },
     "meta-llama/llama-4-scout": {
       "capabilities": {
@@ -11542,7 +12585,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Meta: Llama 4 Scout"
+      "name": "Meta: Llama 4 Scout",
+      "pricing": {
+        "rates": {
+          "input": 0.1,
+          "output": 0.3
+        },
+        "source": "models.dev:openrouter/meta-llama/llama-4-scout"
+      }
     },
     "meta-llama/llama-guard-3-8b": {
       "capabilities": {
@@ -11633,7 +12683,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Meta: Llama Guard 4 12B"
+      "name": "Meta: Llama Guard 4 12B",
+      "pricing": {
+        "rates": {
+          "input": 0.18,
+          "output": 0.18
+        },
+        "source": "models.dev:openrouter/meta-llama/llama-guard-4-12b"
+      }
     },
     "meta/muse-glimmer-30b": {
       "capabilities": {
@@ -11698,7 +12755,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Meta: Muse Glimmer 30B"
+      "name": "Meta: Muse Glimmer 30B",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.04,
+          "input": 0.3,
+          "output": 1.2
+        },
+        "source": "models.dev:openrouter/meta/muse-glimmer-30b"
+      }
     },
     "meta/muse-glimmer-30b:batch": {
       "capabilities": {
@@ -11861,7 +12926,15 @@
           "modality": "text+image+file+audio+video->text"
         }
       },
-      "name": "Meta: Muse Spark 1.1"
+      "name": "Meta: Muse Spark 1.1",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.15,
+          "input": 1.25,
+          "output": 4.25
+        },
+        "source": "models.dev:openrouter/meta/muse-spark-1.1"
+      }
     },
     "meta/muse-spark-1.2": {
       "capabilities": {
@@ -11928,7 +13001,15 @@
           "modality": "text+image+file+audio+video->text"
         }
       },
-      "name": "Meta: Muse Spark 1.2"
+      "name": "Meta: Muse Spark 1.2",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.15,
+          "input": 1.25,
+          "output": 4.25
+        },
+        "source": "models.dev:openrouter/meta/muse-spark-1.2"
+      }
     },
     "meta/muse-spark-1.2-contributor": {
       "capabilities": {
@@ -11995,7 +13076,15 @@
           "modality": "text+image+file+audio+video->text"
         }
       },
-      "name": "Meta: Muse Spark 1.2 Contributor"
+      "name": "Meta: Muse Spark 1.2 Contributor",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.002,
+          "input": 0.1,
+          "output": 0.2
+        },
+        "source": "models.dev:openrouter/meta/muse-spark-1.2-contributor"
+      }
     },
     "meta/muse-spark-1.3": {
       "capabilities": {
@@ -12063,7 +13152,15 @@
           "modality": "text+image+file+audio+video->text"
         }
       },
-      "name": "Meta: Muse Spark 1.3"
+      "name": "Meta: Muse Spark 1.3",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.15,
+          "input": 1.25,
+          "output": 4.25
+        },
+        "source": "models.dev:openrouter/meta/muse-spark-1.3"
+      }
     },
     "meta/muse-spark-1.3-contributor": {
       "capabilities": {
@@ -12131,7 +13228,15 @@
           "modality": "text+image+file+audio+video->text"
         }
       },
-      "name": "Meta: Muse Spark 1.3 Contributor"
+      "name": "Meta: Muse Spark 1.3 Contributor",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.002,
+          "input": 0.1,
+          "output": 0.2
+        },
+        "source": "models.dev:openrouter/meta/muse-spark-1.3-contributor"
+      }
     },
     "meta/muse-voice-transcribe-1.0": {
       "capabilities": {
@@ -12635,7 +13740,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Microsoft: Phi 4"
+      "name": "Microsoft: Phi 4",
+      "pricing": {
+        "rates": {
+          "input": 0.07,
+          "output": 0.14
+        },
+        "source": "models.dev:openrouter/microsoft/phi-4"
+      }
     },
     "microsoft/wizardlm-2-8x22b": {
       "capabilities": {
@@ -12679,7 +13791,14 @@
           "modality": "text->text"
         }
       },
-      "name": "WizardLM-2 8x22B"
+      "name": "WizardLM-2 8x22B",
+      "pricing": {
+        "rates": {
+          "input": 0.62,
+          "output": 0.62
+        },
+        "source": "models.dev:openrouter/microsoft/wizardlm-2-8x22b"
+      }
     },
     "minimax/hailuo-2.3": {
       "capabilities": {
@@ -12972,7 +14091,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "MiniMax: MiniMax-01"
+      "name": "MiniMax: MiniMax-01",
+      "pricing": {
+        "rates": {
+          "input": 0.2,
+          "output": 1.1
+        },
+        "source": "models.dev:openrouter/minimax/minimax-01"
+      }
     },
     "minimax/minimax-m1": {
       "capabilities": {
@@ -13021,7 +14147,14 @@
           "modality": "text->text"
         }
       },
-      "name": "MiniMax: MiniMax M1"
+      "name": "MiniMax: MiniMax M1",
+      "pricing": {
+        "rates": {
+          "input": 0.4,
+          "output": 2.2
+        },
+        "source": "models.dev:openrouter/minimax/minimax-m1"
+      }
     },
     "minimax/minimax-m2": {
       "capabilities": {
@@ -13074,7 +14207,14 @@
           "reasoning_response_field": "reasoning_details"
         }
       },
-      "name": "MiniMax: MiniMax M2"
+      "name": "MiniMax: MiniMax M2",
+      "pricing": {
+        "rates": {
+          "input": 0.255,
+          "output": 1.02
+        },
+        "source": "models.dev:openrouter/minimax/minimax-m2"
+      }
     },
     "minimax/minimax-m2-her": {
       "capabilities": {
@@ -13112,7 +14252,15 @@
           "modality": "text->text"
         }
       },
-      "name": "MiniMax: MiniMax M2-her"
+      "name": "MiniMax: MiniMax M2-her",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.03,
+          "input": 0.3,
+          "output": 1.2
+        },
+        "source": "models.dev:openrouter/minimax/minimax-m2-her"
+      }
     },
     "minimax/minimax-m2.1": {
       "capabilities": {
@@ -13162,7 +14310,15 @@
           "reasoning_response_field": "reasoning_details"
         }
       },
-      "name": "MiniMax: MiniMax M2.1"
+      "name": "MiniMax: MiniMax M2.1",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.03,
+          "input": 0.3,
+          "output": 1.2
+        },
+        "source": "models.dev:openrouter/minimax/minimax-m2.1"
+      }
     },
     "minimax/minimax-m2.5": {
       "capabilities": {
@@ -13217,7 +14373,15 @@
           "reasoning_response_field": "reasoning_details"
         }
       },
-      "name": "MiniMax: MiniMax M2.5"
+      "name": "MiniMax: MiniMax M2.5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.027,
+          "input": 0.27,
+          "output": 1.08
+        },
+        "source": "models.dev:openrouter/minimax/minimax-m2.5"
+      }
     },
     "minimax/minimax-m2.7": {
       "capabilities": {
@@ -13271,7 +14435,15 @@
           "modality": "text->text"
         }
       },
-      "name": "MiniMax: MiniMax M2.7"
+      "name": "MiniMax: MiniMax M2.7",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.06,
+          "input": 0.3,
+          "output": 1.2
+        },
+        "source": "models.dev:openrouter/minimax/minimax-m2.7"
+      }
     },
     "minimax/minimax-m3": {
       "capabilities": {
@@ -13332,7 +14504,15 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "MiniMax: MiniMax M3"
+      "name": "MiniMax: MiniMax M3",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.06,
+          "input": 0.3,
+          "output": 1.2
+        },
+        "source": "models.dev:openrouter/minimax/minimax-m3"
+      }
     },
     "minimax/minimax-m3:batch": {
       "capabilities": {
@@ -13596,7 +14776,15 @@
           "modality": "text+file->text"
         }
       },
-      "name": "Mistral: Codestral 2508"
+      "name": "Mistral: Codestral 2508",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.03,
+          "input": 0.3,
+          "output": 0.9
+        },
+        "source": "models.dev:openrouter/mistralai/codestral-2508"
+      }
     },
     "mistralai/codestral-2508:batch": {
       "capabilities": {
@@ -13726,7 +14914,15 @@
           "modality": "text+file->text"
         }
       },
-      "name": "Mistral: Devstral 2 2512"
+      "name": "Mistral: Devstral 2 2512",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.04,
+          "input": 0.4,
+          "output": 2.0
+        },
+        "source": "models.dev:openrouter/mistralai/devstral-2512"
+      }
     },
     "mistralai/ministral-14b-2512": {
       "capabilities": {
@@ -13775,7 +14971,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Mistral: Ministral 3 14B 2512"
+      "name": "Mistral: Ministral 3 14B 2512",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.02,
+          "input": 0.2,
+          "output": 0.2
+        },
+        "source": "models.dev:openrouter/mistralai/ministral-14b-2512"
+      }
     },
     "mistralai/ministral-3b-2512": {
       "capabilities": {
@@ -13824,7 +15028,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Mistral: Ministral 3 3B 2512"
+      "name": "Mistral: Ministral 3 3B 2512",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.01,
+          "input": 0.1,
+          "output": 0.1
+        },
+        "source": "models.dev:openrouter/mistralai/ministral-3b-2512"
+      }
     },
     "mistralai/ministral-8b-2512": {
       "capabilities": {
@@ -13873,7 +15085,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Mistral: Ministral 3 8B 2512"
+      "name": "Mistral: Ministral 3 8B 2512",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.015,
+          "input": 0.15,
+          "output": 0.15
+        },
+        "source": "models.dev:openrouter/mistralai/ministral-8b-2512"
+      }
     },
     "mistralai/ministral-8b-2512:batch": {
       "capabilities": {
@@ -14002,7 +15222,15 @@
           "modality": "text+file->text"
         }
       },
-      "name": "Mistral Large"
+      "name": "Mistral Large",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "input": 2.0,
+          "output": 6.0
+        },
+        "source": "models.dev:openrouter/mistralai/mistral-large"
+      }
     },
     "mistralai/mistral-large-2407": {
       "capabilities": {
@@ -14051,7 +15279,15 @@
           "modality": "text+file->text"
         }
       },
-      "name": "Mistral Large 2407"
+      "name": "Mistral Large 2407",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "input": 2.0,
+          "output": 6.0
+        },
+        "source": "models.dev:openrouter/mistralai/mistral-large-2407"
+      }
     },
     "mistralai/mistral-large-2512:batch": {
       "capabilities": {
@@ -14154,7 +15390,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Mistral: Mistral Medium 3"
+      "name": "Mistral: Mistral Medium 3",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.04,
+          "input": 0.4,
+          "output": 2.0
+        },
+        "source": "models.dev:openrouter/mistralai/mistral-medium-3"
+      }
     },
     "mistralai/mistral-medium-3-5": {
       "capabilities": {
@@ -14214,7 +15458,14 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Mistral: Mistral Medium 3.5"
+      "name": "Mistral: Mistral Medium 3.5",
+      "pricing": {
+        "rates": {
+          "input": 1.5,
+          "output": 7.5
+        },
+        "source": "models.dev:openrouter/mistralai/mistral-medium-3-5"
+      }
     },
     "mistralai/mistral-medium-3-5:batch": {
       "capabilities": {
@@ -14320,7 +15571,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Mistral: Mistral Medium 3.1"
+      "name": "Mistral: Mistral Medium 3.1",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.04,
+          "input": 0.4,
+          "output": 2.0
+        },
+        "source": "models.dev:openrouter/mistralai/mistral-medium-3.1"
+      }
     },
     "mistralai/mistral-medium-3.1:batch": {
       "capabilities": {
@@ -14423,7 +15682,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Mistral: Mistral Nemo"
+      "name": "Mistral: Mistral Nemo",
+      "pricing": {
+        "rates": {
+          "input": 0.019,
+          "output": 0.03
+        },
+        "source": "models.dev:openrouter/mistralai/mistral-nemo"
+      }
     },
     "mistralai/mistral-saba": {
       "capabilities": {
@@ -14472,7 +15738,15 @@
           "modality": "text+file->text"
         }
       },
-      "name": "Mistral: Saba"
+      "name": "Mistral: Saba",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.02,
+          "input": 0.2,
+          "output": 0.6
+        },
+        "source": "models.dev:openrouter/mistralai/mistral-saba"
+      }
     },
     "mistralai/mistral-small-24b-instruct-2501": {
       "capabilities": {
@@ -14520,7 +15794,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Mistral: Mistral Small 3"
+      "name": "Mistral: Mistral Small 3",
+      "pricing": {
+        "rates": {
+          "input": 0.05,
+          "output": 0.08
+        },
+        "source": "models.dev:openrouter/mistralai/mistral-small-24b-instruct-2501"
+      }
     },
     "mistralai/mistral-small-2603": {
       "capabilities": {
@@ -14577,7 +15858,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Mistral: Mistral Small 4"
+      "name": "Mistral: Mistral Small 4",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.015,
+          "input": 0.15,
+          "output": 0.6
+        },
+        "source": "models.dev:openrouter/mistralai/mistral-small-2603"
+      }
     },
     "mistralai/mistral-small-2603:batch": {
       "capabilities": {
@@ -14679,7 +15968,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Mistral: Mistral Small 3.1 24B"
+      "name": "Mistral: Mistral Small 3.1 24B",
+      "pricing": {
+        "rates": {
+          "input": 0.351,
+          "output": 0.555
+        },
+        "source": "models.dev:openrouter/mistralai/mistral-small-3.1-24b-instruct"
+      }
     },
     "mistralai/mistral-small-3.2-24b-instruct": {
       "capabilities": {
@@ -14734,7 +16030,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Mistral: Mistral Small 3.2 24B"
+      "name": "Mistral: Mistral Small 3.2 24B",
+      "pricing": {
+        "rates": {
+          "input": 0.09375,
+          "output": 0.25
+        },
+        "source": "models.dev:openrouter/mistralai/mistral-small-3.2-24b-instruct"
+      }
     },
     "mistralai/mixtral-8x22b-instruct": {
       "capabilities": {
@@ -14783,7 +16086,15 @@
           "modality": "text+file->text"
         }
       },
-      "name": "Mistral: Mixtral 8x22B Instruct"
+      "name": "Mistral: Mixtral 8x22B Instruct",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "input": 2.0,
+          "output": 6.0
+        },
+        "source": "models.dev:openrouter/mistralai/mixtral-8x22b-instruct"
+      }
     },
     "mistralai/voxtral-mini-3b-2507": {
       "capabilities": {
@@ -14967,7 +16278,15 @@
           "modality": "text+file+audio->text"
         }
       },
-      "name": "Mistral: Voxtral Small 24B 2507"
+      "name": "Mistral: Voxtral Small 24B 2507",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.01,
+          "input": 0.1,
+          "output": 0.3
+        },
+        "source": "models.dev:openrouter/mistralai/voxtral-small-24b-2507"
+      }
     },
     "mistralai/voxtral-small-24b-2507-stt": {
       "capabilities": {
@@ -15047,7 +16366,14 @@
           "modality": "text->text"
         }
       },
-      "name": "MoonshotAI: Kimi K2 0711"
+      "name": "MoonshotAI: Kimi K2 0711",
+      "pricing": {
+        "rates": {
+          "input": 0.57,
+          "output": 2.3
+        },
+        "source": "models.dev:openrouter/moonshotai/kimi-k2"
+      }
     },
     "moonshotai/kimi-k2-0905": {
       "capabilities": {
@@ -15095,7 +16421,14 @@
           "modality": "text->text"
         }
       },
-      "name": "MoonshotAI: Kimi K2 0905"
+      "name": "MoonshotAI: Kimi K2 0905",
+      "pricing": {
+        "rates": {
+          "input": 0.6,
+          "output": 2.5
+        },
+        "source": "models.dev:openrouter/moonshotai/kimi-k2-0905"
+      }
     },
     "moonshotai/kimi-k2-thinking": {
       "capabilities": {
@@ -15145,7 +16478,15 @@
           "reasoning_response_field": "reasoning_details"
         }
       },
-      "name": "MoonshotAI: Kimi K2 Thinking"
+      "name": "MoonshotAI: Kimi K2 Thinking",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.15,
+          "input": 0.6,
+          "output": 2.5
+        },
+        "source": "models.dev:openrouter/moonshotai/kimi-k2-thinking"
+      }
     },
     "moonshotai/kimi-k2.5": {
       "capabilities": {
@@ -15204,7 +16545,15 @@
           "reasoning_response_field": "reasoning_details"
         }
       },
-      "name": "MoonshotAI: Kimi K2.5"
+      "name": "MoonshotAI: Kimi K2.5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.07,
+          "input": 0.45,
+          "output": 2.25
+        },
+        "source": "models.dev:openrouter/moonshotai/kimi-k2.5"
+      }
     },
     "moonshotai/kimi-k2.6": {
       "capabilities": {
@@ -15264,7 +16613,15 @@
           "reasoning_response_field": "reasoning_details"
         }
       },
-      "name": "MoonshotAI: Kimi K2.6"
+      "name": "MoonshotAI: Kimi K2.6",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.16,
+          "input": 0.95,
+          "output": 4.0
+        },
+        "source": "models.dev:openrouter/moonshotai/kimi-k2.6"
+      }
     },
     "moonshotai/kimi-k2.6:free": {
       "capabilities": {
@@ -15357,7 +16714,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "MoonshotAI: Kimi K2.7 Code"
+      "name": "MoonshotAI: Kimi K2.7 Code",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.18,
+          "input": 0.7062,
+          "output": 3.21
+        },
+        "source": "models.dev:openrouter/moonshotai/kimi-k2.7-code"
+      }
     },
     "moonshotai/kimi-k3": {
       "capabilities": {
@@ -15424,7 +16789,15 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "MoonshotAI: Kimi K3"
+      "name": "MoonshotAI: Kimi K3",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.17,
+          "input": 1.7,
+          "output": 8.5
+        },
+        "source": "models.dev:openrouter/moonshotai/kimi-k3"
+      }
     },
     "moonshotai/kimi-k3:batch": {
       "capabilities": {
@@ -15519,7 +16892,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Morph: Morph V3 Fast"
+      "name": "Morph: Morph V3 Fast",
+      "pricing": {
+        "rates": {
+          "input": 0.8,
+          "output": 1.2
+        },
+        "source": "models.dev:openrouter/morph/morph-v3-fast"
+      }
     },
     "morph/morph-v3-large": {
       "capabilities": {
@@ -15561,7 +16941,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Morph: Morph V3 Large"
+      "name": "Morph: Morph V3 Large",
+      "pricing": {
+        "rates": {
+          "input": 0.9,
+          "output": 1.9
+        },
+        "source": "models.dev:openrouter/morph/morph-v3-large"
+      }
     },
     "nex-agi/deepseek-v3.1-nex-n1": {
       "capabilities": {
@@ -15658,7 +17045,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Nex AGI: Nex-N2.5-Mini (free)"
+      "name": "Nex AGI: Nex-N2.5-Mini (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/nex-agi/nex-n2.5-mini:free"
+      }
     },
     "nex-agi/nex-n2.5-pro:free": {
       "capabilities": {
@@ -15715,7 +17109,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Nex AGI: Nex-N2.5-Pro (free)"
+      "name": "Nex AGI: Nex-N2.5-Pro (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/nex-agi/nex-n2.5-pro:free"
+      }
     },
     "nousresearch/hermes-3-llama-3.1-405b": {
       "capabilities": {
@@ -15763,7 +17164,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Nous: Hermes 3 405B Instruct"
+      "name": "Nous: Hermes 3 405B Instruct",
+      "pricing": {
+        "rates": {
+          "input": 1.0,
+          "output": 1.0
+        },
+        "source": "models.dev:openrouter/nousresearch/hermes-3-llama-3.1-405b"
+      }
     },
     "nousresearch/hermes-3-llama-3.1-70b": {
       "capabilities": {
@@ -15810,7 +17218,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Nous: Hermes 3 70B Instruct"
+      "name": "Nous: Hermes 3 70B Instruct",
+      "pricing": {
+        "rates": {
+          "input": 0.7,
+          "output": 0.7
+        },
+        "source": "models.dev:openrouter/nousresearch/hermes-3-llama-3.1-70b"
+      }
     },
     "nousresearch/hermes-4-405b": {
       "capabilities": {
@@ -15856,7 +17271,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Nous: Hermes 4 405B"
+      "name": "Nous: Hermes 4 405B",
+      "pricing": {
+        "rates": {
+          "input": 1.0,
+          "output": 3.0
+        },
+        "source": "models.dev:openrouter/nousresearch/hermes-4-405b"
+      }
     },
     "nvidia/llama-nemotron-embed-vl-1b-v2:free": {
       "capabilities": {
@@ -15977,7 +17399,14 @@
           "modality": "text->text"
         }
       },
-      "name": "NVIDIA: Nemotron 3 Nano 30B A3B"
+      "name": "NVIDIA: Nemotron 3 Nano 30B A3B",
+      "pricing": {
+        "rates": {
+          "input": 0.06,
+          "output": 0.24
+        },
+        "source": "models.dev:openrouter/nvidia/nemotron-3-nano-30b-a3b"
+      }
     },
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": {
       "capabilities": {
@@ -16030,7 +17459,14 @@
           "modality": "text+image+audio+video->text"
         }
       },
-      "name": "NVIDIA: Nemotron 3 Nano Omni (free)"
+      "name": "NVIDIA: Nemotron 3 Nano Omni (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+      }
     },
     "nvidia/nemotron-3-super-120b-a12b": {
       "capabilities": {
@@ -16090,7 +17526,14 @@
           "modality": "text->text"
         }
       },
-      "name": "NVIDIA: Nemotron 3 Super"
+      "name": "NVIDIA: Nemotron 3 Super",
+      "pricing": {
+        "rates": {
+          "input": 0.08,
+          "output": 0.45
+        },
+        "source": "models.dev:openrouter/nvidia/nemotron-3-super-120b-a12b"
+      }
     },
     "nvidia/nemotron-3-super-120b-a12b:free": {
       "capabilities": {
@@ -16141,7 +17584,14 @@
           "modality": "text->text"
         }
       },
-      "name": "NVIDIA: Nemotron 3 Super (free)"
+      "name": "NVIDIA: Nemotron 3 Super (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/nvidia/nemotron-3-super-120b-a12b:free"
+      }
     },
     "nvidia/nemotron-3-ultra-550b-a55b": {
       "capabilities": {
@@ -16199,7 +17649,15 @@
           "modality": "text->text"
         }
       },
-      "name": "NVIDIA: Nemotron 3 Ultra"
+      "name": "NVIDIA: Nemotron 3 Ultra",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.12,
+          "input": 0.6,
+          "output": 2.4
+        },
+        "source": "models.dev:openrouter/nvidia/nemotron-3-ultra-550b-a55b"
+      }
     },
     "nvidia/nemotron-3-ultra-550b-a55b:free": {
       "capabilities": {
@@ -16248,7 +17706,14 @@
           "modality": "text->text"
         }
       },
-      "name": "NVIDIA: Nemotron 3 Ultra (free)"
+      "name": "NVIDIA: Nemotron 3 Ultra (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
+      }
     },
     "nvidia/nemotron-3.5-asr-streaming-multilingual-0.6b": {
       "capabilities": {
@@ -16334,7 +17799,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "NVIDIA: Nemotron 3.5 Content Safety"
+      "name": "NVIDIA: Nemotron 3.5 Content Safety",
+      "pricing": {
+        "rates": {
+          "input": 0.2,
+          "output": 0.2
+        },
+        "source": "models.dev:openrouter/nvidia/nemotron-3.5-content-safety"
+      }
     },
     "nvidia/nemotron-3.5-content-safety:free": {
       "capabilities": {
@@ -16379,7 +17851,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "NVIDIA: Nemotron 3.5 Content Safety (free)"
+      "name": "NVIDIA: Nemotron 3.5 Content Safety (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/nvidia/nemotron-3.5-content-safety:free"
+      }
     },
     "nvidia/nemotron-3.5-lightning": {
       "capabilities": {
@@ -16434,7 +17913,15 @@
           "modality": "text->text"
         }
       },
-      "name": "NVIDIA: Nemotron 3.5 Lightning"
+      "name": "NVIDIA: Nemotron 3.5 Lightning",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.04,
+          "input": 0.07,
+          "output": 0.2
+        },
+        "source": "models.dev:openrouter/nvidia/nemotron-3.5-lightning"
+      }
     },
     "nvidia/nemotron-3.5-lightning:free": {
       "capabilities": {
@@ -16478,7 +17965,14 @@
           "modality": "text->text"
         }
       },
-      "name": "NVIDIA: Nemotron 3.5 Lightning (free)"
+      "name": "NVIDIA: Nemotron 3.5 Lightning (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/nvidia/nemotron-3.5-lightning:free"
+      }
     },
     "nvidia/nemotron-nano-9b-v2": {
       "capabilities": {
@@ -16605,7 +18099,14 @@
           "modality": "text->text"
         }
       },
-      "name": "OpenAI: GPT-3.5 Turbo"
+      "name": "OpenAI: GPT-3.5 Turbo",
+      "pricing": {
+        "rates": {
+          "input": 0.5,
+          "output": 1.5
+        },
+        "source": "models.dev:openrouter/openai/gpt-3.5-turbo"
+      }
     },
     "openai/gpt-3.5-turbo-0613": {
       "capabilities": {
@@ -16654,7 +18155,14 @@
           "modality": "text->text"
         }
       },
-      "name": "OpenAI: GPT-3.5 Turbo (older v0613)"
+      "name": "OpenAI: GPT-3.5 Turbo (older v0613)",
+      "pricing": {
+        "rates": {
+          "input": 1.0,
+          "output": 2.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-3.5-turbo-0613"
+      }
     },
     "openai/gpt-3.5-turbo-16k": {
       "capabilities": {
@@ -16704,7 +18212,14 @@
           "modality": "text->text"
         }
       },
-      "name": "OpenAI: GPT-3.5 Turbo 16k"
+      "name": "OpenAI: GPT-3.5 Turbo 16k",
+      "pricing": {
+        "rates": {
+          "input": 3.0,
+          "output": 4.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-3.5-turbo-16k"
+      }
     },
     "openai/gpt-3.5-turbo-instruct": {
       "capabilities": {
@@ -16751,7 +18266,14 @@
           "modality": "text->text"
         }
       },
-      "name": "OpenAI: GPT-3.5 Turbo Instruct"
+      "name": "OpenAI: GPT-3.5 Turbo Instruct",
+      "pricing": {
+        "rates": {
+          "input": 1.5,
+          "output": 2.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-3.5-turbo-instruct"
+      }
     },
     "openai/gpt-3.5-turbo:batch": {
       "capabilities": {
@@ -16846,7 +18368,14 @@
           "modality": "text->text"
         }
       },
-      "name": "OpenAI: GPT-4"
+      "name": "OpenAI: GPT-4",
+      "pricing": {
+        "rates": {
+          "input": 30.0,
+          "output": 60.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-4"
+      }
     },
     "openai/gpt-4-turbo": {
       "capabilities": {
@@ -16895,7 +18424,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "OpenAI: GPT-4 Turbo"
+      "name": "OpenAI: GPT-4 Turbo",
+      "pricing": {
+        "rates": {
+          "input": 10.0,
+          "output": 30.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-4-turbo"
+      }
     },
     "openai/gpt-4-turbo:batch": {
       "capabilities": {
@@ -16993,7 +18529,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-4.1"
+      "name": "OpenAI: GPT-4.1",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.5,
+          "input": 2.0,
+          "output": 8.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-4.1"
+      }
     },
     "openai/gpt-4.1-mini": {
       "capabilities": {
@@ -17040,7 +18584,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-4.1 Mini"
+      "name": "OpenAI: GPT-4.1 Mini",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1,
+          "input": 0.4,
+          "output": 1.6
+        },
+        "source": "models.dev:openrouter/openai/gpt-4.1-mini"
+      }
     },
     "openai/gpt-4.1-mini:batch": {
       "capabilities": {
@@ -17135,7 +18687,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-4.1 Nano"
+      "name": "OpenAI: GPT-4.1 Nano",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.025,
+          "input": 0.1,
+          "output": 0.4
+        },
+        "source": "models.dev:openrouter/openai/gpt-4.1-nano"
+      }
     },
     "openai/gpt-4.1-nano:batch": {
       "capabilities": {
@@ -17286,7 +18846,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-4o"
+      "name": "OpenAI: GPT-4o",
+      "pricing": {
+        "rates": {
+          "cache_read": 1.25,
+          "input": 2.5,
+          "output": 10.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-4o"
+      }
     },
     "openai/gpt-4o-2024-05-13": {
       "capabilities": {
@@ -17341,7 +18909,14 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-4o (2024-05-13)"
+      "name": "OpenAI: GPT-4o (2024-05-13)",
+      "pricing": {
+        "rates": {
+          "input": 5.0,
+          "output": 15.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-4o-2024-05-13"
+      }
     },
     "openai/gpt-4o-2024-08-06": {
       "capabilities": {
@@ -17396,7 +18971,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-4o (2024-08-06)"
+      "name": "OpenAI: GPT-4o (2024-08-06)",
+      "pricing": {
+        "rates": {
+          "cache_read": 1.25,
+          "input": 2.5,
+          "output": 10.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-4o-2024-08-06"
+      }
     },
     "openai/gpt-4o-2024-11-20": {
       "capabilities": {
@@ -17450,7 +19033,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-4o (2024-11-20)"
+      "name": "OpenAI: GPT-4o (2024-11-20)",
+      "pricing": {
+        "rates": {
+          "cache_read": 1.25,
+          "input": 2.5,
+          "output": 10.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-4o-2024-11-20"
+      }
     },
     "openai/gpt-4o-mini": {
       "capabilities": {
@@ -17505,7 +19096,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-4o-mini"
+      "name": "OpenAI: GPT-4o-mini",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.075,
+          "input": 0.15,
+          "output": 0.6
+        },
+        "source": "models.dev:openrouter/openai/gpt-4o-mini"
+      }
     },
     "openai/gpt-4o-mini-2024-07-18": {
       "capabilities": {
@@ -17562,7 +19161,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-4o-mini (2024-07-18)"
+      "name": "OpenAI: GPT-4o-mini (2024-07-18)",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.075,
+          "input": 0.15,
+          "output": 0.6
+        },
+        "source": "models.dev:openrouter/openai/gpt-4o-mini-2024-07-18"
+      }
     },
     "openai/gpt-4o-mini-transcribe": {
       "capabilities": {
@@ -17800,7 +19407,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5"
+      "name": "OpenAI: GPT-5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.125,
+          "input": 1.25,
+          "output": 10.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-5"
+      }
     },
     "openai/gpt-5-image": {
       "capabilities": {
@@ -17909,7 +19524,15 @@
           "modality": "text+image+file->text+image"
         }
       },
-      "name": "OpenAI: GPT-5 Image"
+      "name": "OpenAI: GPT-5 Image",
+      "pricing": {
+        "rates": {
+          "cache_read": 1.25,
+          "input": 10.0,
+          "output": 10.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-5-image"
+      }
     },
     "openai/gpt-5-image-mini": {
       "capabilities": {
@@ -18018,7 +19641,15 @@
           "modality": "text+image+file->text+image"
         }
       },
-      "name": "OpenAI: GPT-5 Image Mini"
+      "name": "OpenAI: GPT-5 Image Mini",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.25,
+          "input": 2.5,
+          "output": 2.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-5-image-mini"
+      }
     },
     "openai/gpt-5-mini": {
       "capabilities": {
@@ -18076,7 +19707,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5 Mini"
+      "name": "OpenAI: GPT-5 Mini",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.025,
+          "input": 0.25,
+          "output": 2.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-5-mini"
+      }
     },
     "openai/gpt-5-mini:batch": {
       "capabilities": {
@@ -18183,7 +19822,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5 Nano"
+      "name": "OpenAI: GPT-5 Nano",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.005,
+          "input": 0.05,
+          "output": 0.4
+        },
+        "source": "models.dev:openrouter/openai/gpt-5-nano"
+      }
     },
     "openai/gpt-5-nano:batch": {
       "capabilities": {
@@ -18286,7 +19933,14 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5 Pro"
+      "name": "OpenAI: GPT-5 Pro",
+      "pricing": {
+        "rates": {
+          "input": 15.0,
+          "output": 120.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-5-pro"
+      }
     },
     "openai/gpt-5-pro:batch": {
       "capabilities": {
@@ -18393,7 +20047,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5.1"
+      "name": "OpenAI: GPT-5.1",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.125,
+          "input": 1.25,
+          "output": 10.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.1"
+      }
     },
     "openai/gpt-5.1-codex": {
       "capabilities": {
@@ -18446,7 +20108,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "OpenAI: GPT-5.1-Codex"
+      "name": "OpenAI: GPT-5.1-Codex",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.13,
+          "input": 1.25,
+          "output": 10.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.1-codex"
+      }
     },
     "openai/gpt-5.1-codex-max": {
       "capabilities": {
@@ -18500,7 +20170,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "OpenAI: GPT-5.1-Codex-Max"
+      "name": "OpenAI: GPT-5.1-Codex-Max",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.125,
+          "input": 1.25,
+          "output": 10.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.1-codex-max"
+      }
     },
     "openai/gpt-5.1-codex-mini": {
       "capabilities": {
@@ -18553,7 +20231,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "OpenAI: GPT-5.1-Codex-Mini"
+      "name": "OpenAI: GPT-5.1-Codex-Mini",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.03,
+          "input": 0.25,
+          "output": 2.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.1-codex-mini"
+      }
     },
     "openai/gpt-5.1:batch": {
       "capabilities": {
@@ -18661,7 +20347,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5.2"
+      "name": "OpenAI: GPT-5.2",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.175,
+          "input": 1.75,
+          "output": 14.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.2"
+      }
     },
     "openai/gpt-5.2-chat": {
       "capabilities": {
@@ -18708,7 +20402,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5.2 Chat"
+      "name": "OpenAI: GPT-5.2 Chat",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.175,
+          "input": 1.75,
+          "output": 14.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.2-chat"
+      }
     },
     "openai/gpt-5.2-codex": {
       "capabilities": {
@@ -18762,7 +20464,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "OpenAI: GPT-5.2-Codex"
+      "name": "OpenAI: GPT-5.2-Codex",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.175,
+          "input": 1.75,
+          "output": 14.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.2-codex"
+      }
     },
     "openai/gpt-5.2-pro": {
       "capabilities": {
@@ -18818,7 +20528,14 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5.2 Pro"
+      "name": "OpenAI: GPT-5.2 Pro",
+      "pricing": {
+        "rates": {
+          "input": 21.0,
+          "output": 168.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.2-pro"
+      }
     },
     "openai/gpt-5.2-pro:batch": {
       "capabilities": {
@@ -18975,7 +20692,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5.3-Codex"
+      "name": "OpenAI: GPT-5.3-Codex",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.175,
+          "input": 1.75,
+          "output": 14.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.3-codex"
+      }
     },
     "openai/gpt-5.4": {
       "capabilities": {
@@ -19034,7 +20759,26 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5.4"
+      "name": "OpenAI: GPT-5.4",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.25,
+          "input": 2.5,
+          "output": 15.0,
+          "tiers": [
+            {
+              "cache_read": 0.5,
+              "input": 5.0,
+              "output": 22.5,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.4"
+      }
     },
     "openai/gpt-5.4-image-2": {
       "capabilities": {
@@ -19154,7 +20898,15 @@
           "modality": "text+image+file->text+image"
         }
       },
-      "name": "OpenAI: GPT-5.4 Image 2"
+      "name": "OpenAI: GPT-5.4 Image 2",
+      "pricing": {
+        "rates": {
+          "cache_read": 2.0,
+          "input": 8.0,
+          "output": 15.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.4-image-2"
+      }
     },
     "openai/gpt-5.4-mini": {
       "capabilities": {
@@ -19213,7 +20965,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5.4 Mini"
+      "name": "OpenAI: GPT-5.4 Mini",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.075,
+          "input": 0.75,
+          "output": 4.5
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.4-mini"
+      }
     },
     "openai/gpt-5.4-mini:batch": {
       "capabilities": {
@@ -19321,7 +21081,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5.4 Nano"
+      "name": "OpenAI: GPT-5.4 Nano",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.02,
+          "input": 0.2,
+          "output": 1.25
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.4-nano"
+      }
     },
     "openai/gpt-5.4-nano:batch": {
       "capabilities": {
@@ -19427,7 +21195,24 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5.4 Pro"
+      "name": "OpenAI: GPT-5.4 Pro",
+      "pricing": {
+        "rates": {
+          "input": 30.0,
+          "output": 180.0,
+          "tiers": [
+            {
+              "input": 60.0,
+              "output": 270.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.4-pro"
+      }
     },
     "openai/gpt-5.4-pro:batch": {
       "capabilities": {
@@ -19584,7 +21369,26 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5.5"
+      "name": "OpenAI: GPT-5.5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.5,
+          "input": 5.0,
+          "output": 30.0,
+          "tiers": [
+            {
+              "cache_read": 1.0,
+              "input": 10.0,
+              "output": 45.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.5"
+      }
     },
     "openai/gpt-5.5-pro": {
       "capabilities": {
@@ -19640,7 +21444,24 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5.5 Pro"
+      "name": "OpenAI: GPT-5.5 Pro",
+      "pricing": {
+        "rates": {
+          "input": 30.0,
+          "output": 180.0,
+          "tiers": [
+            {
+              "input": 60.0,
+              "output": 270.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.5-pro"
+      }
     },
     "openai/gpt-5.5-pro:batch": {
       "capabilities": {
@@ -19798,7 +21619,28 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5.6 Luna"
+      "name": "OpenAI: GPT-5.6 Luna",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.02,
+          "cache_write": 0.25,
+          "input": 0.2,
+          "output": 1.2,
+          "tiers": [
+            {
+              "cache_read": 0.04,
+              "cache_write": 0.5,
+              "input": 0.4,
+              "output": 1.8,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.6-luna"
+      }
     },
     "openai/gpt-5.6-luna-pro": {
       "capabilities": {
@@ -19858,7 +21700,28 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5.6 Luna Pro"
+      "name": "OpenAI: GPT-5.6 Luna Pro",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.02,
+          "cache_write": 0.25,
+          "input": 0.2,
+          "output": 1.2,
+          "tiers": [
+            {
+              "cache_read": 0.04,
+              "cache_write": 0.5,
+              "input": 0.4,
+              "output": 1.8,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.6-luna-pro"
+      }
     },
     "openai/gpt-5.6-luna-pro:batch": {
       "capabilities": {
@@ -20016,7 +21879,28 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5.6 Sol"
+      "name": "OpenAI: GPT-5.6 Sol",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 10.0,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "cache_write": 5.0,
+              "input": 4.0,
+              "output": 15.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.6-sol"
+      }
     },
     "openai/gpt-5.6-sol-pro": {
       "capabilities": {
@@ -20076,7 +21960,28 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5.6 Sol Pro"
+      "name": "OpenAI: GPT-5.6 Sol Pro",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 10.0,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "cache_write": 5.0,
+              "input": 4.0,
+              "output": 15.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.6-sol-pro"
+      }
     },
     "openai/gpt-5.6-sol-pro:batch": {
       "capabilities": {
@@ -20234,7 +22139,28 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5.6 Terra"
+      "name": "OpenAI: GPT-5.6 Terra",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 12.0,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "cache_write": 5.0,
+              "input": 4.0,
+              "output": 18.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.6-terra"
+      }
     },
     "openai/gpt-5.6-terra-pro": {
       "capabilities": {
@@ -20294,7 +22220,28 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-5.6 Terra Pro"
+      "name": "OpenAI: GPT-5.6 Terra Pro",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 12.0,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "cache_write": 5.0,
+              "input": 4.0,
+              "output": 18.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/openai/gpt-5.6-terra-pro"
+      }
     },
     "openai/gpt-5.6-terra-pro:batch": {
       "capabilities": {
@@ -20500,7 +22447,28 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-6 Astra"
+      "name": "OpenAI: GPT-6 Astra",
+      "pricing": {
+        "rates": {
+          "cache_read": 1.0,
+          "cache_write": 12.5,
+          "input": 10.0,
+          "output": 50.0,
+          "tiers": [
+            {
+              "cache_read": 2.0,
+              "cache_write": 25.0,
+              "input": 20.0,
+              "output": 75.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/openai/gpt-6-astra"
+      }
     },
     "openai/gpt-6-astra-pro": {
       "capabilities": {
@@ -20559,7 +22527,28 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT-6 Astra Pro"
+      "name": "OpenAI: GPT-6 Astra Pro",
+      "pricing": {
+        "rates": {
+          "cache_read": 1.0,
+          "cache_write": 12.5,
+          "input": 10.0,
+          "output": 50.0,
+          "tiers": [
+            {
+              "cache_read": 2.0,
+              "cache_write": 25.0,
+              "input": 20.0,
+              "output": 75.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/openai/gpt-6-astra-pro"
+      }
     },
     "openai/gpt-6-astra-pro:batch": {
       "capabilities": {
@@ -20711,7 +22700,14 @@
           "modality": "text+audio->text+audio"
         }
       },
-      "name": "OpenAI: GPT Audio"
+      "name": "OpenAI: GPT Audio",
+      "pricing": {
+        "rates": {
+          "input": 2.5,
+          "output": 10.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-audio"
+      }
     },
     "openai/gpt-audio-mini": {
       "capabilities": {
@@ -20765,7 +22761,14 @@
           "modality": "text+audio->text+audio"
         }
       },
-      "name": "OpenAI: GPT Audio Mini"
+      "name": "OpenAI: GPT Audio Mini",
+      "pricing": {
+        "rates": {
+          "input": 0.6,
+          "output": 2.4
+        },
+        "source": "models.dev:openrouter/openai/gpt-audio-mini"
+      }
     },
     "openai/gpt-chat-latest": {
       "capabilities": {
@@ -20812,7 +22815,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT Chat Latest"
+      "name": "OpenAI: GPT Chat Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.5,
+          "input": 5.0,
+          "output": 30.0
+        },
+        "source": "models.dev:openrouter/openai/gpt-chat-latest"
+      }
     },
     "openai/gpt-image-1": {
       "capabilities": {
@@ -21375,7 +23386,15 @@
           "modality": "text->text"
         }
       },
-      "name": "OpenAI: gpt-oss-120b"
+      "name": "OpenAI: gpt-oss-120b",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.075,
+          "input": 0.15,
+          "output": 0.6
+        },
+        "source": "models.dev:openrouter/openai/gpt-oss-120b"
+      }
     },
     "openai/gpt-oss-120b:batch": {
       "capabilities": {
@@ -21487,7 +23506,15 @@
           "modality": "text->text"
         }
       },
-      "name": "OpenAI: gpt-oss-20b"
+      "name": "OpenAI: gpt-oss-20b",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.03,
+          "input": 0.03,
+          "output": 0.13
+        },
+        "source": "models.dev:openrouter/openai/gpt-oss-20b"
+      }
     },
     "openai/gpt-oss-safeguard-20b": {
       "capabilities": {
@@ -21539,7 +23566,15 @@
           "modality": "text->text"
         }
       },
-      "name": "OpenAI: gpt-oss-safeguard-20b"
+      "name": "OpenAI: gpt-oss-safeguard-20b",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0375,
+          "input": 0.075,
+          "output": 0.3
+        },
+        "source": "models.dev:openrouter/openai/gpt-oss-safeguard-20b"
+      }
     },
     "openai/gpt-transcribe": {
       "capabilities": {
@@ -21623,7 +23658,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: o1"
+      "name": "OpenAI: o1",
+      "pricing": {
+        "rates": {
+          "cache_read": 7.5,
+          "input": 15.0,
+          "output": 60.0
+        },
+        "source": "models.dev:openrouter/openai/o1"
+      }
     },
     "openai/o1-pro": {
       "capabilities": {
@@ -21671,7 +23714,14 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: o1-pro"
+      "name": "OpenAI: o1-pro",
+      "pricing": {
+        "rates": {
+          "input": 150.0,
+          "output": 600.0
+        },
+        "source": "models.dev:openrouter/openai/o1-pro"
+      }
     },
     "openai/o3": {
       "capabilities": {
@@ -21721,7 +23771,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: o3"
+      "name": "OpenAI: o3",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.5,
+          "input": 2.0,
+          "output": 8.0
+        },
+        "source": "models.dev:openrouter/openai/o3"
+      }
     },
     "openai/o3-mini": {
       "capabilities": {
@@ -21768,7 +23826,15 @@
           "modality": "text+file->text"
         }
       },
-      "name": "OpenAI: o3 Mini"
+      "name": "OpenAI: o3 Mini",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.55,
+          "input": 1.1,
+          "output": 4.4
+        },
+        "source": "models.dev:openrouter/openai/o3-mini"
+      }
     },
     "openai/o3-mini-high": {
       "capabilities": {
@@ -21819,7 +23885,15 @@
           "modality": "text+file->text"
         }
       },
-      "name": "OpenAI: o3 Mini High"
+      "name": "OpenAI: o3 Mini High",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.55,
+          "input": 1.1,
+          "output": 4.4
+        },
+        "source": "models.dev:openrouter/openai/o3-mini-high"
+      }
     },
     "openai/o3-mini:batch": {
       "capabilities": {
@@ -21914,7 +23988,14 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: o3 Pro"
+      "name": "OpenAI: o3 Pro",
+      "pricing": {
+        "rates": {
+          "input": 20.0,
+          "output": 80.0
+        },
+        "source": "models.dev:openrouter/openai/o3-pro"
+      }
     },
     "openai/o3:batch": {
       "capabilities": {
@@ -22012,7 +24093,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: o4 Mini"
+      "name": "OpenAI: o4 Mini",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.275,
+          "input": 1.1,
+          "output": 4.4
+        },
+        "source": "models.dev:openrouter/openai/o4-mini"
+      }
     },
     "openai/o4-mini-high": {
       "capabilities": {
@@ -22066,7 +24155,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: o4 Mini High"
+      "name": "OpenAI: o4 Mini High",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.275,
+          "input": 1.1,
+          "output": 4.4
+        },
+        "source": "models.dev:openrouter/openai/o4-mini-high"
+      }
     },
     "openai/o4-mini:batch": {
       "capabilities": {
@@ -22723,7 +24820,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Free Models Router"
+      "name": "Free Models Router",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/openrouter/free"
+      }
     },
     "openrouter/fusion": {
       "capabilities": {
@@ -22839,7 +24943,14 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Perceptron: Perceptron Mk1"
+      "name": "Perceptron: Perceptron Mk1",
+      "pricing": {
+        "rates": {
+          "input": 0.15,
+          "output": 1.5
+        },
+        "source": "models.dev:openrouter/perceptron/perceptron-mk1"
+      }
     },
     "perplexity/pplx-embed-v1-0.6b": {
       "capabilities": {
@@ -22945,7 +25056,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Perplexity: Sonar"
+      "name": "Perplexity: Sonar",
+      "pricing": {
+        "rates": {
+          "input": 1.0,
+          "output": 1.0
+        },
+        "source": "models.dev:openrouter/perplexity/sonar"
+      }
     },
     "perplexity/sonar-deep-research": {
       "capabilities": {
@@ -22990,7 +25108,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Perplexity: Sonar Deep Research"
+      "name": "Perplexity: Sonar Deep Research",
+      "pricing": {
+        "rates": {
+          "input": 2.0,
+          "output": 8.0,
+          "reasoning": 3.0
+        },
+        "source": "models.dev:openrouter/perplexity/sonar-deep-research"
+      }
     },
     "perplexity/sonar-pro": {
       "capabilities": {
@@ -23032,7 +25158,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Perplexity: Sonar Pro"
+      "name": "Perplexity: Sonar Pro",
+      "pricing": {
+        "rates": {
+          "input": 3.0,
+          "output": 15.0
+        },
+        "source": "models.dev:openrouter/perplexity/sonar-pro"
+      }
     },
     "perplexity/sonar-pro-search": {
       "capabilities": {
@@ -23080,7 +25213,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Perplexity: Sonar Pro Search"
+      "name": "Perplexity: Sonar Pro Search",
+      "pricing": {
+        "rates": {
+          "input": 3.0,
+          "output": 15.0
+        },
+        "source": "models.dev:openrouter/perplexity/sonar-pro-search"
+      }
     },
     "perplexity/sonar-reasoning-pro": {
       "capabilities": {
@@ -23128,7 +25268,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Perplexity: Sonar Reasoning Pro"
+      "name": "Perplexity: Sonar Reasoning Pro",
+      "pricing": {
+        "rates": {
+          "input": 2.0,
+          "output": 8.0
+        },
+        "source": "models.dev:openrouter/perplexity/sonar-reasoning-pro"
+      }
     },
     "poolside/laguna-s-2.1": {
       "capabilities": {
@@ -23170,7 +25317,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Poolside: Laguna S 2.1"
+      "name": "Poolside: Laguna S 2.1",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.009,
+          "input": 0.09,
+          "output": 0.18
+        },
+        "source": "models.dev:openrouter/poolside/laguna-s-2.1"
+      }
     },
     "poolside/laguna-s-2.1:free": {
       "capabilities": {
@@ -23212,7 +25367,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Poolside: Laguna S 2.1 (free)"
+      "name": "Poolside: Laguna S 2.1 (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/poolside/laguna-s-2.1:free"
+      }
     },
     "poolside/laguna-xs-2.1": {
       "capabilities": {
@@ -23254,7 +25416,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Poolside: Laguna XS 2.1"
+      "name": "Poolside: Laguna XS 2.1",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.03,
+          "input": 0.06,
+          "output": 0.12
+        },
+        "source": "models.dev:openrouter/poolside/laguna-xs-2.1"
+      }
     },
     "poolside/laguna-xs-2.1:free": {
       "capabilities": {
@@ -23296,7 +25466,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Poolside: Laguna XS 2.1 (free)"
+      "name": "Poolside: Laguna XS 2.1 (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/poolside/laguna-xs-2.1:free"
+      }
     },
     "prism-ml/ternary-bonsai-2-27b": {
       "capabilities": {
@@ -23356,7 +25533,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "PrismML: Ternary Bonsai 2 27B"
+      "name": "PrismML: Ternary Bonsai 2 27B",
+      "pricing": {
+        "rates": {
+          "input": 0.075,
+          "output": 0.5
+        },
+        "source": "models.dev:openrouter/prism-ml/ternary-bonsai-2-27b"
+      }
     },
     "qwen/qwen-2.5-72b-instruct": {
       "capabilities": {
@@ -23406,7 +25590,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen2.5 72B Instruct"
+      "name": "Qwen2.5 72B Instruct",
+      "pricing": {
+        "rates": {
+          "input": 0.36,
+          "output": 0.4
+        },
+        "source": "models.dev:openrouter/qwen/qwen-2.5-72b-instruct"
+      }
     },
     "qwen/qwen-2.5-7b-instruct": {
       "capabilities": {
@@ -23455,7 +25646,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen2.5 7B Instruct"
+      "name": "Qwen: Qwen2.5 7B Instruct",
+      "pricing": {
+        "rates": {
+          "input": 0.1,
+          "output": 0.2
+        },
+        "source": "models.dev:openrouter/qwen/qwen-2.5-7b-instruct"
+      }
     },
     "qwen/qwen-2.5-coder-32b-instruct": {
       "capabilities": {
@@ -23501,7 +25699,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen2.5 Coder 32B Instruct"
+      "name": "Qwen2.5 Coder 32B Instruct",
+      "pricing": {
+        "rates": {
+          "input": 0.66,
+          "output": 1.0
+        },
+        "source": "models.dev:openrouter/qwen/qwen-2.5-coder-32b-instruct"
+      }
     },
     "qwen/qwen-audio-3.0-tts-flash": {
       "capabilities": {
@@ -23792,7 +25997,28 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen-Plus"
+      "name": "Qwen: Qwen-Plus",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.052,
+          "cache_write": 0.325,
+          "input": 0.26,
+          "output": 0.78,
+          "tiers": [
+            {
+              "cache_read": 0.156,
+              "cache_write": 0.975,
+              "input": 0.78,
+              "output": 2.34,
+              "tier": {
+                "size": 256000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/qwen/qwen-plus"
+      }
     },
     "qwen/qwen-plus-2025-07-28": {
       "capabilities": {
@@ -23841,7 +26067,24 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen Plus 0728"
+      "name": "Qwen: Qwen Plus 0728",
+      "pricing": {
+        "rates": {
+          "input": 0.26,
+          "output": 0.78,
+          "tiers": [
+            {
+              "input": 0.78,
+              "output": 2.34,
+              "tier": {
+                "size": 256000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/qwen/qwen-plus-2025-07-28"
+      }
     },
     "qwen/qwen2.5-vl-72b-instruct": {
       "capabilities": {
@@ -23893,7 +26136,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Qwen: Qwen2.5 VL 72B Instruct"
+      "name": "Qwen: Qwen2.5 VL 72B Instruct",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.4,
+          "input": 0.8,
+          "output": 1.0
+        },
+        "source": "models.dev:openrouter/qwen/qwen2.5-vl-72b-instruct"
+      }
     },
     "qwen/qwen3-14b": {
       "capabilities": {
@@ -23948,7 +26199,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3 14B"
+      "name": "Qwen: Qwen3 14B",
+      "pricing": {
+        "rates": {
+          "input": 0.12,
+          "output": 0.24
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-14b"
+      }
     },
     "qwen/qwen3-235b-a22b": {
       "capabilities": {
@@ -23997,7 +26255,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3 235B A22B"
+      "name": "Qwen: Qwen3 235B A22B",
+      "pricing": {
+        "rates": {
+          "input": 0.455,
+          "output": 1.82
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-235b-a22b"
+      }
     },
     "qwen/qwen3-235b-a22b-2507": {
       "capabilities": {
@@ -24049,7 +26314,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3 235B A22B Instruct 2507"
+      "name": "Qwen: Qwen3 235B A22B Instruct 2507",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0175,
+          "input": 0.0875,
+          "output": 0.35
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-235b-a22b-2507"
+      }
     },
     "qwen/qwen3-235b-a22b-thinking-2507": {
       "capabilities": {
@@ -24100,7 +26373,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3 235B A22B Thinking 2507"
+      "name": "Qwen: Qwen3 235B A22B Thinking 2507",
+      "pricing": {
+        "rates": {
+          "input": 0.23,
+          "output": 2.3
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-235b-a22b-thinking-2507"
+      }
     },
     "qwen/qwen3-30b-a3b": {
       "capabilities": {
@@ -24153,7 +26433,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3 30B A3B"
+      "name": "Qwen: Qwen3 30B A3B",
+      "pricing": {
+        "rates": {
+          "input": 0.12,
+          "output": 0.5
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-30b-a3b"
+      }
     },
     "qwen/qwen3-30b-a3b-instruct-2507": {
       "capabilities": {
@@ -24204,7 +26491,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3 30B A3B Instruct 2507"
+      "name": "Qwen: Qwen3 30B A3B Instruct 2507",
+      "pricing": {
+        "rates": {
+          "input": 0.04815,
+          "output": 0.19305
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-30b-a3b-instruct-2507"
+      }
     },
     "qwen/qwen3-30b-a3b-thinking-2507": {
       "capabilities": {
@@ -24252,7 +26546,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3 30B A3B Thinking 2507"
+      "name": "Qwen: Qwen3 30B A3B Thinking 2507",
+      "pricing": {
+        "rates": {
+          "input": 0.2,
+          "output": 2.4
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-30b-a3b-thinking-2507"
+      }
     },
     "qwen/qwen3-32b": {
       "capabilities": {
@@ -24305,7 +26606,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3 32B"
+      "name": "Qwen: Qwen3 32B",
+      "pricing": {
+        "rates": {
+          "input": 0.08,
+          "output": 0.28
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-32b"
+      }
     },
     "qwen/qwen3-8b": {
       "capabilities": {
@@ -24354,7 +26662,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3 8B"
+      "name": "Qwen: Qwen3 8B",
+      "pricing": {
+        "rates": {
+          "input": 0.117,
+          "output": 0.455
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-8b"
+      }
     },
     "qwen/qwen3-asr-0.6b": {
       "capabilities": {
@@ -24508,7 +26823,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3 Coder 480B A35B"
+      "name": "Qwen: Qwen3 Coder 480B A35B",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1,
+          "input": 0.3,
+          "output": 1.0
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-coder"
+      }
     },
     "qwen/qwen3-coder-30b-a3b-instruct": {
       "capabilities": {
@@ -24558,7 +26881,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3 Coder 30B A3B Instruct"
+      "name": "Qwen: Qwen3 Coder 30B A3B Instruct",
+      "pricing": {
+        "rates": {
+          "input": 0.07,
+          "output": 0.28
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-coder-30b-a3b-instruct"
+      }
     },
     "qwen/qwen3-coder-flash": {
       "capabilities": {
@@ -24606,7 +26936,38 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3 Coder Flash"
+      "name": "Qwen: Qwen3 Coder Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.039,
+          "cache_write": 0.24375,
+          "input": 0.195,
+          "output": 0.975,
+          "tiers": [
+            {
+              "cache_read": 0.065,
+              "cache_write": 0.40625,
+              "input": 0.325,
+              "output": 1.625,
+              "tier": {
+                "size": 32000,
+                "type": "context"
+              }
+            },
+            {
+              "cache_read": 0.104,
+              "cache_write": 0.65,
+              "input": 0.52,
+              "output": 2.6,
+              "tier": {
+                "size": 128000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-coder-flash"
+      }
     },
     "qwen/qwen3-coder-next": {
       "capabilities": {
@@ -24657,7 +27018,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3 Coder Next"
+      "name": "Qwen: Qwen3 Coder Next",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.07,
+          "input": 0.12,
+          "output": 0.8
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-coder-next"
+      }
     },
     "qwen/qwen3-coder-plus": {
       "capabilities": {
@@ -24706,7 +27075,38 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3 Coder Plus"
+      "name": "Qwen: Qwen3 Coder Plus",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.13,
+          "cache_write": 0.8125,
+          "input": 0.65,
+          "output": 3.25,
+          "tiers": [
+            {
+              "cache_read": 0.234,
+              "cache_write": 1.4625,
+              "input": 1.17,
+              "output": 5.85,
+              "tier": {
+                "size": 32000,
+                "type": "context"
+              }
+            },
+            {
+              "cache_read": 0.39,
+              "cache_write": 2.4375,
+              "input": 1.95,
+              "output": 9.75,
+              "tier": {
+                "size": 128000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-coder-plus"
+      }
     },
     "qwen/qwen3-embedding-4b": {
       "capabilities": {
@@ -24819,7 +27219,38 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3 Max"
+      "name": "Qwen: Qwen3 Max",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.156,
+          "cache_write": 0.975,
+          "input": 0.78,
+          "output": 3.9,
+          "tiers": [
+            {
+              "cache_read": 0.312,
+              "cache_write": 1.95,
+              "input": 1.56,
+              "output": 7.8,
+              "tier": {
+                "size": 32000,
+                "type": "context"
+              }
+            },
+            {
+              "cache_read": 0.39,
+              "cache_write": 2.4375,
+              "input": 1.95,
+              "output": 9.75,
+              "tier": {
+                "size": 128000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-max"
+      }
     },
     "qwen/qwen3-max-thinking": {
       "capabilities": {
@@ -24871,7 +27302,32 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3 Max Thinking"
+      "name": "Qwen: Qwen3 Max Thinking",
+      "pricing": {
+        "rates": {
+          "input": 0.78,
+          "output": 3.9,
+          "tiers": [
+            {
+              "input": 1.56,
+              "output": 7.8,
+              "tier": {
+                "size": 32000,
+                "type": "context"
+              }
+            },
+            {
+              "input": 1.95,
+              "output": 9.75,
+              "tier": {
+                "size": 128000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-max-thinking"
+      }
     },
     "qwen/qwen3-next-80b-a3b-instruct": {
       "capabilities": {
@@ -24923,7 +27379,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3 Next 80B A3B Instruct"
+      "name": "Qwen: Qwen3 Next 80B A3B Instruct",
+      "pricing": {
+        "rates": {
+          "input": 0.09,
+          "output": 1.1
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-next-80b-a3b-instruct"
+      }
     },
     "qwen/qwen3-next-80b-a3b-thinking": {
       "capabilities": {
@@ -24975,7 +27438,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3 Next 80B A3B Thinking"
+      "name": "Qwen: Qwen3 Next 80B A3B Thinking",
+      "pricing": {
+        "rates": {
+          "input": 0.15,
+          "output": 1.2
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-next-80b-a3b-thinking"
+      }
     },
     "qwen/qwen3-vl-235b-a22b-instruct": {
       "capabilities": {
@@ -25030,7 +27500,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Qwen: Qwen3 VL 235B A22B Instruct"
+      "name": "Qwen: Qwen3 VL 235B A22B Instruct",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1,
+          "input": 0.21,
+          "output": 1.9
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-vl-235b-a22b-instruct"
+      }
     },
     "qwen/qwen3-vl-235b-a22b-thinking": {
       "capabilities": {
@@ -25085,7 +27563,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Qwen: Qwen3 VL 235B A22B Thinking"
+      "name": "Qwen: Qwen3 VL 235B A22B Thinking",
+      "pricing": {
+        "rates": {
+          "input": 0.4,
+          "output": 4.0
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-vl-235b-a22b-thinking"
+      }
     },
     "qwen/qwen3-vl-30b-a3b-instruct": {
       "capabilities": {
@@ -25140,7 +27625,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Qwen: Qwen3 VL 30B A3B Instruct"
+      "name": "Qwen: Qwen3 VL 30B A3B Instruct",
+      "pricing": {
+        "rates": {
+          "input": 0.13,
+          "output": 0.52
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-vl-30b-a3b-instruct"
+      }
     },
     "qwen/qwen3-vl-30b-a3b-thinking": {
       "capabilities": {
@@ -25194,7 +27686,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Qwen: Qwen3 VL 30B A3B Thinking"
+      "name": "Qwen: Qwen3 VL 30B A3B Thinking",
+      "pricing": {
+        "rates": {
+          "input": 0.2,
+          "output": 2.4
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-vl-30b-a3b-thinking"
+      }
     },
     "qwen/qwen3-vl-32b-instruct": {
       "capabilities": {
@@ -25246,7 +27745,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Qwen: Qwen3 VL 32B Instruct"
+      "name": "Qwen: Qwen3 VL 32B Instruct",
+      "pricing": {
+        "rates": {
+          "input": 0.104,
+          "output": 0.416
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-vl-32b-instruct"
+      }
     },
     "qwen/qwen3-vl-8b-instruct": {
       "capabilities": {
@@ -25300,7 +27806,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Qwen: Qwen3 VL 8B Instruct"
+      "name": "Qwen: Qwen3 VL 8B Instruct",
+      "pricing": {
+        "rates": {
+          "input": 0.117,
+          "output": 0.455
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-vl-8b-instruct"
+      }
     },
     "qwen/qwen3-vl-8b-thinking": {
       "capabilities": {
@@ -25354,7 +27867,14 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Qwen: Qwen3 VL 8B Thinking"
+      "name": "Qwen: Qwen3 VL 8B Thinking",
+      "pricing": {
+        "rates": {
+          "input": 0.18,
+          "output": 2.1
+        },
+        "source": "models.dev:openrouter/qwen/qwen3-vl-8b-thinking"
+      }
     },
     "qwen/qwen3.5-122b-a10b": {
       "capabilities": {
@@ -25415,7 +27935,14 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Qwen: Qwen3.5-122B-A10B"
+      "name": "Qwen: Qwen3.5-122B-A10B",
+      "pricing": {
+        "rates": {
+          "input": 0.26,
+          "output": 2.08
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.5-122b-a10b"
+      }
     },
     "qwen/qwen3.5-27b": {
       "capabilities": {
@@ -25476,7 +28003,14 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Qwen: Qwen3.5-27B"
+      "name": "Qwen: Qwen3.5-27B",
+      "pricing": {
+        "rates": {
+          "input": 0.195,
+          "output": 1.56
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.5-27b"
+      }
     },
     "qwen/qwen3.5-35b-a3b": {
       "capabilities": {
@@ -25537,7 +28071,15 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Qwen: Qwen3.5-35B-A3B"
+      "name": "Qwen: Qwen3.5-35B-A3B",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.15625,
+          "input": 0.3125,
+          "output": 1.25
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.5-35b-a3b"
+      }
     },
     "qwen/qwen3.5-397b-a17b": {
       "capabilities": {
@@ -25598,7 +28140,15 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Qwen: Qwen3.5 397B A17B"
+      "name": "Qwen: Qwen3.5 397B A17B",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.225,
+          "input": 0.55,
+          "output": 3.5
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.5-397b-a17b"
+      }
     },
     "qwen/qwen3.5-9b": {
       "capabilities": {
@@ -25659,7 +28209,14 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Qwen: Qwen3.5-9B"
+      "name": "Qwen: Qwen3.5-9B",
+      "pricing": {
+        "rates": {
+          "input": 0.1,
+          "output": 0.15
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.5-9b"
+      }
     },
     "qwen/qwen3.5-9b:batch": {
       "capabilities": {
@@ -25771,7 +28328,14 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Qwen: Qwen3.5-Flash"
+      "name": "Qwen: Qwen3.5-Flash",
+      "pricing": {
+        "rates": {
+          "input": 0.065,
+          "output": 0.26
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.5-flash-02-23"
+      }
     },
     "qwen/qwen3.5-plus-02-15": {
       "capabilities": {
@@ -25829,7 +28393,24 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Qwen: Qwen3.5 Plus 2026-02-15"
+      "name": "Qwen: Qwen3.5 Plus 2026-02-15",
+      "pricing": {
+        "rates": {
+          "input": 0.26,
+          "output": 1.56,
+          "tiers": [
+            {
+              "input": 0.325,
+              "output": 1.95,
+              "tier": {
+                "size": 256000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.5-plus-02-15"
+      }
     },
     "qwen/qwen3.5-plus-20260420": {
       "capabilities": {
@@ -25887,7 +28468,26 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Qwen: Qwen3.5 Plus 2026-04-20"
+      "name": "Qwen: Qwen3.5 Plus 2026-04-20",
+      "pricing": {
+        "rates": {
+          "cache_write": 0.375,
+          "input": 0.3,
+          "output": 1.8,
+          "tiers": [
+            {
+              "cache_write": 0.46875,
+              "input": 0.375,
+              "output": 2.25,
+              "tier": {
+                "size": 256000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.5-plus-20260420"
+      }
     },
     "qwen/qwen3.6-27b": {
       "capabilities": {
@@ -25948,7 +28548,15 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Qwen: Qwen3.6 27B"
+      "name": "Qwen: Qwen3.6 27B",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.03,
+          "input": 0.3,
+          "output": 2.0
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.6-27b"
+      }
     },
     "qwen/qwen3.6-35b-a3b": {
       "capabilities": {
@@ -26009,7 +28617,15 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Qwen: Qwen3.6 35B A3B"
+      "name": "Qwen: Qwen3.6 35B A3B",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.05,
+          "input": 0.1,
+          "output": 0.9
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.6-35b-a3b"
+      }
     },
     "qwen/qwen3.6-flash": {
       "capabilities": {
@@ -26067,7 +28683,26 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Qwen: Qwen3.6 Flash"
+      "name": "Qwen: Qwen3.6 Flash",
+      "pricing": {
+        "rates": {
+          "cache_write": 0.234375,
+          "input": 0.1875,
+          "output": 1.125,
+          "tiers": [
+            {
+              "cache_write": 0.9375,
+              "input": 0.75,
+              "output": 3.0,
+              "tier": {
+                "size": 256000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.6-flash"
+      }
     },
     "qwen/qwen3.6-max-preview": {
       "capabilities": {
@@ -26119,7 +28754,26 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3.6 Max Preview"
+      "name": "Qwen: Qwen3.6 Max Preview",
+      "pricing": {
+        "rates": {
+          "cache_write": 1.28375,
+          "input": 1.027,
+          "output": 6.162,
+          "tiers": [
+            {
+              "cache_write": 1.975,
+              "input": 1.58,
+              "output": 9.48,
+              "tier": {
+                "size": 128000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.6-max-preview"
+      }
     },
     "qwen/qwen3.6-plus": {
       "capabilities": {
@@ -26177,7 +28831,26 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Qwen: Qwen3.6 Plus"
+      "name": "Qwen: Qwen3.6 Plus",
+      "pricing": {
+        "rates": {
+          "cache_write": 0.40625,
+          "input": 0.325,
+          "output": 1.95,
+          "tiers": [
+            {
+              "cache_write": 1.625,
+              "input": 1.3,
+              "output": 3.9,
+              "tier": {
+                "size": 256000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.6-plus"
+      }
     },
     "qwen/qwen3.7-flash": {
       "capabilities": {
@@ -26231,7 +28904,38 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Qwen: Qwen3.7 Flash"
+      "name": "Qwen: Qwen3.7 Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.006,
+          "cache_write": 0.038,
+          "input": 0.03,
+          "output": 0.13,
+          "tiers": [
+            {
+              "cache_read": 0.02,
+              "cache_write": 0.125,
+              "input": 0.1,
+              "output": 0.4,
+              "tier": {
+                "size": 32000,
+                "type": "context"
+              }
+            },
+            {
+              "cache_read": 0.04,
+              "cache_write": 0.25,
+              "input": 0.2,
+              "output": 0.8,
+              "tier": {
+                "size": 256000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.7-flash"
+      }
     },
     "qwen/qwen3.7-max": {
       "capabilities": {
@@ -26283,7 +28987,16 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3.7 Max"
+      "name": "Qwen: Qwen3.7 Max",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.295,
+          "cache_write": 1.84375,
+          "input": 1.475,
+          "output": 4.425
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.7-max"
+      }
     },
     "qwen/qwen3.7-plus": {
       "capabilities": {
@@ -26338,7 +29051,28 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Qwen: Qwen3.7 Plus"
+      "name": "Qwen: Qwen3.7 Plus",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.064,
+          "cache_write": 0.4,
+          "input": 0.32,
+          "output": 1.28,
+          "tiers": [
+            {
+              "cache_read": 0.192,
+              "cache_write": 1.2,
+              "input": 0.96,
+              "output": 3.84,
+              "tier": {
+                "size": 256000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.7-plus"
+      }
     },
     "qwen/qwen3.8-2.4t-a95b": {
       "capabilities": {
@@ -26399,7 +29133,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Qwen: Qwen3.8 2.4T A95B"
+      "name": "Qwen: Qwen3.8 2.4T A95B",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.25,
+          "input": 2.0,
+          "output": 6.0
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.8-2.4t-a95b"
+      }
     },
     "qwen/qwen3.8-2.4t-a95b:batch": {
       "capabilities": {
@@ -26520,7 +29262,15 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Qwen: Qwen3.8 27B"
+      "name": "Qwen: Qwen3.8 27B",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.085,
+          "input": 0.2,
+          "output": 2.55
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.8-27b"
+      }
     },
     "qwen/qwen3.8-27b:free": {
       "capabilities": {
@@ -26580,7 +29330,14 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Qwen: Qwen3.8 27B (free)"
+      "name": "Qwen: Qwen3.8 27B (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.8-27b:free"
+      }
     },
     "qwen/qwen3.8-flash": {
       "capabilities": {
@@ -26638,7 +29395,16 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Qwen: Qwen3.8 Flash"
+      "name": "Qwen: Qwen3.8 Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.016,
+          "cache_write": 0.2,
+          "input": 0.15,
+          "output": 0.47
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.8-flash"
+      }
     },
     "qwen/qwen3.8-max-0902": {
       "capabilities": {
@@ -26704,7 +29470,16 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Qwen: Qwen3.8 Max (0902)"
+      "name": "Qwen: Qwen3.8 Max (0902)",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.25,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 6.0
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.8-max-0902"
+      }
     },
     "recraft/recraft-v3": {
       "capabilities": {
@@ -27842,7 +30617,14 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Reka Edge"
+      "name": "Reka Edge",
+      "pricing": {
+        "rates": {
+          "input": 0.1,
+          "output": 0.1
+        },
+        "source": "models.dev:openrouter/rekaai/reka-edge"
+      }
     },
     "rekaai/reka-flash-3": {
       "capabilities": {
@@ -27890,7 +30672,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Reka Flash 3"
+      "name": "Reka Flash 3",
+      "pricing": {
+        "rates": {
+          "input": 0.1,
+          "output": 0.2
+        },
+        "source": "models.dev:openrouter/rekaai/reka-flash-3"
+      }
     },
     "relace/relace-apply-3": {
       "capabilities": {
@@ -27927,7 +30716,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Relace: Relace Apply 3"
+      "name": "Relace: Relace Apply 3",
+      "pricing": {
+        "rates": {
+          "input": 0.85,
+          "output": 1.25
+        },
+        "source": "models.dev:openrouter/relace/relace-apply-3"
+      }
     },
     "relace/relace-search": {
       "capabilities": {
@@ -27969,7 +30765,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Relace: Relace Search"
+      "name": "Relace: Relace Search",
+      "pricing": {
+        "rates": {
+          "input": 1.0,
+          "output": 3.0
+        },
+        "source": "models.dev:openrouter/relace/relace-search"
+      }
     },
     "runway/aleph-2": {
       "capabilities": {
@@ -28168,7 +30971,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Sakana: Fugu Max"
+      "name": "Sakana: Fugu Max",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.25,
+          "input": 2.0,
+          "output": 6.0
+        },
+        "source": "models.dev:openrouter/sakana/fugu-max"
+      }
     },
     "sakana/fugu-ultra": {
       "capabilities": {
@@ -28219,7 +31030,26 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Sakana: Fugu Ultra"
+      "name": "Sakana: Fugu Ultra",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.5,
+          "input": 5.0,
+          "output": 30.0,
+          "tiers": [
+            {
+              "cache_read": 1.0,
+              "input": 10.0,
+              "output": 45.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/sakana/fugu-ultra"
+      }
     },
     "sakana/fugu-ultra-v2": {
       "capabilities": {
@@ -28273,7 +31103,26 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Sakana: Fugu Ultra v2"
+      "name": "Sakana: Fugu Ultra v2",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.5,
+          "input": 5.0,
+          "output": 30.0,
+          "tiers": [
+            {
+              "cache_read": 1.0,
+              "input": 10.0,
+              "output": 45.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/sakana/fugu-ultra-v2"
+      }
     },
     "sakana/sakana-namazu": {
       "capabilities": {
@@ -28326,7 +31175,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Sakana: Sakana Namazu"
+      "name": "Sakana: Sakana Namazu",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.15,
+          "input": 0.95,
+          "output": 4.0
+        },
+        "source": "models.dev:openrouter/sakana/sakana-namazu"
+      }
     },
     "sao10k/l3-lunaris-8b": {
       "capabilities": {
@@ -28376,7 +31233,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Sao10K: Llama 3 8B Lunaris"
+      "name": "Sao10K: Llama 3 8B Lunaris",
+      "pricing": {
+        "rates": {
+          "input": 0.04,
+          "output": 0.05
+        },
+        "source": "models.dev:openrouter/sao10k/l3-lunaris-8b"
+      }
     },
     "sao10k/l3.1-euryale-70b": {
       "capabilities": {
@@ -28425,7 +31289,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Sao10K: Llama 3.1 Euryale 70B v2.2"
+      "name": "Sao10K: Llama 3.1 Euryale 70B v2.2",
+      "pricing": {
+        "rates": {
+          "input": 0.85,
+          "output": 0.85
+        },
+        "source": "models.dev:openrouter/sao10k/l3.1-euryale-70b"
+      }
     },
     "sao10k/l3.3-euryale-70b": {
       "capabilities": {
@@ -28472,7 +31343,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Sao10K: Llama 3.3 Euryale 70B"
+      "name": "Sao10K: Llama 3.3 Euryale 70B",
+      "pricing": {
+        "rates": {
+          "input": 0.65,
+          "output": 0.75
+        },
+        "source": "models.dev:openrouter/sao10k/l3.3-euryale-70b"
+      }
     },
     "sentence-transformers/all-minilm-l12-v2": {
       "capabilities": {
@@ -29126,7 +32004,14 @@
           "modality": "text->text"
         }
       },
-      "name": "StepFun: Step 3.5 Flash"
+      "name": "StepFun: Step 3.5 Flash",
+      "pricing": {
+        "rates": {
+          "input": 0.1,
+          "output": 0.3
+        },
+        "source": "models.dev:openrouter/stepfun/step-3.5-flash"
+      }
     },
     "stepfun/step-3.7-flash": {
       "capabilities": {
@@ -29192,7 +32077,15 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "StepFun: Step 3.7 Flash"
+      "name": "StepFun: Step 3.7 Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.04,
+          "input": 0.2,
+          "output": 1.15
+        },
+        "source": "models.dev:openrouter/stepfun/step-3.7-flash"
+      }
     },
     "tencent/hunyuan-a13b-instruct": {
       "capabilities": {
@@ -29237,7 +32130,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Tencent: Hunyuan A13B Instruct"
+      "name": "Tencent: Hunyuan A13B Instruct",
+      "pricing": {
+        "rates": {
+          "input": 0.14,
+          "output": 0.57
+        },
+        "source": "models.dev:openrouter/tencent/hunyuan-a13b-instruct"
+      }
     },
     "tencent/hy-mt2-1.8b": {
       "capabilities": {
@@ -29276,7 +32176,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Tencent: Hy-MT2-1.8B"
+      "name": "Tencent: Hy-MT2-1.8B",
+      "pricing": {
+        "rates": {
+          "input": 0.044,
+          "output": 0.177
+        },
+        "source": "models.dev:openrouter/tencent/hy-mt2-1.8b"
+      }
     },
     "tencent/hy-mt2-30b-a3b": {
       "capabilities": {
@@ -29317,7 +32224,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Tencent: Hy-MT2-30B-A3B"
+      "name": "Tencent: Hy-MT2-30B-A3B",
+      "pricing": {
+        "rates": {
+          "input": 0.074,
+          "output": 0.295
+        },
+        "source": "models.dev:openrouter/tencent/hy-mt2-30b-a3b"
+      }
     },
     "tencent/hy-mt2-7b": {
       "capabilities": {
@@ -29358,7 +32272,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Tencent: Hy-MT2-7B"
+      "name": "Tencent: Hy-MT2-7B",
+      "pricing": {
+        "rates": {
+          "input": 0.074,
+          "output": 0.295
+        },
+        "source": "models.dev:openrouter/tencent/hy-mt2-7b"
+      }
     },
     "tencent/hy3": {
       "capabilities": {
@@ -29418,7 +32339,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Tencent: Hy3"
+      "name": "Tencent: Hy3",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.020625,
+          "input": 0.0825,
+          "output": 0.33
+        },
+        "source": "models.dev:openrouter/tencent/hy3"
+      }
     },
     "tencent/hy3-preview": {
       "capabilities": {
@@ -29468,7 +32397,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Tencent: Hy3 preview"
+      "name": "Tencent: Hy3 preview",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.06,
+          "input": 0.18,
+          "output": 0.6
+        },
+        "source": "models.dev:openrouter/tencent/hy3-preview"
+      }
     },
     "tencent/hy4-preview": {
       "capabilities": {
@@ -29520,7 +32457,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Tencent: Hy4 preview"
+      "name": "Tencent: Hy4 preview",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.042,
+          "input": 0.834,
+          "output": 2.501
+        },
+        "source": "models.dev:openrouter/tencent/hy4-preview"
+      }
     },
     "thedrummer/cydonia-24b-v4.1": {
       "capabilities": {
@@ -29568,7 +32513,15 @@
           "modality": "text->text"
         }
       },
-      "name": "TheDrummer: Cydonia 24B V4.1"
+      "name": "TheDrummer: Cydonia 24B V4.1",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.15,
+          "input": 0.3,
+          "output": 0.5
+        },
+        "source": "models.dev:openrouter/thedrummer/cydonia-24b-v4.1"
+      }
     },
     "thedrummer/skyfall-36b-v2": {
       "capabilities": {
@@ -29616,7 +32569,15 @@
           "modality": "text->text"
         }
       },
-      "name": "TheDrummer: Skyfall 36B V2"
+      "name": "TheDrummer: Skyfall 36B V2",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.25,
+          "input": 0.55,
+          "output": 0.8
+        },
+        "source": "models.dev:openrouter/thedrummer/skyfall-36b-v2"
+      }
     },
     "thedrummer/unslopnemo-12b": {
       "capabilities": {
@@ -29663,7 +32624,14 @@
           "modality": "text->text"
         }
       },
-      "name": "TheDrummer: UnslopNemo 12B"
+      "name": "TheDrummer: UnslopNemo 12B",
+      "pricing": {
+        "rates": {
+          "input": 0.4,
+          "output": 0.4
+        },
+        "source": "models.dev:openrouter/thedrummer/unslopnemo-12b"
+      }
     },
     "thenlper/gte-base": {
       "capabilities": {
@@ -29793,7 +32761,15 @@
           "modality": "text+image+audio->text"
         }
       },
-      "name": "Thinking Machines: Inkling"
+      "name": "Thinking Machines: Inkling",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.17,
+          "input": 1.0,
+          "output": 4.05
+        },
+        "source": "models.dev:openrouter/thinkingmachines/inkling"
+      }
     },
     "thinkingmachines/inkling-small": {
       "capabilities": {
@@ -29861,7 +32837,15 @@
           "modality": "text+image+audio->text"
         }
       },
-      "name": "Thinking Machines: Inkling Small"
+      "name": "Thinking Machines: Inkling Small",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1,
+          "input": 0.45,
+          "output": 1.2
+        },
+        "source": "models.dev:openrouter/thinkingmachines/inkling-small"
+      }
     },
     "thinkingmachines/inkling-small:free": {
       "capabilities": {
@@ -29922,7 +32906,14 @@
           "modality": "text+image+audio->text"
         }
       },
-      "name": "Thinking Machines: Inkling Small (free)"
+      "name": "Thinking Machines: Inkling Small (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/thinkingmachines/inkling-small:free"
+      }
     },
     "thinkingmachines/inkling:batch": {
       "capabilities": {
@@ -30038,7 +33029,14 @@
           "modality": "text+image+audio->text"
         }
       },
-      "name": "Thinking Machines: Inkling (free)"
+      "name": "Thinking Machines: Inkling (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/thinkingmachines/inkling:free"
+      }
     },
     "typesafe/jev-1.13": {
       "capabilities": {
@@ -30109,7 +33107,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Pareto"
+      "name": "Pareto",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.25,
+          "input": 2.5,
+          "output": 7.5
+        },
+        "source": "models.dev:openrouter/unbiased/pareto"
+      }
     },
     "undi95/remm-slerp-l2-13b": {
       "capabilities": {
@@ -30159,7 +33165,14 @@
           "modality": "text->text"
         }
       },
-      "name": "ReMM SLERP 13B"
+      "name": "ReMM SLERP 13B",
+      "pricing": {
+        "rates": {
+          "input": 0.35,
+          "output": 0.65
+        },
+        "source": "models.dev:openrouter/undi95/remm-slerp-l2-13b"
+      }
     },
     "upstage/solar-pro-3": {
       "capabilities": {
@@ -30215,7 +33228,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Upstage: Solar Pro 3"
+      "name": "Upstage: Solar Pro 3",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.015,
+          "input": 0.15,
+          "output": 0.6
+        },
+        "source": "models.dev:openrouter/upstage/solar-pro-3"
+      }
     },
     "upstage/solar-pro4": {
       "capabilities": {
@@ -30273,7 +33294,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Upstage: Solar Pro 4"
+      "name": "Upstage: Solar Pro 4",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.018,
+          "input": 0.09,
+          "output": 0.36
+        },
+        "source": "models.dev:openrouter/upstage/solar-pro4"
+      }
     },
     "voyageai/voyage-4": {
       "capabilities": {
@@ -30472,7 +33501,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Writer: Palmyra X5"
+      "name": "Writer: Palmyra X5",
+      "pricing": {
+        "rates": {
+          "input": 0.6,
+          "output": 6.0
+        },
+        "source": "models.dev:openrouter/writer/palmyra-x5"
+      }
     },
     "x-ai/grok-4.20": {
       "capabilities": {
@@ -30526,7 +33562,26 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "SpaceXAI: Grok 4.20"
+      "name": "SpaceXAI: Grok 4.20",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "input": 1.25,
+          "output": 2.5,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "input": 2.5,
+              "output": 5.0,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/x-ai/grok-4.20"
+      }
     },
     "x-ai/grok-4.20-multi-agent": {
       "capabilities": {
@@ -30585,7 +33640,26 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "SpaceXAI: Grok 4.20 Multi-Agent"
+      "name": "SpaceXAI: Grok 4.20 Multi-Agent",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "input": 1.25,
+          "output": 2.5,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "input": 2.5,
+              "output": 5.0,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/x-ai/grok-4.20-multi-agent"
+      }
     },
     "x-ai/grok-4.3": {
       "capabilities": {
@@ -30646,7 +33720,26 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "SpaceXAI: Grok 4.3"
+      "name": "SpaceXAI: Grok 4.3",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "input": 1.25,
+          "output": 2.5,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "input": 2.5,
+              "output": 5.0,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/x-ai/grok-4.3"
+      }
     },
     "x-ai/grok-4.3:batch": {
       "capabilities": {
@@ -30759,7 +33852,26 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "SpaceXAI: Grok 4.5"
+      "name": "SpaceXAI: Grok 4.5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.3,
+          "input": 2.0,
+          "output": 6.0,
+          "tiers": [
+            {
+              "cache_read": 0.6,
+              "input": 4.0,
+              "output": 12.0,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/x-ai/grok-4.5"
+      }
     },
     "x-ai/grok-4.6": {
       "capabilities": {
@@ -30822,7 +33934,26 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "SpaceXAI: Grok 4.6"
+      "name": "SpaceXAI: Grok 4.6",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.5,
+          "input": 2.0,
+          "output": 6.0,
+          "tiers": [
+            {
+              "cache_read": 1.0,
+              "input": 4.0,
+              "output": 12.0,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/x-ai/grok-4.6"
+      }
     },
     "x-ai/grok-build-0.1": {
       "capabilities": {
@@ -30875,7 +34006,26 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "SpaceXAI: Grok Build 0.1"
+      "name": "SpaceXAI: Grok Build 0.1",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "input": 1.0,
+          "output": 2.0,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "input": 2.0,
+              "output": 4.0,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/x-ai/grok-build-0.1"
+      }
     },
     "x-ai/grok-imagine-image-2.0": {
       "capabilities": {
@@ -31386,7 +34536,15 @@
           "reasoning_response_field": "reasoning_details"
         }
       },
-      "name": "Xiaomi: MiMo-V2.5"
+      "name": "Xiaomi: MiMo-V2.5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0028,
+          "input": 0.14,
+          "output": 0.28
+        },
+        "source": "models.dev:openrouter/xiaomi/mimo-v2.5"
+      }
     },
     "xiaomi/mimo-v2.5-pro": {
       "capabilities": {
@@ -31442,7 +34600,15 @@
           "reasoning_response_field": "reasoning_content"
         }
       },
-      "name": "Xiaomi: MiMo-V2.5-Pro"
+      "name": "Xiaomi: MiMo-V2.5-Pro",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0036,
+          "input": 0.435,
+          "output": 0.87
+        },
+        "source": "models.dev:openrouter/xiaomi/mimo-v2.5-pro"
+      }
     },
     "z-ai/glm-4-32b": {
       "capabilities": {
@@ -31523,7 +34689,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Z.ai: GLM 4.5"
+      "name": "Z.ai: GLM 4.5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.11,
+          "input": 0.6,
+          "output": 2.2
+        },
+        "source": "models.dev:openrouter/z-ai/glm-4.5"
+      }
     },
     "z-ai/glm-4.5-air": {
       "capabilities": {
@@ -31572,7 +34746,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Z.ai: GLM 4.5 Air"
+      "name": "Z.ai: GLM 4.5 Air",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.025,
+          "input": 0.13,
+          "output": 0.85
+        },
+        "source": "models.dev:openrouter/z-ai/glm-4.5-air"
+      }
     },
     "z-ai/glm-4.5-air:free": {
       "capabilities": {
@@ -31663,7 +34845,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "Z.ai: GLM 4.5V"
+      "name": "Z.ai: GLM 4.5V",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.11,
+          "input": 0.6,
+          "output": 1.8
+        },
+        "source": "models.dev:openrouter/z-ai/glm-4.5v"
+      }
     },
     "z-ai/glm-4.6": {
       "capabilities": {
@@ -31716,7 +34906,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Z.ai: GLM 4.6"
+      "name": "Z.ai: GLM 4.6",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.08,
+          "input": 0.43,
+          "output": 1.75
+        },
+        "source": "models.dev:openrouter/z-ai/glm-4.6"
+      }
     },
     "z-ai/glm-4.6v": {
       "capabilities": {
@@ -31772,7 +34970,15 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Z.ai: GLM 4.6V"
+      "name": "Z.ai: GLM 4.6V",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.055,
+          "input": 0.3,
+          "output": 0.9
+        },
+        "source": "models.dev:openrouter/z-ai/glm-4.6v"
+      }
     },
     "z-ai/glm-4.7": {
       "capabilities": {
@@ -31827,7 +35033,15 @@
           "reasoning_response_field": "reasoning_details"
         }
       },
-      "name": "Z.ai: GLM 4.7"
+      "name": "Z.ai: GLM 4.7",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.08,
+          "input": 0.4,
+          "output": 1.75
+        },
+        "source": "models.dev:openrouter/z-ai/glm-4.7"
+      }
     },
     "z-ai/glm-4.7-flash": {
       "capabilities": {
@@ -31883,7 +35097,14 @@
           "reasoning_response_field": "reasoning_details"
         }
       },
-      "name": "Z.ai: GLM 4.7 Flash"
+      "name": "Z.ai: GLM 4.7 Flash",
+      "pricing": {
+        "rates": {
+          "input": 0.0605,
+          "output": 0.4
+        },
+        "source": "models.dev:openrouter/z-ai/glm-4.7-flash"
+      }
     },
     "z-ai/glm-5": {
       "capabilities": {
@@ -31937,7 +35158,15 @@
           "reasoning_response_field": "reasoning_content"
         }
       },
-      "name": "Z.ai: GLM 5"
+      "name": "Z.ai: GLM 5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.12,
+          "input": 0.6,
+          "output": 1.92
+        },
+        "source": "models.dev:openrouter/z-ai/glm-5"
+      }
     },
     "z-ai/glm-5-turbo": {
       "capabilities": {
@@ -31983,7 +35212,15 @@
           "reasoning_response_field": "reasoning_content"
         }
       },
-      "name": "Z.ai: GLM 5 Turbo"
+      "name": "Z.ai: GLM 5 Turbo",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.24,
+          "input": 1.2,
+          "output": 4.0
+        },
+        "source": "models.dev:openrouter/z-ai/glm-5-turbo"
+      }
     },
     "z-ai/glm-5.1": {
       "capabilities": {
@@ -32039,7 +35276,15 @@
           "reasoning_response_field": "reasoning_content"
         }
       },
-      "name": "Z.ai: GLM 5.1"
+      "name": "Z.ai: GLM 5.1",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1794,
+          "input": 0.966,
+          "output": 3.036
+        },
+        "source": "models.dev:openrouter/z-ai/glm-5.1"
+      }
     },
     "z-ai/glm-5.2": {
       "capabilities": {
@@ -32101,7 +35346,15 @@
           "reasoning_response_field": "reasoning_content"
         }
       },
-      "name": "Z.ai: GLM 5.2"
+      "name": "Z.ai: GLM 5.2",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.12064,
+          "input": 0.6496,
+          "output": 2.0416
+        },
+        "source": "models.dev:openrouter/z-ai/glm-5.2"
+      }
     },
     "z-ai/glm-5.2:batch": {
       "capabilities": {
@@ -32206,7 +35459,14 @@
           "modality": "text->text"
         }
       },
-      "name": "Z.ai: GLM 5.2 (free)"
+      "name": "Z.ai: GLM 5.2 (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/z-ai/glm-5.2:free"
+      }
     },
     "z-ai/glm-5.3": {
       "capabilities": {
@@ -32268,7 +35528,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Z.ai: GLM 5.3"
+      "name": "Z.ai: GLM 5.3",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.169,
+          "input": 0.91,
+          "output": 2.86
+        },
+        "source": "models.dev:openrouter/z-ai/glm-5.3"
+      }
     },
     "z-ai/glm-5.3-flash": {
       "capabilities": {
@@ -32335,7 +35603,15 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Z.ai: GLM 5.3 Flash"
+      "name": "Z.ai: GLM 5.3 Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.018,
+          "input": 0.09,
+          "output": 0.3
+        },
+        "source": "models.dev:openrouter/z-ai/glm-5.3-flash"
+      }
     },
     "z-ai/glm-5.3-flash:batch": {
       "capabilities": {
@@ -32451,7 +35727,15 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Z.ai: GLM 5.3 FlashX"
+      "name": "Z.ai: GLM 5.3 FlashX",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.075,
+          "input": 0.37,
+          "output": 1.25
+        },
+        "source": "models.dev:openrouter/z-ai/glm-5.3-flashx"
+      }
     },
     "z-ai/glm-5.3:batch": {
       "capabilities": {
@@ -32554,7 +35838,15 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Z.ai: GLM 5V Turbo"
+      "name": "Z.ai: GLM 5V Turbo",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.24,
+          "input": 1.2,
+          "output": 4.0
+        },
+        "source": "models.dev:openrouter/z-ai/glm-5v-turbo"
+      }
     },
     "~anthropic/claude-fable-latest": {
       "capabilities": {
@@ -32613,7 +35905,16 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Anthropic: Claude Fable Latest"
+      "name": "Anthropic: Claude Fable Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.25,
+          "cache_write": 12.5,
+          "input": 10.0,
+          "output": 50.0
+        },
+        "source": "models.dev:openrouter/~anthropic/claude-fable-latest"
+      }
     },
     "~anthropic/claude-haiku-latest": {
       "capabilities": {
@@ -32667,7 +35968,16 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Anthropic: Claude Haiku Latest"
+      "name": "Anthropic: Claude Haiku Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1,
+          "cache_write": 1.25,
+          "input": 1.0,
+          "output": 5.0
+        },
+        "source": "models.dev:openrouter/~anthropic/claude-haiku-latest"
+      }
     },
     "~anthropic/claude-opus-latest": {
       "capabilities": {
@@ -32728,7 +36038,16 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Anthropic: Claude Opus Latest"
+      "name": "Anthropic: Claude Opus Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.5,
+          "cache_write": 6.25,
+          "input": 5.0,
+          "output": 25.0
+        },
+        "source": "models.dev:openrouter/~anthropic/claude-opus-latest"
+      }
     },
     "~anthropic/claude-sonnet-latest": {
       "capabilities": {
@@ -32788,7 +36107,16 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "Anthropic: Claude Sonnet Latest"
+      "name": "Anthropic: Claude Sonnet Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 10.0
+        },
+        "source": "models.dev:openrouter/~anthropic/claude-sonnet-latest"
+      }
     },
     "~deepseek/deepseek-flash-latest": {
       "capabilities": {
@@ -32852,7 +36180,15 @@
           "modality": "text+image->text"
         }
       },
-      "name": "DeepSeek: DeepSeek Flash Latest"
+      "name": "DeepSeek: DeepSeek Flash Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0026,
+          "input": 0.13,
+          "output": 0.52
+        },
+        "source": "models.dev:openrouter/~deepseek/deepseek-flash-latest"
+      }
     },
     "~deepseek/deepseek-pro-latest": {
       "capabilities": {
@@ -32913,7 +36249,15 @@
           "modality": "text->text"
         }
       },
-      "name": "DeepSeek: DeepSeek Pro Latest"
+      "name": "DeepSeek: DeepSeek Pro Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.017136,
+          "input": 0.53856,
+          "output": 1.61568
+        },
+        "source": "models.dev:openrouter/~deepseek/deepseek-pro-latest"
+      }
     },
     "~deepseek/deepseek-v4-flash-latest": {
       "capabilities": {
@@ -32976,7 +36320,15 @@
           "modality": "text->text"
         }
       },
-      "name": "DeepSeek: DeepSeek V4 Flash Latest"
+      "name": "DeepSeek: DeepSeek V4 Flash Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.016,
+          "input": 0.04,
+          "output": 0.08
+        },
+        "source": "models.dev:openrouter/~deepseek/deepseek-v4-flash-latest"
+      }
     },
     "~google/gemini-flash-latest": {
       "capabilities": {
@@ -33041,7 +36393,17 @@
           "modality": "text+image+file+audio+video->text"
         }
       },
-      "name": "Google: Gemini Flash Latest"
+      "name": "Google: Gemini Flash Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.075,
+          "cache_write": 0.041667,
+          "input": 0.75,
+          "output": 3.75,
+          "reasoning": 3.75
+        },
+        "source": "models.dev:openrouter/~google/gemini-flash-latest"
+      }
     },
     "~google/gemini-pro-latest": {
       "capabilities": {
@@ -33106,7 +36468,30 @@
           "modality": "text+image+file+audio+video->text"
         }
       },
-      "name": "Google: Gemini Pro Latest"
+      "name": "Google: Gemini Pro Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 0.375,
+          "input": 2.0,
+          "output": 12.0,
+          "reasoning": 12.0,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "cache_write": 0.375,
+              "input": 4.0,
+              "output": 18.0,
+              "reasoning": 12.0,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/~google/gemini-pro-latest"
+      }
     },
     "~moonshotai/kimi-latest": {
       "capabilities": {
@@ -33173,7 +36558,15 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "MoonshotAI: Kimi Latest"
+      "name": "MoonshotAI: Kimi Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.17,
+          "input": 1.7,
+          "output": 8.5
+        },
+        "source": "models.dev:openrouter/~moonshotai/kimi-latest"
+      }
     },
     "~openai/gpt-astra-latest": {
       "capabilities": {
@@ -33232,7 +36625,28 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT Astra Latest"
+      "name": "OpenAI: GPT Astra Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 1.0,
+          "cache_write": 12.5,
+          "input": 10.0,
+          "output": 50.0,
+          "tiers": [
+            {
+              "cache_read": 2.0,
+              "cache_write": 25.0,
+              "input": 20.0,
+              "output": 75.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/~openai/gpt-astra-latest"
+      }
     },
     "~openai/gpt-luna-latest": {
       "capabilities": {
@@ -33292,7 +36706,28 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT Luna Latest"
+      "name": "OpenAI: GPT Luna Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.02,
+          "cache_write": 0.25,
+          "input": 0.2,
+          "output": 1.2,
+          "tiers": [
+            {
+              "cache_read": 0.04,
+              "cache_write": 0.5,
+              "input": 0.4,
+              "output": 1.8,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/~openai/gpt-luna-latest"
+      }
     },
     "~openai/gpt-mini-latest": {
       "capabilities": {
@@ -33351,7 +36786,15 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT Mini Latest"
+      "name": "OpenAI: GPT Mini Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.075,
+          "input": 0.75,
+          "output": 4.5
+        },
+        "source": "models.dev:openrouter/~openai/gpt-mini-latest"
+      }
     },
     "~openai/gpt-sol-latest": {
       "capabilities": {
@@ -33411,7 +36854,28 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT Sol Latest"
+      "name": "OpenAI: GPT Sol Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 10.0,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "cache_write": 5.0,
+              "input": 4.0,
+              "output": 15.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/~openai/gpt-sol-latest"
+      }
     },
     "~openai/gpt-terra-latest": {
       "capabilities": {
@@ -33471,7 +36935,28 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "OpenAI: GPT Terra Latest"
+      "name": "OpenAI: GPT Terra Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 12.0,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "cache_write": 5.0,
+              "input": 4.0,
+              "output": 18.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/~openai/gpt-terra-latest"
+      }
     },
     "~typesafe/jev-latest": {
       "capabilities": {
@@ -33566,7 +37051,26 @@
           "modality": "text+image+file->text"
         }
       },
-      "name": "xAI: Grok Latest"
+      "name": "xAI: Grok Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.5,
+          "input": 2.0,
+          "output": 6.0,
+          "tiers": [
+            {
+              "cache_read": 1.0,
+              "input": 4.0,
+              "output": 12.0,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/~x-ai/grok-latest"
+      }
     },
     "~z-ai/glm-flash-latest": {
       "capabilities": {
@@ -33633,7 +37137,15 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "Z.ai: GLM Flash Latest"
+      "name": "Z.ai: GLM Flash Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.015,
+          "input": 0.075,
+          "output": 0.25
+        },
+        "source": "models.dev:openrouter/~z-ai/glm-flash-latest"
+      }
     },
     "~z-ai/glm-latest": {
       "capabilities": {
@@ -33695,7 +37207,15 @@
           "modality": "text->text"
         }
       },
-      "name": "Z.ai: GLM Latest"
+      "name": "Z.ai: GLM Latest",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.15444,
+          "input": 0.8316,
+          "output": 2.6136
+        },
+        "source": "models.dev:openrouter/~z-ai/glm-latest"
+      }
     }
   },
   "provider_id": "openrouter",

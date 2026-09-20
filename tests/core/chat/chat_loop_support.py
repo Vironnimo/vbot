@@ -626,6 +626,9 @@ class StubModelEntry:
 
 
 class StubModels:
+    def pricing_for(self, model_reference: str) -> None:
+        return None
+
     def __init__(
         self,
         entries: dict[tuple[str, str], int | None],

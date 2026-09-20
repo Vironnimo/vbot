@@ -31,6 +31,7 @@ from core.models.database import (
     MODEL_DATABASE_MANIFEST_FILE_NAME,
     select_model_database_dir,
 )
+from core.models.pricing import TokenPricing
 
 if TYPE_CHECKING:
     from core.models.query import ModelQuery
@@ -316,6 +317,7 @@ class Model:
     recommended_temperature: float | None = None
     recommended_top_p: float | None = None
     reasoning_replay: str | None = None
+    pricing: TokenPricing | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", _freeze_metadata_value(self.metadata))
@@ -364,6 +366,13 @@ class ModelRegistry:
     ) -> None:
         self._models = models
         self._provider_reasoning_replay = dict(provider_reasoning_replay or {})
+
+    def pricing_for(self, model_reference: str) -> TokenPricing | None:
+        """Read exact catalog pricing without Connection/Account identifiers."""
+        bare = model_reference.split("::", 1)[0]
+        provider, _, model_id = bare.partition("/")
+        model = self._models.get((provider, model_id))
+        return model.pricing if model is not None else None
 
     @classmethod
     def load(
@@ -785,6 +794,7 @@ def _model_from_record(model_id: str, record: Mapping[str, Any]) -> Model:
         ),
         recommended_top_p=_coerce_recommended_top_p(record.get("recommended_top_p")),
         reasoning_replay=_coerce_reasoning_replay(record.get("reasoning_replay")),
+        pricing=TokenPricing.from_dict(record.get("pricing")),
     )
 
 

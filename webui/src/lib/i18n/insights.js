@@ -170,7 +170,7 @@ export default Object.freeze({
   'statistics.eyebrow': 'Usage & activity',
   'statistics.title': 'Statistics',
   'statistics.subtitle':
-    'Explore activity, token usage and reliability across your Sessions.',
+    'Understand token usage, cost, cache efficiency and Compaction across your Sessions.',
   'statistics.loading': 'Loading statistics…',
   'statistics.loadError': 'Statistics could not be loaded.',
   'statistics.empty': 'No activity recorded yet.',
@@ -182,7 +182,7 @@ export default Object.freeze({
   'statistics.derivedHint':
     'Derived from an in-run model change — not an authoritative fallback signal.',
   'statistics.subview.overview': 'Overview',
-  'statistics.subview.usage': 'Usage',
+  'statistics.subview.usage': 'Usage & costs',
   'statistics.subview.runs': 'Runs & errors',
   'statistics.subview.compactions': 'Compactions',
   'statistics.subview.tools': 'Tools',
@@ -391,4 +391,139 @@ export default Object.freeze({
     '{used} {unit} observed; quota usage is provider-weighted',
 
   // First-run onboarding wizard.
+  'statistics.col.date': 'Date',
+  'statistics.col.strategy': 'Strategy',
+  'statistics.compactions.averageAfter': 'Average remaining tokens',
+  'statistics.compactions.averageBefore': 'Average tokens before',
+  'statistics.compactions.beforeAfter': 'Tokens before → after',
+  'statistics.compactions.coverage':
+    '{known} of {total} checkpoints have before/after context estimates.',
+  'statistics.compactions.diagnosticHint':
+    'Rapid recurrence or growing context can help locate ineffective Compactions. Older checkpoints may have no duration or Model usage; missing data stays unknown.',
+  'statistics.compactions.duration': 'Average duration',
+  'statistics.compactions.durationShort': 'Duration',
+  'statistics.compactions.effectiveness': 'Context & duration',
+  'statistics.compactions.nextInput': 'Average next measured input',
+  'statistics.compactions.nextInputHint':
+    'Before/after values are context estimates. The first subsequent measured request includes its new input and is shown separately; it is not a direct estimate-error measurement.',
+  'statistics.compactions.nonShrinking': 'Without context reduction',
+  'statistics.compactions.p50After': 'Median tokens after',
+  'statistics.compactions.p95After': 'P95 remaining tokens',
+  'statistics.compactions.p95Duration': 'P95 duration',
+  'statistics.compactions.p95Hint':
+    '95% of recorded context sizes after Compaction are at or below this value.',
+  'statistics.compactions.rapid': 'Repeated within 2 Model steps',
+  'statistics.compactions.recent': 'Recent Compactions · up to 50',
+  'statistics.compactions.reduction': 'Context reduction',
+  'statistics.compactions.reductionHint':
+    'Total before minus total after, divided by total before. Negative values mean the context grew.',
+  'statistics.compactions.samples':
+    '{intervals} intervals · {durations} durations · {inputs} subsequent inputs · {calls} saved Model calls',
+  'statistics.compactions.steps': 'Model steps between Compactions',
+  'statistics.compactions.stepsHint':
+    'Average saved Chat responses between consecutive checkpoints in the same Session. The first checkpoint has no interval.',
+  'statistics.compactions.stepsShort': 'Steps since previous',
+  'statistics.cost.cacheCoverage': '{count} calls report cache usage',
+  'statistics.cost.callCount': '{count} calls',
+  'statistics.cost.calls': 'Recorded Model calls',
+  'statistics.cost.callsShort': 'Calls',
+  'statistics.cost.currentCatalog': 'Current catalog estimate',
+  'statistics.cost.daily': 'Daily cost · UTC',
+  'statistics.cost.estimated': 'Estimated API value',
+  'statistics.cost.explanation':
+    'Provider amounts and catalog estimates cover different calls and are shown separately. Estimates account for cache pricing and context tiers. Subscription usage is valued at API prices; this is not your subscription bill.',
+  'statistics.cost.historical':
+    '{count} older calls use current catalog prices. New calls keep their original price snapshot.',
+  'statistics.cost.inspect': 'Inspect usage & costs',
+  'statistics.cost.models': 'Cost by Model',
+  'statistics.cost.ofCalls': 'of {count} recorded calls',
+  'statistics.cost.providerSource': 'Provider',
+  'statistics.cost.reason.bucket': 'A used token category has no price',
+  'statistics.cost.reason.cache': 'Inconsistent cache counters',
+  'statistics.cost.reason.price': 'No matching catalog price',
+  'statistics.cost.reason.reasoning': 'Inconsistent Reasoning counters',
+  'statistics.cost.reason.reasoningUsage': 'Reasoning usage unavailable',
+  'statistics.cost.reason.tier': 'Unsupported price schedule',
+  'statistics.cost.reason.usage': 'Token usage unavailable',
+  'statistics.cost.recent': 'Recent Model calls',
+  'statistics.cost.recentHint':
+    'Up to 50 calls in this time range, newest first. Expand a call for its price source and Session.',
+  'statistics.cost.reported': 'Provider-reported cost',
+  'statistics.cost.retrospective': 'Priced using today’s catalog',
+  'statistics.cost.savedCatalog': 'Saved catalog estimate',
+  'statistics.cost.scope':
+    'Saved Chat responses and Compaction calls. Background tasks and attempts without a saved response are outside this report. Missing prices are never counted as free.',
+  'statistics.cost.sessions':
+    'Sessions with the highest recorded cost · top 20',
+  'statistics.cost.source': 'Price source',
+  'statistics.cost.subscriptionHint':
+    'Catalog prices applied to usage. For subscriptions this is an API-equivalent value, not an additional charge or subscription bill.',
+  'statistics.cost.title': 'Cost & API-equivalent usage · USD',
+  'statistics.cost.unknown': 'Unpriced',
+  'statistics.cost.unpriced': 'Calls without a price',
+  'statistics.limits.activityLoadError': 'vBot activity could not be loaded.',
+  'statistics.limits.activityLoading': 'Loading vBot activity…',
+  'statistics.limits.activityTruncated':
+    'Only the newest 200 overlapping Runs are shown.',
+  'statistics.limits.connections': 'Connections',
+  'statistics.limits.correlationNotice':
+    'These Runs overlap the observation interval. Parallel use outside vBot may also change the Subscription.',
+  'statistics.limits.credits': '{balance} credits',
+  'statistics.limits.creditsAvailable': 'Credits available',
+  'statistics.limits.deleteHistory': 'Delete history',
+  'statistics.limits.deleteHistoryBody':
+    'All stored hourly Subscription snapshots will be permanently deleted. Live limit cards and Provider connections are not affected.',
+  'statistics.limits.deleteHistoryConfirm': 'Delete history',
+  'statistics.limits.deleteHistoryTitle': 'Delete limit history?',
+  'statistics.limits.estimatedShort': 'Estimated',
+  'statistics.limits.estimatedTokens': 'Estimated tokens',
+  'statistics.limits.flightRecorder': 'Subscription flight recorder',
+  'statistics.limits.gap': 'Data gap',
+  'statistics.limits.historyClearError': 'Limit history could not be deleted.',
+  'statistics.limits.historyCleared': '{count} historical snapshots deleted.',
+  'statistics.limits.historyDescription':
+    'Hourly local snapshots. Changes are correlated with vBot Runs, never presented as proof of cause.',
+  'statistics.limits.historyLoadError': 'Limit history could not be loaded.',
+  'statistics.limits.historyLoading': 'Loading limit history…',
+  'statistics.limits.historyRange': 'History range',
+  'statistics.limits.historyTitle': 'Limit history',
+  'statistics.limits.largestChanges': 'Largest observed changes',
+  'statistics.limits.largestChangesNote':
+    'Comparable windows rank by percentage-point increase; resets and gaps break the series.',
+  'statistics.limits.lastSnapshot': 'Last snapshot {time}',
+  'statistics.limits.measuredShort': 'Measured',
+  'statistics.limits.measuredTokens': 'Measured tokens',
+  'statistics.limits.noHistory':
+    'The first automatic snapshot appears when a supported Subscription is available. Further points are recorded at most once per hour.',
+  'statistics.limits.noHistoryTitle': 'The flight recorder is ready',
+  'statistics.limits.noRunsInInterval':
+    'No persisted vBot Runs overlap this interval.',
+  'statistics.limits.noSuccessfulHistory':
+    'Snapshots exist, but none contains a usable limit window in this range.',
+  'statistics.limits.range24h': '24 hours',
+  'statistics.limits.range30d': '30 days',
+  'statistics.limits.range7d': '7 days',
+  'statistics.limits.rangeAll': 'All',
+  'statistics.limits.remainingUnits': '{remaining} of {total} {unit} remaining',
+  'statistics.limits.reset': 'Reset / discontinuity',
+  'statistics.limits.runs': 'Runs',
+  'statistics.limits.since': 'Since',
+  'statistics.limits.snapshots': 'Snapshots',
+  'statistics.limits.toolCalls': '{count} Tool calls',
+  'statistics.limits.traceAria':
+    '{provider} {window} usage history, latest {percent} percent used.',
+  'statistics.limits.unavailableSamples': 'Unavailable',
+  'statistics.limits.units': 'units',
+  'statistics.limits.unlimited': 'Unlimited',
+  'statistics.limits.vbotActivity': 'vBot activity',
+  'statistics.limits.waitingForComparison': 'Waiting for a second snapshot',
+  'statistics.limits.waitingForComparisonDescription':
+    'A single point establishes the baseline. Changes and correlated Runs appear after the next hourly observation.',
+  'statistics.overview.allModels': 'All Models & calls',
+  'statistics.overview.contextHealth': 'Context after Compaction',
+  'statistics.overview.coverage': 'Coverage & diagnostics',
+  'statistics.overview.failedRunsLabel': 'Failed Runs',
+  'statistics.overview.inspectCompactions': 'Inspect Compactions',
+  'statistics.overview.leadingModels': 'Models using the most tokens',
+  'statistics.usage.unreported': 'Calls missing token usage',
 });

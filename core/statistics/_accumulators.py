@@ -86,12 +86,3 @@ class _ToolAcc:
     duration_total_ms: int = 0
     duration_samples: list[int] = field(default_factory=list)
     error_codes: Counter[str] = field(default_factory=Counter)
-
-
-@dataclass
-class _CompactionSessionAcc:
-    agent_id: str
-    session_id: str
-    compactions: int = 0
-    estimated_reclaimed_tokens: int = 0
-    last_compaction: str | None = None
