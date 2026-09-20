@@ -1,9 +1,10 @@
 #!/usr/bin/env python
-"""Probe one configured Provider for structural Tool-contract conformance.
+"""Probe Provider transport or run explicitly selected Tool task evaluations.
 
-The probe deliberately prints only structural measurements. It never prints
-credentials, prompts, generated content, Tool arguments, or raw Provider
-responses.
+Conformance scenarios prescribe arguments and do not establish usability.
+tool_first_use supplies natural tasks and competing production Tools, executes
+disposable effects, and retains full synthetic evidence in --first-use-report.
+Credentials are never included in reports.
 
 Examples:
     python scripts/probe_provider_tool_call.py --model glm-5.2 --mode stream
@@ -84,6 +85,7 @@ from scripts.provider_probe.transport import (  # noqa: E402
     _probe_nonstream,
     _probe_stream,
 )
+from scripts.provider_probe.workflow_first_use import _probe_first_use  # noqa: E402
 from scripts.provider_probe.workflow_mcp import _probe_mcp_workflow  # noqa: E402
 from scripts.provider_probe.workflow_patch import _probe_apply_patch  # noqa: E402
 from scripts.provider_probe.workflow_recall import _probe_recall_workflow  # noqa: E402
@@ -102,6 +104,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=("stream", "nonstream"), default="stream")
     parser.add_argument("--wire", choices=("auto", "openai", "anthropic"), default="auto")
     parser.add_argument("--scenario", choices=PROBE_SCENARIOS, default="direct_required")
+    parser.add_argument(
+        "--first-use-tool", choices=("all", "search_files", "subagent"), default="all"
+    )
+    parser.add_argument("--first-use-case", default="all")
+    parser.add_argument("--first-use-report", type=Path)
+    parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--terminal-case", default="all")
     parser.add_argument(
         "--search-case", default="all", help="Search case ids, comma-separated, or all."
@@ -332,6 +340,7 @@ def _parser() -> argparse.ArgumentParser:
 
 async def _run(args: argparse.Namespace) -> int:
     if args.scenario in {
+        "tool_first_use",
         "search_files",
         "tool_tolerance",
         "terminal",
@@ -347,7 +356,9 @@ async def _run(args: argparse.Namespace) -> int:
             adapter = runtime.get_adapter(ConnectionRef(args.provider, args.connection))
             try:
                 probe = (
-                    _probe_search_files
+                    _probe_first_use
+                    if args.scenario == "tool_first_use"
+                    else _probe_search_files
                     if args.scenario == "search_files"
                     else _probe_tool_tolerance
                     if args.scenario == "tool_tolerance"

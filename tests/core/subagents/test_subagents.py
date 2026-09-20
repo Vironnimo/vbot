@@ -443,13 +443,11 @@ async def test_subagent_blank_session_id_is_rejected(tmp_path: Path) -> None:
     )
 
     assert result["ok"] is False
-    assert result["error"]["code"] == "session_not_found"
+    assert result["error"]["code"] == "invalid_arguments"
     assert manager.started == []
 
 
-async def test_subagent_blank_agent_id_falls_back_to_calling_agent(tmp_path: Path) -> None:
-    # A blank (whitespace-only) agent_id must fall back to the calling agent,
-    # exactly like omitting it.
+async def test_subagent_blank_agent_id_does_not_substitute_calling_agent(tmp_path: Path) -> None:
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
@@ -464,12 +462,9 @@ async def test_subagent_blank_agent_id_falls_back_to_calling_agent(tmp_path: Pat
     )
 
     # Assert
-    assert result["ok"] is True
-    assert result["data"]["agent_id"] == "parent"
-    # Settle the background completion tracker task before the loop closes.
-    started_run = manager.started[0]["run"]
-    started_run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="done"))
-    await asyncio.sleep(0)
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert manager.started == []
 
 
 async def test_project_subagent_foreground_at_depth_stays_project_scoped(

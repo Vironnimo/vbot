@@ -154,8 +154,12 @@ async def _handle_subagent(
     runtime: RuntimeServices,
     batch_tracker: SubAgentBatchTracker,
 ) -> JsonObject:
+    if "action" not in arguments and "id" in arguments:
+        return tool_failure(
+            "invalid_arguments", "Specify action status or cancel when using a work id."
+        )
     try:
-        action = required_string(arguments.get("action"), field_name="action")
+        action = required_string(arguments.get("action", "run"), field_name="action")
     except ToolArgumentError as error:
         return tool_failure("invalid_arguments", str(error))
 
@@ -199,9 +203,17 @@ async def _handle_subagent(
         )
 
     try:
-        explicit_agent_address = optional_string(arguments.get("agent_id"), field_name="agent_id")
+        explicit_agent_address = (
+            required_string(arguments["agent_id"], field_name="agent_id")
+            if "agent_id" in arguments
+            else None
+        )
         description = optional_string(arguments.get("description"), field_name="description")
-        session_id = optional_string(arguments.get("session_id"), field_name="session_id")
+        session_id = (
+            required_string(arguments["session_id"], field_name="session_id")
+            if "session_id" in arguments
+            else None
+        )
         if session_id is not None and explicit_agent_address is None:
             return tool_failure(
                 "invalid_arguments",

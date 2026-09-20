@@ -1,4 +1,4 @@
-"""Fresh-Model file-search calls, checked through real dispatch on disposable files."""
+"""Guided single-Tool search conformance, not independent Tool-choice evaluation."""
 
 from __future__ import annotations
 
@@ -613,6 +613,7 @@ async def _probe_search_files(adapter: Any, args: argparse.Namespace) -> dict:
     rows = await asyncio.gather(*(evaluate(case) for case in cases))
     return {
         "scenario": "search_files",
+        "evaluation": "guided_single_tool_conformance",
         "cases": len(rows),
         "passed": all(row["passed"] for row in rows),
         "results": rows,

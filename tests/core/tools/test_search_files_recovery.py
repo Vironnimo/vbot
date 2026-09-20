@@ -31,6 +31,9 @@ from tests.core.tools.test_search_files import context
         (["rg"], ["rg"], [], [], "files"),
         (["-g", "--help", "needle"], ["needle"], [], ["-g", "--help"], "files"),
         (["-e", "--files"], ["--files"], [], [], "files"),
+        (["-e", "--offset"], ["--offset"], [], [], "files"),
+        (["-g", "--offset", "needle"], ["needle"], [], ["-g", "--offset"], "files"),
+        (["--", "--offset", "--limit"], ["--offset"], ["--limit"], [], "files"),
         (["-e", ""], [""], [], [], "files"),
     ],
 )
@@ -146,9 +149,68 @@ async def test_path_discovery_case_scope_and_pagination(tmp_path):
     files = {"args": ["--files", "-i", "-g", "*.py", "--sort=path"], "limit": 1}
     first = await registry.dispatch(ctx, files)
     assert first["data"]["content"] == "b.py"
+    assert first["data"]["complete"] is False
     second = await registry.dispatch(ctx, {**files, "offset": first["data"]["next_offset"]})
     assert second["data"]["content"] == "nested/a.PY"
     assert "next_offset" not in second["data"]
+    assert second["data"]["complete"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"args": ["needle", "--offset", "1", "--limit=1"]},
+        {"args": ["--offset=1", "needle"], "limit": 1},
+        {"args": ["needle", "--offset=01", "--limit", "1"], "offset": 1, "limit": 1},
+    ],
+)
+async def test_paging_flags_select_same_exact_results_as_fields(tmp_path, arguments):
+    (tmp_path / "a.py").write_text("needle first\nneedle second\nneedle third\n")
+    registry = ToolRegistry()
+    register_search_files_tool(registry)
+    before = copy.deepcopy(arguments)
+    result = await registry.dispatch(context(tmp_path), arguments)
+    assert arguments == before
+    assert result["ok"], result
+    assert result["data"]["content"] == "a.py:2:needle second"
+    assert result["data"]["next_offset"] == 2
+    assert result["data"]["complete"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"args": ["needle", "--offset=1"], "offset": 2},
+        {"args": ["needle", "--offset=1", "--offset=2"]},
+        {"args": ["needle", "--limit=1"], "limit": 2},
+        {"args": ["needle", "--offset=-1"]},
+        {"args": ["needle", "--offset=1.5"]},
+        {"args": ["needle", "--offset=1000001"]},
+        {"args": ["needle", "--offset"]},
+        {"args": ["needle", "--limit=0"]},
+        {"args": ["needle", "--limit=10001"]},
+        {"args": ["needle", "-q", "--offset=0"]},
+    ],
+)
+async def test_paging_never_discards_conflicting_or_invalid_constraints(tmp_path, arguments):
+    (tmp_path / "a.py").write_text("needle first\nneedle second\n")
+    registry = ToolRegistry()
+    register_search_files_tool(registry)
+    result = await registry.dispatch(context(tmp_path), arguments)
+    assert not result["ok"]
+    assert result["data"] is None
+
+
+@pytest.mark.asyncio
+async def test_paging_option_spellings_remain_literal_payloads(tmp_path):
+    (tmp_path / "--limit").write_text("--offset\n")
+    registry = ToolRegistry()
+    register_search_files_tool(registry)
+    result = await registry.dispatch(context(tmp_path), {"args": ["--", "--offset", "--limit"]})
+    assert result["ok"], result
+    assert result["data"]["content"] == "--limit:1:--offset"
 
 
 def test_empty_result_reports_actual_cwd_and_literal_quotes(tmp_path):
