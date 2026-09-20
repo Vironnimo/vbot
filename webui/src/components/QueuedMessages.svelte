@@ -1,5 +1,6 @@
 <script>
   import Button from './ui/Button.svelte';
+  import Banner from './ui/Banner.svelte';
   import { floatingHoverCard } from '$lib/tooltip.js';
   import { t } from '$lib/i18n.js';
 
@@ -83,8 +84,10 @@
 </script>
 
 {#if queuedMessages.length > 0}
-  <aside
+  <Banner
+    appearance="compact"
     class="queued-messages"
+    role="complementary"
     aria-label={t('queue.title', 'Queued messages')}
   >
     <ol>
@@ -198,32 +201,30 @@
         </li>
       {/each}
     </ol>
-  </aside>
+  </Banner>
 {/if}
 
 <style>
-  .queued-messages {
+  :global(.queued-messages) {
     flex-shrink: 0;
-    padding: 4px 12px;
-    background: var(--composer-surface);
-    border-radius: var(--r-md);
   }
-  .queued-messages ol {
+  ol {
     display: flex;
     flex-direction: column;
     gap: 1px;
+    width: 100%;
     margin: 0;
     padding: 0;
     list-style: none;
   }
-  .queued-messages li {
+  li {
     display: flex;
     align-items: center;
     gap: 8px;
     min-width: 0;
     padding: 2px 0;
   }
-  .queued-messages li.editing {
+  li.editing {
     flex-wrap: wrap;
     padding: 6px 0;
   }
@@ -278,11 +279,6 @@
   .editing .queued-messages__actions {
     margin-left: auto;
   }
-  .queued-messages__actions :global(button) {
-    min-height: 26px;
-    padding: 3px 6px;
-    font-size: 11.5px;
-  }
   .queued-messages__editor {
     width: 100%;
     min-height: 68px;
@@ -303,11 +299,5 @@
     margin: 0;
     color: var(--red);
     font-size: 12px;
-  }
-  @media (pointer: coarse) {
-    .queued-messages__actions :global(button) {
-      min-height: 40px;
-      min-width: 40px;
-    }
   }
 </style>

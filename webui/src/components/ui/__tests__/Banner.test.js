@@ -53,15 +53,22 @@ describe('Banner', () => {
     expect(banner.classList.contains('banner--neutral')).toBe(true);
   });
 
-  it('renders content and forwards classes and accessibility attributes', () => {
-    const banner = render({
-      variant: 'error',
-      class: 'extra',
-      role: 'alert',
-      children: content('Something went wrong'),
-    });
-    expect(banner.classList.contains('extra')).toBe(true);
-    expect(banner.getAttribute('role')).toBe('alert');
-    expect(banner.textContent).toContain('Something went wrong');
-  });
+  it.each(['default', 'compact'])(
+    'renders content and forwards accessibility attributes in %s appearance',
+    (appearance) => {
+      const banner = render({
+        appearance,
+        variant: 'error',
+        class: 'extra',
+        role: 'alert',
+        children: content('Something went wrong'),
+      });
+      expect(banner.classList.contains('extra')).toBe(true);
+      expect(banner.classList.contains('banner--compact')).toBe(
+        appearance === 'compact',
+      );
+      expect(banner.getAttribute('role')).toBe('alert');
+      expect(banner.textContent).toContain('Something went wrong');
+    },
+  );
 });
