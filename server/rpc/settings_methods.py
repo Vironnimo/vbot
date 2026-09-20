@@ -9,6 +9,7 @@ from typing import Any
 
 from core.debug.store import DebugTraceStore
 from core.extensions import validate_extension_config
+from core.fetch_config import WEB_FETCH_CREDENTIALS, WEB_FETCH_PRICING, WEB_FETCH_PROVIDERS
 from core.model_tasks import SUPPORTED_TASK_TYPES
 from core.recall.recall import FIRST_PARTY_RECALL_BACKENDS
 from core.search_config import FIRST_PARTY_WEB_SEARCH_PROVIDERS
@@ -713,6 +714,19 @@ def _settings_response(state: Any) -> JsonObject:
         "recall": {
             "backend": recall["backend"],
             "available_backends": _available_recall_backends(runtime),
+        },
+        "web_fetch": {
+            **runtime.storage.load_web_fetch_settings(),
+            "available_providers": list(WEB_FETCH_PROVIDERS),
+            "services": [
+                {
+                    "id": provider,
+                    "api_key_env": variable,
+                    "configured": bool(runtime.resolve_environment_credential(variable)),
+                    "pricing_url": WEB_FETCH_PRICING[provider],
+                }
+                for provider, variable in WEB_FETCH_CREDENTIALS.items()
+            ],
         },
         "web_search": {
             "provider": web_search["provider"],

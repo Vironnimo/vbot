@@ -232,6 +232,26 @@ export default Object.freeze({
   'settings.recall.vectorHint':
     'Semantic search requires an embedding model — configure it under Specialized Models.',
   'settings.recall.saveSuccess': 'Recall backend updated.',
+  'settings.webFetch.direct': 'Direct (no service)',
+  'settings.webFetch.fallback': 'Only when direct fetch fails',
+  'settings.webFetch.prefer': 'Prefer this service',
+  'settings.webFetch.provider': 'Page extraction service',
+  'settings.webFetch.description':
+    'Read pages directly, or use an optional service for difficult websites and JavaScript content.',
+  'settings.webFetch.mode': 'When to use it',
+  'settings.webFetch.modeDescription':
+    'Fallback uses the service for blocked, failed or unreadable pages. Prefer uses it first for page URLs and tries direct fetch if it fails.',
+  'settings.webFetch.cost':
+    'The selected service receives requested URLs and may charge per page. Free allowances and prices vary. Reading or searching an already saved page makes no additional service request.',
+  'settings.webFetch.keyPresent': 'API key configured.',
+  'settings.webFetch.keyMissing': 'API key required:',
+  'settings.webFetch.keyHint':
+    'Set this variable in the .env file in the vBot data directory.',
+  'settings.webFetch.pricing': 'Service pricing',
+  'settings.webFetch.title': 'Web Fetch',
+  'settings.webFetch.subtitle':
+    'Page reading and optional extraction services.',
+  'settings.webFetch.saveSuccess': 'Web fetch settings updated.',
   'settings.webSearch.title': 'Web Search',
   'settings.webSearch.subtitle': 'Provider used by the web_search tool.',
   'settings.webSearch.provider': 'Search provider',

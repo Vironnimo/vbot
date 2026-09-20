@@ -47,6 +47,7 @@ from core.settings.normalizers import (
     normalize_skill_directories,
     normalize_speech_settings,
     normalize_subagent_integer,
+    normalize_web_fetch_settings,
     normalize_web_search_settings,
 )
 from core.settings.settings import (
@@ -178,6 +179,7 @@ def build_effective_settings(raw_settings: JsonObject) -> JsonObject:
         "recall": normalize_recall_settings(raw_settings.get("recall")),
         "reflection": normalize_reflection_settings(raw_settings.get("reflection")),
         "web_search": normalize_web_search_settings(raw_settings.get("web_search")),
+        "web_fetch": normalize_web_fetch_settings(raw_settings.get("web_fetch")),
         "debug": normalize_debug_settings(raw_settings.get("debug")),
         "session_titles": normalize_session_title_settings(raw_settings.get("session_titles")),
         "local_models": normalize_local_models_settings(raw_settings.get("local_models")),

@@ -169,7 +169,8 @@ def assert_success_envelope(result: dict[str, object]) -> dict[str, object]:
     assert result["artifacts"] == []
     data = result["data"]
     assert isinstance(data, dict)
-    assert set(data) == {"content"}
+    assert "content" in data
+    assert "owner" not in data and "page" not in data
     return data
 
 

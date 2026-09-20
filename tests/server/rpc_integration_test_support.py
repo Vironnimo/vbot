@@ -230,6 +230,9 @@ class IntegrationStorage:
     def load_recall_settings(self) -> JsonObject:
         return {"backend": "sqlite_fts"}
 
+    def load_web_fetch_settings(self) -> JsonObject:
+        return {"provider": "direct", "mode": "fallback"}
+
     def load_web_search_settings(self) -> JsonObject:
         return {
             "provider": "brave",
@@ -456,6 +459,9 @@ class IntegrationRuntime:
 
     def get_adapter(self, connection: ConnectionRef) -> SequencedAdapter:
         return self._adapter_pool.next()
+
+    def resolve_environment_credential(self, key: str) -> str:
+        return ""
 
     def has_provider_credentials(self, provider_id: str) -> bool:
         return provider_id in self._configured_provider_ids

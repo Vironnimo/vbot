@@ -42,6 +42,7 @@ from core.settings.normalizers import (
     normalize_skill_directories,
     normalize_speech_settings,
     normalize_subagent_integer,
+    normalize_web_fetch_settings,
     normalize_web_search_settings,
 )
 from core.settings.paths import SUBAGENT_SETTING_DEFAULTS
@@ -77,6 +78,7 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "model_tasks",
         "providers",
         "web_search",
+        "web_fetch",
         "debug",
         "extensions",
         "reflection",
@@ -375,6 +377,11 @@ class StorageManager:
                     settings,
                     settings_update["recall"],
                 )
+            if "web_fetch" in settings_update:
+                updated_sections["web_fetch"] = settings_updates.apply_web_fetch_settings(
+                    settings,
+                    settings_update["web_fetch"],
+                )
             if "web_search" in settings_update:
                 updated_sections["web_search"] = settings_updates.apply_web_search_settings(
                     settings,
@@ -609,6 +616,9 @@ class StorageManager:
 
         settings = self.load_settings()
         return normalize_reflection_settings(settings.get("reflection"))
+
+    def load_web_fetch_settings(self) -> dict[str, Any]:
+        return normalize_web_fetch_settings(self.load_settings().get("web_fetch"))
 
     def load_web_search_settings(self) -> dict[str, Any]:
         """Return normalized persisted web search provider settings."""
