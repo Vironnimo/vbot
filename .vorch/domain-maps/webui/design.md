@@ -64,7 +64,7 @@ Common breakpoints are mobile at <=640px, tablet through 960px, desktop from 961
 | Dialogs | `Modal.svelte` supplies overlay, visible title, close control, and body/footer slots. `ConfirmDialog.svelte` adds the explicit consequence and confirm/cancel choice. Form geometry belongs to each caller. Modal choice lists currently use full-width bordered rows/cards. |
 | Tabs | `TabList.svelte` has underline and segmented treatments, with a compact density option. Period filters and Chat Agent navigation are separate controls. |
 | State and metadata | `StatusChip.svelte` represents status; `Badge.svelte` represents kind/origin/version/scope. Most are text pills; Session drawer metadata uses compact accessible icon badges. |
-| Inline feedback | `Banner.svelte` displays loading, errors, warnings, and notices using a surface with a semantic left stripe. `EmptyState.svelte` displays known absence with a quiet dashed treatment. |
+| Inline feedback | `Banner.svelte` displays loading, errors, warnings, and notices using a surface with a semantic left stripe. Its compact appearance shares the quiet composer surface and tertiary action sizing between Queue rows and Chat context notices. `EmptyState.svelte` displays known absence with a quiet dashed treatment. |
 | Toasts | `ToastStack.svelte` displays a bottom-right stack with colored left stripes. Error toasts persist by default; other variants usually expire. Caller overrides and lifecycle belong to `lib/toastState.js`. |
 | Tooltips and hints | `lib/tooltip.js` owns Quick tooltips and interactive Structured hover cards. `InfoHint.svelte` is the small question-mark explanation control. These use the shared floating layer, not native browser title bubbles. |
 | Audio | `AudioPlayer.svelte` provides a bounded playback surface with Play/Pause, progress/time, speed, mute, volume, and download. Secondary controls wrap as the component narrows; inline failure leaves playback retry reachable. |
@@ -109,7 +109,7 @@ Inherited and disabled instructions remain readable. The component-local `.sp-bl
 
 ### Chat and content inspection
 
-Queued messages appear as slim single-line rows above the composer, without a heading, status badge, or separate action row. Steer is a quiet text button; edit/remove use icons. Full text appears in a scrollable floating hover/focus card (`QueuedMessages.svelte`).
+Queued messages appear as slim single-line rows above the composer, without a heading, status badge, or separate action row. Steer is a quiet text button; edit/remove use icons. Full text appears in a scrollable floating hover/focus card (`QueuedMessages.svelte`). The Queue, Sub-Agent return notice, Provider/Model setup notices, and duplicate-Session composer notice share `Banner`'s compact appearance. Actionable notices use one bold sentence and a quiet text action; the Sub-Agent notice has no explanatory second paragraph. These surfaces wrap to the available Chat-area width and retain larger touch targets.
 
 Chat's current layout supports up to two retained areas, each containing Chat or an HTML preview. The split control sits with Sessions/New Session; HTML links can open the preview in the other area. Closing or switching areas retains drafts and scroll state. The preview has its own compact file toolbar, bounded iframe, and live-reload control. Source owners and interaction contracts are in `chat.md`.
 

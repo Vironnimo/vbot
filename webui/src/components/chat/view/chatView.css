@@ -275,45 +275,6 @@
   width: 100%;
   max-width: var(--chat-measure);
   margin: 0 auto 10px;
-  padding: 9px 20px 9px 12px;
-}
-
-.chat-view__footer-banner-copy {
-  min-width: 0;
-}
-
-.chat-view__footer-banner-actions {
-  display: flex;
-  flex-shrink: 0;
-  gap: 8px;
-}
-
-.chat-view__footer-banner-title,
-.chat-view__footer-banner-hint {
-  margin: 0;
-}
-
-.chat-view__footer-banner-title {
-  color: var(--accent);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
-  font-weight: 500;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-
-.chat-view__footer-banner-hint {
-  margin-top: 4px;
-  color: var(--text-med);
-  font-size: var(--fs-body-sm);
-}
-
-.chat-view__subagent-session-return {
-  flex-shrink: 0;
-}
-
-.chat-view__no-model-action {
-  flex-shrink: 0;
 }
 
 @media (max-width: 640px) {
@@ -334,18 +295,5 @@
 
   .chat-view__content-shell {
     flex-direction: column;
-  }
-
-  .chat-view__footer-banner {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .chat-view__footer-banner-actions {
-    width: 100%;
-  }
-
-  .chat-view__subagent-session-return {
-    margin-right: 0;
   }
 }

@@ -50,11 +50,12 @@ describe('ChatView', () => {
     });
     expect(document.body.textContent).toContain('Viewing a sub-agent session');
     expect(document.body.textContent).toContain('Return to current session');
-    expect(
-      document.querySelector(
-        '.chat-view__footer-stack .chat-view__footer-banner',
-      ),
-    ).toBeTruthy();
+    const notice = document.querySelector(
+      '.chat-view__footer-stack .chat-view__footer-banner',
+    );
+    expect(notice?.querySelector('strong')).toBeTruthy();
+    expect(notice?.querySelectorAll('button')).toHaveLength(1);
+    expect(notice?.querySelector('p')).toBeNull();
     expect(document.querySelector('textarea')?.disabled).toBe(false);
   });
 
