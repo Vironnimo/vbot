@@ -11,12 +11,13 @@ from pathlib import Path
 from typing import Any
 
 from core.tools._argument_repair import normalize_call_arguments
+from core.tools._search_arguments import parse_search_args
 from core.tools._search_execution import content_events, file_types, validate_patterns
-from core.tools._search_options import BY_NAME, help_text, parse_options
+from core.tools._search_options import help_text, parse_options
 from core.tools._search_results import ResultPage, path_label, render_events
 from core.tools._search_selection import FileSelection
 from core.tools._tool_context import _path_argument
-from core.tools.arguments import optional_bool, optional_int
+from core.tools.arguments import optional_int
 from core.tools.contracts import _load_json_value, compile_tool_contract
 from core.tools.search import SearchBudget
 from core.tools.tools import (
@@ -34,7 +35,7 @@ from core.utils.search_binary import require_binary
 SEARCH_FILES_TOOL_NAME = "search_files"
 
 
-def _repair_pattern_array(value: Any) -> Any:
+def _repair_argument_array(value: Any) -> Any:
     """Decode list syntax without turning a malformed list into a regex class."""
     if not isinstance(value, str) or not re.match(r'^\s*\[\s*"', value):
         return value
@@ -65,123 +66,27 @@ def _repair_pattern_array(value: Any) -> Any:
         except ValueError:
             pass
     raise ValueError(
-        "patterns contains a malformed encoded list. Send a JSON array of strings, "
-        'for example ["TODO"]. For literal text, add options ["-F"].'
+        "args contains a malformed encoded list. Send each rg argument as a string, "
+        'for example ["-F", "TODO"].'
     )
 
 
 @cache
 def _repair_contract():
-    properties = dict(SEARCH_FILES_TOOL_PARAMETERS["properties"])
-    for field in ("ignore_case", "literal", "include_ignored", "multiline"):
-        properties[field] = {"type": "boolean"}
-    properties["context"] = {"type": "integer"}
-    for name, option in BY_NAME.items():
-        if not option.argument:
-            properties[name] = {"type": "boolean"}
     return compile_tool_contract(
         name=SEARCH_FILES_TOOL_NAME,
-        input_schema={**SEARCH_FILES_TOOL_PARAMETERS, "properties": properties},
+        input_schema=SEARCH_FILES_TOOL_PARAMETERS,
         require_closed_input=False,
     )
 
 
 def normalize_search_arguments(arguments: Any) -> Any:
-    value = normalize_call_arguments(
+    return normalize_call_arguments(
         _repair_contract(),
         arguments,
-        enum_fields=("action", "kind"),
-        field_aliases={
-            "pattern": "patterns",
-            "path": "paths",
-            "args": "options",
-            "head": "limit",
-            "head_limit": "limit",
-        },
-        field_normalizers={"patterns": _repair_pattern_array},
+        field_aliases={"argv": "args"},
+        field_normalizers={"args": _repair_argument_array},
     )
-    if not isinstance(value, dict):
-        return value
-    tokens = value.get("options", [])
-    if not isinstance(tokens, list) or not all(isinstance(t, str) for t in tokens):
-        return value
-    tokens = list(tokens)
-    action, kind = value.get("action", "content"), value.get("kind", "all")
-    aliases = {
-        "ignore_case": ("-i", "-s"),
-        "literal": ("-F", "--no-fixed-strings"),
-        "include_ignored": ("--no-ignore", "--ignore"),
-        "multiline": ("-U", "--no-multiline"),
-    }
-    extras: list[str] = []
-    for field in list(value):
-        if field in aliases:
-            enabled = optional_bool(value.pop(field), field_name=field, default=False)
-            extras.append(aliases[field][0 if enabled else 1])
-            if field == "multiline" and enabled:
-                extras.append("--multiline-dotall")
-        elif field == "context":
-            amount = optional_int(value.pop(field), field_name=field, default=0, minimum=0)
-            extras.extend(["-C", str(amount)])
-        elif field == "glob":
-            pattern = value.pop(field)
-            if not isinstance(pattern, str):
-                raise ValueError(
-                    "glob must be a string; use repeated -g options for several filters."
-                )
-            extras.extend(["-g", pattern])
-        elif field == "output_mode":
-            modes = {"content": [], "files_with_matches": ["-l"], "count": ["-c"]}
-            mode = value.pop(field)
-            if mode not in modes:
-                raise ValueError(
-                    "Unknown output_mode; use content options -l, -c, or --count-matches."
-                )
-            if mode == "content" and parse_options(tokens, action=action, kind=kind).get("output"):
-                raise ValueError(
-                    "output_mode conflicts with options; provide one intended output mode."
-                )
-            extras.extend(modes[mode])
-        elif field in BY_NAME:
-            option = BY_NAME[field]
-            item = value.pop(field)
-            if option.argument:
-                if not isinstance(item, (str, int)) or isinstance(item, bool):
-                    raise ValueError(f"{field} requires one option value.")
-                extras.extend([field, str(item)])
-            elif optional_bool(item, field_name=field, default=False):
-                extras.append(field)
-            else:
-                raise ValueError(
-                    f"{field}=false is ambiguous; put its supported reverse flag in options."
-                )
-    if extras:
-        supplied = parse_options(tokens, action=action, kind=kind)
-        repaired = parse_options(extras, action=action, kind=kind)
-        for option, setting in repaired.entries:
-            matching = [
-                (old, old_value) for old, old_value in supplied.entries if old.key == option.key
-            ]
-            if option.key in {"ignore", "hidden", "binary"}:
-                matching.extend(
-                    (old, old_value)
-                    for old, old_value in supplied.entries
-                    if old.key == "unrestricted"
-                )
-            if matching and (option.repeat or supplied.get(option.key) != setting):
-                raise ValueError(
-                    f"Separate {option.names[0]} field conflicts with options; "
-                    "express the complete ordered selection in options."
-                )
-        context_keys = {"before", "after", "context"}
-        if (
-            any(option.key in context_keys for option, _ in repaired.entries)
-            and any(option.key in context_keys for option, _ in supplied.entries)
-            and repaired.context != supplied.context
-        ):
-            raise ValueError("Separate context field conflicts with options.")
-        value["options"] = tokens + extras
-    return value
 
 
 def _strings(arguments: JsonObject, name: str, default: list[str]) -> list[str]:
@@ -202,40 +107,23 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         if unknown:
             raise ValueError(
                 f"Unknown argument(s): {', '.join(sorted(unknown))}. "
-                "Use options for supported flags; action='help' lists them."
+                "Use args for ripgrep arguments; args=['--help'] lists supported options."
             )
-        action = arguments.get("action")
-        if action not in {"content", "paths", "help"}:
-            raise ValueError("action must be content, paths, or help.")
-        kind = arguments.get("kind", "all")
-        if kind not in {"files", "directories", "all"}:
-            raise ValueError("kind must be files, directories, or all.")
-        if action != "paths" and "kind" in arguments:
-            raise ValueError("kind applies only to action='paths'.")
-        tokens = _strings(arguments, "options", [])
-        options = parse_options(tokens, action=action, kind=kind)
+        query = parse_search_args(_strings(arguments, "args", []))
+        action, kind = query["action"], query["kind"]
+        patterns = query["patterns"]
+        options = parse_options(query["options"], action=action, kind=kind)
         reference = options.get("reference")
-        if action == "help" or reference == "help":
-            if set(arguments) - {"action", "options"} or any(
-                option.key != "reference" for option, _ in options.entries
+        if reference == "help":
+            if (
+                set(arguments) - {"args"}
+                or patterns
+                or query["paths"]
+                or any(option.key != "reference" for option, _ in options.entries)
             ):
-                raise ValueError(
-                    "Help does not search; omit patterns, paths, kind, limit, offset, "
-                    "and search options."
-                )
+                raise ValueError("--help does not search; omit patterns, paths, and other options.")
             return tool_success({"content": help_text()})
-        patterns = _strings(arguments, "patterns", [])
-        if action == "content" and not patterns and reference != "types":
-            raise ValueError(
-                "Content search requires one or more patterns. Use action='paths' to find names."
-            )
-        if "patterns" in arguments and not patterns:
-            raise ValueError("patterns must not be empty; omit it to list all paths.")
-        roots_input = _strings(arguments, "paths", [str(context.effective_cwd)])
-        if not roots_input or any(not p.strip() for p in roots_input):
-            raise ValueError(
-                "paths must contain at least one nonempty literal file or directory path."
-            )
+        roots_input = query["paths"] or [str(context.effective_cwd)]
         cwd = Path(os.path.abspath(context.effective_cwd.expanduser()))
         roots = list(
             dict.fromkeys(
@@ -289,8 +177,13 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
             else {}
         )
         if reference == "types":
-            if set(arguments) - {"action", "options"} or any(
-                o.key not in {"type_add", "type_clear", "reference"} for o, _ in options.entries
+            if (
+                set(arguments) - {"args"}
+                or patterns
+                or query["paths"]
+                or any(
+                    o.key not in {"type_add", "type_clear", "reference"} for o, _ in options.entries
+                )
             ):
                 raise ValueError(
                     "--type-list accepts only type additions/clears; "
@@ -314,7 +207,6 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
             )
             with contextlib.closing(selection):
                 selection.populate(
-                    patterns if action == "paths" else [],
                     kind if action == "paths" else "files",
                     types,
                 )
@@ -383,20 +275,10 @@ async def _search_files_async(context: ToolContext, arguments: JsonObject) -> Js
 
 
 def _display_parts(arguments: JsonObject) -> list[ToolDisplayPart]:
-    parts = []
-    for field, kind in (("patterns", "query"), ("paths", "path")):
-        values = arguments.get(field)
-        if isinstance(values, list):
-            values = [value for value in values if isinstance(value, str) and value.strip()]
-            if values:
-                parts.append(
-                    ToolDisplayPart(
-                        ", ".join(values),
-                        kind=kind if len(values) == 1 else "text",
-                        quote=field == "patterns",
-                    )
-                )
-    return parts or [ToolDisplayPart(str(arguments.get("action", "search")))]
+    values = arguments.get("args")
+    if isinstance(values, list):
+        return [ToolDisplayPart(" ".join(value for value in values if isinstance(value, str)))]
+    return []
 
 
 def register_search_files_tool(registry: ToolRegistry) -> None:
@@ -423,72 +305,41 @@ def register_search_files_tool(registry: ToolRegistry) -> None:
 
 
 SEARCH_FILES_TOOL_DESCRIPTION = (
-    "Search file contents or find file and directory paths. Content pa"
-    "tterns are regex unless -F is given. Path patterns are case-insen"
-    "sitive root-relative globs: '*.py' at top level, '**/*.py' at any"
-    " depth. Hidden paths are included; ignore rules apply unless -u i"
-    "s given; .git entries are always excluded. Explicit ignored targe"
-    "ts are searched. File filters narrow this scope. Results have usa"
-    "ble paths and content line numbers. Content is ordered by path; p"
-    "aths by newest modification. Use help to inspect supported option"
-    "s."
+    "Search file contents or discover paths using ripgrep arguments. "
+    'Content: ["-F","computeDamage(","src"]. Files: ["--files","-g","*.py","src"]. '
+    "Use --dirs for directories (including empty ones), or --entries for both. "
+    "Name filters use -g, case-insensitive by default; globs without / match at any depth. "
+    "-i/-s controls case for content or path discovery. "
+    "Normal output includes paths and line numbers. -l returns matching files; "
+    "-c counts matching lines; --count-matches counts occurrences. "
+    "Hidden entries are included; ignore rules apply unless -u is given; .git is excluded. "
+    "Explicit ignored roots are searched. Content is ordered by path, discovery by newest "
+    "modification. Use --help for the full supported options."
 )
 SEARCH_FILES_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
-        "action": {
-            "type": "string",
-            "enum": ["content", "paths", "help"],
-            "description": (
-                "Search contents, find paths, or list supported options and their effects."
-            ),
-        },
-        "patterns": {
+        "args": {
             "type": "array",
             "items": {"type": "string"},
             "description": (
-                'Search patterns, e.g. ["TODO", "FIXME"]; any one may match. '
-                'For literal text such as "computeDamage(", add options ["-F"]. '
-                "Required for content. Omit "
-                "for paths to list all entries."
+                "One ripgrep argument per item, without shell quoting or a shell command. "
+                "Regex pattern first, then literal search roots; -F selects literal text. "
+                "Repeat -e for multiple patterns. With --files/--dirs/--entries, all operands "
+                "are roots. Omit roots to search the working directory; relative roots use it."
             ),
-        },
-        "paths": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": (
-                "Files or directories to search. Relative paths use the working di"
-                "rectory; omit to search it."
-            ),
-        },
-        "options": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": (
-                "Ripgrep-style options as separate tokens, e.g. ['-i','-w','-g','*"
-                ".py','-g','!generated/**','-C','3']. -F: literal text; -U: multil"
-                "ine; --multiline-dotall: dot matches newlines; -l: matching file "
-                "paths; -c: matching-line counts; --count-matches: occurrence coun"
-                "ts. Omit for normal matching-line output. Patterns and search roo"
-                "ts belong in patterns and paths."
-            ),
-        },
-        "kind": {
-            "type": "string",
-            "enum": ["files", "directories", "all"],
-            "description": "For paths only: entry types to return. Omit for all.",
         },
         "limit": {
             "type": "integer",
             "minimum": 1,
             "default": 100,
-            "description": "Maximum matches or path/count rows to return. Omit for 100.",
+            "description": "Maximum results. Omit for 100.",
         },
         "offset": {
             "type": "integer",
             "minimum": 0,
-            "description": "Results to skip before limit. Omit to start at the beginning.",
+            "description": "Results to skip. Omit for the first page; use next_offset to continue.",
         },
     },
-    "required": ["action"],
+    "required": ["args"],
 }

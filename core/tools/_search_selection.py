@@ -27,7 +27,9 @@ class Glob:
             or (len(pattern) > 1 and pattern[1] == ":")
             or ".." in pattern.split("/")
         ):
-            raise ValueError("Use root-relative glob patterns; put literal search roots in paths.")
+            raise ValueError(
+                "Use root-relative glob patterns; pass literal roots as separate args items."
+            )
         # Bound expansion before using the existing brace grammar.
         if len(pattern) > 4096 or pattern.count(",") > 32 or pattern.count("{") > 8:
             raise ValueError("Glob expansion is too large; split it into simpler patterns.")
@@ -100,10 +102,9 @@ class FileSelection:
     def close(self) -> None:
         self.db.close()
 
-    def populate(self, patterns: list[str], kind: str, types: dict[str, list[str]]) -> None:
+    def populate(self, kind: str, types: dict[str, list[str]]) -> None:
         options = self.options
         sensitive = options.get("glob_case") == "sensitive"
-        path_patterns = [Glob(p, sensitive=sensitive) for p in patterns]
         filters: list[tuple[bool, Glob]] = []
         for option, value in options.entries:
             if option.key in {"glob", "iglob"}:
@@ -125,7 +126,7 @@ class FileSelection:
         for _, name in type_filters:
             if name != "all" and name not in types:
                 raise ValueError(
-                    f"Unknown file type {name!r}; use options=['--type-list'] to list types."
+                    f"Unknown file type {name!r}; use args=['--type-list'] to list types."
                 )
         compiled_types = {
             name: [Glob(p, sensitive=sensitive, basename=True) for p in values]
@@ -142,8 +143,6 @@ class FileSelection:
                     self._warn("Traversal stopped after one million entries; narrow paths.")
                     return
                 if kind != "all" and directory != (kind == "directories"):
-                    continue
-                if path_patterns and not any(p.matches(relative, directory) for p in path_patterns):
                     continue
                 included = not any(positive for positive, _ in filters)
                 for positive, pattern in filters:

@@ -187,53 +187,23 @@ def test_cancellation_kills_a_silent_child(tmp_path, monkeypatch):
         timer.cancel()
 
 
-def test_true_flag_operand_repair_preserves_false_rejection(tmp_path):
-    (tmp_path / "a").write_text("needle")
-    assert (
-        search(tmp_path, action="content", patterns=["needle"], options=["-n", "true"])["content"]
-        == "a:1:needle"
-    )
-    result = search_files_handler(
-        context(tmp_path), {"action": "content", "patterns": ["needle"], "options": ["-n", "false"]}
-    )
-    assert result["ok"] is False
+@pytest.mark.parametrize("pattern", ["true", "false"])
+def test_boolean_words_are_search_text_not_flag_values(tmp_path, pattern):
+    (tmp_path / "a").write_text("true false\n")
+    result = search_files_handler(context(tmp_path), {"args": ["-n", pattern]})
+    assert result["data"]["content"] == "a:1:true false"
 
 
-@pytest.mark.parametrize(
-    "extra",
-    [
-        {"context": 0, "options": ["-C", "2"]},
-        {"context": 2, "options": ["-C", "0"]},
-        {"include_ignored": False, "options": ["-u"]},
-    ],
-)
-def test_repair_never_overrides_explicit_constraints(tmp_path, extra):
-    result = search_files_handler(
-        context(tmp_path),
-        {
-            "action": "content",
-            "patterns": ["needle"],
-            **extra,
-        },
-    )
-    assert result["ok"] is False
-    assert "conflict" in result["error"]["message"]
-
-
-def test_display_preserves_patterns_and_search_roots():
+def test_display_preserves_search_arguments():
     from core.tools.search_files import register_search_files_tool
     from core.tools.tools import ToolRegistry
 
     registry = ToolRegistry()
     register_search_files_tool(registry)
     display = registry.get("search_files").display.to_payload(
-        {
-            "action": "content",
-            "patterns": ["alpha", "beta"],
-            "paths": ["src", "tests"],
-        }
+        {"args": ["-e", "alpha", "-e", "beta", "src", "tests"]}
     )
-    assert [part["value"] for part in display["primary"]] == ["alpha, beta", "src, tests"]
+    assert [part["value"] for part in display["primary"]] == ["-e alpha -e beta src tests"]
 
 
 def test_nested_repository_uses_its_own_git_ignores(tmp_path):
@@ -274,7 +244,7 @@ def test_missing_engine_hides_tool_and_dispatch_explains_repair(tmp_path, monkey
     registry = ToolRegistry()
     register_search_files_tool(registry)
     assert registry.provider_definitions(["search_files"]) == []
-    result = asyncio.run(registry.dispatch(context(tmp_path), {"action": "paths"}))
+    result = asyncio.run(registry.dispatch(context(tmp_path), {"args": ["--files"]}))
     assert result["error"]["code"] == "tool_not_ready"
     assert "cli.search_runtime" in result["error"]["message"]
 

@@ -307,16 +307,10 @@ function plannedToolResponse(prompt, results, offeredTools) {
       return {
         calls: [
           toolCall("search_files", {
-            action: "paths",
-            paths: ["tool-e2e"],
-            patterns: ["**/*.txt"],
-            kind: "files",
+            args: ["--files", "-g", "*.txt", "tool-e2e"],
           }),
           toolCall("search_files", {
-            action: "content",
-            paths: ["tool-e2e"],
-            patterns: ["needle after"],
-            options: ["-F"],
+            args: ["-F", "needle after", "tool-e2e"],
           }),
         ],
       };
