@@ -470,8 +470,42 @@ textarea::placeholder {
   background: rgba(252, 129, 129, 0.1);
 }
 
+/* Quiet Chat context and Queue surface, with the same text-action footprint. */
+.banner--compact {
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+  min-height: 38px;
+  padding: 4px 12px;
+  border: 0;
+  background: var(--composer-surface);
+}
+
+.banner--compact > :where(strong, p) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.banner--compact .btn-tertiary {
+  flex-shrink: 0;
+  min-height: 26px;
+  padding: 3px 6px;
+  font-size: var(--fs-mono-sm);
+}
+
+.banner--compact > .btn-tertiary {
+  margin-inline-start: auto;
+}
+
+@media (pointer: coarse) {
+  .banner--compact .btn-tertiary {
+    min-height: 40px;
+    min-width: 40px;
+  }
+}
+
 @media (max-width: 640px) {
-  .banner {
+  .banner:not(.banner--compact) {
     align-items: stretch;
     flex-direction: column;
   }

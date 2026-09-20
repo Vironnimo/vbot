@@ -77,12 +77,8 @@ export default Object.freeze({
   'chat.cancelError': 'Run could not be cancelled.',
   'chat.sessionCreateError': 'New session could not be created.',
   'chat.noProvider.title': 'Connect a provider to start',
-  'chat.noProvider.hint':
-    'No provider is connected yet. Connect one before choosing a model.',
   'chat.noProvider.action': 'Connect a provider',
   'chat.noModel.title': 'Pick a model to start',
-  'chat.noModel.hint':
-    'This agent has no model yet. Choose one to send messages.',
   'chat.noModel.action': 'Choose a model',
   'chat.role.user': 'You',
   'chat.role.assistant': 'Assistant',
@@ -209,11 +205,7 @@ export default Object.freeze({
   'chat.activity.reflectionElapsedMinutes': '{count}m',
   'chat.cancelBackgroundTaskError': 'Background task could not be cancelled.',
   'chat.subagentSessionNotice': 'Viewing a sub-agent session',
-  'chat.subagentSessionParentHint':
-    'Messages here continue this sub-agent session. Return to the parent session when you are done.',
   'chat.returnToParentSession': 'Return to parent session',
-  'chat.subagentSessionHint':
-    'Messages here continue this sub-agent session. Return to the current agent session when you are done.',
   'chat.returnToCurrentSession': 'Return to current session',
   'chat.runError': 'Run failed.',
   'chat.errorDetails': 'Details',

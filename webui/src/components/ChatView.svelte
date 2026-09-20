@@ -795,31 +795,15 @@
         >
           {#if navigation.subAgentSessionActive}
             <Banner
-              variant="info"
+              appearance="compact"
               class="chat-view__footer-banner"
               aria-live="polite"
             >
-              <div class="chat-view__footer-banner-copy">
-                <p class="chat-view__footer-banner-title">
-                  {t(
-                    'chat.subagentSessionNotice',
-                    'Viewing a sub-agent session',
-                  )}
-                </p>
-                <p class="chat-view__footer-banner-hint">
-                  {navigation.subAgentParentTarget
-                    ? t(
-                        'chat.subagentSessionParentHint',
-                        'Messages here continue this sub-agent session. Return to the parent session when you are done.',
-                      )
-                    : t(
-                        'chat.subagentSessionHint',
-                        'Messages here continue this sub-agent session. Return to the current agent session when you are done.',
-                      )}
-                </p>
-              </div>
+              <strong>
+                {t('chat.subagentSessionNotice', 'Viewing a sub-agent session')}
+              </strong>
               <Button
-                variant="secondary"
+                variant="tertiary"
                 class="chat-view__subagent-session-return"
                 disabled={chatState.loadingHistory}
                 onClick={navigation.handleReturnToCurrentSession}
@@ -835,23 +819,15 @@
           {/if}
           {#if providerSetupMissing}
             <Banner
-              variant="info"
+              appearance="compact"
               class="chat-view__footer-banner"
               aria-live="polite"
             >
-              <div class="chat-view__footer-banner-copy">
-                <p class="chat-view__footer-banner-title">
-                  {t('chat.noProvider.title', 'Connect a provider to start')}
-                </p>
-                <p class="chat-view__footer-banner-hint">
-                  {t(
-                    'chat.noProvider.hint',
-                    'No provider is connected yet. Connect one before choosing a model.',
-                  )}
-                </p>
-              </div>
+              <strong>
+                {t('chat.noProvider.title', 'Connect a provider to start')}
+              </strong>
               <Button
-                variant="primary"
+                variant="tertiary"
                 class="chat-view__no-provider-action"
                 onClick={onConnectProvider}
               >
@@ -860,23 +836,15 @@
             </Banner>
           {:else if agentModelMissing}
             <Banner
-              variant="info"
+              appearance="compact"
               class="chat-view__footer-banner"
               aria-live="polite"
             >
-              <div class="chat-view__footer-banner-copy">
-                <p class="chat-view__footer-banner-title">
-                  {t('chat.noModel.title', 'Pick a model to start')}
-                </p>
-                <p class="chat-view__footer-banner-hint">
-                  {t(
-                    'chat.noModel.hint',
-                    'This agent has no model yet. Choose one to send messages.',
-                  )}
-                </p>
-              </div>
+              <strong>
+                {t('chat.noModel.title', 'Pick a model to start')}
+              </strong>
               <Button
-                variant="primary"
+                variant="tertiary"
                 class="chat-view__no-model-action"
                 onClick={onPickModel}
               >
@@ -960,11 +928,13 @@
                 {/snippet}
               </ChatComposer>
             {:else}
-              <Banner class="chat-view__footer-banner">
-                {t(
-                  'split.sameSession',
-                  'This Session is open in the other area. Choose another Session or start a new one to chat here.',
-                )}
+              <Banner appearance="compact" class="chat-view__footer-banner">
+                <p>
+                  {t(
+                    'split.sameSession',
+                    'This Session is open in the other area. Choose another Session or start a new one to chat here.',
+                  )}
+                </p>
               </Banner>
             {/if}
           </div>

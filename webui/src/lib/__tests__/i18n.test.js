@@ -102,7 +102,7 @@ describe('i18n t()', () => {
       'chat.subagent.loadingResult',
       'chat.subagent.viewSession',
       'chat.subagentSessionNotice',
-      'chat.subagentSessionHint',
+      'chat.returnToParentSession',
       'chat.returnToCurrentSession',
       'sessions.subagent_parent',
       'status.connected',
@@ -130,7 +130,6 @@ describe('i18n t()', () => {
     expect(t('chat.tokenBadgeNoUsage', undefined, { context: 8000 })).toBe(
       '— / 8000 tok',
     );
-    expect(t('chat.subagentSessionHint')).toContain('continue this sub-agent');
     expect(t('chat.returnToCurrentSession')).toBe('Return to current session');
     expect(englishCatalog['navigation.components']).toBeUndefined();
   });
@@ -193,10 +192,8 @@ describe('i18n t()', () => {
       'onboarding.model.back',
       'onboarding.provider.tip.openrouter',
       'chat.noProvider.title',
-      'chat.noProvider.hint',
       'chat.noProvider.action',
       'chat.noModel.title',
-      'chat.noModel.hint',
       'chat.noModel.action',
     ];
 
