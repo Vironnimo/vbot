@@ -215,14 +215,15 @@ class FilePinnedMemoryBackend:
         return "\n\n".join(blocks)
 
     def _render_scope_block(self, workspace: Path, scope: MemoryScope) -> str:
-        """Render one scope's memory block: its heading label plus its entries.
+        """Render one scope's memory block: heading, character usage, and entries.
 
         Reads the scope's entries (never creating the file — a missing file reads as
-        no entries), then renders the label followed by the ``- `` bullet list, or the
-        empty-scope placeholder when there are none.
+        no entries), then renders the label with usage against the mutation budget,
+        followed by the ``- `` bullet list or the empty-scope placeholder.
         """
         entries = _read_entries(self._path(workspace, scope))
-        label = MEMORY_SCOPE_LABELS[scope]
+        used = sum(len(entry) for entry in entries)
+        label = f"{MEMORY_SCOPE_LABELS[scope]} ({used}/{_MAX_SCOPE_BUDGET[scope]} chars used)"
         if not entries:
             return f"{label}\n{_EMPTY_SCOPE_TEXT}"
         body = "\n".join(f"{_BULLET_PREFIX}{entry}" for entry in entries)
