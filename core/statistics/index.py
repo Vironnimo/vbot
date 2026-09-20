@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from core.chat.messages import ChatMessage, MessageRole
+from core.models.pricing import project_cost
 from core.sessions import (
     FORK_SOURCE_META_KEY,
     ChatSession,
@@ -31,9 +32,9 @@ JsonObject = dict[str, Any]
 _INDEX_DIRECTORY = "statistics"
 _INDEX_FILENAME = "session-statistics.sqlite"
 _GLOBAL_SCOPE = ""
-# v3 replaces JSONL file cursors with canonical Session generations and
-# revisions. This is the one disposable-index bump from the released v2 shape.
-_SCHEMA_VERSION = 4
+# v5 adds saved cost snapshots and nested Compaction Model Usage. Older
+# disposable projections rebuild from canonical Session generations/revisions.
+_SCHEMA_VERSION = 5
 _SQLITE_BUSY_TIMEOUT_MS = 1000
 
 
@@ -612,11 +613,22 @@ def _project_usage(usage: JsonObject, *, assistant: bool) -> JsonObject:
             "output_tokens_estimated",
             "cache_read_tokens",
             "cache_write_tokens",
+            "reported_cost_usd",
+            "cost",
         )
         if assistant
-        else ("context_tokens_before", "context_tokens_after")
+        else ("context_tokens_before", "context_tokens_after", "compaction_duration_ms")
     )
-    return {key: usage[key] for key in keys if key in usage}
+    projected = {key: usage[key] for key in keys if key in usage}
+    if "cost" in projected:
+        projected["cost"] = project_cost(projected["cost"])
+    call = usage.get("model_call")
+    if not assistant and isinstance(call, dict) and isinstance(call.get("usage"), dict):
+        projected["model_call"] = {
+            "model": call.get("model"),
+            "usage": _project_usage(call["usage"], assistant=True),
+        }
+    return projected
 
 
 def _project_timing(timing: JsonObject | None) -> JsonObject | None:

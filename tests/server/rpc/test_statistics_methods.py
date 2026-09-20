@@ -72,6 +72,7 @@ class _RuntimeStub:
         self.agents = _FakeAgents(agent_ids)
         self.projects = ProjectStore(data_dir, sessions=manager)
         self.global_skills: list = []
+        self.models = SimpleNamespace(pricing_for=lambda _: None)
 
     def skills_for(self, project_id, agent_id=None) -> _FakeSkillRegistry:
         return _FakeSkillRegistry(self.global_skills)
@@ -136,6 +137,7 @@ def test_report_returns_full_shape_for_seeded_data(tmp_path: Path) -> None:
         "window",
         "overview",
         "usage",
+        "costs",
         "runs",
         "compactions",
         "errors",

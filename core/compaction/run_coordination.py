@@ -65,10 +65,16 @@ class ManualCompactionRequest(Protocol):
     def active_model_id(self) -> str: ...
 
     @property
+    def active_provider_id(self) -> str: ...
+
+    @property
     def summary_adapter(self) -> Any: ...
 
     @property
     def summary_model_id(self) -> str: ...
+
+    @property
+    def summary_provider_id(self) -> str: ...
 
     @property
     def summary_temperature(self) -> float | None: ...
@@ -289,6 +295,8 @@ class CompactionRunCoordinator:
                     active_tools=request.request_state.tools,
                     summary_temperature=request.summary_temperature,
                     active_temperature=request.active_temperature,
+                    summary_model_reference=f"{request.summary_provider_id}/{request.summary_model_id}",
+                    active_model_reference=f"{request.active_provider_id}/{request.active_model_id}",
                 )
             finally:
                 if request is not None:
@@ -520,6 +528,8 @@ class CompactionRunCoordinator:
                 prompt_cache_affinity_id=context.prompt_cache_affinity_id,
                 summary_adapter=summary_adapter,
                 summary_model_id=summary_model_id,
+                summary_model_reference=f"{summary_provider_id}/{summary_model_id}",
+                active_model_reference=f"{target.provider_id}/{target.model_id}",
                 storage=self._host.storage,
                 settings=settings,
                 request_messages=continuation_request_messages or messages,

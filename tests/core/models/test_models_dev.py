@@ -429,3 +429,43 @@ def test_catalog_construction_rejects_missing_modalities():
     # Act / Assert
     with pytest.raises(ModelsDevError):
         ModelsDevCatalog(raw)
+
+
+@pytest.mark.asyncio
+async def test_catalog_prices_refresh_without_provider_credentials(tmp_path: Path):
+    raw = json.loads(CATALOG_FIXTURE.read_text(encoding="utf-8"))
+    raw["providers"]["openai"]["models"]["gpt-5.5"]["cost"] = {
+        "input": 2,
+        "output": 8,
+        "cache_read": 0.2,
+    }
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    path = models_dir / "gateway.json"
+    path.write_text(
+        json.dumps(
+            {
+                "provider_id": "gateway",
+                "models": {
+                    "gpt-5.5": {
+                        "pricing": {"source": "models.dev:openai/gpt-5.5", "rates": {"input": 99}}
+                    },
+                    "gpt-5.5-guess": {
+                        "pricing": {
+                            "source": "models.dev:openai/gpt-5.5-guess",
+                            "rates": {"input": 99},
+                        }
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    await refresh_canonical_layer(
+        tmp_path, catalog=ModelsDevCatalog(raw), provider_catalog_ids={"gateway": "openai"}
+    )
+    models = json.loads(path.read_text(encoding="utf-8"))["models"]
+    assert models["gpt-5.5"]["pricing"]["rates"] == {"input": 2, "output": 8, "cache_read": 0.2}
+    assert "pricing" not in models["gpt-5.5-guess"]
+    canonical = json.loads((models_dir / "models.json").read_text(encoding="utf-8"))
+    assert canonical["models"]["openai/gpt-5.5"]["pricing"]["rates"]["input"] == 2

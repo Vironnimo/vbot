@@ -614,6 +614,8 @@ class StreamingAccumulator:
         self._reasoning_meta = merge_reasoning_meta(self._reasoning_meta, reasoning_meta)
 
     def _add_usage(self, delta: JsonObject) -> None:
+        from core.models.pricing import nonnegative_amount
+
         usage = dict(self._usage or {})
         primary_count = 0
         for token_key in ("input_tokens", "output_tokens"):
@@ -634,6 +636,9 @@ class StreamingAccumulator:
                 and detail_tokens >= 0
             ):
                 usage[detail_key] = detail_tokens
+        reported_cost = nonnegative_amount(delta.get("reported_cost_usd"))
+        if reported_cost is not None:
+            usage["reported_cost_usd"] = reported_cost
         self._usage = usage
 
     def _add_finish(self, delta: JsonObject) -> None:

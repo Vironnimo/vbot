@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from core.chat.messages import ChatMessage
+from core.models.pricing import TokenPricing
 from core.sessions import (
     skill_context_note_name,
     skill_tool_activation_name,
 )
 from core.statistics._accumulators import (
     _AgentAcc,
-    _CompactionSessionAcc,
     _DailyAcc,
     _ModelAcc,
     _ProviderAcc,
@@ -21,6 +23,8 @@ from core.statistics._accumulators import (
 from core.statistics._cache import (
     _SessionCacheTracker,
 )
+from core.statistics._compactions import CompactionAccumulator
+from core.statistics._costs import CostAccumulator
 from core.statistics._measurements import (
     UNKNOWN_MODEL_KEY,
     _count_entries,
@@ -48,10 +52,7 @@ from core.statistics.report import (
     AgentRunCount,
     CacheBreakIncident,
     CacheSection,
-    CompactionReclaimStats,
-    CompactionSessionStat,
     CompactionsSection,
-    CompactionStrategyCount,
     DailyCount,
     DailyTrendPoint,
     DurationStats,
@@ -126,7 +127,17 @@ TOP_CACHE_BREAK_INCIDENTS = 20
 class _Aggregator:
     """Mutable accumulator for one statistics scan."""
 
-    def __init__(self, *, since: datetime | None, until: datetime | None) -> None:
+    def __init__(
+        self,
+        *,
+        since: datetime | None,
+        until: datetime | None,
+        pricing_lookup: Callable[[str], TokenPricing | None] | None = None,
+    ) -> None:
+        self._costs = CostAccumulator(pricing_lookup)
+        self._compactions = CompactionAccumulator()
+        self._compaction_calls = 0
+        self._unreported_calls = 0
         self._since = since
         self._until = until
 
@@ -148,11 +159,6 @@ class _Aggregator:
         self._derived_fallback_runs = 0
         self._runs_per_session: list[SessionRunCount] = []
         self._longest_runs: list[LongestRun] = []
-
-        self._total_compactions = 0
-        self._compactions_by_strategy: Counter[str] = Counter()
-        self._compaction_reclaim_samples: list[int] = []
-        self._compactions_by_session: dict[tuple[str, str], _CompactionSessionAcc] = {}
 
         self._models: dict[str, _ModelAcc] = {}
         self._providers: dict[str, _ProviderAcc] = {}
@@ -221,6 +227,11 @@ class _Aggregator:
         """
         agent = self._agent(agent_id)
         activity_messages = _session_activity_messages(messages, summary)
+        title = summary.get("title")
+        title = title if isinstance(title, str) else None
+        self._compactions.observe_session(
+            agent_id, session_id, title, activity_messages, self._in_window
+        )
         in_window = [message for message in activity_messages if self._in_window(message.timestamp)]
 
         groups: dict[str, list[ChatMessage]] = {}
@@ -238,7 +249,23 @@ class _Aggregator:
                 agent.chat_messages += 1
             cache_tracker.observe(message)
             if message.role == "compaction_checkpoint":
-                self._record_compaction(agent_id, session_id, message)
+                call = (message.usage or {}).get("model_call")
+                if isinstance(call, dict) and isinstance(call.get("usage"), dict):
+                    call_message = replace(
+                        message, role="assistant", model=call.get("model"), usage=call["usage"]
+                    )
+                    self._record_usage(call_message, _date_key(message.timestamp), compaction=True)
+                    self._costs.observe(
+                        call_message,
+                        agent_id=agent_id,
+                        session_id=session_id,
+                        session_title=title,
+                        kind="compaction",
+                    )
+            if message.role == "assistant":
+                self._costs.observe(
+                    message, agent_id=agent_id, session_id=session_id, session_title=title
+                )
             if message.role == "run_summary":
                 self._record_run(
                     agent, agent_id, session_id, groups.get(message.run_id or "", []), message
@@ -313,28 +340,11 @@ class _Aggregator:
         elif message.role == "tool":
             self._record_tool(agent, message)
 
-    def _record_compaction(self, agent_id: str, session_id: str, message: ChatMessage) -> None:
-        self._total_compactions += 1
-        self._compactions_by_strategy[message.compaction_strategy or UNKNOWN_MODEL_KEY] += 1
-
-        key = (agent_id, session_id)
-        session = self._compactions_by_session.get(key)
-        if session is None:
-            session = _CompactionSessionAcc(agent_id=agent_id, session_id=session_id)
-            self._compactions_by_session[key] = session
-        session.compactions += 1
-        session.last_compaction = _max_timestamp(session.last_compaction, message.timestamp)
-
-        before = _usage_nonnegative_int(message.usage, "context_tokens_before")
-        after = _usage_nonnegative_int(message.usage, "context_tokens_after")
-        if before is None or after is None:
-            return
-        reclaimed = max(0, before - after)
-        session.estimated_reclaimed_tokens += reclaimed
-        self._compaction_reclaim_samples.append(reclaimed)
-
-    def _record_usage(self, message: ChatMessage, day: str | None) -> None:
-        self._usage_assistant_messages += 1
+    def _record_usage(
+        self, message: ChatMessage, day: str | None, *, compaction: bool = False
+    ) -> None:
+        self._compaction_calls += int(compaction)
+        self._usage_assistant_messages += int(not compaction)
         key = _provider_model_key(message.model)
         provider = key.split("/", 1)[0] if "/" in key else key
         model = self._model(provider, key)
@@ -349,8 +359,13 @@ class _Aggregator:
             self._usage_estimated_turns += 1
             model.estimated_turns += 1
             provider_acc.estimated_turns += 1
-        else:
+        elif all(
+            _usage_nonnegative_int(message.usage, key) is not None
+            for key in ("input_tokens", "output_tokens")
+        ):
             self._usage_measured_turns += 1
+        else:
+            self._unreported_calls += 1
 
         if facts.input_estimated:
             model.estimated_input_tokens += facts.input_tokens
@@ -529,6 +544,7 @@ class _Aggregator:
             errors=self._build_errors(),
             tools=self._build_tools(),
             skills=self._build_skills(skill_inventory),
+            costs=self._costs.build(),
         )
 
     def _build_skills(self, skill_inventory: SkillInventorySource | None) -> SkillsSection:
@@ -545,50 +561,7 @@ class _Aggregator:
         return self._skill_usage.build(inventory)
 
     def _build_compactions(self) -> CompactionsSection:
-        sessions = list(self._compactions_by_session.values())
-        counts = sorted(session.compactions for session in sessions)
-        reclaim = sorted(self._compaction_reclaim_samples)
-        top_sessions = sorted(
-            sessions,
-            key=lambda session: (
-                -session.compactions,
-                -session.estimated_reclaimed_tokens,
-                session.agent_id,
-                session.session_id,
-            ),
-        )[:TOP_SESSIONS]
-        return CompactionsSection(
-            total_compactions=self._total_compactions,
-            sessions_with_compactions=len(sessions),
-            average_per_compacted_session=_mean(counts),
-            p50_per_compacted_session=_nearest_rank_percentile(counts, 50),
-            p95_per_compacted_session=_nearest_rank_percentile(counts, 95),
-            max_per_session=max(counts, default=0),
-            by_strategy=[
-                CompactionStrategyCount(strategy=strategy, compactions=count)
-                for strategy, count in sorted(
-                    self._compactions_by_strategy.items(),
-                    key=lambda item: (-item[1], item[0]),
-                )
-            ],
-            reclaim=CompactionReclaimStats(
-                observations=len(reclaim),
-                total_tokens=sum(reclaim),
-                average_tokens=_mean(reclaim),
-                p50_tokens=_nearest_rank_percentile(reclaim, 50),
-                p95_tokens=_nearest_rank_percentile(reclaim, 95),
-            ),
-            top_sessions=[
-                CompactionSessionStat(
-                    agent_id=session.agent_id,
-                    session_id=session.session_id,
-                    compactions=session.compactions,
-                    estimated_reclaimed_tokens=session.estimated_reclaimed_tokens,
-                    last_compaction=session.last_compaction or "",
-                )
-                for session in top_sessions
-            ],
-        )
+        return self._compactions.build()
 
     def _build_overview(self) -> OverviewSection:
         durations = sorted(self._run_durations)
@@ -643,6 +616,9 @@ class _Aggregator:
     def _build_usage(self) -> UsageSection:
         totals = UsageTotals(
             assistant_messages=self._usage_assistant_messages,
+            model_calls=self._usage_assistant_messages + self._compaction_calls,
+            compaction_calls=self._compaction_calls,
+            unreported_calls=self._unreported_calls,
             measured_turns=self._usage_measured_turns,
             estimated_turns=self._usage_estimated_turns,
             measured_input_tokens=sum(

@@ -9,11 +9,11 @@ import { parseAgentAddress } from './agentAddress.js';
 export const STATISTICS_SUB_VIEWS = Object.freeze([
   'overview',
   'usage',
-  'runs',
   'compactions',
+  'limits',
+  'runs',
   'tools',
   'skills',
-  'limits',
 ]);
 
 export const DAILY_GRANULARITIES = Object.freeze(['day', 'week', 'month']);
@@ -72,6 +72,25 @@ export function formatChartTick(
 // future compact form (1.2k) only has to change here.
 export function formatTokens(value, locale = 'en') {
   return formatInteger(value, locale);
+}
+
+export function formatOptionalTokens(value, locale = 'en') {
+  return value == null ? EM_DASH : formatTokens(value, locale);
+}
+
+export function formatCost(value, locale = 'en', { exact = false } = {}) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0)
+    return EM_DASH;
+  const tiny = !exact && value > 0 && value < 0.0001;
+  return (
+    (tiny ? '<' : '') +
+    new Intl.NumberFormat(locale, {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: exact ? 10 : value < 1 && value > 0 ? 4 : 2,
+    }).format(tiny ? 0.0001 : value)
+  );
 }
 
 export function formatPercent(ratio, { fractionDigits = 1 } = {}) {

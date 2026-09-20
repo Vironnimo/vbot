@@ -463,6 +463,9 @@ class StubProviders:
 
 
 class StubModels:
+    def pricing_for(self, model_reference: str) -> None:
+        return None
+
     def __init__(self) -> None:
         self._models = {
             "anthropic": [

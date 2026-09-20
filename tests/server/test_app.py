@@ -177,6 +177,7 @@ async def test_statistics_warmup_builds_disposable_index_for_complete_runtime_su
     runtime = SimpleNamespace(
         chat_sessions=manager,
         agents=SimpleNamespace(list=lambda: []),
+        models=SimpleNamespace(pricing_for=lambda _: None),
         projects=SimpleNamespace(list=lambda: [], session_owning_agents=lambda _project_id: []),
     )
     state = SimpleNamespace(runtime=runtime)

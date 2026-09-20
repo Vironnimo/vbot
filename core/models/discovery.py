@@ -26,6 +26,7 @@ from core.models.models_dev import (
     provider_family,
     provider_limits,
     provider_modalities,
+    provider_pricing,
     provider_reasoning_block,
     provider_reasoning_supported,
     reasoning_response_field,
@@ -451,6 +452,10 @@ def _enrich_provider_model(
     if pointer is not None:
         data["canonical"] = pointer
 
+    pricing = provider_pricing(catalog, models_dev_id=models_dev_id, wire_id=wire_id)
+    if pricing is not None:
+        data["pricing"] = pricing
+
     # Fill the limits the endpoint did not report from the provider's models.dev
     # section (the gateway's own limits). "Fill, don't overwrite": a falsy value
     # (None / 0) means the endpoint gave nothing, so the models.dev value wins; a
@@ -825,6 +830,8 @@ def _model_to_data(model: Model | Mapping[str, Any]) -> dict[str, Any]:
         # metadata are omitted when empty so generated catalogs stay clean.
         if model.family:
             data["family"] = model.family
+        if model.pricing is not None:
+            data["pricing"] = model.pricing.to_dict()
         if model.connections:
             data["connections"] = list(model.connections)
         if model.connection_context_windows:

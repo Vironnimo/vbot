@@ -80,7 +80,7 @@
   function subViewLabel(id) {
     switch (id) {
       case 'usage':
-        return t('statistics.subview.usage', 'Usage');
+        return t('statistics.subview.usage', 'Usage & costs');
       case 'runs':
         return t('statistics.subview.runs', 'Runs & errors');
       case 'compactions':
@@ -113,7 +113,7 @@
       <p class="stats-view__subtitle view-header__subtitle">
         {t(
           'statistics.subtitle',
-          'Explore activity, token usage and reliability across your Sessions.',
+          'Understand token usage, cost, cache efficiency and Compaction across your Sessions.',
         )}
       </p>
     </div>
