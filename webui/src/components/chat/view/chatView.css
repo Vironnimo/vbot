@@ -13,6 +13,7 @@
 }
 
 .chat-view__surface {
+  --session-controls-inset: 6px;
   position: relative;
   display: flex;
   min-height: 0;
@@ -30,34 +31,29 @@
   overflow: hidden;
 }
 
-/* Combined floating "Sessions | +" control at the top-left of the chat
+/* Shared floating Session controls at the top-left of the chat
      surface. Stays fixed while the timeline scrolls underneath. The session
      panel opens downward from this control as a floating overlay (not a
      sidebar), so the chat surface always fills the full width. */
 .chat-view__session-bar {
   position: absolute;
-  top: 12px;
-  left: 6px;
+  top: var(--session-controls-inset);
+  left: var(--session-controls-inset);
   z-index: 2;
   display: flex;
   align-items: stretch;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-lg);
-  background: var(--surface-2);
+  padding: 3px 6px 3px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
   box-shadow: var(--floating-elevation);
   overflow: hidden;
-}
-
-.chat-view__session-bar-divider {
-  width: 1px;
-  align-self: stretch;
-  background: var(--border-2);
 }
 
 .btn-secondary.chat-view__session-toggle {
   border: 0;
   border-radius: 0;
-  padding: 7px 14px;
+  padding: 5px 8px;
   background: transparent;
   color: var(--text-med);
   font-size: var(--fs-label-sm);
@@ -69,16 +65,12 @@
   color: var(--accent);
 }
 
-.chat-view__session-toggle--active {
-  background: var(--accent-12);
-  color: var(--accent);
-}
-
 .btn-secondary.btn-icon.chat-view__new-session-fab,
 .btn-secondary.btn-icon.chat-view__workspace-action {
   border: 0;
   border-radius: 0;
-  width: 36px;
+  width: 28px;
+  min-width: 28px;
   padding: 0;
   background: transparent;
   color: var(--text-med);
@@ -324,6 +316,17 @@
 }
 
 @media (max-width: 640px) {
+  .chat-view__surface {
+    --session-controls-inset: 8px;
+  }
+
+  .btn-secondary.btn-icon.chat-view__new-session-fab,
+  .btn-secondary.btn-icon.chat-view__workspace-action {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+  }
+
   .chat-view__composer-feedback {
     padding: 0 14px 10px;
   }

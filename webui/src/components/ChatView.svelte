@@ -694,9 +694,7 @@
         {#snippet sessionControls()}
           <Button
             variant="secondary"
-            class={`chat-view__session-toggle${
-              showSessionDrawer ? ' chat-view__session-toggle--active' : ''
-            }`}
+            class="chat-view__session-toggle"
             disabled={!target.activeAgent}
             aria-expanded={showSessionDrawer}
             onClick={async (event) => {
@@ -712,8 +710,6 @@
           >
             {t('sessions.title', 'Sessions')}
           </Button>
-          <span class="chat-view__session-bar-divider" aria-hidden="true"
-          ></span>
           <Button
             variant="secondary"
             icon
@@ -729,8 +725,6 @@
             </svg>
           </Button>
           {#if workspaceActions}
-            <span class="chat-view__session-bar-divider" aria-hidden="true"
-            ></span>
             {@render workspaceActions()}
           {/if}
         {/snippet}
