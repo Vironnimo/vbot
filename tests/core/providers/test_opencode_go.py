@@ -57,6 +57,7 @@ def model_with_output_limit(
     )
 
 
+@pytest.mark.parametrize("model_id", ["deepseek-flash", "deepseek-v4.1-flash"])
 @pytest.mark.parametrize(
     ("effort", "thinking", "level"),
     [
@@ -71,7 +72,7 @@ def model_with_output_limit(
     ],
 )
 @pytest.mark.asyncio
-async def test_deepseek41_preserves_effort_with_its_thinking_toggle(effort, thinking, level):
+async def test_deepseek41_preserves_effort_with_its_thinking_toggle(model_id, effort, thinking, level):
     resources = Path(__file__).resolve().parents[3] / "resources"
     registry = ModelRegistry.load(resources)
     from core.providers.providers import ProviderRegistry
@@ -85,17 +86,18 @@ async def test_deepseek41_preserves_effort_with_its_thinking_toggle(effort, thin
     try:
         payload = adapter._build_payload(
             [{"role": "user", "content": "test"}],
-            "deepseek-flash",
+            model_id,
             thinking_effort=effort,
         )
         assert payload["thinking"] == {"type": thinking}
         assert payload.get("reasoning_effort") == level
-        assert adapter._model_protocol("deepseek-flash") == "openai"
-        assert adapter.reasoning_replay_policy("deepseek-flash") == "full_history"
-        assert adapter.reasoning_replay_fidelity("deepseek-flash") == "readable_only"
+        assert payload["model"] == model_id
+        assert adapter._model_protocol(model_id) == "openai"
+        assert adapter.reasoning_replay_policy(model_id) == "full_history"
+        assert adapter.reasoning_replay_fidelity(model_id) == "readable_only"
         intent = adapter.describe_reasoning_render(
             model_lookup=lookup,
-            model_id="deepseek-flash",
+            model_id=model_id,
             effort=effort,
         )
         assert intent.kind == (
