@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from functools import cache
 from typing import Any
 
 from core.settings import ALLOWED_THINKING_EFFORTS
 from core.subagents import SubAgentCoordinator, SubAgentPromptTarget
+from core.tools._argument_repair import normalize_call_arguments
+from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
     JsonObject,
     ToolDisplay,
@@ -17,15 +20,15 @@ from core.tools.tools import (
 SUBAGENT_TOOL_NAME = "subagent"
 
 SUBAGENT_TOOL_DESCRIPTION = (
-    "Run, inspect, or cancel owned Sub-Agent work. Top-level run actions return "
-    "immediately and deliver results automatically; run actions made by a Sub-Agent "
-    "wait for completion."
+    "Delegate a task to a Sub-Agent, or inspect/cancel owned work. Top-level delegation "
+    "returns immediately with automatic result delivery; delegation by a Sub-Agent "
+    "waits for completion."
 )
 
 SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
     "## Sub-Agents\n\n"
-    "A Sub-Agent is a delegated task running in its own persisted Session. It can use the "
-    "calling Agent or one of the additional Agents listed below. You remain "
+    "A Sub-Agent runs a delegated task in its own persisted Session, using your Agent "
+    "configuration unless you select an additional Agent below. You remain "
     "responsible for deciding what to delegate, integrating the results, and "
     "verifying the final outcome.\n\n"
     "The following additional Agents are available. Use each Agent id exactly as "
@@ -76,16 +79,13 @@ _SUBAGENT_CONTENT_PARAMETER: JsonObject = {
 }
 _SUBAGENT_DESCRIPTION_PARAMETER: JsonObject = {
     "type": "string",
-    "description": (
-        "Short 3–5 word title for the delegated task. Strongly preferred; omit only if the "
-        "first 48 characters of content clearly identify the task."
-    ),
+    "description": ("Short title for run. Omit to use the beginning of content."),
 }
 _SUBAGENT_AGENT_ID_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
     "description": (
-        "Target Agent for run. Omit to use the caller when starting a new Session; required "
+        "Target Agent for run. Omit for a copy of yourself when starting a new Session; required "
         "with session_id."
     ),
 }
@@ -120,7 +120,9 @@ SUBAGENT_TOOL_PARAMETERS: JsonObject = {
         "action": {
             "type": "string",
             "enum": ["run", "status", "cancel"],
-            "description": "Lifecycle action to perform.",
+            "description": (
+                "run delegates content (default); status inspects owned work; cancel stops it."
+            ),
         },
         "content": _SUBAGENT_CONTENT_PARAMETER,
         "description": _SUBAGENT_DESCRIPTION_PARAMETER,
@@ -130,8 +132,26 @@ SUBAGENT_TOOL_PARAMETERS: JsonObject = {
         "thinking_effort": _SUBAGENT_THINKING_PARAMETER,
         "id": _SUBAGENT_ID_PARAMETER,
     },
-    "required": ["action"],
+    "required": [],
 }
+
+
+@cache
+def _repair_contract():
+    return compile_tool_contract(
+        name=SUBAGENT_TOOL_NAME,
+        input_schema=SUBAGENT_TOOL_PARAMETERS,
+        require_closed_input=False,
+    )
+
+
+def _normalize_subagent_arguments(arguments: Any) -> Any:
+    return normalize_call_arguments(
+        _repair_contract(),
+        arguments,
+        enum_fields=("action", "thinking_effort"),
+        empty_as_omitted=("model", "thinking_effort"),
+    )
 
 
 def register_subagent_tools(
@@ -147,6 +167,7 @@ def register_subagent_tools(
         coordinator.spawn,
         execution_slot_required=False,
         open_input_schema=True,
+        argument_normalizer=_normalize_subagent_arguments,
         result_schema={"type": "object"},
         display=ToolDisplay(
             parts_builder=_subagent_display_parts,
@@ -161,7 +182,7 @@ def register_subagent_tools(
 
 
 def _subagent_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
-    action = arguments.get("action")
+    action = arguments.get("action", "run")
     if action not in {"run", "status", "cancel"}:
         return ()
     agent_id = arguments.get("agent_id")

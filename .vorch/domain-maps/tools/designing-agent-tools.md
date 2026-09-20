@@ -42,13 +42,13 @@ Use this decision order:
 1. **One behavior:** expose its arguments directly in one open flat object. A Tool named `channel_send` that only sends should accept delivery fields directly; `action: "send"` would repeat the Tool name.
 2. **One repeatable independent behavior:** use one required plural array of compact operation objects when batching materially reduces Agent roundtrips. State ordering semantics in the array description, preserve input order, keep per-operation options on each item, and report indexed outcomes.
 3. **One behavior with optional targeting or selection:** keep direct optional target fields and validate their dependencies. `status()` checks the current Session, `status(session_id)` checks another Session for the same Agent, and `status(agent_id, session_id)` changes the owner and Session; these are target variants, not actions.
-4. **Several genuinely different behaviors:** require one top-level `action` enum and place every action argument beside it. CRUD, lifecycle transitions, and read-versus-mutate behavior normally qualify. `memory(action, scope, content?, entry_id?)` and `history(action, ...)` are the reference shape.
+4. **Several genuinely different behaviors:** use one top-level `action` enum and place every action argument beside it. Require an explicit choice when omission cannot identify the intended behavior. A common action may have a documented omission default when its validated inputs unambiguously express that task, as `subagent(content)` delegates. CRUD and read-versus-mutate behavior normally require explicit actions; `memory(action, scope, content?, entry_id?)` and `history(action, ...)` are reference shapes.
 
 Do not expose `request.operation`, an operation-key object such as `{"create": {...}}`, a stringified nested request, or several mutually exclusive booleans that encode actions. Do not infer a behavioral mode from an arbitrary combination of optional fields when a required `action` would state it directly.
 
 Action Tool mechanics:
 
-- Represent an Action Tool as one flat object. Make `action` a required string enum whose description names every action in operational language.
+- Represent an Action Tool as one flat object. Its `action` string enum names the actions in operational language; make it required unless the common-action default above applies. Explicit invalid values never become omission.
 - Put all arguments used by any action in the same `properties` object.
 - Leave action-dependent arguments out of the root `required` list and state their action dependency briefly in their descriptions.
 - Do not represent actions with `oneOf`, `anyOf`, `allOf`, conditional schemas, or duplicated per-action object branches.
@@ -142,7 +142,7 @@ Example:
 
 ## Writing the Texts
 
-The model-facing texts decide whether a Tool gets chosen and called correctly; the handler behind them is secondary. Three surfaces share one craft: the description selects the Tool, the parameter descriptions steer the call, the result and error texts steer the loop.
+The model-facing texts guide Tool choice and invocation; the handler and returned evidence establish whether the intended effect actually occurred. The description selects the Tool, parameter descriptions steer the call, and result/error texts guide continuation. Verify these surfaces together.
 
 - Write for a fresh Agent with no project context: self-contained, only concepts the Agent can observe or act on. Explain the available behavior and the next valid action, and never name a hidden implementation category merely to explain an exclusion.
 - All three surfaces are runtime Agent-facing text. Follow `AGENTS.md` -> Communication with the user -> Present Agent-facing text changes for review presentation.
@@ -189,7 +189,7 @@ Before accepting a Tool definition, verify all of the following:
 - Every optional parameter tells the Model when to omit it; omission results appear only when they affect that decision.
 - No `additionalProperties` keyword is present in the model-facing schema.
 - No non-numeric JSON Schema `default` is present.
-- Every Action Tool has one flat object and only `action` is unconditionally required unless another field is truly required by every action.
+- Every Action Tool has one flat object. `action` is required unless it has a documented unambiguous default; other root-required fields must be required by every action.
 - Parameter descriptions contain no duplicated schema facts or runtime internals.
 - Every parameter still has enough description for the Model to use it correctly.
 - Cross-Tool guidance cannot point to an unavailable Tool.
