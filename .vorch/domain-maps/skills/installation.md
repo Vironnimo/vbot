@@ -1,0 +1,33 @@
+# Skill Installation
+
+Read when changing imports, source adapters, package validation or replacement. Domain-wide visibility and write-scope contracts remain in `../skills.md`.
+
+## Owner and surfaces
+
+- `SkillAuthoringService.install` owns imports alongside ordinary authoring. `_sources.py`, `_packages.py` and `_installation.py` are internal helpers for acquisition, bounded file collection and publication; do not add a separate installer service or write packages from an Accessor.
+- `server/rpc/skill_methods.py` validates `skill.install` scope/options before acquisition, runs blocking work on the bounded Skill worker pool, and uses the existing cancellation-safe mutation serialization. Global success reloads the pool; private success invalidates every scoped registry, including shared receivers. Installed/replaced outcomes emit a content-free log and resource event. Unchanged imports refresh registries without emitting a mutation event; previews do neither.
+- CLI `skill install <source> --scope own|global|agent:<id>` is an RPC client. `own` requires a local target and the Identity Run context injected by Bash (`VBOT_RUN_AGENT_ID` and Session id, no Config Agent Project id). An Identity Agent with a loaded Project still has its private home. Outside a Run, use an explicit existing Identity Agent or global scope. Project/bundled/Extension roots are not installation targets.
+- The bundled `vbot-cli` Skill routes installation requests to `references/skills.md`. No new always-visible Tool or registry-specific Tool is registered. Installation does not execute scripts, install dependencies, change allowlists/disable policy, or grant Tools and credentials.
+
+## Source selection
+
+- Directories and archive paths are server-local. The CLI resolves relative paths only for local targets; it never uploads client files to a remote server. Uploaded Chat attachments can be installed from their existing server file path.
+- ZIP (including `.skill`) and TAR (plain, gzip, bzip2, xz) are read by content. HTTP(S) download URLs need no registry. A sole archive wrapper directory is removed once. Arbitrary HTML catalog pages and isolated Markdown are rejected with guidance to use the repository/download link.
+- Public GitHub repository, tree and SKILL.md page links resolve a branch/tag/ref to an immutable commit, then download its codeload archive. `--ref` handles slash-containing branch names explicitly; conflicting URL revisions/paths reject. `skills.sh/<owner>/<repo>/<name>` selects the exact declared Skill name from that repository. ClawHub's `/<owner>/skills/<slug>` and older two-part links pass `ownerHandle` to metadata/download requests and verify the returned publisher. The public install resolver selects a hosted version or a pinned GitHub directory; an explicit version selects a hosted archive. Blocked resolver/download responses are not bypassed. No ambient credentials are sent; private sources must first be acquired through existing authorized access.
+- An explicit `--path` selects one directory. Otherwise discovery finds outermost SKILL.md files; nested example packages remain resources of their parent. Multiple candidates require a choice, exposed by `--dry-run`. The installed name comes from lenient metadata normalization, but must satisfy the authoring owner's trigger-safe directory rules and portable path rules. Original source bytes are not rewritten or stamped with a new author.
+- Repositories are downloaded and validated as a whole before package selection. Limits or unsupported files elsewhere in a repository can therefore reject it; use a prepared Skill directory/archive in that case. There is no automatic update scheduler, bulk install, authentication store or remote-page scraper.
+
+## Package and publication invariants
+
+- `_packages.py` bounds downloads to 64 MiB, ordinary file payloads to 128 MiB total and 32 MiB each, archive/directory entries to 10,000, and SKILL.md to 1 MiB. Expanded compressed TAR streams include headers/metadata in the 128 MiB bound before parsing. Network requests have bounded connect/read time, total elapsed checks and redirects; HTTPS downgrade redirects reject. Failures never automatically replay a download or mutation.
+- Reject traversal, absolute paths, Windows devices/alternate streams, unsafe separators, case/Unicode collisions, symlinks, junctions, hard links, special/sparse files and encrypted archives. Archive entries are read into bounded file records, never extracted with an archive library. Omit VCS/generated trees and incoming `.vbot-install.json`; preserve other ordinary file bytes, binary assets and executable status where the OS supports it.
+- `--dry-run` acquires/validates and computes a result but creates no target directories. Identical live package contents return `unchanged`. Different existing packages require `replace=true` (`--replace --yes` in CLI); replacement removes old files including local modifications. Non-package collisions never overwrite.
+- Prepare all files and the receipt in a hidden sibling transaction directory before publication. Under the author's write lock, move the old package aside and publish the prepared directory. Restore the old package on publication failure; if restore also fails, retain it at the recovery path in the error. Leftover transaction directories are not discoverable Skills. This is staged replacement with rollback, not a crash-recovery journal.
+- `.vbot-install.json` records version 1, source, selected path, content digest and installation time. Generic URL query/fragment credentials are omitted; resolved GitHub commits and ClawHub versions are retained. The receipt is internal, excluded from equality, resource listings and Tool reads; it is not an authority or permission grant. Existing scoped `skill delete` uninstalls packages.
+
+## Verification pointers
+
+- `tests/core/skills/test_installation.py`: complete files, metadata, selection, idempotence, overwrite, hostile archives, limits and rollback.
+- `tests/core/skills/test_sources.py`: HTTP bounds, redirects, GitHub, skills.sh, ClawHub and exact selection.
+- `tests/server/rpc/test_skill_methods.py`, `tests/cli/test_cli_skill.py`: scope validation, previews, confirmation, context and transport.
+- `tests/core/runtime/test_runtime_skills.py`, `tests/core/tools/test_skill.py`: live scope/allowlist/disable/sharing behavior and arbitrary UTF-8 support-file reads.

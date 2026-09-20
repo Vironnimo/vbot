@@ -122,6 +122,15 @@ def test_inspection_keeps_content_scope(tmp_path, tokens, scope):
     assert parse_args(guidance.commands[0][1:]).scope == scope
 
 
+def test_install_own_scope_recovery_does_not_copy_install_only_shorthand(tmp_path):
+    args = parse_args(["skill", "install", "https://example.org/package.skill", "--scope", "own"])
+    guidance = recovery_guidance(args, CommandResult(False, "test sentinel", instance(tmp_path)))
+    followup = parse_args(guidance.commands[0][1:])
+    assert (followup.area, followup.command) == ("skill", "inventory")
+    assert followup.host == "192.0.2.8"
+    assert "own" not in guidance.commands[0]
+
+
 def test_inspection_keeps_project_agent_address_and_resolved_target(tmp_path):
     args = parse_args(["session", "delete", "alice@project", "s", "--yes"])
     result = CommandResult(False, "test sentinel", instance(tmp_path))

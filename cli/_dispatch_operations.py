@@ -52,6 +52,7 @@ from cli.skill_management import (
     skill_create,
     skill_delete,
     skill_inspect,
+    skill_install,
     skill_inventory,
     skill_read,
     skill_remove_file,
@@ -202,6 +203,17 @@ def dispatch_skill_command(
         return list_skills_fn(instance)
     if args.command == "inventory":
         return inventory_skills_fn(instance)
+    if args.command == "install":
+        return skill_install(
+            instance,
+            args.source,
+            args.scope,
+            path=args.path,
+            ref=args.ref,
+            dry_run=args.dry_run,
+            replace=args.replace,
+            confirm=args.yes,
+        )
     if args.command == "inspect":
         return skill_inspect(instance, args.id)
     if args.command in {"disable", "enable"}:

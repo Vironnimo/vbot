@@ -140,6 +140,9 @@ def _inspection(args: argparse.Namespace) -> list[str] | None:
     if area == "prompt":
         return ["prompt", "list", "--scope", args.scope]
     if area == "skill" and getattr(args, "scope", None):
+        if args.scope == "own":
+            # This Run shorthand belongs to install, not the read command.
+            return ["skill", "inventory"]
         return ["skill", "read", "--scope", args.scope]
     if area == "extensions" and getattr(args, "selector", None) not in {
         None,

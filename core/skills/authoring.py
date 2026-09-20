@@ -17,6 +17,8 @@ from typing import Any, Literal
 
 import yaml
 
+from core.skills._installation import SkillInstallResult, install_package
+from core.skills._packages import PackageError
 from core.skills.requirements import (
     REQUIREMENTS_METADATA_KEY,
     RequirementParseError,
@@ -61,7 +63,7 @@ class SkillWriteResult:
 
 
 class SkillAuthoringService:
-    """One validated write core for Skill documents and UTF-8 support files."""
+    """One validated write core for complete Skill imports and authored text files."""
 
     def __init__(self, protected_roots: Sequence[Path] = ()) -> None:
         self._protected_roots = [self._resolve(root) for root in protected_roots]
@@ -101,6 +103,25 @@ class SkillAuthoringService:
                 path=skill_file,
                 warnings=validation.warnings,
             )
+
+    def install(
+        self,
+        target_root: Path,
+        source: str,
+        *,
+        path: str | None = None,
+        ref: str | None = None,
+        replace: bool = False,
+        dry_run: bool = False,
+    ) -> SkillInstallResult:
+        """Install one complete package without executing any of its contents."""
+        self._reject_protected(self._resolve(target_root))
+        try:
+            return install_package(
+                self, target_root, source, path=path, ref=ref, replace=replace, dry_run=dry_run
+            )
+        except PackageError as error:
+            raise SkillAuthoringError(str(error)) from error
 
     def edit(
         self,
@@ -348,7 +369,7 @@ class SkillAuthoringService:
 def normalize_skill_file_path(relative_path: str) -> str:
     """Normalize one skill-package-relative path or raise ``SkillAuthoringError``.
 
-    The single shared rule for addressing a file inside a skill package:
+    The authoring rule for addressing a file inside a skill package:
     ``SKILL.md`` passes through unchanged; every other path must be relative
     and live under one of the resource directories (``scripts/``,
     ``references/``, ``assets/``). Rejects absolute paths, empty segments,
