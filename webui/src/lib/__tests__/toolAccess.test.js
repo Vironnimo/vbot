@@ -127,6 +127,31 @@ describe('Tool Access Policy UI helpers', () => {
     });
   });
 
+  it('enables only the requested automatic Tool after deselecting everything', () => {
+    const next = setToolAccessPreference(
+      { mode: 'none', granted: ['computer'] },
+      catalog[4],
+      true,
+      catalog,
+    );
+    expect(next).toEqual({
+      mode: 'selected',
+      allowed: [],
+      denied: ['session_read'],
+    });
+    expect(toolAccessPreferenceEnabled(next, catalog[4])).toBe(true);
+    expect(toolAccessPreferenceEnabled(next, catalog[3])).toBe(false);
+    expect(toolAccessPreferenceEnabled(next, catalog[0])).toBe(false);
+  });
+
+  it('keeps no access when enabling a Tool outside the Project ceiling', () => {
+    expect(
+      setToolAccessPreference({ mode: 'none' }, catalog[1], true, catalog, [
+        'read',
+      ]),
+    ).toEqual({ mode: 'none' });
+  });
+
   it('allows automatic Tools to be blocked and restored but not explicitly enabled', () => {
     const blocked = setToolAccessState(
       { mode: 'selected', allowed: ['session_search'] },

@@ -138,9 +138,7 @@ function expectSectionOrder(titles) {
   ).map((node) => {
     const clone = node.cloneNode(true);
     clone.querySelectorAll('.info-hint').forEach((dot) => dot.remove());
-    clone
-      .querySelectorAll('.projects-section-refresh')
-      .forEach((button) => button.remove());
+    clone.querySelectorAll('button').forEach((button) => button.remove());
     return clone.textContent.trim();
   });
   expect(rendered).toEqual(titles);

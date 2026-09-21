@@ -169,7 +169,23 @@ export function setToolAccessPreference(
   catalog = [],
   ceiling = null,
 ) {
-  const policy = normalizeToolAccess(value);
+  let policy = normalizeToolAccess(value);
+  if (enabled && policy.mode === TOOL_ACCESS_MODE_NONE) {
+    const permitted = ceilingNames(ceiling);
+    if (!tool?.name || (permitted && !permitted.has(tool.name))) return policy;
+    // Starting from no access must not silently reactivate unrelated automatic
+    // Tools or dormant grants when the user enables one checkbox.
+    policy = normalizeToolAccess({
+      mode: TOOL_ACCESS_MODE_SELECTED,
+      allowed: [],
+      denied: [
+        ...(policy.denied ?? []),
+        ...catalog
+          .filter((entry) => !toolIsConfigurable(entry))
+          .map((entry) => entry.name),
+      ],
+    });
+  }
   if (enabled) {
     return setToolAccessState(
       policy,

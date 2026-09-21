@@ -60,8 +60,17 @@ describe('ProjectsView', () => {
     await waitForCondition(() =>
       document.querySelector('[data-testid="project-team-toggle-builder"]'),
     );
-    // Description one-liner and the effective model summary render on the row.
-    expect(document.body.textContent).toContain('Builds things');
+    const header = buttonByTestId('project-team-toggle-builder');
+    expect(header.textContent).not.toContain('Builds things');
+    expect(header.textContent).toContain('openai/gpt-mini');
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    header.focus();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[role="tooltip"]').textContent).toContain(
+        'Builds things',
+      );
+    });
+    header.blur();
 
     buttonByTestId('project-team-toggle-builder').click();
     flushSync();

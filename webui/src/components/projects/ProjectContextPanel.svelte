@@ -5,11 +5,7 @@
   import EmptyState from '../ui/EmptyState.svelte';
   import TextField from '../ui/TextField.svelte';
   import { tick } from 'svelte';
-  let {
-    projectsState = $bindable(),
-    projectsController,
-    activeDetail,
-  } = $props();
+  let { projectsState = $bindable(), projectsController } = $props();
 
   let autoLoadDrag = $state(null);
 
@@ -119,17 +115,10 @@
   }
 </script>
 
-<div
-  class="management-topic"
-  role="tabpanel"
-  id="project-detail-panel-context"
-  aria-labelledby="project-detail-tab-context"
-  hidden={activeDetail !== 'context'}
-  tabindex="0"
->
+<div class="management-topic" id="project-detail-panel-context">
   <!-- Section 2: Auto-load files -->
   <div class="detail-section">
-    <div class="detail-section-title">
+    <h3 class="detail-section-title">
       {t('projects.detail.sectionAutoLoad', 'Auto-load files')}
       <InfoHint
         text={t(
@@ -137,7 +126,7 @@
           'These files are embedded into the system prompt of every session in this project — the agent always sees their full content, with higher weight than normal chat history, and they are never dropped or summarized by context compaction.\n\nPaths are relative to the project folder (absolute paths also work), files load in list order, and missing files are skipped. When an outside Identity Agent explicitly loads the project with the project Tool, the same files are returned as Project Context.',
         )}
       />
-    </div>
+    </h3>
     <div class="detail-section-body">
       <div class="projects-field">
         {#if projectsState.editForm.auto_load.length > 0}

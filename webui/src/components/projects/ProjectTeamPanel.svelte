@@ -30,7 +30,7 @@
   let {
     projectsState = $bindable(),
     projectsController,
-    activeDetail,
+    scanAction,
     findingsExpanded = $bindable(false),
     trackModelDropdownOpen,
     updateToolAccessOverride,
@@ -214,19 +214,13 @@
   }
 </script>
 
-<div
-  class="management-topic"
-  role="tabpanel"
-  id="project-detail-panel-team"
-  aria-labelledby="project-detail-tab-team"
-  hidden={activeDetail !== 'team'}
-  tabindex="0"
->
+<div class="management-topic" id="project-detail-panel-team">
   <!-- Section 3: Team -->
   <div class="detail-section">
-    <div class="detail-section-title">
+    <h3 class="detail-section-title">
       <span class="projects-section-title-copy">
         {t('projects.detail.sectionTeam', 'Team')}
+        {@render scanAction?.()}
         <InfoHint
           text={t(
             'projects.detail.teamInfo',
@@ -234,7 +228,7 @@
           )}
         />
       </span>
-    </div>
+    </h3>
     <div class="detail-section-body">
       {#if projectsState.activeReport && !projectsState.activeReport.clean}
         <div class="projects-field">
@@ -321,6 +315,9 @@
                 class="projects-team-header"
                 data-testid={`project-team-toggle-${member.agent_id}`}
                 aria-expanded={expanded}
+                use:tooltip={[member.description, summary.value]
+                  .filter(Boolean)
+                  .join('\n\n')}
                 onclick={() => toggleMember(member.agent_id)}
               >
                 <svg
@@ -333,17 +330,10 @@
                 >
                   <path d="M4 2l4 4-4 4" />
                 </svg>
-                <span class="projects-team-headline">
-                  <span class="projects-team-name">
-                    {member.display_name}
-                  </span>
-                  {#if member.description}
-                    <span class="projects-team-description">
-                      {member.description}
-                    </span>
-                  {/if}
+                <span class="projects-team-name">
+                  {member.display_name}
                 </span>
-                <span class="projects-team-summary" use:tooltip={summary.value}>
+                <span class="projects-team-summary">
                   {summary.value}
                 </span>
               </button>

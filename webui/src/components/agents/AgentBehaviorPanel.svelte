@@ -28,7 +28,6 @@
     memoriesRefreshToken,
     formValues = $bindable(),
     formMode,
-    activeDetail,
     handleCustomPromptToggle,
     navigateToAgentPrompt,
     showAgentToast,
@@ -375,60 +374,11 @@
   });
 </script>
 
-<div
-  class="management-topic"
-  role="tabpanel"
-  id="agent-detail-panel-behavior"
-  aria-labelledby="agent-detail-tab-behavior"
-  hidden={activeDetail !== 'behavior'}
-  tabindex="0"
->
-  <div class="detail-group agents-view__compaction-group">
-    <div class="detail-group-title">
-      {t('agents.detail.compaction', 'Compaction Policy')}
-
-      <Button
-        variant="tertiary"
-        onClick={() => onNavigateToSettingsPanel('compaction')}
-        >{t('agents.shared.title', 'Shared defaults')}</Button
-      >
-    </div>
-    <div class="agents-view__prompt-toggle-row">
-      <div>
-        <div class="agents-view__prompt-toggle-label">
-          {formValues.compaction_policy
-            ? t('compaction.scope.agentOwn', 'Use an Agent Policy')
-            : t(
-                'compaction.scope.inheritGlobal',
-                'Inherit the global Policy live',
-              )}
-        </div>
-        <div class="agents-view__prompt-toggle-desc">
-          {t(
-            'compaction.scope.agentDescription',
-            'Inherited changes apply to this Agent’s existing Sessions unless a Session has its own override.',
-          )}
-        </div>
-      </div>
-      <Toggle
-        checked={formValues.compaction_policy !== null}
-        ariaLabel={t('compaction.scope.agentOwn', 'Use an Agent Policy')}
-        onChange={setOwnCompactionPolicy}
-      />
-    </div>
-    {#if formValues.compaction_policy}
-      <CompactionPolicyEditor
-        value={formValues.compaction_policy}
-        onChange={(next) => (formValues.compaction_policy = next)}
-        idPrefix="agent-compaction"
-      />
-    {/if}
-  </div>
-
+<div class="management-topic" id="agent-detail-panel-behavior">
+  <h3 class="management-section-heading">
+    {t('agents.contextMemory', 'Context & Memory')}
+  </h3>
   <div class="detail-group agents-view__prompt-group">
-    <div class="detail-group-title">
-      {t('agents.detail.systemPrompt', 'System Prompt')}
-    </div>
     <div class="agents-view__prompt-toggle-row">
       <span class="agents-view__prompt-toggle-label">
         {t('agents.form.customSystemPrompt', 'Custom system prompt')}
@@ -467,9 +417,6 @@
   </div>
 
   <div class="detail-group agents-view__memory-group">
-    <div class="detail-group-title">
-      {t('agents.detail.memory', 'Memory')}
-    </div>
     <div class="agents-view__prompt-memory-row">
       <span class="agents-view__prompt-toggle-label">
         {t('agents.form.memoryPromptMode', 'Memory')}
@@ -687,6 +634,40 @@
           </div>
         {/if}
       </div>
+    {/if}
+  </div>
+  <div class="detail-group agents-view__compaction-group">
+    <div class="agents-view__prompt-toggle-row">
+      <div>
+        <div class="agents-view__prompt-toggle-label">
+          {t('agents.customCompaction', 'Custom Compaction Policy')}
+        </div>
+        <div class="agents-view__prompt-toggle-desc">
+          {t(
+            'agents.customCompactionHelp',
+            'Turn on to customize how this Agent condenses long conversations.',
+          )}
+        </div>
+      </div>
+      <div class="agents-view__prompt-toggle-controls">
+        <Button
+          variant="tertiary"
+          onClick={() => onNavigateToSettingsPanel('compaction')}
+          >{t('agents.shared.title', 'Shared defaults')}</Button
+        >
+        <Toggle
+          checked={formValues.compaction_policy !== null}
+          ariaLabel={t('compaction.scope.agentOwn', 'Use an Agent Policy')}
+          onChange={setOwnCompactionPolicy}
+        />
+      </div>
+    </div>
+    {#if formValues.compaction_policy}
+      <CompactionPolicyEditor
+        value={formValues.compaction_policy}
+        onChange={(next) => (formValues.compaction_policy = next)}
+        idPrefix="agent-compaction"
+      />
     {/if}
   </div>
 </div>
