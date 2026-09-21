@@ -52,22 +52,6 @@ export async function cleanupSettingsViewHarness(mountedComponent) {
 // Topic navigation keeps editors mounted; helpers scope repeated control labels
 // to the active topic just as the visible interface does.
 export async function openSettingsSection(navLabel, sectionId) {
-  const category = {
-    providers: 'Connections',
-    channels: 'Connections',
-    extensions: 'Connections',
-    specialized_models: 'Tools & Media',
-    voice: 'Tools & Media',
-    web_search: 'Tools & Media',
-    subagents: 'Tools & Media',
-    session_titles: 'Sessions & Memory',
-    recall: 'Sessions & Memory',
-    reflection: 'Sessions & Memory',
-    general: 'System',
-    debug: 'System',
-    appearance: 'General',
-    preferences: 'General',
-  }[sectionId];
   if (sectionId === 'defaults' || sectionId === 'compaction') {
     await waitForCondition(() => buttonByText('Shared defaults'));
     buttonByText('Shared defaults').click();
@@ -76,14 +60,13 @@ export async function openSettingsSection(navLabel, sectionId) {
       document.querySelector('#settings-defaults-model'),
     );
   } else {
-    await waitForCondition(() => buttonByText(category));
-    buttonByText(category).click();
-    flushSync();
-    await waitForCondition(() =>
-      document.querySelector(`#settings-section-${sectionId}`),
+    await waitForCondition(() => buttonByText(navLabel));
+    buttonByText(navLabel).click();
+    await waitForCondition(
+      () =>
+        document.querySelector('[data-settings-section="' + sectionId + '"]')
+          ?.hidden === false,
     );
-    const heading = document.querySelector(`#settings-section-${sectionId}`);
-    if (heading.getAttribute('aria-expanded') !== 'true') heading.click();
   }
   flushSync();
   activeSection = document.body.querySelector(

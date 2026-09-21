@@ -242,9 +242,7 @@ describe('SettingsView', () => {
     expect(buttonByText('Connection')).toBeTruthy();
     await waitForCondition(
       () =>
-        buttonByText('Tools & Media')?.classList.contains(
-          'snav-item--active',
-        ) === true,
+        buttonByText('Voice')?.classList.contains('snav-item--active') === true,
     );
 
     // Navigating elsewhere moves the index highlight; the Voice section stays
@@ -254,12 +252,12 @@ describe('SettingsView', () => {
 
     await waitForCondition(
       () =>
-        buttonByText('System')?.classList.contains('snav-item--active') ===
+        buttonByText('Server info')?.classList.contains('snav-item--active') ===
         true,
     );
-    expect(
-      buttonByText('Tools & Media')?.classList.contains('snav-item--active'),
-    ).toBe(false);
+    expect(buttonByText('Voice')?.classList.contains('snav-item--active')).toBe(
+      false,
+    );
     expect(
       document.querySelector(
         '[role="switch"][aria-label="Enable wakeword listening"]',

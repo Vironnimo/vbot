@@ -400,6 +400,57 @@ describe('App', () => {
     expect(document.querySelector('.chat-view__state-banner')).toBeNull();
   });
 
+  it('retains Settings input after a failed topic change and retries the same navigation', async () => {
+    let failSave = true;
+    const settingsRpc = createSettingsRpcMock();
+    rpcMock.mockImplementation((method, params) =>
+      method === 'settings.update' && failSave
+        ? Promise.reject(new Error('save unavailable'))
+        : settingsRpc(method, params),
+    );
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+    sidebarNavButton('Settings').click();
+    await waitForCondition(() =>
+      expect(settingsPanelButton('Sub-Agents')).toBeTruthy(),
+    );
+    settingsPanelButton('Sub-Agents').click();
+    await waitForCondition(() =>
+      expect(
+        document.querySelector('[data-settings-section="subagents"]').hidden,
+      ).toBe(false),
+    );
+    const input = document.querySelector(
+      'input[aria-label="Max sub-agent depth"]',
+    );
+    input.value = '6';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    settingsPanelButton('Appearance').click();
+    await waitForCondition(() =>
+      expect(document.querySelector('[role="dialog"]')).toBeTruthy(),
+    );
+    expect(
+      document.querySelector('[data-settings-section="subagents"]').hidden,
+    ).toBe(false);
+    expect(input.value).toBe('6');
+    failSave = false;
+    Array.from(
+      document.querySelector('[role="dialog"]').querySelectorAll('button'),
+    )
+      .find((button) => button.textContent.trim() === 'Retry')
+      .click();
+    await waitForCondition(() =>
+      expect(
+        document.querySelector('[data-settings-section="appearance"]').hidden,
+      ).toBe(false),
+    );
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(rpcMock).toHaveBeenCalledWith('settings.update', {
+      subagents: expect.objectContaining({ max_subagent_depth: 6 }),
+    });
+  });
+
   it('restores the Settings topic and its reading position after switching to another tab', async () => {
     rpcMock.mockImplementation(createSettingsRpcMock());
     mountedComponent = mount(App, { target: document.body });
