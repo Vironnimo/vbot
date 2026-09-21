@@ -86,8 +86,8 @@ describe('Swarm refresh under load', () => {
     expect(refresh).toHaveBeenCalledTimes(2);
   });
 
-  it.each(['Wiki', 'Decisions'])(
-    'opens %s with nine Agents without waiting for hidden reports',
+  it.each(['Wiki'])(
+    'opens %s with twelve Agents without waiting for hidden reports',
     async (tab) => {
       const { bridge, operation } = createBridge();
       const original = operation.getMockImplementation();
@@ -98,7 +98,7 @@ describe('Swarm refresh under load', () => {
           return Promise.resolve({
             swarm: {
               ...structuredClone(swarm),
-              participants: Array.from({ length: 9 }, (_, index) => ({
+              participants: Array.from({ length: 12 }, (_, index) => ({
                 ...swarm.participants[0],
                 id: `peer-${index}`,
                 display_name: `Peer ${index}`,
@@ -125,14 +125,11 @@ describe('Swarm refresh under load', () => {
       for (let i = 0; i < 90; i++) bridge.invalidate();
       await new Promise((resolve) => setTimeout(resolve, 150));
       expect(listCalls()).toBe(1);
-      const entry =
-        method === 'wiki'
-          ? { page_id: 'wpg-ready', title: 'Loaded under load', revision: 1 }
-          : {
-              question_id: 'dec-ready',
-              title: 'Loaded under load',
-              revision: 1,
-            };
+      const entry = {
+        page_id: 'wpg-ready',
+        title: 'Loaded under load',
+        revision: 1,
+      };
       finishList({ entries: [entry] });
       await vi.waitFor(() =>
         expect(document.body.textContent).toContain('Loaded under load'),

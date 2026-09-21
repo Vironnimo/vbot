@@ -111,6 +111,29 @@ async function openWiki(fixture) {
 }
 
 describe('Swarm Wiki', () => {
+  it('replaces the initial loading state with a list failure', async () => {
+    const fixture = wikiBridge();
+    const original = fixture.operation.getMockImplementation();
+    fixture.operation.mockImplementation((name, args) => {
+      if (name === 'wiki' && args.action === 'list')
+        return Promise.reject(new Error('Wiki unavailable'));
+      return original(name, args);
+    });
+    await render(fixture.bridge);
+    button('Investigate').click();
+    await vi.waitFor(() => expect(button('Wiki')).toBeDefined());
+    button('Wiki').click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.wiki-panel').textContent).toContain(
+        'Wiki unavailable',
+      ),
+    );
+    expect(document.querySelector('.wiki-panel [role="status"]')).toBeNull();
+    expect(document.querySelector('.wiki-panel').textContent).not.toContain(
+      'No pages found.',
+    );
+  });
+
   it('opens internal Board links, displays the pinned request and restores a deleted page', async () => {
     const fixture = wikiBridge();
     await render(fixture.bridge);
@@ -217,4 +240,80 @@ describe('Swarm Wiki', () => {
       ),
     );
   });
+});
+
+it('retains Wiki entries and the open page across tabs while refreshing quietly', async () => {
+  const fixture = wikiBridge();
+  await openWiki(fixture);
+  const reads = () =>
+    fixture.operation.mock.calls.filter(
+      ([name, args]) => name === 'wiki' && args.action === 'read',
+    ).length;
+  const count = reads();
+  fixture.bridge.invalidate();
+  await new Promise((resolve) => setTimeout(resolve, 160));
+  expect(reads()).toBe(count);
+  button('Board').click();
+  await tick();
+  expect(document.querySelector('.wiki-panel')).toBeNull();
+  const calls = fixture.operation.mock.calls.filter(
+    ([name]) => name === 'wiki',
+  ).length;
+  fixture.bridge.invalidate();
+  await new Promise((resolve) => setTimeout(resolve, 160));
+  expect(
+    fixture.operation.mock.calls.filter(([name]) => name === 'wiki'),
+  ).toHaveLength(calls);
+  const original = fixture.operation.getMockImplementation();
+  let finishList;
+  fixture.operation.mockImplementation((name, args) =>
+    name === 'wiki' && args.action === 'list'
+      ? new Promise((resolve) => {
+          finishList = resolve;
+        })
+      : original(name, args),
+  );
+  button('Wiki').click();
+  await tick();
+  expect(button('Shared research')).toBeDefined();
+  expect(document.querySelector('.wiki-content').textContent).toContain(
+    'Original evidence',
+  );
+  expect(document.querySelector('.wiki-panel [role="status"]')).toBeNull();
+  await vi.waitFor(() => expect(finishList).toBeTypeOf('function'));
+  fixture.peerEdit();
+  finishList({
+    entries: [{ page_id: 'wpg-one', title: 'Shared research', revision: 2 }],
+  });
+  await vi.waitFor(() =>
+    expect(document.querySelector('.wiki-content').textContent).toContain(
+      'Peer evidence',
+    ),
+  );
+  expect(reads()).toBe(count + 1);
+});
+
+it('does not replace a Wiki draft with an in-flight background page read', async () => {
+  const fixture = wikiBridge();
+  await openWiki(fixture);
+  fixture.peerEdit();
+  const original = fixture.operation.getMockImplementation();
+  let finishRead;
+  fixture.operation.mockImplementation((name, args) =>
+    name === 'wiki' && args.action === 'read'
+      ? new Promise((resolve) => {
+          finishRead = async () => resolve(await original(name, args));
+        })
+      : original(name, args),
+  );
+  fixture.bridge.invalidate();
+  await vi.waitFor(() => expect(finishRead).toBeTypeOf('function'));
+  button('Edit').click();
+  await tick();
+  fill('wiki-content', 'My draft remains');
+  await finishRead();
+  await tick();
+  expect(document.getElementById('wiki-content').value).toBe(
+    'My draft remains',
+  );
 });

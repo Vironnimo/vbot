@@ -506,13 +506,7 @@ describe('SwarmPage', () => {
 it('shows and saves each private Swarm Tool independently', async () => {
   const { bridge, operation } = createBridge();
   const original = operation.getMockImplementation();
-  const names = [
-    'swarm_board',
-    'swarm_inbox',
-    'swarm_state',
-    'swarm_wiki',
-    'swarm_decisions',
-  ];
+  const names = ['swarm_board', 'swarm_inbox', 'swarm_state', 'swarm_wiki'];
   operation.mockImplementation(async (name, args) => {
     const result = await original(name, args);
     if (name === 'catalog')
@@ -535,7 +529,7 @@ it('shows and saves each private Swarm Tool independently', async () => {
     expect(
       document.querySelector(`[aria-label="Turn off ${name}"]`),
     ).not.toBeNull();
-  document.querySelector('[aria-label="Turn off swarm_decisions"]').click();
+  document.querySelector('[aria-label="Turn off swarm_state"]').click();
   await tick();
   document.querySelector('[aria-label="Turn off swarm_board"]').click();
   await tick();
@@ -546,7 +540,7 @@ it('shows and saves each private Swarm Tool independently', async () => {
       expect.objectContaining({
         profile: expect.objectContaining({
           tool_access: expect.objectContaining({
-            denied: ['swarm_decisions', 'swarm_board'],
+            denied: ['swarm_state', 'swarm_board'],
           }),
         }),
       }),

@@ -159,7 +159,7 @@ def _initial_message(swarm: Json) -> str:
     guidance = (
         "Use your available shared collaboration Tools to discuss and examine the request "
         "with your peers before implementation. Decide together when you are ready to work."
-        if any(name not in denied for name in ("swarm_wiki", "swarm_decisions"))
+        if "swarm_wiki" not in denied
         else (
             "Work toward the request with the Tools available to you. Other "
             "participants may be working in parallel."

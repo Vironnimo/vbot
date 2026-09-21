@@ -434,10 +434,6 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                 from scripts.provider_probe.swarm_wiki_cases import wiki_cases
 
                 cases = await wiki_cases(store, sid, pid)
-            if tool_name == "swarm_decisions":
-                from scripts.provider_probe.swarm_decision_cases import decision_cases
-
-                cases = await decision_cases(store, sid, pid)
             if args.swarm_case in {"workflow", "unassisted"}:
                 return await _probe_swarm_workflow(
                     adapter, args, extensions, registry, service, sessions, context, binding, peer
@@ -514,12 +510,6 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                         from scripts.provider_probe.swarm_wiki_cases import verify_wiki_effect
 
                         durable = await verify_wiki_effect(store, sid, pid, name, result)
-                    if tool_name == "swarm_decisions":
-                        from scripts.provider_probe.swarm_decision_cases import (
-                            verify_decision_effect,
-                        )
-
-                        durable = await verify_decision_effect(store, sid, pid, name, result)
                     receipts = call_context._delivery_receipts
                     if success and receipts:
                         assistant = ChatMessage.assistant(
@@ -595,7 +585,7 @@ async def _probe_swarm_workflow(
     from core.chat.wire_shaping import _notes_to_request_messages
     from resources.extensions.swarm.agent_text import INITIAL_MESSAGE, RESUME_REMINDER
 
-    names = ("swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki", "swarm_decisions")
+    names = ("swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki")
     definitions = registry.provider_definitions(names, session_grants=names)
     if {tool["name"] for tool in definitions} != set(names):
         raise RuntimeError("Fresh-participant evaluation requires the complete production Tool set")

@@ -370,7 +370,6 @@ async def test_forty_participants_become_idle_without_closing_the_swarm(lifecycl
         "swarm_inbox",
         "swarm_state",
         "swarm_wiki",
-        "swarm_decisions",
     }
     for run_id in run_ids:
         assert (
@@ -944,15 +943,15 @@ async def test_old_stop_retry_preserves_a_new_resume(lifecycle, tmp_path):
 @pytest.mark.parametrize(
     "denied",
     [
-        ["swarm_decisions"],
+        ["swarm_state"],
         ["swarm_board", "swarm_inbox"],
-        ["swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki", "swarm_decisions"],
+        ["swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki"],
     ],
 )
 async def test_disabled_swarm_tools_stay_unavailable_on_start_and_resume(
     lifecycle, tmp_path, denied
 ):
-    names = {"swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki", "swarm_decisions"}
+    names = {"swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki"}
     profile = await lifecycle.service.store.save_profile(
         {
             "schema_version": 1,

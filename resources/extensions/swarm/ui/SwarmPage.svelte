@@ -29,9 +29,7 @@
   import { createSwarmPageActivity } from './pageActivity.svelte.js';
   import './swarmPage.css';
   import WikiPanel from './WikiPanel.svelte';
-  import DecisionsPanel from './DecisionsPanel.svelte';
   let wikiPanel = $state(null);
-  let decisionsPanel = $state(null);
 
   let { bridgeClient = null } = $props();
   const model = createSwarmPageModel({
@@ -40,9 +38,6 @@
     },
     get wiki() {
       return wikiPanel;
-    },
-    get decisions() {
-      return decisionsPanel;
     },
     get activity() {
       return activity;
@@ -332,6 +327,13 @@
               )}
             </Banner>
           {/if}
+          {#key model.selectedSwarm.id}<WikiPanel
+              bind:this={wikiPanel}
+              swarmId={model.selectedSwarm.id}
+              client={model.client}
+              contentLinks={model.contentLinks}
+              active={model.activeTab === 'wiki'}
+            />{/key}
           {#if model.activeTab === 'board'}<section
               class="panel board-panel"
               role="tabpanel"
@@ -492,20 +494,6 @@
                     >{t('swarm.board.more', 'Load earlier messages')}</Button
                   >{/if}{/if}
             </section>
-          {:else if model.activeTab === 'decisions'}
-            {#key model.selectedSwarm.id}<DecisionsPanel
-                bind:this={decisionsPanel}
-                swarmId={model.selectedSwarm.id}
-                client={model.client}
-                contentLinks={model.contentLinks}
-              />{/key}
-          {:else if model.activeTab === 'wiki'}
-            {#key model.selectedSwarm.id}<WikiPanel
-                bind:this={wikiPanel}
-                swarmId={model.selectedSwarm.id}
-                client={model.client}
-                contentLinks={model.contentLinks}
-              />{/key}
           {:else if model.activeTab === 'participants'}<section
               class="panel"
               role="tabpanel"
@@ -624,9 +612,6 @@
                 <dt>{t('swarm.id', 'Swarm ID')}</dt>
                 <dd>{model.selectedSwarm.id}</dd>
               </dl>
-              {#if model.usageLoading}<p role="status">
-                  {t('swarm.usage.loading', 'Updating usage...')}
-                </p>{/if}
               {#if model.usage?.usage}<dl class="usage-summary">
                   <div>
                     <dt>
@@ -835,7 +820,7 @@
         <p>
           {t(
             'swarm.deleteRun.body',
-            'Permanently delete this Run, its Board, Wiki, decisions and participant Sessions? The Swarm will be kept. This cannot be undone.',
+            'Permanently delete this Run, its Board, Wiki and participant Sessions? The Swarm will be kept. This cannot be undone.',
           )}
         </p>
         {#if model.deleteError}<Banner variant="error"

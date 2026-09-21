@@ -188,7 +188,7 @@ describe('SwarmPage', () => {
     await vi.waitFor(() => expect(button('Usage')).toBeDefined());
     button('Usage').click();
     await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
-    expect(document.querySelector('[role="status"]')).not.toBeNull();
+    expect(document.querySelector('[role="status"]')).toBeNull();
     button('Board').click();
     await tick();
     button('Usage').click();
@@ -488,4 +488,41 @@ describe('Swarm failure feedback', () => {
       Object.assign(swarm.participants[0], previous);
     }
   });
+});
+
+it('refreshes Usage without inserting progress text or hiding the last report', async () => {
+  const { bridge, operation } = createBridge();
+  await render(bridge);
+  button('Investigate').click();
+  await vi.waitFor(() => expect(button('Usage')).toBeDefined());
+  button('Usage').click();
+  await vi.waitFor(() =>
+    expect(document.querySelector('.usage-summary')).not.toBeNull(),
+  );
+  const summary = document.querySelector('.usage-summary');
+  const before = summary.textContent;
+  const original = operation.getMockImplementation();
+  let finishUsage;
+  operation.mockImplementation((name, args) =>
+    name === 'swarms.usage'
+      ? new Promise((resolve) => {
+          finishUsage = resolve;
+        })
+      : original(name, args),
+  );
+  bridge.invalidate();
+  await vi.waitFor(() => expect(finishUsage).toBeTypeOf('function'));
+  expect(document.querySelector('.usage-summary')).toBe(summary);
+  expect(summary.textContent).toBe(before);
+  expect(
+    summary.closest('[role="tabpanel"]').querySelector('[role="status"]'),
+  ).toBeNull();
+  finishUsage({
+    usage: {
+      usage: { totals: { input_tokens: 987654 }, models: [] },
+      tools: { total_calls: 42 },
+      participants: [],
+    },
+  });
+  await vi.waitFor(() => expect(summary.textContent).not.toBe(before));
 });
