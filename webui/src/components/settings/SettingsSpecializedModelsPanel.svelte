@@ -606,6 +606,93 @@
   </div>
 {/if}
 
+{#snippet optionField(taskType, field)}
+  {@const jsonError =
+    field.type === JSON_OPTION_TYPE ? taskModelJsonError(taskType, field) : ''}
+  {@const fieldControlId = `task-model-${taskType}-${field.name}`}
+  <FormField
+    controlId={fieldControlId}
+    full={field.type === JSON_OPTION_TYPE}
+    label={field.label}
+    help={field.description ?? ''}
+    error={jsonError
+      ? t('settings.specializedModels.jsonInvalid', 'Invalid JSON: {error}', {
+          error: jsonError,
+        })
+      : ''}
+  >
+    {#snippet children(formField)}
+      {#if field.type === 'select'}
+        <Dropdown
+          id={formField.controlId}
+          value={taskModelOptionValue(taskType, field)}
+          options={field.options}
+          ariaLabel={field.label}
+          ariaDescribedby={formField.describedBy}
+          triggerClass="settings-view__dropdown"
+          listClass="settings-view__thinking-list"
+          onValueChange={(value) => setTaskModelOption(taskType, field, value)}
+        />
+      {:else if field.type === 'textarea'}
+        <TextArea
+          id={formField.controlId}
+          rows="3"
+          aria-describedby={formField.describedBy}
+          value={taskModelOptionValue(taskType, field)}
+          onInput={(_value, event) =>
+            handleTaskModelOptionChange(taskType, field, event)}
+        />
+      {:else if field.type === JSON_OPTION_TYPE}
+        <TextArea
+          id={formField.controlId}
+          code
+          invalid={formField.invalid}
+          rows="4"
+          spellcheck="false"
+          autocapitalize="off"
+          autocorrect="off"
+          aria-describedby={formField.describedBy}
+          placeholder={t(
+            'settings.specializedModels.jsonPlaceholder',
+            '[ … ] or { … }',
+          )}
+          value={taskModelOptionValue(taskType, field)}
+          onInput={(_value, event) =>
+            handleTaskModelOptionChange(taskType, field, event)}
+        />
+      {:else if field.type === 'number'}
+        <TextField
+          id={formField.controlId}
+          type="number"
+          aria-describedby={formField.describedBy}
+          min={field.min ?? undefined}
+          max={field.max ?? undefined}
+          step={field.step ?? 'any'}
+          value={taskModelOptionValue(taskType, field)}
+          onInput={(_next, event) =>
+            handleTaskModelOptionChange(taskType, field, event)}
+        />
+      {:else if field.type === 'boolean'}
+        <Toggle
+          id={formField.controlId}
+          checked={taskModelOptionValue(taskType, field) === true}
+          ariaLabel={field.label}
+          aria-describedby={formField.describedBy}
+          onChange={(next) => setTaskModelOption(taskType, field, next)}
+        />
+      {:else}
+        <TextField
+          id={formField.controlId}
+          value={taskModelOptionValue(taskType, field)}
+          aria-describedby={formField.describedBy}
+          onInput={(_next, event) =>
+            handleTaskModelOptionChange(taskType, field, event)}
+        />
+      {/if}
+    {/snippet}
+  </FormField>
+{/snippet}
+
 <div class="s-task-model-list">
   {#each TASK_MODEL_ROWS as row (row.taskType)}
     {@const binding = taskModelBindings[row.taskType] ?? {
@@ -647,96 +734,16 @@
       {#if binding.target && fields.length > 0}
         <div class="s-task-model-options">
           {#each fields as field (field.name)}
-            {@const jsonError =
-              field.type === JSON_OPTION_TYPE
-                ? taskModelJsonError(row.taskType, field)
-                : ''}
-            {@const fieldControlId = `task-model-${row.taskType}-${field.name}`}
-            <FormField
-              controlId={fieldControlId}
-              full={field.type === JSON_OPTION_TYPE}
-              label={field.label}
-              help={field.description ?? ''}
-              error={jsonError
-                ? t(
-                    'settings.specializedModels.jsonInvalid',
-                    'Invalid JSON: {error}',
-                    { error: jsonError },
-                  )
-                : ''}
-            >
-              {#snippet children(formField)}
-                {#if field.type === 'select'}
-                  <Dropdown
-                    id={formField.controlId}
-                    value={taskModelOptionValue(row.taskType, field)}
-                    options={field.options}
-                    ariaLabel={field.label}
-                    ariaDescribedby={formField.describedBy}
-                    triggerClass="settings-view__dropdown"
-                    listClass="settings-view__thinking-list"
-                    onValueChange={(value) =>
-                      setTaskModelOption(row.taskType, field, value)}
-                  />
-                {:else if field.type === 'textarea'}
-                  <TextArea
-                    id={formField.controlId}
-                    rows="3"
-                    aria-describedby={formField.describedBy}
-                    value={taskModelOptionValue(row.taskType, field)}
-                    onInput={(_value, event) =>
-                      handleTaskModelOptionChange(row.taskType, field, event)}
-                  />
-                {:else if field.type === JSON_OPTION_TYPE}
-                  <TextArea
-                    id={formField.controlId}
-                    code
-                    invalid={formField.invalid}
-                    rows="8"
-                    spellcheck="false"
-                    autocapitalize="off"
-                    autocorrect="off"
-                    aria-describedby={formField.describedBy}
-                    placeholder={t(
-                      'settings.specializedModels.jsonPlaceholder',
-                      '[ … ] or { … }',
-                    )}
-                    value={taskModelOptionValue(row.taskType, field)}
-                    onInput={(_value, event) =>
-                      handleTaskModelOptionChange(row.taskType, field, event)}
-                  />
-                {:else if field.type === 'number'}
-                  <TextField
-                    id={formField.controlId}
-                    type="number"
-                    aria-describedby={formField.describedBy}
-                    min={field.min ?? undefined}
-                    max={field.max ?? undefined}
-                    step={field.step ?? 'any'}
-                    value={taskModelOptionValue(row.taskType, field)}
-                    onInput={(_next, event) =>
-                      handleTaskModelOptionChange(row.taskType, field, event)}
-                  />
-                {:else if field.type === 'boolean'}
-                  <Toggle
-                    id={formField.controlId}
-                    checked={taskModelOptionValue(row.taskType, field) === true}
-                    ariaLabel={field.label}
-                    aria-describedby={formField.describedBy}
-                    onChange={(next) =>
-                      setTaskModelOption(row.taskType, field, next)}
-                  />
-                {:else}
-                  <TextField
-                    id={formField.controlId}
-                    value={taskModelOptionValue(row.taskType, field)}
-                    aria-describedby={formField.describedBy}
-                    onInput={(_next, event) =>
-                      handleTaskModelOptionChange(row.taskType, field, event)}
-                  />
-                {/if}
-              {/snippet}
-            </FormField>
+            {#if field.type === JSON_OPTION_TYPE}
+              <details class="s-task-model-advanced">
+                <summary
+                  >{field.label}<span aria-hidden="true">JSON</span></summary
+                >
+                {@render optionField(row.taskType, field)}
+              </details>
+            {:else}
+              {@render optionField(row.taskType, field)}
+            {/if}
           {/each}
         </div>
       {:else if binding.target}
