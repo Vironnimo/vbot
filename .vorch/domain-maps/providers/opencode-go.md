@@ -55,6 +55,23 @@ Since `metadata` is replaced **wholesale** by the highest layer at load (assembl
 - Anthropic-routed Models render replayed `reasoning_meta.content_blocks` through the inner `AnthropicCompatibleAdapter`, including its thinking-disabled guard. Responses-routed Models (`grok-4.6`, `gpt-5.6-luna`, `muse-spark-1.2-contributor`, `muse-spark-1.3-contributor`, plus legacy `grok-4.5`) replay whole original output items by design, including encrypted Reasoning, through the shared Responses input builder; Chat fidelity does not apply to them.
 - Kimi K2.5/K2.6 render `thinking.type` from the Agent's on/off intent and never send generic `reasoning_effort`; K2.6 adds `keep: "all"` only while enabled. K2.7 always renders enabled and suppresses unsupported effort/disable fields. K3 and Grok use `reasoning_effort`, with `none` safely mapped to `low`.
 
+### MiniMax M3 replay follow-up (2026-09-21)
+
+The exact `opencode-go:api-key` / `minimax-m3` route remains `POST https://opencode.ai/zen/go/v1/messages` with inherited `full_history`. Real streamed plain and Tool-call responses were accumulated through Chat, saved to a disposable SQLite Session, reopened, and shaped through the actual Adapter with a fresh instance per request. Thinking blocks survived exactly. Every comparison used temperature 1.0, `thinking: {type: enabled, budget_tokens: 1024}`, `max_tokens: 4096`, `User-Agent: vBot`, and stable `x-opencode-session`. Synthetic Tool Results were supplied without dispatching Tools.
+
+A omitted historical Thinking; B replayed the exact returned blocks; C placed the same readable text in ordinary Assistant content. The actual streaming Adapter and direct non-streaming HTTP replay of each captured request body returned identical total input counts, including cache-read/write subsets:
+
+| Request shape | A: absent | B: exact Thinking | C: visible control |
+| --- | ---: | ---: | ---: |
+| Immediate Tool-result continuation | 1921 | 1948 | 1948 |
+| Tool history plus a new User follow-up | 1936 | 1963 | 1963 |
+| Completed plain response, later request with Tools | 1898 | 1965 | 1965 |
+| Completed plain response, later request without Tools | 1665 | 1732 | 1732 |
+
+M3 consumes historical Thinking in every tested shape, including later requests without Tools. Preserve `full_history`; the DeepSeek Tools condition must not be generalized to M3. MiniMax's upstream [Messages contract](https://platform.minimax.io/docs/api-reference/text-anthropic-api) requires complete Thinking/text/Tool Use history for multi-turn Tool calls; the [Go endpoint table](https://dev.opencode.ai/docs/go/) confirms this route (both read 2026-09-21). This follow-up verified replay only, not other capabilities or alternate endpoints. Direct MiniMax, M2.x, and other gateways were excluded.
+
+An effective-policy check on the same date confirmed `full_history` for all five bundled Go DeepSeek ids: `deepseek-flash`, `deepseek-v4.1-flash`, `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`, and `deepseek-v4-pro`. Live `/models` discovery matched this scoped roster; the active development Model DB resolved the same policies. The [DeepSeek contract](https://api-docs.deepseek.com/guides/thinking_mode/) still requires earlier `reasoning_content` whenever the current request carries Tool definitions, including history turns without a Tool Call (read 2026-09-21). Their existing dated live evidence below remains applicable; this follow-up did not repeat DeepSeek inference.
+
 ### Union Alpha verification (2026-09-16)
 
 - Exact Connection/Model: `opencode-go:api-key`, `union-alpha`, displayed as **Union Alpha Free**. The official Go endpoint table assigns `POST https://opencode.ai/zen/go/v1/messages` with `@ai-sdk/anthropic`; the override selects the existing inner Messages Adapter instead of the unprofiled Chat fallback. Authentication and session-affinity headers follow the existing Messages contract above.
