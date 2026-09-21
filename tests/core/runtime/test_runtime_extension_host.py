@@ -183,7 +183,6 @@ def test_extension_prompt_inspection_uses_selected_blocks_and_owner_tools(tmp_pa
             "swarm_inbox",
             "swarm_state",
             "swarm_wiki",
-            "swarm_decisions",
         }
         blocks = {block["id"]: block for block in preview["blocks"]}
         assert blocks["core:runtime"]["enabled"] is False
@@ -193,7 +192,7 @@ def test_extension_prompt_inspection_uses_selected_blocks_and_owner_tools(tmp_pa
         selected = replace(
             config,
             tool_access=ToolAccess(
-                mode="selected", allowed=(), denied=("swarm_decisions", "swarm_board")
+                mode="selected", allowed=(), denied=("swarm_state", "swarm_board")
             ),
         )
         preview = asyncio.run(
@@ -201,7 +200,6 @@ def test_extension_prompt_inspection_uses_selected_blocks_and_owner_tools(tmp_pa
         )
         assert {tool["name"] for tool in preview["tools"]} == {
             "swarm_inbox",
-            "swarm_state",
             "swarm_wiki",
         }
     finally:
@@ -421,8 +419,8 @@ def test_temporary_preflight_rechecks_owner_after_blocking_validation(
 @pytest.mark.parametrize(
     "denied",
     [
-        ("swarm_decisions",),
-        ("swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki", "swarm_decisions"),
+        ("swarm_state",),
+        ("swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki"),
     ],
 )
 def test_real_owner_preflight_accepts_explicit_private_tool_denials(tmp_path, monkeypatch, denied):

@@ -72,7 +72,9 @@ def model_with_output_limit(
     ],
 )
 @pytest.mark.asyncio
-async def test_deepseek41_preserves_effort_with_its_thinking_toggle(model_id, effort, thinking, level):
+async def test_deepseek41_preserves_effort_with_its_thinking_toggle(
+    model_id, effort, thinking, level
+):
     resources = Path(__file__).resolve().parents[3] / "resources"
     registry = ModelRegistry.load(resources)
     from core.providers.providers import ProviderRegistry

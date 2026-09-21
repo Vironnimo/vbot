@@ -528,3 +528,49 @@ async def test_goal_is_pinned_user_post_without_automatic_delivery(board):
     assert all(item["pending_count"] == 0 for item in board.swarm["participants"])
     board_read = await board.service.board(board.contexts[0], {"action": "read"})
     assert board_read["data"]["goal_post_id"] == board.swarm["goal_post_id"]
+
+
+@pytest.mark.asyncio
+async def test_twelve_peers_can_edit_independent_passages_from_the_same_revision(tmp_path):
+    from resources.extensions.swarm.store import SwarmStore
+    from tests.resources.extensions.swarm_store_helpers import _swarm
+
+    store = SwarmStore(tmp_path / "swarm.db")
+    await store.open()
+    try:
+        started = await _swarm(store, count=12)
+        sid = started["swarm_id"]
+        peers = (await store.get_swarm(sid))["participants"]
+        created = await store.wiki(
+            sid,
+            peers[0]["id"],
+            {
+                "action": "create",
+                "title": "Shared findings",
+                "content": "\n".join(f"Finding {i:02}: pending" for i in range(12)),
+                "request_id": "create-findings",
+            },
+        )
+        edits = await asyncio.gather(
+            *(
+                store.wiki(
+                    sid,
+                    peer["id"],
+                    {
+                        "action": "update",
+                        "page_id": created["page_id"],
+                        "expected_revision": 1,
+                        "old_text": f"Finding {i:02}: pending",
+                        "new_text": f"Finding {i:02}: verified",
+                        "request_id": f"finding-{i}",
+                    },
+                )
+                for i, peer in enumerate(peers)
+            )
+        )
+        assert sorted(edit["revision"] for edit in edits) == list(range(2, 14))
+        current = await store.wiki(sid, None, {"action": "read", "page_id": created["page_id"]})
+        assert current["content"] == "\n".join(f"Finding {i:02}: verified" for i in range(12))
+        assert current["revision"] == 13
+    finally:
+        await store.close()

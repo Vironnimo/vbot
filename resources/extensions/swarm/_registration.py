@@ -23,7 +23,6 @@ from .agent_text import (
     STATE_DESCRIPTION,
     STATE_PARAMETERS,
 )
-from .decision_text import DECISION_DESCRIPTION, DECISION_PARAMETERS
 from .wiki_text import WIKI_DESCRIPTION, WIKI_PARAMETERS
 
 if TYPE_CHECKING:
@@ -45,7 +44,6 @@ def session_tool_catalog() -> list[Json]:
             ("swarm_inbox", INBOX_DESCRIPTION),
             ("swarm_state", STATE_DESCRIPTION),
             ("swarm_wiki", WIKI_DESCRIPTION),
-            ("swarm_decisions", DECISION_DESCRIPTION),
         )
     ]
 
@@ -85,13 +83,6 @@ def register(api: ExtensionAPI) -> None:
         service.wiki,
         argument_normalizer=lambda arguments: _normalize_arguments("swarm_wiki", arguments),
     )
-    api.register_session_tool(
-        "swarm_decisions",
-        DECISION_DESCRIPTION,
-        DECISION_PARAMETERS,
-        service.decisions,
-        argument_normalizer=lambda arguments: _normalize_arguments("swarm_decisions", arguments),
-    )
     api.register_session_runtime(
         before_request=service._before_request,
         run_finished=service._run_finished,
@@ -108,10 +99,6 @@ def register(api: ExtensionAPI) -> None:
         execution_mode="immediate",
     )
     descriptions = {
-        "decisions": (
-            "Explore shared questions, alternatives and participant positions; "
-            "changes require request_id and observed revisions."
-        ),
         "wiki": (
             "Read and collaboratively edit this Run's Wiki; mutations require "
             "request_id and existing-page changes require expected_revision."

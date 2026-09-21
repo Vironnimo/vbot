@@ -192,3 +192,83 @@ async def test_overlapping_prepared_batches_acknowledge_each_recipient_once(tmp_
         assert (await value.prepare_inbox_delivery(started["swarm_id"], recipient))["entries"] == []
     finally:
         await value.close()
+
+
+@pytest.mark.asyncio
+async def test_pending_reads_do_not_scan_delivered_board_history(store):
+    """A busy Board must not delay all Store work behind historical delivery scans."""
+    from resources.extensions.swarm._store_delivery import _prepare_automatic_delivery
+    from resources.extensions.swarm._store_profiles import _get_swarm
+    from resources.extensions.swarm._store_records import _pending_count, _pending_rows
+
+    started = await _swarm(store, count=12)
+    sid = started["swarm_id"]
+    swarm = await store.get_swarm(sid)
+    peers = [item["id"] for item in swarm["participants"]]
+
+    # Fixture history is populated in one transaction, independently of query planning.
+    def seed(db):
+        def insert(connection):
+            connection.executemany(
+                "INSERT INTO posts VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                [
+                    (
+                        f"historical-{i}",
+                        sid,
+                        swarm["main_discussion_id"],
+                        i + 1,
+                        "participant",
+                        peers[0],
+                        "Author",
+                        "Delivered history",
+                        None,
+                        "[]",
+                        "2026-01-01T00:00:00+00:00",
+                    )
+                    for i in range(2000)
+                ],
+            )
+            connection.executemany(
+                "INSERT INTO recipients(post_id,participant_id,route_class,delivered_at) "
+                "VALUES(?,?,?,?)",
+                [
+                    (f"historical-{i}", peer, "main", "2026-01-01T00:00:00+00:00")
+                    for i in range(2000)
+                    for peer in peers[1:]
+                ],
+            )
+
+        db._write(insert)
+
+    await store._run(seed)
+    await store.post(sid, peers[0], text="Pending now", request_id="pending-now")
+
+    def inspect(db):
+        steps = 0
+
+        def progress():
+            nonlocal steps
+            steps += 100
+            return 0
+
+        connection = db._require_connection()
+        connection.set_progress_handler(progress, 100)
+        try:
+            snapshot = _get_swarm(db, sid)
+            count = _pending_count(connection, sid, peers[1])
+            rows = _pending_rows(connection, sid, peers[1], 20, 24000)
+            prepared = _prepare_automatic_delivery(db, sid, peers[1], swarm["epoch"], 0, False)
+            replayed = _prepare_automatic_delivery(db, sid, peers[1], swarm["epoch"], 0, False)
+        finally:
+            connection.set_progress_handler(None, 0)
+        return snapshot, count, [row["text"] for row in rows], prepared, replayed, steps
+
+    snapshot, count, texts, prepared, replayed, steps = await store._run(inspect)
+    assert [item["pending_count"] for item in snapshot["participants"]] == [0] + [1] * 11
+    assert count == 1
+    assert texts == ["Pending now"]
+    assert [entry["text"] for entry in prepared["entries"]] == ["Pending now"]
+    assert replayed["entries"] == prepared["entries"]
+    assert replayed["replayed"]
+    # Work is proportional to outstanding deliveries, not 22,000 delivered rows.
+    assert steps < 10000
