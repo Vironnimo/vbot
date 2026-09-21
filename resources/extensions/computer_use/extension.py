@@ -148,7 +148,10 @@ class ComputerUseService:
             raise ComputerUseError(
                 "Computer Use requires a Session. Start a Session before calling this Tool."
             )
-        agent = self.host.resolve_agent(context.project_id, context.agent_id)
+        try:
+            agent = self.host.resolve_tool_agent(context)
+        except ValueError as error:
+            raise ComputerUseError(str(error)) from error
         allowed = resolve_tool_access(
             agent.tool_access,
             self.api.operations.tool_registry.list_tools(),

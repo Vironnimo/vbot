@@ -8,6 +8,7 @@ import stat
 from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from difflib import SequenceMatcher
+from os.path import commonprefix
 from pathlib import Path
 
 from core.tools._argument_repair import normalize_call_arguments
@@ -270,6 +271,24 @@ def _clean_additions(hunk: _Hunk, path: str, index: int) -> tuple[_Hunk, list[st
     return replace(hunk, lines=lines), warnings
 
 
+def _inline_context_identifies(content: str, old: str, new: str) -> bool:
+    """Identify a single-line replacement by two retained, unique text anchors."""
+    if "\n" in old or "\n" in new:
+        return False
+    prefix = commonprefix((old, new))
+    suffix = commonprefix((old[len(prefix) :][::-1], new[len(prefix) :][::-1]))[::-1]
+    # Syntax/indentation alone cannot identify a target. Both sides must retain
+    # substantive text, and together they must select exactly one current line.
+    if any(
+        len(anchor.strip()) < 4 or not re.search(r"\w{3}", anchor) for anchor in (prefix, suffix)
+    ):
+        return False
+    candidates = [
+        line for line in content.splitlines() if line.startswith(prefix) and line.endswith(suffix)
+    ]
+    return candidates == [new]
+
+
 def _apply_hunk(content: str, hunk: _Hunk, path: str, index: int) -> tuple[str, list[str]]:
     if not any(prefix in "+-" for prefix, _ in hunk.lines):
         return content, []
@@ -365,13 +384,19 @@ def _apply_hunk(content: str, hunk: _Hunk, path: str, index: int) -> tuple[str, 
                 hunk, old, new, found = trimmed, candidate_old, candidate_new, candidate_match
     if found is None:
         context = "".join(text.strip() for prefix, text in hunk.lines if prefix == " ")
+        poststate = (
+            _match(window, new, new, precise=True, eof=hunk.eof or hunk.no_newline) if new else None
+        )
         if (
-            len(context) >= 4
-            and new
-            and isinstance(_match(window, new, new, precise=True, eof=hunk.eof), FuzzyReplacement)
+            (len(context) >= 4 or _inline_context_identifies(window, old, new))
+            and isinstance(poststate, FuzzyReplacement)
+            and (not hunk.no_newline or poststate.before_spans[0][1] == len(window))
         ):
             return content, warnings
-        if not hunk.precise_only:
+        # An exact post-state elsewhere does not prove this target is satisfied.
+        # Do not let approximate matching choose it (or a similar other target)
+        # after the independent locator above failed to establish that fact.
+        if not hunk.precise_only and (not new or _match(window, new, new, precise=True) is None):
             found = _match(window, old, new, eof=hunk.eof)
     if isinstance(found, AmbiguousFuzzyMatch):
         raise _PatchError(

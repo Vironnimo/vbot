@@ -155,7 +155,7 @@ def computer(tmp_path, monkeypatch):
         workspace=str(tmp_path),
     )
     asyncio.run(
-        service.start(SimpleNamespace(data_dir=tmp_path, resolve_agent=lambda project, name: agent))
+        service.start(SimpleNamespace(data_dir=tmp_path, resolve_tool_agent=lambda context: agent))
     )
     client = DesktopClient()
     monkeypatch.setattr(service, "_client", lambda: client)

@@ -124,7 +124,12 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   no insertion/removal. It never invents omitted replacement content or reports
   success. Identical old/new line sequences are no-ops only when located. A unique
   precise post-state with at least four shared non-whitespace context characters
-  permits an already-applied retry before approximate matching. A missing
+  permits an already-applied retry before approximate matching. A single-line
+  replacement can also identify its post-state through the unchanged prefix and
+  suffix within that line: both must retain substantive text, and together they
+  must select exactly one current line. Exact post-state text without an independent
+  target is not enough; approximate matching cannot substitute that text or another
+  similar target. Explicit hints and EOF constraints still apply. A missing
   deletion/move source remains an error, not inferred proof of prior execution.
 
 ## Mutation invariants
