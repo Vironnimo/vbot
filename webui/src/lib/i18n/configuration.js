@@ -1,4 +1,32 @@
 export default Object.freeze({
+  'settings.pages.general': 'General',
+  'settings.pages.generalDescription':
+    'Display, conversation titles, and regional preferences.',
+  'settings.pages.providersDescription':
+    'Connect the services and local runtimes that supply your Models.',
+  'settings.pages.voiceDescription':
+    'Speaking, listening, and voice activation.',
+  'settings.pages.memory': 'Memory',
+  'settings.pages.memoryDescription':
+    'Find past conversations and learn from them.',
+  'settings.pages.tools': 'Tools',
+  'settings.pages.toolsDescription':
+    'Web access, media, evaluation, and delegation.',
+  'settings.pages.integrations': 'Integrations',
+  'settings.pages.integrationsDescription':
+    'Messaging Channels, Extensions, and MCP connections.',
+  'settings.pages.system': 'System',
+  'settings.pages.systemDescription':
+    'Server information, connections, and diagnostics.',
+  'settings.sections.voiceControls': 'Voice controls',
+  'settings.sections.speechModels': 'Speech Models',
+  'settings.sections.recall': 'Conversation search',
+  'settings.sections.mediaModels': 'Images, video & music',
+  'settings.sections.evaluation': 'Evaluation',
+  'settings.sections.delegation': 'Sub-Agent limits',
+  'settings.agentShortcut.hint':
+    'The chat Model, Thinking, and Compaction are configured in',
+
   'settings.specializedModels.resetOptions': 'Reset options',
   'settings.categories.sessions': 'Sessions & Memory',
   'settings.groups.personal': 'Personal',
@@ -204,7 +232,7 @@ export default Object.freeze({
   'settings.recall.backends.hybrid':
     'Hybrid — combines full-text and semantic search',
   'settings.recall.vectorHint':
-    'Semantic search requires an embedding model — configure it under Specialized Models.',
+    'Semantic search uses the embedding model configured below.',
   'settings.recall.saveSuccess': 'Recall backend updated.',
   'settings.webFetch.direct': 'Direct (no service)',
   'settings.webFetch.fallback': 'Only when direct fetch fails',

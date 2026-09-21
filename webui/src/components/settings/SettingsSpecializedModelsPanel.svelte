@@ -47,13 +47,31 @@
     onToast = noop,
     onError = noop,
     modelsRefreshToken = 0,
+    taskTypes = null,
+    showTaskLabels = true,
   } = $props();
+
+  // Each placement owns only its task types; another page's commit must
+  // never make an untouched binding here look like a draft to be saved.
+  const taskRows = untrack(() =>
+    TASK_MODEL_ROWS.filter(
+      (row) => taskTypes === null || taskTypes.includes(row.taskType),
+    ),
+  );
+  const ownsSpeech = taskRows.some((row) =>
+    ['speech_to_text', 'text_to_speech'].includes(row.taskType),
+  );
+
+  function scopedBindings(value) {
+    const bindings = normalizeTaskModelSettings(value);
+    return Object.fromEntries(
+      taskRows.map((row) => [row.taskType, bindings[row.taskType]]),
+    );
+  }
 
   // Form is seeded once from the settings prop at mount (untrack avoids a
   // reactive dependency); later commits flow back through saveDisabled.
-  let taskModelBindings = $state(
-    untrack(() => normalizeTaskModelSettings(settings)),
-  );
+  let taskModelBindings = $state(untrack(() => scopedBindings(settings)));
   let taskModelTargetsByType = $state({});
   let taskModelSchemasByType = $state({});
   let taskModelLoading = $state(false);
@@ -152,10 +170,7 @@
   let saveDisabled = $derived(
     taskModelSaving ||
       taskModelLoading ||
-      taskModelBindingsMatch(
-        taskModelBindings,
-        normalizeTaskModelSettings(settings),
-      ),
+      taskModelBindingsMatch(taskModelBindings, scopedBindings(settings)),
   );
   // "Busy" while loading, saving, or holding unsaved edits — a reload during any
   // of those would disturb in-progress work, so it is deferred until idle.
@@ -167,10 +182,7 @@
     getSnapshot: () => taskModelBindings,
     hasChanges: () =>
       autoSaveArmed &&
-      !taskModelBindingsMatch(
-        taskModelBindings,
-        normalizeTaskModelSettings(settings),
-      ),
+      !taskModelBindingsMatch(taskModelBindings, scopedBindings(settings)),
     save: saveTaskModelBindings,
   });
   const unregisterTaskModelsAutosave = autosaveContext.register(
@@ -179,7 +191,7 @@
 
   onMount(() => {
     void loadTaskModelPanel();
-    void refreshSpeechMemory();
+    if (ownsSpeech) void refreshSpeechMemory();
   });
 
   onDestroy(() => {
@@ -240,14 +252,14 @@
 
     try {
       const targetEntries = await Promise.all(
-        TASK_MODEL_ROWS.map(async (row) => {
+        taskRows.map(async (row) => {
           const result = await listTaskModelTargets(row.taskType);
           return [row.taskType, normalizeTargets(result)];
         }),
       );
       taskModelTargetsByType = Object.fromEntries(targetEntries);
 
-      for (const row of TASK_MODEL_ROWS) {
+      for (const row of taskRows) {
         const target = taskModelBindings[row.taskType]?.target ?? '';
         if (target) {
           await loadTaskModelSchema(row.taskType, target);
@@ -326,10 +338,7 @@
   async function saveTaskModelBindings(reason) {
     if (
       !autoSaveArmed ||
-      taskModelBindingsMatch(
-        taskModelBindings,
-        normalizeTaskModelSettings(settings),
-      )
+      taskModelBindingsMatch(taskModelBindings, scopedBindings(settings))
     ) {
       return true;
     }
@@ -342,7 +351,7 @@
       const result = await updateTaskModelSettings(
         createTaskModelUpdatePayload(
           taskModelBindings,
-          normalizeTaskModelSettings(settings),
+          scopedBindings(settings),
         ),
       );
       const nextSettings = {
@@ -351,7 +360,7 @@
       };
       onCommit(nextSettings);
       if (JSON.stringify(taskModelBindings) === submitted) {
-        taskModelBindings = normalizeTaskModelSettings(nextSettings);
+        taskModelBindings = scopedBindings(nextSettings);
         autoSaveArmed = false;
       }
       if (reason === 'manual')
@@ -694,7 +703,7 @@
 {/snippet}
 
 <div class="s-task-model-list">
-  {#each TASK_MODEL_ROWS as row (row.taskType)}
+  {#each taskRows as row (row.taskType)}
     {@const binding = taskModelBindings[row.taskType] ?? {
       target: '',
       options: {},
@@ -706,9 +715,11 @@
     <div class="s-row s-row--stacked s-task-model-row">
       <div class="s-task-model-head">
         <div class="s-row-info">
-          <div class="s-row-label">
-            {t(row.titleKey, row.titleFallback)}
-          </div>
+          {#if showTaskLabels}
+            <div class="s-row-label">
+              {t(row.titleKey, row.titleFallback)}
+            </div>
+          {/if}
           <div class="s-row-desc">
             {t(row.descriptionKey, row.descriptionFallback)}
           </div>

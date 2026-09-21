@@ -1,4 +1,4 @@
-/* Settings topic navigation and editor presentation. */
+/* Settings pages group related tasks independently of form ownership. */
 .settings-nav.secondary-pane {
   padding: 24px 12px 20px;
   gap: 16px;
@@ -23,30 +23,13 @@
   color: var(--text-med);
 }
 .settings-desktop-index {
-  gap: 18px;
-}
-.settings-nav-group {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 0 0 5px;
-  padding: 0 10px;
-  color: var(--text-med);
-  font: 500 11px / 1.5 var(--font-ui);
-  letter-spacing: 0;
-  text-transform: none;
-}
-.settings-nav-group::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--border);
+  gap: 4px;
 }
 .settings-nav .snav-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 32px;
+  min-height: 38px;
   padding: 6px 10px;
   font-size: var(--fs-body-md);
   font-weight: 400;
@@ -89,8 +72,26 @@
   font-size: var(--fs-body-lg);
   line-height: 1.6;
 }
+.settings-page[hidden],
 .settings-editor[hidden] {
   display: none;
+}
+.settings-editor + .settings-editor {
+  margin-top: 32px;
+  padding-top: 28px;
+  border-top: 1px solid var(--border);
+}
+.settings-section-heading {
+  margin-bottom: 18px;
+}
+.settings-section-heading h3 {
+  margin: 0;
+  color: var(--text-hi);
+  font: 600 17px / 1.4 var(--font-ui);
+  letter-spacing: -0.015em;
+}
+.settings-section-heading h3:focus {
+  outline: none;
 }
 .settings-editor-body {
   min-width: 0;
@@ -141,7 +142,14 @@
 }
 .settings-related {
   display: flex;
-  margin-bottom: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
 }
 .settings-search-results {
   display: flex;
