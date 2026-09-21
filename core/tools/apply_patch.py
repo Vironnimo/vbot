@@ -46,8 +46,8 @@ from core.utils.paths import model_path
 
 APPLY_PATCH_TOOL_NAME = "apply_patch"
 APPLY_PATCH_TOOL_DESCRIPTION = (
-    "Edit files with V4A patches: replace, insert, or remove text; create, delete, "
-    "or move files. Combine multiple edits in one patch. Changes run in order; "
+    "Apply V4A patches with one or more edits across one or more files: replace, insert, "
+    "or remove text; create, delete, or move files. Changes run in order; "
     "successful changes remain applied if another change fails."
 )
 APPLY_PATCH_TOOL_PARAMETERS: JsonObject = {
@@ -56,16 +56,16 @@ APPLY_PATCH_TOOL_PARAMETERS: JsonObject = {
         "patch": {
             "type": "string",
             "description": (
-                "The complete V4A patch to apply. For text edits, include the lines to "
-                "add (+) or remove (-); prefix unchanged neighboring lines with a space. "
+                "The complete V4A patch. Include changed lines and locating context together: "
+                "+ for added lines, - for removed lines, a space for unchanged neighboring lines. "
+                "Context-only calls do not select locations for later calls. "
                 "Paths are relative to the working directory or absolute.\n"
-                "Replace text:\n"
-                "*** Begin Patch\n*** Update File: path\n@@\n-old line\n+new line\n*** End Patch\n"
-                "Insert text before an existing line:\n"
-                "*** Begin Patch\n*** Update File: path\n@@\n"
-                "+new line\n existing line\n*** End Patch\n"
-                "Repeat @@ blocks or file headers before the final *** End Patch for more edits. "
-                "Context-only blocks before @@ locate the next edit; they do not supply a change. "
+                "Replacement and insertion across files:\n"
+                "*** Begin Patch\n*** Update File: file_a.txt\n@@\n-old line\n+new line\n"
+                "@@\n+inserted line\n existing line\n"
+                "*** Update File: file_b.txt\n@@\n-old value\n+new value\n*** End Patch\n"
+                "Repeat @@ blocks for separate locations and file headers for additional files, "
+                "all inside the same Begin/End Patch. "
                 "`*** Add File: path` followed by + lines creates or fully overwrites "
                 "a file with that content. `*** Delete File: path` deletes a file. "
                 "`*** Move File: source -> destination` moves a file.\n"
