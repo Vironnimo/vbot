@@ -36,6 +36,23 @@ GLM-5.2, GLM-5.3, GLM-5.3-Flash, and Kimi K3 accept cross-Run `reasoning` with i
 
 The native `/api/chat` and Anthropic-compatible `/v1/messages` probes produced no wider replay scope for the selected Models than `/v1/chat/completions`; the native probe must send explicit `think` or its result is invalid. `/v1/responses` is documented as non-stateful, lacks `previous_response_id` and `conversation`, and lists reasoning summaries rather than a historical Reasoning carrier or request effort control. It returns reasoning output items, but manually replaying those items for Kimi K2.7 Code and MiniMax M2.7/M3 changed Provider input tokens by zero with and without Tools while visible controls added 47 to 125 tokens. Direct Cloud therefore stays on `/v1/chat/completions`: it has the verified common Reasoning control, response/history carrier, streaming Usage, Tool, and image contract vBot needs. This is a Provider-wire decision, not a claim that the same endpoint is best for local Ollama.
 
+### MiniMax M3 replay follow-up (2026-09-21)
+
+Rechecked only `ollama-cloud:api-key` / `minimax-m3` on `POST https://ollama.com/v1/chat/completions`; local Ollama and alternate endpoints were excluded. The effective policy is still the explicit Model override `none`. The diagnostic B case deliberately forced `full_history` without modifying that override, proving that the negative result is remote behavior rather than Chat removing the candidate field.
+
+Real streamed plain and Tool-call responses were accumulated through Chat, saved to a disposable SQLite Session, reopened, and replayed through a fresh actual Adapter per request. B returned their exact readable Reasoning under `reasoning`, with no duplicate opaque carrier. Every comparison used `reasoning_effort: high`, temperature 1.0, and `max_tokens: 4096`; a fixed synthetic code fixture kept input counts positive, avoiding M3's short-request zero-Usage issue. Synthetic Tool Results were supplied without dispatching Tools. A omitted historical Reasoning and C moved the same text into ordinary Assistant content. Streaming Adapter counts and direct non-streaming HTTP replays of the captured request bodies agreed exactly:
+
+| Request shape | A: absent | B: exact `reasoning` | C: visible control |
+| --- | ---: | ---: | ---: |
+| Immediate Tool-result continuation | 1932 | 1932 | 1990 |
+| Tool history plus a new User follow-up | 1947 | 1947 | 2005 |
+| Completed plain response, later request with Tools | 1885 | 1885 | 1947 |
+| Completed plain response, later request without Tools | 1665 | 1665 | 1727 |
+
+The returned carrier is ignored in all four tested shapes while each visible control adds its expected cost. No DeepSeek-like Tools exception was observed; retain `none` on this exact gateway route. This is not a claim that MiniMax M3 intrinsically cannot reuse Reasoning: the same-day Go Messages probe consumes it in every shape (`providers/opencode-go.md`). Official references read 2026-09-21: [Ollama compatibility](https://docs.ollama.com/api/openai-compatibility), [Tool continuation](https://docs.ollama.com/capabilities/tool-calling), and [MiniMax's upstream history contract](https://platform.minimax.io/docs/api-reference/text-openai-api).
+
+The same-day effective-policy check confirmed `full_history` for all three bundled Cloud DeepSeek ids: `deepseek-v4-flash:0731`, `deepseek-v4-pro:0813`, and `deepseek-v4.1-flash`. Live `/api/tags` discovery matched this scoped roster; the active development Model DB resolved the same policies. Their existing dated live evidence remains unchanged: the condition is Tool definitions on the current request, not whether the previous Assistant actually called a Tool. DeepSeek inference was not repeated in this follow-up.
+
 ### DeepSeek V4.1 Flash verification (2026-09-11)
 
 Direct Cloud discovery lists the exact wire id `deepseek-v4.1-flash` on `ollama-cloud:api-key`. Public `/api/show` confirms thinking, Tools, vision, and a 1,048,576-token Context. The [Model page](https://ollama.com/library/deepseek-v4.1-flash) uses `deepseek-v4.1-flash:cloud` for the local proxy; do not substitute that alias for the discovered direct Cloud id.
