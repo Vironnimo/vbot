@@ -176,24 +176,37 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
             name in arguments or options.values(name) for name in ("limit", "offset")
         ):
             raise ValueError("Existence searches (-q) do not paginate; omit limit and offset.")
+        missing_roots: list[Path] = []
+        warnings: list[str] = []
         if reference != "types":
             for root in roots:
                 if not root.exists():
-                    return tool_failure(
-                        "path_not_found",
-                        f"Search root not found: {root.as_posix()}. "
-                        "Correct paths; no roots were searched.",
-                    )
-                if not root.is_file() and not root.is_dir():
+                    missing_roots.append(root)
+                elif not root.is_file() and not root.is_dir():
                     return tool_failure(
                         "invalid_arguments",
                         f"Search root is not a regular file or directory: {root.as_posix()}",
+                    )
+            if missing_roots:
+                warnings = [
+                    f"Search root not found: {root.as_posix()}. Correct this path."
+                    for root in missing_roots
+                ]
+                if action == "content":
+                    warnings.insert(
+                        0,
+                        "Operands after the first pattern are search paths. If a missing path "
+                        "was intended as another pattern, pass each pattern with -e.",
+                    )
+                roots = [root for root in roots if root not in missing_roots]
+                if not roots:
+                    return tool_failure(
+                        "path_not_found", "No roots were searched. " + " ".join(warnings)
                     )
         binary = require_binary()
     except (OSError, RuntimeError, ValueError) as error:
         return tool_failure("invalid_arguments", str(error))
     budget = SearchBudget(context)
-    warnings: list[str] = []
     page = ResultPage(offset, limit)
     complete = True
     try:
@@ -290,6 +303,9 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
             "nly to the searched portions."
         )
     data = page.data(complete=complete, warnings=warnings, quiet=options.enabled("quiet"))
+    if missing_roots:
+        data["missing_paths"] = [root.as_posix() for root in missing_roots]
+        data["searched_paths"] = [root.as_posix() for root in roots]
     if not page.observed and not page.matched:
         data["searched_paths"] = [root.as_posix() for root in roots]
         data["patterns"] = patterns

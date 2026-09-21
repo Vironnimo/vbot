@@ -269,7 +269,7 @@ def test_binary_encodings_and_existence(tmp_path: Path) -> None:
     "arguments",
     [
         {"args": []},
-        {"args": ["--files", "missing", "."]},
+        {"args": ["--files", "missing"]},
         {"args": ["--dirs", "-tpy"]},
         {"args": ["--files", "--dirs"]},
         {"args": ["--dirs", "-e", "run"]},

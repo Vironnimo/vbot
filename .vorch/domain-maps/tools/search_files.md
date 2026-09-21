@@ -27,6 +27,12 @@ explicit empty roots and stdin reject. Relative roots use that cwd, absolute roo
 are allowed, and symlink spelling stays usable. Omitting name filters lists every
 eligible entry. `--help` and `--type-list` provide on-demand references.
 
+Missing explicit roots produce partial results from the remaining requested roots,
+with `missing_paths`, `searched_paths`, warnings and `complete=false`. If every root
+is missing, the call fails with `path_not_found`. Roots are never reinterpreted as
+patterns or replaced by the working directory. Content-search diagnostics explain
+the operand interpretation and repeated `-e` syntax for multiple patterns.
+
 The option catalog in `_search_options.py` owns aliases, arity, repeat/order
 semantics, native forwarding, applicability, validation, and on-demand help.
 This is a bounded search interface, never a shell command or unrestricted native
@@ -109,6 +115,10 @@ silent children. User cancellation kills the child and returns cancelled_by_user
 timeouts, Run cancellation, and unreadable entries make results incomplete with
 bounded warnings. Regex errors fail even when selection is empty. Native exit 1
 means no match; native diagnostics cannot become a successful empty search.
+Invalid-regex diagnostics suggest `-F` only as an explicit caller correction;
+the Tool never changes regex semantics automatically. A child that exits before
+process monitoring attaches still has its output, diagnostics and exit code drained
+through the original process handle; memory monitoring remains active when available.
 
 Independent bounds cover 50 KiB content output, 8 MiB native protocol records,
 bounded pipe queues/stderr, 512 MiB child RSS, candidate storage (128 MiB), one
