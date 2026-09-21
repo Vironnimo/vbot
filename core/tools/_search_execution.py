@@ -47,7 +47,11 @@ def native_lines(
                 process.kill()
 
     context.on_cancel(kill)
-    monitored = psutil.Process(process.pid)
+    monitored = None
+    # A fast child may exit before psutil attaches. Its pipes and exit status
+    # still belong to Popen and must be drained normally.
+    with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+        monitored = psutil.Process(process.pid)
 
     def put(kind: str, data: bytes) -> None:
         while not stopped.is_set():
@@ -93,7 +97,7 @@ def native_lines(
     try:
         while budget.keep_going():
             with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
-                if monitored.memory_info().rss > 512 * 1024 * 1024:
+                if monitored is not None and monitored.memory_info().rss > 512 * 1024 * 1024:
                     raise RuntimeError(
                         "Search exceeded its memory bound; narrow files or patterns."
                     )
@@ -159,8 +163,16 @@ def validate_patterns(
     for pattern in patterns:
         args.extend(["-e", pattern])
     args.extend(["--", str(empty_file)])
-    for _ in native_lines(binary, args, context, budget):
-        pass
+    try:
+        for _ in native_lines(binary, args, context, budget):
+            pass
+    except RuntimeError as error:
+        if "regex parse error" in str(error) or "PCRE2: error compiling pattern" in str(error):
+            raise RuntimeError(
+                f"{error}\nIf you meant literal text, add -F to args. "
+                "Otherwise correct the regular expression."
+            ) from error
+        raise
 
 
 def content_events(

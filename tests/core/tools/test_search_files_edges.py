@@ -8,6 +8,7 @@ import threading
 import time
 from pathlib import Path
 
+import psutil  # type: ignore[import-untyped]
 import pytest
 
 from core.tools._search_execution import native_lines
@@ -185,6 +186,43 @@ def test_cancellation_kills_a_silent_child(tmp_path, monkeypatch):
         assert children[0].poll() is not None
     finally:
         timer.cancel()
+
+
+@pytest.mark.parametrize("exit_code", [0, 2])
+def test_finished_child_is_drained_when_process_monitor_misses_it(tmp_path, monkeypatch, exit_code):
+    original = subprocess.Popen
+    children = []
+
+    def launch(_command, **kwargs):
+        child = original(
+            [
+                sys.executable,
+                "-c",
+                f"import sys; print('found'); "
+                f"sys.stderr.write('specific failure' if {exit_code} else ''); "
+                f"sys.exit({exit_code})",
+            ],
+            **kwargs,
+        )
+        child.wait(timeout=5)
+        children.append(child)
+        return child
+
+    def gone(pid):
+        raise psutil.NoSuchProcess(pid)
+
+    monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", launch)
+    monkeypatch.setattr("core.tools._search_execution.psutil.Process", gone)
+    ctx = context(tmp_path)
+    lines = native_lines(Path(sys.executable), [], ctx, SearchBudget(ctx))
+    assert next(lines).strip() == b"found"
+    if exit_code:
+        with pytest.raises(RuntimeError, match="specific failure"):
+            next(lines)
+    else:
+        assert list(lines) == []
+    assert children[0].returncode == exit_code
+    assert children[0].stdout.closed and children[0].stderr.closed
 
 
 @pytest.mark.parametrize("pattern", ["true", "false"])

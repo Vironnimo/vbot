@@ -15,6 +15,56 @@ from core.tools.tools import ToolRegistry
 from tests.core.tools.test_search_files import context
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [[], ["--files"], ["-q"]])
+async def test_missing_explicit_roots_preserve_results_and_report_incomplete_scope(tmp_path, mode):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/a.py").write_text("needle\n")
+    (tmp_path / "outside.py").write_text("needle\n")
+    registry = ToolRegistry()
+    register_search_files_tool(registry)
+    patterns = [] if "--files" in mode else ["needle"]
+    args = [*mode, *patterns, "missing", "src"]
+    result = await registry.dispatch(context(tmp_path), {"args": args})
+    assert result["ok"]
+    data = result["data"]
+    assert data["complete"] is False and data["warnings"]
+    assert data["missing_paths"] == [(tmp_path / "missing").as_posix()]
+    assert data["searched_paths"] == [(tmp_path / "src").as_posix()]
+    if "-q" in mode:
+        assert data["matched"] is True
+        (tmp_path / "src/a.py").write_text("unrelated\n")
+        result = await registry.dispatch(context(tmp_path), {"args": args})
+        assert result["data"]["matched"] is None
+        assert result["data"]["complete"] is False
+    else:
+        assert data["content"] == ("src/a.py" if mode else "src/a.py:1:needle")
+
+
+@pytest.mark.asyncio
+async def test_missing_path_is_not_reinterpreted_as_pattern_and_regex_is_not_made_literal(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/code").write_text("Alpha\nBeta\ncall(\n")
+    registry = ToolRegistry()
+    register_search_files_tool(registry)
+    ctx = context(tmp_path)
+    partial = await registry.dispatch(ctx, {"args": ["Alpha", "Beta", "src"]})
+    assert partial["data"]["content"] == "src/code:1:Alpha"
+    assert partial["data"]["complete"] is False
+    assert any("-e" in warning for warning in partial["data"]["warnings"])
+    missing = await registry.dispatch(ctx, {"args": ["Alpha", "Beta"]})
+    assert missing["error"]["code"] == "path_not_found"
+    corrected = await registry.dispatch(ctx, {"args": ["-e", "Alpha", "-e", "Beta", "src"]})
+    assert corrected["data"]["content"] == "src/code:1:Alpha\nsrc/code:2:Beta"
+    assert corrected["data"]["complete"] is True
+    for options in ([], ["-P"]):
+        regex = await registry.dispatch(ctx, {"args": [*options, "call(", "src"]})
+        assert regex["error"]["code"] == "search_error"
+        assert "-F" in regex["error"]["message"]
+    literal = await registry.dispatch(ctx, {"args": ["-F", "call(", "src"]})
+    assert literal["data"]["content"] == "src/code:3:call("
+
+
 @pytest.mark.parametrize(
     "tokens,patterns,roots,options,kind",
     [
