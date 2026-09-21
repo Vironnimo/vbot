@@ -23,7 +23,7 @@
   let {
     projectsState = $bindable(),
     projectsController,
-    activeDetail,
+    repositoryActions,
     onNavigateToSettingsPanel,
     handleManualSave,
     trackModelDropdownOpen,
@@ -146,23 +146,16 @@
   }
 </script>
 
-<div
-  class="management-topic"
-  role="tabpanel"
-  id="project-detail-panel-overview"
-  aria-labelledby="project-detail-tab-overview"
-  hidden={activeDetail !== 'overview'}
-  tabindex="0"
->
+<div class="management-topic" id="project-detail-panel-overview">
   <!-- Section 1: Project settings -->
   <form
     class="detail-section detail-section--overflow"
     id="project-settings-form"
     onsubmit={handleManualSave}
   >
-    <div class="detail-section-title">
-      {t('projects.detail.sectionSettings', 'Project settings')}
-    </div>
+    <h3 class="detail-section-title">
+      {t('projects.repositorySection', 'Repository')}
+    </h3>
     <div class="detail-section-body">
       <div class="projects-field-grid">
         <label class="projects-field">
@@ -194,6 +187,25 @@
             onValueChange={(value) => updateEditField('source_format', value)}
           />
         </label>
+      </div>
+      <details class="management-disclosure">
+        <summary
+          >{t('projects.repositoryActions', 'Repository management')}</summary
+        >
+        <div class="management-disclosure-body">
+          {@render repositoryActions?.()}
+        </div>
+      </details>
+      <h3 class="management-section-heading">
+        {t('projects.defaultsSection', 'Agent defaults')}
+      </h3>
+      <p class="projects-help">
+        {t(
+          'projects.defaultsSummary',
+          'Shared starting values for the Team. Individual Agents can override them.',
+        )}
+      </p>
+      <div class="projects-field-grid projects-field-grid--models">
         <label class="projects-field">
           <span class="projects-label">
             {t('projects.manage.defaultAgent', 'Default agent')}
@@ -217,8 +229,6 @@
             onValueChange={(value) => updateEditField('default_agent', value)}
           />
         </label>
-      </div>
-      <div class="projects-field-grid projects-field-grid--models">
         <label class="projects-field">
           <span class="projects-label">
             {t('projects.manage.defaultModel', 'Default model')}

@@ -17,7 +17,6 @@
     availableAgentTargets,
     agentTargetCatalogError,
     formValues = $bindable(),
-    activeDetail,
     navigateToExtensions,
   } = $props();
 
@@ -231,28 +230,17 @@
   }
 </script>
 
-<div
-  class="management-topic"
-  role="tabpanel"
-  id="agent-detail-panel-access"
-  aria-labelledby="agent-detail-tab-access"
-  hidden={activeDetail !== 'access'}
-  tabindex="0"
->
-  <div class="detail-group">
-    <div class="detail-group-title">
-      {t('agents.detail.access', 'Access')}
-    </div>
-
+<div class="management-topic" id="agent-detail-panel-access">
+  <div class="agent-capabilities">
     <div class="tl-section">
       <div class="tl-section-header">
-        <span class="tl-section-label">
+        <h3 class="tl-section-label">
           {t('agents.form.toolAccess', 'Tool access')}
-        </span>
+        </h3>
         <InfoHint
           text={t(
             'agents.form.toolAccessHelp',
-            'Choose all Tools, your own selection, or none. Click a Tool name or a family switch to change access. Dashed Tools activate automatically when their condition is met.',
+            'Choose which Tools this Agent may use. Automatic Tools become available when their condition is met; permission does not guarantee current availability.',
           )}
         />
       </div>
@@ -269,9 +257,9 @@
 
     <div class="tl-section">
       <div class="tl-section-header">
-        <span class="tl-section-label">
+        <h3 class="tl-section-label">
           {t('agents.form.allowedSkills', 'Allowed skills')}
-        </span>
+        </h3>
       </div>
       <ToggleChipList
         items={skillChipItems}
@@ -336,7 +324,7 @@
     {#if subagentToolEnabled}
       <div class="tl-section">
         <div class="tl-section-header">
-          <span class="tl-section-label">
+          <h3 class="tl-section-label">
             {t('agents.form.subagentSettings', 'Sub-Agent settings')}
             <InfoHint
               text={t(
@@ -344,7 +332,7 @@
                 'Additional targets for subagent. The calling Agent is always available by omitting agent_id and is not listed here. Project Agents use agent@project ids. Rooting does not narrow this permission.',
               )}
             />
-          </span>
+          </h3>
         </div>
         <section aria-labelledby="agent-identity-targets-label">
           <h4

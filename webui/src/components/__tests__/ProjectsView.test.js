@@ -42,7 +42,7 @@ describe('ProjectsView', () => {
       document.querySelector('[data-testid="project-panel-demo"]'),
     ).toBeTruthy();
     expectSectionOrder([
-      'Project settings',
+      'Repository',
       'Team',
       'Auto-load files',
       'Tools',
@@ -50,7 +50,7 @@ describe('ProjectsView', () => {
     ]);
   });
 
-  it('opens Team and Context directly without losing the Project form', async () => {
+  it('shows Team, Context and access together without replacing the Project form', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [project({ project_id: 'demo' })],
     });
@@ -69,19 +69,26 @@ describe('ProjectsView', () => {
     name.value = 'Draft project';
     name.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
-    for (const topic of ['team', 'context', 'access', 'overview']) {
-      document.querySelector(`#project-detail-tab-${topic}`).click();
-      flushSync();
-      await waitForCondition(
-        () => !document.querySelector(`#project-detail-panel-${topic}`).hidden,
-      );
-      const visible = Array.from(
-        document.querySelectorAll('.management-topic'),
-      ).filter((panel) => !panel.hidden);
-      expect(visible.map((panel) => panel.id)).toEqual([
-        `project-detail-panel-${topic}`,
-      ]);
-    }
+    expect(document.querySelector('[role="tablist"]')).toBeNull();
+    const visible = Array.from(
+      document.querySelectorAll('.management-topic'),
+    ).filter((panel) => !panel.hidden);
+    expect(visible.map((panel) => panel.id)).toEqual([
+      'project-detail-panel-overview',
+      'project-detail-panel-team',
+      'project-detail-panel-context',
+      'project-detail-panel-access',
+    ]);
+    expect(
+      document
+        .querySelector('[data-testid="project-repository-rescan"]')
+        .closest('#project-detail-panel-team'),
+    ).not.toBeNull();
+    expect(
+      document
+        .querySelector('[data-testid="project-remove-demo"]')
+        .closest('.management-disclosure'),
+    ).not.toBeNull();
     expect(document.querySelector('#project-edit-name')).toBe(name);
     expect(name.value).toBe('Draft project');
   });
@@ -349,10 +356,12 @@ describe('ProjectsView', () => {
 
   it('groups the Project Tool Whitelist by real registry families', async () => {
     listProjectsMock.mockResolvedValue({
-      projects: [project({ project_id: 'demo', allowed_tools: ['read'] })],
+      projects: [
+        project({ project_id: 'demo', allowed_tools: ['read', 'bash'] }),
+      ],
     });
     showProjectMock.mockResolvedValue({
-      project: project({ project_id: 'demo', allowed_tools: ['read'] }),
+      project: project({ project_id: 'demo', allowed_tools: ['read', 'bash'] }),
       scan: { team: [], report: { clean: true, findings: [] }, skills: {} },
     });
     mockToolCatalog(
@@ -372,9 +381,23 @@ describe('ProjectsView', () => {
     await waitForCondition(() => toggleByAriaLabel('Toggle tool read'));
 
     const headings = Array.from(
-      document.querySelectorAll('.access-chips__group-title'),
+      document.querySelectorAll(
+        '#project-detail-panel-access .tool-access-group-header h4',
+      ),
     ).map((heading) => heading.textContent.trim());
-    expect(headings).toEqual(['Execution', 'Files', 'Individual Tools']);
+    expect(headings).toEqual(['Files', 'Execution', 'Individual Tools']);
+    const search = document.querySelector(
+      '#project-detail-panel-access input[type="search"]',
+    );
+    search.value = 'edit';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    document.querySelector('[aria-label="Turn on Files"]').click();
+    buttonByTestId('project-save-demo').click();
+    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
+    expect(setProjectMock).toHaveBeenCalledWith('demo', {
+      allowed_tools: ['read', 'bash', 'edit'],
+    });
   });
 
   it('shows a persisted unavailable tool and lets the user remove it', async () => {
@@ -418,7 +441,11 @@ describe('ProjectsView', () => {
     const unavailableToggle = toggleByAriaLabel(
       'Toggle tool disabled_extension_tool',
     );
-    expect(unavailableToggle.classList.contains('is-attention')).toBe(true);
+    expect(
+      unavailableToggle
+        .closest('.tool-access-chip-wrap')
+        .classList.contains('is-unavailable'),
+    ).toBe(true);
 
     unavailableToggle.click();
     buttonByTestId('project-save-demo').click();

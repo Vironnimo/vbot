@@ -99,7 +99,7 @@ describe('AgentsView', () => {
     vi.useRealTimers();
   });
 
-  it('opens the selected Agent with Model before identity and returns from shared defaults to the same editor', async () => {
+  it('opens the selected Agent with identity and Model together and returns from shared defaults to the same editor', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
@@ -107,7 +107,7 @@ describe('AgentsView', () => {
     const model = document.querySelector('#agent-model');
     const name = document.querySelector('#agent-name');
     expect(
-      model.compareDocumentPosition(name) & Node.DOCUMENT_POSITION_FOLLOWING,
+      name.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     document.querySelector('.agent-list-defaults button').click();
     flushSync();
@@ -233,7 +233,7 @@ describe('AgentsView', () => {
     expect(consumed).toHaveBeenCalledOnce();
   });
 
-  it('switches detail topics with keyboard navigation without replacing edited fields', async () => {
+  it('keeps the Agent on one page while local disclosures preserve edited fields', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
@@ -242,27 +242,40 @@ describe('AgentsView', () => {
     name.value = 'Draft name';
     name.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
-    const overview = document.querySelector('#agent-detail-tab-overview');
-    overview.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }),
-    );
+    expect(document.querySelector('[role="tablist"]')).toBeNull();
+    for (const topic of ['overview', 'behavior', 'access']) {
+      expect(
+        document.querySelector('#agent-detail-panel-' + topic).hidden,
+      ).toBe(false);
+    }
+    const advanced = document.querySelector('#agent-detail-panel-details');
+    expect(advanced.open).toBe(false);
+    advanced.querySelector('summary').click();
     flushSync();
-    await waitForCondition(
-      () => !document.querySelector('#agent-detail-panel-behavior').hidden,
-    );
-    expect(document.querySelector('#agent-detail-panel-behavior').hidden).toBe(
-      false,
-    );
-    expect(document.querySelector('#agent-detail-panel-overview').hidden).toBe(
-      true,
-    );
-    overview.click();
-    flushSync();
+    expect(advanced.open).toBe(true);
     expect(document.querySelector('#agent-name')).toBe(name);
     expect(name.value).toBe('Draft name');
-    expect(document.querySelector('#agent-detail-panel-overview').hidden).toBe(
-      false,
-    );
+    expect(
+      document.querySelector('.agent-detail-scroll .management-header'),
+    ).not.toBeNull();
+  });
+
+  it('opens model options and focuses an invalid field when saving the continuous page', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() => document.querySelector('#agent-temperature'));
+    const temperature = document.querySelector('#agent-temperature');
+    const options = temperature.closest('details');
+    options.open = true;
+    temperature.value = 'invalid';
+    temperature.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    options.open = false;
+    getButton('Save changes').click();
+    await waitForCondition(() => document.activeElement === temperature);
+    expect(options.open).toBe(true);
+    expect(temperature.getAttribute('aria-invalid')).toBe('true');
   });
 
   it('opens Add as a compact modal and sends selected create payload', async () => {

@@ -364,7 +364,6 @@ describe('AgentsView', () => {
       document.body.querySelector('button[aria-label="Toggle agent worker"]'),
     );
 
-    getButton('Tools & Skills').click();
     flushSync();
     const panel = document.querySelector('#agent-detail-panel-access');
     expect(panel.hidden).toBe(false);
@@ -426,7 +425,6 @@ describe('AgentsView', () => {
       );
       mountedComponent = mount(AgentsView, { target: document.body });
       await waitForText('builder@demo');
-      getButton('Tools & Skills').click();
       flushSync();
       vi.useFakeTimers();
       if (group === 'project') {
@@ -808,7 +806,7 @@ describe('AgentsView', () => {
     expect(updateCall[1].allowed_skills).toEqual(['sample-skill']);
   });
 
-  it('renders a not-ready tool greyed with a badge, verbatim hint, and extensions link', async () => {
+  it('renders a not-ready tool with a visible status, verbatim hint, and extensions link', async () => {
     const navigateMock = vi.fn();
     rpcMock.mockImplementation(
       createAgentsRpcMock({
@@ -841,7 +839,11 @@ describe('AgentsView', () => {
     // Policy controls stay editable because access is independent of readiness.
     const toolToggle = toolAccessToggle('home_assistant');
     expect(toolToggle.disabled).toBe(false);
-    expect(toolToggle.classList.contains('is-unavailable')).toBe(true);
+    expect(
+      toolToggle
+        .closest('.tool-access-chip-wrap')
+        .classList.contains('is-unavailable'),
+    ).toBe(true);
 
     // The extensions link navigates to the Extensions settings panel.
     const openExtensions = Array.from(

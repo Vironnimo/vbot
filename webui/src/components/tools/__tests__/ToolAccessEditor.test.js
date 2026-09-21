@@ -92,7 +92,7 @@ describe('ToolAccessEditor', () => {
     document.body.innerHTML = '';
   });
 
-  it('offers explicit opt-in while All mode stays selected', () => {
+  it('offers explicit opt-in while retaining the default policy', () => {
     const onChange = vi.fn();
     mountedComponent = mount(ToolAccessEditor, {
       target: document.body,
@@ -119,7 +119,66 @@ describe('ToolAccessEditor', () => {
     });
   });
 
-  it('renders name-only chips and restores each Tool description on hover', () => {
+  it('selects all Tools inside the ceiling, including explicit permissions', () => {
+    const onChange = vi.fn();
+    mountedComponent = mount(ToolAccessEditor, {
+      target: document.body,
+      props: {
+        value: { mode: 'none' },
+        tools: [...tools, { name: 'computer', requires_opt_in: true }],
+        ceiling: ['read', 'computer'],
+        onChange,
+      },
+    });
+    flushSync();
+    buttonWithText('Select all').click();
+    const selected = onChange.mock.calls.at(-1)[0];
+    expect(selected.mode).toBe('selected');
+    expect(selected.allowed).toEqual(
+      expect.arrayContaining(['read', 'computer']),
+    );
+    expect(selected.allowed).toHaveLength(2);
+    expect(selected.granted).toEqual(['computer']);
+    expect(toolChip('read').disabled).toBe(false);
+  });
+
+  it('clears all access and permits individual selection from an empty policy', async () => {
+    const onChange = vi.fn();
+    const props = {
+      value: { mode: 'all', granted: ['analyze_image', 'computer'] },
+      tools,
+      onChange,
+    };
+    mountedComponent = mount(ToolAccessEditor, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+    buttonWithText('Deselect all').click();
+    flushSync();
+    expect(onChange).toHaveBeenLastCalledWith({ mode: 'none' });
+    await unmount(mountedComponent);
+    mountedComponent = mount(ToolAccessEditor, {
+      target: document.body,
+      props: { ...props, value: { mode: 'none' } },
+    });
+    flushSync();
+    expect(
+      [...document.querySelectorAll('[data-tool-name]')].every(
+        (tool) =>
+          tool.getAttribute('aria-checked') === 'false' && !tool.disabled,
+      ),
+    ).toBe(true);
+    toolChip('read').click();
+    expect(onChange.mock.calls.at(-1)[0]).toEqual({
+      mode: 'selected',
+      allowed: ['read'],
+      denied: ['session_read', 'memory'],
+    });
+    expect(onChange.mock.calls.at(-1)[0].granted).toBeUndefined();
+  });
+
+  it('keeps Tool rows compact and shows complete details on hover', () => {
     mountedComponent = mount(ToolAccessEditor, {
       target: document.body,
       props: {
@@ -275,9 +334,41 @@ describe('ToolAccessEditor', () => {
     expect(toolChip('session_search')).toBeTruthy();
     expect(document.querySelector('[data-tool-name="read"]')).toBeNull();
 
-    const selectedMode = document.querySelector('[role="radio"]');
-    selectedMode.focus();
-    expect(document.activeElement).toBe(selectedMode);
+    const bulkAction = buttonWithText('Select all');
+    bulkAction.focus();
+    expect(document.activeElement).toBe(bulkAction);
+    expect(document.querySelector('[role="radiogroup"]')).toBeNull();
+  });
+
+  it('finds Tools by description and family without changing hidden permissions', () => {
+    const onChange = vi.fn();
+    mountedComponent = mount(ToolAccessEditor, {
+      target: document.body,
+      props: { value: { mode: 'all' }, tools, onChange },
+    });
+    flushSync();
+    const search = document.querySelector('input[type="search"]');
+    search.value = 'from disk';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    expect(
+      [...document.querySelectorAll('[data-tool-name]')].map(
+        (tool) => tool.dataset.toolName,
+      ),
+    ).toEqual(['read']);
+    buttonByAriaLabel('Turn off Files').click();
+    expect(onChange).toHaveBeenLastCalledWith({
+      mode: 'all',
+      denied: ['read'],
+    });
+    search.value = 'Home Assistant';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    expect(
+      [...document.querySelectorAll('[data-tool-name]')].map(
+        (tool) => tool.dataset.toolName,
+      ),
+    ).toEqual(['ha_call_service', 'ha_get_state']);
   });
 });
 
@@ -298,5 +389,13 @@ function toolTipWithText(text) {
 function buttonByAriaLabel(label) {
   const button = document.querySelector(`button[aria-label="${label}"]`);
   expect(button, label).toBeTruthy();
+  return button;
+}
+
+function buttonWithText(text) {
+  const button = [...document.querySelectorAll('button')].find(
+    (candidate) => candidate.textContent.trim() === text,
+  );
+  expect(button, text).toBeTruthy();
   return button;
 }
