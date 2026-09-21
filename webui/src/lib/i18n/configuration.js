@@ -1,35 +1,9 @@
 export default Object.freeze({
   'settings.specializedModels.resetOptions': 'Reset options',
-  'settings.categories.general': 'General',
-  'settings.categories.generalDescription':
-    'Make vBot comfortable to work with.',
   'settings.categories.sessions': 'Sessions & Memory',
-  'settings.categories.sessionsDescription':
-    'Name conversations, find earlier work and learn from finished Sessions.',
-  'settings.categories.tools': 'Tools & Media',
-  'settings.categories.toolsDescription':
-    'Set up speech, images, web search and delegation.',
-  'settings.categories.connections': 'Connections',
-  'settings.categories.connectionsDescription':
-    'Connect Model Providers, messaging Channels and Extensions.',
-  'settings.categories.systemDescription':
-    'Server, connected devices and diagnostics.',
-  'settings.summary.appearance': 'Language, reading width and work details',
-  'settings.summary.hostTimezone': 'Server time zone',
-  'settings.summary.indexedSearch': 'Indexed search',
-  'settings.summary.historySearch': 'Session history search',
-  'settings.summary.notConfigured': 'Not configured',
-  'settings.summary.delegation': 'Depth, parallel work and time limits',
-  'settings.summary.providers': 'Accounts, credentials and available Models',
-  'settings.summary.channels': 'Messaging accounts and access',
-  'settings.summary.extensions': 'Installed capabilities and configuration',
-  'settings.summary.media': 'Speech, images, embeddings and decisions',
-  'settings.summary.voice': 'Microphone and voice activation',
-  'settings.summary.server': 'Server and connected clients',
-  'settings.summary.connection': 'Current server connection',
-  'settings.agentShortcut.description':
-    'Changing an Agent’s Model or Thinking level?',
-  'settings.agentShortcut.action': 'Go to Agents',
+  'settings.groups.personal': 'Personal',
+  'settings.agentShortcut.nav': 'Model & Thinking',
+  'settings.search.resultCount': 'Matching topics: {count}',
   'settings.agentShortcut.search':
     'Agents → Shared defaults · Model, Thinking, fallbacks and Compaction',
   'settings.title': 'Settings',
