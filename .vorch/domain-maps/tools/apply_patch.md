@@ -14,8 +14,11 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   ordinary field formatting and shared call wrappers. Equal aliases coalesce;
   conflicting aliases (including placeholder text) and unsupported fields fail
   before mutation. Patch contents remain literal. The canonical schema stays `patch`.
-- The definition leads with file editing and complete replacement/insertion examples,
-  then Add/Delete/Move headers, batching, insertion-after and EOF targeting.
+- The definition states that a patch can contain one or more edits across one or more
+  files, without prescribing how many to combine. One example combines three replacement/insertion
+  edits in two files. Each text edit supplies its changed lines and locating context
+  together; a context-only call cannot select a location for a later call.
+  Further guidance covers Add/Delete/Move headers, insertion-after and EOF targeting.
   Detailed continuation guidance belongs in
   results; matching errors distinguish missing/ambiguous context hints from hunk text.
 - Add, Update, Delete, standalone `Move File: source -> destination`, and
