@@ -103,57 +103,74 @@ describe('SettingsView', () => {
 
     const picker = document.querySelector('#settings-mobile-section');
     expect(picker).not.toBeNull();
-    expect(picker.textContent).toContain('General');
+    expect(picker.textContent).toContain('Providers');
 
     picker.click();
     flushSync();
 
     const appearanceOption = Array.from(
       document.body.querySelectorAll('.dropdown-option'),
-    ).find((option) => option.textContent.includes('Connections'));
+    ).find((option) => option.textContent.includes('Appearance'));
     expect(appearanceOption).toBeTruthy();
 
     appearanceOption.click();
     flushSync();
 
-    expect(picker.textContent).toContain('Connections');
+    expect(picker.textContent).toContain('Appearance');
     expect(
       document.querySelector('[data-settings-section="appearance"]').hidden,
-    ).toBe(true);
+    ).toBe(false);
     expect(
       document.querySelector('[data-settings-section="providers"]').hidden,
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it('shows five category entries and related settings together without scroll-driven navigation', async () => {
+  it('prioritizes Models and opens each topic directly without scroll-driven navigation', async () => {
     rpcMock.mockResolvedValue(createSettingsPayload());
-    mountedComponent = mount(SettingsView, { target: document.body });
+    const navigate = vi.fn();
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: { onNavigateToAgentDefaults: navigate },
+    });
     flushSync();
     await waitForText('Add provider');
-    clickButton('General');
+    const visibleTopics = () =>
+      Array.from(document.querySelectorAll('[data-settings-section]'))
+        .filter((section) => !section.hidden)
+        .map((section) => section.dataset.settingsSection);
+    expect(visibleTopics()).toEqual(['providers']);
+    const firstGroup = document.querySelector('.settings-nav-section');
     expect(
-      document.querySelectorAll('.settings-desktop-index .snav-item'),
-    ).toHaveLength(5);
+      Array.from(firstGroup.querySelectorAll('button')).map((button) =>
+        button.textContent.trim(),
+      ),
+    ).toEqual([
+      'Providers',
+      'Specialized Models',
+      expect.stringContaining('Model & Thinking'),
+    ]);
     expect(document.querySelector('#settings-defaults-model')).toBeNull();
+    for (const button of document.querySelectorAll(
+      '.settings-nav .snav-item:not(.settings-defaults-link)',
+    )) {
+      button.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      flushSync();
+      expect(visibleTopics()).toHaveLength(1);
+      expect(document.activeElement.textContent).toBe(button.textContent);
+      expect(button.getAttribute('aria-current')).toBe('page');
+      expect(button.hasAttribute('aria-expanded')).toBe(false);
+    }
+    clickButton('Appearance');
     await new Promise((resolve) => setTimeout(resolve, 0));
     flushSync();
-    const visibleTopics = () =>
-      Array.from(document.querySelectorAll('[data-settings-section]')).filter(
-        (section) => !section.hidden,
-      );
-    expect(
-      visibleTopics().map((section) => section.dataset.settingsSection),
-    ).toEqual(['appearance', 'preferences']);
     const scrollContainer = document.querySelector('.settings-content');
     scrollContainer.scrollTop = 400;
     scrollContainer.dispatchEvent(new Event('scroll'));
     flushSync();
-    expect(
-      visibleTopics().map((section) => section.dataset.settingsSection),
-    ).toEqual(['appearance', 'preferences']);
-    expect(document.activeElement).toBe(
-      document.querySelector('.settings-page-heading h2'),
-    );
+    expect(visibleTopics()).toEqual(['appearance']);
+    document.querySelector('.settings-defaults-link').click();
+    expect(navigate).toHaveBeenCalledWith('defaults');
   });
 
   it('finds settings across hidden topics with spacing-insensitive search and preserves drafts', async () => {
@@ -620,7 +637,7 @@ describe('SettingsView', () => {
     mountedComponent = mount(SettingsView, { target: document.body });
     flushSync();
     await waitForText('Add provider');
-    openSection('General', 'preferences');
+    openSection('Region & setup', 'preferences');
 
     document
       .getElementById('settings-general-timezone')

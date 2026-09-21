@@ -100,6 +100,11 @@ describe('SettingsView', () => {
 
     const jsonTextarea = document.body.querySelector('.text-area--code');
     expect(jsonTextarea).toBeTruthy();
+    const advanced = jsonTextarea.closest('details');
+    expect(advanced.open).toBe(false);
+    advanced.querySelector('summary').click();
+    expect(advanced.open).toBe(true);
+
     // Default empty array serializes to "[]" — confirms the renderer
     // stringifies structured defaults rather than treating them as text.
     expect(jsonTextarea.value).toBe('[]');
