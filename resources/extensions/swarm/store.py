@@ -571,18 +571,6 @@ class SwarmStore:
             _membership, swarm_id, participant_id, discussion_id, False, expected_epoch
         )
 
-    async def decisions(
-        self,
-        swarm_id: str,
-        actor_id: str | None,
-        arguments: Json,
-        *,
-        expected_epoch: int | None = None,
-    ) -> Json:
-        from ._store_decisions import decisions
-
-        return await self._run(decisions, swarm_id, actor_id, arguments, expected_epoch)
-
     async def wiki(
         self,
         swarm_id: str,

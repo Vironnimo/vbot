@@ -174,6 +174,7 @@ CREATE TABLE IF NOT EXISTS delivery_batches(receipt_id TEXT PRIMARY KEY,particip
 CREATE TABLE IF NOT EXISTS delivery_batch_entries(receipt_id TEXT NOT NULL REFERENCES delivery_batches(receipt_id),post_id TEXT NOT NULL REFERENCES posts(id),participant_id TEXT NOT NULL REFERENCES participants(id),PRIMARY KEY(receipt_id,post_id,participant_id)) STRICT;
 CREATE TABLE IF NOT EXISTS requests(scope TEXT NOT NULL,request_id TEXT NOT NULL,payload_hash TEXT NOT NULL,outcome TEXT NOT NULL,PRIMARY KEY(scope,request_id)) STRICT;
 CREATE TABLE IF NOT EXISTS swarm_goals(swarm_id TEXT PRIMARY KEY REFERENCES swarms(id),post_id TEXT NOT NULL REFERENCES posts(id)) STRICT;
+-- Retained question history has no callable API; it follows explicit Swarm deletion.
 CREATE TABLE IF NOT EXISTS decision_questions(id TEXT PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),document TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS decision_positions(question_id TEXT NOT NULL REFERENCES decision_questions(id),actor_id TEXT NOT NULL,document TEXT NOT NULL,PRIMARY KEY(question_id,actor_id)) STRICT;
 CREATE TABLE IF NOT EXISTS decision_events(id INTEGER PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),question_id TEXT NOT NULL REFERENCES decision_questions(id),kind TEXT NOT NULL,actor_id TEXT NOT NULL,author TEXT NOT NULL,created_at TEXT NOT NULL,document TEXT NOT NULL) STRICT;
@@ -181,6 +182,7 @@ CREATE INDEX IF NOT EXISTS decision_event_page ON decision_events(swarm_id,quest
 CREATE TABLE IF NOT EXISTS wiki_pages(id TEXT PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),revision INTEGER NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS wiki_revisions(id INTEGER PRIMARY KEY,swarm_id TEXT NOT NULL REFERENCES swarms(id),page_id TEXT NOT NULL REFERENCES wiki_pages(id),revision INTEGER NOT NULL,title TEXT NOT NULL,content TEXT NOT NULL,deleted INTEGER NOT NULL CHECK(deleted IN(0,1)),author_id TEXT NOT NULL,author_name TEXT NOT NULL,author_kind TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(page_id,revision)) STRICT;
 CREATE INDEX IF NOT EXISTS wiki_revision_page ON wiki_revisions(swarm_id,page_id,id DESC);
+CREATE INDEX IF NOT EXISTS recipients_pending_participant ON recipients(participant_id,post_id) WHERE delivered_at IS NULL;
 CREATE INDEX IF NOT EXISTS posts_discussion_page ON posts(swarm_id,discussion_id,sequence DESC);
 CREATE INDEX IF NOT EXISTS discussions_page ON discussions(swarm_id,is_main DESC,sequence);
 CREATE UNIQUE INDEX IF NOT EXISTS discussions_one_main ON discussions(swarm_id) WHERE is_main=1;

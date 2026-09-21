@@ -76,9 +76,11 @@ def _pending_rows(
     limit: int,
     batch_chars: int,
 ) -> list[sqlite3.Row]:
+    # Keep ordered reads on outstanding deliveries; scanning posts in sequence
+    # can otherwise revisit the entire delivered history before reaching LIMIT.
     candidates = connection.execute(
         "SELECT p.*,r.route_class,d.title AS discussion_title "
-        "FROM recipients r JOIN posts p ON p.id=r.post_id "
+        "FROM recipients r INDEXED BY recipients_pending_participant JOIN posts p ON p.id=r.post_id "
         "JOIN discussions d ON d.id=p.discussion_id "
         "WHERE p.swarm_id=? AND r.participant_id=? AND r.delivered_at IS NULL ORDER BY p.sequence LIMIT ?",
         (swarm_id, participant_id, limit),
