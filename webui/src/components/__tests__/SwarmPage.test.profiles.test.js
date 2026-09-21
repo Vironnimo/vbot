@@ -248,7 +248,7 @@ describe('SwarmPage', () => {
     );
   });
 
-  it('keeps drafts across tabs and materializes All and None tool selections', async () => {
+  it('keeps drafts across tabs and saves bulk Tool selections', async () => {
     const { bridge, operation } = createBridge();
     await render(bridge);
     button('Edit').click();
@@ -260,11 +260,7 @@ describe('SwarmPage', () => {
     expect(document.getElementById('swarm-profile-panel-access').hidden).toBe(
       false,
     );
-    document.querySelector('[role="radio"][aria-label="All"]')?.click();
-    const radio = [...document.querySelectorAll('[role="radio"]')].find(
-      (el) => el.textContent.trim() === 'All',
-    );
-    radio.click();
+    button('Select all').click();
     await tick();
     button('Save changes').click();
     await tick();
@@ -274,16 +270,15 @@ describe('SwarmPage', () => {
       .at(-1)[1].profile;
     expect(saved.tool_access).toEqual({
       mode: 'selected',
-      allowed: ['read', 'write'],
+      allowed: ['browser', 'read', 'write'],
+      granted: ['browser'],
     });
     expect(saved.instructions).toBe('test-owned instruction body');
     expect(saved.slug).toBe('research');
     await new Promise((resolve) => setTimeout(resolve));
     button('Tools & Skills').click();
     await tick();
-    [...document.querySelectorAll('[role="radio"]')]
-      .find((el) => el.textContent.trim() === 'None')
-      .click();
+    button('Deselect all').click();
     await tick();
     button('Save changes').click();
     await tick();

@@ -1,5 +1,6 @@
 <script>
   import { t } from '$lib/i18n.js';
+  import ToolCatalogEditor from '../tools/ToolCatalogEditor.svelte';
   import ToggleChipList from '../ui/ToggleChipList.svelte';
   import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
@@ -7,32 +8,7 @@
     buildToolToggleList,
     buildSkillToggleSections,
   } from '$lib/projectsView.js';
-  let {
-    projectsState,
-    projectsController,
-    activeDetail,
-    navigateToExtensions,
-  } = $props();
-
-  function projectToolGroupLabel(family, items = []) {
-    const labels = {
-      files: t('toolAccess.family.files', 'Files'),
-      execution: t('toolAccess.family.execution', 'Execution'),
-      web: t('toolAccess.family.web', 'Web'),
-      sessions: t('toolAccess.family.sessions', 'Sessions'),
-      skills: t('toolAccess.family.skills', 'Skills'),
-      media: t('toolAccess.family.media', 'Media'),
-    };
-    return (
-      labels[family] ??
-      items.find((item) => item?.family_label)?.family_label ??
-      (family
-        ? String(family)
-            .replaceAll('_', ' ')
-            .replace(/\b\w/g, (letter) => letter.toUpperCase())
-        : t('toolAccess.family.individual', 'Individual Tools'))
-    );
-  }
+  let { projectsState, projectsController, navigateToExtensions } = $props();
 
   let toolToggleRows = $derived(
     buildToolToggleList({
@@ -143,19 +119,12 @@
   }
 </script>
 
-<div
-  class="management-topic"
-  role="tabpanel"
-  id="project-detail-panel-access"
-  aria-labelledby="project-detail-tab-access"
-  hidden={activeDetail !== 'access'}
-  tabindex="0"
->
+<div class="management-topic" id="project-detail-panel-access">
   <!-- Section 4: Tools -->
   <div class="detail-section">
-    <div class="detail-section-title">
+    <h3 class="detail-section-title">
       {t('projects.detail.sectionTools', 'Tools')}
-    </div>
+    </h3>
     <div class="detail-section-body">
       <div class="projects-field">
         <span class="projects-label">
@@ -167,20 +136,38 @@
             'The maximum tools this project’s agents may use. An individual agent may use fewer through its own permissions.',
           )}
         </p>
-        <ToggleChipList
+        <ToolCatalogEditor
           items={toolChipItems}
-          grouped
-          groupLabel={projectToolGroupLabel}
-          emptyLabel={t('projects.manage.toolsEmpty', 'No tools available')}
-          ariaToggleLabel={(name) =>
+          toggleLabel={(tool) =>
             t('projects.manage.toggleTool', 'Toggle tool {name}', {
-              name,
+              name: tool.name,
             })}
-          onToggle={(name, next) => toggleTool(name, next)}
-          onSetAll={setAllTools}
+          onToggle={(tool, next) => toggleTool(tool.name, next)}
+          onToggleGroup={(members, enabled) => {
+            const names = new Set(members.map((tool) => tool.name));
+            projectsController.replaceListField(
+              'allowed_tools',
+              enabled
+                ? [
+                    ...new Set([
+                      ...projectsState.editForm.allowed_tools,
+                      ...names,
+                    ]),
+                  ]
+                : projectsState.editForm.allowed_tools.filter(
+                    (name) => !names.has(name),
+                  ),
+            );
+          }}
           onOpenExtensions={navigateToExtensions}
         >
-          {#snippet headerActions()}
+          {#snippet toolbar()}
+            <Button variant="tertiary" onClick={() => setAllTools(true)}
+              >{t('toolAccess.selectAll', 'Select all')}</Button
+            >
+            <Button variant="tertiary" onClick={() => setAllTools(false)}
+              >{t('toolAccess.deselectAll', 'Deselect all')}</Button
+            >
             <Button
               variant="tertiary"
               data-testid="project-tools-reset"
@@ -189,16 +176,16 @@
               {t('projects.manage.resetDefaults', 'Reset to defaults')}
             </Button>
           {/snippet}
-        </ToggleChipList>
+        </ToolCatalogEditor>
       </div>
     </div>
   </div>
 
   <!-- Section 5: Skills -->
   <div class="detail-section">
-    <div class="detail-section-title">
+    <h3 class="detail-section-title">
       <span>{t('projects.detail.sectionSkills', 'Skills')}</span>
-    </div>
+    </h3>
     <div class="detail-section-body">
       <div class="projects-field">
         <span class="projects-label">

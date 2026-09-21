@@ -1,6 +1,24 @@
 export default Object.freeze({
+  'agents.contextMemory': 'Context & Memory',
+  'agents.customCompactionHelp':
+    'Turn on to customize how this Agent condenses long conversations.',
+  'agents.customCompaction': 'Custom Compaction Policy',
+  'toolAccess.selectAll': 'Select all',
+  'toolAccess.deselectAll': 'Deselect all',
+  'toolAccess.selectionCount': '{enabled} of {total} allowed',
+  'toolAccess.automatic': 'Automatic',
+  'toolAccess.unavailable': 'Currently unavailable',
+  'toolAccess.explicitPermission': 'Explicit permission required',
+  'agents.modelOptions': 'Temperature & fallback models',
+  'agents.storageDetails': 'Workspace & advanced',
+  'agents.identityStorage': 'Identity & storage',
+  'projects.repositorySection': 'Repository',
+  'projects.defaultsSection': 'Agent defaults',
+  'projects.defaultsSummary':
+    'Shared starting values for the Team. Individual Agents can override them.',
+  'projects.repositoryActions': 'Repository management',
   'toolAccess.requiresOptIn':
-    'Requires explicit permission, including in All mode. Turn this Tool on to grant it.',
+    'Requires explicit permission. Selecting this Tool grants it.',
   'skills.descriptionLabel': 'When to use this skill',
   'skills.descriptionHelp':
     'Agents use this description to decide when this playbook is relevant.',
@@ -163,7 +181,7 @@ export default Object.freeze({
   'agents.form.allowedTools': 'Allowed tools',
   'agents.form.toolAccess': 'Tool access',
   'agents.form.toolAccessHelp':
-    'Choose all Tools, your own selection, or none. Click a Tool name or a family switch to change access. Dashed Tools activate automatically when their condition is met.',
+    'Choose which Tools this Agent may use. Automatic Tools become available when their condition is met; permission does not guarantee current availability.',
   'agents.form.allowedSkills': 'Allowed skills',
   'agents.form.customSystemPrompt': 'Custom system prompt',
   'agents.form.customPromptHelp':
@@ -184,10 +202,6 @@ export default Object.freeze({
     'How much internal reasoning the model may spend before answering. Leave at — for the default.',
   'agents.form.wildcardNote':
     'Currently all are allowed, including ones added in the future. Turning any single item off switches to a fixed list.',
-  'toolAccess.modeLabel': 'Tool access',
-  'toolAccess.mode.all': 'All',
-  'toolAccess.mode.selected': 'Choose',
-  'toolAccess.mode.none': 'None',
   'toolAccess.searchLabel': 'Filter Tools',
   'toolAccess.searchPlaceholder': 'Filter Tools…',
   'toolAccess.resetOverride': 'Reset to repository policy',
