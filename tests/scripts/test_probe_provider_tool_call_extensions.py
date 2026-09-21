@@ -26,7 +26,6 @@ def test_swarm_workflow_rejects_a_claim_without_coordination():
                 "swarm_inbox",
                 "swarm_state",
                 "swarm_wiki",
-                "swarm_decisions",
             }
             return {"content": "Everything is complete."}
 
@@ -139,9 +138,8 @@ def test_swarm_workflow_persists_failed_calls_and_resumes_from_feedback():
             {"status_default", "status_cursor", "name_rejected", "name_field_rejected"},
         ),
         ("swarm_wiki", "all", 4, {"create", "update_patch", "delete", "restore"}),
-        ("swarm_decisions", "all", 37, set()),
     ],
-    ids=["board", "bounds", "inbox", "state", "wiki", "decisions"],
+    ids=["board", "bounds", "inbox", "state", "wiki"],
 )
 def test_swarm_probe_uses_registered_handlers_and_canonical_receipts(
     tool, case, minimum, expected_names

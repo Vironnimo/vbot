@@ -140,7 +140,7 @@ def _prepare_automatic_delivery(
         if prepared is not None:
             newest = int(
                 connection.execute(
-                    "SELECT COALESCE(MAX(p.sequence),0) FROM recipients r JOIN posts p ON p.id=r.post_id "
+                    "SELECT COALESCE(MAX(p.sequence),0) FROM recipients r INDEXED BY recipients_pending_participant JOIN posts p ON p.id=r.post_id "
                     "WHERE p.swarm_id=? AND r.participant_id=? AND r.delivered_at IS NULL",
                     (swarm_id, participant_id),
                 ).fetchone()[0]
@@ -182,8 +182,9 @@ def _prepare_automatic_delivery(
                 "settings_revision": int(prepared["settings_revision"]),
                 "replayed": True,
             }
+        # Ordered delivery scans must start from outstanding recipients, not posts.
         pending = connection.execute(
-            "SELECT p.*,r.route_class,d.title AS discussion_title FROM recipients r JOIN posts p ON p.id=r.post_id JOIN discussions d ON d.id=p.discussion_id "
+            "SELECT p.*,r.route_class,d.title AS discussion_title FROM recipients r INDEXED BY recipients_pending_participant JOIN posts p ON p.id=r.post_id JOIN discussions d ON d.id=p.discussion_id "
             "WHERE p.swarm_id=? AND r.participant_id=? AND r.delivered_at IS NULL ORDER BY p.sequence",
             (swarm_id, participant_id),
         ).fetchall()
