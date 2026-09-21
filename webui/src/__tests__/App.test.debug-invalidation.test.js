@@ -53,9 +53,9 @@ describe('App', () => {
     flushSync();
 
     await waitForCondition(() => {
-      expect(settingsPanelButton('Debug')).toBeTruthy();
+      expect(settingsPanelButton('System')).toBeTruthy();
     });
-    settingsPanelButton('Debug')?.click();
+    settingsPanelButton('System')?.click();
     flushSync();
 
     await waitForCondition(() => {
@@ -105,9 +105,9 @@ describe('App', () => {
     flushSync();
 
     await waitForCondition(() => {
-      expect(settingsPanelButton('Debug')).toBeTruthy();
+      expect(settingsPanelButton('System')).toBeTruthy();
     });
-    settingsPanelButton('Debug')?.click();
+    settingsPanelButton('System')?.click();
     flushSync();
 
     await waitForCondition(() => {

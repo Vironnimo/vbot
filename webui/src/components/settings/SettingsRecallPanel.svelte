@@ -146,7 +146,7 @@
       <div class="s-row-desc">
         {t(
           'settings.recall.vectorHint',
-          'Semantic search requires an embedding model — configure it under Specialized Models.',
+          'Semantic search uses the embedding model configured below.',
         )}
       </div>
     </div>

@@ -128,14 +128,14 @@
     </div>
     <Button
       variant="tertiary"
-      onClick={() => onNavigateToSettingsPanel('specialized_models')}
+      onClick={() => onNavigateToSettingsPanel('decision_model')}
       >{t('jev.configure', 'Configure model')}</Button
     >
   </header>
   {#if !loading && !available}<div class="jev-notice">
       {t(
         'jev.configureHelp',
-        'Select a Decision model in Specialized Models to evaluate questions or start a control. You can prepare experiments now.',
+        'Choose a Decision model under Settings → Tools → Evaluation to evaluate questions or start a control. You can prepare experiments now.',
       )}
     </div>{/if}
   {#if error}<p class="jev-error" role="alert">{error}</p>

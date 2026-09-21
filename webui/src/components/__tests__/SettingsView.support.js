@@ -80,13 +80,13 @@ export async function openProvidersPanel() {
 }
 
 export async function openChannelsPanel() {
-  await openSettingsSection('Channels', 'channels');
+  await openSettingsSection('Integrations', 'channels');
   await waitForCondition(() => buttonByText('Add channel'));
   await waitForCondition(() => buttonByText('Add channel')?.disabled === false);
 }
 
 export async function openSubAgentsPanel() {
-  await openSettingsSection('Sub-Agents', 'subagents');
+  await openSettingsSection('Tools', 'subagents');
   await waitForCondition(() =>
     activeSection.textContent.includes('Max sub-agent depth'),
   );
@@ -100,14 +100,14 @@ export async function openCompactionPanel() {
 }
 
 export async function openRecallPanel() {
-  await openSettingsSection('Recall', 'recall');
+  await openSettingsSection('Memory', 'recall');
   await waitForCondition(() =>
     activeSection.textContent.includes('Recall backend'),
   );
 }
 
 export async function openWebSearchPanel() {
-  await openSettingsSection('Web Search', 'web_search');
+  await openSettingsSection('Tools', 'web_search');
   await waitForCondition(() =>
     activeSection.textContent.includes('Search provider'),
   );
@@ -120,8 +120,8 @@ export async function openDefaultsPanel() {
   );
 }
 
-export async function openSpecializedModelsPanel() {
-  await openSettingsSection('Specialized Models', 'specialized_models');
+export async function openMediaModelsPanel() {
+  await openSettingsSection('Tools', 'media_models');
   // The panel calls task_model.list_targets on mount; waiting for that call
   // is the strongest signal the panel is mounted and its first paint is
   // committed.

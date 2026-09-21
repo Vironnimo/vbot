@@ -69,8 +69,7 @@ describe('SettingsView', () => {
     );
     expect(document.querySelector('.s-doc > .banner--neutral')).toBeTruthy();
 
-    // Providers is the default panel, so its content is the settings-loaded
-    // signal now that General is no longer shown first.
+    // Editors stay mounted on other pages and load independently.
     await waitForText('Add provider');
 
     expect(rpcMock).toHaveBeenCalledWith('settings.get');
@@ -81,7 +80,7 @@ describe('SettingsView', () => {
     expect(document.body.textContent).not.toContain('Anthropic');
     expect(document.body.textContent).toContain('Add provider');
 
-    clickButton('Server info');
+    clickButton('System');
 
     expect(document.body.textContent).toContain('0.0.0.0:9001');
     expect(document.body.textContent).toContain('C:/Users/test/.vbot');
@@ -103,29 +102,29 @@ describe('SettingsView', () => {
 
     const picker = document.querySelector('#settings-mobile-section');
     expect(picker).not.toBeNull();
-    expect(picker.textContent).toContain('Providers');
+    expect(picker.textContent).toContain('General');
 
     picker.click();
     flushSync();
 
     const appearanceOption = Array.from(
       document.body.querySelectorAll('.dropdown-option'),
-    ).find((option) => option.textContent.includes('Appearance'));
+    ).find((option) => option.textContent.includes('Voice'));
     expect(appearanceOption).toBeTruthy();
 
     appearanceOption.click();
     flushSync();
 
-    expect(picker.textContent).toContain('Appearance');
+    expect(picker.textContent).toContain('Voice');
     expect(
-      document.querySelector('[data-settings-section="appearance"]').hidden,
+      document.querySelector('[data-settings-section="speech_models"]').hidden,
     ).toBe(false);
     expect(
       document.querySelector('[data-settings-section="providers"]').hidden,
     ).toBe(true);
   });
 
-  it('prioritizes Models and opens each topic directly without scroll-driven navigation', async () => {
+  it('groups settings by purpose and keeps small controls out of page navigation', async () => {
     rpcMock.mockResolvedValue(createSettingsPayload());
     const navigate = vi.fn();
     mountedComponent = mount(SettingsView, {
@@ -134,43 +133,134 @@ describe('SettingsView', () => {
     });
     flushSync();
     await waitForText('Add provider');
-    const visibleTopics = () =>
-      Array.from(document.querySelectorAll('[data-settings-section]'))
-        .filter((section) => !section.hidden)
-        .map((section) => section.dataset.settingsSection);
-    expect(visibleTopics()).toEqual(['providers']);
-    const firstGroup = document.querySelector('.settings-nav-section');
-    expect(
-      Array.from(firstGroup.querySelectorAll('button')).map((button) =>
-        button.textContent.trim(),
-      ),
-    ).toEqual([
+    const visiblePages = () =>
+      Array.from(document.querySelectorAll('[data-settings-page]'))
+        .filter((page) => !page.hidden)
+        .map((page) => page.dataset.settingsPage);
+    expect(visiblePages()).toEqual(['general']);
+    const buttons = document.querySelectorAll('.settings-nav .snav-item');
+    expect(Array.from(buttons, (button) => button.textContent.trim())).toEqual([
+      'General',
       'Providers',
-      'Specialized Models',
-      expect.stringContaining('Model & Thinking'),
+      'Voice',
+      'Memory',
+      'Tools',
+      'Integrations',
+      'System',
     ]);
-    expect(document.querySelector('#settings-defaults-model')).toBeNull();
-    for (const button of document.querySelectorAll(
-      '.settings-nav .snav-item:not(.settings-defaults-link)',
-    )) {
+    const expectedSections = {
+      general: ['appearance', 'session_titles', 'preferences'],
+      voice: ['speech_models', 'voice_controls'],
+      memory: ['recall', 'embedding_model', 'reflection'],
+      tools: [
+        'web_search',
+        'web_fetch',
+        'media_models',
+        'decision_model',
+        'subagents',
+      ],
+      integrations: ['channels', 'extensions'],
+      system: ['server', 'debug'],
+    };
+    for (const [pageId, sectionIds] of Object.entries(expectedSections)) {
+      const page = document.querySelector(
+        '[data-settings-page="' + pageId + '"]',
+      );
+      expect(
+        Array.from(
+          page.querySelectorAll('[data-settings-section]'),
+          (section) => section.dataset.settingsSection,
+        ),
+      ).toEqual(sectionIds);
+    }
+    // Task-specific Models sit beside their consumers, exactly once.
+    for (const [task, pageId] of [
+      ['speech_to_text', 'voice'],
+      ['text_to_speech', 'voice'],
+      ['text_embedding', 'memory'],
+      ['image_generation', 'tools'],
+      ['decision', 'tools'],
+    ]) {
+      const inputs = document.querySelectorAll('#settings-specialized-' + task);
+      expect(inputs).toHaveLength(1);
+      expect(
+        inputs[0].closest('[data-settings-page]').dataset.settingsPage,
+      ).toBe(pageId);
+    }
+    for (const button of buttons) {
       button.click();
       await new Promise((resolve) => setTimeout(resolve, 0));
       flushSync();
-      expect(visibleTopics()).toHaveLength(1);
+      expect(visiblePages()).toHaveLength(1);
       expect(document.activeElement.textContent).toBe(button.textContent);
       expect(button.getAttribute('aria-current')).toBe('page');
-      expect(button.hasAttribute('aria-expanded')).toBe(false);
     }
-    clickButton('Appearance');
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    flushSync();
-    const scrollContainer = document.querySelector('.settings-content');
-    scrollContainer.scrollTop = 400;
-    scrollContainer.dispatchEvent(new Event('scroll'));
-    flushSync();
-    expect(visibleTopics()).toEqual(['appearance']);
+    clickButton('Providers');
     document.querySelector('.settings-defaults-link').click();
     expect(navigate).toHaveBeenCalledWith('defaults');
+    expect(document.querySelector('#settings-defaults-model')).toBeNull();
+  });
+
+  it('opens a deep link at its section inside the owning page', async () => {
+    rpcMock.mockImplementation(createSettingsRpcHandler());
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: { targetPanelId: 'decision_model', targetPanelRequestId: 1 },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.activeElement?.id === 'settings-section-decision_model',
+    );
+    expect(document.querySelector('[data-settings-page="tools"]').hidden).toBe(
+      false,
+    );
+    expect(
+      document.querySelector('.snav-item[aria-current="page"]').textContent,
+    ).toBe('Tools');
+    expect(
+      document.querySelector('[data-settings-section="web_search"]').hidden,
+    ).toBe(false);
+  });
+
+  it('keeps a search destination in view as earlier content loads, until the user scrolls', async () => {
+    let finishOptions;
+    const options = new Promise((resolve) => {
+      finishOptions = resolve;
+    });
+    rpcMock.mockImplementation(
+      createSettingsRpcHandler({
+        'settings.get': () =>
+          createSettingsPayload({
+            model_tasks: {
+              image_generation: { target: 'test/image', options: {} },
+            },
+          }),
+        'task_model.options': () => options,
+      }),
+    );
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: { targetPanelId: 'decision_model', targetPanelRequestId: 1 },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.activeElement?.id === 'settings-section-decision_model',
+    );
+    const scrollport = document.querySelector('.settings-content');
+    const heading = document.activeElement;
+    let contentTop = 800;
+    heading.getBoundingClientRect = () => ({
+      top: contentTop - scrollport.scrollTop,
+    });
+    finishOptions({ fields: [{ name: 'size', label: 'Size', type: 'text' }] });
+    await waitForCondition(() => scrollport.scrollTop === 776, 40, 10);
+
+    scrollport.dispatchEvent(new Event('wheel'));
+    scrollport.scrollTop = 120;
+    contentTop = 1000;
+    heading.append(document.createTextNode(' '));
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(scrollport.scrollTop).toBe(120);
   });
 
   it('finds settings across hidden topics with spacing-insensitive search and preserves drafts', async () => {
@@ -178,7 +268,7 @@ describe('SettingsView', () => {
     mountedComponent = mount(SettingsView, { target: document.body });
     flushSync();
     await waitForText('Add provider');
-    clickButton('Web Search');
+    clickButton('Tools');
     const input = document.querySelector('#settings-web-search-default-count');
     input.value = '9';
     input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -196,9 +286,10 @@ describe('SettingsView', () => {
       document.querySelector('[data-settings-section="preferences"]').hidden,
     ).toBe(false);
     expect(
-      document.querySelector('[data-settings-section="general"]').hidden,
+      document.querySelector('[data-settings-section="server"]').hidden,
     ).toBe(true);
-    clickButton('Web Search');
+    expect(document.activeElement.id).toBe('settings-section-preferences');
+    clickButton('Tools');
     expect(document.querySelector('#settings-web-search-default-count')).toBe(
       input,
     );
@@ -231,7 +322,7 @@ describe('SettingsView', () => {
     mountedComponent = mount(SettingsView, { target: document.body });
     flushSync();
     await waitForText('Add provider');
-    clickButton('Appearance');
+    clickButton('General');
     const search = document.querySelector('input[type="search"]');
     search.value = 'OpenAI';
     search.dispatchEvent(new Event('input', { bubbles: true }));
@@ -281,7 +372,7 @@ describe('SettingsView', () => {
     flushSync();
 
     await waitForText('Add provider');
-    openSection('Sub-Agents', 'subagents');
+    openSection('Tools', 'subagents');
 
     const inputs = activeSection.querySelectorAll('input.s-input');
     expect(inputs).toHaveLength(3);
@@ -336,7 +427,7 @@ describe('SettingsView', () => {
     flushSync();
 
     await waitForText('Add provider');
-    openSection('Recall', 'recall');
+    openSection('Memory', 'recall');
 
     const trigger = document.body.querySelector('#settings-recall-backend');
     expect(trigger).not.toBeNull();
@@ -392,7 +483,7 @@ describe('SettingsView', () => {
     flushSync();
 
     await waitForText('Add provider');
-    openSection('Web Search', 'web_search');
+    openSection('Tools', 'web_search');
 
     const trigger = document.body.querySelector(
       '#settings-web-search-provider',
@@ -473,7 +564,7 @@ describe('SettingsView', () => {
     flushSync();
 
     await waitForText('Add provider');
-    openSection('Session titles', 'session_titles');
+    openSection('General', 'session_titles');
 
     const toggle = activeSection.querySelector(
       'button[role="switch"][aria-label="Automatic Session titles"]',
@@ -566,7 +657,7 @@ describe('SettingsView', () => {
 
     await waitForText('Add provider');
 
-    openSection('Appearance', 'appearance');
+    openSection('General', 'appearance');
 
     const saveButton = getButton('Save');
     const languageTrigger = document.body.querySelector(
@@ -637,7 +728,7 @@ describe('SettingsView', () => {
     mountedComponent = mount(SettingsView, { target: document.body });
     flushSync();
     await waitForText('Add provider');
-    openSection('Region & setup', 'preferences');
+    openSection('General', 'preferences');
 
     document
       .getElementById('settings-general-timezone')
@@ -739,9 +830,10 @@ async function waitForText(text, attempts = 20) {
   throw new Error(`Timed out waiting for text: ${text}`);
 }
 
-async function waitForCondition(check, attempts = 20) {
+async function waitForCondition(check, attempts = 20, delayMs = 0) {
   for (let index = 0; index < attempts; index += 1) {
     await Promise.resolve();
+    if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
     flushSync();
 
     if (check()) {

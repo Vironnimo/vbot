@@ -186,9 +186,11 @@ describe('SettingsView', () => {
 
     mountedComponent = mount(SettingsView, { target: document.body });
     flushSync();
-    await waitForCondition(() => buttonByText('Appearance'));
+    await waitForCondition(() => buttonByText('General'));
 
-    expect(buttonByText('Connection')).toBeUndefined();
+    expect(
+      document.querySelector('[data-settings-section="desktop_connection"]'),
+    ).toBeNull();
     expect(buttonByText('Voice')).toBeTruthy();
     expect(
       document.querySelector('button[aria-label="Transcription audio"]'),
@@ -239,7 +241,9 @@ describe('SettingsView', () => {
           '[role="switch"][aria-label="Enable wakeword listening"]',
         ) !== null,
     );
-    expect(buttonByText('Connection')).toBeTruthy();
+    expect(
+      document.querySelector('[data-settings-section="desktop_connection"]'),
+    ).toBeTruthy();
     await waitForCondition(
       () =>
         buttonByText('Voice')?.classList.contains('snav-item--active') === true,
@@ -247,12 +251,12 @@ describe('SettingsView', () => {
 
     // Navigating elsewhere moves the index highlight; the Voice section stays
     // in the document (sections are never unmounted).
-    buttonByText('Server info').click();
+    buttonByText('System').click();
     flushSync();
 
     await waitForCondition(
       () =>
-        buttonByText('Server info')?.classList.contains('snav-item--active') ===
+        buttonByText('System')?.classList.contains('snav-item--active') ===
         true,
     );
     expect(buttonByText('Voice')?.classList.contains('snav-item--active')).toBe(
