@@ -16,6 +16,102 @@ from tests.core.tools.apply_patch_helpers import context
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["\n", "\r\n"])
+async def test_redundant_inline_replacement_identifies_same_label_without_writing(tmp_path, ending):
+    path = tmp_path / "file.txt"
+    old = '        "Savings 2 % p.a.": pd.Series('
+    new = '        "Savings 2 % p.a. (1 year = 365 days)": pd.Series('
+    content = f"# Concurrent explanation\n{new}\n            values,\n        )\n".replace(
+        "\n", ending
+    ).encode()
+    path.write_bytes(content)
+    stamp = path.stat().st_mtime_ns
+    registry = ToolRegistry()
+    register_apply_patch_tool(registry, file_state=FileReadState())
+    result = await registry.dispatch(
+        context(tmp_path), {"patch": f"*** Update File: file.txt\n@@\n-{old}\n+{new}"}
+    )
+    assert result["ok"] and result["data"]["already_applied"]
+    assert path.read_bytes() == content and path.stat().st_mtime_ns == stamp
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["", "\n", "\nother"])
+async def test_inline_poststate_preserves_no_newline_constraint(tmp_path, ending):
+    path = tmp_path / "file.txt"
+    path.write_bytes(('"Series new": pd.Series(' + ending).encode())
+    before = path.read_bytes()
+    registry = ToolRegistry()
+    register_apply_patch_tool(registry, file_state=FileReadState())
+    result = await registry.dispatch(
+        context(tmp_path),
+        {
+            "patch": '*** Update File: file.txt\n@@\n-"Series old": pd.Series(\n'
+            '+"Series new": pd.Series(\n\\ No newline at end of file'
+        },
+    )
+    assert result["ok"] is (ending == "")
+    assert path.read_bytes() == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "old,new,current",
+    [
+        ("old_value", "new_value", "new_value\n"),
+        ("return 1", "return 2", "return 2\n"),
+        ('label("old");', 'label("new");', 'label("new");\n'),
+        (
+            '"Series old": pd.Series(',
+            '"Series new": pd.Series(',
+            '"Series new": pd.Series(\n"Series other": pd.Series(\n',
+        ),
+        (
+            '"Series old": pd.Series(',
+            '"Series new": pd.Series(',
+            '"Series new": pd.Series(\n"Series new": pd.Series(\n',
+        ),
+        (
+            '"Series old": pd.Series(',
+            '"Series new": pd.Series(',
+            '"Series new": pd.Series(\ntrailing\n',
+        ),
+    ],
+)
+async def test_poststate_without_unique_target_or_requested_eof_is_not_success(
+    tmp_path, old, new, current
+):
+    path = tmp_path / "file.txt"
+    path.write_bytes(current.encode())
+    registry = ToolRegistry()
+    register_apply_patch_tool(registry, file_state=FileReadState())
+    end = "\n*** End of File" if current.endswith("trailing\n") else ""
+    result = await registry.dispatch(
+        context(tmp_path),
+        {"patch": f"*** Update File: file.txt\n@@\n-{old}\n+{new}{end}"},
+    )
+    assert not result["ok"]
+    assert path.read_bytes() == current.encode()
+
+
+@pytest.mark.asyncio
+async def test_existing_prestate_is_updated_even_if_another_line_is_already_poststate(tmp_path):
+    path = tmp_path / "file.txt"
+    path.write_bytes(b'"Series old": pd.Series(\n"Series new": pd.Series(\n')
+    registry = ToolRegistry()
+    register_apply_patch_tool(registry, file_state=FileReadState())
+    result = await registry.dispatch(
+        context(tmp_path),
+        {
+            "patch": "*** Update File: file.txt\n@@\n"
+            '-"Series old": pd.Series(\n+"Series new": pd.Series('
+        },
+    )
+    assert result["ok"] and not result["data"].get("already_applied")
+    assert path.read_bytes() == b'"Series new": pd.Series(\n"Series new": pd.Series(\n'
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("body", "expected"),
     [

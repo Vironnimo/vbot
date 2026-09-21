@@ -135,6 +135,34 @@ async def test_find_searches_full_page_and_match_reference_reads_more(tmp_path, 
 
 
 @pytest.mark.asyncio
+async def test_redundant_url_must_match_owned_saved_final_page(tmp_path, monkeypatch):
+    final_url = "https://example.com/reference"
+    fetch = AsyncMock(return_value=make_result(text="Needle fact. " * 1500, url=final_url))
+    monkeypatch.setattr("core.tools.web_fetch._http_get", fetch)
+    tool, context = registry(), make_context(tmp_path)
+    first = await tool.dispatch(context, {"url": "https://example.com/redirect"})
+    ref = first["data"]["ref"]
+    found = await tool.dispatch(context, {"url": final_url, "ref": ref, "find": "Needle"})
+    assert found["ok"] and "Needle fact" in found["data"]["content"]
+    continued = await tool.dispatch(context, {"url": final_url, **first["data"]["next"]})
+    assert continued["ok"] and continued["data"]["offset"] > 0
+    for url in ("https://example.com/other", "https://example.com/redirect"):
+        rejected = await tool.dispatch(context, {"url": url, "ref": ref})
+        assert rejected["error"]["code"] == "validation_error"
+    for changed in (replace(context, session_id="other"), replace(context, agent_id="other")):
+        rejected = await tool.dispatch(changed, {"url": final_url, "ref": ref})
+        assert rejected["error"]["code"] == "reference_error"
+    for extra in ({"output": "raw"}, {"fresh": True}):
+        rejected = await tool.dispatch(context, {"url": final_url, "ref": ref, **extra})
+        assert not rejected["ok"]
+    now = pages.time.time()
+    monkeypatch.setattr(pages.time, "time", lambda: now + 73 * 3600)
+    expired = await tool.dispatch(context, {"url": final_url, "ref": ref})
+    assert expired["error"]["code"] == "reference_error"
+    fetch.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_search_continuations_recover_all_matches_without_fetching(tmp_path, monkeypatch):
     body = "\n".join("Filler " * 100 + f"Needle{i:02d}" for i in range(30))
     fetch = AsyncMock(return_value=make_result(text=body))

@@ -10,6 +10,13 @@ The existing service's internal files separate Tool schema/argument validation (
 
 `computer` requires explicit opt-in; Project whitelist membership alone does not grant access. Policy is checked after lock admission, connection/session setup, and before subsequent actions. Independent Bash permission remains outside this boundary.
 
+Live checks use `ExtensionHost.resolve_tool_agent(context)`, including temporary
+Agents resolved from their canonical Session binding. Temporary callers must retain
+the owning Extension, group, participant and Session generation; invalid ownership
+refuses before Driver access and cannot supply recovery authority. Ordinary Agent
+resolution and explicit Tool permission checks remain shared with the host.
+`tests/core/runtime/test_runtime_computer_access.py` covers this through dispatch.
+
 The installed Cua Driver must be stable 0.23.2 or newer. Registration snapshots executable availability; installation requires Extension reload. The Extension does not install or update it. Input dispatched to Cua uses its tagged `target` contract; window cursor movement omits the unsupported delivery field. Cua screenshots, including Windows background captures, require `max_image_dimension=0`; Windows foreground Pillow captures are independent of this setting. No source patch or compiler is required.
 
 ## Desktop behavior

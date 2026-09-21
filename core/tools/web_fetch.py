@@ -862,8 +862,8 @@ def _validate_arguments(arguments: JsonObject) -> None:
     unknown = set(arguments) - allowed
     if unknown:
         raise ValueError("Unknown argument(s): " + ", ".join(sorted(unknown)))
-    if ("url" in arguments) == ("ref" in arguments):
-        raise ValueError("Supply exactly one of url (fresh fetch) or ref (saved page).")
+    if "url" not in arguments and "ref" not in arguments:
+        raise ValueError("Supply url for a fresh fetch or ref for a saved page.")
     for key in ("url", "ref", "find"):
         if key in arguments and (not isinstance(arguments[key], str) or not arguments[key].strip()):
             raise ValueError(f"{key} must be a non-empty string")
@@ -928,6 +928,13 @@ def make_web_fetch_handler(
                 snapshot = await run_tool_worker(load_page, context, manager, arguments["ref"])
             except ValueError as error:
                 return tool_failure("reference_error", str(error), retryable=False)
+            if "url" in arguments and arguments["url"].strip() != snapshot["url"]:
+                return tool_failure(
+                    "validation_error",
+                    "url does not match the saved page's final URL. Use ref alone to read "
+                    "that page, or omit ref to fetch the intended url.",
+                    retryable=False,
+                )
             return await run_tool_worker(read_page, snapshot, arguments)
 
         url = arguments["url"].strip()
