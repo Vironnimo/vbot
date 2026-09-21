@@ -7,14 +7,13 @@
     normalizeAgentForm,
   } from '$lib/agentForm.js';
   import { t } from '$lib/i18n.js';
-  import TabList from '../ui/TabList.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import Modal from '../ui/Modal.svelte';
   import FormField from '../ui/FormField.svelte';
   import TextField from '../ui/TextField.svelte';
-  import { onDestroy, untrack } from 'svelte';
+  import { onDestroy, tick, untrack } from 'svelte';
   import {
     createAgent,
     deleteAgent,
@@ -61,22 +60,8 @@
     : AGENT_FORM_MODE_CREATE;
   const editorAgentId = initialAgent?.id ?? '';
 
-  let activeDetail = $state('overview');
-
-  let detailScroll = $state(null);
-  let detailTabs = $derived([
-    { id: 'overview', label: t('management.overview', 'Overview') },
-    { id: 'behavior', label: t('management.behavior', 'Behavior') },
-    { id: 'access', label: t('management.access', 'Tools & Skills') },
-    { id: 'details', label: t('management.details', 'Details') },
-  ]);
-  function selectDetail(id) {
-    return autosaveContext.requestTransition(() => {
-      activeDetail = id;
-      if (detailScroll) detailScroll.scrollTop = 0;
-    });
-  }
   let formMode = $state(initialFormMode);
+  let editorForm = $state(null);
   let formValues = $state(createAgentFormValues(initialAgent ?? {}));
   let editBaselineValues = $state(createAgentFormValues(initialAgent ?? {}));
   let formErrors = $state({});
@@ -190,12 +175,12 @@
 
     if (!result.isValid) {
       if (source !== 'auto') {
-        activeDetail =
-          result.errors.id || result.errors.workspace ? 'details' : 'overview';
         errorMessage = t(
           'errors.validation',
           'Check the highlighted fields and try again.',
         );
+        await tick();
+        editorForm?.querySelector('[aria-invalid="true"]')?.focus();
       }
       return false;
     }
@@ -581,27 +566,24 @@
   }
 </script>
 
-<form class="agent-detail-pane" onsubmit={handleAgentSubmit}>
-  <div class="management-header">
-    <div class="detail-top">
-      <div>
-        <div class="detail-heading">
-          {formMode === AGENT_FORM_MODE_CREATE
-            ? t('agents.create', 'Create agent')
-            : agent?.name || formValues.name || agent?.id}
+<form
+  class="agent-detail-pane"
+  bind:this={editorForm}
+  onsubmit={handleAgentSubmit}
+>
+  <div class="agent-detail-scroll">
+    <div class="management-header">
+      <div class="detail-top">
+        <div>
+          <h2 class="detail-heading">
+            {formMode === AGENT_FORM_MODE_CREATE
+              ? t('agents.create', 'Create agent')
+              : agent?.name || formValues.name || agent?.id}
+          </h2>
+          <div class="detail-sub">{detailSubtitle}</div>
         </div>
-        <div class="detail-sub">{detailSubtitle}</div>
       </div>
     </div>
-    <TabList
-      items={detailTabs}
-      value={activeDetail}
-      idPrefix="agent-detail"
-      ariaLabel={t('management.sections', 'Detail sections')}
-      onChange={selectDetail}
-    />
-  </div>
-  <div class="agent-detail-scroll" bind:this={detailScroll}>
     {#if errorMessage}
       <Banner variant="error" role="alert">
         {errorMessage}
@@ -617,7 +599,6 @@
       bind:formValues
       {formMode}
       {formErrors}
-      {activeDetail}
       {fieldError}
       {navigateToAgentDefaults}
       {inheritSource}
@@ -629,7 +610,6 @@
       {memoriesRefreshToken}
       bind:formValues
       {formMode}
-      {activeDetail}
       {handleCustomPromptToggle}
       {navigateToAgentPrompt}
       {showAgentToast}
@@ -642,7 +622,6 @@
       {availableAgentTargets}
       {agentTargetCatalogError}
       bind:formValues
-      {activeDetail}
       {navigateToExtensions}
     />
     <AgentDetailsPanel
@@ -652,7 +631,6 @@
       {formErrors}
       {isSaving}
       {isDeleting}
-      {activeDetail}
       {deleteSelectedAgent}
       {openRenameDialog}
       {resetWorkspaceToDefault}

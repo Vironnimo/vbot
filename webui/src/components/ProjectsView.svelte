@@ -11,7 +11,6 @@
   } from '$lib/projectsView.js';
   import StatusChip from './ui/StatusChip.svelte';
   import { tooltip } from '$lib/tooltip.js';
-  import TabList from './ui/TabList.svelte';
   import { onDestroy, onMount, untrack } from 'svelte';
   import {
     createAutosaveParticipant,
@@ -45,22 +44,7 @@
   let hasProjects = $derived(projectsState.projects.length > 0);
 
   let selectedProject = $derived(projectsController.selectedProject());
-  let activeDetail = $state('overview');
   let findingsExpanded = $state(false);
-
-  let detailScroll = $state(null);
-  let detailTabs = $derived([
-    { id: 'overview', label: t('management.overview', 'Overview') },
-    { id: 'team', label: t('projects.detail.sectionTeam', 'Team') },
-    { id: 'context', label: t('management.context', 'Context') },
-    { id: 'access', label: t('management.access', 'Tools & Skills') },
-  ]);
-  function selectDetail(id) {
-    return autosaveContext.requestTransition(() => {
-      activeDetail = id;
-      if (detailScroll) detailScroll.scrollTop = 0;
-    });
-  }
 
   // The sparse project.set changes the open form represents versus the saved
   // project — empty when the form matches what the server already holds.
@@ -294,22 +278,70 @@
           class="project-detail-pane"
           data-testid={`project-panel-${selectedProject.project_id}`}
         >
-          <div class="management-header">
-            <div class="detail-top">
-              <div>
-                <div class="detail-heading-row">
-                  <span class="detail-heading">
-                    {selectedProject.display_name || selectedProject.project_id}
-                  </span>
-                  {#if needsRePoint(selectedProject)}
-                    <StatusChip variant="error">
-                      {t('projects.rePoint.title', 'Repository not found')}
-                    </StatusChip>
-                  {/if}
+          <div class="project-detail-scroll">
+            <div class="management-header">
+              <div class="detail-top">
+                <div>
+                  <div class="detail-heading-row">
+                    <h2 class="detail-heading">
+                      {selectedProject.display_name ||
+                        selectedProject.project_id}
+                    </h2>
+                    {#if needsRePoint(selectedProject)}
+                      <StatusChip variant="error">
+                        {t('projects.rePoint.title', 'Repository not found')}
+                      </StatusChip>
+                    {/if}
+                  </div>
+                  <div class="detail-sub">{selectedProject.cwd}</div>
                 </div>
-                <div class="detail-sub">{selectedProject.cwd}</div>
               </div>
-              <div class="detail-btns">
+            </div>
+
+            {#if projectsState.editError}
+              <Banner variant="error" role="alert">
+                {projectsState.editError}
+              </Banner>
+            {/if}
+
+            <ProjectOverviewPanel
+              bind:projectsState
+              {projectsController}
+              {onNavigateToSettingsPanel}
+              {handleManualSave}
+              {trackModelDropdownOpen}
+            >
+              {#snippet repositoryActions()}
+                <div class="detail-btns">
+                  {#if needsRePoint(selectedProject)}
+                    <Button
+                      variant="secondary"
+                      data-testid={`project-repoint-${selectedProject.project_id}`}
+                      onClick={() => openRePoint(selectedProject)}
+                    >
+                      {t('projects.rePoint.submit', 'Re-point')}
+                    </Button>
+                  {/if}
+                  <Button
+                    variant="danger"
+                    data-testid={`project-remove-${selectedProject.project_id}`}
+                    disabled={projectsState.removingProjectId ===
+                      selectedProject.project_id || projectsState.editSaving}
+                    onClick={() => removeOne(selectedProject)}
+                  >
+                    {t('projects.remove', 'Remove')}
+                  </Button>
+                </div>{/snippet}
+            </ProjectOverviewPanel>
+            <ProjectTeamPanel
+              bind:findingsExpanded
+              bind:projectsState
+              {projectsController}
+              {trackModelDropdownOpen}
+              {updateToolAccessOverride}
+              {navigateToExtensions}
+            >
+              {#snippet scanAction()}
                 <Button
                   variant="secondary"
                   data-testid="project-repository-rescan"
@@ -320,69 +352,12 @@
                   {projectsState.scanRefreshRequested
                     ? t('projects.repository.rescanning', 'Scanning…')
                     : t('projects.repository.rescan', 'Rescan repository')}
-                </Button>
-                {#if needsRePoint(selectedProject)}
-                  <Button
-                    variant="secondary"
-                    data-testid={`project-repoint-${selectedProject.project_id}`}
-                    onClick={() => openRePoint(selectedProject)}
-                  >
-                    {t('projects.rePoint.submit', 'Re-point')}
-                  </Button>
-                {/if}
-                <Button
-                  variant="danger"
-                  data-testid={`project-remove-${selectedProject.project_id}`}
-                  disabled={projectsState.removingProjectId ===
-                    selectedProject.project_id || projectsState.editSaving}
-                  onClick={() => removeOne(selectedProject)}
-                >
-                  {t('projects.remove', 'Remove')}
-                </Button>
-              </div>
-            </div>
-
-            <TabList
-              items={detailTabs}
-              value={activeDetail}
-              idPrefix="project-detail"
-              ariaLabel={t('management.sections', 'Detail sections')}
-              onChange={selectDetail}
-            />
-          </div>
-          <div class="project-detail-scroll" bind:this={detailScroll}>
-            {#if projectsState.editError}
-              <Banner variant="error" role="alert">
-                {projectsState.editError}
-              </Banner>
-            {/if}
-
-            <ProjectOverviewPanel
-              bind:projectsState
-              {projectsController}
-              {activeDetail}
-              {onNavigateToSettingsPanel}
-              {handleManualSave}
-              {trackModelDropdownOpen}
-            />
-            <ProjectTeamPanel
-              bind:findingsExpanded
-              bind:projectsState
-              {projectsController}
-              {activeDetail}
-              {trackModelDropdownOpen}
-              {updateToolAccessOverride}
-              {navigateToExtensions}
-            />
-            <ProjectContextPanel
-              bind:projectsState
-              {projectsController}
-              {activeDetail}
-            />
+                </Button>{/snippet}
+            </ProjectTeamPanel>
+            <ProjectContextPanel bind:projectsState {projectsController} />
             <ProjectAccessPanel
               {projectsState}
               {projectsController}
-              {activeDetail}
               {navigateToExtensions}
             />
             <div class="management-footer">
