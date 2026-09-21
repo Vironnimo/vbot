@@ -13,8 +13,9 @@ import {
   getSimpleList,
   openSearchableDropdown,
   openRecallPanel,
+  openSettingsSection,
   openSimpleDropdown,
-  openSpecializedModelsPanel,
+  openMediaModelsPanel,
   resetSettingsViewHarness,
   rpcMock,
   selectSearchableOption,
@@ -81,12 +82,12 @@ describe('SettingsView', () => {
     mountedComponent = mount(SettingsView, {
       target: document.body,
       props: {
-        targetPanelId: 'specialized_models',
+        targetPanelId: 'media_models',
         targetPanelRequestId: 1,
       },
     });
     flushSync();
-    await openSpecializedModelsPanel();
+    await openMediaModelsPanel();
 
     await openSearchableDropdown('settings-specialized-image_generation');
     selectSearchableOption(
@@ -204,12 +205,12 @@ describe('SettingsView', () => {
     mountedComponent = mount(SettingsView, {
       target: document.body,
       props: {
-        targetPanelId: 'specialized_models',
+        targetPanelId: 'media_models',
         targetPanelRequestId: 1,
       },
     });
     flushSync();
-    await openSpecializedModelsPanel();
+    await openMediaModelsPanel();
 
     await openSearchableDropdown('settings-specialized-image_generation');
     selectSearchableOption(
@@ -311,7 +312,7 @@ describe('SettingsView', () => {
     });
   });
 
-  it('renders and saves the embedding model row in the Specialized Models panel', async () => {
+  it('renders and saves the embedding model alongside conversation search', async () => {
     const target = 'openrouter/google/gemini-embedding-2::api-key';
     rpcMock.mockImplementation(
       createSettingsRpcMock({
@@ -343,12 +344,12 @@ describe('SettingsView', () => {
     mountedComponent = mount(SettingsView, {
       target: document.body,
       props: {
-        targetPanelId: 'specialized_models',
+        targetPanelId: 'embedding_model',
         targetPanelRequestId: 1,
       },
     });
     flushSync();
-    await openSpecializedModelsPanel();
+    await openSettingsSection('Memory', 'embedding_model');
 
     // The panel requests text_embedding alongside the other task types and
     // renders its dropdown.
