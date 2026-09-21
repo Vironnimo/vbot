@@ -82,6 +82,78 @@ describe('SettingsSpecializedModelsPanel', () => {
     vi.useRealTimers();
   });
 
+  it.each([
+    ['speech_to_text', 'text_embedding'],
+    ['text_embedding', 'image_generation'],
+    ['image_generation', 'speech_to_text'],
+    ['decision', 'text_to_speech'],
+  ])(
+    'keeps %s edits isolated when another page updates %s',
+    async (taskType, otherTask) => {
+      const binding = {
+        target: 'test/owned',
+        options: { stale_option: 'remove-me' },
+      };
+      const otherBinding = { target: 'test/other-before', options: {} };
+      const props = reactiveProps({
+        taskTypes: [taskType],
+        settings: {
+          model_tasks: { [taskType]: binding, [otherTask]: otherBinding },
+        },
+        onCommit: (settings) => {
+          props.settings = settings;
+        },
+      });
+      mountedComponent = mount(SettingsSpecializedModelsPanel, {
+        target: document.body,
+        props,
+      });
+      await waitForCondition(
+        () => button('Reset options') && !button('Reset options').disabled,
+      );
+      expect(listTaskModelTargetsMock.mock.calls.map(([task]) => task)).toEqual(
+        [taskType],
+      );
+      expect(
+        document.getElementById('settings-specialized-' + otherTask),
+      ).toBeNull();
+      if (taskType !== 'speech_to_text')
+        expect(getLocalSpeechMemoryMock).not.toHaveBeenCalled();
+
+      button('Reset options').click();
+      flushSync();
+      // An independent page publishes its result while this page has a draft.
+      const changedOtherBinding = {
+        target: 'test/other-after',
+        options: { temperature: 0.4 },
+      };
+      props.settings = {
+        model_tasks: {
+          [taskType]: binding,
+          [otherTask]: changedOtherBinding,
+        },
+      };
+      updateTaskModelSettingsMock.mockResolvedValue({
+        model_tasks: {
+          [taskType]: { ...binding, options: {} },
+          [otherTask]: changedOtherBinding,
+        },
+      });
+      flushSync();
+      button('Save').click();
+      await waitForCondition(
+        () => updateTaskModelSettingsMock.mock.calls.length === 1,
+      );
+      expect(updateTaskModelSettingsMock.mock.calls[0][0]).toEqual({
+        [taskType]: { target: binding.target, options: {} },
+      });
+      expect(props.settings.model_tasks[otherTask]).toEqual(
+        changedOtherBinding,
+      );
+      expect(button('Reset options')).toBeUndefined();
+    },
+  );
+
   it('unloads a specific model and ignores an older in-flight status poll', async () => {
     vi.useFakeTimers();
     const loaded = {

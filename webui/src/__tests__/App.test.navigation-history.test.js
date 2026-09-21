@@ -412,9 +412,9 @@ describe('App', () => {
     flushSync();
     sidebarNavButton('Settings').click();
     await waitForCondition(() =>
-      expect(settingsPanelButton('Sub-Agents')).toBeTruthy(),
+      expect(settingsPanelButton('Tools')).toBeTruthy(),
     );
-    settingsPanelButton('Sub-Agents').click();
+    settingsPanelButton('Tools').click();
     await waitForCondition(() =>
       expect(
         document.querySelector('[data-settings-section="subagents"]').hidden,
@@ -426,7 +426,7 @@ describe('App', () => {
     input.value = '6';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
-    settingsPanelButton('Appearance').click();
+    settingsPanelButton('General').click();
     await waitForCondition(() =>
       expect(document.querySelector('[role="dialog"]')).toBeTruthy(),
     );
@@ -463,11 +463,10 @@ describe('App', () => {
       ).toBeTruthy();
     });
 
-    settingsPanelButton('Specialized Models')?.click();
+    settingsPanelButton('Tools')?.click();
     await waitForCondition(() => {
       expect(
-        document.querySelector('[data-settings-section="specialized_models"]')
-          .hidden,
+        document.querySelector('[data-settings-section="media_models"]').hidden,
       ).toBe(false);
     });
     const firstScrollContainer = document.querySelector('.settings-content');
@@ -485,8 +484,7 @@ describe('App', () => {
       expect(restoredContainer).not.toBe(firstScrollContainer);
       expect(restoredContainer.scrollTop).toBe(640);
       expect(
-        document.querySelector('[data-settings-section="specialized_models"]')
-          .hidden,
+        document.querySelector('[data-settings-section="media_models"]').hidden,
       ).toBe(false);
     });
   });
@@ -507,9 +505,9 @@ describe('App', () => {
 
     sidebarNavButton('Settings')?.click();
     await waitForCondition(() => {
-      expect(settingsPanelButton('Sub-Agents')).toBeTruthy();
+      expect(settingsPanelButton('Tools')).toBeTruthy();
     });
-    settingsPanelButton('Sub-Agents')?.click();
+    settingsPanelButton('Tools')?.click();
     const depthInput = document.querySelector(
       'input[aria-label="Max sub-agent depth"]',
     );
@@ -635,7 +633,7 @@ describe('App', () => {
 
     sidebarNavButton('Settings')?.click();
     await waitForCondition(() => {
-      expect(settingsPanelButton('Sub-Agents')).toBeTruthy();
+      expect(settingsPanelButton('Tools')).toBeTruthy();
     });
     const depthInput = document.querySelector(
       'input[aria-label="Max sub-agent depth"]',
@@ -686,7 +684,7 @@ describe('App', () => {
 
     sidebarNavButton('Settings')?.click();
     await waitForCondition(() => {
-      expect(settingsPanelButton('Sub-Agents')).toBeTruthy();
+      expect(settingsPanelButton('Tools')).toBeTruthy();
     });
     const depthInput = document.querySelector(
       'input[aria-label="Max sub-agent depth"]',

@@ -57,216 +57,134 @@
   }
 
   const autosaveContext = useAutosaveContext();
-  let catalog = $derived(
-    new Map(
-      [
-        {
-          id: 'providers',
-          label: () => t('settings.providers.title', 'Providers'),
-          subtitle: () =>
-            t(
-              'settings.providers.subtitle',
-              'Connected providers and their credentials.',
-            ),
-        },
-        {
-          id: 'channels',
-          label: () => t('settings.channels.title', 'Channels'),
-          subtitle: () =>
-            t(
-              'settings.channels.subtitle',
-              'Manage channel routing and runtime status.',
-            ),
-        },
-        {
-          id: 'extensions',
-          label: () => t('settings.extensions.title', 'Extensions'),
-          subtitle: () =>
-            t(
-              'settings.extensions.subtitle',
-              'Loaded extensions and their capabilities. Toggles take effect immediately.',
-            ),
-        },
-        {
-          id: 'specialized_models',
-          label: () =>
-            t('settings.specializedModels.title', 'Specialized Models'),
-          subtitle: () =>
-            t(
-              'settings.specializedModels.subtitle',
-              'Task-specific model bindings for speech, images, video, music, embeddings, and decisions. These bindings are independent of agent and project defaults.',
-            ),
-        },
-        {
-          id: 'session_titles',
-          label: () => t('settings.sessionTitles.title', 'Session titles'),
-          subtitle: () =>
-            t(
-              'settings.sessionTitles.subtitle',
-              'Immediate local names and optional Model-generated titles for new Sessions.',
-            ),
-        },
-        {
-          id: 'recall',
-          label: () => t('settings.recall.title', 'Recall'),
-          subtitle: () =>
-            t(
-              'settings.recall.subtitle',
-              'How agents search past conversations.',
-            ),
-        },
-        {
-          id: 'voice',
-          label: () => t('settings.voice.title', 'Voice'),
-          subtitle: () =>
-            t(
-              'settings.voice.subtitle',
-              'Live voice, transcription audio, and wakeword command settings.',
-            ),
-        },
-        {
-          id: 'web_fetch',
-          label: () => t('settings.webFetch.title', 'Web Fetch'),
-          subtitle: () =>
-            t(
-              'settings.webFetch.subtitle',
-              'Page reading and optional extraction services.',
-            ),
-        },
-        {
-          id: 'web_search',
-          label: () => t('settings.webSearch.title', 'Web Search'),
-          subtitle: () =>
-            t(
-              'settings.webSearch.subtitle',
-              'Provider used by the web_search tool.',
-            ),
-        },
-        {
-          id: 'subagents',
-          label: () => t('settings.subagents.title', 'Sub-Agents'),
-          subtitle: () =>
-            t(
-              'settings.subagents.subtitle',
-              'Depth, fan-out, and timeout limits for spawned agent sessions.',
-            ),
-        },
-        {
-          id: 'reflection',
-          label: () => t('settings.reflection.title', 'Reflection'),
-          subtitle: () =>
-            t(
-              'settings.reflection.subtitle',
-              'Automatic background self-review that saves durable memory and skill updates from finished conversations.',
-            ),
-        },
-        {
-          id: 'appearance',
-          label: () => t('settings.appearance.title', 'Appearance'),
-          subtitle: () =>
-            t(
-              'settings.appearance.subtitle',
-              'Language and chat reading width.',
-            ),
-        },
-        {
-          id: 'debug',
-          label: () => t('debug.settings', 'Debug'),
-          subtitle: () =>
-            t(
-              'debug.settingsSubtitle',
-              'Control debug tracing of provider requests and responses.',
-            ),
-        },
-        {
-          id: 'general',
-          label: () => t('settings.general.title', 'Server info'),
-          subtitle: () =>
-            t(
-              'settings.general.subtitle',
-              'Server address, data directory, and connected clients.',
-            ),
-        },
-        {
-          id: 'desktop_connection',
-          label: () => t('settings.desktop.connection.title', 'Connection'),
-          subtitle: () =>
-            t(
-              'settings.desktop.connection.subtitle',
-              'Choose which vBot server this Desktop app connects to.',
-            ),
-        },
-      ].map((panel) => [panel.id, panel]),
-    ),
-  );
-  let preferencesPanel = $derived({
-    id: 'preferences',
-    labelKey: 'settings.preferences.title',
-    labelFallback: 'General',
-    label: () => t('settings.preferences.title', 'Region & setup'),
-    subtitle: () =>
-      t('settings.preferences.subtitle', 'Time zone and getting started.'),
-  });
-  let groups = $derived([
+  // Navigation follows user tasks; editor components do not define pages.
+  const sections = [
+    ['appearance', 'settings.appearance.title', 'Appearance'],
+    ['session_titles', 'settings.sessionTitles.title', 'Session titles'],
+    ['preferences', 'settings.preferences.title', 'Region & setup'],
+    ['providers', 'settings.providers.title', 'Providers'],
+    ['voice_controls', 'settings.sections.voiceControls', 'Voice controls'],
+    ['speech_models', 'settings.sections.speechModels', 'Speech Models'],
+    ['recall', 'settings.sections.recall', 'Conversation search'],
+    [
+      'embedding_model',
+      'settings.specializedModels.embeddingModel',
+      'Embedding model',
+    ],
+    ['reflection', 'settings.reflection.title', 'Reflection'],
+    ['web_search', 'settings.webSearch.title', 'Web Search'],
+    ['web_fetch', 'settings.webFetch.title', 'Web Fetch'],
+    ['media_models', 'settings.sections.mediaModels', 'Images, video & music'],
+    ['decision_model', 'settings.sections.evaluation', 'Evaluation'],
+    ['subagents', 'settings.sections.delegation', 'Sub-Agent limits'],
+    ['channels', 'settings.channels.title', 'Channels'],
+    ['extensions', 'settings.extensions.title', 'Extensions'],
+    ['server', 'settings.general.title', 'Server info'],
+    ['desktop_connection', 'settings.desktop.connection.title', 'Connection'],
+    ['debug', 'debug.settings', 'Debug'],
+  ].map(([id, key, fallback]) => ({ id, label: () => t(key, fallback) }));
+  const panelById = new Map(sections.map((section) => [section.id, section]));
+  const modelTasksBySection = {
+    speech_models: ['speech_to_text', 'text_to_speech'],
+    embedding_model: ['text_embedding'],
+    media_models: [
+      'image_understanding',
+      'image_generation',
+      'video_generation',
+      'music_generation',
+    ],
+    decision_model: ['decision'],
+  };
+  let pages = $derived([
     {
-      id: 'models',
-      label: () => t('settings.groups.models', 'Models'),
-      sections: ['providers', 'specialized_models'].map((id) =>
-        catalog.get(id),
-      ),
+      id: 'general',
+      label: () => t('settings.pages.general', 'General'),
+      description: () =>
+        t(
+          'settings.pages.generalDescription',
+          'Display, conversation titles, and regional preferences.',
+        ),
+      sections: ['appearance', 'session_titles', 'preferences'],
     },
     {
-      id: 'personal',
-      label: () => t('settings.groups.personal', 'Personal'),
+      id: 'providers',
+      label: () => t('settings.providers.title', 'Providers'),
+      description: () =>
+        t(
+          'settings.pages.providersDescription',
+          'Connect the services and local runtimes that supply your Models.',
+        ),
+      sections: ['providers'],
+    },
+    {
+      id: 'voice',
+      label: () => t('settings.voice.title', 'Voice'),
+      description: () =>
+        t(
+          'settings.pages.voiceDescription',
+          'Speaking, listening, and voice activation.',
+        ),
+      sections: ['speech_models', 'voice_controls'],
+    },
+    {
+      id: 'memory',
+      label: () => t('settings.pages.memory', 'Memory'),
+      description: () =>
+        t(
+          'settings.pages.memoryDescription',
+          'Find past conversations and learn from them.',
+        ),
+      sections: ['recall', 'embedding_model', 'reflection'],
+    },
+    {
+      id: 'tools',
+      label: () => t('settings.pages.tools', 'Tools'),
+      description: () =>
+        t(
+          'settings.pages.toolsDescription',
+          'Web access, media, evaluation, and delegation.',
+        ),
       sections: [
-        catalog.get('appearance'),
-        preferencesPanel,
-        catalog.get('voice'),
+        'web_search',
+        'web_fetch',
+        'media_models',
+        'decision_model',
+        'subagents',
       ],
     },
     {
-      id: 'capabilities',
-      label: () => t('settings.groups.capabilities', 'Capabilities'),
-      sections: ['web_search', 'web_fetch', 'channels', 'extensions'].map(
-        (id) => catalog.get(id),
-      ),
-    },
-    {
-      id: 'sessions',
-      label: () => t('settings.categories.sessions', 'Sessions & Memory'),
-      sections: ['session_titles', 'recall', 'reflection', 'subagents'].map(
-        (id) => catalog.get(id),
-      ),
+      id: 'integrations',
+      label: () => t('settings.pages.integrations', 'Integrations'),
+      description: () =>
+        t(
+          'settings.pages.integrationsDescription',
+          'Messaging Channels, Extensions, and MCP connections.',
+        ),
+      sections: ['channels', 'extensions'],
     },
     {
       id: 'system',
-      label: () => t('settings.groups.system', 'System'),
+      label: () => t('settings.pages.system', 'System'),
+      description: () =>
+        t(
+          'settings.pages.systemDescription',
+          'Server information, connections, and diagnostics.',
+        ),
       sections: [
-        'general',
+        'server',
         ...(desktopCapabilities?.serverSelection ? ['desktop_connection'] : []),
         'debug',
-      ].map((id) => catalog.get(id)),
+      ],
     },
   ]);
-  let panels = $derived(groups.flatMap((group) => group.sections));
-  let panelById = $derived(new Map(panels.map((panel) => [panel.id, panel])));
+  let panels = $derived(
+    pages.flatMap((page) => page.sections.map((id) => panelById.get(id))),
+  );
   let mobileSectionOptions = $derived(
-    groups.flatMap((group) => [
-      ...group.sections.map((panel) => ({
-        value: panel.id,
-        label: panel.label(),
-        secondaryLabel: group.label(),
-      })),
-      ...(group.id === 'models'
-        ? [
-            {
-              value: 'agent_defaults',
-              label: t('settings.agentShortcut.nav', 'Model & Thinking'),
-              secondaryLabel: group.label(),
-            },
-          ]
-        : []),
-    ]),
+    pages.map((page) => ({
+      value: page.id,
+      label: page.label(),
+    })),
   );
   let settings = $state(null);
   let loading = $state(true);
@@ -274,8 +192,8 @@
   let providersPanel = $state(null);
   let scrollContainer = $state(null);
   let documentRoot = $state(null);
-  let activeSectionId = $state(
-    untrack(() => initialScrollPosition?.sectionId || 'providers'),
+  let activePageId = $state(
+    untrack(() => initialScrollPosition?.pageId || 'general'),
   );
   let searchQuery = $state('');
   let searchResults = $state([]);
@@ -284,6 +202,7 @@
   let restoreTop = untrack(() => Math.max(0, initialScrollPosition?.top || 0));
   let restorePending = untrack(() => Boolean(initialScrollPosition));
   let restoreFrame = null;
+  let restoreAnchorId = '';
 
   onMount(() => {
     loadSettings();
@@ -293,8 +212,8 @@
   });
 
   $effect(() => {
-    if (!loading && !panelById.has(activeSectionId))
-      activeSectionId = panels[0].id;
+    if (!loading && !pages.some((page) => page.id === activePageId))
+      activePageId = pages[0].id;
   });
 
   $effect(() => {
@@ -302,12 +221,12 @@
       !loading &&
       targetPanelId &&
       targetPanelRequestId !== handledTargetPanelRequestId &&
-      panelById.has(targetPanelId)
+      pageForDestination(targetPanelId)
     ) {
       handledTargetPanelRequestId = targetPanelRequestId;
       // A deliberate deep link replaces the remembered page; an ordinary
       // return carries its saved page and may still have an old target prop.
-      if (!initialScrollPosition) void selectSection(targetPanelId, false);
+      if (!initialScrollPosition) void selectDestination(targetPanelId);
     }
   });
 
@@ -356,7 +275,13 @@
         const section = documentRoot?.querySelector(
           `[data-settings-section="${panel.id}"]`,
         );
-        const text = normalizedSearch(section?.textContent ?? '');
+        const text = normalizedSearch(
+          [
+            pageForDestination(panel.id)?.label(),
+            panel.label(),
+            section?.textContent ?? '',
+          ].join(' '),
+        );
         if (terms.every((term) => text.includes(term))) results.push(panel.id);
       }
     }
@@ -373,25 +298,44 @@
     if (results.join('|') !== searchResults.join('|')) searchResults = results;
   }
 
+  function headingOffset(heading) {
+    return Math.max(
+      0,
+      scrollContainer.scrollTop +
+        heading.getBoundingClientRect().top -
+        scrollContainer.getBoundingClientRect().top -
+        24,
+    );
+  }
+
   function queueRestore() {
-    if (!restorePending || loading || !scrollContainer || restoreFrame !== null)
+    if (
+      (!restorePending && !restoreAnchorId) ||
+      loading ||
+      !scrollContainer ||
+      restoreFrame !== null
+    )
       return;
     restoreFrame = requestAnimationFrame(() => {
       restoreFrame = null;
-      if (restorePending && scrollContainer)
-        scrollContainer.scrollTop = restoreTop;
+      if (!scrollContainer) return;
+      const anchor =
+        restoreAnchorId && documentRoot?.querySelector('#' + restoreAnchorId);
+      if (anchor) scrollContainer.scrollTop = headingOffset(anchor);
+      else if (restorePending) scrollContainer.scrollTop = restoreTop;
     });
   }
 
   function releaseRestore() {
     restorePending = false;
+    restoreAnchorId = '';
   }
 
   function captureScrollPosition() {
     return scrollContainer
       ? {
           top: Math.max(0, scrollContainer.scrollTop),
-          sectionId: activeSectionId,
+          pageId: activePageId,
         }
       : null;
   }
@@ -401,26 +345,38 @@
       onScrollPositionChange(captureScrollPosition());
   }
 
-  async function selectSection(panelId, focusHeading = true) {
-    if (!panelById.has(panelId)) return;
-    releaseRestore();
-    searchQuery = '';
-    activeSectionId = panelId;
-    await tick();
-    const target = documentRoot?.querySelector(
-      `[data-settings-section="${panelId}"]`,
+  function pageForDestination(id) {
+    return (
+      pages.find((page) => page.id === id) ??
+      pages.find((page) => page.sections.includes(id))
     );
-    if (scrollContainer && target) scrollContainer.scrollTop = 0;
-    onScrollPositionChange(captureScrollPosition());
-    if (focusHeading)
-      documentRoot
-        ?.querySelector(`#settings-section-${panelId}`)
-        ?.focus({ preventScroll: true });
   }
 
-  function navigateToSection(panelId) {
-    if (panelId === 'agent_defaults') return navigateToDefaults();
-    return autosaveContext.requestTransition(() => selectSection(panelId));
+  async function selectDestination(id) {
+    const page = pageForDestination(id);
+    if (!page) return;
+    releaseRestore();
+    searchQuery = '';
+    activePageId = page.id;
+    await tick();
+    const headingId =
+      page.id === id ? 'settings-page-' + page.id : 'settings-section-' + id;
+    const heading = documentRoot?.querySelector('#' + headingId);
+    if (scrollContainer) {
+      scrollContainer.scrollTop =
+        page.id === id || !heading ? 0 : headingOffset(heading);
+      // Keep a deep link in view while asynchronous editors above it settle.
+      if (page.id !== id && heading) {
+        restoreAnchorId = headingId;
+        queueRestore();
+      }
+    }
+    onScrollPositionChange(captureScrollPosition());
+    heading?.focus({ preventScroll: true });
+  }
+
+  function navigateToSection(id) {
+    return autosaveContext.requestTransition(() => selectDestination(id));
   }
 
   function navigateToDefaults() {
@@ -516,8 +472,10 @@
       {onToast}
       onError={(message) => reportSettingsError(message)}
     />
-  {:else if panelId === 'specialized_models'}
+  {:else if modelTasksBySection[panelId]}
     <SettingsSpecializedModelsPanel
+      taskTypes={modelTasksBySection[panelId]}
+      showTaskLabels={panelId !== 'embedding_model'}
       {settings}
       onCommit={commitSettings}
       {onToast}
@@ -539,14 +497,7 @@
       {onToast}
       onError={(message) => reportSettingsError(message)}
     />
-  {:else if panelId === 'voice'}
-    <div class="settings-related">
-      <Button
-        variant="tertiary"
-        onClick={() => navigateToSection('specialized_models')}
-        >{t('settings.voice.modelsLink', 'Choose speech Models')}</Button
-      >
-    </div>
+  {:else if panelId === 'voice_controls'}
     <WakewordVoiceSettings
       {agents}
       {settings}
@@ -598,7 +549,7 @@
       onError={(message) => reportSettingsError(message)}
       {onDebugEnabledChange}
     />
-  {:else if panelId === 'general'}
+  {:else if panelId === 'server'}
     <SettingsGeneralPanel
       {settings}
       {clientsRefreshToken}
@@ -634,45 +585,22 @@
       />
     </div>
     <div class="settings-desktop-index">
-      {#each groups as group (group.id)}
-        <div
-          class="settings-nav-section"
-          role="group"
-          aria-labelledby={'settings-group-' + group.id}
+      {#each pages as page (page.id)}
+        <button
+          class="snav-item"
+          class:snav-item--active={!searchActive && page.id === activePageId}
+          type="button"
+          aria-current={!searchActive && page.id === activePageId
+            ? 'page'
+            : undefined}
+          onclick={() => navigateToSection(page.id)}>{page.label()}</button
         >
-          <h3 class="settings-nav-group" id={'settings-group-' + group.id}>
-            {group.label()}
-          </h3>
-          {#each group.sections as panel (panel.id)}
-            <button
-              class="snav-item"
-              class:snav-item--active={!searchActive &&
-                panel.id === activeSectionId}
-              type="button"
-              aria-current={!searchActive && panel.id === activeSectionId
-                ? 'page'
-                : undefined}
-              onclick={() => navigateToSection(panel.id)}
-              >{panel.label()}</button
-            >
-          {/each}
-          {#if group.id === 'models'}
-            <button
-              class="snav-item settings-defaults-link"
-              type="button"
-              onclick={navigateToDefaults}
-            >
-              {t('settings.agentShortcut.nav', 'Model & Thinking')}
-              <span aria-hidden="true">↗</span>
-            </button>
-          {/if}
-        </div>
       {/each}
     </div>
     <div class="settings-mobile-section-picker">
       <Dropdown
         id="settings-mobile-section"
-        value={activeSectionId}
+        value={activePageId}
         options={mobileSectionOptions}
         ariaLabel={t('settings.sections', 'Settings sections')}
         onValueChange={navigateToSection}
@@ -733,7 +661,7 @@
                 >
                 <span class="settings-search-result__description"
                   >{panel
-                    ? panel.subtitle()
+                    ? pageForDestination(panelId)?.label()
                     : t(
                         'settings.agentShortcut.search',
                         'Agents â†’ Shared defaults Â· Model, Thinking, fallbacks and Compaction',
@@ -752,28 +680,60 @@
           </div>
         {/if}
         <div class="settings-editors">
-          {#each panels as panel (panel.id)}
-            <section
-              class="settings-editor"
-              data-settings-section={panel.id}
-              hidden={searchActive || activeSectionId !== panel.id}
-              aria-labelledby={'settings-section-' + panel.id}
+          {#each pages as page (page.id)}
+            <article
+              class="settings-page"
+              data-settings-page={page.id}
+              hidden={searchActive || activePageId !== page.id}
+              aria-labelledby={'settings-page-' + page.id}
             >
               <header class="settings-page-heading">
-                <div class="settings-page-eyebrow">
-                  {groups
-                    .find((group) => group.sections.includes(panel))
-                    ?.label()}
-                </div>
-                <h2 id={'settings-section-' + panel.id} tabindex="-1">
-                  {panel.label()}
+                <h2 id={'settings-page-' + page.id} tabindex="-1">
+                  {page.label()}
                 </h2>
-                <p>{panel.subtitle()}</p>
+                <p>{page.description()}</p>
               </header>
-              <div class="settings-editor-body">
-                {@render panelContent(panel.id)}
-              </div>
-            </section>
+              {#if page.id === 'providers'}
+                <div class="settings-related">
+                  <span
+                    >{t(
+                      'settings.agentShortcut.hint',
+                      'The chat Model, Thinking, and Compaction are configured in',
+                    )}</span
+                  >
+                  <Button
+                    class="settings-defaults-link"
+                    variant="tertiary"
+                    onClick={navigateToDefaults}
+                  >
+                    {t('agents.shared.title', 'Shared defaults')}
+                    <span aria-hidden="true">↗</span>
+                  </Button>
+                </div>
+              {/if}
+              {#each page.sections as panelId (panelId)}
+                {@const panel = panelById.get(panelId)}
+                <section
+                  class="settings-editor"
+                  data-settings-section={panelId}
+                  hidden={searchActive || activePageId !== page.id}
+                  aria-labelledby={page.sections.length === 1
+                    ? 'settings-page-' + page.id
+                    : 'settings-section-' + panelId}
+                >
+                  {#if page.sections.length > 1}
+                    <header class="settings-section-heading">
+                      <h3 id={'settings-section-' + panelId} tabindex="-1">
+                        {panel.label()}
+                      </h3>
+                    </header>
+                  {/if}
+                  <div class="settings-editor-body">
+                    {@render panelContent(panelId)}
+                  </div>
+                </section>
+              {/each}
+            </article>
           {/each}
         </div>
       {/if}
