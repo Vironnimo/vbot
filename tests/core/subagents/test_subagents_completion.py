@@ -142,6 +142,112 @@ async def test_executor_base_exception_reaches_subagent_completion_watcher(monke
     await manager.aclose()
 
 
+@pytest.mark.parametrize("background", [False, True])
+async def test_parent_cancel_during_queue_notification_preserves_child_ownership(
+    tmp_path: Path, background: bool
+) -> None:
+    manager = ChatRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    runtime.chat_sessions.create("worker", session_id="busy-child")
+    trigger = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger)
+    release_busy = asyncio.Event()
+
+    async def busy(_run: Run) -> None:
+        await release_busy.wait()
+
+    busy_run = await manager.start(_address("worker", "busy-child"), busy)
+    captured: dict[str, Any] = {}
+
+    async def cancel_notification(_event: str, payload: JsonObject) -> None:
+        data = payload.get("data", {})
+        if data.get("queue_item_id") is not None:
+            captured.update(data)
+            raise asyncio.CancelledError()
+
+    context = make_context(nesting_depth=0 if background else 1, emit_hook=cancel_notification)
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await _handle_subagent(
+                context,
+                {"content": "follow-up", "agent_id": "worker", "session_id": "busy-child"},
+                runtime=runtime,
+                batch_tracker=tracker,
+            )
+        queued = manager.list_queued("worker", "busy-child", project_id=None)
+        if background:
+            assert len(queued) == 1
+            assert tracker.owned_entry("parent", "parent-session", None, captured["id"]) is not None
+            release_busy.set()
+            await busy_run.wait()
+            child = await asyncio.wait_for(queued[0].future, 1)
+            await child.wait()
+            await asyncio.sleep(0)
+            entry = tracker.owned_entry("parent", "parent-session", None, captured["id"])
+            assert entry is not None and entry[1].complete
+            assert f"subagent:parent-run:{captured['id']}" in trigger.completion_deliveries
+        else:
+            assert queued == []
+    finally:
+        release_busy.set()
+        await manager.aclose()
+
+
+async def test_foreground_child_starting_during_queue_notification_is_cancelled_and_tracked(
+    tmp_path: Path,
+) -> None:
+    manager = ChatRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    runtime.chat_sessions.create("worker", session_id="busy-child")
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    release_busy = asyncio.Event()
+    child_started = asyncio.Event()
+
+    async def busy(_run: Run) -> None:
+        await release_busy.wait()
+
+    async def child_executor(_run: Run) -> None:
+        child_started.set()
+        await asyncio.Event().wait()
+
+    runtime.streaming_chat_loop.run_executor = lambda *args, **kwargs: child_executor
+    busy_run = await manager.start(_address("worker", "busy-child"), busy)
+    captured: dict[str, Any] = {}
+
+    async def cancel_notification(_event: str, payload: JsonObject) -> None:
+        data = payload.get("data", {})
+        if data.get("queue_item_id") is None:
+            return
+        captured.update(data)
+        item = manager.list_queued("worker", "busy-child", project_id=None)[0]
+        release_busy.set()
+        await busy_run.wait()
+        captured["child"] = await item.future
+        await child_started.wait()
+        raise asyncio.CancelledError()
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await _handle_subagent(
+                make_context(nesting_depth=1, emit_hook=cancel_notification),
+                {"content": "follow-up", "agent_id": "worker", "session_id": "busy-child"},
+                runtime=runtime,
+                batch_tracker=tracker,
+            )
+        child = captured["child"]
+        assert child.cancel_requested
+        assert child._task is not None
+        await child._task
+        await asyncio.sleep(0)
+        entry = tracker.owned_entry("parent", "parent-session", None, captured["id"])
+        assert entry is not None and entry[1].complete
+        assert entry[1].result is not None
+        assert entry[1].result["status"] == "cancelled"
+    finally:
+        release_busy.set()
+        await manager.aclose()
+
+
 async def test_parent_cancel_during_spawn_window_still_cascades_and_tracks(
     tmp_path: Path,
 ) -> None:
