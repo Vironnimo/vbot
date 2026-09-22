@@ -106,6 +106,91 @@ async def test_aborted_bound_tap_restores_unadmitted_state(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_waiter", [False, True])
+async def test_aborted_tap_cannot_undo_later_admission_to_same_origin(
+    tmp_path, monkeypatch, cancel_waiter
+):
+    storage = ChannelStorage(tmp_path)
+    trigger = AsyncMock(return_value=make_completed_run(output_text="done", session_id="origin"))
+    engine, sessions, _, _ = make_engine(
+        tmp_path, run_button_binding_registry=storage, trigger_run=trigger
+    )
+    sessions.create("assistant", session_id=SESSION_ID)
+    sessions.create("assistant", session_id="origin")
+    address = SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    sessions.set_metadata(address, {"active_session_id": "prior"})
+    events = []
+    for name in ("first", "second"):
+        binding = RunButtonBinding(
+            id=name,
+            platform_target="12345",
+            thread_id=None,
+            origin_session_id="origin",
+            original_button_data=("run:done",),
+            created_at=datetime.now(UTC).isoformat(),
+        )
+        storage.save_run_button_binding("tg-assistant", binding)
+        data = bound_run_callback_data(name, 0)
+        events.append(
+            InteractionEvent(
+                platform="telegram",
+                channel_id="tg-assistant",
+                chat_id="12345",
+                user_id="50",
+                message_id="777",
+                data=data,
+                buttons=((InteractionButton(label="Done", data=data),),),
+            )
+        )
+    entered, release = threading.Event(), threading.Event()
+    original = engine._routing._point_conversation_at_session
+    calls = 0
+
+    def delayed(*args):
+        nonlocal calls
+        calls += 1
+        first = calls == 1
+        result = original(*args)
+        if first:
+            entered.set()
+            assert release.wait(5)
+        return result
+
+    monkeypatch.setattr(engine._routing, "_point_conversation_at_session", delayed)
+    first = asyncio.create_task(engine.trigger_interaction_reply(make_conversation(), events[0]))
+    pending = [first]
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        first.cancel()
+        if cancel_waiter:
+            waiter = asyncio.create_task(
+                engine.trigger_interaction_reply(make_conversation(), events[1])
+            )
+            pending.append(waiter)
+            await asyncio.sleep(0)
+            waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
+        second = asyncio.create_task(
+            engine.trigger_interaction_reply(make_conversation(), events[1])
+        )
+        pending.append(second)
+        completed, _ = await asyncio.wait({second}, timeout=0.05)
+        assert not completed
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        assert await second == "enqueued"
+        assert sessions.get_metadata(address)["active_session_id"] == "origin"
+        await drain(engine, "12345")
+        assert trigger.await_count == 1
+    finally:
+        release.set()
+        await asyncio.gather(*pending, return_exceptions=True)
+        await engine.stop()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("delete_origin", [False, True])
 async def test_waiting_bound_tap_keeps_origin_after_anchor_changes(tmp_path, delete_origin):
     storage = ChannelStorage(tmp_path)
