@@ -879,10 +879,8 @@ def _agent_workspace(agent: Any, data_root: Path) -> Path:
 def _resolve_tool_cwd(project_cwd: Path | None, workspace: Path) -> Path:
     """Choose the tool working directory: project cwd when set, else workspace.
 
-    A project session supplies the repo ``project_cwd`` so file/shell tools
-    resolve relative paths against the repo. Without one (identity sessions and
-    every current caller, since the chat loop does not yet thread a project cwd),
-    the working directory stays the agent workspace — today's behavior. The chat
-    loop will pass the real project cwd later via ``_dispatch_tool_calls``.
+    Chat supplies the admitted working Project's cwd for Project Agents and
+    Rooted Identity Agents. Without a working Project, relative file/shell paths
+    resolve against the Identity Agent's Workspace.
     """
     return project_cwd if project_cwd is not None else workspace

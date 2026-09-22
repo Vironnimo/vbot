@@ -76,7 +76,6 @@ class ChatLoop:
         if max_tool_iterations < 0:
             raise ChatError("max tool iterations must not be negative")
         self._dependencies = dependencies
-        dependencies.run_manager.bind_persistence(dependencies.sessions)
         self._max_tool_iterations = max_tool_iterations
         self._streaming = streaming
         self._attachment_resolver = attachment_resolver
