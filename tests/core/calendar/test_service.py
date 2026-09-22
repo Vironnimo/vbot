@@ -22,6 +22,15 @@ def service(tmp_path: Path) -> CalendarService:
 
 
 class TestCreateEvent:
+    def test_conflicting_recurrence_limits_cannot_mutate_store(self, service):
+        event = service.create_event(title="Existing", start="2026-09-03")
+        invalid_rule = {"freq": "daily", "count": 2, "until": "2026-09-14"}
+        with pytest.raises(CalendarValidationError):
+            service.create_event(title="Invalid", start="2026-09-03", rrule=invalid_rule)
+        with pytest.raises(CalendarValidationError):
+            service.update_event(event.id, rrule=invalid_rule)
+        assert service.list_events() == [event]
+
     def test_single_timed_event_stores_utc_instant(self, service: CalendarService) -> None:
         event = service.create_event(title="Zahnarzt", start="2026-09-03T15:00:00+02:00")
         assert event.start_utc == "2026-09-03T13:00:00+00:00"

@@ -59,6 +59,10 @@ class TestNormalizeRrule:
         with pytest.raises(CalendarValidationError, match="rrule.until"):
             normalize_rrule({"freq": "daily", "until": "tomorrow"})
 
+    def test_rejects_simultaneous_count_and_until(self) -> None:
+        with pytest.raises(CalendarValidationError):
+            normalize_rrule({"freq": "daily", "count": 2, "until": "2026-09-14"})
+
 
 class TestParseDateString:
     def test_parses_iso_date(self) -> None:

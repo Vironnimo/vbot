@@ -49,6 +49,7 @@ New event/action ids use `evt_`/`act_` plus 12 lowercase base32 characters, with
 ## Conventions
 
 - Recurring timed events anchor wall-clock in the server timezone (09:00 stays 09:00 across DST; test-verified over the Berlin transition). Single timed events persist as UTC instants; all-day events are dates in the server zone. Clearing a recurrence re-resolves the event as a single timed event from its wall-clock start and drops any exdates (exceptions are meaningless on a single event).
+- Recurrence validation rejects simultaneous `count` and `until` limits before event mutation, matching the shared RPC/Tool contract (`test_recurrence.py`, `test_service.py`).
 - The application zone is injected at construction (`CalendarService(data_root, tz=...)`) from `server.timezone`, defaults to the host zone when the setting is absent, and changes live through `set_timezone`; tests pass `tz="Europe/Berlin"` explicitly for determinism. Never call `tzlocal` per operation.
 - The tool layer maps `duration` to `duration_minutes`/`duration_days` by the event's kind (the start form decides: date = all-day, datetime = timed) and passes `all_day` explicitly on update so kind switches work without exposing an `all_day` parameter.
 - Window bounds are inclusive days: a date bound selects its whole local day (`to` includes that day).
