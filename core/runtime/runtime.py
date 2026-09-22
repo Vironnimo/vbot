@@ -748,7 +748,14 @@ class Runtime:
         """Reload Skills without scanning their files on the Event Loop."""
         owner = self._skill_operations()
         generation = self._skill_reload_generation = object()
+        credential_snapshot = self._fallback_environment
         skills = await _RUNTIME_WORKERS.run(owner.load_global_registry)
+        if credential_snapshot is not self._fallback_environment:
+            # A credential reload updates held registries while the scan runs.
+            # Rebase its environment without discarding newly scanned packages.
+            environment = dict(self._fallback_environment)
+            environment.update(os.environ)
+            skills.reload_environment(environment)
         self._apply_reloaded_skills(skills, generation=generation)
 
     def _apply_reloaded_skills(self, skills: SkillRegistry, *, generation: object) -> None:
