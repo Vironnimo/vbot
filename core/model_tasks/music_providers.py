@@ -102,6 +102,8 @@ class ProviderMusicClient(ProviderTaskClient):
                     await response.aread()
                     classify_task_response(response)
                 yield response
+            except httpx.TransportError as exc:
+                raise wrap_network_error(exc) from exc
             finally:
                 await response.aclose()
 
@@ -161,6 +163,11 @@ def _collect_music_delta(
     for choice in choices:
         if not isinstance(choice, Mapping):
             continue
+        finish_reason = choice.get("finish_reason")
+        if (finish_reason is not None and finish_reason != "stop") or choice.get(
+            "native_finish_reason"
+        ) in ("network_error", "server_error"):
+            raise ProviderError("OpenRouter did not return generated music audio.", retryable=False)
         delta = choice.get("delta")
         if not isinstance(delta, Mapping):
             continue
