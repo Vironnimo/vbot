@@ -465,6 +465,9 @@ class StubRuntime:
     def reload_skills(self) -> None:
         self.skills = ReloadableStubRuntimeSkills(self)
 
+    async def reload_skills_async(self) -> None:
+        self.reload_skills()
+
     def reload_recall_backend(self) -> None:
         self.recall_reload_count += 1
 

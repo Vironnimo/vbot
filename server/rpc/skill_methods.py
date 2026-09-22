@@ -16,9 +16,7 @@ the ``skills`` kind.
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Awaitable, Callable
-from contextlib import suppress
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -27,6 +25,7 @@ from core.skills import SkillAuthoringError, SkillRegistry, SkillWriteResult
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_SKILLS
+from server.rpc._mutations import serialized_mutation
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.event_bridge import publish_resource_changed
@@ -207,7 +206,9 @@ async def install_skill_upload(
     async def install(state: Any, params: JsonObject) -> JsonObject:
         return await _skill_install(state, params, archive=data)
 
-    return await _serialized_skill_mutation(install)(state, {**params, "source": filename})
+    return await serialized_mutation(install, lock_attribute="_skill_mutation_lock")(
+        state, {**params, "source": filename}
+    )
 
 
 async def _skill_update(state: Any, params: JsonObject) -> JsonObject:
@@ -347,45 +348,24 @@ def _share_skill_policy(state: Any, params: JsonObject) -> JsonObject:
     return {"agent_id": agent_id, "name": name, "shared": shared, "receivers": receivers}
 
 
-def _serialized_skill_mutation(
-    handler: Callable[[Any, JsonObject], Awaitable[JsonObject]],
-) -> Callable[[Any, JsonObject], Awaitable[JsonObject]]:
-    """Keep persisted writes and loop-owned refresh in one cancellation-safe sequence."""
-
-    async def run(state: Any, params: JsonObject) -> JsonObject:
-        lock = getattr(state, "_skill_mutation_lock", None)
-        if lock is None:
-            lock = asyncio.Lock()
-            state._skill_mutation_lock = lock
-        async with lock:
-            task = asyncio.ensure_future(handler(state, params))
-            try:
-                return await asyncio.shield(task)
-            except asyncio.CancelledError:
-                # Retain serialization until the registry and publication catch up
-                # with any completed disk write, even across repeated cancellation.
-                while not task.done():
-                    with suppress(asyncio.CancelledError, Exception):
-                        await asyncio.shield(task)
-                if not task.cancelled():
-                    task.exception()
-                raise
-
-    return run
-
-
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the skill mutation RPC handlers."""
     return {
         "skill.read": _skill_read,
-        "skill.create": _serialized_skill_mutation(_skill_create),
-        "skill.install": _serialized_skill_mutation(_skill_install),
-        "skill.update": _serialized_skill_mutation(_skill_update),
-        "skill.delete": _serialized_skill_mutation(_skill_delete),
-        "skill.write_file": _serialized_skill_mutation(_skill_write_file),
-        "skill.remove_file": _serialized_skill_mutation(_skill_remove_file),
+        "skill.create": serialized_mutation(_skill_create, lock_attribute="_skill_mutation_lock"),
+        "skill.install": serialized_mutation(_skill_install, lock_attribute="_skill_mutation_lock"),
+        "skill.update": serialized_mutation(_skill_update, lock_attribute="_skill_mutation_lock"),
+        "skill.delete": serialized_mutation(_skill_delete, lock_attribute="_skill_mutation_lock"),
+        "skill.write_file": serialized_mutation(
+            _skill_write_file, lock_attribute="_skill_mutation_lock"
+        ),
+        "skill.remove_file": serialized_mutation(
+            _skill_remove_file, lock_attribute="_skill_mutation_lock"
+        ),
         "skill.inventory": _skill_inventory,
         "skill.inspect": _skill_inspect,
-        "skill.set_disabled": _serialized_skill_mutation(_skill_set_disabled),
-        "skill.share": _serialized_skill_mutation(_skill_share),
+        "skill.set_disabled": serialized_mutation(
+            _skill_set_disabled, lock_attribute="_skill_mutation_lock"
+        ),
+        "skill.share": serialized_mutation(_skill_share, lock_attribute="_skill_mutation_lock"),
     }
