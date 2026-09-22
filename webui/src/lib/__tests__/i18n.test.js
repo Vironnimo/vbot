@@ -163,20 +163,8 @@ describe('i18n t()', () => {
       'onboarding.dismiss',
       'onboarding.finishSetup',
       'onboarding.finishSetupHint',
-      'onboarding.step.service.kicker',
       'onboarding.step.service.title',
       'onboarding.step.service.subtitle',
-      'onboarding.hero.badge',
-      'onboarding.hero.title',
-      'onboarding.hero.description',
-      'onboarding.hero.action',
-      'onboarding.subscription.title',
-      'onboarding.subscription.description',
-      'onboarding.subscription.action',
-      'onboarding.more.toggle',
-      'onboarding.more.description',
-      'onboarding.more.action',
-      'onboarding.step.model.kicker',
       'onboarding.step.model.title',
       'onboarding.step.model.subtitle',
       'onboarding.model.label',
@@ -186,11 +174,17 @@ describe('i18n t()', () => {
       'onboarding.model.loading',
       'onboarding.model.loadError',
       'onboarding.model.empty',
-      'onboarding.model.retry',
+      'onboarding.retry',
       'onboarding.model.start',
       'onboarding.model.assignError',
       'onboarding.model.back',
-      'onboarding.provider.tip.openrouter',
+      'onboarding.model.freeOnly',
+      'onboarding.service.loadError',
+      'onboarding.service.search',
+      'onboarding.service.continue',
+      'onboarding.service.connectedCount',
+      'onboarding.connect.signInDescription',
+      'onboarding.connect.keyHelp',
       'chat.noProvider.title',
       'chat.noProvider.action',
       'chat.noModel.title',
@@ -198,15 +192,6 @@ describe('i18n t()', () => {
     ];
 
     expectCatalogKeys(requiredKeys);
-    expect(
-      t('onboarding.subscription.action', undefined, { provider: 'ChatGPT' }),
-    ).toBe('Sign in with ChatGPT');
-    expect(
-      t('onboarding.more.action', undefined, { provider: 'Anthropic' }),
-    ).toBe('Connect Anthropic');
-    expect(t('onboarding.provider.tip.openrouter').toLowerCase()).toContain(
-      'free',
-    );
   });
 
   it('contains Toasted design labels for Agents placeholders', () => {

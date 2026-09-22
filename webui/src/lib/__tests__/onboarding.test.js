@@ -1,18 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  ONBOARDING_HERO_PROVIDER_ID,
   ONBOARDING_TARGET_AGENT_ID,
-  PROVIDER_MODEL_SEARCH_PREFILL,
   agentNeedsModel,
   connectedProviderId,
   isOperational,
-  onboardingHeroScope,
-  onboardingMoreProviders,
-  onboardingSubscriptionProviders,
   providerModalScope,
-  providerModelSearchPrefill,
-  providerTipKey,
+  onboardingProviders,
 } from '../onboarding.js';
 
 // A connection as it appears in a `settings.get` provider item.
@@ -142,67 +136,21 @@ describe('agentNeedsModel', () => {
   });
 });
 
-describe('onboardingHeroScope', () => {
-  it('scopes OpenRouter to its API-key connection', () => {
-    const scope = onboardingHeroScope(freshInstallSettings());
-    expect(scope).not.toBeNull();
-    expect(scope.scopedProvider.id).toBe(ONBOARDING_HERO_PROVIDER_ID);
-    expect(scope.scopedConnection.id).toBe('openrouter:api-key');
-    expect(scope.providers).toEqual([]);
-  });
-
-  it('hides the hero once OpenRouter is already connected', () => {
-    const settings = freshInstallSettings();
-    settings.providers.items[0].connections[0].configured = true;
-    settings.providers.items[0].connections[0].usable = true;
-    expect(onboardingHeroScope(settings)).toBeNull();
-  });
-});
-
-describe('onboardingSubscriptionProviders', () => {
-  it('returns only providers offering an OAuth device flow', () => {
-    const ids = onboardingSubscriptionProviders(freshInstallSettings()).map(
-      (provider) => provider.id,
-    );
-    expect(ids).toEqual(['openai', 'github-copilot']);
-  });
-});
-
-describe('onboardingMoreProviders', () => {
-  it('returns API-key candidates excluding the hero, and excludes device-flow-only providers', () => {
-    const ids = onboardingMoreProviders(freshInstallSettings()).map(
-      (provider) => provider.id,
-    );
-    // OpenAI stays (it has an API key), and fresh keyless Ollama is addable;
-    // GitHub Copilot (device-flow only) and OpenRouter (the hero) are excluded.
-    expect(ids).toEqual([
-      'openai',
-      'anthropic',
-      'mistral',
-      'minimax',
-      'opencode-go',
-      'ollama',
-    ]);
-  });
-});
-
 describe('providerModalScope', () => {
-  it('scopes a single-connection provider to that connection', () => {
-    const [, , , anthropic] = freshInstallSettings().providers.items;
-    const scope = providerModalScope(anthropic, 'api_key');
-    expect(scope.scopedConnection.id).toBe('anthropic:api-key');
+  it('skips a redundant choice for a single method', () => {
+    const provider = freshInstallSettings().providers.items[0];
+    expect(providerModalScope(provider).scopedConnection.id).toBe(
+      'openrouter:api-key',
+    );
   });
 
-  it('prefers the OAuth device flow when a provider offers several methods', () => {
-    const openai = freshInstallSettings().providers.items[1];
-    const scope = providerModalScope(openai, 'oauth');
-    expect(scope.scopedConnection.id).toBe('openai:subscription');
-  });
-
-  it('prefers the API key when a provider offers several methods', () => {
-    const openai = freshInstallSettings().providers.items[1];
-    const scope = providerModalScope(openai, 'api_key');
-    expect(scope.scopedConnection.id).toBe('openai:api-key');
+  it('lets the user choose when a Provider supports API key and sign-in', () => {
+    const provider = freshInstallSettings().providers.items[1];
+    expect(providerModalScope(provider).scopedConnection).toBeNull();
+    provider.connections[0] = apiKey('openai:api-key', { configured: true });
+    expect(providerModalScope(provider).scopedConnection.id).toBe(
+      'openai:subscription',
+    );
   });
 
   it('returns null when nothing is addable', () => {
@@ -211,7 +159,7 @@ describe('providerModalScope', () => {
   });
 });
 
-describe('connectedProviderId / tips / prefill', () => {
+describe('connectedProviderId', () => {
   it('names the first connected provider', () => {
     const settings = freshInstallSettings();
     expect(connectedProviderId(settings)).toBe('');
@@ -220,20 +168,82 @@ describe('connectedProviderId / tips / prefill', () => {
     expect(connectedProviderId(settings)).toBe('openrouter');
   });
 
-  it('builds a per-provider tip key and hides it for the empty provider', () => {
-    expect(providerTipKey('openrouter')).toBe(
-      'onboarding.provider.tip.openrouter',
-    );
-    expect(providerTipKey('')).toBe('');
-  });
-
-  it('exposes the OpenRouter free-model search prefill', () => {
-    expect(PROVIDER_MODEL_SEARCH_PREFILL.openrouter).toBe('free');
-    expect(providerModelSearchPrefill('openrouter')).toBe('free');
-    expect(providerModelSearchPrefill('anthropic')).toBe('');
+  it('keeps the chosen Provider when several are usable', () => {
+    const settings = freshInstallSettings();
+    settings.providers.items[0].connections[0].usable = true;
+    settings.providers.items[1].connections[0].usable = true;
+    expect(connectedProviderId(settings, 'openai')).toBe('openai');
+    expect(connectedProviderId(settings, 'removed')).toBe('openrouter');
   });
 
   it('targets the bootstrap main agent', () => {
     expect(ONBOARDING_TARGET_AGENT_ID).toBe('main');
+  });
+});
+
+describe('onboardingProviders', () => {
+  it('lists each Provider once, including local-only and sign-in-only Providers', () => {
+    const settings = freshInstallSettings();
+    settings.providers.items.push({
+      id: 'lmstudio',
+      name: 'LM Studio',
+      connections: [keyless('lmstudio:local')],
+    });
+    const items = onboardingProviders(settings);
+    expect(items).toHaveLength(9);
+    expect(items.filter((item) => item.provider.id === 'openai')).toHaveLength(
+      1,
+    );
+    expect(
+      items.find((item) => item.provider.id === 'openai').methodTypes,
+    ).toEqual(['api_key', 'oauth']);
+    expect(
+      items.find((item) => item.provider.id === 'lmstudio').scope
+        .scopedConnection.type,
+    ).toBe('none');
+    expect(
+      items.find((item) => item.provider.id === 'github-copilot').scope
+        .scopedConnection.type,
+    ).toBe('oauth');
+    expect(items[0].provider.name).toBe('Anthropic');
+  });
+
+  it('finds Providers by name, id and subscription name regardless of case', () => {
+    const settings = freshInstallSettings();
+    for (const query of [' OPENAI ', 'ChatGPT']) {
+      expect(
+        onboardingProviders(settings, query).map((item) => item.provider.id),
+      ).toEqual(['openai']);
+    }
+    expect(onboardingProviders(settings, 'not-present')).toEqual([]);
+  });
+
+  it('keeps connected Providers and their remaining methods available', () => {
+    const settings = freshInstallSettings();
+    settings.providers.items[1].connections[0] = apiKey('openai:api-key', {
+      configured: true,
+    });
+    const [item] = onboardingProviders(settings, 'OpenAI');
+    expect(item.connected).toBe(true);
+    expect(item.scope.scopedConnection.id).toBe('openai:subscription');
+    settings.providers.items[1].connections[1].usable = true;
+    expect(onboardingProviders(settings, 'OpenAI')[0].scope).toBeNull();
+  });
+
+  it('does not offer unsupported OAuth flows or new custom endpoints', () => {
+    const settings = freshInstallSettings();
+    settings.providers.items = [
+      {
+        id: 'unsupported',
+        connections: [{ type: 'oauth', connectable: false }],
+      },
+      { id: 'custom', custom: true, connections: [apiKey('custom:key')] },
+    ];
+    expect(onboardingProviders(settings)).toEqual([]);
+    settings.providers.items[1].connections[0].usable = true;
+    expect(onboardingProviders(settings)[0]).toMatchObject({
+      connected: true,
+      scope: null,
+    });
   });
 });
