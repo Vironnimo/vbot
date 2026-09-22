@@ -879,8 +879,9 @@ async def test_album_flush_failure_log_carries_traceback(
 
     warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
     assert any(
-        "album flush failed" in record.getMessage() and "album-1" in record.getMessage()
+        "album flush failed" in record.getMessage() and "tg-assistant" in record.getMessage()
         for record in warnings
     )
+    assert all("album-1" not in record.getMessage() for record in warnings)
     assert any(record.exc_info is not None for record in warnings)
     await adapter.stop()

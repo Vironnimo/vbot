@@ -320,9 +320,8 @@ class TelegramTransport:
             message_id = int(reply_to_message_id)
         except (TypeError, ValueError):
             _LOGGER.debug(
-                "Ignoring non-integer reply target message id (channel=%s): %r",
+                "Ignoring non-integer reply target message id (channel=%s)",
                 self._channel_id,
-                reply_to_message_id,
             )
             return None
         telegram = _load_telegram()
@@ -523,9 +522,8 @@ class TelegramTransport:
             except Exception as error:
                 # Best-effort cosmetic indicator: stop quietly if the API call fails.
                 _LOGGER.debug(
-                    "Telegram typing indicator stopped (channel=%s target=%s): %s",
+                    "Telegram typing indicator stopped (channel=%s): %s",
                     self._channel_id,
-                    platform_target,
                     error,
                 )
                 return
