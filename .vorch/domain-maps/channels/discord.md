@@ -6,6 +6,8 @@ Discord platform-I/O adapter behind the shared channel conversation engine.
 
 `core/channels/discord.py` uses `discord.py`'s async Gateway client. It owns Gateway lifecycle, Discord message parsing, bounded history backfill, attachment download, typing, replies, and outbound sends. Queueing, response gating, commands, Run relay, sender attribution, observed-note formatting, and Session metadata remain in `ChannelConversationEngine`.
 
+Shutdown closes inbound admission and cancels/drains Gateway message callbacks before stopping engine workers. Discord client shutdown alone does not own those callbacks; pending history fetches and per-chat lock waiters must not admit new work after the engine stops.
+
 ## Routing And Gating
 
 - Discord configs use `platform: "discord"`. `token_env_var` resolves the bot token through the injected credential resolver; `allowed_chat_ids` contains Discord channel ids as normalized strings.
@@ -20,14 +22,15 @@ Discord platform-I/O adapter behind the shared channel conversation engine.
 
 ## History Backfill
 
-- In group `response_mode: "mention"` with `observe_unaddressed: false`, an addressed non-command message fetches up to 50 messages immediately before the trigger, newest-first. Collection stops at the bot's latest message; retained entries are reversed to chronological order and enqueued through `observe_inbound_text` before the triggering turn.
+- In group `response_mode: "mention"` with `observe_unaddressed: false`, an addressed non-command message fetches up to 50 messages immediately before the trigger, newest-first. Collection stops at the bot's latest message; retained entries are reversed to chronological order and travel with the triggering text/media turn under one waiting-work admission. The engine persists those notes before triggering the Run, so background history cannot consume the capacity needed by the addressed message itself.
 - Backfilled attachments are context placeholders (`[media] <filename>`); they are not downloaded. The engine snapshots every backfilled sender role and persists the normal `[channel-message] [<display_name>|<platform_user_id>|<role>]: ...` note format.
-- Process-local seen ids suppress duplicate backfill while multiple triggers are pending; the set is cleared after a successful outbound bot send. Seen-id and known-conversation maps are bounded least-recently-used caches, while per-chat serialization locks are removed as soon as their active/waiting user count reaches zero, so a long-lived adapter cannot retain state for every historical chat. Backfill failure is logged as a warning and does not block the triggering message.
+- Process-local seen ids suppress duplicate backfill while multiple triggers are pending; ids are remembered only after the entire turn is admitted, and the set is cleared after a successful outbound bot send. Busy rejection therefore leaves history available for a later trigger. Seen-id and known-conversation maps are bounded least-recently-used caches, while per-chat serialization locks are removed as soon as their active/waiting user count reaches zero, so a long-lived adapter cannot retain state for every historical chat. Backfill failure is logged as a warning and does not block the triggering message.
 - `observe_unaddressed: true` switches to the engine's live passive-observation path and disables history backfill to avoid duplicate context.
 
 ## Outbound
 
 - Discord message content is split at 2000 characters. Files are sent in batches of at most 10; text chunks and file batches share sends by index, so the caption appears only on the first send.
+- Transient send failures retry only the current payload through shared bounded backoff; upload handles are recreated on each attempt. Exhaustion is non-retryable to the engine so it cannot resend earlier acknowledged chunks. Transient target lookup failures remain retryable before any payload has been sent.
 - Group replies reference only the first outbound chunk using a partial-message reference with `fail_if_not_exists=False` and do not mention the replied-to author. Proactive `channel_send` output has no reply reference.
 - `activity_indicator` uses `channel.typing()` for the Run/compaction scope. Indicator failures are cosmetic and do not fail the Run.
 - Target ids resolve from the client cache first, then `fetch_channel()`. `ensure_outbound_session()` is synchronous and therefore uses a target already seen, cached, or resolved by the preceding send.

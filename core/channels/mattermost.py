@@ -152,7 +152,8 @@ class MattermostChannelAdapter(NetworkChannelAdapter):
         self.remember(await self.target_facts(platform_target))
         file_ids: list[str] = []
         for file in files or []:
-            upload = await self.api(
+            upload = await self._send_operation(
+                self.api,
                 "POST",
                 "/files",
                 data={"channel_id": platform_target},
@@ -166,4 +167,4 @@ class MattermostChannelAdapter(NetworkChannelAdapter):
                 payload["root_id"] = thread_id
             if index == 0 and file_ids:
                 payload["file_ids"] = file_ids
-            await self.api("POST", "/posts", json=payload)
+            await self._send_operation(self.api, "POST", "/posts", json=payload)

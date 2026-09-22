@@ -29,6 +29,7 @@ from core.channels.engine import ChannelConversationEngine
 from core.chat.content_blocks import ContentBlock, TextBlock
 from core.extensions import InteractionButton
 from core.utils.logging import get_logger
+from core.utils.retry import retry_async
 
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
@@ -88,6 +89,8 @@ class DiscordChannelAdapter(ChannelAdapter):
 
         self._client: Any | None = None
         self._bot_id: str | None = None
+        self._stopping = False
+        self._inbound_tasks: set[asyncio.Task[Any]] = set()
         self._allowed_chat_ids = frozenset(config.allowed_chat_ids)
         self._denied_chat_log = DeniedChatLog()
         self._message_locks: dict[str, _MessageLockState] = {}
@@ -105,7 +108,9 @@ class DiscordChannelAdapter(ChannelAdapter):
         client = discord.Client(intents=intents)
 
         async def on_ready() -> None:
-            bot_user = client.user
+            if self._stopping or self._client is not client:
+                return
+            bot_user = getattr(client, "user", None)
             bot_id = getattr(bot_user, "id", None)
             self._bot_id = str(bot_id) if _is_snowflake(bot_id) else None
             _LOGGER.info(
@@ -115,15 +120,24 @@ class DiscordChannelAdapter(ChannelAdapter):
             )
 
         async def on_message(message: Any) -> None:
-            await self._handle_inbound_message(message)
+            if self._client is client:
+                await self._handle_inbound_message(message)
 
         client.event(on_ready)
         client.event(on_message)
+        self._stopping = False
+        self._bot_id = None
         self._client = client
         await client.start(self._token)
 
     async def stop(self) -> None:
         """Stop engine workers and close the Discord Gateway connection."""
+        self._stopping = True
+        inbound_tasks = tuple(self._inbound_tasks)
+        for task in inbound_tasks:
+            task.cancel()
+        if inbound_tasks:
+            await asyncio.gather(*inbound_tasks, return_exceptions=True)
         await self._engine.stop()
         self._message_locks.clear()
         self._backfilled_message_ids.clear()
@@ -298,12 +312,20 @@ class DiscordChannelAdapter(ChannelAdapter):
         # discord.py runs this inside its own event loop and catches/logs any exception to
         # the `discord` logger only, silently dropping the message. Surface failures in the
         # vbot.channels.discord logger so inbound dispatch crashes are not invisible.
+        if self._stopping:
+            return
+        task = asyncio.current_task()
+        if task is not None:
+            self._inbound_tasks.add(task)
         try:
             await self._dispatch_inbound_message(message)
         except asyncio.CancelledError:
             raise
         except Exception:
             _LOGGER.error("Discord inbound dispatch failed", exc_info=True)
+        finally:
+            if task is not None:
+                self._inbound_tasks.discard(task)
 
     async def _dispatch_inbound_message(self, message: Any) -> None:
         author = getattr(message, "author", None)
@@ -325,20 +347,29 @@ class DiscordChannelAdapter(ChannelAdapter):
         self._remember_conversation(conversation)
         async with self._message_lock(conversation.chat_id):
             should_backfill = self._should_backfill(conversation, content)
-            if should_backfill:
-                await self._backfill_history(message)
+            observed_context = await self._backfill_history(message) if should_backfill else []
 
             if attachments:
-                await self._engine.handle_inbound_media(conversation, (message,))
+                admitted = await self._engine.handle_inbound_media(
+                    conversation, (message,), observed_context=observed_context
+                )
             elif content is not None:
-                await self._engine.handle_inbound_text(
+                admitted = await self._engine.handle_inbound_text(
                     conversation,
                     content,
                     raw_message=message,
+                    observed_context=observed_context,
                 )
+            else:
+                return
 
-            if should_backfill and conversation.message_id is not None:
-                self._seen_message_ids(conversation.chat_id).add(conversation.message_id)
+            if admitted and should_backfill:
+                seen_ids = self._seen_message_ids(conversation.chat_id)
+                for observed, _body in observed_context:
+                    if observed.message_id is not None:
+                        seen_ids.add(observed.message_id)
+                if conversation.message_id is not None:
+                    seen_ids.add(conversation.message_id)
 
     def _should_backfill(
         self,
@@ -353,11 +384,13 @@ class DiscordChannelAdapter(ChannelAdapter):
             return False
         return self._engine.should_respond(conversation, (content,))
 
-    async def _backfill_history(self, triggering_message: Any) -> None:
+    async def _backfill_history(
+        self, triggering_message: Any
+    ) -> list[tuple[ConversationFacts, str]]:
         channel = getattr(triggering_message, "channel", None)
         target_id = _snowflake_string(getattr(channel, "id", None))
         if channel is None or target_id is None:
-            return
+            return []
 
         seen_ids = self._seen_message_ids(target_id)
         observed: list[tuple[ConversationFacts, str]] = []
@@ -390,12 +423,9 @@ class DiscordChannelAdapter(ChannelAdapter):
                 error,
                 exc_info=(type(error), error, error.__traceback__),
             )
-            return
+            return []
 
-        for conversation, body in reversed(observed):
-            self._engine.observe_inbound_text(conversation, body)
-            if conversation.message_id is not None:
-                seen_ids.add(conversation.message_id)
+        return list(reversed(observed))
 
     def _conversation_facts(self, message: Any) -> ConversationFacts | None:
         channel = getattr(message, "channel", None)
@@ -533,6 +563,9 @@ class DiscordChannelAdapter(ChannelAdapter):
             try:
                 target = await client.fetch_channel(target_id)
             except Exception as error:
+                classified = _classify_discord_send_error(error)
+                if classified.retryable:
+                    raise classified from error
                 raise ChannelConfigError(
                     f"Cannot resolve Discord platform_target {platform_target}: {error}"
                 ) from error
@@ -566,37 +599,53 @@ class DiscordChannelAdapter(ChannelAdapter):
             for start in range(0, len(files), _DISCORD_FILE_BATCH_LIMIT)
         ]
         send_count = max(len(chunks), len(file_batches))
-        discord = _load_discord()
-
         for index in range(send_count):
-            payload: dict[str, Any] = {}
-            if index < len(chunks):
-                payload["content"] = chunks[index]
-
-            discord_files: list[Any] = []
-            if index < len(file_batches):
-                discord_files = [
-                    discord.File(
-                        io.BytesIO(file_data.data),
-                        filename=file_data.filename,
-                    )
-                    for file_data in file_batches[index]
-                ]
-                payload["files"] = discord_files
-
-            if index == 0 and reference is not None:
-                payload["reference"] = reference
-                payload["mention_author"] = False
-
             try:
-                await target.send(**payload)
-            except Exception as error:
-                raise _classify_discord_send_error(error) from error
-            finally:
-                for discord_file in discord_files:
-                    close = getattr(discord_file, "close", None)
-                    if callable(close):
-                        close()
+                await retry_async(
+                    self._send_payload,
+                    target,
+                    chunks[index] if index < len(chunks) else None,
+                    file_batches[index] if index < len(file_batches) else [],
+                    reference=reference if index == 0 else None,
+                )
+            except ChannelError as error:
+                # Retrying the whole message would resend earlier acknowledged chunks.
+                error.retryable = False
+                raise
+
+    async def _send_payload(
+        self,
+        target: Any,
+        content: str | None,
+        files: list[FileData],
+        *,
+        reference: Any | None,
+    ) -> None:
+        payload: dict[str, Any] = {}
+        if content is not None:
+            payload["content"] = content
+        if reference is not None:
+            payload["reference"] = reference
+            payload["mention_author"] = False
+
+        # discord.py consumes upload streams even on failure; each attempt owns
+        # fresh handles so a retry uploads the original bytes from the beginning.
+        discord_files: list[Any] = []
+        try:
+            if files:
+                discord = _load_discord()
+                for file_data in files:
+                    discord_files.append(
+                        discord.File(io.BytesIO(file_data.data), filename=file_data.filename)
+                    )
+                payload["files"] = discord_files
+            await target.send(**payload)
+        except Exception as error:
+            raise _classify_discord_send_error(error) from error
+        finally:
+            for discord_file in discord_files:
+                discord_file.close()
+                discord_file.fp.close()
 
     def _reply_reference(self, target: Any, reply_to_message_id: str | None) -> Any | None:
         if reply_to_message_id is None:

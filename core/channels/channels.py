@@ -112,6 +112,7 @@ class ChannelService:
                 except Exception as error:
                     reason = str(error) or type(error).__name__
                     self._mark_channel_failed(config.id, reason)
+                    self._schedule_restart(config.id)
                     _LOGGER.error(
                         "Cannot start channel adapter during service startup (channel=%s): %s",
                         config.id,
@@ -260,6 +261,7 @@ class ChannelService:
         """
         normalized_id = _normalize_channel_id(channel_id)
         config = self._storage.get(normalized_id)
+        self._require_whatsapp_idle(normalized_id)
         self._validate_agent_exists(config.agent_id)
         self._preflight_adapter_start(config)
 
@@ -371,12 +373,7 @@ class ChannelService:
             raise ChannelConfigError(f"Unsupported channel fields: {joined}")
         if not fields:
             return
-        operation = self._whatsapp_operations.get(normalized_id)
-        if operation is not None and operation.locked():
-            raise ChannelError("Wait for the WhatsApp connection operation to finish")
-        setup = self._whatsapp_setup_tasks.get(normalized_id)
-        if setup is not None and not setup.done():
-            raise ChannelError("Wait for WhatsApp setup to finish before changing this Channel")
+        self._require_whatsapp_idle(normalized_id)
 
         had_enabled_channels = self.has_enabled_channels()
         updated = replace(config, **fields)
@@ -405,14 +402,9 @@ class ChannelService:
         """Delete one channel config and stop any active adapter task."""
         normalized_id = _normalize_channel_id(channel_id)
         config = self._storage.get(normalized_id)
-        operation = self._whatsapp_operations.get(normalized_id)
-        if operation is not None and operation.locked():
-            raise ChannelError("Wait for the WhatsApp connection operation to finish")
-        setup = self._whatsapp_setup_tasks.get(normalized_id)
+        self._require_whatsapp_idle(normalized_id)
         if config.platform in {"whatsapp", "slack", "mattermost"} and (
-            self._is_running(normalized_id)
-            or self._is_stop_in_progress(normalized_id)
-            or (setup is not None and not setup.done())
+            self._is_running(normalized_id) or self._is_stop_in_progress(normalized_id)
         ):
             raise ChannelError(
                 "Disable the Channel and wait for shutdown or setup to finish before removing it"
@@ -430,6 +422,12 @@ class ChannelService:
         """Enable one channel and start its adapter task."""
         normalized_id = _normalize_channel_id(channel_id)
         config = self._storage.get(normalized_id)
+        self._require_whatsapp_idle(normalized_id)
+        self._enable_channel(config)
+
+    def _enable_channel(self, config: ChannelConfig) -> None:
+        """Apply enable after public exclusion checks or inside the pairing owner."""
+        normalized_id = config.id
         self._validate_agent_exists(config.agent_id)
         had_enabled_channels = self.has_enabled_channels()
         if not config.enabled:
@@ -443,6 +441,7 @@ class ChannelService:
         """Disable one channel and stop its adapter task."""
         normalized_id = _normalize_channel_id(channel_id)
         config = self._storage.get(normalized_id)
+        self._require_whatsapp_idle(normalized_id)
         had_enabled_channels = self.has_enabled_channels()
         if config.enabled:
             self._storage.save(replace(config, enabled=False))
@@ -632,7 +631,11 @@ class ChannelService:
             existing = self._whatsapp_setup_tasks.get(channel_id)
             if existing is not None and not existing.done():
                 return status
-            if self._is_running(channel_id) or self._is_stop_in_progress(channel_id):
+            if (
+                self._storage.get(channel_id).enabled
+                or self._is_running(channel_id)
+                or self._is_stop_in_progress(channel_id)
+            ):
                 raise ChannelConfigError("Disable this WhatsApp Channel before installing support")
             self._whatsapp_setup_states[channel_id] = {"setup": "installing", "error": None}
 
@@ -674,9 +677,17 @@ class ChannelService:
                 if stopping is not None:
                     await asyncio.shield(stopping)
                 await channel_io(reset_pairing, self._channel_root / channel_id)
-            self.enable_channel(channel_id)
+            self._enable_channel(self._storage.get(channel_id))
             _LOGGER.info("WhatsApp pairing requested (channel=%s reset=%s)", channel_id, reset)
             return await self.whatsapp_status(channel_id)
+
+    def _require_whatsapp_idle(self, channel_id: str) -> None:
+        operation = self._whatsapp_operations.get(channel_id)
+        if operation is not None and operation.locked():
+            raise ChannelError("Wait for the WhatsApp connection operation to finish")
+        setup = self._whatsapp_setup_tasks.get(channel_id)
+        if setup is not None and not setup.done():
+            raise ChannelError("Wait for WhatsApp setup to finish before changing this Channel")
 
     def _preflight_adapter_start(self, config: ChannelConfig) -> None:
         if not config.enabled:
@@ -780,6 +791,8 @@ class ChannelService:
                 config_override=config_override,
             )
         except Exception as error:
+            self._mark_channel_failed(channel_id, str(error) or type(error).__name__)
+            self._schedule_restart(channel_id)
             _LOGGER.error(
                 "Cannot start queued channel adapter after stop completed (channel=%s): %s",
                 channel_id,
@@ -965,17 +978,20 @@ class ChannelService:
         return config.enabled
 
     def _cancel_restart_task(self, channel_id: str) -> None:
-        task = self._adapter_restart_tasks.pop(channel_id, None)
-        if task is None or task.done():
+        task = self._adapter_restart_tasks.get(channel_id)
+        if task is None:
             return
 
         if task is asyncio.current_task():
             return
 
-        task.cancel()
+        self._adapter_restart_tasks.pop(channel_id, None)
+        if not task.done():
+            task.cancel()
 
     def _on_restart_task_done(self, channel_id: str, task: asyncio.Task[None]) -> None:
-        if self._adapter_restart_tasks.get(channel_id) is task:
+        owns_restart = self._adapter_restart_tasks.get(channel_id) is task
+        if owns_restart:
             self._adapter_restart_tasks.pop(channel_id, None)
 
         if task.cancelled():
@@ -984,6 +1000,10 @@ class ChannelService:
         error = task.exception()
         if error is None:
             return
+
+        if owns_restart:
+            self._mark_channel_failed(channel_id, str(error) or type(error).__name__)
+            self._schedule_restart(channel_id)
 
         _LOGGER.error(
             "Channel adapter restart task failed for channel=%s: %s",
