@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -128,6 +129,10 @@ class SkillRuntime:
         self._reload = reload_skills
         self._project_skills: dict[str, _ProjectSkillBundle] = {}
         self._agent_skills: dict[tuple[str | None, str], SkillRegistry] = {}
+        # Scans run in workers as well as on the Event Loop. Hold this lock only
+        # around cache metadata; mutations must never wait for filesystem scans.
+        self._cache_lock = threading.RLock()
+        self._cache_generation = 0
 
     @property
     def registry(self) -> SkillRegistry:
@@ -149,17 +154,20 @@ class SkillRuntime:
         self._logger = logger
 
     def replace_registry(self, registry: SkillRegistry) -> None:
-        self._skills = registry
-        self.invalidate_project_skills()
+        with self._cache_lock:
+            self._skills = registry
+            self.invalidate_project_skills()
 
     def reload_environment(self, fallback_environment: dict[str, str]) -> None:
         """Refresh requirements in every cached scope, including held Run references."""
         environment = self._skill_environment(fallback_environment)
-        self._skills.reload_environment(environment)
-        for bundle in self._project_skills.values():
-            bundle.registry.reload_environment(environment)
-        for registry in self._agent_skills.values():
-            registry.reload_environment(environment)
+        with self._cache_lock:
+            self._cache_generation += 1
+            self._skills.reload_environment(environment)
+            for bundle in self._project_skills.values():
+                bundle.registry.reload_environment(environment)
+            for registry in self._agent_skills.values():
+                registry.reload_environment(environment)
 
     def load_global_registry(self) -> SkillRegistry:
         return load_global_skill_registry(
@@ -529,12 +537,14 @@ class SkillRuntime:
         cached agent registries for that project (or all of them when ``None``) to
         keep them coherent with the project pool.
         """
-        if project_id is None:
-            self._project_skills.clear()
-            self._agent_skills.clear()
-            return
-        self._project_skills.pop(project_id, None)
-        self._drop_agent_skills(lambda key: key[0] == project_id)
+        with self._cache_lock:
+            self._cache_generation += 1
+            if project_id is None:
+                self._project_skills.clear()
+                self._agent_skills.clear()
+                return
+            self._project_skills.pop(project_id, None)
+            self._drop_agent_skills(lambda key: key[0] == project_id)
 
     def invalidate_agent_skills(self, agent_id: str | None = None) -> None:
         """Drop a Skill owner's and its receivers' caches, or all when ``None``.
@@ -544,13 +554,16 @@ class SkillRuntime:
         including when creating or deleting a package named by an existing share.
         All Project contexts of each affected Identity Agent must rebuild.
         """
-        if agent_id is None:
-            self._agent_skills.clear()
-            return
         affected = {agent_id}
-        for receivers in self._policy.load().shared.get(agent_id, {}).values():
-            affected.update(receivers)
-        self._drop_agent_skills(lambda key: key[1] in affected)
+        if agent_id is not None:
+            for receivers in self._policy.load().shared.get(agent_id, {}).values():
+                affected.update(receivers)
+        with self._cache_lock:
+            self._cache_generation += 1
+            if agent_id is None:
+                self._agent_skills.clear()
+                return
+            self._drop_agent_skills(lambda key: key[1] in affected)
 
     def _drop_agent_skills(self, predicate: Callable[[tuple[str | None, str]], bool]) -> None:
         for key in [key for key in self._agent_skills if predicate(key)]:
@@ -558,12 +571,16 @@ class SkillRuntime:
 
     def _agent_skill_registry(self, project_id: str | None, agent_id: str) -> SkillRegistry:
         key = (project_id, agent_id)
-        cached = self._agent_skills.get(key)
-        if cached is not None:
-            return cached
-        registry = self._build_agent_skill_registry(project_id, agent_id)
-        self._agent_skills[key] = registry
-        return registry
+        while True:
+            with self._cache_lock:
+                cached = self._agent_skills.get(key)
+                if cached is not None:
+                    return cached
+                generation = self._cache_generation
+            registry = self._build_agent_skill_registry(project_id, agent_id)
+            with self._cache_lock:
+                if generation == self._cache_generation:
+                    return self._agent_skills.setdefault(key, registry)
 
     def _build_agent_skill_registry(self, project_id: str | None, agent_id: str) -> SkillRegistry:
         settings = self._storage.load_settings()
@@ -727,12 +744,16 @@ class SkillRuntime:
         return directories
 
     def _project_skill_bundle(self, project_id: str) -> _ProjectSkillBundle:
-        cached = self._project_skills.get(project_id)
-        if cached is not None:
-            return cached
-        bundle = self._build_project_skill_bundle(project_id)
-        self._project_skills[project_id] = bundle
-        return bundle
+        while True:
+            with self._cache_lock:
+                cached = self._project_skills.get(project_id)
+                if cached is not None:
+                    return cached
+                generation = self._cache_generation
+            bundle = self._build_project_skill_bundle(project_id)
+            with self._cache_lock:
+                if generation == self._cache_generation:
+                    return self._project_skills.setdefault(project_id, bundle)
 
     def _build_project_skill_bundle(self, project_id: str) -> _ProjectSkillBundle:
         project = self._projects.get(project_id)
