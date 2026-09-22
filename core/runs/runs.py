@@ -931,7 +931,13 @@ class ChatRunManager:
             except BaseException as exc:
                 status, abort = RunStatus.CANCELLED, exc
                 payload["history_persisted"] = False
-            notification_errors = await run.notify_completion(status)
+            try:
+                notification_errors = await run.notify_completion(status)
+            except BaseException as exc:
+                # Even process-level observer aborts must release the Session.
+                # Preserve the already committed outcome before propagating.
+                abort = exc
+                notification_errors = [str(exc) or type(exc).__name__]
             if notification_errors:
                 payload["completion_notification_errors"] = notification_errors
             if status == RunStatus.CANCELLED:
