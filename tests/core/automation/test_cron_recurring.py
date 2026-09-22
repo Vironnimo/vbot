@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -30,18 +28,9 @@ async def test_run_cron_job_fires_and_updates_last_fired_at(
         cron_expression="* * * * *",
     )
 
-    class ImmediateCronIter:
-        @staticmethod
-        def is_valid(_expression: str) -> bool:
-            return True
-
-        def __init__(self, _expression: str, base_time: datetime) -> None:
-            self._next_fire = base_time
-
-        def get_next(self, _return_type: Any) -> datetime:
-            return self._next_fire
-
-    monkeypatch.setattr("core.automation._cron_schedule.croniter", ImmediateCronIter)
+    monkeypatch.setattr(
+        "core.automation._cron_timing._sleep_until_utc", AsyncMock(return_value=True)
+    )
 
     async def trigger_and_pause(
         _agent_id: str,
@@ -89,17 +78,6 @@ async def test_run_cron_job_continues_after_trigger_failure(
         cron_expression="* * * * *",
     )
 
-    class ImmediateCronIter:
-        @staticmethod
-        def is_valid(_expression: str) -> bool:
-            return True
-
-        def __init__(self, _expression: str, base_time: datetime) -> None:
-            self._next_fire = base_time
-
-        def get_next(self, _return_type: Any) -> datetime:
-            return self._next_fire
-
     async def trigger_then_fail_then_pause(
         _agent_id: str,
         _prompt: str,
@@ -115,7 +93,9 @@ async def test_run_cron_job_continues_after_trigger_failure(
             raise RuntimeError("boom")
         service._jobs[job.id].status = "paused"
 
-    monkeypatch.setattr("core.automation._cron_schedule.croniter", ImmediateCronIter)
+    monkeypatch.setattr(
+        "core.automation._cron_timing._sleep_until_utc", AsyncMock(return_value=True)
+    )
     monkeypatch.setattr(cron_module.asyncio, "sleep", AsyncMock())
     trigger_service.trigger_run.side_effect = trigger_then_fail_then_pause
 

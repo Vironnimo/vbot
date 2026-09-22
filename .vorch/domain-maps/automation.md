@@ -68,6 +68,7 @@ the Model context; the probe checks stored effects and read-before-write behavio
 - Busy-session queueing shares `ChatRunManager`'s 32-item system ceiling; queued triggered work dies on restart. Removing one queued item surfaces `RunCancelledError` to its producer rather than cancelling the producer task; recurring Cron jobs retain scheduling, while a removed one-shot settles as failed and releases its fire claim. Actual producer-task cancellation still propagates as cancellation.
 - Completion buckets, dedup, retries, and remembered cancelled origins are process-local; delivery waits at Run boundaries rather than queuing one Run per producer. Once the fallback note persists, the reminder itself is durable across restarts.
 - Missed once jobs log warn and become `missed` (no fabricated timestamps); missed ticks never replay - the next fire computes from current time. Fired once jobs retain as `completed`.
+- Cron ticks always advance in UTC: repeated-hour wall times use only their first occurrence, and elapsed first occurrences are skipped. Spring-gap fires shift forward by the gap; projection resumes from that resolved wall time to match live scheduling without duplicate instants (`test_cron.py`, `test_cron_projection.py`).
 
 ## References
 
