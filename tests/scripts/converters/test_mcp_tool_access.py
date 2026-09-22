@@ -33,6 +33,31 @@ def test_policy_conversion(policy, prior, expected):
     assert convert_policy(expected, prior) == expected
 
 
+@pytest.mark.parametrize("addresses", ["alice", {"alice": True}, ["alice", 1], [""]])
+def test_malformed_legacy_addresses_fail_before_any_changes(tmp_path, monkeypatch, addresses):
+    connection = tmp_path / "mcp/connections.json"
+    connection.parent.mkdir()
+    connection.write_text(
+        json.dumps([{"id": "test", "transport": "stdio", "command": "unused", "agents": addresses}])
+    )
+    agent = tmp_path / "agents/a/agent.json"
+    agent.parent.mkdir(parents=True)
+    agent.write_text('{"id":"a"}')
+    original = connection.read_bytes()
+    original_agent = agent.read_bytes()
+
+    def refused(*args, **kwargs):
+        raise ConnectionRefusedError()
+
+    monkeypatch.setattr(socket, "create_connection", refused)
+    with pytest.raises(ValueError):
+        convert_mcp_access(tmp_path, apply=True, port=8420)
+
+    assert connection.read_bytes() == original
+    assert agent.read_bytes() == original_agent
+    assert not (tmp_path / "backups").exists()
+
+
 def test_offline_conversion_updates_profiles_bindings_and_retains_backups(tmp_path, monkeypatch):
     connection = tmp_path / "mcp/connections.json"
     connection.parent.mkdir()
