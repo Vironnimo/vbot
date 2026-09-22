@@ -10,6 +10,7 @@ malformed JSON becomes a non-retryable ``ProviderError``).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Callable
@@ -42,6 +43,7 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
+from core.utils.retry import caller_owns_retries
 
 
 def test_provider_chat_timeout_bounds_every_non_streaming_phase() -> None:
@@ -476,6 +478,64 @@ async def test_execute_with_sampling_fallback_reraises_unrelated_errors() -> Non
         await execute_with_sampling_fallback(
             attempt, payload, logger=logging.getLogger("test"), provider_label="stub"
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        ProviderAuthError("Unsupported parameter temperature for this credential"),
+        ProviderRateLimitError("Unsupported parameter temperature: backend overloaded"),
+        ProviderTimeoutError("Unsupported parameter temperature: upstream timed out"),
+        ProviderError("Unsupported parameter temperature: temporary failure", retryable=True),
+    ],
+)
+async def test_sampling_fallback_preserves_non_validation_failure(error: ProviderError) -> None:
+    payload = {"model": "m", "temperature": 0.7}
+    attempt = AsyncMock(side_effect=error)
+    with pytest.raises(type(error)) as raised:
+        await execute_with_sampling_fallback(
+            attempt, payload, logger=logging.getLogger("test"), provider_label="stub"
+        )
+    assert raised.value is error
+    attempt.assert_awaited_once()
+    assert payload == {"model": "m", "temperature": 0.7}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [httpx.ReadError, httpx.ReadTimeout, asyncio.CancelledError])
+async def test_failed_error_body_read_closes_stream(failure: type[BaseException]) -> None:
+    class BrokenBody(httpx.AsyncByteStream):
+        closed = False
+
+        async def __aiter__(self):
+            yield b"partial error"
+            raise failure("body interrupted")
+
+        async def aclose(self):
+            self.closed = True
+
+    body = BrokenBody()
+    client = _mock_client(lambda request: httpx.Response(503, stream=body))
+    expected = (
+        asyncio.CancelledError
+        if failure is asyncio.CancelledError
+        else ProviderTimeoutError
+        if failure is httpx.ReadTimeout
+        else NetworkError
+    )
+    try:
+        with caller_owns_retries(), pytest.raises(expected):
+            await connect_streaming_with_retry(
+                client,
+                "/stream",
+                {},
+                build_headers=AsyncMock(return_value={}),
+                handle_error_status=_never_expected_error_status,
+            )
+    finally:
+        await client.aclose()
+    assert body.closed
 
 
 # ---------------------------------------------------------------------------
