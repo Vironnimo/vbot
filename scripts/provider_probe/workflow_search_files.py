@@ -319,6 +319,14 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "missing_root",
             "arguments": {"args": ["-e", "alpha", "--", "missing", "src"]},
+            "content": "src/a.py:1:alpha alpha",
+            "complete": False,
+            "missing_paths": ["missing"],
+            "searched_paths": ["src"],
+        },
+        {
+            "id": "all_roots_missing",
+            "arguments": {"args": ["-e", "alpha", "--", "missing"]},
             "content": None,
             "error": True,
             "error_contains": "not found",
@@ -569,13 +577,14 @@ async def _case(adapter: Any, args: argparse.Namespace, case: dict) -> dict:
             )
         if "contains" in case:
             passed = passed and case["contains"] in data.get("content", "")
-        for field in ("matched", "next_offset", "patterns"):
+        for field in ("matched", "next_offset", "patterns", "complete"):
             if field in case:
                 passed = passed and data.get(field) == case[field]
-        if "searched_paths" in case:
-            passed = passed and data.get("searched_paths") == [
-                (root / path).as_posix() for path in case["searched_paths"]
-            ]
+        for field in ("searched_paths", "missing_paths"):
+            if field in case:
+                passed = passed and data.get(field) == [
+                    (root / path).as_posix() for path in case[field]
+                ]
         return {
             "case": case["id"],
             "passed": passed,
