@@ -173,9 +173,10 @@ def _normalize_gemini_stream_chunk(
     has_tool_calls: bool,
 ) -> tuple[list[dict[str, Any]], bool, bool]:
     error = chunk.get("error")
-    if isinstance(error, Mapping):
+    if error is not None:
+        detail = error.get("message") or error if isinstance(error, Mapping) else error
         raise ProviderError(
-            f"OpenCode Zen Gemini stream error: {error.get('message') or error}",
+            f"OpenCode Zen Gemini stream error: {detail}",
             retryable=False,
         )
     deltas: list[dict[str, Any]] = []
@@ -211,7 +212,9 @@ def _normalize_gemini_stream_chunk(
                     "type": "tool_call_delta",
                     "id": _gemini_tool_call_id(function_call, chunk, len(replay_parts) - 1),
                     "name_delta": name if isinstance(name, str) else "",
-                    "arguments_delta": json.dumps(
+                    "arguments_delta": arguments
+                    if isinstance(arguments, str)
+                    else json.dumps(
                         arguments if arguments is not None else {},
                         separators=(",", ":"),
                     ),
@@ -225,7 +228,11 @@ def _normalize_gemini_stream_chunk(
             }
         )
     finish_reason = candidate.get("finishReason")
-    finished = finish_reason is not None
+    prompt_feedback = chunk.get("promptFeedback")
+    prompt_blocked = isinstance(prompt_feedback, Mapping) and bool(
+        prompt_feedback.get("blockReason")
+    )
+    finished = finish_reason is not None or prompt_blocked
     if finished:
         deltas.append(
             {
@@ -233,7 +240,7 @@ def _normalize_gemini_stream_chunk(
                 "reason": _gemini_finish_reason(
                     finish_reason,
                     has_tool_calls=has_tool_calls or chunk_has_tools,
-                    prompt_feedback=chunk.get("promptFeedback"),
+                    prompt_feedback=prompt_feedback,
                 ),
             }
         )
