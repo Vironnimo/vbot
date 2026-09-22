@@ -79,6 +79,8 @@ negative `-g`/`--iglob` filters apply to roots independently; negatives can excl
 directory descendants. File type/size filters on path searches require `--files`.
 Overlapping roots deduplicate lexical paths; following symlinks remains opt-in
 except an explicit root, preserves its spelling, and detects ancestor loops.
+Windows junctions count as links (`is_link_entry`), like ripgrep's own walker
+(`test_junctions_are_followed_only_on_request_or_as_explicit_roots`).
 
 Default content ordering is path ascending; path discovery uses newest modification
 first, with path tie-breaks. Explicit sorts cover path, modified, accessed, created,

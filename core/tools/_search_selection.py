@@ -12,6 +12,7 @@ from pathlib import Path
 
 from core.tools._search_ignores import IgnoreRules
 from core.tools._search_options import SearchOptions, size_bytes
+from core.tools._tool_context import is_link_entry
 from core.tools.search import SearchBudget, _expand_brace_alternations
 
 
@@ -227,7 +228,8 @@ class FileSelection:
             if any((part.casefold() if os.name == "nt" else part) == ".git" for part in path.parts):
                 return
             try:
-                link = path.is_symlink()
+                # Junctions are directory links too, although is_symlink() misses them.
+                link = is_link_entry(path)
                 if link and depth and not follow:
                     return
                 metadata = path.stat()
