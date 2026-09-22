@@ -358,3 +358,27 @@ def test_same_name_across_roots_no_longer_both_load(tmp_path: Path) -> None:
     assert _marker_names(marker) == ["shared"]
     statuses = sorted(record.status for record in registry.records())
     assert statuses == ["loaded", "overridden"]
+
+
+@pytest.mark.parametrize("entry_name", ["__init__.py", "extension.py"])
+def test_directory_entry_points_resolve_relative_imports(tmp_path: Path, entry_name: str) -> None:
+    root = tmp_path / "extensions"
+    package = root / "directory_ext"
+    package.mkdir(parents=True)
+    marker = tmp_path / "marker.txt"
+    (package / "helper.py").write_text(
+        "from pathlib import Path\n"
+        "def handler(ctx, **payload):\n"
+        f"    Path({str(marker)!r}).write_text('directory_ext', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    (package / entry_name).write_text(
+        "from .helper import handler\ndef register(api):\n    api.on('run_start', handler)\n",
+        encoding="utf-8",
+    )
+
+    registry = ExtensionRegistry.load(root)
+    _fire_run_start(registry)
+
+    assert _record_by_name(registry, "directory_ext").status == "loaded"
+    assert _marker_names(marker) == ["directory_ext"]

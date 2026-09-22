@@ -127,7 +127,7 @@ def _register_extension(
             return _failed_record(discovered, message, manifest=manifest)
 
     try:
-        module = _import_extension_module(name, discovered.entry_path)
+        module = _import_extension_module(discovered)
     except Exception as exc:
         _LOGGER.error(
             "Failed to load extension %r from %s: %s",
@@ -408,21 +408,18 @@ def purge_extension_modules() -> None:
             del sys.modules[module_name]
 
 
-def _extension_spec(module_name: str, entry_path: Path) -> Any:
-    if entry_path.name == "__init__.py":
-        return importlib.util.spec_from_file_location(
-            module_name,
-            entry_path,
-            submodule_search_locations=[str(entry_path.parent)],
-        )
-
-    return importlib.util.spec_from_file_location(module_name, entry_path)
-
-
-def _import_extension_module(name: str, entry_path: Path) -> types.ModuleType:
+def _import_extension_module(discovered: _DiscoveredExtension) -> types.ModuleType:
     """Import one extension entry point under the synthetic ``vbot_ext`` namespace."""
+    name = discovered.name
+    entry_path = discovered.entry_path
     module_name = f"{_EXTENSION_PARENT_PACKAGE}.{name}"
-    spec = _extension_spec(module_name, entry_path)
+    spec = importlib.util.spec_from_file_location(
+        module_name,
+        entry_path,
+        submodule_search_locations=(
+            [str(discovered.root_path)] if discovered.root_path != entry_path else None
+        ),
+    )
     if spec is None or spec.loader is None:
         raise ImportError(f"No loader for extension entry point: {entry_path}")
 
