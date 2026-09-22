@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.chat.streaming import StreamingAccumulator
+
 from .openai_compatible_test_support import (
     OPENAI_URL,
     SAMPLE_MESSAGES,
@@ -16,6 +18,29 @@ from .openai_compatible_test_support import openrouter_adapter as openrouter_ada
 
 class TestStreamSSE:
     "Verify that stream() correctly parses SSE event chunks."
+
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("name", [None, "", 42])
+    async def test_empty_idless_tool_attempt_is_preserved_for_rejection(self, openai_adapter, name):
+        calls = [
+            {"index": 0, "function": {"name": name, "arguments": ""}},
+            {"index": 1, "id": "call_valid", "function": {"name": "read", "arguments": "{}"}},
+        ]
+        chunk = {"choices": [{"delta": {"tool_calls": calls}, "finish_reason": "tool_calls"}]}
+        body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+        respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, text=body))
+        accumulator = StreamingAccumulator()
+
+        async for delta in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            accumulator.add_delta(delta)
+
+        result = accumulator.finalize_assistant_fields().tool_calls
+        assert result is not None
+        assert len(result) == 2
+        assert result[0]["id"] == "tool_call_0"
+        assert result[0]["rejection"]["code"] == "malformed_tool_call"
+        assert result[1] == {"id": "call_valid", "name": "read", "arguments": {}}
 
     @respx.mock
     @pytest.mark.asyncio
@@ -201,6 +226,65 @@ class TestStreamSSE:
 # by id while reusing one index for the whole batch.
 class TestReusedToolCallIndexRedirect:
     """A same-index delta carrying a different id starts a fresh slot."""
+
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("late_id", [False, True])
+    async def test_redirected_slot_does_not_capture_a_later_native_index(
+        self, openai_adapter, late_id
+    ):
+        calls = [
+            {"index": 0, "id": "call_a", "function": {"name": "first", "arguments": "{}"}},
+            {"index": 0, "id": "call_b", "function": {"name": "second", "arguments": "{}"}},
+            {"index": 1, "function": {"name": "third", "arguments": '{"value":'}},
+            {"index": 1, "id": "call_c", "function": {"arguments": "3}"}},
+        ]
+        if not late_id:
+            calls[2]["id"] = "call_c"
+        body = "".join(
+            "data: " + json.dumps({"choices": [{"delta": {"tool_calls": [call]}}]}) + "\n\n"
+            for call in calls
+        )
+        body += 'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
+        body += "data: [DONE]\n\n"
+        respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, text=body))
+        accumulator = StreamingAccumulator()
+
+        async for delta in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            accumulator.add_delta(delta)
+
+        calls = accumulator.finalize_assistant_fields().tool_calls
+        assert calls == [
+            {"id": "call_a", "name": "first", "arguments": {}},
+            {"id": "call_b", "name": "second", "arguments": {}},
+            {"id": "call_c", "name": "third", "arguments": {"value": 3}},
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_interleaved_reused_index_returns_to_the_original_call(self, openai_adapter):
+        calls = [
+            {"index": 0, "id": "call_a", "function": {"name": "first", "arguments": '{"a":'}},
+            {"index": 0, "id": "call_b", "function": {"name": "second", "arguments": '{"b":'}},
+            {"index": 0, "id": "call_a", "function": {"arguments": "1}"}},
+            {"index": 0, "id": "call_b", "function": {"arguments": "2}"}},
+        ]
+        body = "".join(
+            "data: " + json.dumps({"choices": [{"delta": {"tool_calls": [call]}}]}) + "\n\n"
+            for call in calls
+        )
+        body += 'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
+        body += "data: [DONE]\n\n"
+        respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, text=body))
+        accumulator = StreamingAccumulator()
+
+        async for delta in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            accumulator.add_delta(delta)
+
+        assert accumulator.finalize_assistant_fields().tool_calls == [
+            {"id": "call_a", "name": "first", "arguments": {"a": 1}},
+            {"id": "call_b", "name": "second", "arguments": {"b": 2}},
+        ]
 
     @respx.mock
     @pytest.mark.asyncio

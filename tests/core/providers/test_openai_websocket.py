@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 from collections import deque
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import respx
@@ -200,6 +201,30 @@ async def test_codex_websocket_reuses_connection_and_sends_only_new_tool_result(
     assert "session_id" not in websocket_headers
     await adapter.aclose()
     assert websocket.closed is True
+
+
+@pytest.mark.asyncio
+async def test_closing_partial_codex_stream_releases_socket_before_returning() -> None:
+    websocket = _FakeCodexWebSocket([[{"type": "response.output_text.delta", "delta": "partial"}]])
+    adapter = OpenAIAdapter(
+        _subscription_config(),
+        _jwt_with_account("acct_openai"),
+        connection_mode=CODEX_RESPONSES_MODE,
+        codex_websocket_connect=_FakeCodexWebSocketConnector([websocket]),
+    )
+    stream = cast(
+        AsyncGenerator[dict[str, Any], None],
+        adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.6-terra", conversation_id="agent:session"),
+    )
+    try:
+        assert await anext(stream) == {"type": "content_delta", "text": "partial"}
+        await stream.aclose()
+
+        assert websocket.closed
+        assert not adapter._codex_socket._codex_websocket_lock.locked()
+    finally:
+        await stream.aclose()
+        await adapter.aclose()
 
 
 @pytest.mark.asyncio

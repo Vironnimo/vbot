@@ -183,9 +183,13 @@ def _extract_ollama_usage(response: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def _normalize_ollama_done_reason(done_reason: Any, *, has_tool_calls: bool) -> str:
-    if done_reason in _OLLAMA_TOOL_DONE_REASONS or has_tool_calls:
+    if not isinstance(done_reason, str):
+        return "unknown"
+    if done_reason in _OLLAMA_TOOL_DONE_REASONS:
         return "tool_calls"
-    return "stop"
+    if done_reason == "stop":
+        return "tool_calls" if has_tool_calls else "stop"
+    return "unknown"
 
 
 def _build_error_detail(status_code: int, response_body: str = "") -> str:

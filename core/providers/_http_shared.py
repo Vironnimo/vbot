@@ -318,6 +318,8 @@ async def execute_with_sampling_fallback(
     try:
         return await execute_attempt()
     except ProviderError as error:
+        if error.retryable or isinstance(error, ProviderAuthError):
+            raise
         blamed_parameter = unsupported_sampling_parameter(str(error))
         if blamed_parameter is None or blamed_parameter not in payload:
             raise
@@ -344,8 +346,8 @@ def wrap_network_error(error: Exception) -> NetworkError | ProviderTimeoutError:
     ``RemoteProtocolError``, ``ProtocolError``, ``ProxyError``, ``UnsupportedProtocol``,
     ``LocalProtocolError``, ``NetworkError``, and any other transport-level
     failure — are wrapped as ``NetworkError`` (retryable and not
-    provider-specific). ``NetworkError`` deliberately stays a non-``ProviderError``
-    so it never triggers model fallback (see ``.vorch/domain-maps/providers.md`` gotchas).
+    provider-specific). ``NetworkError`` stays a non-``ProviderError``; Chat owns
+    its recovery budget and any configured Model fallback.
     """
     if isinstance(error, httpx.TimeoutException):
         detail = str(error).strip() or "No response received within the request timeout."
@@ -413,8 +415,13 @@ async def connect_streaming_with_retry(
         if auth_recovery is not None:
             auth_recovery.record_response(response.status_code, headers)
         if response.status_code >= 400:
-            error_body = (await response.aread()).decode("utf-8", errors="replace")
-            await response.aclose()
+            try:
+                try:
+                    error_body = (await response.aread()).decode("utf-8", errors="replace")
+                finally:
+                    await response.aclose()
+            except httpx.TransportError as exc:
+                raise wrap_transport_error(exc) from exc
             if auth_recovery is not None:
                 auth_recovery.record_response(response.status_code, headers, error_body)
             handle_error_status(response.status_code, error_body, response.headers)

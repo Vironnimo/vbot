@@ -73,8 +73,10 @@ The live `/models` listing is authoritative and rich - each entry carries `max_i
 - `text` blocks concatenate into `content`.
 - Readable `thinking` blocks concatenate into visible `reasoning`; redacted thinking remains opaque metadata only.
 - `tool_use` blocks map to canonical `tool_calls`.
+- A streamed `tool_use` start registers an addressable Call even when its name is malformed and no input deltas follow, so canonical validation can reject it and preserve sibling/Result order (`test_messages_stream.py`).
 - Streaming tracks content-block indexes and yields normalized vBot deltas only. `AnthropicMessagesStreamDecoder` owns the stateful Messages SSE protocol and is also consumed by GitHub Copilot's `/v1/messages` path; compatible providers configure only verified wire differences instead of copying the event state machine.
 - Usage: Anthropic reports `cache_read_input_tokens`/`cache_creation_input_tokens` **separately** from `input_tokens`. `apply_anthropic_cache_usage()` maps them to canonical `cache_read_tokens`/`cache_write_tokens` and adds both onto `input_tokens` so the canonical value is the total prompt (non-stream and the stream `message_start` path). `github_copilot_messages` reuses this helper for Copilot's Anthropic-style wire.
+- Primary Usage counters survive independently; absent output is never fabricated as measured zero. Malformed, Boolean, or negative counters are ignored, and unusable cache counters never alter the input total. A stream's usable start/terminal input snapshot survives a terminal Usage object that omits output (`test_messages_usage.py`).
 
 ## Error Classification
 

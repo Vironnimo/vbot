@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 from core.providers._chat_completions_constants import (
@@ -151,8 +152,6 @@ def _normalize_openai_tool_call_deltas(
             name_delta = ""
         if not isinstance(arguments_delta, str):
             arguments_delta = ""
-        if provider_id is None and not name_delta and not arguments_delta:
-            continue
         normalized_delta: dict[str, Any] = {
             "type": "tool_call_delta",
             "slot": tool_call_index,
@@ -170,6 +169,13 @@ def _openai_tool_call_index(raw_tool_call: dict[str, Any], position: int) -> int
     return index if isinstance(index, int) else position
 
 
+@dataclass
+class _ToolCallIndexState:
+    active_slot: int
+    active_id: str | None = None
+    slots_by_id: dict[str, int] = field(default_factory=dict)
+
+
 def _redirect_reused_tool_call_index(
     raw_index: int,
     provider_id: str | None,
@@ -180,11 +186,11 @@ def _redirect_reused_tool_call_index(
 
     Ollama-compatible endpoints may reuse one index (typically ``0``) for every
     Tool Call in a parallel batch, distinguishing the calls only by ``id``. A
-    same-index delta carrying a *different* id therefore starts a new call and
-    is redirected to a fresh virtual slot instead of being merged into the
-    previous call's fragments. An id-less fragment keeps the tracked virtual
-    slot of its raw index. Requires the per-stream ``normalization_state``
-    mapping; without it the raw index wins.
+    same-index delta carrying a new id therefore starts a new call; a returning
+    id resumes its original slot. Every allocation checks occupied slots so a
+    later native index cannot collide with an earlier virtual one. An id-less
+    fragment keeps its raw index's active slot, including before a late id.
+    Requires per-stream ``normalization_state``; without it the raw index wins.
     """
 
     if normalization_state is None:
@@ -194,22 +200,18 @@ def _redirect_reused_tool_call_index(
         tracked = {}
         normalization_state[_OPENAI_TOOL_CALL_INDEX_IDS_STATE_KEY] = tracked
     entry = tracked.get(raw_index)
-    if isinstance(entry, list) and len(entry) == 2:
-        last_id, virtual_index = entry
-        if (
-            isinstance(last_id, str)
-            and isinstance(virtual_index, int)
-            and not isinstance(virtual_index, bool)
-        ):
-            if provider_id is None or provider_id == last_id:
-                return virtual_index
-            fresh_index = max(tool_call_slots, default=raw_index) + 1
-            tracked[raw_index] = [provider_id, fresh_index]
-            return fresh_index
-    if provider_id is None:
-        return raw_index
-    tracked[raw_index] = [provider_id, raw_index]
-    return raw_index
+    if not isinstance(entry, _ToolCallIndexState):
+        slot = raw_index if raw_index not in tool_call_slots else max(tool_call_slots) + 1
+        entry = _ToolCallIndexState(active_slot=slot)
+        tracked[raw_index] = entry
+    if provider_id is not None:
+        if provider_id in entry.slots_by_id:
+            entry.active_slot = entry.slots_by_id[provider_id]
+        elif entry.active_id is not None:
+            entry.active_slot = max(tool_call_slots, default=raw_index) + 1
+        entry.active_id = provider_id
+        entry.slots_by_id[provider_id] = entry.active_slot
+    return entry.active_slot
 
 
 def _accumulate_openai_stream_reasoning_details(

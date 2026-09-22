@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Mapping
-from typing import TYPE_CHECKING, Any
+from collections.abc import AsyncGenerator, Callable, Mapping
+from contextlib import aclosing
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
@@ -126,10 +127,16 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
         *,
         model_id: str,
         **kwargs: Any,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         await self._ensure_model_loaded(model_id)
-        async for event in super().stream(messages, model_id=model_id, **kwargs):
-            yield event
+        async with aclosing(
+            cast(
+                AsyncGenerator[dict[str, Any], None],
+                super().stream(messages, model_id=model_id, **kwargs),
+            )
+        ) as events:
+            async for event in events:
+                yield event
 
     async def _ensure_model_loaded(self, model_id: str) -> None:
         bare_model_id = model_id.split("::", 1)[0]

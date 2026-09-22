@@ -367,16 +367,14 @@ def _extract_openai_usage(response: dict[str, Any]) -> dict[str, int] | None:
     usage = response.get("usage")
     if not isinstance(usage, dict):
         return None
-    prompt_tokens = usage.get("prompt_tokens")
-    completion_tokens = usage.get("completion_tokens")
-    has_input = isinstance(prompt_tokens, int)
-    has_output = isinstance(completion_tokens, int)
-    if not has_input and not has_output:
+    prompt_tokens = _optional_non_negative_usage_int(usage.get("prompt_tokens"))
+    completion_tokens = _optional_non_negative_usage_int(usage.get("completion_tokens"))
+    if prompt_tokens is None and completion_tokens is None:
         return None
     normalized: dict[str, int] = {}
-    if isinstance(prompt_tokens, int):
+    if prompt_tokens is not None:
         normalized["input_tokens"] = prompt_tokens
-    if isinstance(completion_tokens, int):
+    if completion_tokens is not None:
         normalized["output_tokens"] = completion_tokens
     cache_read_tokens = _openai_cached_prompt_tokens(usage)
     if cache_read_tokens is not None:
@@ -401,30 +399,8 @@ def _extract_stream_usage(chunk: dict[str, Any]) -> dict[str, Any] | None:
     Returns ``None`` when the chunk has no usable usage data, so that
     callers can skip yielding anything.
     """
-    usage = chunk.get("usage")
-    if not isinstance(usage, dict):
-        return None
-    prompt_tokens = usage.get("prompt_tokens")
-    completion_tokens = usage.get("completion_tokens")
-    has_input = isinstance(prompt_tokens, int)
-    has_output = isinstance(completion_tokens, int)
-    if not has_input and not has_output:
-        return None
-    delta: dict[str, Any] = {"type": "usage"}
-    if has_input:
-        delta["input_tokens"] = prompt_tokens
-    if has_output:
-        delta["output_tokens"] = completion_tokens
-    cache_read_tokens = _openai_cached_prompt_tokens(usage)
-    if cache_read_tokens is not None:
-        delta["cache_read_tokens"] = cache_read_tokens
-    cache_write_tokens = _openai_cache_write_tokens(usage)
-    if cache_write_tokens is not None:
-        delta["cache_write_tokens"] = cache_write_tokens
-    reasoning_tokens = reasoning_token_count(usage)
-    if isinstance(reasoning_tokens, int) and reasoning_tokens >= 0:
-        delta["reasoning_tokens"] = reasoning_tokens
-    return delta
+    usage = _extract_openai_usage(chunk)
+    return {"type": "usage", **usage} if usage is not None else None
 
 
 def _openai_cached_prompt_tokens(usage: dict[str, Any]) -> int | None:

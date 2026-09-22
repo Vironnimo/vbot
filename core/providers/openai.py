@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, cast
 
 import httpx
@@ -495,13 +496,16 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 stream=True,
                 **self._request_kwargs_with_defaults(kwargs),
             )
-            async for delta in self._stream_responses(
-                payload,
-                endpoint_path=CODEX_RESPONSES_ENDPOINT,
-                cache_scope_id=prompt_cache_affinity_id,
-                conversation_id=conversation_id,
-            ):
-                yield delta
+            async with aclosing(
+                self._stream_responses(
+                    payload,
+                    endpoint_path=CODEX_RESPONSES_ENDPOINT,
+                    cache_scope_id=prompt_cache_affinity_id,
+                    conversation_id=conversation_id,
+                )
+            ) as deltas:
+                async for delta in deltas:
+                    yield delta
             return
         if self._uses_platform_responses(model_id):
             payload = self._build_responses_payload(
@@ -510,14 +514,20 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 stream=True,
                 **self._request_kwargs_with_defaults(kwargs),
             )
-            async for delta in self._stream_responses(
-                payload,
-                endpoint_path=RESPONSES_POLICY_ENDPOINT,
-            ):
-                yield delta
+            async with aclosing(
+                self._stream_responses(payload, endpoint_path=RESPONSES_POLICY_ENDPOINT)
+            ) as deltas:
+                async for delta in deltas:
+                    yield delta
             return
-        async for delta in super().stream(messages, model_id=model_id, **kwargs):
-            yield delta
+        async with aclosing(
+            cast(
+                AsyncGenerator[dict[str, Any], None],
+                super().stream(messages, model_id=model_id, **kwargs),
+            )
+        ) as deltas:
+            async for delta in deltas:
+                yield delta
 
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
@@ -795,7 +805,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         cache_scope_id: str | None = None,
         conversation_id: str | None = None,
         state: ResponsesStreamState | None = None,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         stream_state = state or ResponsesStreamState()
         if (
             endpoint_path == CODEX_RESPONSES_ENDPOINT
@@ -803,21 +813,27 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             and conversation_id
             and self._codex_transport == _CODEX_TRANSPORT_AUTO
         ):
-            async for delta in self._stream_codex_auto(
-                payload,
-                cache_scope_id=cache_scope_id,
-                conversation_id=conversation_id,
-                state=stream_state,
-            ):
-                yield delta
+            async with aclosing(
+                self._stream_codex_auto(
+                    payload,
+                    cache_scope_id=cache_scope_id,
+                    conversation_id=conversation_id,
+                    state=stream_state,
+                )
+            ) as deltas:
+                async for delta in deltas:
+                    yield delta
             return
-        async for delta in self._stream_responses_sse(
-            payload,
-            endpoint_path=endpoint_path,
-            cache_scope_id=cache_scope_id,
-            state=stream_state,
-        ):
-            yield delta
+        async with aclosing(
+            self._stream_responses_sse(
+                payload,
+                endpoint_path=endpoint_path,
+                cache_scope_id=cache_scope_id,
+                state=stream_state,
+            )
+        ) as deltas:
+            async for delta in deltas:
+                yield delta
 
     async def _stream_responses_sse(
         self,
@@ -826,7 +842,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         endpoint_path: str,
         cache_scope_id: str | None,
         state: ResponsesStreamState,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         response = await self._connect_stream(endpoint_path, payload, cache_scope_id=cache_scope_id)
         event_lines: list[str] = []
         seen_finish_delta = False
@@ -861,7 +877,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         cache_scope_id: str,
         conversation_id: str,
         state: ResponsesStreamState,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         websocket_headers = await self._build_codex_websocket_headers(cache_scope_id)
         account_id = websocket_headers["chatgpt-account-id"]
         model_id = payload.get("model")
@@ -872,34 +888,43 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         # never consume another branch's ``previous_response_id`` state.
         route = (conversation_id, model_id, account_id)
         if route in self._codex_websocket_disabled_routes:
-            async for delta in self._stream_responses_sse(
-                payload,
-                endpoint_path=CODEX_RESPONSES_ENDPOINT,
-                cache_scope_id=cache_scope_id,
-                state=state,
-            ):
-                yield delta
+            async with aclosing(
+                self._stream_responses_sse(
+                    payload,
+                    endpoint_path=CODEX_RESPONSES_ENDPOINT,
+                    cache_scope_id=cache_scope_id,
+                    state=state,
+                )
+            ) as deltas:
+                async for delta in deltas:
+                    yield delta
             return
 
         try:
-            async for delta in self._codex_socket.stream(
-                payload,
-                headers=websocket_headers,
-                route=route,
-                state=state,
-            ):
-                yield delta
+            async with aclosing(
+                self._codex_socket.stream(
+                    payload,
+                    headers=websocket_headers,
+                    route=route,
+                    state=state,
+                )
+            ) as deltas:
+                async for delta in deltas:
+                    yield delta
         except _CodexWebSocketTransportError as exc:
             self._codex_websocket_disabled_routes.add(route)
             if exc.events_received:
                 raise
-            async for delta in self._stream_responses_sse(
-                payload,
-                endpoint_path=CODEX_RESPONSES_ENDPOINT,
-                cache_scope_id=cache_scope_id,
-                state=state,
-            ):
-                yield delta
+            async with aclosing(
+                self._stream_responses_sse(
+                    payload,
+                    endpoint_path=CODEX_RESPONSES_ENDPOINT,
+                    cache_scope_id=cache_scope_id,
+                    state=state,
+                )
+            ) as deltas:
+                async for delta in deltas:
+                    yield delta
 
     async def _build_codex_websocket_headers(self, cache_scope_id: str) -> dict[str, str]:
         wire_cache_scope = _clamp_codex_cache_scope(cache_scope_id)
