@@ -336,16 +336,12 @@ class OAuthTokenGetter:
             if (
                 isinstance(exc, ProviderAuthError)
                 and self._oauth_config.device_flow in ROTATING_REFRESH_DEVICE_FLOWS
-                and self._token_store.load(
-                    self._provider_id,
-                    self._local_connection_id,
-                    account_id=self._account_id,
-                )
-                == token
             ):
-                self._token_store.delete(
+                self._token_store.replace_if_current(
                     self._provider_id,
                     self._local_connection_id,
+                    token,
+                    None,
                     account_id=self._account_id,
                 )
             self._log_refresh_failure(exc)
@@ -353,21 +349,21 @@ class OAuthTokenGetter:
         return self._save_refreshed_token(token, refreshed_token)
 
     def _save_refreshed_token(self, original: OAuthToken, refreshed: OAuthToken) -> str:
-        # Refresh awaits network I/O; disconnect/reconnect can change the Account
-        # meanwhile. Keep the comparison and write synchronous on the runtime loop.
-        current = self._token_store.load(
-            self._provider_id, self._local_connection_id, account_id=self._account_id
-        )
-        if current != original:
-            if current is not None and not _is_expiring(current):
-                return current.access_token
-            raise ProviderAuthError("OAuth credentials changed during refresh — reconnect required")
-        self._token_store.save(
+        if not self._token_store.replace_if_current(
             self._provider_id,
             self._local_connection_id,
+            original,
             refreshed,
             account_id=self._account_id,
-        )
+        ):
+            current = self._token_store.load(
+                self._provider_id, self._local_connection_id, account_id=self._account_id
+            )
+            if current is not None and not _is_expiring(current):
+                return current.access_token
+            raise ProviderAuthError(
+                "OAuth credentials changed during refresh; retry with the current Connection"
+            )
         self._log_refresh_success()
         return refreshed.access_token
 

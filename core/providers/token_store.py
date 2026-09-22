@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import RLock
 
 from core.providers.accounts import ACCOUNT_ID_PATTERN, DEFAULT_ACCOUNT_ID, sorted_account_ids
 from core.utils.atomic import atomic_write_text
@@ -33,6 +34,7 @@ class TokenStore:
         self._data_dir = data_dir
         self._oauth_dir = data_dir / "oauth"
         self._refresh_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
+        self._mutation_lock = RLock()
 
     def refresh_lock(
         self,
@@ -65,11 +67,12 @@ class TokenStore:
         """Persist *token* atomically for the provider connection account."""
 
         token_path = self._token_path(provider_id, local_connection_id, account_id)
-        atomic_write_text(
-            token_path,
-            json.dumps(self._token_to_dict(token), sort_keys=True),
-            data_dir=self._data_dir,
-        )
+        with self._mutation_lock:
+            atomic_write_text(
+                token_path,
+                json.dumps(self._token_to_dict(token), sort_keys=True),
+                data_dir=self._data_dir,
+            )
 
     def load(
         self,
@@ -102,10 +105,35 @@ class TokenStore:
         """Delete the token for a provider connection account, if it exists."""
 
         token_path = self._token_path(provider_id, local_connection_id, account_id)
-        try:
-            token_path.unlink()
-        except FileNotFoundError:
-            return
+        with self._mutation_lock:
+            try:
+                token_path.unlink()
+            except FileNotFoundError:
+                return
+
+    def replace_if_current(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        expected: OAuthToken,
+        replacement: OAuthToken | None,
+        *,
+        account_id: str = DEFAULT_ACCOUNT_ID,
+    ) -> bool:
+        """Apply a delayed refresh only while its source credentials remain current.
+
+        Disconnect and a fresh login remain immediate synchronous mutations.
+        A network refresh may neither revive their retired token nor remove
+        replacement credentials after its own exchange fails.
+        """
+        with self._mutation_lock:
+            if self.load(provider_id, local_connection_id, account_id=account_id) != expected:
+                return False
+            if replacement is None:
+                self.delete(provider_id, local_connection_id, account_id=account_id)
+            else:
+                self.save(provider_id, local_connection_id, replacement, account_id=account_id)
+            return True
 
     def has_valid_token(
         self,
