@@ -544,13 +544,15 @@ class RunExecution:
                     "Failed to compute change statistics for run %s", run.id, exc_info=True
                 )
             if context.continuation_tracker is not None:
+                answered = completed_assistant is not None and not completed_assistant.interrupted
                 try:
-                    if (
-                        outcome == "success"
-                        and completed_assistant is not None
-                        and not completed_assistant.interrupted
-                    ):
+                    if outcome == "success" and answered:
                         await context.continuation_tracker.prepare_completion()
+                    elif outcome == "cancelled" and answered:
+                        # Stop after a complete, persisted final answer (for example
+                        # during post-answer Compaction) leaves nothing to recover.
+                        # Only a completed terminal commit removes the journal.
+                        await context.continuation_tracker.resolve()
                     else:
                         if outcome == "cancelled":
                             cause: ContinuationCause = (

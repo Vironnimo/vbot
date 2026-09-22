@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, cast
 
@@ -25,6 +26,8 @@ from core.runs import (
     COMPACTION_ABORTED_EVENT,
     COMPACTION_STARTED_EVENT,
     Run,
+    RunCancelledError,
+    RunStatus,
 )
 from core.tools import (
     HISTORY_TOOL_NAME,
@@ -337,3 +340,53 @@ async def test_compaction_projection_failure_does_not_persist_checkpoint(
     assert any(
         "Post-compaction request projection failed" in record.message for record in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_stop_during_post_answer_compaction_keeps_the_answer_resolved(
+    tmp_path: Path,
+) -> None:
+    class BlockingFinalCompaction:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.checks = 0
+
+        def has_new_compactable_context(self, *_args: Any, **_kwargs: Any) -> bool:
+            return True
+
+        def should_auto_compact(self, *_args: Any, **_kwargs: Any) -> bool:
+            self.checks += 1
+            return self.checks == 2  # the check after the final answer
+
+        async def compact(self, *_args: Any, **_kwargs: Any) -> ChatMessage:
+            self.started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    service = BlockingFinalCompaction()
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[]),
+        adapter=StubAdapter(
+            [{"content": "Complete answer", "usage": {"input_tokens": 90, "output_tokens": 5}}]
+        ),
+        storage=StubStorage(
+            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    runtime.chat_sessions.create("coder", session_id="one")
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    run = await loop.start_run("coder", "Finish", session_id="one")
+    await asyncio.wait_for(service.started.wait(), 10)
+
+    await runtime.chat_run_manager.cancel(run.id, reason="user")
+
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+    assert run.status == RunStatus.CANCELLED
+    session = runtime.chat_sessions.get(session_address("coder", "one"))
+    assistant = next(message for message in session.load() if message.role == "assistant")
+    assert assistant.content == "Complete answer"
+    assert not assistant.interrupted
+    assert session.load_continuation_records() == []
