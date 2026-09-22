@@ -86,6 +86,26 @@ def test_sniff_media_type_rejects_oversized_ooxml_content_types() -> None:
     assert media_type == "application/octet-stream"
 
 
+@pytest.mark.parametrize("damage", ["encrypted", "unsupported_compression", "invalid_deflate"])
+def test_store_rejects_unreadable_ooxml_as_unsupported_type(tmp_path: Path, damage: str) -> None:
+    payload = bytearray(_build_ooxml_payload(b"wordprocessingml.document"))
+    central_header = payload.index(b"PK\x01\x02")
+    if damage == "encrypted":
+        payload[6] |= 1
+        payload[central_header + 8] |= 1
+    elif damage == "unsupported_compression":
+        payload[8:10] = (99).to_bytes(2, "little")
+        payload[central_header + 10 : central_header + 12] = (99).to_bytes(2, "little")
+    else:
+        compressed_start = 30 + len(b"[Content_Types].xml")
+        payload[compressed_start:central_header] = b"\xff" * (central_header - compressed_start)
+
+    assert sniff_media_type(bytes(payload), "report.docx") == "application/octet-stream"
+    with pytest.raises(AttachmentTypeNotAllowedError):
+        AttachmentStore(tmp_path).store("report.docx", bytes(payload))
+    assert not DataDirectoryLayout(tmp_path).attachments.exists()
+
+
 @pytest.mark.parametrize(
     ("filename", "data", "expected_media_type", "expected_extension"),
     [
@@ -318,6 +338,16 @@ def test_get_rejects_sidecar_id_mismatch(tmp_path: Path) -> None:
     payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
     payload["id"] = "00000000-0000-4000-8000-000000000000"
     sidecar_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(AttachmentError):
+        store.get(record.id)
+
+
+def test_get_rejects_non_utf8_sidecar_as_attachment_error(tmp_path: Path) -> None:
+    store = AttachmentStore(tmp_path)
+    record = store.store("notes.txt", b"notes")
+    sidecar_path = DataDirectoryLayout(tmp_path).attachments / f"{record.id}.json"
+    sidecar_path.write_bytes(b"\xff\xfe")
 
     with pytest.raises(AttachmentError):
         store.get(record.id)

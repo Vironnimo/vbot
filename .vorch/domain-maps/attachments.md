@@ -29,7 +29,7 @@ Blob-backed original-file storage, attachment-specific message shaping, and shar
 
 ## Constraints & Gotchas
 
-- OOXML sniffing opens the uploaded ZIP's `[Content_Types].xml` - an unbounded decompression a within-limit zip bomb could inflate to gigabytes. The reader caps at 1 MiB treating overflow as "not OOXML"; the upload limit bounds compressed bytes only, never make this read unbounded.
+- OOXML sniffing opens the uploaded ZIP's `[Content_Types].xml` - an unbounded decompression a within-limit zip bomb could inflate to gigabytes. The reader caps at 1 MiB treating overflow as "not OOXML"; encrypted entries, unsupported compression and malformed compressed data also stay unrecognized instead of escaping as unexpected exceptions. The upload limit bounds compressed bytes only, never make this read unbounded.
 - Suffixless blobs from the old layout are invalid - convert explicitly with `scripts/converters/attachment_blob_extensions.py` (pre-flighting, collision-refusing, idempotent).
 - `GET /api/attachments/{id}` serves sniffed type with inline disposition and the display filename.
 - Media resolution lives in the chat layer as a provider-agnostic intersection: native only when current turn AND model modality AND adapter wire support align; otherwise degraded - always one block in, one or more out, every attachment leaving a `Path:` handle, degradation never aborting a Run. Per-modality policies live in `chat/request-building.md`.
