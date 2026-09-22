@@ -36,6 +36,8 @@ from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
     REASONING_INTENT_DEFAULT,
+    REASONING_INTENT_OFF,
+    REASONING_INTENT_ON,
     REASONING_REPLAY_FIDELITY_READABLE_ONLY,
     ReasoningIntent,
     ReasoningReplayFidelity,
@@ -398,11 +400,21 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         effort: str | None,
         provider_config: ProviderConfig | None = None,
     ) -> ReasoningIntent:
+        thinking_control = _model_profile_value(
+            model_lookup, model_id, THINKING_CONTROL_METADATA_KEY
+        )
+        if thinking_control in (THINKING_CONTROL_TOGGLE, THINKING_CONTROL_ALWAYS_ENABLED):
+            # These profiles replace generic effort with an explicit toggle,
+            # including enabled when no effort was selected.
+            enabled = (
+                thinking_control == THINKING_CONTROL_ALWAYS_ENABLED
+                or normalize_thinking_effort(effort) != "none"
+            )
+            return ReasoningIntent(REASONING_INTENT_ON if enabled else REASONING_INTENT_OFF)
         if (
             _model_profile_value(model_lookup, model_id, PROTOCOL_METADATA_KEY)
             == PROTOCOL_ANTHROPIC
-            and _model_profile_value(model_lookup, model_id, THINKING_CONTROL_METADATA_KEY)
-            == THINKING_CONTROL_PROVIDER_DEFAULT
+            and thinking_control == THINKING_CONTROL_PROVIDER_DEFAULT
         ):
             return ReasoningIntent(REASONING_INTENT_DEFAULT)
         return super().describe_reasoning_render(
@@ -542,7 +554,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             THINKING_CONTROL_TOGGLE_WITH_EFFORT,
             THINKING_CONTROL_ALWAYS_ENABLED,
         ):
-            # Binary Kimi profiles suppress effort; DeepSeek's toggle is
+            # Binary thinking profiles suppress effort; DeepSeek's toggle is
             # independent of its effort ladder and must preserve both controls.
             if thinking_control != THINKING_CONTROL_TOGGLE_WITH_EFFORT or selected_effort == "none":
                 payload.pop("reasoning_effort", None)

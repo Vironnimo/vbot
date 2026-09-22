@@ -495,7 +495,7 @@ def test_get_model_openrouter_claude_sonnet(runtime: Runtime) -> None:
     # Assert
     assert model.model_id == "anthropic/claude-sonnet-4"
     assert model.name == "Anthropic: Claude Sonnet 4"
-    assert model.context_window == 1000000
+    assert model.context_window == 200000
     assert model.max_output_tokens == 64000
     assert model.capabilities.vision is True
     assert model.capabilities.tools is True

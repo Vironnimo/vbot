@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-19T18:07:14.238088+00:00",
+  "fetched_at": "2026-09-22T08:09:36.277219+00:00",
   "models": {
     "aion-labs/aion-2.0": {
       "capabilities": {
@@ -1304,6 +1304,7 @@
           "response_format",
           "stop",
           "structured_outputs",
+          "tool_choice",
           "tools",
           "verbosity"
         ],
@@ -1554,65 +1555,6 @@
         }
       },
       "name": "Anthropic: Claude Haiku 4.5 (batch)"
-    },
-    "anthropic/claude-opus-4": {
-      "capabilities": {
-        "input_modalities": [
-          "image",
-          "text",
-          "file"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "on_off",
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "stop",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 200000,
-      "family": "claude-opus",
-      "max_output_tokens": 32000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+file->text"
-        }
-      },
-      "name": "Anthropic: Claude Opus 4",
-      "pricing": {
-        "rates": {
-          "cache_read": 1.5,
-          "cache_write": 18.75,
-          "input": 15.0,
-          "output": 75.0
-        },
-        "source": "models.dev:openrouter/anthropic/claude-opus-4"
-      }
     },
     "anthropic/claude-opus-4.1": {
       "capabilities": {
@@ -2383,7 +2325,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 1000000,
+      "context_window": 200000,
       "family": "claude-sonnet",
       "max_output_tokens": 64000,
       "metadata": {
@@ -6068,9 +6010,9 @@
       "name": "DeepSeek: DeepSeek V4 Flash 0423",
       "pricing": {
         "rates": {
-          "cache_read": 0.007112,
-          "input": 0.03556,
-          "output": 0.07112
+          "cache_read": 0.017721,
+          "input": 0.088606,
+          "output": 0.177212
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4-flash"
       }
@@ -6141,7 +6083,7 @@
         "rates": {
           "cache_read": 0.016,
           "input": 0.04,
-          "output": 0.08
+          "output": 0.64
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4-flash-0731"
       }
@@ -6164,7 +6106,6 @@
           "logit_bias",
           "logprobs",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "reasoning",
           "reasoning_effort",
@@ -6198,65 +6139,6 @@
         }
       },
       "name": "DeepSeek: DeepSeek V4 Flash 0731 (batch)"
-    },
-    "deepseek/deepseek-v4-flash-0731:free": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "low",
-            "high",
-            "max"
-          ],
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "family": "deepseek-flash",
-      "max_output_tokens": 393216,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "DeepSeek: DeepSeek V4 Flash 0731 (free)"
     },
     "deepseek/deepseek-v4-flash-vision-exp": {
       "capabilities": {
@@ -6314,7 +6196,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek-flash",
-      "max_output_tokens": 262144,
+      "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -6323,9 +6205,9 @@
       "name": "DeepSeek: DeepSeek V4 Flash Vision Exp",
       "pricing": {
         "rates": {
-          "cache_read": 0.00686,
-          "input": 0.2156,
-          "output": 0.6468
+          "cache_read": 0.007,
+          "input": 0.22,
+          "output": 0.66
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4-flash-vision-exp"
       }
@@ -6448,9 +6330,9 @@
       "name": "DeepSeek: DeepSeek V4 Pro 0423",
       "pricing": {
         "rates": {
-          "cache_read": 0.035192,
-          "input": 0.422298,
-          "output": 0.844596
+          "cache_read": 0.079605,
+          "input": 0.95526,
+          "output": 1.91052
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4-pro"
       }
@@ -6508,7 +6390,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek-thinking",
-      "max_output_tokens": 393216,
+      "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -6517,9 +6399,9 @@
       "name": "DeepSeek: DeepSeek V4 Pro 0813",
       "pricing": {
         "rates": {
-          "cache_read": 0.017136,
-          "input": 0.53856,
-          "output": 1.61568
+          "cache_read": 0.088,
+          "input": 0.624,
+          "output": 2.88
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4-pro-0813"
       }
@@ -6542,7 +6424,6 @@
           "logit_bias",
           "logprobs",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "reasoning",
           "reasoning_effort",
@@ -6642,9 +6523,9 @@
       "name": "DeepSeek: DeepSeek V4.1 Flash",
       "pricing": {
         "rates": {
-          "cache_read": 0.003,
-          "input": 0.15,
-          "output": 0.6
+          "cache_read": 0.006,
+          "input": 0.3,
+          "output": 1.2
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4.1-flash"
       }
@@ -11590,64 +11471,6 @@
       },
       "name": "Krea: Krea 2 Medium Turbo"
     },
-    "kwaipilot/kat-coder-pro-v2": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "family": "kat-coder",
-      "max_output_tokens": 144000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "Kwaipilot: KAT-Coder-Pro V2",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.06,
-          "input": 0.3,
-          "output": 1.2
-        },
-        "source": "models.dev:openrouter/kwaipilot/kat-coder-pro-v2"
-      }
-    },
     "kwaipilot/kat-coder-pro-v2.5": {
       "capabilities": {
         "input_modalities": [
@@ -12749,7 +12572,7 @@
       ],
       "context_window": 131072,
       "family": "muse",
-      "max_output_tokens": 117964,
+      "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -12784,7 +12607,6 @@
           "logit_bias",
           "logprobs",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "reasoning",
           "reasoning_effort",
@@ -14514,62 +14336,6 @@
         "source": "models.dev:openrouter/minimax/minimax-m3"
       }
     },
-    "minimax/minimax-m3:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "repetition_penalty",
-          "response_format",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 524288,
-      "max_output_tokens": 471859,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+video->text"
-        }
-      },
-      "name": "MiniMax: MiniMax M3 (batch)"
-    },
     "minimax/speech-2.8-hd": {
       "capabilities": {
         "input_modalities": [
@@ -15943,6 +15709,8 @@
           "seed",
           "stop",
           "temperature",
+          "tool_choice",
+          "tools",
           "top_k",
           "top_logprobs",
           "top_p"
@@ -15954,7 +15722,7 @@
           "image_input",
           "image_understanding"
         ],
-        "tools": false,
+        "tools": true,
         "vision": true
       },
       "connections": [
@@ -16792,69 +16560,12 @@
       "name": "MoonshotAI: Kimi K3",
       "pricing": {
         "rates": {
-          "cache_read": 0.17,
-          "input": 1.7,
-          "output": 8.5
+          "cache_read": 0.3,
+          "input": 3.0,
+          "output": 15.0
         },
         "source": "models.dev:openrouter/moonshotai/kimi-k3"
       }
-    },
-    "moonshotai/kimi-k3:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "repetition_penalty",
-          "response_format",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "max_output_tokens": 943718,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+video->text"
-        }
-      },
-      "name": "MoonshotAI: Kimi K3 (batch)"
     },
     "morph/morph-v3-fast": {
       "capabilities": {
@@ -16990,6 +16701,68 @@
       },
       "name": "Nex AGI: DeepSeek V3.1 Nex N1"
     },
+    "nex-agi/nex-n2.5-mini": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "logprobs",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "structured_outputs",
+          "temperature",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "family": "agi",
+      "max_output_tokens": 235929,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "Nex AGI: Nex-N2.5-Mini",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0025,
+          "input": 0.025,
+          "output": 0.1
+        },
+        "source": "models.dev:openrouter/nex-agi/nex-n2.5-mini"
+      }
+    },
     "nex-agi/nex-n2.5-mini:free": {
       "capabilities": {
         "input_modalities": [
@@ -17052,6 +16825,70 @@
           "output": 0.0
         },
         "source": "models.dev:openrouter/nex-agi/nex-n2.5-mini:free"
+      }
+    },
+    "nex-agi/nex-n2.5-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "logprobs",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "family": "agi",
+      "max_output_tokens": 235929,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "Nex AGI: Nex-N2.5-Pro",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.015,
+          "input": 0.075,
+          "output": 0.25
+        },
+        "source": "models.dev:openrouter/nex-agi/nex-n2.5-pro"
       }
     },
     "nex-agi/nex-n2.5-pro:free": {
@@ -17402,8 +17239,9 @@
       "name": "NVIDIA: Nemotron 3 Nano 30B A3B",
       "pricing": {
         "rates": {
-          "input": 0.06,
-          "output": 0.24
+          "cache_read": 0.03,
+          "input": 0.05,
+          "output": 0.2
         },
         "source": "models.dev:openrouter/nvidia/nemotron-3-nano-30b-a3b"
       }
@@ -23396,57 +23234,6 @@
         "source": "models.dev:openrouter/openai/gpt-oss-120b"
       }
     },
-    "openai/gpt-oss-120b:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "repetition_penalty",
-          "response_format",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 131072,
-      "max_output_tokens": 117964,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "OpenAI: gpt-oss-120b (batch)"
-    },
     "openai/gpt-oss-20b": {
       "capabilities": {
         "input_modalities": [
@@ -24780,7 +24567,6 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
-          "logit_bias",
           "logprobs",
           "max_completion_tokens",
           "max_tokens",
@@ -25660,7 +25446,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
@@ -25674,6 +25460,7 @@
           "min_p",
           "presence_penalty",
           "repetition_penalty",
+          "response_format",
           "seed",
           "stop",
           "temperature",
@@ -27432,7 +27219,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 32768,
+      "max_output_tokens": 235929,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -28065,7 +27852,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 65536,
+      "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -28203,7 +27990,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 235929,
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -28217,62 +28004,6 @@
         },
         "source": "models.dev:openrouter/qwen/qwen3.5-9b"
       }
-    },
-    "qwen/qwen3.5-9b:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "repetition_penalty",
-          "response_format",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "max_output_tokens": 235929,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+video->text"
-        }
-      },
-      "name": "Qwen: Qwen3.5-9B (batch)"
     },
     "qwen/qwen3.5-flash-02-23": {
       "capabilities": {
@@ -28621,8 +28352,8 @@
       "pricing": {
         "rates": {
           "cache_read": 0.05,
-          "input": 0.1,
-          "output": 0.9
+          "input": 0.15,
+          "output": 1.0
         },
         "source": "models.dev:openrouter/qwen/qwen3.6-35b-a3b"
       }
@@ -29143,59 +28874,6 @@
         "source": "models.dev:openrouter/qwen/qwen3.8-2.4t-a95b"
       }
     },
-    "qwen/qwen3.8-2.4t-a95b:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "logprobs",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "repetition_penalty",
-          "response_format",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1010000,
-      "max_output_tokens": 909000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "Qwen: Qwen3.8 2.4T A95B (batch)"
-    },
     "qwen/qwen3.8-27b": {
       "capabilities": {
         "input_modalities": [
@@ -29266,8 +28944,8 @@
       "pricing": {
         "rates": {
           "cache_read": 0.085,
-          "input": 0.2,
-          "output": 2.55
+          "input": 0.42,
+          "output": 3.0
         },
         "source": "models.dev:openrouter/qwen/qwen3.8-27b"
       }
@@ -32342,9 +32020,9 @@
       "name": "Tencent: Hy3",
       "pricing": {
         "rates": {
-          "cache_read": 0.020625,
-          "input": 0.0825,
-          "output": 0.33
+          "cache_read": 0.033,
+          "input": 0.132,
+          "output": 0.528
         },
         "source": "models.dev:openrouter/tencent/hy3"
       }
@@ -32914,61 +32592,6 @@
         },
         "source": "models.dev:openrouter/thinkingmachines/inkling-small:free"
       }
-    },
-    "thinkingmachines/inkling:batch": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "audio"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "reasoning",
-          "reasoning_effort",
-          "repetition_penalty",
-          "stop",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "audio_input",
-          "speech_to_text"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 524288,
-      "max_output_tokens": 471859,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+audio->text"
-        }
-      },
-      "name": "Thinking Machines: Inkling (batch)"
     },
     "thinkingmachines/inkling:free": {
       "capabilities": {
@@ -33955,6 +33578,86 @@
         "source": "models.dev:openrouter/x-ai/grok-4.6"
       }
     },
+    "x-ai/grok-4.7": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "logprobs",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 500000,
+      "family": "grok",
+      "max_output_tokens": 450000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text"
+        }
+      },
+      "name": "SpaceXAI: Grok 4.7",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.4,
+          "input": 1.6,
+          "output": 4.8,
+          "tiers": [
+            {
+              "cache_read": 0.8,
+              "input": 3.2,
+              "output": 9.6,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/x-ai/grok-4.7"
+      }
+    },
     "x-ai/grok-build-0.1": {
       "capabilities": {
         "input_modalities": [
@@ -34608,6 +34311,201 @@
           "output": 0.87
         },
         "source": "models.dev:openrouter/xiaomi/mimo-v2.5-pro"
+      }
+    },
+    "xiaomi/mimo-v2.6-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "max_tokens",
+          "presence_penalty",
+          "reasoning",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "mimo",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+audio+video->text"
+        }
+      },
+      "name": "Xiaomi: MiMo-V2.6-Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0028,
+          "input": 0.14,
+          "output": 0.28
+        },
+        "source": "models.dev:openrouter/xiaomi/mimo-v2.6-flash"
+      }
+    },
+    "xiaomi/mimo-v2.6-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "max_tokens",
+          "presence_penalty",
+          "reasoning",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "mimo",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+audio+video->text"
+        }
+      },
+      "name": "Xiaomi: MiMo-V2.6-Pro",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0036,
+          "input": 0.435,
+          "output": 0.87
+        },
+        "source": "models.dev:openrouter/xiaomi/mimo-v2.6-pro"
+      }
+    },
+    "xiaomi/mimo-v2.6-pro-ultraspeed": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "max_tokens",
+          "presence_penalty",
+          "reasoning",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "audio_input",
+          "speech_to_text",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "mimo",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+audio+video->text"
+        }
+      },
+      "name": "Xiaomi: MiMo-V2.6-Pro-UltraSpeed",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.036,
+          "input": 4.35,
+          "output": 8.7
+        },
+        "source": "models.dev:openrouter/xiaomi/mimo-v2.6-pro-ultraspeed"
       }
     },
     "z-ai/glm-4-32b": {
@@ -35531,9 +35429,9 @@
       "name": "Z.ai: GLM 5.3",
       "pricing": {
         "rates": {
-          "cache_read": 0.169,
-          "input": 0.91,
-          "output": 2.86
+          "cache_read": 0.156,
+          "input": 0.84,
+          "output": 2.64
         },
         "source": "models.dev:openrouter/z-ai/glm-5.3"
       }
@@ -35565,6 +35463,7 @@
           "logprobs",
           "max_tokens",
           "min_p",
+          "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
           "reasoning_effort",
@@ -35597,7 +35496,7 @@
       ],
       "context_window": 1310720,
       "family": "glm-flash",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -35606,9 +35505,9 @@
       "name": "Z.ai: GLM 5.3 Flash",
       "pricing": {
         "rates": {
-          "cache_read": 0.018,
-          "input": 0.09,
-          "output": 0.3
+          "cache_read": 0.05,
+          "input": 0.15,
+          "output": 0.5
         },
         "source": "models.dev:openrouter/z-ai/glm-5.3-flash"
       }
@@ -35633,7 +35532,6 @@
           "logit_bias",
           "logprobs",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "reasoning",
           "reasoning_effort",
@@ -35879,6 +35777,7 @@
           "response_format",
           "stop",
           "structured_outputs",
+          "tool_choice",
           "tools",
           "verbosity"
         ],
@@ -36183,9 +36082,9 @@
       "name": "DeepSeek: DeepSeek Flash Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.0026,
-          "input": 0.13,
-          "output": 0.52
+          "cache_read": 0.0036,
+          "input": 0.12,
+          "output": 0.48
         },
         "source": "models.dev:openrouter/~deepseek/deepseek-flash-latest"
       }
@@ -36243,7 +36142,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek",
-      "max_output_tokens": 393216,
+      "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -36252,9 +36151,9 @@
       "name": "DeepSeek: DeepSeek Pro Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.017136,
-          "input": 0.53856,
-          "output": 1.61568
+          "cache_read": 0.088,
+          "input": 0.624,
+          "output": 2.88
         },
         "source": "models.dev:openrouter/~deepseek/deepseek-pro-latest"
       }
@@ -36323,9 +36222,9 @@
       "name": "DeepSeek: DeepSeek V4 Flash Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.016,
-          "input": 0.04,
-          "output": 0.08
+          "cache_read": 0.008,
+          "input": 0.03,
+          "output": 1.0
         },
         "source": "models.dev:openrouter/~deepseek/deepseek-v4-flash-latest"
       }
@@ -36561,9 +36460,9 @@
       "name": "MoonshotAI: Kimi Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.17,
-          "input": 1.7,
-          "output": 8.5
+          "cache_read": 0.15,
+          "input": 1.5,
+          "output": 7.5
         },
         "source": "models.dev:openrouter/~moonshotai/kimi-latest"
       }
@@ -37019,12 +36918,10 @@
           "reasoning_effort",
           "response_format",
           "seed",
-          "stop",
           "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
-          "top_k",
           "top_logprobs",
           "top_p"
         ],
@@ -37054,14 +36951,14 @@
       "name": "xAI: Grok Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.5,
-          "input": 2.0,
-          "output": 6.0,
+          "cache_read": 0.4,
+          "input": 1.6,
+          "output": 4.8,
           "tiers": [
             {
-              "cache_read": 1.0,
-              "input": 4.0,
-              "output": 12.0,
+              "cache_read": 0.8,
+              "input": 3.2,
+              "output": 9.6,
               "tier": {
                 "size": 200000,
                 "type": "context"
@@ -37099,6 +36996,7 @@
           "logprobs",
           "max_tokens",
           "min_p",
+          "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
           "reasoning_effort",
@@ -37131,7 +37029,7 @@
       ],
       "context_window": 1310720,
       "family": "glm-flash",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -37201,7 +37099,7 @@
       ],
       "context_window": 1310720,
       "family": "glm",
-      "max_output_tokens": 32768,
+      "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -37210,9 +37108,9 @@
       "name": "Z.ai: GLM Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.15444,
-          "input": 0.8316,
-          "output": 2.6136
+          "cache_read": 0.107525,
+          "input": 0.6545,
+          "output": 2.057
         },
         "source": "models.dev:openrouter/~z-ai/glm-latest"
       }
