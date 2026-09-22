@@ -116,6 +116,28 @@ def test_schema_resolution_failure_is_a_task_configuration_error() -> None:
         resolver.resolve("speech_to_text")
 
 
+def test_missing_local_target_is_a_task_configuration_error() -> None:
+    from core.model_tasks import TASK_SPEECH_TO_TEXT, TaskModelService
+    from tests.core.model_tasks.model_tasks_test_support import (
+        _Credentials,
+        _Models,
+        _Providers,
+        _Storage,
+    )
+
+    service = TaskModelService(
+        _Providers(),
+        _Models([]),
+        _Credentials(),
+        _Storage({TASK_SPEECH_TO_TEXT: {"target": "local/missing", "options": {}}}),
+    )
+    resolver = TaskBindingResolver(service, configuration_error=_StubConfigurationError)
+
+    assert not service.binding_is_usable(TASK_SPEECH_TO_TEXT)
+    with pytest.raises(_StubConfigurationError):
+        resolver.resolve(TASK_SPEECH_TO_TEXT)
+
+
 def test_execution_rejects_disabled_connection_even_while_credential_remains() -> None:
     from pathlib import Path
 

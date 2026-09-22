@@ -69,6 +69,17 @@ def test_parse_provider_target_requires_connection_suffix() -> None:
         parse_task_model_target_id("openrouter/openai/gpt-4o-transcribe")
 
 
+@pytest.mark.parametrize("operation", ["update", "options"])
+def test_unknown_local_target_is_a_binding_validation_error(operation: str) -> None:
+    service = TaskModelService(_Providers(), _Models([]), _Credentials(), _Storage())
+
+    with pytest.raises(TaskModelValidationError):
+        if operation == "update":
+            service.update({TASK_SPEECH_TO_TEXT: {"target": "local/missing"}})
+        else:
+            service.options(TASK_SPEECH_TO_TEXT, "local/missing")
+
+
 def test_parse_target_with_account_suffix() -> None:
     ref = parse_task_model_target_id("openrouter/openai/gpt-4o-transcribe::api-key:work")
 

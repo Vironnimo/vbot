@@ -20,6 +20,7 @@ from core.model_tasks.options import (
     TaskModelOptionField,
     TaskModelOptionValidationError,
     option_schema_for,
+    validate_task_model_options,
 )
 from core.models import Capabilities, Model, ReasoningCapabilities
 
@@ -82,6 +83,14 @@ def test_task_model_option_field_rejects_empty_name() -> None:
 
     with pytest.raises(TaskModelOptionValidationError, match="name"):
         TaskModelOptionField(name="", type="json", label="X")
+
+
+@pytest.mark.parametrize("value", [10**400, -(10**400)])
+def test_numeric_options_reject_overflow_as_validation_error(value: int) -> None:
+    schema = option_schema_for(TASK_TEXT_TO_SPEECH, "openai", "openai/tts-1::api-key")
+
+    with pytest.raises(TaskModelOptionValidationError):
+        validate_task_model_options(schema, {"speed": value})
 
 
 def test_existing_field_types_still_validate() -> None:
