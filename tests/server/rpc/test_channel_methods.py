@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -767,7 +768,17 @@ async def test_session_link_channel_sets_metadata_without_writing_reminder() -> 
     channel_service.list_channels.return_value = [config]
 
     chat_sessions = Mock()
-    chat_sessions.get_metadata.return_value = {"persisted": "value"}
+    metadata = {"persisted": "value"}
+
+    def mutate_metadata(
+        address: SessionAddress, mutation: Callable[[dict], None]
+    ) -> tuple[dict, dict]:
+        assert address == SessionAddress(None, "assistant", "session-1")
+        previous = dict(metadata)
+        mutation(metadata)
+        return previous, dict(metadata)
+
+    chat_sessions.mutate_metadata_with_previous.side_effect = mutate_metadata
     chat_sessions.write_lock.return_value = _NullAsyncContext()
     linked_session = Mock()
     chat_sessions.get.return_value = linked_session
@@ -788,19 +799,16 @@ async def test_session_link_channel_sets_metadata_without_writing_reminder() -> 
     )
 
     assert response == {"ok": True, "result": {"ok": True}}
-    chat_sessions.set_metadata.assert_called_once_with(
-        SessionAddress(project_id=None, agent_id="assistant", session_id="session-1"),
-        {
-            "persisted": "value",
-            "source_channel_id": "tg-assistant",
-            "platform": "telegram",
-            "platform_conv_id": "12345",
-            "last_reply_target": {
-                "channel_id": "tg-assistant",
-                "platform_target": "12345",
-            },
+    assert metadata == {
+        "persisted": "value",
+        "source_channel_id": "tg-assistant",
+        "platform": "telegram",
+        "platform_conv_id": "12345",
+        "last_reply_target": {
+            "channel_id": "tg-assistant",
+            "platform_target": "12345",
         },
-    )
+    }
     linked_session.add_note.assert_not_called()
     chat_sessions.write_lock.assert_not_called()
 
