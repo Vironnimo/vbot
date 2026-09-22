@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import io
+import threading
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -19,6 +23,7 @@ from server.rpc.skill_methods import (
     _skill_remove_file,
     _skill_update,
     _skill_write_file,
+    install_skill_upload,
     method_handlers,
 )
 
@@ -55,6 +60,102 @@ class _SkillRuntime:
 def _state(tmp_path: Path, known_agents: set[str] | None = None) -> Any:
     known = known_agents if known_agents is not None else {"builder"}
     return SimpleNamespace(runtime=_SkillRuntime(tmp_path, known))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upload", [False, True])
+@pytest.mark.parametrize("cancel_caller", [False, True])
+async def test_private_install_settles_before_agent_archive(
+    tmp_path, monkeypatch, upload, cancel_caller
+):
+    known = {"builder"}
+    state = _state(tmp_path, known)
+    state.agent_delete_lock = asyncio.Lock()
+    source = tmp_path / "package"
+    source.mkdir()
+    (source / "SKILL.md").write_text(_skill_md(), encoding="utf-8")
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as package:
+        package.writestr("SKILL.md", _skill_md())
+    entered = asyncio.Event()
+    archive_started = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    original = state.runtime.skill_authoring.install
+
+    def install(*args, **kwargs):
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(10)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(state.runtime.skill_authoring, "install", install)
+    archived = tmp_path / "archived-builder"
+
+    async def archive_agent():
+        archive_started.set()
+        async with state.agent_delete_lock:
+            known.remove("builder")
+            agent_root = state.runtime.agent_skills_dir("builder").parent
+            if agent_root.exists():
+                agent_root.rename(archived)
+
+    params = {"scope": "agent:builder"}
+    request = asyncio.create_task(
+        install_skill_upload(state, params, data=archive.getvalue(), filename="demo.skill")
+        if upload
+        else method_handlers()["skill.install"](state, {**params, "source": str(source)})
+    )
+    deletion = None
+    try:
+        await asyncio.wait_for(entered.wait(), 10)
+        if cancel_caller:
+            request.cancel()
+            await asyncio.sleep(0)
+        deletion = asyncio.create_task(archive_agent())
+        await archive_started.wait()
+        assert not deletion.done()
+        release.set()
+        if cancel_caller:
+            with pytest.raises(asyncio.CancelledError):
+                await request
+        else:
+            assert (await request)["operation"] == "installed"
+        await deletion
+        assert not state.runtime.agent_skills_dir("builder").parent.exists()
+        assert (archived / "skills/demo/SKILL.md").is_file()
+        assert state.runtime.invalidated == ["builder"]
+    finally:
+        release.set()
+        await asyncio.gather(request, return_exceptions=True)
+        if deletion is not None:
+            await deletion
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_waiter", [False, True])
+async def test_private_install_waits_for_lifecycle_before_scope_validation(tmp_path, cancel_waiter):
+    known = {"builder"}
+    state = _state(tmp_path, known)
+    state.agent_delete_lock = asyncio.Lock()
+    source = tmp_path / "package"
+    source.mkdir()
+    (source / "SKILL.md").write_text(_skill_md(), encoding="utf-8")
+    await state.agent_delete_lock.acquire()
+    request = asyncio.create_task(
+        method_handlers()["skill.install"](state, {"scope": "agent:builder", "source": str(source)})
+    )
+    try:
+        await asyncio.sleep(0)
+        if cancel_waiter:
+            request.cancel()
+            await asyncio.sleep(0)
+            assert request.done()
+        known.remove("builder")
+    finally:
+        state.agent_delete_lock.release()
+    with pytest.raises(asyncio.CancelledError if cancel_waiter else RpcError):
+        await request
+    assert not state.runtime.agent_skills_dir("builder").exists()
 
 
 @pytest.mark.asyncio
@@ -312,12 +413,14 @@ def test_method_handlers_registered() -> None:
         ("skill.read", None, {}),
     ],
 )
+@pytest.mark.parametrize("scope", ["global", "agent:builder"])
 async def test_skill_rpc_io_yields_and_refreshes_on_loop(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     method: str,
     owner_method: str | None,
     params: dict[str, Any],
+    scope: str,
 ) -> None:
     import asyncio
     import threading
@@ -326,14 +429,15 @@ async def test_skill_rpc_io_yields_and_refreshes_on_loop(
     from server.rpc.methods import dispatch_rpc
 
     state = _state(tmp_path)
+    state.agent_delete_lock = asyncio.Lock()
     if method == "skill.install":
         source = tmp_path / "package"
         source.mkdir()
         (source / "SKILL.md").write_text(_skill_md("imported"))
         params = {"source": str(source)}
-    await _skill_create(state, {"scope": "global", "name": "demo", "content": _skill_md()})
+    await _skill_create(state, {"scope": scope, "name": "demo", "content": _skill_md()})
     await _skill_write_file(
-        state, {"scope": "global", "name": "demo", "path": "scripts/a.py", "content": ""}
+        state, {"scope": scope, "name": "demo", "path": "scripts/a.py", "content": ""}
     )
     loop = asyncio.get_running_loop()
     loop_thread = threading.get_ident()
@@ -346,6 +450,9 @@ async def test_skill_rpc_io_yields_and_refreshes_on_loop(
 
     def slow_io(*args: Any, **kwargs: Any) -> Any:
         assert threading.get_ident() != loop_thread
+        assert state.agent_delete_lock.locked() == (
+            scope == "agent:builder" and method != "skill.read"
+        )
         loop.call_soon_threadsafe(entered.set)
         assert release.wait(2)
         return original(*args, **kwargs)
@@ -357,7 +464,7 @@ async def test_skill_rpc_io_yields_and_refreshes_on_loop(
     monkeypatch.setattr(owner, name, slow_io)
     monkeypatch.setattr(state.runtime, "reload_skills_async", reload_skills)
     task = asyncio.create_task(
-        dispatch_rpc(state, {"method": method, "params": {"scope": "global", **params}})
+        dispatch_rpc(state, {"method": method, "params": {"scope": scope, **params}})
     )
     try:
         await asyncio.wait_for(entered.wait(), 2)
@@ -366,4 +473,4 @@ async def test_skill_rpc_io_yields_and_refreshes_on_loop(
         release.set()
     result = await task
     assert result["ok"] is True, result
-    assert bool(refreshed) == (method != "skill.read")
+    assert bool(refreshed) == (scope == "global" and method != "skill.read")
