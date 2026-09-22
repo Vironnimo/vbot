@@ -60,6 +60,14 @@ vi.mock('$lib/api.js', () =>
 export const { default: App } = await import('../App.svelte');
 
 export function resetAppHarness() {
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   document.body.innerHTML = '';
   localStorage.clear();
   // Tests share one jsdom window: drop the location hash a previous test's
@@ -103,6 +111,7 @@ export async function cleanupAppHarness(mountedComponent) {
   localStorage.clear();
   delete window.pywebview;
   rpcMock.mockReset();
+  vi.unstubAllGlobals();
   return null;
 }
 

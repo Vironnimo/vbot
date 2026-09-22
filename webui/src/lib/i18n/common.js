@@ -155,6 +155,8 @@ export default Object.freeze({
   'onboarding.service.loadError': 'Providers could not be loaded.',
   'onboarding.service.search': 'Search Providers…',
   'onboarding.service.count': '{count} Providers',
+  'onboarding.service.showAll': 'Show all {count} Providers',
+  'onboarding.service.showFewer': 'Show fewer Providers',
   'onboarding.service.clearSearch': 'Clear',
   'onboarding.service.noMatches': 'No Providers match your search.',
   'onboarding.service.existing': 'Connected Providers',

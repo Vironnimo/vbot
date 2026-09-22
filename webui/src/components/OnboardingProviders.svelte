@@ -7,8 +7,16 @@
 
   let { settings, resetToken = 0, disabled = false, onSelect } = $props();
   let search = $state('');
+  let expanded = $state(false);
   let searchContainer = $state();
+  let listElement = $state();
+  let catalogWidth = $state(600);
   let items = $derived(onboardingProviders(settings, search));
+  let singleColumn = $derived(catalogWidth > 0 && catalogWidth <= 500);
+  let previewCount = $derived(singleColumn ? 3 : 10);
+  let visibleItems = $derived(
+    expanded || search.trim() ? items : items.slice(0, previewCount),
+  );
 
   $effect(() => {
     if (resetToken > 0) {
@@ -22,10 +30,26 @@
     if (type === 'none') return t('onboarding.connect.local', 'Local');
     return t('onboarding.connect.signIn', 'Sign in');
   }
+
+  async function toggleExpanded() {
+    const previousCount = visibleItems.length;
+    expanded = !expanded;
+    if (expanded) {
+      await tick();
+      Array.from(listElement?.querySelectorAll('button') ?? [])
+        .slice(previousCount)
+        .find((button) => !button.disabled)
+        ?.focus();
+    }
+  }
 </script>
 
 <div class="onboarding-catalog">
-  <div class="onboarding-provider-search" bind:this={searchContainer}>
+  <div
+    class="onboarding-provider-search"
+    bind:this={searchContainer}
+    bind:clientWidth={catalogWidth}
+  >
     <svg
       viewBox="0 0 24 24"
       width="18"
@@ -60,10 +84,13 @@
   </div>
 
   <ul
+    id="onboarding-provider-list"
     class="onboarding-provider-list"
+    class:onboarding-provider-list--single-column={singleColumn}
+    bind:this={listElement}
     aria-label={t('onboarding.progress.service', 'Providers')}
   >
-    {#each items as item (item.provider.id)}
+    {#each visibleItems as item (item.provider.id)}
       <li>
         <button
           type="button"
@@ -119,4 +146,22 @@
       </li>
     {/each}
   </ul>
+  {#if !search.trim() && items.length > previewCount}
+    <Button
+      variant="tertiary"
+      class="onboarding-provider-expand"
+      aria-expanded={expanded}
+      aria-controls="onboarding-provider-list"
+      onClick={toggleExpanded}
+    >
+      {expanded
+        ? t('onboarding.service.showFewer', 'Show fewer Providers')
+        : t('onboarding.service.showAll', 'Show all {count} Providers', {
+            count: items.length,
+          })}
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"
+        ><path d={expanded ? 'm6 15 6-6 6 6' : 'm6 9 6 6 6-6'} /></svg
+      >
+    </Button>
+  {/if}
 </div>
