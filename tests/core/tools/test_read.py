@@ -613,6 +613,24 @@ async def test_read_strips_utf8_bom(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("first_line", ["ID3 tags", "OggS notes", "fLaC header", "GIF8 frames"])
+async def test_text_starting_with_a_media_magic_word_is_read_as_text(
+    tmp_path: Path, first_line: str
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.md").write_bytes(f"{first_line}\nsecond\n".encode())
+    speech = _FakeSpeech()
+    context = make_context(workspace)
+
+    result = await make_handler(speech=speech)(context, {"path": "notes.md"})
+
+    assert assert_success_envelope(result)["content"] == f"1| {first_line}\n2| second\n"
+    assert speech.calls == []
+    assert context.result_media == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("separator", ["\f", "\v", "\x1c", "\x85", " ", " "])
 async def test_line_numbers_break_only_at_lf_crlf_and_cr_like_search_files(
     tmp_path: Path, separator: str
@@ -761,7 +779,7 @@ async def test_read_audio_maps_speech_error_to_failure(tmp_path: Path) -> None:
 async def test_read_audio_rejects_oversized_file_before_transcription(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    workspace.joinpath("voice.mp3").write_bytes(b"ID3" + b"x" * 20)
+    workspace.joinpath("voice.mp3").write_bytes(b"ID3\x04\x00\x00\x00\x00\x00\x0a" + b"x" * 20)
     speech = _FakeSpeech()
 
     result = await make_handler(speech=speech, speech_max_size_bytes=8)(

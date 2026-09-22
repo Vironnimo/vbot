@@ -193,7 +193,7 @@ def test_store_preserves_existing_filename_extension(tmp_path: Path) -> None:
         ("song.mp3", b"ID3\x04\x00mp3-data", "audio/mpeg"),
         ("raw.mp3", b"\xff\xfbmp3-frame-data", "audio/mpeg"),
         ("clip.wav", b"RIFF\x24\x00\x00\x00WAVEfmt ", "audio/wav"),
-        ("track.flac", b"fLaCflac-data", "audio/flac"),
+        ("track.flac", b"fLaC\x00\x00\x00\x22flac-data", "audio/flac"),
         ("audio.m4a", b"\x00\x00\x00\x18ftypM4A m4a-data", "audio/mp4"),
         ("movie.mp4", b"\x00\x00\x00\x18ftypisommp4-data", "video/mp4"),
         ("movie.mov", b"\x00\x00\x00\x14ftypqt  mov-data", "video/quicktime"),
@@ -441,6 +441,34 @@ def test_short_attachment_ids_reserve_sidecars_across_extensions(tmp_path, monke
     assert second.id == "att_000000000002"
     assert Path(store.get(first.id).file_path).read_bytes() == b"first"
     assert Path(store.get(second.id).file_path).read_bytes() == b"%PDF-1.7 second"
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        b"ID3 tags are read by the player.\n",
+        b"ID3v2 notes\n",
+        b"OggS container notes\n",
+        b"fLaC is the FLAC magic.\n",
+        b"GIF8 is how a GIF starts.\n",
+    ],
+)
+def test_text_starting_with_a_media_magic_word_is_text(data: bytes) -> None:
+    assert sniff_media_type(data, "notes.md") == "text/plain"
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        (b"ID3\x03\x00\x00\x00\x00\x02\x01rest", "audio/mpeg"),
+        (b"OggS\x00\x02" + b"\x00" * 21, "audio/ogg"),
+        (b"fLaC\x80\x00\x00\x22" + b"\x00" * 34, "audio/flac"),
+        (b"GIF89a\x01\x00\x01\x00\x80\x00\x00", "image/gif"),
+        (b"GIF87a\x10\x00\x10\x00\x00\x00\x00", "image/gif"),
+    ],
+)
+def test_media_magic_words_with_real_headers_keep_their_type(data: bytes, expected: str) -> None:
+    assert sniff_media_type(data, "file.bin") == expected
 
 
 @pytest.mark.parametrize("data", [b"BMW is a car maker\n", b"BM25 ranking notes\n"])
