@@ -176,8 +176,20 @@ def _ambiguous_candidates(content: str, match: AmbiguousFuzzyMatch, offset: int 
     return {"occurrences": match.occurrences, "candidates": candidates}
 
 
+def _removed_lines(hunk: _Hunk) -> list[int]:
+    """Return the 0-based positions of removed lines within the hunk's old text."""
+    old_prefixes = [prefix for prefix, _ in hunk.lines if prefix in " -"]
+    return [index for index, prefix in enumerate(old_prefixes) if prefix == "-"]
+
+
 def _match(
-    content: str, old: str, new: str, *, precise: bool = False, eof: bool = False
+    content: str,
+    old: str,
+    new: str,
+    *,
+    precise: bool = False,
+    eof: bool = False,
+    required_lines: list[int] | None = None,
 ) -> FuzzyReplacement | AmbiguousFuzzyMatch | None:
     if old == "":
         positions = []
@@ -211,6 +223,7 @@ def _match(
         precise_only=precise,
         at_eof=eof,
         typographic=True,
+        required_lines=required_lines or (),
     )
 
 
@@ -396,8 +409,10 @@ def _apply_hunk(content: str, hunk: _Hunk, path: str, index: int) -> tuple[str, 
         # An exact post-state elsewhere does not prove this target is satisfied.
         # Do not let approximate matching choose it (or a similar other target)
         # after the independent locator above failed to establish that fact.
+        # Similarity may absorb context drift only: every removed line must
+        # still match its actual line up to the precise normalizations.
         if not hunk.precise_only and (not new or _match(window, new, new, precise=True) is None):
-            found = _match(window, old, new, eof=hunk.eof)
+            found = _match(window, old, new, eof=hunk.eof, required_lines=_removed_lines(hunk))
     if isinstance(found, AmbiguousFuzzyMatch):
         raise _PatchError(
             "ambiguous_match",

@@ -62,11 +62,6 @@ def test_tolerates_patch_fences_missing_markers_and_crlf(tmp_path, wrapper, mark
             "@@\n alpha  = 1\n-old\n+new\n tail",
             "alpha\t = 1\nnew\ntail\n",
         ),
-        (
-            "start\nvalue = 100\nend\n",
-            "@@\n start\n-value = 101\n+value = 200\n end",
-            "start\nvalue = 200\nend\n",
-        ),
         ("keep\nremove\ntail\n", "@@\n-remove", "keep\ntail\n"),
         ("keep\nremove", "@@\n-remove", "keep\n"),
         ("keep", "@@\n keep\n+added", "keep\nadded"),
@@ -236,6 +231,50 @@ def test_escape_recovery_preserves_literal_replacement_escapes(tmp_path, before,
     result = apply(tmp_path, update("@@\n" + body))
     assert result["ok"], result
     assert path.read_bytes() == expected.encode()
+
+
+@pytest.mark.parametrize(
+    ("before", "body"),
+    [
+        # A similar block with exact boundaries must not delete another call.
+        (
+            "def process(data):\n    validate(data)\n    save_to_database(data)\n    return True\n",
+            " def process(data):\n-    validate(data)\n-    log(data)\n"
+            "+    validate(data, strict=True)\n     return True",
+        ),
+        # A similar line must not stand in for a different removed value.
+        (
+            "TIMEOUT = 30\nRETRIES = 5\nMAX_SIZE = 1024\n",
+            " TIMEOUT = 30\n-RETRIES = 3\n+RETRIES = 4\n MAX_SIZE = 1024",
+        ),
+        ("start\nvalue = 100\nend\n", " start\n-value = 101\n+value = 200\n end"),
+    ],
+)
+def test_similarity_never_replaces_a_different_removed_line(tmp_path, before, body):
+    path = tmp_path / "file.txt"
+    path.write_bytes(before.encode())
+
+    result = apply(tmp_path, update("@@\n" + body))
+
+    assert result["error"]["code"] == "text_not_found"
+    assert '"candidates": [{"line": 1' in result["error"]["message"]
+    assert path.read_bytes() == before.encode()
+
+
+def test_similarity_absorbs_context_drift_around_precise_removed_lines(tmp_path):
+    path = tmp_path / "file.py"
+    path.write_bytes("def process(data):\n    value = “x”\n    return True\n".encode())
+
+    result = apply(
+        tmp_path,
+        update(
+            ' def process(data, strict):\n-    value = "x"\n+    value = "y"\n     return True',
+            "file.py",
+        ),
+    )
+
+    assert result["ok"], result
+    assert path.read_bytes() == ("def process(data):\n    value = “y”\n    return True\n".encode())
 
 
 @pytest.mark.parametrize(
