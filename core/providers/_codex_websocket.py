@@ -6,7 +6,8 @@ import asyncio
 import copy
 import inspect
 import json
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping
+from contextlib import aclosing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -115,7 +116,7 @@ class CodexWebSocket:
         headers: dict[str, str],
         route: CodexWebSocketRoute,
         state: ResponsesStreamState,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         async with self._codex_websocket_lock:
             if self._codex_websocket_route not in {None, route}:
                 await self.aclose()
@@ -123,13 +124,16 @@ class CodexWebSocket:
             retried_missing_continuation = False
             while True:
                 try:
-                    async for delta in self._stream_codex_websocket_attempt(
-                        request_payload,
-                        headers=headers,
-                        route=route,
-                        state=state,
-                    ):
-                        yield delta
+                    async with aclosing(
+                        self._stream_codex_websocket_attempt(
+                            request_payload,
+                            headers=headers,
+                            route=route,
+                            state=state,
+                        )
+                    ) as deltas:
+                        async for delta in deltas:
+                            yield delta
                 except _CodexPreviousResponseMissingError:
                     if (
                         "previous_response_id" not in request_payload
@@ -161,7 +165,7 @@ class CodexWebSocket:
         headers: dict[str, str],
         route: CodexWebSocketRoute,
         state: ResponsesStreamState,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         wire_payload = {"type": "response.create", **request_payload}
         wire_text = json.dumps(wire_payload, ensure_ascii=False, separators=(",", ":"))
         capture = (
