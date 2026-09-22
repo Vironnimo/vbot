@@ -121,14 +121,11 @@ def _agent_resolver(state: Any) -> Any:
 
 
 def _invalidate_project_caches(state: Any, project_id: str) -> None:
-    """Drop both per-project caches that hang off a project's cwd/repo.
+    """Drop discovery and Skill projections derived from a Project.
 
-    The resolver's Team-scan cache and the runtime's project-skill bundle are both
-    keyed on a project's repo, so any operation that re-points or drops that repo
-    must invalidate them **together** — a surviving half would resolve the
-    project's agents against the old repo's Team or skills. The skill half is
-    guarded with ``getattr`` so a minimal runtime without the skill seam degrades
-    cleanly, mirroring ``_project_skill_pool``.
+    Team membership depends on cwd and source format. SkillRuntime also embeds
+    Project grants and labels in Identity registries. Refresh both after material
+    Project edits so callers need not mirror either owner's cache dependencies.
     """
     _agent_resolver(state).invalidate_team_cache(project_id)
     invalidate_project_skills = getattr(state.runtime, "invalidate_project_skills", None)
@@ -268,13 +265,11 @@ def _set_project(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
-    # A cwd change re-points the repo and a source_format change re-points which
-    # of its directories count, so the live Team and the project's own skills can
-    # both change — drop the per-project caches so the returned report and every
-    # later resolve see the new ground truth. Any other change (e.g. a whitelist
-    # edit) deliberately does not invalidate: project.json is read fresh per
-    # resolve and the skill cache holds only the file pool, not the whitelist rule.
-    if "cwd" in changes or "source_format" in changes:
+    # Publish Project edits with fresh derived state. Identity Skill registries
+    # retain Project grants and display labels as well as scanned files, so a
+    # registry is not merely a cwd/source-format cache. Keep callers independent
+    # of which Project fields the discovery and Skill owners currently capture.
+    if changed_fields:
         _invalidate_project_caches(state, project_id)
     scan = _scan_preview(state, project)
     publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
