@@ -14,7 +14,6 @@ from core.chat._request_builder import (
     _resolve_wire_media_support,
     _resolved_model_reference,
 )
-from core.chat._request_history import _restore_in_run_tool_result_content
 from core.chat._run_state import (
     ChatLoopDependencies,
     RequestBuildInputs,
@@ -23,7 +22,6 @@ from core.chat._run_state import (
 )
 from core.chat.continuation import (
     fold_continuation_records,
-    inject_continuation_reminder,
     render_continuation_reminder,
 )
 from core.chat.events import _close_adapter
@@ -34,7 +32,6 @@ from core.chat.model_resolution import (
     _split_agent_model,
     resolve_request_temperature,
 )
-from core.chat.wire_shaping import _restore_in_run_assistant_reasoning
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.projects import resolve_prompt_project, resolve_skill_scope, runtime_agent_body
 from core.prompts import ProjectPromptContext
@@ -507,30 +504,17 @@ class ChatCompactionHost:
         inputs = cast(RequestBuildInputs, request_inputs).merged_with_refresh(
             cast(_CompactionPromptRefresh | None, prompt_refresh)
         )
-        projected_state = await self._requests.build_request_state(
+        projected_state = await self._requests.rebuild_live_request_state(
             agent,
             session,
             inputs=inputs.with_session_messages([*session_messages, checkpoint]),
+            live_messages=live_request_messages,
+            continuation_reminder=continuation_reminder,
         )
-        projected_messages = projected_state.messages
-        if continuation_reminder is not None:
-            projected_messages = inject_continuation_reminder(
-                projected_messages,
-                continuation_reminder,
-            )
-        if live_request_messages is not None:
-            projected_messages = await _restore_in_run_tool_result_content(
-                _restore_in_run_assistant_reasoning(
-                    projected_messages,
-                    live_request_messages,
-                ),
-                live_request_messages,
-                image_budget=inputs.image_budget,
-            )
         context_tokens_after = await self.run_transform(
             estimate_wire_request_input_tokens,
             active_adapter,
-            projected_messages,
+            projected_state.messages,
             model_id=active_model_id,
             tools=projected_state.tools,
         )
@@ -538,13 +522,7 @@ class ChatCompactionHost:
             context_tokens_before=context_tokens_before,
             context_tokens_after=context_tokens_after,
         )
-        return stamped_checkpoint, RequestState(
-            projected_messages,
-            projected_state.tools,
-            projected_state.allowed_tool_names,
-            projected_state.session_tool_grants,
-            projected_state.tool_contracts,
-        )
+        return stamped_checkpoint, projected_state
 
     async def project_automatic_compaction_request(
         self,
@@ -596,32 +574,14 @@ class ChatCompactionHost:
         live_request_messages: list[JsonObject],
     ) -> RequestState:
         await context.session_snapshot.refresh(context.session)
-        refreshed_state = await self._requests.build_request_state(
+        return await self._requests.rebuild_live_request_state(
             context.agent,
             context.session,
             inputs=RequestBuildInputs.from_context(context, target).with_session_messages(
                 context.session_snapshot.active_messages
             ),
-        )
-        refreshed_messages = await _restore_in_run_tool_result_content(
-            _restore_in_run_assistant_reasoning(
-                refreshed_state.messages,
-                live_request_messages,
-            ),
-            live_request_messages,
-            image_budget=context.image_budget,
-        )
-        if context.continuation_reminder is not None:
-            refreshed_messages = inject_continuation_reminder(
-                refreshed_messages,
-                context.continuation_reminder,
-            )
-        return RequestState(
-            refreshed_messages,
-            refreshed_state.tools,
-            refreshed_state.allowed_tool_names,
-            refreshed_state.session_tool_grants,
-            refreshed_state.tool_contracts,
+            live_messages=live_request_messages,
+            continuation_reminder=context.continuation_reminder,
         )
 
     async def rotate_prompt_cache_affinity(self, run: Run) -> str:
