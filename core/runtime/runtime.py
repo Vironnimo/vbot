@@ -786,6 +786,7 @@ class Runtime:
                     self.invalidate_agent_skills,
                     self._resolve_shared_skills_dir,
                     self._resolve_external_skill_scope,
+                    lifecycle_guard=self.agents.lifecycle_guard,
                 )
         if self._system_prompts is not None:
             self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))
