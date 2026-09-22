@@ -24,6 +24,67 @@ from .subagent_test_support import (
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.mark.parametrize("nesting_depth", [0, 1])
+@pytest.mark.parametrize("abort_type", [asyncio.CancelledError, RuntimeError])
+@pytest.mark.parametrize("starts_during_event", [False, True])
+async def test_queued_spawn_cancellation_during_event_keeps_lifecycle_ownership(
+    tmp_path: Path,
+    nesting_depth: int,
+    abort_type: type[BaseException],
+    starts_during_event: bool,
+) -> None:
+    manager = FakeRunManager()
+    manager.hold_enqueued_starts = True
+    runtime = make_runtime(tmp_path, manager, {"max_subagents_per_turn": 1})
+    trigger = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger)
+    captured = {}
+    started_child = None
+
+    async def cancel_during_queued_event(_event_type, payload):
+        nonlocal started_child
+        data = payload.get("data", {})
+        if data.get("queue_item_id"):
+            captured["work_id"] = data["id"]
+            if starts_during_event:
+                started_child = manager.release_next_enqueued_start()
+            if abort_type is asyncio.CancelledError:
+                manager.parent_run.request_cancel(reason="user")
+            raise abort_type
+
+    context = make_context(nesting_depth=nesting_depth, emit_hook=cancel_during_queued_event)
+    runtime.chat_sessions.create(context.agent_id, session_id="waiting-child")
+    manager.busy_sessions[(context.agent_id, "waiting-child")] = Run(
+        run_id="busy-run", agent_id=context.agent_id, session_id="waiting-child"
+    )
+    with pytest.raises(abort_type):
+        await _handle_subagent(
+            context,
+            {"content": "spawn", "agent_id": context.agent_id, "session_id": "waiting-child"},
+            runtime=runtime,
+            batch_tracker=tracker,
+        )
+
+    parent_key = (context.agent_id, context.session_id, context.run_id)
+    if nesting_depth and not starts_during_event:
+        assert manager.enqueued == []
+        assert tracker.spawn_count(parent_key) == 0
+    else:
+        assert len(manager.enqueued) == 1
+        assert tracker.spawn_count(parent_key) == 1
+        owned = tracker.owned_entry(context.agent_id, context.session_id, None, captured["work_id"])
+        assert owned is not None
+        child = started_child or manager.release_next_enqueued_start()
+        if nesting_depth:
+            assert child.cancel_requested
+            child.mark_cancelled()
+        else:
+            child.mark_completed(ChatMessage.assistant(model="test/model", content="Finished"))
+        for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
+            await asyncio.sleep(0)
+        assert f"subagent:{context.run_id}:{captured['work_id']}" in trigger.deliveries
+
+
 async def test_subagent_tool_queues_busy_session_and_returns_running(tmp_path: Path) -> None:
     # Arrange
     manager = FakeRunManager()
