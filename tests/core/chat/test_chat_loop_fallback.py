@@ -68,13 +68,14 @@ async def test_fallback_prepares_multiple_retained_images_in_original_order():
         )
     live = [
         {
+            "id": "msg_images",
             "role": "tool",
             "tool_call_id": "images",
             "content": "loaded",
             TOOL_RESULT_CONTENT_BLOCKS_FIELD: content,
         }
     ]
-    rebuilt = [{"role": "tool", "tool_call_id": "images", "content": "loaded"}]
+    rebuilt = [{"id": "msg_images", "role": "tool", "tool_call_id": "images", "content": "loaded"}]
     restored = await _restore_in_run_tool_result_content(
         rebuilt,
         live,

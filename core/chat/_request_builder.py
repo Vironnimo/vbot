@@ -666,22 +666,25 @@ class RequestBuilder:
 
         The persisted Tool message keeps only its compact result envelope. Base64
         blocks live exclusively in the in-flight request, so reading an image does
-        not fabricate or persist a user turn.
+        not fabricate or persist a user turn. Correlation uses the Tool message
+        identity because Providers may reuse Tool-call ids across turns.
         """
 
         if not media_outputs:
             return
 
-        by_tool_call_id: dict[str, list[JsonObject]] = {}
+        by_tool_message_id: dict[str, list[JsonObject]] = {}
         for media_output in media_outputs:
-            tool_call_id = media_output.get("tool_call_id")
-            if isinstance(tool_call_id, str):
-                by_tool_call_id.setdefault(tool_call_id, []).append(media_output)
+            tool_message_id = media_output.get("tool_message_id")
+            if isinstance(tool_message_id, str):
+                by_tool_message_id.setdefault(tool_message_id, []).append(media_output)
 
         for tool_message in tool_messages:
-            tool_call_id = tool_message.get("tool_call_id")
+            tool_message_id = tool_message.get("id")
             matching = (
-                by_tool_call_id.get(tool_call_id, []) if isinstance(tool_call_id, str) else []
+                by_tool_message_id.get(tool_message_id, [])
+                if isinstance(tool_message_id, str)
+                else []
             )
             if not matching:
                 continue
@@ -713,7 +716,7 @@ class RequestBuilder:
                 )
                 for media_output in matching
             ]
-            transient_message_id = f"tool-result:{tool_call_id}"
+            transient_message_id = f"tool-result:{tool_message_id}"
             resolved = await self._attachment_resolver.resolve_messages(
                 [
                     {
