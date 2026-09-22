@@ -98,8 +98,13 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   require whole-line matches, permit precise-only retry checks, and constrain
   EOF. The matcher retains its default substring mode for direct callers. Precise matches win;
   ambiguity at a winning strategy never falls through to a looser strategy.
-- Newline/Unicode/whitespace/indentation differences and the existing bounded
-  block/context similarity strategies are supported. Only changed lines are
+- Newline/Unicode/typography/whitespace/indentation differences are supported
+  for every hunk line. The bounded block-anchor and context-similarity
+  strategies may absorb differences only in context lines: each removed (`-`)
+  line must still equal its actual line up to those normalizations (user
+  decision). Otherwise the hunk fails with `text_not_found` and candidate
+  excerpts; similar candidates failing this rule are discarded before the
+  ambiguity check (`replace_fuzzy(required_lines=...)`). Only changed lines are
   emitted from the replacement; context lines keep their actual original bytes.
 - Read-output gutters recover after raw matching misses, including single lines,
   mixed raw/numbered locators, and stale line numbers. Their stripped contents

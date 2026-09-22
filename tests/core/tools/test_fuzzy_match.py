@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from core.tools.fuzzy_match import (
     AmbiguousFuzzyMatch,
     FuzzyReplacement,
@@ -317,6 +319,60 @@ def test_context_aware_keeps_approximate_ambiguity() -> None:
     assert isinstance(result, AmbiguousFuzzyMatch)
     assert result.occurrences == 2
     assert result.line_numbers == [1, 2]
+
+
+@pytest.mark.parametrize(
+    ("content", "old_string"),
+    [
+        # block_anchor: exact boundaries around a middle that names another call.
+        (
+            "def process(data):\n    validate(data)\n    save_to_database(data)\n    return True\n",
+            "def process(data):\n    validate(data)\n    log(data)\n    return True",
+        ),
+        # context_aware: every line is similar, but the required value differs.
+        (
+            "TIMEOUT = 30\nRETRIES = 5\nMAX_SIZE = 1024\n",
+            "TIMEOUT = 30\nRETRIES = 3\nMAX_SIZE = 1024",
+        ),
+    ],
+)
+def test_similarity_strategies_cannot_absorb_required_line_differences(
+    content: str, old_string: str
+) -> None:
+    unconstrained = replace_fuzzy(content, old_string, "x", replace_all=False)
+    assert isinstance(unconstrained, FuzzyReplacement)
+    assert unconstrained.strategy in {"block_anchor", "context_aware"}
+
+    required = replace_fuzzy(
+        content, old_string, "x", replace_all=False, typographic=True, required_lines=[1, 2]
+    )
+
+    assert required is None
+
+
+def test_required_lines_allow_precise_normalizations_and_context_drift() -> None:
+    content = "    alpha_setting = 1\n    value = “x”\t\n    omega\n"
+    old_string = 'alpha_setting = 2\nvalue  =  "x"\nomega'
+
+    result = replace_fuzzy(
+        content, old_string, "replaced", replace_all=False, typographic=True, required_lines=[1]
+    )
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.strategy == "context_aware"
+
+
+def test_required_lines_select_the_block_with_the_precise_line_before_ambiguity() -> None:
+    content = "start\nalpha = 1\nvalue = 9\nend\nstart\nalpha = 2\nvalue = 8\nend\n"
+    old_string = "start\nalpha = 3\nvalue = 8\nend"
+
+    assert isinstance(
+        replace_fuzzy(content, old_string, "x", replace_all=False), AmbiguousFuzzyMatch
+    )
+    result = replace_fuzzy(content, old_string, "x", replace_all=False, required_lines=[2])
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.before_spans == ((content.index("start", 1), len(content) - 1),)
 
 
 def test_replace_all_does_not_use_approximate_strategies() -> None:

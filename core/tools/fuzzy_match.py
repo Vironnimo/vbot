@@ -30,12 +30,15 @@ terminal — it does not fall through to a looser strategy):
 All non-exact strategies search a normalized copy of the content and map the
 match back to the original characters through a per-character span map, so CRLF line
 endings and the exact original characters are always preserved. Similarity strategies
-remain uniqueness-gated and are never used for ``replace_all``.
+remain uniqueness-gated and are never used for ``replace_all``. A caller can name
+``required_lines`` that similarity strategies must still match up to the precise
+normalizations, so similarity only absorbs differences in the remaining lines.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from heapq import heappush, heapreplace
@@ -99,6 +102,7 @@ _LINE_ENDINGS = (
 )
 _EXOTIC_LINE_ENDINGS = _LINE_ENDINGS[3:]
 _LINE_BREAK_RE = re.compile(r"\r\n|[\n\v\f\x1c-\x1e\x85\u2028\u2029\r]")
+_HORIZONTAL_WHITESPACE_RE = re.compile(r"[ \t]+")
 
 
 @dataclass(frozen=True)
@@ -142,6 +146,7 @@ def replace_fuzzy(
     precise_only: bool = False,
     at_eof: bool = False,
     typographic: bool = False,
+    required_lines: Collection[int] = (),
 ) -> FuzzyReplacement | AmbiguousFuzzyMatch | None:
     """Find ``old_string`` in ``content`` via the strategy chain and replace it.
 
@@ -150,8 +155,12 @@ def replace_fuzzy(
     ``None`` when no strategy matched.
 
     Patch callers can require whole-line spans, restrict matching to precise
-    strategies for retry evidence, or anchor a hunk at EOF. Defaults retain
-    the default substring and fuzzy-matching behavior.
+    strategies for retry evidence, or anchor a hunk at EOF. ``required_lines``
+    names 0-based ``old_string`` lines that similarity strategies must match up
+    to the newline, Unicode/typography, and whitespace normalizations of the
+    precise strategies; candidates failing that are discarded before the
+    ambiguity check. Defaults retain the default substring and fuzzy-matching
+    behavior.
     """
     replacement_text = _normalize_replacement_newlines(new_string)
     old_lf = _normalize_newlines(old_string)
@@ -165,6 +174,14 @@ def replace_fuzzy(
             if typographic and name == "normalized"
             else matcher(content, old_string)
         )
+        if approximate and required_lines:
+            matches = [
+                (start, end)
+                for start, end in matches
+                if _required_lines_match(
+                    content[start:end], old_string, required_lines, typographic=typographic
+                )
+            ]
         if whole_lines:
             matches = [
                 (start, end)
@@ -210,6 +227,28 @@ def replace_fuzzy(
         )
 
     return None
+
+
+def _required_lines_match(
+    region: str, pattern: str, required_lines: Collection[int], *, typographic: bool
+) -> bool:
+    """Return whether a similarity match keeps every required line precise."""
+    region_lines = _LINE_BREAK_RE.split(region)
+    pattern_lines = _LINE_BREAK_RE.split(pattern)
+    if len(region_lines) != len(pattern_lines):
+        return False
+    return all(
+        0 <= index < len(pattern_lines)
+        and _precise_line_key(region_lines[index], typographic=typographic)
+        == _precise_line_key(pattern_lines[index], typographic=typographic)
+        for index in required_lines
+    )
+
+
+def _precise_line_key(line: str, *, typographic: bool) -> str:
+    """Fold one line like the precise strategies: Unicode, typography, whitespace."""
+    folded = _normalize_with_spans(line, typographic=typographic)[0]
+    return _HORIZONTAL_WHITESPACE_RE.sub(" ", folded).strip()
 
 
 def _candidate_normalize_line(line: str) -> str:
