@@ -29,6 +29,7 @@ import tempfile
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import RLock
 from typing import TYPE_CHECKING, Any
 
 from core.projects.paths import cwd_identity_key
@@ -103,12 +104,16 @@ class ProjectStore:
         self._data_dir = Path(data_dir).expanduser()
         self._sessions = sessions
         self._owns_sessions = sessions is None
+        # Commands and RPC workers share this store. Serialize complete config
+        # transactions, including duplicate-cwd checks and failure compensation.
+        self._write_lock = RLock()
 
     def close(self) -> None:
-        if self._owns_sessions and self._sessions is not None:
-            self._sessions.close()
-            self._sessions = None
-            self._owns_sessions = False
+        with self._write_lock:
+            if self._owns_sessions and self._sessions is not None:
+                self._sessions.close()
+                self._sessions = None
+                self._owns_sessions = False
 
     @property
     def data_dir(self) -> Path:
@@ -138,46 +143,53 @@ class ProjectStore:
         # A new project starts with AGENTS.md seeded as its first auto-load entry
         # (the project-instruction convention). Seeded here, in create only — never
         # in build_project, which update shares — so removing it later sticks.
-        project = build_project(
-            project_id,
-            display_name,
-            cwd,
-            default_agent=default_agent,
-            default_model=default_model,
-            default_temperature=default_temperature,
-            default_thinking_effort=default_thinking_effort,
-            source_format=source_format,
-            auto_load=seed_default_auto_load(auto_load),
-        )
+        with self._write_lock:
+            project = build_project(
+                project_id,
+                display_name,
+                cwd,
+                default_agent=default_agent,
+                default_model=default_model,
+                default_temperature=default_temperature,
+                default_thinking_effort=default_thinking_effort,
+                source_format=source_format,
+                auto_load=seed_default_auto_load(auto_load),
+            )
 
-        project_dir = self._project_dir(project.project_id)
-        if project_dir.exists():
-            raise ProjectAlreadyExistsError(f"Project already exists: {project.project_id}")
+            project_dir = self._project_dir(project.project_id)
+            if project_dir.exists():
+                raise ProjectAlreadyExistsError(f"Project already exists: {project.project_id}")
 
-        self._reject_duplicate_cwd(project.cwd, exclude_project_id=None)
+            self._reject_duplicate_cwd(project.cwd, exclude_project_id=None)
 
-        agents_dir = project_dir / _AGENTS_DIRNAME
-        agents_dir.mkdir(parents=True)
-        self._write_project(project)
-        return project
+            project_dir.mkdir(parents=True)
+            try:
+                (project_dir / _AGENTS_DIRNAME).mkdir()
+                self._write_project(project)
+            except Exception:
+                shutil.rmtree(project_dir)
+                raise
+            return project
 
     def get(self, project_id: str) -> Project:
         """Load one project anchor by id."""
-        config_path = self._config_path(project_id)
-        if not config_path.exists():
-            raise ProjectNotFoundError(f"Project not found: {project_id}")
-        return self._read_project(config_path)
+        with self._write_lock:
+            config_path = self._config_path(project_id)
+            if not config_path.exists():
+                raise ProjectNotFoundError(f"Project not found: {project_id}")
+            return self._read_project(config_path)
 
     def exists(self, project_id: str) -> bool:
         """Return whether a valid Project with this id can be loaded."""
-        try:
-            config_path = self._config_path(project_id)
-            if not config_path.exists():
+        with self._write_lock:
+            try:
+                config_path = self._config_path(project_id)
+                if not config_path.exists():
+                    return False
+                self._read_project(config_path)
+            except (ProjectError, OSError):
                 return False
-            self._read_project(config_path)
-        except (ProjectError, OSError):
-            return False
-        return True
+            return True
 
     def list(self) -> list[Project]:
         """Return all persisted projects sorted by id.
@@ -186,17 +198,18 @@ class ProjectStore:
         rather than aborting the whole listing; strict access stays in
         :meth:`get`.
         """
-        projects_dir = self._data_dir / _PROJECTS_DIRNAME
-        if not projects_dir.exists():
-            return []
+        with self._write_lock:
+            projects_dir = self._data_dir / _PROJECTS_DIRNAME
+            if not projects_dir.exists():
+                return []
 
-        projects: list[Project] = []
-        for config_path in sorted(projects_dir.glob(f"*/{_PROJECT_CONFIG_FILENAME}")):
-            try:
-                projects.append(self._read_project(config_path))
-            except ProjectError as error:
-                _LOGGER.warning("Skipping invalid project config %s: %s", config_path, error)
-        return sorted(projects, key=lambda project: project.project_id)
+            projects: list[Project] = []
+            for config_path in sorted(projects_dir.glob(f"*/{_PROJECT_CONFIG_FILENAME}")):
+                try:
+                    projects.append(self._read_project(config_path))
+                except ProjectError as error:
+                    _LOGGER.warning("Skipping invalid project config %s: %s", config_path, error)
+            return sorted(projects, key=lambda project: project.project_id)
 
     def find_by_cwd(self, cwd: str | os.PathLike[str]) -> Project | None:
         """Return the project whose repo cwd is ``cwd``, or ``None`` if none match.
@@ -209,14 +222,15 @@ class ProjectStore:
         discover which registered Project owns an arbitrary repository path; an
         empty or unresolvable path yields ``None`` rather than raising.
         """
-        try:
-            target_key = cwd_identity_key(cwd)
-        except ValueError:
+        with self._write_lock:
+            try:
+                target_key = cwd_identity_key(cwd)
+            except ValueError:
+                return None
+            for project in self.list():
+                if cwd_identity_key(project.cwd) == target_key:
+                    return project
             return None
-        for project in self.list():
-            if cwd_identity_key(project.cwd) == target_key:
-                return project
-        return None
 
     def update(self, project_id: str, **changes: Any) -> Project:
         """Update mutable project fields. ``project_id`` is immutable.
@@ -226,65 +240,66 @@ class ProjectStore:
         an updatable field, so passing it (the anchor directory name) is rejected
         as an unknown field rather than silently moving the anchor.
         """
-        project = self.get(project_id)
-        if not changes:
-            return project
+        with self._write_lock:
+            project = self.get(project_id)
+            if not changes:
+                return project
 
-        allowed_fields = {
-            "display_name",
-            "cwd",
-            "default_agent",
-            "default_model",
-            "default_temperature",
-            "default_thinking_effort",
-            "source_format",
-            "auto_load",
-            "allowed_tools",
-            "skills_bundled_enabled",
-            "skills_global_enabled",
-            "skills_project_disabled",
-        }
-        unknown_fields = sorted(set(changes) - allowed_fields)
-        if unknown_fields:
-            raise ProjectError(f"Unknown project fields: {', '.join(unknown_fields)}")
+            allowed_fields = {
+                "display_name",
+                "cwd",
+                "default_agent",
+                "default_model",
+                "default_temperature",
+                "default_thinking_effort",
+                "source_format",
+                "auto_load",
+                "allowed_tools",
+                "skills_bundled_enabled",
+                "skills_global_enabled",
+                "skills_project_disabled",
+            }
+            unknown_fields = sorted(set(changes) - allowed_fields)
+            if unknown_fields:
+                raise ProjectError(f"Unknown project fields: {', '.join(unknown_fields)}")
 
-        # Re-run the field validation by rebuilding through ``build_project``,
-        # carrying immutable identity/timestamps; this keeps one validation path.
-        rebuilt = build_project(
-            project.project_id,
-            changes.get("display_name", project.display_name),
-            changes.get("cwd", project.cwd),
-            default_agent=changes.get("default_agent", project.default_agent),
-            default_model=changes.get("default_model", project.default_model),
-            default_temperature=changes.get("default_temperature", project.default_temperature),
-            default_thinking_effort=changes.get(
-                "default_thinking_effort", project.default_thinking_effort
-            ),
-            source_format=changes.get("source_format", project.source_format),
-            auto_load=changes.get("auto_load", list(project.auto_load)),
-            allowed_tools=changes.get("allowed_tools", list(project.allowed_tools)),
-            skills_bundled_enabled=changes.get(
-                "skills_bundled_enabled", list(project.skills_bundled_enabled)
-            ),
-            skills_global_enabled=changes.get(
-                "skills_global_enabled", list(project.skills_global_enabled)
-            ),
-            skills_project_disabled=changes.get(
-                "skills_project_disabled", list(project.skills_project_disabled)
-            ),
-            # overrides is not a generic update field (it has its own atomic per-field
-            # set/clear seam below); always carry the current map through so an
-            # unrelated edit never drops an override.
-            overrides=_copy_overrides(project.overrides),
-            created_at=project.created_at,
-        )
+            # Re-run the field validation by rebuilding through ``build_project``,
+            # carrying immutable identity/timestamps; this keeps one validation path.
+            rebuilt = build_project(
+                project.project_id,
+                changes.get("display_name", project.display_name),
+                changes.get("cwd", project.cwd),
+                default_agent=changes.get("default_agent", project.default_agent),
+                default_model=changes.get("default_model", project.default_model),
+                default_temperature=changes.get("default_temperature", project.default_temperature),
+                default_thinking_effort=changes.get(
+                    "default_thinking_effort", project.default_thinking_effort
+                ),
+                source_format=changes.get("source_format", project.source_format),
+                auto_load=changes.get("auto_load", list(project.auto_load)),
+                allowed_tools=changes.get("allowed_tools", list(project.allowed_tools)),
+                skills_bundled_enabled=changes.get(
+                    "skills_bundled_enabled", list(project.skills_bundled_enabled)
+                ),
+                skills_global_enabled=changes.get(
+                    "skills_global_enabled", list(project.skills_global_enabled)
+                ),
+                skills_project_disabled=changes.get(
+                    "skills_project_disabled", list(project.skills_project_disabled)
+                ),
+                # overrides is not a generic update field (it has its own atomic per-field
+                # set/clear seam below); always carry the current map through so an
+                # unrelated edit never drops an override.
+                overrides=_copy_overrides(project.overrides),
+                created_at=project.created_at,
+            )
 
-        if "cwd" in changes and rebuilt.cwd != project.cwd:
-            self._reject_duplicate_cwd(rebuilt.cwd, exclude_project_id=project_id)
+            if "cwd" in changes and rebuilt.cwd != project.cwd:
+                self._reject_duplicate_cwd(rebuilt.cwd, exclude_project_id=project_id)
 
-        updated = replace(rebuilt, updated_at=_utc_now())
-        self._write_project(updated)
-        return updated
+            updated = replace(rebuilt, updated_at=_utc_now())
+            self._write_project(updated)
+            return updated
 
     def set_override(self, project_id: str, agent_id: str, field: str, value: Any) -> Project:
         """Override one field (``model`` / ``temperature`` / ``thinking_effort``) for an agent.
@@ -297,12 +312,13 @@ class ProjectStore:
         an overridden model is *configured in this instance* is the caller's gate (the
         ``/model`` command path), not enforced here. Returns the updated project.
         """
-        project = self.get(project_id)
-        overrides = _copy_overrides(project.overrides)
-        agent_override = dict(overrides.get(agent_id, {}))
-        agent_override[field] = value
-        overrides[agent_id] = agent_override
-        return self._rewrite_with_overrides(project, overrides)
+        with self._write_lock:
+            project = self.get(project_id)
+            overrides = _copy_overrides(project.overrides)
+            agent_override = dict(overrides.get(agent_id, {}))
+            agent_override[field] = value
+            overrides[agent_id] = agent_override
+            return self._rewrite_with_overrides(project, overrides)
 
     def clear_override(self, project_id: str, agent_id: str, field: str) -> Project:
         """Remove one overridden field for an agent; clearing an absent field is a no-op success.
@@ -313,18 +329,19 @@ class ProjectStore:
         the project is returned unchanged without a write; otherwise exactly that one
         field is dropped and every other override and field is preserved.
         """
-        project = self.get(project_id)
-        agent_override = project.overrides.get(agent_id)
-        if agent_override is None or field not in agent_override:
-            return project
-        overrides = _copy_overrides(project.overrides)
-        updated_override = dict(overrides[agent_id])
-        del updated_override[field]
-        if updated_override:
-            overrides[agent_id] = updated_override
-        else:
-            del overrides[agent_id]
-        return self._rewrite_with_overrides(project, overrides)
+        with self._write_lock:
+            project = self.get(project_id)
+            agent_override = project.overrides.get(agent_id)
+            if agent_override is None or field not in agent_override:
+                return project
+            overrides = _copy_overrides(project.overrides)
+            updated_override = dict(overrides[agent_id])
+            del updated_override[field]
+            if updated_override:
+                overrides[agent_id] = updated_override
+            else:
+                del overrides[agent_id]
+            return self._rewrite_with_overrides(project, overrides)
 
     def _rewrite_with_overrides(
         self, project: Project, overrides: dict[str, dict[str, Any]]
@@ -367,36 +384,37 @@ class ProjectStore:
         restore the active anchor and any prior archive. Product-level reference
         and Run admission guards belong to the caller. Returns the archive path.
         """
-        project_dir = self._project_dir(project_id)
-        if not project_dir.exists():
-            raise ProjectNotFoundError(f"Project not found: {project_id}")
+        with self._write_lock:
+            project_dir = self._project_dir(project_id)
+            if not project_dir.exists():
+                raise ProjectNotFoundError(f"Project not found: {project_id}")
 
-        archive_dir = self._archive_dir(project_id)
-        archive_dir.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(
-            prefix=f".{project_id}-archive-",
-            dir=archive_dir.parent,
-            ignore_cleanup_errors=True,
-        ) as backup_root:
-            previous_archive = Path(backup_root) / "previous"
-            if archive_dir.exists():
-                shutil.move(str(archive_dir), str(previous_archive))
-            project_moved = False
-            try:
-                shutil.move(str(project_dir), str(archive_dir))
-                project_moved = True
-                self._session_manager().archive_project_sessions(project_id)
-            except Exception:
-                if project_moved:
-                    shutil.move(str(archive_dir), str(project_dir))
-                if previous_archive.exists():
-                    # Restore prior archive whether move or DB step failed.
-                    # If project_moved and DB rolled back, archive_dir is already
-                    # gone (moved back), so this recreates the previous archive.
-                    # If move failed, archive_dir never existed.
-                    shutil.move(str(previous_archive), str(archive_dir))
-                raise
-        return archive_dir
+            archive_dir = self._archive_dir(project_id)
+            archive_dir.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(
+                prefix=f".{project_id}-archive-",
+                dir=archive_dir.parent,
+                ignore_cleanup_errors=True,
+            ) as backup_root:
+                previous_archive = Path(backup_root) / "previous"
+                if archive_dir.exists():
+                    shutil.move(str(archive_dir), str(previous_archive))
+                project_moved = False
+                try:
+                    shutil.move(str(project_dir), str(archive_dir))
+                    project_moved = True
+                    self._session_manager().archive_project_sessions(project_id)
+                except Exception:
+                    if project_moved:
+                        shutil.move(str(archive_dir), str(project_dir))
+                    if previous_archive.exists():
+                        # Restore prior archive whether move or DB step failed.
+                        # If project_moved and DB rolled back, archive_dir is already
+                        # gone (moved back), so this recreates the previous archive.
+                        # If move failed, archive_dir never existed.
+                        shutil.move(str(previous_archive), str(archive_dir))
+                    raise
+            return archive_dir
 
     def session_owning_agents(self, project_id: str) -> builtins.list[str]:
         """Return the agent ids that own at least one session under this anchor.
@@ -412,19 +430,20 @@ class ProjectStore:
         return sorted({address.agent_id for address in addresses})
 
     def _session_manager(self) -> ChatSessionManager:
-        if self._sessions is None:
-            from contextlib import suppress
+        with self._write_lock:
+            if self._sessions is None:
+                from contextlib import suppress
 
-            from core.sessions import ChatSessionManager
-            from core.storage.layout import initialize_data_directory
+                from core.sessions import ChatSessionManager
+                from core.storage.layout import initialize_data_directory
 
-            marker = self._data_dir / "session-store.json"
-            if not marker.exists():
-                with suppress(Exception):
-                    initialize_data_directory(self._data_dir)
-            self._sessions = ChatSessionManager(self._data_dir)
-            self._owns_sessions = True
-        return self._sessions
+                marker = self._data_dir / "session-store.json"
+                if not marker.exists():
+                    with suppress(Exception):
+                        initialize_data_directory(self._data_dir)
+                self._sessions = ChatSessionManager(self._data_dir)
+                self._owns_sessions = True
+            return self._sessions
 
     def workspace_dir(self, project_id: str, agent_id: str) -> Path:
         """Return the rooted-identity-agent workspace dir under the anchor.
