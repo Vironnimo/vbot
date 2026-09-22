@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -12,11 +13,16 @@ from core.chat._message_history import (
     finalize_checkpoint_history_guidance,
     history_available,
 )
-from core.chat._request_history import _prepare_request_messages, _request_content_resolution_inputs
+from core.chat._request_history import (
+    _prepare_request_messages,
+    _request_content_resolution_inputs,
+    _restore_in_run_tool_result_content,
+)
 from core.chat._run_state import RequestBuildInputs, _ModelTarget, _RequestState
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import MediaBlock, content_block_to_dict
+from core.chat.continuation import inject_continuation_reminder
 from core.chat.errors import ChatError
 from core.chat.events import _close_adapter
 from core.chat.messages import (
@@ -34,7 +40,7 @@ from core.chat.model_resolution import (
     parse_model_with_connection,
 )
 from core.chat.usage import latest_session_context_usage
-from core.chat.wire_shaping import limit_request_images
+from core.chat.wire_shaping import _restore_in_run_assistant_reasoning, limit_request_images
 from core.extensions import invoke_extension_handler
 from core.projects import ProjectError
 from core.prompts import BLOCK_KIND_DATA, BlockDefinition, PinnedSkillCatalog, ProjectPromptContext
@@ -555,6 +561,39 @@ class RequestBuilder:
             session_tool_grants,
             tool_contracts,
         )
+
+    async def rebuild_live_request_state(
+        self,
+        agent: Any,
+        session: ChatSession,
+        *,
+        inputs: RequestBuildInputs,
+        live_messages: list[JsonObject] | None,
+        continuation_reminder: str | None,
+    ) -> _RequestState:
+        """Rebuild an active Run's request without losing its live-only state.
+
+        Canonical history shaping cannot see what exists only in the live
+        request: current-Run native Reasoning (stripped from history under
+        ``current_run``) and Run-local Tool media. Steering, stale-Compaction
+        recovery, post-Compaction projection and Model fallback all rebuild
+        through this one path; fallback strips native Reasoning afterward.
+        """
+        state = await self.build_request_state(agent, session, inputs=inputs)
+        messages = state.messages
+        if live_messages is not None:
+            messages = await _restore_in_run_tool_result_content(
+                _restore_in_run_assistant_reasoning(messages, live_messages),
+                live_messages,
+                input_modalities=inputs.input_modalities,
+                wire_media_types=inputs.wire_media_types,
+                image_budget=inputs.image_budget,
+                image_converter=self._tool_image_converter,
+                max_image_bytes=inputs.max_image_bytes,
+            )
+        if continuation_reminder is not None:
+            messages = inject_continuation_reminder(messages, continuation_reminder)
+        return replace(state, messages=messages)
 
     async def _route_tool_definitions(
         self,

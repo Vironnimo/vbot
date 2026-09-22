@@ -12,6 +12,7 @@ from core.providers.errors import NetworkError
 from core.runs import PROVIDER_REQUEST_STATUS_EVENT, ActiveRunError, RunStatus
 from core.tools import ToolRegistry, tool_success
 from tests.core.chat.chat_loop_support import (
+    PolicyStubAdapter,
     StubAdapter,
     StubAgent,
     StubRuntime,
@@ -45,6 +46,21 @@ class SteeringAdapter(StubAdapter):
 class PausedAdapter(StubAdapter):
     def __init__(self, responses: list[Any]) -> None:
         super().__init__(responses)
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def send(
+        self, messages: list[dict[str, Any]], *, model_id: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        if not self.requests:
+            self.entered.set()
+            await self.release.wait()
+        return await super().send(messages, model_id=model_id, **kwargs)
+
+
+class PausedPolicyAdapter(PolicyStubAdapter):
+    def __init__(self, responses: list[Any], *, policy: Any) -> None:
+        super().__init__(responses, policy=policy)
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
 
@@ -216,3 +232,42 @@ async def test_withdrawn_steering_input_keeps_the_final_answer(tmp_path: Path) -
     assert not run.accepts_steering
     history = runtime.chat_sessions.get(address).load()
     assert [m.content for m in history if m.role == "user"] == ["Original"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("steer", [False, True])
+async def test_steering_keeps_current_run_reasoning(tmp_path: Path, steer: bool) -> None:
+    first = {
+        "content": "Before",
+        "reasoning": "Plan the probe",
+        "reasoning_meta": {"signature": "sig-1"},
+        "tool_calls": [{"id": "a", "name": "probe", "arguments": {}}],
+        "terminal_outcome": "tool_calls",
+    }
+    adapter = PausedPolicyAdapter(
+        [first, {"content": "After", "tool_calls": None}], policy="current_run"
+    )
+    tools = ToolRegistry()
+    tools.register(
+        "probe", "Probe", {"type": "object"}, lambda _ctx, _args: tool_success({"done": True})
+    )
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["probe"])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime.chat_sessions.create("coder", session_id="one")
+    loop = build_chat_loop(runtime)
+    run = await loop.start_run("coder", "Original", session_id="one")
+    await asyncio.wait_for(adapter.entered.wait(), 5)
+    if steer:
+        item = await loop.queue_run("coder", "Steer", session_id="one")
+        runtime.chat_run_manager.steer_queued(
+            "coder", "one", item.item_id, project_id=None, run_id=run.id
+        )
+    adapter.release.set()
+    await asyncio.wait_for(run.wait(), 10)
+    sent = adapter.requests[1]["messages"]
+    tool_turn = next(m for m in sent if m["role"] == "assistant" and m.get("tool_calls"))
+    assert tool_turn["reasoning"] == "Plan the probe"
+    assert tool_turn["reasoning_meta"] == {"signature": "sig-1"}
+    assert [m["content"] for m in sent if m["role"] == "user"][-1] == (
+        "Steer" if steer else "Original"
+    )
