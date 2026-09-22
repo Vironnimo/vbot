@@ -130,6 +130,9 @@ class RecallIntegration:
             return
         active_backend = self._storage.load_recall_settings()["backend"]
         if active_backend not in removed_backend_names:
+            # Removed declarations must leave the selectable catalog even when
+            # the active backend can remain intact.
+            self._recall_backend_registry = self._build_recall_backend_registry()
             return
         if self.logger is not None:
             self.logger.warning(
