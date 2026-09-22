@@ -207,6 +207,39 @@ describe('chat controller', () => {
     expect(sessionState.actionError).toContain('offline');
   });
 
+  it.each(['edit', 'remove', 'enqueue'])(
+    'keeps an accepted Queue %s when an earlier list response arrives later',
+    async (mutation) => {
+      const stale = deferred();
+      const { chatState, controller } = setup({
+        operationOverrides: {
+          listQueue: vi.fn().mockReturnValue(stale.promise),
+          updateQueueItem: vi.fn().mockResolvedValue({ ok: true }),
+          removeFromQueue: vi.fn().mockResolvedValue({ ok: true }),
+          startChatRun: vi.fn().mockResolvedValue({
+            queued: true,
+            item: { id: 'new', content: 'New queued text', editable: true },
+          }),
+        },
+      });
+      const session = ensureSessionState(chatState, 'alpha', 'one');
+      const original = { id: 'old', content: 'Original', editable: true };
+      session.queue = [structuredClone(original)];
+      const pendingSync = controller.syncSessionQueue(session);
+      if (mutation === 'edit')
+        await controller.updateQueued(session, 'old', 'Edited');
+      if (mutation === 'remove') await controller.removeQueued(session, 'old');
+      if (mutation === 'enqueue')
+        await controller.sendMessage(session, 'New queued text');
+      const accepted = structuredClone(session.queue);
+
+      stale.resolve({ items: [original] });
+      await pendingSync;
+
+      expect(session.queue).toEqual(accepted);
+    },
+  );
+
   it('merges a terminal cancel response and reconciles durable Tool history', async () => {
     const cancelledRun = {
       run_id: 'run-cancelled',

@@ -127,12 +127,17 @@ export function createChatController({
       : String(error ?? '');
   }
 
+  function invalidateQueueSync(sessionState) {
+    const version = (queueSyncVersions.get(sessionState.key) ?? 0) + 1;
+    queueSyncVersions.set(sessionState.key, version);
+    return version;
+  }
+
   async function syncSessionQueue(sessionState) {
     if (!sessionState?.agentId || !sessionState?.sessionId) {
       return;
     }
-    const requestVersion = (queueSyncVersions.get(sessionState.key) ?? 0) + 1;
-    queueSyncVersions.set(sessionState.key, requestVersion);
+    const requestVersion = invalidateQueueSync(sessionState);
     const isLatestRequest = () =>
       queueSyncVersions.get(sessionState.key) === requestVersion;
     try {
@@ -513,6 +518,7 @@ export function createChatController({
         };
       }
       if (run?.queued === true) {
+        invalidateQueueSync(sessionState);
         addServerQueuedMessage(sessionState, run.item);
         return { kind: 'queued' };
       }
@@ -663,6 +669,7 @@ export function createChatController({
         sessionState.sessionId,
         queuedMessageId,
       );
+      invalidateQueueSync(sessionState);
       removeQueuedMessage(sessionState, queuedMessageId);
     } catch (error) {
       sessionState.actionError = `${translate('queue.removeError', 'Queued message could not be removed.')} ${errorMessage(error)}`;
@@ -690,6 +697,7 @@ export function createChatController({
         newContent,
         { fileMentions: normalizedFileMentions },
       );
+      invalidateQueueSync(sessionState);
       updateQueuedMessageContent(sessionState, queuedMessageId, newContent, {
         editable: normalizedFileMentions.length === 0,
       });
@@ -800,10 +808,7 @@ export function createChatController({
             (item) => item?.id && !serverItemIds.has(item.id),
           ).length;
         }
-        queueSyncVersions.set(
-          sessionState.key,
-          (queueSyncVersions.get(sessionState.key) ?? 0) + 1,
-        );
+        invalidateQueueSync(sessionState);
         syncQueueFromServer(sessionState, serverItems);
       }
       if (discardedCount > 0) {
