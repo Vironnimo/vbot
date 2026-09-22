@@ -105,6 +105,9 @@ class _TtsModelTasks:
     def binding_for(self, task_type: str) -> object:
         return SimpleNamespace(task_type=task_type, target="local/piper", options={})
 
+    def validate_execution_target(self, _binding: object) -> None:
+        pass
+
     def options_with_defaults(self, _binding: object) -> dict[str, object]:
         return {}
 
@@ -129,6 +132,9 @@ class _ProviderSttModelTasks:
             options={},
         )
 
+    def validate_execution_target(self, _binding: object) -> None:
+        pass
+
     def options_with_defaults(self, _binding: object) -> dict[str, object]:
         return {}
 
@@ -140,6 +146,9 @@ class _ProviderTtsModelTasks:
             target="openrouter/openai/gpt-4o-mini-tts::api-key",
             options={},
         )
+
+    def validate_execution_target(self, _binding: object) -> None:
+        pass
 
     def options_with_defaults(self, _binding: object) -> dict[str, object]:
         return {}

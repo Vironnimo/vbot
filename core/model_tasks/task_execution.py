@@ -32,8 +32,12 @@ class TaskBindingResolver:
     def resolve(self, task_type: str) -> tuple[TaskModelBinding, JsonObject, TaskModelTargetRef]:
         """Return the configured binding, merged options, and parsed target ref."""
         binding = self.binding_for(task_type)
-        options = self._model_tasks.options_with_defaults(binding)
-        return binding, options, self.parse_target(binding.target)
+        try:
+            self._model_tasks.validate_execution_target(binding)
+            options = self._model_tasks.options_with_defaults(binding)
+            return binding, options, self.parse_target(binding.target)
+        except TaskModelError as exc:
+            raise self._configuration_error(str(exc)) from exc
 
     def binding_for(self, task_type: str) -> TaskModelBinding:
         try:
