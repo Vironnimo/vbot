@@ -158,6 +158,29 @@ def test_follow_preserves_spelling_and_stops_loops(tmp_path):
     assert any("loop" in warning for warning in data["warnings"])
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows directory junctions")
+def test_junctions_are_followed_only_on_request_or_as_explicit_roots(tmp_path):
+    import _winapi
+
+    project = tmp_path / "project"
+    outside = tmp_path / "outside"
+    project.mkdir()
+    outside.mkdir()
+    (project / "a.txt").write_text("needle")
+    (outside / "secret.txt").write_text("needle")
+    _winapi.CreateJunction(str(outside), str(project / "linked"))
+
+    content = search(project, action="content", patterns=["needle"], options=["-F"])
+    paths = search(project, action="paths", kind="files")
+    followed = search(project, action="content", patterns=["needle"], options=["-F", "-L"])
+    explicit = search(project, action="content", patterns=["needle"], paths=["linked"])
+
+    assert content["content"] == "a.txt:1:needle"
+    assert paths["content"] == "a.txt"
+    assert followed["content"] == "a.txt:1:needle\nlinked/secret.txt:1:needle"
+    assert explicit["content"] == "linked/secret.txt:1:needle"
+
+
 def test_cancellation_kills_a_silent_child(tmp_path, monkeypatch):
     original = subprocess.Popen
     children = []
