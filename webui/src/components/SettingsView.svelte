@@ -22,7 +22,8 @@
   import EmptyState from './ui/EmptyState.svelte';
   import { getSettings } from '$lib/api.js';
   import { setApplicationTimeZone } from '$lib/dateTimePrefs.svelte.js';
-  import { init, t } from '$lib/i18n.js';
+  import { applyAppearanceSettings } from '$lib/appearancePrefs.svelte.js';
+  import { t } from '$lib/i18n.js';
   import { useAutosaveContext } from '$lib/autosave.js';
   import { SETTINGS_LAYOUT_CLASS } from '$lib/settingsView.js';
 
@@ -412,13 +413,11 @@
     settings = nextSettings;
     setApplicationTimeZone(nextSettings?.general?.timezone);
 
-    const language = nextSettings?.appearance?.language ?? 'en';
-    init(language);
+    applyAppearanceSettings(nextSettings?.appearance);
   }
 
   function commitSettings(nextSettings) {
-    settings = nextSettings;
-    setApplicationTimeZone(nextSettings?.general?.timezone);
+    applySettings(nextSettings);
     onSettingsCommit(nextSettings);
   }
 

@@ -1,11 +1,7 @@
 import { isOperational } from '$lib/onboarding.js';
 import { setApplicationTimeZone } from '$lib/dateTimePrefs.svelte.js';
 import { getSettings } from '$lib/api.js';
-import { init } from '$lib/i18n.js';
-import {
-  setChatWidth,
-  setChatWorkingMode,
-} from '$lib/appearancePrefs.svelte.js';
+import { applyAppearanceSettings } from '$lib/appearancePrefs.svelte.js';
 
 export function createAppSetup(context) {
   // Accessor-local UI state only: whether the user set the first-run wizard
@@ -70,12 +66,7 @@ export function createAppSetup(context) {
       const result = await getSettings();
       settings = result;
       setApplicationTimeZone(result?.general?.timezone);
-      setChatWidth(result?.appearance?.chat_width);
-      setChatWorkingMode(result?.appearance?.chat_working_mode);
-      const language = result?.appearance?.language;
-      if (typeof language === 'string' && language.length > 0) {
-        init(language);
-      }
+      applyAppearanceSettings(result?.appearance);
       maybeStartOnboarding();
     } catch {
       // settings RPC unavailable — keep the comfortable defaults and leave the
