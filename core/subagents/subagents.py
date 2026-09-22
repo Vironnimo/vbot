@@ -29,6 +29,7 @@ from core.settings import SettingsValidationError, validate_thinking_effort
 from core.subagents._completion import (
     _activity_file,
     _attach_parent_cancellation,
+    _cancel_subagent_child,
     _public_subagent_result,
     _register_result_acknowledgement_after_parent_persistence,
     _result_dict,
@@ -403,70 +404,20 @@ async def _handle_subagent(
             )
             if activity is not None:
                 activity.mark_queued()
-            await _emit_subagent_session_started(
-                context,
-                work_id,
+            # Admission already accepted this work. Install ownership and its
+            # watcher before notification can suspend or fail, even when enqueue
+            # started the Run immediately after the previous busy check.
+            batch_tracker.register_queued(
+                parent_key,
                 target_agent_id,
-                target_project_id,
                 session.id,
-                queue_item_id=item.item_id,
-                status=SUBAGENT_STATUS_QUEUED,
-                delivery="automatic" if background else "inline",
-                activity_file=activity_file,
+                item.item_id,
+                target_project_id,
+                activity_file,
+                work_id=work_id,
             )
-            if background:
-                queued_run = _started_run_from_queue_item(item)
-                if queued_run is None:
-                    batch_tracker.register_queued(
-                        parent_key,
-                        target_agent_id,
-                        session.id,
-                        item.item_id,
-                        target_project_id,
-                        activity_file,
-                        work_id=work_id,
-                    )
-                    slot_registered = True
-                    if _should_register_parent_cascade(background=True):
-                        _attach_parent_cancellation(
-                            runtime,
-                            context.run_id,
-                            queued_item=item,
-                            queued_agent_id=target_agent_id,
-                            queued_session_id=session.id,
-                            queued_project_id=target_project_id,
-                            batch_tracker=batch_tracker,
-                            parent_key=parent_key,
-                        )
-                    _track_queued_subagent_completion(
-                        batch_tracker,
-                        parent_key,
-                        item,
-                        activity,
-                        activity_file,
-                    )
-                    activity_handed_off = activity is not None
-                    return tool_success(
-                        _with_activity_note(
-                            _with_target_project(
-                                {
-                                    "id": work_id,
-                                    "agent_id": target_agent_id,
-                                    "session_id": session.id,
-                                    "status": SUBAGENT_STATUS_QUEUED,
-                                    "delivery": "automatic",
-                                    "note": TOP_LEVEL_QUEUED_BACKGROUND_NOTE,
-                                    "activity_file": activity_file,
-                                },
-                                target_project_id,
-                            ),
-                            activity_file,
-                        )
-                    )
-                sub_run = queued_run
-            else:
-                # Foreground parents always cascade so an awaited queued child
-                # honours the parent cancel, even if it has not started yet.
+            slot_registered = True
+            if _should_register_parent_cascade(background=background):
                 _attach_parent_cancellation(
                     runtime,
                     context.run_id,
@@ -474,42 +425,91 @@ async def _handle_subagent(
                     queued_agent_id=target_agent_id,
                     queued_session_id=session.id,
                     queued_project_id=target_project_id,
+                    batch_tracker=batch_tracker,
+                    parent_key=parent_key,
                 )
-                try:
-                    sub_run = await item.future
-                except asyncio.CancelledError:
-                    runtime.chat_run_manager.remove_queued(
-                        target_agent_id, session.id, item.item_id, project_id=target_project_id
-                    )
-                    raise
-
-        if activity is not None:
-            activity.attach(sub_run)
-            activity_handed_off = True
-        # Register tracking, parent-cancel cascade, and completion watcher
-        # synchronously - before the next await. The child Run is already live,
-        # so every await below is an orphan window: a parent cancel landing
-        # there must still cascade to and track this child.
-        batch_tracker.register_reserved(
-            parent_key,
-            target_agent_id,
-            session.id,
-            sub_run.id,
-            target_project_id,
-            activity_file,
-            work_id=work_id,
-        )
-        slot_registered = True
-        if _should_register_parent_cascade(background=background):
-            _attach_parent_cancellation(
-                runtime,
-                context.run_id,
-                sub_run=sub_run,
-                batch_tracker=batch_tracker,
-                parent_key=parent_key,
+            _track_queued_subagent_completion(
+                batch_tracker, parent_key, item, activity, activity_file
             )
+            activity_handed_off = activity is not None
+            try:
+                await _emit_subagent_session_started(
+                    context,
+                    work_id,
+                    target_agent_id,
+                    target_project_id,
+                    session.id,
+                    queue_item_id=item.item_id,
+                    status=SUBAGENT_STATUS_QUEUED,
+                    delivery="automatic" if background else "inline",
+                    activity_file=activity_file,
+                )
+                if background:
+                    queued_run = _started_run_from_queue_item(item)
+                    if queued_run is None:
+                        return tool_success(
+                            _with_activity_note(
+                                _with_target_project(
+                                    {
+                                        "id": work_id,
+                                        "agent_id": target_agent_id,
+                                        "session_id": session.id,
+                                        "status": SUBAGENT_STATUS_QUEUED,
+                                        "delivery": "automatic",
+                                        "note": TOP_LEVEL_QUEUED_BACKGROUND_NOTE,
+                                        "activity_file": activity_file,
+                                    },
+                                    target_project_id,
+                                ),
+                                activity_file,
+                            )
+                        )
+                    sub_run = queued_run
+                else:
+                    sub_run = await asyncio.shield(item.future)
+            except BaseException:
+                if not background:
+                    _cancel_subagent_child(
+                        runtime,
+                        sub_run=None,
+                        queued_item=item,
+                        queued_agent_id=target_agent_id,
+                        queued_session_id=session.id,
+                        queued_project_id=target_project_id,
+                        batch_tracker=batch_tracker,
+                        parent_key=parent_key,
+                        parent_reason=parent_run.cancel_reason if parent_run is not None else None,
+                    )
+                raise
 
-        _track_subagent_completion(batch_tracker, parent_key, sub_run, activity_file)
+        if not slot_registered:
+            if activity is not None:
+                activity.attach(sub_run)
+                activity_handed_off = True
+            # Register tracking, parent-cancel cascade, and completion watcher
+            # synchronously - before the next await. The child Run is already live,
+            # so every await below is an orphan window: a parent cancel landing
+            # there must still cascade to and track this child.
+            batch_tracker.register_reserved(
+                parent_key,
+                target_agent_id,
+                session.id,
+                sub_run.id,
+                target_project_id,
+                activity_file,
+                work_id=work_id,
+            )
+            slot_registered = True
+            if _should_register_parent_cascade(background=background):
+                _attach_parent_cancellation(
+                    runtime,
+                    context.run_id,
+                    sub_run=sub_run,
+                    batch_tracker=batch_tracker,
+                    parent_key=parent_key,
+                )
+
+            _track_subagent_completion(batch_tracker, parent_key, sub_run, activity_file)
         await _emit_subagent_session_started(
             context,
             work_id,
