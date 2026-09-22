@@ -547,6 +547,7 @@ export function createChatController({
       return { kind: 'ignored' };
     }
     sessionState.actionError = '';
+    const previousRunId = sessionState.currentRun?.runId;
     try {
       const run = await operations.editChatMessage({
         agent_id: sessionState.agentId,
@@ -554,6 +555,18 @@ export function createChatController({
         message_id: messageId,
         content,
       });
+      const currentRunId = sessionState.currentRun?.runId;
+      if (
+        currentRunId &&
+        currentRunId !== run.run_id &&
+        currentRunId !== previousRunId
+      ) {
+        // The edited Run can finish and admit its successor before this RPC
+        // returns. Reconcile the new lineage without truncating that Run's
+        // live events or replacing its subscription with the predecessor.
+        await reconcileRunSession(sessionState, currentRunId);
+        return { kind: 'started', runId: run.run_id ?? '' };
+      }
       truncateSessionForEdit(sessionState, messageId, run.run_id);
       startRun(sessionState, run);
       runStream.subscribeToRun(sessionState, run.sse_url, {

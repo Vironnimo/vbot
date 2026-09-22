@@ -645,6 +645,58 @@ it('preserves accepted edit events that arrived before its response', async () =
   controller.destroy();
 });
 
+it('reconciles an accepted edit without replacing its live successor Run', async () => {
+  const response = deferred();
+  const history = deferred();
+  const loadChatHistory = vi.fn(() => history.promise);
+  const { controller, chatState, runStream } = setup({
+    isDisplayedSession: () => true,
+    operationOverrides: {
+      editChatMessage: vi.fn(() => response.promise),
+      loadChatHistory,
+    },
+  });
+  const session = ensureSessionState(chatState, 'alpha', 'session');
+  session.messages = [{ id: 'target', role: 'user', content: 'Old' }];
+  const editing = controller.editMessage(session, 'target', 'New');
+  appendRunEvent(session, { run_id: 'edit', sequence: 1, type: 'run_started' });
+  appendRunEvent(session, {
+    run_id: 'edit',
+    sequence: 2,
+    type: 'run_completed',
+  });
+  appendRunEvent(session, { run_id: 'next', sequence: 1, type: 'run_started' });
+  appendRunEvent(session, {
+    run_id: 'next',
+    sequence: 2,
+    type: 'assistant_output_delta',
+    payload: { content_delta: 'Successor output' },
+  });
+  const drafts = session.streamingRunEvents;
+  response.resolve({
+    run_id: 'edit',
+    status: 'running',
+    sse_url: '/edit',
+    events: [],
+  });
+  await vi.waitFor(() => expect(loadChatHistory).toHaveBeenCalledOnce());
+  expect(session.currentRun.runId).toBe('next');
+  expect(session.streamingRunEvents).toBe(drafts);
+  history.resolve({
+    messages: [{ id: 'replacement', role: 'user', content: 'New' }],
+    active_run: { run_id: 'next', status: 'running', sse_url: '/next' },
+  });
+  await editing;
+  expect(session.messages).toMatchObject([{ id: 'replacement' }]);
+  expect(session.currentRun.runId).toBe('next');
+  expect(runStream.subscribeToRun).not.toHaveBeenCalled();
+  expect(runStream.attachRunStream).toHaveBeenCalledWith(
+    session,
+    expect.objectContaining({ run_id: 'next' }),
+  );
+  controller.destroy();
+});
+
 it('invalidates a pending Queue read when a newer connection snapshot arrives', async () => {
   const response = deferred();
   const { controller, chatState } = setup({
