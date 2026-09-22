@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-22T09:20:40.353297+00:00",
+  "fetched_at": "2026-09-22T19:30:33.735532+00:00",
   "models": {
     "claude-fable-5": {
       "capabilities": {
@@ -421,6 +421,60 @@
           "output": 25.0
         },
         "source": "models.dev:opencode/claude-opus-5"
+      }
+    },
+    "claude-opus-5-5": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 1000000,
+      "family": "claude-opus",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "protocol": "messages"
+        }
+      },
+      "name": "claude-opus-5-5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 5.0,
+          "input": 4.0,
+          "output": 20.0
+        },
+        "source": "models.dev:opencode/claude-opus-5-5"
       }
     },
     "claude-sonnet-4-5": {
@@ -2282,6 +2336,140 @@
           ]
         },
         "source": "models.dev:opencode/gpt-6-astra"
+      }
+    },
+    "gpt-6-luna": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 1050000,
+      "family": "gpt-luna",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "protocol": "responses"
+        }
+      },
+      "name": "gpt-6-luna",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.01,
+          "cache_write": 0.125,
+          "input": 0.1,
+          "output": 0.5,
+          "tiers": [
+            {
+              "cache_read": 0.02,
+              "cache_write": 0.25,
+              "input": 0.2,
+              "output": 0.75,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:opencode/gpt-6-luna"
+      }
+    },
+    "gpt-6-sol": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key",
+        "account"
+      ],
+      "context_window": 1050000,
+      "family": "gpt-sol",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "protocol": "responses"
+        }
+      },
+      "name": "gpt-6-sol",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 10.0,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "cache_write": 5.0,
+              "input": 4.0,
+              "output": 15.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:opencode/gpt-6-sol"
       }
     },
     "grok-4.5": {

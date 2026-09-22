@@ -6,6 +6,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -13,7 +14,7 @@ import pytest
 import respx
 
 import core.providers.opencode_zen as zen_module
-from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.providers._opencode_zen_gemini import _normalize_gemini_stream_chunk
 from core.providers.errors import (
     CatalogEntrySkipped,
@@ -211,6 +212,48 @@ async def test_responses_model_uses_responses_wire_and_bearer_auth(
     assert payload["model"] == "gpt-5.6-sol"
     assert route.calls.last.request.headers["authorization"] == "Bearer zen-secret"
     assert adapter.normalize_response(response, model_id="gpt-5.6-sol")["content"] == "done"
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_id", ["gpt-6-sol", "gpt-6-luna"])
+async def test_gpt6_catalog_models_use_zen_responses_wire(model_id: str) -> None:
+    registry = ModelRegistry.load(Path(__file__).resolve().parents[3] / "resources")
+    adapter = OpenCodeZenAdapter(
+        _config(),
+        "zen-secret",
+        model_lookup=lambda selected: registry.get("opencode-zen", selected),
+    )
+    route = respx.post(RESPONSES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp_gpt6",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "done"}],
+                    }
+                ],
+            },
+        )
+    )
+
+    try:
+        response = await adapter.send(
+            [{"role": "user", "content": "hello"}],
+            model_id=model_id,
+            thinking_effort="none",
+        )
+        payload = json.loads(route.calls.last.request.content)
+        assert payload["model"] == model_id
+        assert payload["reasoning"]["effort"] == "none"
+        assert route.calls.last.request.headers["authorization"] == "Bearer zen-secret"
+        assert adapter.normalize_response(response, model_id=model_id)["content"] == "done"
+    finally:
+        await adapter.aclose()
 
 
 @respx.mock
@@ -654,9 +697,12 @@ async def test_gemini_stream_preserves_malformed_tool_values_for_chat_rejection(
     ("model_id", "protocol"),
     [
         ("gpt-6-astra", "responses"),
+        ("gpt-6-sol", "responses"),
+        ("gpt-6-luna", "responses"),
         ("grok-4.7", "responses"),
         ("muse-spark-1.3", "responses"),
         ("claude-fable-5-1", "messages"),
+        ("claude-opus-5-5", "messages"),
         ("qwen3.8-flash", "messages"),
         ("gemini-3.8-flash", "gemini_generate_content"),
         ("glm-5.3-flash", "chat_completions"),
