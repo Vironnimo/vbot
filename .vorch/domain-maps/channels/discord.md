@@ -6,6 +6,8 @@ Discord platform-I/O adapter behind the shared channel conversation engine.
 
 `core/channels/discord.py` uses `discord.py`'s async Gateway client. It owns Gateway lifecycle, Discord message parsing, bounded history backfill, attachment download, typing, replies, and outbound sends. Queueing, response gating, commands, Run relay, sender attribution, observed-note formatting, and Session metadata remain in `ChannelConversationEngine`.
 
+Shutdown closes inbound admission and cancels/drains Gateway message callbacks before stopping engine workers. Discord client shutdown alone does not own those callbacks; pending history fetches and per-chat lock waiters must not admit new work after the engine stops.
+
 ## Routing And Gating
 
 - Discord configs use `platform: "discord"`. `token_env_var` resolves the bot token through the injected credential resolver; `allowed_chat_ids` contains Discord channel ids as normalized strings.

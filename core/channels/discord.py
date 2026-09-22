@@ -88,6 +88,8 @@ class DiscordChannelAdapter(ChannelAdapter):
 
         self._client: Any | None = None
         self._bot_id: str | None = None
+        self._stopping = False
+        self._inbound_tasks: set[asyncio.Task[Any]] = set()
         self._allowed_chat_ids = frozenset(config.allowed_chat_ids)
         self._denied_chat_log = DeniedChatLog()
         self._message_locks: dict[str, _MessageLockState] = {}
@@ -105,7 +107,9 @@ class DiscordChannelAdapter(ChannelAdapter):
         client = discord.Client(intents=intents)
 
         async def on_ready() -> None:
-            bot_user = client.user
+            if self._stopping or self._client is not client:
+                return
+            bot_user = getattr(client, "user", None)
             bot_id = getattr(bot_user, "id", None)
             self._bot_id = str(bot_id) if _is_snowflake(bot_id) else None
             _LOGGER.info(
@@ -115,15 +119,24 @@ class DiscordChannelAdapter(ChannelAdapter):
             )
 
         async def on_message(message: Any) -> None:
-            await self._handle_inbound_message(message)
+            if self._client is client:
+                await self._handle_inbound_message(message)
 
         client.event(on_ready)
         client.event(on_message)
+        self._stopping = False
+        self._bot_id = None
         self._client = client
         await client.start(self._token)
 
     async def stop(self) -> None:
         """Stop engine workers and close the Discord Gateway connection."""
+        self._stopping = True
+        inbound_tasks = tuple(self._inbound_tasks)
+        for task in inbound_tasks:
+            task.cancel()
+        if inbound_tasks:
+            await asyncio.gather(*inbound_tasks, return_exceptions=True)
         await self._engine.stop()
         self._message_locks.clear()
         self._backfilled_message_ids.clear()
@@ -298,12 +311,20 @@ class DiscordChannelAdapter(ChannelAdapter):
         # discord.py runs this inside its own event loop and catches/logs any exception to
         # the `discord` logger only, silently dropping the message. Surface failures in the
         # vbot.channels.discord logger so inbound dispatch crashes are not invisible.
+        if self._stopping:
+            return
+        task = asyncio.current_task()
+        if task is not None:
+            self._inbound_tasks.add(task)
         try:
             await self._dispatch_inbound_message(message)
         except asyncio.CancelledError:
             raise
         except Exception:
             _LOGGER.error("Discord inbound dispatch failed", exc_info=True)
+        finally:
+            if task is not None:
+                self._inbound_tasks.discard(task)
 
     async def _dispatch_inbound_message(self, message: Any) -> None:
         author = getattr(message, "author", None)
