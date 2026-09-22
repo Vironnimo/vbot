@@ -867,21 +867,6 @@ async def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
     return {"ok": True}
 
 
-def _active_run_response(
-    state: Any, agent_id: str, session_id: str, project_id: str | None
-) -> JsonObject | None:
-    run = _state_chat_runs(state).active_run(
-        agent_id=agent_id, session_id=session_id, project_id=project_id
-    )
-    if run is None:
-        return None
-    return _run_response(
-        run,
-        sse_url=f"/api/runs/{run.id}/events",
-        file_delivery=getattr(state, "file_delivery", None),
-    )
-
-
 def _public_queue_item(
     chat_runs: ChatRunManager,
     agent_id: str,
