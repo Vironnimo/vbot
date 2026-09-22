@@ -383,6 +383,7 @@ class AgenticProgression:
                             chunk_timeout_seconds=target.chunk_timeout_seconds,
                             continuation_tracker=context.continuation_tracker,
                             output_cwd=output_cwd,
+                            public_model=target.public_model,
                             provider_id=target.provider_id,
                             recovery=context.recovery,
                         )

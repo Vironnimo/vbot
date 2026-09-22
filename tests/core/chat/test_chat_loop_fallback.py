@@ -414,6 +414,8 @@ async def test_fallback_model_activates_on_retryable_error(tmp_path: Path) -> No
     ]
     assert assistant.content == "Recovered"
     assert persisted_roles(messages) == ["user", "note", "assistant"]
+    # Usage and cost belong to the Model that actually answered.
+    assert messages[2].model == "anthropic/claude-sonnet-4::api-key"
     assert run.iteration_count == 1
     assert messages[-1].iteration_count == 1
     assert run.events[-1].payload["iteration_count"] == 1
@@ -474,6 +476,11 @@ async def test_streaming_fallback_activates_after_same_model_recovery_is_exhaust
 
     run = next(iter(runtime.chat_runs._runs.values()))
     assert assistant.content == "Recovered"
+    assert assistant.model == "anthropic/claude-sonnet-4::api-key"
+    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    assert [m.model for m in persisted if m.role == "assistant"] == [
+        "anthropic/claude-sonnet-4::api-key"
+    ]
     assert len(primary_adapter.stream_requests) == 9
     assert len(fallback_adapter.stream_requests) == 1
     assert run.status == RunStatus.COMPLETED
@@ -551,6 +558,10 @@ async def test_next_turn_reuses_primary_model(tmp_path: Path) -> None:
     )
     assert first_assistant.content == "Fallback turn 1"
     assert second_assistant.content == "Primary turn 2"
+    assert (first_assistant.model, second_assistant.model) == (
+        "anthropic/claude-sonnet-4::api-key",
+        "openai/gpt-5.2",
+    )
     assert len(primary_adapter.requests) == 2
     assert len(fallback_adapter.requests) == 1
     assert fallback_event_count == 1
