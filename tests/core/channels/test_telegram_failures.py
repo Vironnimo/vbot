@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -83,6 +85,40 @@ async def test_offset_saves_cannot_regress_when_threads_finish_out_of_order(tmp_
 
     await asyncio.gather(asyncio.to_thread(save_lower), asyncio.to_thread(save_higher))
     assert ChannelStorage(tmp_path).load_update_offset("tg-assistant") == 8
+
+
+@pytest.mark.parametrize("age_hours", [24, 47, 48, 168])
+def test_polling_watermark_expires_before_telegram_randomizes_ids(tmp_path, age_hours):
+    from core.channels import ChannelStorage
+
+    storage = ChannelStorage(tmp_path)
+    storage.save_update_offset("tg-assistant", 100)
+    state_path = tmp_path / "channels" / "tg-assistant" / "polling.json"
+    previous_write = time.time() - age_hours * 60 * 60
+    os.utime(state_path, (previous_write, previous_write))
+
+    assert storage.load_update_offset("tg-assistant") == (100 if age_hours < 48 else 0)
+    storage.save_update_offset("tg-assistant", 5)
+    assert storage.load_update_offset("tg-assistant") == (100 if age_hours < 48 else 5)
+
+
+@pytest.mark.asyncio
+async def test_live_adapter_accepts_reset_update_ids_after_idle_window(tmp_path, monkeypatch):
+    import core.channels.telegram as telegram_module
+
+    clock = [0.0]
+    monkeypatch.setattr(
+        telegram_module, "time", SimpleNamespace(monotonic=lambda: clock[0]), raising=False
+    )
+    adapter, _, _, _ = make_adapter(tmp_path, monkeypatch, allowed_chat_ids=[12345])
+    assert adapter._claim_update(SimpleNamespace(update_id=100))
+    clock[0] = 47 * 60 * 60
+    assert not adapter._claim_update(SimpleNamespace(update_id=99))
+    clock[0] = 48 * 60 * 60
+    assert adapter._claim_update(SimpleNamespace(update_id=5))
+    assert not adapter._claim_update(SimpleNamespace(update_id=5))
+    assert adapter._claim_update(SimpleNamespace(update_id=6))
+    await adapter.stop()
 
 
 @pytest.mark.asyncio
