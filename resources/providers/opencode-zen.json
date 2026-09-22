@@ -13,7 +13,8 @@
         "prefix": "Bearer ",
         "credential_key": "OPENCODE_API_KEY"
       },
-      "models_endpoint": "/models"
+      "models_endpoint": "/models",
+      "catalog_requires_credentials": false
     },
     {
       "id": "account",
@@ -31,15 +32,36 @@
         "token_url": "https://console.opencode.ai/auth/device/token",
         "scopes": []
       },
-      "models_endpoint": "/models"
+      "models_endpoint": "/models",
+      "catalog_requires_credentials": false
     }
   ],
   "defaults": {
     "max_tokens": 8192
   },
+  "extra_headers": {
+    "User-Agent": "vBot"
+  },
   "models_endpoint": "/models",
   "models_dev_id": "opencode",
   "catalog_exclusions": [
+    "big-pickle",
+    "mimo-v2.6-flash-free",
+    "mimo-v2.5-free",
+    "laguna-s-2.1-free",
+    "ling-3.0-flash-fin-free",
+    "ling-3.0-flash-free",
+    "north-mini-code-free",
+    "nemotron-3-ultra-free",
+    "nemotron-3.5-lightning-free",
+    "deepseek-v4-flash-free",
+    "muse-spark-1.2-contributor-free",
+    "muse-spark-1.3-contributor-free",
+    "jev-1.13-free",
+    "jev-1.13",
+    "claude-opus-4-1",
+    "kimi-k2.5",
+    "minimax-m2.5",
     "gpt-5.2-codex",
     "gpt-5.1-codex",
     "gpt-5.1-codex-max",

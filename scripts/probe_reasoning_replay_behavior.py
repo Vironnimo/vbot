@@ -20,7 +20,7 @@ prompts. Exit code 0 when every shape behaved consistently.
 
 Examples:
     python scripts/probe_reasoning_replay_behavior.py --model glm-5.3-flash \
-        --base-url https://opencode.ai/zen/go --api-key-env OPENCODE_GO_API_KEY
+        --base-url https://opencode.ai/zen/go --api-key-env OPENCODE_API_KEY
     python scripts/probe_reasoning_replay_behavior.py --model glm-5.2 \
         --base-url https://ollama.com --api-key-env OLLAMA_API_KEY
 """

@@ -31,7 +31,6 @@ from core.providers._opencode_zen_gemini import (
 from core.providers._opencode_zen_profiles import (
     _AUTH_401_MARKERS,
     _FREE_MODELS,
-    _IMMINENT_DEPRECATIONS,
     _KNOWN_PROTOCOLS,
     _NON_AUTH_401_MARKERS,
     _PERMANENT_429_MARKERS,
@@ -40,9 +39,7 @@ from core.providers._opencode_zen_profiles import (
     _ZEN_GEMINI_MEDIA_TYPES,
     _ZEN_INLINE_REQUEST_MAX_BYTES,
     _ZEN_MAX_IMAGES_PER_REQUEST,
-    DEPRECATES_AT_METADATA_KEY,
     OPENCODE_ZEN_METADATA_KEY,
-    PRIVACY_METADATA_KEY,
     PROTOCOL_CHAT,
     PROTOCOL_GEMINI,
     PROTOCOL_MESSAGES,
@@ -81,16 +78,20 @@ if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
 
 __all__ = [
-    "DEPRECATES_AT_METADATA_KEY",
     "OPENCODE_ZEN_METADATA_KEY",
     "OpenCodeZenAdapter",
-    "PRIVACY_METADATA_KEY",
     "PROTOCOL_CHAT",
     "PROTOCOL_GEMINI",
     "PROTOCOL_MESSAGES",
     "PROTOCOL_METADATA_KEY",
     "PROTOCOL_RESPONSES",
 ]
+
+_FREE_TIER_ACCESS_MESSAGE = (
+    "OpenCode Zen free Models are only available inside OpenCode. "
+    "Choose a paid Zen Model or an OpenCode Go Model. "
+    "Another API key does not enable free-tier access from vBot."
+)
 
 
 def _classify_zen_status(
@@ -100,6 +101,10 @@ def _classify_zen_status(
     response_headers: httpx.Headers,
 ) -> None:
     normalized = detail.casefold()
+    if status_code == 403 and "freetiererror" in normalized:
+        error = ProviderError(_FREE_TIER_ACCESS_MESSAGE, retryable=False)
+        error.status_code = status_code
+        raise error
     if status_code == 401:
         if any(marker in normalized for marker in _NON_AUTH_401_MARKERS):
             raise ProviderError(
@@ -216,6 +221,8 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         defaults: Mapping[str, Any] | None = None,
     ) -> Model:
         raw_model_id = raw.get("id")
+        if isinstance(raw_model_id, str) and raw_model_id in _FREE_MODELS:
+            raise CatalogEntrySkipped(_FREE_TIER_ACCESS_MESSAGE)
         if isinstance(raw_model_id, str) and raw_model_id in _RETIRED_MODELS:
             raise CatalogEntrySkipped(f"OpenCode Zen Model {raw_model_id!r} is retired")
         model = OpenAICompatibleAdapter.normalize_catalog_entry(raw, defaults)
@@ -225,10 +232,6 @@ class OpenCodeZenAdapter(OpenAIAdapter):
                 f"OpenCode Zen Model {model.model_id!r} has no reviewed endpoint protocol"
             )
         profile: dict[str, Any] = {PROTOCOL_METADATA_KEY: protocol}
-        if model.model_id in _FREE_MODELS:
-            profile[PRIVACY_METADATA_KEY] = "free_model_data_collection"
-        if deprecates_at := _IMMINENT_DEPRECATIONS.get(model.model_id):
-            profile[DEPRECATES_AT_METADATA_KEY] = deprecates_at
         return replace(
             model,
             metadata={**model.metadata, OPENCODE_ZEN_METADATA_KEY: profile},
@@ -323,6 +326,11 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         return policy
 
     def _model_protocol(self, model_id: str) -> str:
+        upstream_id = model_id.split("::", 1)[0]
+        if upstream_id in _FREE_MODELS:
+            raise ProviderError(_FREE_TIER_ACCESS_MESSAGE, retryable=False)
+        if upstream_id in _RETIRED_MODELS:
+            raise ProviderError(f"OpenCode Zen Model {upstream_id!r} is retired", retryable=False)
         protocol = self._profile_value(model_id, PROTOCOL_METADATA_KEY)
         if protocol not in _KNOWN_PROTOCOLS:
             raise ProviderError(

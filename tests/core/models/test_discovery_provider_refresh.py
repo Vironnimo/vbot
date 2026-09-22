@@ -116,9 +116,10 @@ class TestRefreshModels:
                 json={
                     "data": [
                         {"id": "gemini-3.5-flash"},
-                        {"id": "claude-opus-4-1"},
+                        {"id": "claude-fable-5-1"},
                         {"id": "glm-5"},
                         {"id": "unreviewed-future-model"},
+                        {"id": "mimo-v2.6-flash-free"},
                     ]
                 },
             )
@@ -146,11 +147,11 @@ class TestRefreshModels:
             (resources_dir / "models" / "opencode-zen.raw.json").read_text(encoding="utf-8")
         )
         gemini = written["models"]["gemini-3.5-flash"]
-        opus = written["models"]["claude-opus-4-1"]
+        opus = written["models"]["claude-fable-5-1"]
         assert first["model_count"] == 2
         assert second["model_count"] == 2
         assert route.call_count == 2
-        assert set(written["models"]) == {"gemini-3.5-flash", "claude-opus-4-1"}
+        assert set(written["models"]) == {"gemini-3.5-flash", "claude-fable-5-1"}
         assert gemini["connections"] == ["api-key", "account"]
         assert gemini["context_window"] == 1_048_576
         assert gemini["max_output_tokens"] == 65_536
@@ -162,12 +163,13 @@ class TestRefreshModels:
             "pdf",
         ]
         assert gemini["metadata"]["opencode_zen"]["protocol"] == ("gemini_generate_content")
-        assert opus["metadata"]["opencode_zen"]["deprecates_at"] == "2026-08-05"
+        assert opus["metadata"]["opencode_zen"]["protocol"] == "messages"
         assert {entry["id"] for entry in raw["raw_response"]["data"]} == {
             "gemini-3.5-flash",
-            "claude-opus-4-1",
+            "claude-fable-5-1",
             "glm-5",
             "unreviewed-future-model",
+            "mimo-v2.6-flash-free",
         }
 
     @respx.mock

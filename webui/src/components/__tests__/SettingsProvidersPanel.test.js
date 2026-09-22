@@ -40,6 +40,62 @@ describe('SettingsProvidersPanel', () => {
     document.body.innerHTML = '';
   });
 
+  it('explains shared OpenCode edits and removes the selected shared Account', async () => {
+    const items = ['opencode-go', 'opencode-zen'].map((id) => ({
+      id,
+      name: id === 'opencode-go' ? 'OpenCode Go' : 'OpenCode Zen',
+      connections: [
+        {
+          id: `${id}:api-key`,
+          type: 'api_key',
+          label: 'API Key',
+          credential_key: 'OPENCODE_API_KEY',
+          configured: true,
+          usable: true,
+          accounts: [{ id: 'work', usable: true, source: 'data_dir' }],
+        },
+      ],
+    }));
+    mountedComponent = mount(SettingsProvidersPanel, {
+      target: document.body,
+      props: {
+        settings: { providers: { items } },
+        visible: true,
+        onReloadSettings: onReloadSettingsMock,
+      },
+    });
+    flushSync();
+    expect(document.querySelectorAll('.s-provider-card')).toHaveLength(2);
+    findButton('Replace key…').click();
+    flushSync();
+    const note = document.querySelector(
+      '.provider-connect-modal [role="note"]',
+    );
+    expect(note?.textContent).toContain('OpenCode Go');
+    expect(note?.textContent).toContain('Zen');
+    const input = document.querySelector('#provider-api-key');
+    input.value = 'replacement-test';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    findButton('Save key').click();
+    await waitForCondition(() => onReloadSettingsMock.mock.calls.length > 0);
+    expect(rpcMock).toHaveBeenCalledWith('provider.set_key', {
+      provider_id: 'opencode-go',
+      connection_id: 'opencode-go:api-key',
+      account: 'work',
+      value: 'replacement-test',
+    });
+    findButton('Remove shared key').click();
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(([method]) => method === 'provider.unset_key'),
+    );
+    expect(rpcMock).toHaveBeenCalledWith('provider.unset_key', {
+      provider_id: 'opencode-go',
+      connection_id: 'opencode-go:api-key',
+      account: 'work',
+    });
+  });
+
   it('reflects a provider change via a settings reload when modelsRefreshToken changes', async () => {
     const props = reactiveProps({
       settings: { providers: { items: [] } },

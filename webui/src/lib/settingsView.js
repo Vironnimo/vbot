@@ -75,6 +75,8 @@ export {
 } from './settingsView/extensions.js';
 export {
   getProviderItems,
+  isSharedOpenCodeConnection,
+  describeSharedOpenCodeKey,
   getCustomProviderItems,
   DEFAULT_ACCOUNT_ID,
   isValidAccountId,

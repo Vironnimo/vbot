@@ -24,7 +24,7 @@ from scripts._reasoning_probe_wire import (
 @pytest.mark.asyncio
 @respx.mock
 async def test_exact_probe_sends_opencode_session_header(tmp_path):
-    (tmp_path / ".env").write_text("OPENCODE_GO_API_KEY=test-key\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("OPENCODE_API_KEY=test-key\n", encoding="utf-8")
     built = _build_adapter("opencode-go", "deepseek-flash", data_dir=tmp_path)
     route = respx.post("https://opencode.ai/zen/go/v1/chat/completions").mock(
         return_value=httpx.Response(

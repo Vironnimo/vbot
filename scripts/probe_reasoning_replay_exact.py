@@ -61,7 +61,7 @@ Examples:
     python scripts/probe_reasoning_replay_exact.py --provider opencode-go \\
         --model glm-5.3 --scenario instruction
     python scripts/probe_reasoning_replay_exact.py --provider opencode-go \\
-        --model ox-alpha-free --api-key-env OPENCODE_GO_API_KEY \\
+        --model ox-alpha-free --api-key-env OPENCODE_API_KEY \\
         --data-dir ~/.vbot-dev --scenario tool_loop
 """
 
@@ -104,7 +104,7 @@ from scripts._reasoning_probe_wire import (  # noqa: E402
 DEFAULT_DATA_DIR = Path.home() / ".vbot"
 API_KEY_ENV_BY_PROVIDER = {
     "ollama-cloud": "OLLAMA_API_KEY",
-    "opencode-go": "OPENCODE_GO_API_KEY",
+    "opencode-go": "OPENCODE_API_KEY",
 }
 
 
