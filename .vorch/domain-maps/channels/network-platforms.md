@@ -32,7 +32,7 @@ This integration is an explicitly selected unofficial linked-device connection t
 
 Baileys auth persists under `<data-dir>/channels/<id>/whatsapp/auth`. Treat that directory like account credentials. Explicit re-pair archives auth under a generated `revoked_*` sibling after stopping the adapter; it does not revoke the remote linked device. Remove old devices from WhatsApp itself. The bridge's `delivery.json` preserves the initial message-time boundary and 4096 sent IDs. It rejects pre-setup history, non-self destinations, messages not marked `fromMe`, and its own sent IDs. Phone and LID identities are normalized, including device suffixes; both `notify` and `append` upserts are accepted for user-authored self-chat messages. Outbound IDs persist before transmission to prevent echo Runs across restart.
 
-Logged-out bridges remain idle for explicit re-pairing; ordinary connection failures use service backoff. Private media requests are bounded in both processes. No history sync is requested. Upstream compatibility and personal-account restrictions remain operational limitations; local tests cannot establish account eligibility.
+Logged-out bridges remain idle for explicit re-pairing; ordinary connection failures use service backoff. Disconnects immediately fail pending bridge calls without retrying an uncertain delivery, including while the adapter remains idle after logout. Private media requests are bounded in both processes. No history sync is requested. Upstream compatibility and personal-account restrictions remain operational limitations; local tests cannot establish account eligibility.
 
 ## Verification owners
 

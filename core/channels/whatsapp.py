@@ -84,6 +84,7 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
                     self._qr = None
                     self._connected = False
                     self._pairing_state = event.get("reason", "disconnected")
+                    self._fail_pending_calls()
                     if self._pairing_state == "logged_out":
                         # Remain idle until an explicit new pairing request; repeated
                         # restarts cannot repair revoked device credentials.
@@ -100,12 +101,16 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
             worker.cancel()
             await asyncio.gather(reader, worker, return_exceptions=True)
             self._qr = None
+            self._fail_pending_calls()
 
-    async def stop(self) -> None:
-        self._qr = None
+    def _fail_pending_calls(self) -> None:
         for future in self._pending.values():
             if not future.done():
                 future.set_exception(ChannelError("WhatsApp connection closed"))
+
+    async def stop(self) -> None:
+        self._qr = None
+        self._fail_pending_calls()
         process = self._process
         if process is not None:
             if process.stdin:
@@ -149,6 +154,13 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
             raise ChannelError("WhatsApp operation could not be confirmed") from None
         finally:
             self._pending.pop(request_id, None)
+            # Disconnect can fail the response while stdin.drain is still
+            # pending. Consume that failure even if the pipe or caller cancels
+            # before this coroutine reaches the response await.
+            if future.done() and not future.cancelled():
+                future.exception()
+            else:
+                future.cancel()
 
     def self_facts(self, message_id: str | None = None) -> ConversationFacts:
         return ConversationFacts(
