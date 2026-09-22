@@ -174,3 +174,45 @@ async def test_each_steered_step_gets_a_fresh_recovery_budget(tmp_path: Path, mo
     assert retries == list(range(2, 10))
     history = runtime.chat_sessions.get(session_address("coder", "one")).load()
     assert len([m for m in history if m.role == "user"]) == 10
+
+
+@pytest.mark.asyncio
+async def test_withdrawn_steering_input_keeps_the_final_answer(tmp_path: Path) -> None:
+    address = session_address("coder", "one")
+
+    class WithdrawingAdapter(StubAdapter):
+        async def send(
+            self, messages: list[dict[str, Any]], *, model_id: str, **kwargs: Any
+        ) -> dict[str, Any]:
+            if not self.requests:
+                item = await loop.queue_run("coder", "Withdrawn", session_id="one")
+                manager.steer_queued("coder", "one", item.item_id, project_id=None, run_id=run.id)
+                withdrawals.append(asyncio.create_task(withdraw(item.item_id)))
+            return await super().send(messages, model_id=model_id, **kwargs)
+
+    async def withdraw(item_id: str) -> None:
+        # Wait on the Session lock while the final answer is persisted, so the
+        # removal lands between the pending-steering check and its delivery.
+        lock = runtime.chat_sessions.write_lock(address)
+        while not lock._lock.locked():
+            await asyncio.sleep(0)
+        async with lock:
+            assert manager.remove_queued("coder", "one", item_id, project_id=None)
+
+    withdrawals: list[asyncio.Task[None]] = []
+    adapter = WithdrawingAdapter([{"content": "Final", "tool_calls": None}])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path, agent=StubAgent(id="coder", model="openai/gpt-5.2"), adapter=adapter
+    )
+    runtime.chat_sessions.create("coder", session_id="one")
+    manager = runtime.chat_run_manager
+    loop = build_chat_loop(runtime)
+    run = await loop.start_run("coder", "Original", session_id="one")
+    result = await asyncio.wait_for(run.wait(), 10)
+    await asyncio.gather(*withdrawals)
+    assert run.status == RunStatus.COMPLETED
+    assert result.content == "Final"
+    assert len(adapter.requests) == 1
+    assert not run.accepts_steering
+    history = runtime.chat_sessions.get(address).load()
+    assert [m.content for m in history if m.role == "user"] == ["Original"]
