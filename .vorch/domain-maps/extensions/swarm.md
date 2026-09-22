@@ -92,11 +92,13 @@ the requested revision. Search matches Unicode-casefolded titles and content.
 Create, update, delete and restore preserve full versions with author and timestamp.
 Update supports title/content replacement or one unique `old_text`/`new_text` edit.
 Writes require payload-bound request ids; changes to existing pages also require
-`expected_revision`. Targeted edits reuse `core.tools.fuzzy_match.replace_fuzzy`,
-including typography, newline, whitespace, indentation and bounded similarity
-matching. With an older revision, only a targeted edit without a title change may
-proceed, and only exact/normalized matches are allowed; similarity cannot overwrite
-a concurrently changed passage. Missing/ambiguous matches fail atomically. Full
+`expected_revision`. Targeted edits reuse `core.tools.fuzzy_match.replace_fuzzy`
+with only its precise strategies (`precise_only=True`): typography, newline,
+whitespace and indentation differences are tolerated, but every `old_text` line
+must match, so similarity never selects a different passage at any revision
+(user decision A, `test_wiki_old_text_must_match_every_line_precisely`). With an
+older revision, only a targeted edit without a title change may proceed.
+Missing/ambiguous matches fail atomically. Full
 replacement, title changes, delete, restore and future revisions retain strict
 revision checks. Recovery reads the current page and reconciles the edit. Delete retains history,
 and restore creates a new live revision from the chosen historical content.
