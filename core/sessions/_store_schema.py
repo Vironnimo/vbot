@@ -51,9 +51,9 @@ def _reconcile_session_metadata_projection(connection: sqlite3.Connection, path:
     ).fetchone()
     if row is not None and str(row[0]) == _store_values._SESSION_METADATA_PROJECTION_VERSION:
         return
-    rows = connection.execute("SELECT * FROM sessions ORDER BY session_key").fetchall()
     connection.execute("BEGIN IMMEDIATE")
     try:
+        rows = connection.execute("SELECT * FROM sessions ORDER BY session_key").fetchall()
         for state in rows:
             metadata = _store_values._session_metadata_from_state(state)
             residual_payload, projection = _store_values._session_metadata_storage(metadata)
