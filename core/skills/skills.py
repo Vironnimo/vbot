@@ -211,6 +211,10 @@ class SkillRegistry:
             excluded_skills=excluded_skills,
         )
 
+    def reload_environment(self, environment: dict[str, str]) -> None:
+        """Refresh requirement inputs while preserving loaded packages and policy."""
+        self._environment = dict(environment)
+
     def get(self, name: str) -> SkillMetadata:
         """Return one skill by name.
 

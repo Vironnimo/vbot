@@ -152,6 +152,15 @@ class SkillRuntime:
         self._skills = registry
         self.invalidate_project_skills()
 
+    def reload_environment(self, fallback_environment: dict[str, str]) -> None:
+        """Refresh requirements in every cached scope, including held Run references."""
+        environment = self._skill_environment(fallback_environment)
+        self._skills.reload_environment(environment)
+        for bundle in self._project_skills.values():
+            bundle.registry.reload_environment(environment)
+        for registry in self._agent_skills.values():
+            registry.reload_environment(environment)
+
     def load_global_registry(self) -> SkillRegistry:
         return load_global_skill_registry(
             storage=self._storage,
