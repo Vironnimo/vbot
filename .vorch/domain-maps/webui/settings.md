@@ -16,6 +16,8 @@ The App shell retains the selected Settings page and scroll offset while another
 
 `settingsView.js` owns normalization and payload builders shared by the panels. Each panel loads and submits through `api.js`, keeps editable values local until save, and adopts server responses after mutation. Decimal settings remain strings during editing and are normalized only when building the payload.
 
+`appearancePrefs.svelte.js` owns applying canonical appearance snapshots (language, Chat width, and Work details) for both App setup and SettingsView loads/commits. The Appearance panel submits its draft and forwards the response; it never publishes draft values into global preferences after an awaited save. A newer draft remains editable, and a failed follow-up save leaves the last confirmed appearance active (`SettingsView.test.appearance.test.js`).
+
 Before adding or changing panel fields or saving behavior, read `webui/autosave.md` for the shared integration and input-continuity contract. Settings panels keep domain-specific normalization and payloads here; save timing, serialization, and transition flushing use that common mechanism.
 
 Cross-cutting value coercion for JSON-derived data lives in `webui/src/lib/values.js` (`isPlainObject` strict `[object Object]`, `asText`, `asOptionalText`).

@@ -8,11 +8,7 @@
     createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
-  import { init, t } from '$lib/i18n.js';
-  import {
-    setChatWidth,
-    setChatWorkingMode,
-  } from '$lib/appearancePrefs.svelte.js';
+  import { t } from '$lib/i18n.js';
   import {
     buildChatWidthOptions,
     buildChatWorkingModeOptions,
@@ -177,11 +173,6 @@
         }),
       );
       onCommit(nextSettings);
-      init(selectedLanguageId);
-      // Update the app-wide prefs store so the open Chat changes live; these
-      // display preferences have no runtime reload hook.
-      setChatWidth(selectedChatWidth);
-      setChatWorkingMode(selectedChatWorkingMode);
       if (reason === 'manual')
         onToast({
           title: t('settings.appearance.saveSuccess', 'Appearance updated.'),
