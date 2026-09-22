@@ -92,6 +92,16 @@ def test_read_settings_returns_empty_for_corrupt_json(tmp_path: Path) -> None:
     assert desktop_settings.read_settings(settings_file) == {}
 
 
+def test_read_settings_returns_defaults_for_invalid_utf8(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_bytes(b'{"wakeword": "\xff"}')
+
+    assert desktop_settings.read_settings(settings_file) == {}
+    assert desktop_settings.read_wakeword_settings(settings_file) == (
+        desktop_settings.DEFAULT_WAKEWORD_SETTINGS
+    )
+
+
 @pytest.mark.parametrize("settings_text", ["[]", '"not an object"', "42"])
 def test_read_settings_returns_empty_for_non_object_json(
     tmp_path: Path,
@@ -256,6 +266,43 @@ def test_write_servers_preserves_other_keys(tmp_path: Path) -> None:
     assert stored["servers"] == servers
     assert stored["last_used"] == {"host": "pi.lan", "port": 9000}
     assert stored["wakeword"] == wakeword
+
+
+@pytest.mark.parametrize("error_type", [PermissionError, OSError])
+def test_section_write_preserves_unreadable_existing_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[OSError]
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    original = b'{"servers": [{"host": "pi.lan", "port": 9000}]}'
+    settings_file.write_bytes(original)
+
+    def fail_read(_path: Path, **_kwargs: object) -> str:
+        raise error_type("test-owned read failure")
+
+    monkeypatch.setattr(Path, "read_text", fail_read)
+    monkeypatch.setattr(desktop_settings.time, "sleep", lambda _delay: None)
+
+    # Startup can still fall back, but a later resize/settings save must not
+    # mistake an unreadable document for a new one and discard other sections.
+    assert desktop_settings.read_settings(settings_file) == {}
+    with pytest.raises(error_type):
+        desktop_settings.write_window_size(1280, 800, settings_file)
+
+    assert settings_file.read_bytes() == original
+
+
+@pytest.mark.parametrize("original", [b"not json", b'{"label": "\xff"}', b"[]", b"null"])
+def test_section_write_preserves_malformed_existing_settings(
+    tmp_path: Path, original: bytes
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_bytes(original)
+
+    assert desktop_settings.read_settings(settings_file) == {}
+    with pytest.raises(ValueError):
+        desktop_settings.write_window_size(1280, 800, settings_file)
+
+    assert settings_file.read_bytes() == original
 
 
 # -- Last-used target --------------------------------------------------------
@@ -511,6 +558,41 @@ def test_read_wakeword_settings_preserves_stable_microphone_identity(tmp_path: P
     config = desktop_settings.read_wakeword_settings(settings_file)
 
     assert config["microphone"] == microphone
+
+
+@pytest.mark.parametrize("session_behavior", [[], {}, ["active"], None, True, 1])
+def test_read_wakeword_settings_drops_invalid_server_profiles(
+    tmp_path: Path, session_behavior: object
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    valid_profile = {"target_agent_id": "main", "session_behavior": "new"}
+    desktop_settings.write_settings(
+        {
+            "wakeword": {
+                "server_profiles": {
+                    "http://bad.lan:8420": {"session_behavior": session_behavior},
+                    "http://good.lan:8420": valid_profile,
+                }
+            }
+        },
+        settings_file,
+    )
+
+    config = desktop_settings.read_wakeword_settings(settings_file)
+
+    assert config["server_profiles"] == {"http://good.lan:8420": valid_profile}
+
+
+def test_read_wakeword_settings_drops_out_of_range_large_sensitivity(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    desktop_settings.write_settings(
+        {"wakeword": {"model_sensitivities": {"invalid": 10**400, "valid": 0.7}}},
+        settings_file,
+    )
+
+    config = desktop_settings.read_wakeword_settings(settings_file)
+
+    assert config["model_sensitivities"] == {"valid": 0.7}
 
 
 def test_read_wakeword_settings_falls_back_for_missing_wakeword_key(tmp_path: Path) -> None:

@@ -16,6 +16,7 @@ from core.recall.canonical import (
     CANONICAL_FALLBACK_PARTIAL_REASON,
     CANONICAL_FALLBACK_SCAN_LIMIT,
     CanonicalSessionRecallBackend,
+    _session_address,
     compact_text,
     first_match_span,
     message_matches_search_request,
@@ -34,7 +35,6 @@ from core.recall.recall import (
     RecallSearchPage,
     RecallSearchRequest,
 )
-from core.sessions import SessionAddress
 from core.sessions.schema import required_journal_mode
 
 _INDEX_DIR_NAME = "recall"
@@ -49,13 +49,6 @@ _FTS_PARTIAL_FALLBACK_REASON = (
     "Results are incomplete and newest-first. Narrow period or session_id; an empty result "
     "does not establish that no matching text exists."
 )
-
-
-def _session_address(request: Any, session_id: str) -> SessionAddress:
-    """Address the one Session of a search request's scope."""
-    return SessionAddress(
-        project_id=request.project_id, agent_id=request.agent_id, session_id=session_id
-    )
 
 
 # Bump when the on-disk index schema changes; mismatched indexes are dropped and rebuilt.
@@ -225,12 +218,15 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             )
         except Exception as error:  # pragma: no cover
             self._warning("Canonical FTS page failed; falling back: %s", error)
-        fallback_request = (
-            replace(request, order="newest") if request.order == "relevance" else request
+        fallback_request = replace(
+            request,
+            order="newest" if request.order == "relevance" else request.order,
+            snapshot_id=None,
         )
         page = await self._fallback.search_page(fallback_request)
         return replace(
             page,
+            snapshot_id=snapshot_id,
             ranking=f"substring_scan_{fallback_request.order}",
             degraded=True,
             degradation_reason=(

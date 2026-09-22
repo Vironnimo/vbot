@@ -21,6 +21,26 @@ def service(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> CronService:
 
 
 class TestProjectOccurrences:
+    def test_spring_gap_projection_matches_successive_live_fires(self, service):
+        service.set_timezone("Europe/Berlin")
+        job = service.create_job(
+            agent_id="joel",
+            prompt="half-hour",
+            schedule_type="cron",
+            cron_expression="*/30 * * * *",
+        )
+        start = datetime(2026, 3, 29, 0, tzinfo=UTC)
+        end = start + timedelta(hours=3)
+        projected = [row.fire_at_utc for row in service.project_occurrences(start, end)]
+        expected = [start + timedelta(minutes=30 * index) for index in range(6)]
+        assert projected == expected
+        cursor = start - timedelta(microseconds=1)
+        live = []
+        for _ in expected:
+            cursor = datetime.fromisoformat(service.next_fire_at(job, reference_time=cursor))
+            live.append(cursor)
+        assert live == projected
+
     @pytest.mark.parametrize("day", ["2026-09-10", "2026-03-29", "2026-10-25"])
     def test_cron_midnight_includes_start_and_excludes_end(self, service, day):
         service.set_timezone("Europe/Berlin")

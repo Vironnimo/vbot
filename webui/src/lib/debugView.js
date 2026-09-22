@@ -1,8 +1,5 @@
 import { asOptionalText, asText, isPlainObject } from './values.js';
 
-export const DEBUG_TAB_RAW = 'raw';
-export const DEBUG_TAB_FORMATTED = 'formatted';
-
 export function createDebugViewState() {
   return {
     traces: [],

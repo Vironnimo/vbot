@@ -29,6 +29,6 @@ Storage still owns raw file I/O, process-local locked read-modify-write transact
 
 - Public schema errors stay transport-independent inside `core/settings/` (no RPC errors raised there) and distinct from storage-level validation errors, keeping RPC mapping stable. Diagnostics/formatting for agents belongs to CLI doctor commands.
 - Unknown raw keys warn because persisted data may temporarily contain unconsumed values; Runtime isolates the owning key instead of rejecting siblings or aborting startup.
-- Multi-section payloads and multi-operation patches persist in one locked transaction before lifecycle hooks run; hooks run only after the write succeeds.
+- Multi-section payloads and multi-operation patches persist in one locked transaction before lifecycle hooks run; hooks run only after the write succeeds. Both RPC mutation surfaces serialize through live refresh and finish that sequence even after caller cancellation; Skill-directory refresh uses Runtime's asynchronous reload so scans stay off the Event Loop.
 - Server-side schema validation of extension configs happens at the RPC layer where the loaded registry exists - `core/settings/` stays untouched by design.
 - Setup scripts seed new `settings.json` with thinking effort "high" only and leave temperature unset, so `resolve_request_temperature` (`core/chat/model_resolution.py`) falls through to `Model.recommended_temperature`. Install-time seed only - existing instances keep prior behavior until explicitly configured; this is not a runtime fallback.

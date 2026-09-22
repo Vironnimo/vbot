@@ -482,6 +482,24 @@ def test_timezone_change_reprojects_wall_clock_cron(tmp_path: Path) -> None:
     assert service.next_fire_at(job, reference_time=reference) == "2026-01-02T08:00:00+00:00"
 
 
+@pytest.mark.parametrize(
+    ("expression", "reference", "expected"),
+    [
+        ("30 2 * * *", "2026-10-25T01:15:00+00:00", "2026-10-26T01:30:00+00:00"),
+        ("*/30 * * * *", "2026-10-25T01:15:00+00:00", "2026-10-25T02:00:00+00:00"),
+        ("30 2 * * *", "2026-10-25T00:15:00+00:00", "2026-10-25T00:30:00+00:00"),
+    ],
+)
+def test_next_cron_fire_never_replays_elapsed_overlap(
+    tmp_path: Path, expression: str, reference: str, expected: str
+) -> None:
+    service, _ = make_service(tmp_path, tz="Europe/Berlin")
+    job = service.create_job(
+        agent_id="main", prompt="test", schedule_type="cron", cron_expression=expression
+    )
+    assert service.next_fire_at(job, reference_time=datetime.fromisoformat(reference)) == expected
+
+
 def test_next_fire_keeps_local_wall_clock_across_dst_transitions(tmp_path: Path) -> None:
     service, _trigger_service = make_service(tmp_path, tz="Europe/Berlin")
     job = service.create_job(

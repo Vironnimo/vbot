@@ -132,6 +132,7 @@ class Runtime:
 
     def _clear_service_references(self) -> None:
         """Initialize or release every service reference in one lifecycle-owned place."""
+        self._skill_reload_generation = object()
         self._extension_host_factory: ExtensionHostFactory | None = None
         self._started: bool = False
         self._started_at: datetime | None = None
@@ -692,19 +693,21 @@ class Runtime:
 
     def reload_skills(self) -> None:
         """Reload the runtime skill registry from current persisted settings."""
-        self._apply_reloaded_skills(self._load_reloaded_skills())
+        owner = self._skill_operations()
+        generation = self._skill_reload_generation = object()
+        self._apply_reloaded_skills(owner.load_global_registry(), generation=generation)
 
     async def reload_skills_async(self) -> None:
         """Reload Skills without scanning their files on the Event Loop."""
-        skills = await _RUNTIME_WORKERS.run(self._load_reloaded_skills)
-        self._apply_reloaded_skills(skills)
+        owner = self._skill_operations()
+        generation = self._skill_reload_generation = object()
+        skills = await _RUNTIME_WORKERS.run(owner.load_global_registry)
+        self._apply_reloaded_skills(skills, generation=generation)
 
-    def _load_reloaded_skills(self) -> SkillRegistry:
-        """Build one replacement Skill registry without mutating Runtime state."""
-        return self._skill_operations().load_global_registry()
-
-    def _apply_reloaded_skills(self, skills: SkillRegistry) -> None:
+    def _apply_reloaded_skills(self, skills: SkillRegistry, *, generation: object) -> None:
         """Install a fully built Skill registry and refresh its loop-owned consumers."""
+        if not self._started or generation is not self._skill_reload_generation:
+            return
         self._skills = skills
         self._skill_operations().replace_registry(skills)
         invalid_skill_count = len(self._skills.invalid_diagnostics())

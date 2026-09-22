@@ -143,6 +143,7 @@
       return;
     }
     lastDraftKey = key;
+    media.cancelActiveRecording();
     media.hydratePendingAttachments(key);
     historyCursor = -1;
     navWorkingCopies = {};

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import heapq
+import json
 import re
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -214,7 +215,23 @@ class CanonicalSessionRecallBackend:
                 continue
             generation_id, revision = version
             fingerprint.append(f"{session_id}:{generation_id}:{revision}")
-        return hashlib.sha256("\n".join(fingerprint).encode("utf-8")).hexdigest()
+        selection = {
+            "backend": type(self).__name__,
+            "agent_id": request.agent_id,
+            "project_id": request.project_id,
+            "session_id": request.session_id,
+            "excluded_session_ids": sorted(set(request.excluded_session_ids)),
+            "query": request.query,
+            "since": request.since.isoformat() if request.since is not None else None,
+            "until": request.until.isoformat() if request.until is not None else None,
+            "roles": sorted(set(request.roles)),
+            "match_mode": request.match_mode,
+            "order": request.order,
+            "history": fingerprint,
+        }
+        # Offset and page size may change while traversing the same selection.
+        payload = json.dumps(selection, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def is_recall_artifact_message(message: Any) -> bool:

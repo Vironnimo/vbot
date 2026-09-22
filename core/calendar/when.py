@@ -25,11 +25,12 @@ _RANGE_SEPARATOR = ".."
 
 def parse_when(value: str, *, now_utc: datetime, tz: ZoneInfo) -> tuple[datetime, datetime]:
     """Resolve one ``when`` expression to a half-open [start, end) UTC window."""
-    text = value.strip().lower() if isinstance(value, str) else ""
+    text = value.strip() if isinstance(value, str) else ""
     if not text:
         raise CalendarValidationError(f"when must not be empty; use one of: {WHEN_GRAMMAR}")
     if _RANGE_SEPARATOR in text:
         return _parse_range(text, tz=tz)
+    text = text.lower()
     today = now_utc.astimezone(tz).date()
     if text == "today":
         return _day_window(today, tz)
@@ -58,13 +59,13 @@ def looks_like_date(text: str) -> bool:
 def _parse_range(text: str, *, tz: ZoneInfo) -> tuple[datetime, datetime]:
     """Resolve ``start..end`` where each side is a date or an ISO datetime."""
     start_text, end_text = (part.strip() for part in text.split(_RANGE_SEPARATOR, 1))
-    window_start = _parse_range_bound(start_text, tz=tz, is_end=False)
-    window_end = _parse_range_bound(end_text, tz=tz, is_end=True)
+    window_start = _parse_range_bound(start_text, tz=tz, is_end=False).astimezone(UTC)
+    window_end = _parse_range_bound(end_text, tz=tz, is_end=True).astimezone(UTC)
     if window_end <= window_start:
         raise CalendarValidationError(
             f"when range end must be after its start: {text!r}; use one of: {WHEN_GRAMMAR}"
         )
-    return window_start.astimezone(UTC), window_end.astimezone(UTC)
+    return window_start, window_end
 
 
 def _parse_range_bound(text: str, *, tz: ZoneInfo, is_end: bool) -> datetime:
