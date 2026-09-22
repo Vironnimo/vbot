@@ -144,7 +144,9 @@ class ProcessManager:
         self._terminal_callbacks: list[Callable[[dict[str, Any]], None]] = []
         self._sweeper_task: asyncio.Task[None] | None = None
         self._closed_execution_groups: set[tuple[str, str, str]] = set()
-        self._owned_spawns: dict[asyncio.Task[str], RunExecutionOwner] = {}
+        self._closed = False
+        self._closed_scopes: set[str] = set()
+        self._pending_spawns: dict[asyncio.Task[str], tuple[str, RunExecutionOwner | None]] = {}
 
     def add_terminal_callback(
         self, callback: Callable[[dict[str, Any]], None]
@@ -166,6 +168,8 @@ class ProcessManager:
 
     def start(self) -> None:
         """Start the TTL sweeper task."""
+        if self._closed:
+            raise ProcessManagerError("Process manager is closed")
         if self._sweeper_task is not None and not self._sweeper_task.done():
             return
 
@@ -173,6 +177,7 @@ class ProcessManager:
 
     def stop(self) -> None:
         """Stop the TTL sweeper task and kill active processes."""
+        self._closed = True
         if self._sweeper_task is not None:
             self._sweeper_task.cancel()
             self._sweeper_task = None
@@ -194,6 +199,14 @@ class ProcessManager:
         """Stop the manager and await tracked task cleanup."""
         sweeper_task = self._sweeper_task
         self.stop()
+        pending = list(self._pending_spawns)
+        if pending:
+            await asyncio.gather(
+                *(asyncio.shield(task) for task in pending), return_exceptions=True
+            )
+            # Late launches have now published and performed their own shutdown
+            # cleanup. Retry a failed kill and cancel any late notifications.
+            self.stop()
 
         tasks: list[asyncio.Task[None]] = []
         if sweeper_task is not None and not sweeper_task.done():
@@ -209,7 +222,7 @@ class ProcessManager:
                     tasks.append(task)
 
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*(asyncio.shield(task) for task in tasks), return_exceptions=True)
 
     async def spawn(
         self,
@@ -222,15 +235,16 @@ class ProcessManager:
         cwd: str | Path | None,
         execution_owner: RunExecutionOwner | None = None,
     ) -> str:
-        if execution_owner is None:
-            return await self._spawn(
-                scope_key, agent_id, argv, project_id=project_id, env=env, cwd=cwd
-            )
-        key = (execution_owner.extension, execution_owner.group_id, execution_owner.epoch)
-        if key in self._closed_execution_groups:
-            raise ProcessManagerError(
-                "This Session is no longer available. Check its state through its Extension."
-            )
+        if self._closed:
+            raise ProcessManagerError("Process manager is closed")
+        if scope_key in self._closed_scopes:
+            raise ProcessManagerError("Process Run scope is closed")
+        if execution_owner is not None:
+            key = (execution_owner.extension, execution_owner.group_id, execution_owner.epoch)
+            if key in self._closed_execution_groups:
+                raise ProcessManagerError(
+                    "This Session is no longer available. Check its state through its Extension."
+                )
         task = asyncio.create_task(
             self._spawn(
                 scope_key,
@@ -242,7 +256,7 @@ class ProcessManager:
                 execution_owner=execution_owner,
             )
         )
-        self._owned_spawns[task] = execution_owner
+        self._pending_spawns[task] = (scope_key, execution_owner)
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
@@ -261,7 +275,7 @@ class ProcessManager:
             cleanup.result()
             raise
         finally:
-            self._owned_spawns.pop(task, None)
+            self._pending_spawns.pop(task, None)
 
     async def _spawn(
         self,
@@ -352,6 +366,15 @@ class ProcessManager:
                 task, f"Process completion watcher failed for process={process_id}"
             )
         )
+        # Shutdown/cancellation may close admission while the OS creates the
+        # subprocess. Publish it for cleanup, then settle it before exposing its id.
+        owner_closed = (
+            execution_owner is not None
+            and (execution_owner.extension, execution_owner.group_id, execution_owner.epoch)
+            in self._closed_execution_groups
+        )
+        if self._closed or scope_key in self._closed_scopes or owner_closed:
+            await self._kill_process(tracked)
         return process_id
 
     def get_process(
@@ -510,6 +533,7 @@ class ProcessManager:
         if not scope_key:
             return
 
+        self._closed_scopes.add(scope_key)
         failures: list[ProcessTerminationError] = []
         for tracked in list(self._processes.values()):
             if tracked.scope_key == scope_key and tracked.status == "running":
@@ -870,7 +894,7 @@ class ProcessManager:
         raise ProcessTerminationError(tracked.process_id) from error
 
     def has_execution_work(self, owner: RunExecutionOwner) -> bool:
-        return any(value == owner for value in self._owned_spawns.values()) or any(
+        return any(value == owner for _, value in self._pending_spawns.values()) or any(
             tracked.execution_owner == owner and tracked.status == "running"
             for tracked in self._processes.values()
         )
@@ -881,11 +905,13 @@ class ProcessManager:
         self._closed_execution_groups.add(key)
         pending = [
             task
-            for task, owner in self._owned_spawns.items()
-            if (owner.extension, owner.group_id, owner.epoch) == key
+            for task, (_, owner) in self._pending_spawns.items()
+            if owner is not None and (owner.extension, owner.group_id, owner.epoch) == key
         ]
         if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+            await asyncio.gather(
+                *(asyncio.shield(task) for task in pending), return_exceptions=True
+            )
         failures: list[ProcessTerminationError] = []
         for tracked in list(self._processes.values()):
             owner = tracked.execution_owner
@@ -907,6 +933,12 @@ class ProcessManager:
         if not scope_key:
             return
 
+        self._closed_scopes.add(scope_key)
+        pending = [task for task, (scope, _) in self._pending_spawns.items() if scope == scope_key]
+        if pending:
+            await asyncio.gather(
+                *(asyncio.shield(task) for task in pending), return_exceptions=True
+            )
         failures: list[ProcessTerminationError] = []
         for tracked in list(self._processes.values()):
             if tracked.scope_key == scope_key and tracked.status == "running":
