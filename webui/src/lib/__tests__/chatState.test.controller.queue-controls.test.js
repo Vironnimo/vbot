@@ -413,6 +413,7 @@ describe('chat controller', () => {
         sse_url: '/events/run-one',
       });
     const { chatState, controller, runStream } = setup({
+      isDisplayedSession: () => true,
       operationOverrides: { startChatRun },
     });
     const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
@@ -461,6 +462,7 @@ describe('chat controller', () => {
       sse_url: '/events/run-edit',
     });
     const { chatState, controller, runStream } = setup({
+      isDisplayedSession: () => true,
       operationOverrides: { editChatMessage },
     });
     const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
@@ -518,4 +520,34 @@ describe('chat controller', () => {
     expect(sessionState.currentRun).toBeNull();
     expect(sessionState.actionError).toContain('busy');
   });
+
+  it.each(['send', 'edit'])(
+    'does not reopen a hidden Session stream when %s admission returns after navigation',
+    async (action) => {
+      const response = deferred();
+      let displayedSessionId = 'one';
+      const { chatState, controller, runStream } = setup({
+        isDisplayedSession: (_agentId, sessionId) =>
+          sessionId === displayedSessionId,
+        operationOverrides: {
+          startChatRun: vi.fn(() => response.promise),
+          editChatMessage: vi.fn(() => response.promise),
+        },
+      });
+      const session = ensureSessionState(chatState, 'alpha', 'one');
+      session.messages = [{ id: 'target', role: 'user', content: 'Old' }];
+      const admission =
+        action === 'send'
+          ? controller.sendMessage(session, 'New')
+          : controller.editMessage(session, 'target', 'New');
+      displayedSessionId = 'two';
+      response.resolve({ run_id: 'run-one', sse_url: '/events/run-one' });
+      await expect(admission).resolves.toEqual({
+        kind: 'started',
+        runId: 'run-one',
+      });
+      expect(session.currentRun.runId).toBe('run-one');
+      expect(runStream.subscribeToRun).not.toHaveBeenCalled();
+    },
+  );
 });

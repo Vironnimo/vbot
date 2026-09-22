@@ -540,9 +540,11 @@ export function createChatController({
         return { kind: 'started', runId: run.run_id ?? '' };
       }
       startRun(sessionState, run);
-      runStream.subscribeToRun(sessionState, run.sse_url, {
-        afterSequence: 0,
-      });
+      if (isDisplayedSession(sessionState.agentId, sessionState.sessionId)) {
+        runStream.subscribeToRun(sessionState, run.sse_url, {
+          afterSequence: 0,
+        });
+      }
       return { kind: 'started', runId: run.run_id ?? '' };
     } catch (error) {
       sessionState.actionError = `${translate('chat.sendError', 'Message could not be sent.')} ${errorMessage(error)}`;
@@ -577,9 +579,11 @@ export function createChatController({
       }
       truncateSessionForEdit(sessionState, messageId, run.run_id);
       startRun(sessionState, run);
-      runStream.subscribeToRun(sessionState, run.sse_url, {
-        afterSequence: 0,
-      });
+      if (isDisplayedSession(sessionState.agentId, sessionState.sessionId)) {
+        runStream.subscribeToRun(sessionState, run.sse_url, {
+          afterSequence: 0,
+        });
+      }
       return { kind: 'started', runId: run.run_id ?? '' };
     } catch (error) {
       sessionState.actionError = `${translate('chat.editError', 'Message could not be edited.')} ${errorMessage(error)}`;
