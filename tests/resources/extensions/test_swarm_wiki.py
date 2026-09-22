@@ -228,7 +228,7 @@ async def test_wiki_ambiguous_matches_never_fall_through(board, stale, content, 
 
 
 @pytest.mark.asyncio
-async def test_wiki_similarity_requires_current_revision(board):
+async def test_wiki_similar_passage_never_stands_in_for_old_text(board):
     created = await invoke(
         board,
         {
@@ -259,15 +259,52 @@ async def test_wiki_similarity_requires_current_revision(board):
         "new_text": "Start\nThe result is complete.\nEnd",
         "request_id": "edit",
     }
+    read = {"action": "read", "page_id": page_id}
     assert (await invoke(board, edit))["error"]["code"] == "wiki_revision_conflict"
-    assert (await invoke(board, {"action": "read", "page_id": page_id}))["data"][
-        "content"
-    ] == peer_content
-    result = await invoke(board, {**edit, "expected_revision": 2, "request_id": "current"})
-    assert result["ok"], result
-    assert (await invoke(board, {"action": "read", "page_id": page_id}))["data"]["content"] == edit[
-        "new_text"
-    ]
+    assert (await invoke(board, read))["data"]["content"] == peer_content
+    # The current revision does not authorize replacing a merely similar passage either.
+    current = await invoke(board, {**edit, "expected_revision": 2, "request_id": "current"})
+    assert current["error"]["code"] == "wiki_edit_conflict"
+    assert (await invoke(board, read))["data"]["content"] == peer_content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "old", "new"),
+    [
+        # A similar line must not stand in for a different value.
+        ("Deployment\nRETRIES = 5\nTIMEOUT = 30\n", "RETRIES = 3", "RETRIES = 4"),
+        # Exact boundaries must not let a different middle line be deleted.
+        (
+            "Steps:\nvalidate(data)\nsave_to_database(data)\ndone\n",
+            "Steps:\nvalidate(data)\nlog(data)\ndone",
+            "Steps:\nvalidate(data)\ndone",
+        ),
+    ],
+)
+async def test_wiki_old_text_must_match_every_line_precisely(board, content, old, new):
+    created = await invoke(
+        board,
+        {"action": "create", "title": "Notes", "content": content, "request_id": "create"},
+    )
+    page_id = created["data"]["page_id"]
+    read = {"action": "read", "page_id": page_id}
+    before = await invoke(board, read)
+
+    result = await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": page_id,
+            "expected_revision": 1,
+            "old_text": old,
+            "new_text": new,
+            "request_id": "edit",
+        },
+    )
+
+    assert result["error"]["code"] == "wiki_edit_conflict"
+    assert await invoke(board, read) == before
 
 
 @pytest.mark.asyncio
