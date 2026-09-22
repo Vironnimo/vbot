@@ -250,13 +250,16 @@ def _normalize_gemini_usage(raw: Any) -> dict[str, int] | None:
     visible_output = _nonnegative_int(raw.get("candidatesTokenCount"))
     reasoning_tokens = _nonnegative_int(raw.get("thoughtsTokenCount"))
     cache_read = _nonnegative_int(raw.get("cachedContentTokenCount"))
-    usage = {
-        "input_tokens": input_tokens,
-        "output_tokens": visible_output + reasoning_tokens,
-    }
-    if reasoning_tokens:
+    usage = {}
+    if input_tokens is not None:
+        usage["input_tokens"] = input_tokens
+    if visible_output is not None:
+        usage["output_tokens"] = visible_output + (reasoning_tokens or 0)
+    if not usage:
+        return None
+    if reasoning_tokens is not None:
         usage["reasoning_tokens"] = reasoning_tokens
-    if cache_read:
+    if cache_read is not None:
         usage["cache_read_tokens"] = cache_read
     return usage
 
@@ -386,5 +389,5 @@ def _content_text(value: Any) -> str:
     return value if isinstance(value, str) else "" if value is None else str(value)
 
 
-def _nonnegative_int(value: Any) -> int:
-    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+def _nonnegative_int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
