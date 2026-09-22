@@ -114,16 +114,17 @@ class AnthropicMessagesStreamDecoder:
             block_state["id"] = tool_call_id
             block_state["name"] = name if isinstance(name, str) else ""
             self.content_blocks_by_index[index] = block_state
-            if block_state["name"]:
-                return [
-                    {
-                        "type": "tool_call_delta",
-                        "id": tool_call_id,
-                        "name_delta": block_state["name"],
-                        "arguments_delta": "",
-                    }
-                ]
-            return []
+            # An empty/malformed name is still an addressable Tool attempt.
+            # Register its identity even if no argument fragments follow, so
+            # canonical finalization can reject it without losing its Result.
+            return [
+                {
+                    "type": "tool_call_delta",
+                    "id": tool_call_id,
+                    "name_delta": block_state["name"],
+                    "arguments_delta": "",
+                }
+            ]
 
         reasoning_block = self._reasoning_block_normalizer(content_block)
         if reasoning_block:
