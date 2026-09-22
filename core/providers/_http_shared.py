@@ -346,8 +346,8 @@ def wrap_network_error(error: Exception) -> NetworkError | ProviderTimeoutError:
     ``RemoteProtocolError``, ``ProtocolError``, ``ProxyError``, ``UnsupportedProtocol``,
     ``LocalProtocolError``, ``NetworkError``, and any other transport-level
     failure — are wrapped as ``NetworkError`` (retryable and not
-    provider-specific). ``NetworkError`` deliberately stays a non-``ProviderError``
-    so it never triggers model fallback (see ``.vorch/domain-maps/providers.md`` gotchas).
+    provider-specific). ``NetworkError`` stays a non-``ProviderError``; Chat owns
+    its recovery budget and any configured Model fallback.
     """
     if isinstance(error, httpx.TimeoutException):
         detail = str(error).strip() or "No response received within the request timeout."
