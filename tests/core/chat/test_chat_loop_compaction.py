@@ -247,13 +247,11 @@ def test_context_window_uses_the_selected_provider_connection(tmp_path: Path) ->
 async def test_failed_auto_compaction_retries_at_the_next_boundary(tmp_path: Path) -> None:
     """A failed attempt must leave the next eligible boundary retrying."""
 
-    entered = asyncio.Event()
-    released = asyncio.Event()
+    compaction_counts_at_tool_boundary: list[int] = []
     tools = ToolRegistry()
 
     async def probe(context, arguments):
-        entered.set()
-        await released.wait()
+        compaction_counts_at_tool_boundary.append(len(service.compact_calls))
         return tool_success({"done": True})
 
     tools.register("probe", "Probe", {"type": "object"}, probe)
@@ -275,14 +273,15 @@ async def test_failed_auto_compaction_retries_at_the_next_boundary(tmp_path: Pat
     session = runtime.chat_sessions.create("coder", session_id="test")
     session.append(ChatMessage.user("Earlier context"))
     session.append(ChatMessage.assistant(model=agent.model, content="Earlier answer"))
-    run = await build_chat_loop(runtime, compaction_service=cast(Any, service)).start_run(
-        "coder", "Work", session_id="test"
-    )
-    await asyncio.wait_for(entered.wait(), 5)
-    assert len(service.compact_calls) == 1
-    released.set()
-    assert (await asyncio.wait_for(run.wait(), 5)).content == "Done"
-    # Pre-request check, post-Tool-batch check and final-response check each
-    # retried; a failed attempt never suppresses a later eligible boundary.
-    assert len(service.compact_calls) == 3
-    assert not any(message.role == "compaction_checkpoint" for message in session.load())
+    try:
+        result = await build_chat_loop(runtime, compaction_service=cast(Any, service)).send(
+            "coder", "Work", session_id="test"
+        )
+        assert result.content == "Done"
+        assert compaction_counts_at_tool_boundary == [1]
+        # Pre-request check, post-Tool-batch check and final-response check each
+        # retried; a failed attempt never suppresses a later eligible boundary.
+        assert len(service.compact_calls) == 3
+        assert not any(message.role == "compaction_checkpoint" for message in session.load())
+    finally:
+        await runtime.chat_runs.aclose()
