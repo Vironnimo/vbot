@@ -8,7 +8,7 @@ import { reactiveProps } from './_reactiveProps.svelte.js';
 import { rpcBackedApiMock } from './apiMock.js';
 
 const rpcMock = vi.fn();
-const onReloadSettingsMock = vi.fn();
+const onRefreshProviderSettingsMock = vi.fn();
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -27,8 +27,8 @@ describe('SettingsProvidersPanel', () => {
     init('en');
     rpcMock.mockReset();
     rpcMock.mockResolvedValue({});
-    onReloadSettingsMock.mockReset();
-    onReloadSettingsMock.mockResolvedValue(undefined);
+    onRefreshProviderSettingsMock.mockReset();
+    onRefreshProviderSettingsMock.mockResolvedValue(undefined);
     mountedComponent = null;
   });
 
@@ -61,7 +61,7 @@ describe('SettingsProvidersPanel', () => {
       props: {
         settings: { providers: { items } },
         visible: true,
-        onReloadSettings: onReloadSettingsMock,
+        onRefreshProviderSettings: onRefreshProviderSettingsMock,
       },
     });
     flushSync();
@@ -78,7 +78,9 @@ describe('SettingsProvidersPanel', () => {
     input.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
     findButton('Save key').click();
-    await waitForCondition(() => onReloadSettingsMock.mock.calls.length > 0);
+    await waitForCondition(
+      () => onRefreshProviderSettingsMock.mock.calls.length > 0,
+    );
     expect(rpcMock).toHaveBeenCalledWith('provider.set_key', {
       provider_id: 'opencode-go',
       connection_id: 'opencode-go:api-key',
@@ -100,7 +102,7 @@ describe('SettingsProvidersPanel', () => {
     const props = reactiveProps({
       settings: { providers: { items: [] } },
       visible: true,
-      onReloadSettings: onReloadSettingsMock,
+      onRefreshProviderSettings: onRefreshProviderSettingsMock,
       modelsRefreshToken: 0,
     });
     mountedComponent = mount(SettingsProvidersPanel, {
@@ -111,11 +113,13 @@ describe('SettingsProvidersPanel', () => {
 
     // The panel reads its display from the settings prop, so mount alone must
     // not trigger a reload.
-    expect(onReloadSettingsMock).not.toHaveBeenCalled();
+    expect(onRefreshProviderSettingsMock).not.toHaveBeenCalled();
 
     props.modelsRefreshToken = 1;
     flushSync();
-    await waitForCondition(() => onReloadSettingsMock.mock.calls.length >= 1);
+    await waitForCondition(
+      () => onRefreshProviderSettingsMock.mock.calls.length >= 1,
+    );
   });
 
   it('keeps an unconfigured Custom Provider visible and deletes it through RPC', async () => {
@@ -161,7 +165,7 @@ describe('SettingsProvidersPanel', () => {
           },
         },
         visible: true,
-        onReloadSettings: onReloadSettingsMock,
+        onRefreshProviderSettings: onRefreshProviderSettingsMock,
       },
     });
     flushSync();
@@ -184,7 +188,7 @@ describe('SettingsProvidersPanel', () => {
     expect(rpcMock).toHaveBeenCalledWith('provider.custom_delete', {
       provider_id: 'local-ai',
     });
-    expect(onReloadSettingsMock).toHaveBeenCalled();
+    expect(onRefreshProviderSettingsMock).toHaveBeenCalled();
   });
 
   it('adds a fresh keyless local provider through Add provider', async () => {
@@ -225,7 +229,7 @@ describe('SettingsProvidersPanel', () => {
           },
         },
         visible: true,
-        onReloadSettings: onReloadSettingsMock,
+        onRefreshProviderSettings: onRefreshProviderSettingsMock,
         onToast,
       },
     });
@@ -259,7 +263,7 @@ describe('SettingsProvidersPanel', () => {
       connection_id: 'lmstudio:local',
       enabled: true,
     });
-    expect(onReloadSettingsMock).toHaveBeenCalled();
+    expect(onRefreshProviderSettingsMock).toHaveBeenCalled();
     expect(onToast).toHaveBeenCalledWith(
       expect.objectContaining({
         variant: 'success',

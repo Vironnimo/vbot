@@ -42,8 +42,7 @@ class FirstUseFixture:
             path.mkdir(parents=True, exist_ok=True)
         write_bootstrap_marker(self.data)
         self.sessions = ChatSessionManager(self.data)
-        self.runs = ChatRunManager()
-        self.runs.bind_persistence(self.sessions)
+        self.runs = ChatRunManager(persistence=self.sessions)
         self.temporary = TemporaryFileManager(self.data)
         self.processes = ProcessManager(temporary_files=self.temporary)
         self.received: list[dict[str, Any]] = []

@@ -337,7 +337,7 @@ async def test_same_session_queued_while_different_sessions_run_in_parallel(
 
 
 def _make_state(runtime: Any) -> Any:
-    chat_runs = ChatRunManager()
+    chat_runs = ChatRunManager(persistence=runtime.chat_sessions)
     runtime.chat_runs = chat_runs
     return type(
         "IntegrationState",

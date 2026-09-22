@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Collection, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +27,7 @@ from core.providers.accounts import (
     split_connection_id,
 )
 from core.runs import ChatRunManager, RunKind
+from core.runtime.runtime import Runtime
 from core.sessions.format import write_bootstrap_marker
 from core.tools import FileReadState, ToolRegistry
 from core.utils.errors import ConfigError
@@ -327,7 +329,7 @@ class StubRuntime:
     @property
     def chat_run_manager(self) -> ChatRunManager:
         if self.chat_runs is None:
-            self.chat_runs = ChatRunManager()
+            self.chat_runs = ChatRunManager(persistence=self.chat_sessions)
         return self.chat_runs
 
     def skills_for(self, _project_id: str | None = None, _agent_id: str | None = None) -> Any:
@@ -462,6 +464,26 @@ class StubRuntime:
 
         return CredentialResolver()
 
+    def _ensure_started(self) -> None:
+        pass
+
+    async def apply_settings_change(
+        self,
+        previous: Mapping[str, Any],
+        current: Mapping[str, Any],
+        *,
+        refresh_sections: Collection[str] = (),
+    ) -> bool:
+        return await Runtime.apply_settings_change(
+            cast(Runtime, self), previous, current, refresh_sections=refresh_sections
+        )
+
+    def reload_keep_awake(self) -> None:
+        pass
+
+    def reload_timezone(self) -> None:
+        pass
+
     def reload_skills(self) -> None:
         self.skills = ReloadableStubRuntimeSkills(self)
 
@@ -488,7 +510,7 @@ def make_state(
     compaction_service: Any | None = None,
 ) -> SimpleNamespace:
     runtime: Any = StubRuntime(tmp_path, adapter)
-    chat_runs = ChatRunManager()
+    chat_runs = ChatRunManager(persistence=runtime.chat_sessions)
     runtime.chat_runs = chat_runs
     chat_loop = build_chat_loop(runtime, compaction_service=compaction_service)
     streaming_chat_loop = build_chat_loop(

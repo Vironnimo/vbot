@@ -443,7 +443,7 @@ class IntegrationRuntime:
     @property
     def chat_run_manager(self) -> ChatRunManager:
         if self.chat_runs is None:
-            self.chat_runs = ChatRunManager()
+            self.chat_runs = ChatRunManager(persistence=self.chat_sessions)
         return self.chat_runs
 
     def skills_for(

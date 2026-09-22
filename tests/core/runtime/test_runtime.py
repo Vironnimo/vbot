@@ -108,6 +108,37 @@ def test_safe_startup_modes_do_not_load_extensions_or_start_producers(
         runtime.stop()
 
 
+@pytest.mark.asyncio
+async def test_runtime_run_persistence_does_not_depend_on_chat_loop_construction(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Consumers may be replaced without changing the shared manager's storage.
+    monkeypatch.setattr("core.runtime._bootstrap.ChatLoop", Mock())
+    runtime = Runtime(config, safe_startup_mode="test")
+    runtime.start()
+    try:
+        session = runtime.chat_sessions.create("main")
+
+        async def execute(run: Run) -> ChatMessage:
+            answer = ChatMessage.assistant(model="test", content="persisted")
+            await session.for_run(run.id).append_async(answer)
+            return answer
+
+        run = await runtime.chat_run_manager.start(session.address, execute)
+        await run.wait()
+
+        assert run.events[-1].payload["history_persisted"] is True
+        result = session.load_run_result(run_id=run.id)
+        assert result is not None
+        assert result.assistant is not None
+        assert result.assistant.content == "persisted"
+        summary = session.find_run_summary(run_id=run.id)
+        assert summary is not None
+        assert summary.status == "completed"
+    finally:
+        await runtime.aclose()
+
+
 def _declared_hidden_session_tools(runtime: Runtime) -> set[str]:
     registry = runtime.extensions
     assert registry is not None

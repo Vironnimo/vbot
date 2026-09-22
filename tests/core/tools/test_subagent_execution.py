@@ -288,9 +288,7 @@ async def test_make_subagent_executor_inherits_live_run_loop_wiring() -> None:
     resolver = object()
     compaction_service = object()
     parent_loop = build_chat_loop(
-        cast(
-            Any, SimpleNamespace(chat_run_manager=SimpleNamespace(bind_persistence=lambda _: None))
-        ),
+        SimpleNamespace(),
         streaming=True,
         attachment_resolver=cast(Any, resolver),
         compaction_service=cast(Any, compaction_service),

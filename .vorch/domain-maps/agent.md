@@ -66,6 +66,6 @@ Manual search permission consolidation is owned by `scripts/converters/search_fi
 ## Constraints & Gotchas
 
 - Deletion replaces an existing same-ID archive. Seeding never overwrites existing workspace files.
-- Server guards refuse deleting the last Agent, one with active/queued Runs (`agent_busy`), or one referenced by Channels/Cron (`agent_in_use`); deletion holds both the reference lock and admission guard across validation and archive. Core `AgentStore.delete()` stays a pure filesystem archive operation.
+- Server guards refuse deleting the last Agent, one with active/queued Runs (`agent_busy`), or one referenced by Channels/Cron (`agent_in_use`); deletion holds both the reference lock and admission guard across validation and archive. Core `AgentStore.delete()` owns filesystem and live Session archiving with filesystem compensation on database failure; it does not own those product-level guards.
 - Rename holds reference lock plus admission guards for both ids, refuses open Sub-Agent relations/collisions/invalid ids, coordinates live references (Channels, non-terminal Cron, delegation entries, functional parent links), keeps terminal history/fork provenance/logs historical, and compensates completed changes on failure.
 - Roster order is the selection fallback for accessors without valid saved selection - it never changes current selections, Sessions, Rooting, or Run configuration; Config Agents come from Team scan order and are not in this document.
