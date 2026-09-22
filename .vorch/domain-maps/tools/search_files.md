@@ -109,7 +109,8 @@ the outcome to the native engine.
 duplicate field/flag values must agree, and option-value or post-`--` payloads
 retain their literal meaning. These page controls never reach the native engine.
 Logical matches or path/count rows define pages; context does not
-consume match slots. `next_offset` and a continuation instruction appear when
+consume match slots. Trailing context stops before a match that falls on the
+next page, so a page never shows context around a hidden match. `next_offset` and a continuation instruction appear when
 another result was observed. Continuation repeats a live query; filesystem edits
 can change page boundaries. Long lines contain marked excerpts around the match;
 context omission is explicit and never prevents continuation progress.

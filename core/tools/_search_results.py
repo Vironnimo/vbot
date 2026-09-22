@@ -194,6 +194,10 @@ def render_events(
                                 selected_until = (
                                     number + raw.count(b"\n") - int(raw.endswith(b"\n")) + after
                                 )
+                            elif page.more:
+                                # This match belongs to the next page; context past it
+                                # would read as unmatched lines around a hidden match.
+                                selected_until = min(selected_until, number - 1)
                     previous.append((number, text))
                 else:
                     if number <= selected_until and number not in emitted:
