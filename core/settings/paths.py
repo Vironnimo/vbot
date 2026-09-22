@@ -9,7 +9,7 @@ from copy import deepcopy
 from difflib import get_close_matches
 from typing import Any
 
-from core.model_tasks import SUPPORTED_TASK_TYPES, task_model_targets_equal
+from core.model_tasks.constants import SUPPORTED_TASK_TYPES
 from core.settings._path_definitions import (
     _DEFINITIONS,
     DEFAULT_ATTACHMENT_MAX_SIZE_BYTES,
@@ -391,6 +391,8 @@ def _prepare_structured_patch(
     operations: list[SettingsPatchOperation],
 ) -> None:
     """Seed discriminator-owned objects before applying independent leaf edits."""
+
+    from core.model_tasks.model_tasks import task_model_targets_equal
 
     for operation in operations:
         path = operation.resolved.path.values

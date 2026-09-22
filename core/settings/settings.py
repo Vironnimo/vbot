@@ -11,11 +11,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 from tzlocal import get_localzone_name
 
 from core.fetch_config import parse_web_fetch_settings
-from core.model_tasks import SUPPORTED_TASK_TYPES, TASK_TEXT_EMBEDDING
 from core.model_tasks.constants import (
+    SUPPORTED_TASK_TYPES,
     SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS,
     SUPPORTED_TRANSCRIPTION_AUDIO_PROFILES,
     SUPPORTED_TRANSCRIPTION_AUDIO_SAMPLE_RATES,
+    TASK_TEXT_EMBEDDING,
     TRANSCRIPTION_AUDIO_PRESETS,
 )
 from core.model_tasks.options import (
