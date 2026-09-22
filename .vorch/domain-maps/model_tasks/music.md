@@ -18,6 +18,8 @@ In-band error payloads fail generation even after valid audio fragments have arr
 
 Explicit non-`stop` finish outcomes also reject partial audio, as do native `network_error` / `server_error` outcomes concealed by a normalized `stop`. Repeated `stop` accounting frames are harmless; the client still requires `[DONE]` and valid non-empty Base64 audio. Synthetic regression coverage verifies local handling, not live Music compatibility. OpenRouter's [streaming reference](https://openrouter.ai/docs/api_reference/streaming) and [API overview](https://openrouter.ai/docs/api_reference/overview) describe the terminal fields (read 2026-09-22).
 
+Non-null `audio.data` values must be strings; malformed fragments cannot be dropped to turn earlier partial audio into a successful artifact. Base64 validation applies to the complete concatenation, preserving fragment boundaries inside encoded groups.
+
 ## Tests
 
 Music-vs-generic-Audio classification lives in `tests/core/providers/test_openrouter_catalog.py`; payload and streamed Base64 assembly live in `tests/core/model_tasks/test_generated_media_providers.py`; terminal outcomes and response cleanup live in `tests/core/model_tasks/test_music_stream_outcomes.py`; Tool profiles and caller-owned paths live in `tests/core/tools/test_media_generation.py`.

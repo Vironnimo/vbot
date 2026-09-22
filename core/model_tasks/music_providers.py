@@ -175,6 +175,8 @@ def _collect_music_delta(
         if not isinstance(audio, Mapping):
             continue
         data = audio.get("data")
+        if data is not None and not isinstance(data, str):
+            raise ProviderError("OpenRouter did not return generated music audio.", retryable=False)
         if isinstance(data, str) and data:
             audio_parts.append(data)
         transcript = audio.get("transcript")
