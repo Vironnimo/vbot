@@ -471,6 +471,35 @@ def test_gemini_usage_preserves_only_reported_valid_counters(
     )
 
 
+@pytest.mark.parametrize("finish_reason", [[], {}, ["STOP"], {"reason": "STOP"}])
+def test_gemini_malformed_finish_keeps_tool_attempt_and_unknown_outcome(
+    adapter: OpenCodeZenAdapter, finish_reason: Any
+) -> None:
+    from core.chat.streaming import StreamingAccumulator
+
+    chunk = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [{"functionCall": {"id": "call_1", "name": "read", "args": {}}}]
+                },
+                "finishReason": finish_reason,
+            }
+        ]
+    }
+    normalized = adapter.normalize_response(chunk, model_id="gemini-3.5-flash")
+    assert normalized["terminal_outcome"] == "unknown"
+    assert normalized["tool_calls"] == [{"id": "call_1", "name": "read", "arguments": {}}]
+    deltas, _, finished = _normalize_gemini_stream_chunk(chunk, [], has_tool_calls=False)
+    accumulator = StreamingAccumulator()
+    for delta in deltas:
+        accumulator.add_delta(delta)
+    fields = accumulator.finalize_assistant_fields()
+    assert finished
+    assert fields.finish_reason == "unknown"
+    assert fields.tool_calls == normalized["tool_calls"]
+
+
 def test_gemini_response_preserves_malformed_tool_call_as_rejection(
     adapter: OpenCodeZenAdapter,
 ) -> None:

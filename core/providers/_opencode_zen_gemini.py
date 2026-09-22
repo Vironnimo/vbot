@@ -272,6 +272,8 @@ def _gemini_finish_reason(
 ) -> TerminalOutcome:
     if isinstance(prompt_feedback, Mapping) and prompt_feedback.get("blockReason"):
         return TERMINAL_OUTCOME_CONTENT_FILTERED
+    if not isinstance(value, str):
+        return TERMINAL_OUTCOME_UNKNOWN
     if value == "STOP":
         return TERMINAL_OUTCOME_TOOL_CALLS if has_tool_calls else TERMINAL_OUTCOME_STOP
     if value == "MAX_TOKENS":
