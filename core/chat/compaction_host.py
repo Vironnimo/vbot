@@ -252,6 +252,7 @@ class ChatCompactionHost:
                     model_id,
                 ),
                 wire_media_types=_resolve_wire_media_support(adapter, model_id),
+                max_image_bytes=self._requests._image_size_limit(adapter, model_id),
                 agent_body=runtime_agent_body(agent),
                 project_context=prompt_context,
                 working_project_context=working_project_context,
@@ -518,8 +519,7 @@ class ChatCompactionHost:
                 continuation_reminder,
             )
         if live_request_messages is not None:
-            projected_messages = await self.run_transform(
-                _restore_in_run_tool_result_content,
+            projected_messages = await _restore_in_run_tool_result_content(
                 _restore_in_run_assistant_reasoning(
                     projected_messages,
                     live_request_messages,
@@ -603,8 +603,7 @@ class ChatCompactionHost:
                 context.session_snapshot.active_messages
             ),
         )
-        refreshed_messages = await self.run_transform(
-            _restore_in_run_tool_result_content,
+        refreshed_messages = await _restore_in_run_tool_result_content(
             _restore_in_run_assistant_reasoning(
                 refreshed_state.messages,
                 live_request_messages,

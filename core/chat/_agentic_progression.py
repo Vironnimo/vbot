@@ -768,6 +768,7 @@ class AgenticProgression:
                         media_outputs,
                         target.input_modalities,
                         target.wire_media_types,
+                        max_image_bytes=target.max_image_bytes,
                     )
                     if binding is not None:
                         if extension_registry is None:

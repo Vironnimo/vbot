@@ -250,7 +250,8 @@ def test_compaction_build_request_messages_with_checkpoint_uses_summary_and_tail
     assert all(message["role"] != "compaction_checkpoint" for message in request_messages)
 
 
-def test_compaction_does_not_restore_rich_content_for_aged_tool_result() -> None:
+@pytest.mark.asyncio
+async def test_compaction_does_not_restore_rich_content_for_aged_tool_result() -> None:
     call_id = "call-image"
     aged_content = json.dumps(
         {
@@ -270,7 +271,7 @@ def test_compaction_does_not_restore_rich_content_for_aged_tool_result() -> None
         }
     ]
 
-    restored = _restore_in_run_tool_result_content(rebuilt, live)
+    restored = await _restore_in_run_tool_result_content(rebuilt, live)
 
     assert TOOL_RESULT_CONTENT_BLOCKS_FIELD not in restored[0]
 

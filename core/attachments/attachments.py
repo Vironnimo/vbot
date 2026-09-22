@@ -37,6 +37,8 @@ _MIME_ALLOWLIST = frozenset(
         "image/bmp",
         "image/tiff",
         "image/avif",
+        "image/heic",
+        "image/heif",
         "application/pdf",
         _OOXML_WILDCARD,
         "application/msword",
@@ -52,6 +54,8 @@ _CANONICAL_EXTENSION_BY_MEDIA_TYPE = {
     "image/bmp": ".bmp",
     "image/tiff": ".tiff",
     "image/avif": ".avif",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
     "audio/ogg": ".ogg",
     "audio/mpeg": ".mp3",
     "audio/wav": ".wav",
@@ -312,6 +316,13 @@ def _sniff_mime(data: bytes, filename: str) -> str:
         brands = [data[8:12], *[data[i : i + 4] for i in range(16, box_end - 3, 4)]]
         if any(brand in {b"avif", b"avis"} for brand in brands):
             return "image/avif"
+        if any(
+            brand in {b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"hevm", b"hevs"}
+            for brand in brands
+        ):
+            return "image/heic"
+        if any(brand in {b"mif1", b"msf1"} for brand in brands):
+            return "image/heif"
     if data.startswith(b"\xff\xd8\xff"):
         return "image/jpeg"
     if data.startswith(b"\x89PNG"):

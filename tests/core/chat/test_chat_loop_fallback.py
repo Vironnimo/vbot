@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
+import random
 from pathlib import Path
 from typing import Any
 
 import pytest
+from PIL import Image
 
 from core.attachments import AttachmentStore
 from core.chat._request_builder import RequestBuilder
+from core.chat._request_history import _restore_in_run_tool_result_content
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.errors import (
@@ -46,14 +50,69 @@ JsonObject = dict[str, Any]
 
 
 @pytest.mark.asyncio
+async def test_fallback_prepares_multiple_retained_images_in_original_order():
+    colors = [(255, 0, 0), (0, 0, 255)]
+    content = []
+    for index, color in enumerate(colors):
+        stream = io.BytesIO()
+        Image.new("RGB", (16, 12), color).save(stream, format="PNG")
+        content.extend(
+            [
+                {
+                    "type": "media",
+                    "media_type": "image/png",
+                    "base64": base64.b64encode(stream.getvalue()).decode("ascii"),
+                },
+                {"type": "text", "text": f"[Path: /missing/original-{index}.png]"},
+            ]
+        )
+    live = [
+        {
+            "role": "tool",
+            "tool_call_id": "images",
+            "content": "loaded",
+            TOOL_RESULT_CONTENT_BLOCKS_FIELD: content,
+        }
+    ]
+    rebuilt = [{"role": "tool", "tool_call_id": "images", "content": "loaded"}]
+    restored = await _restore_in_run_tool_result_content(
+        rebuilt,
+        live,
+        input_modalities=frozenset({"image"}),
+        wire_media_types=frozenset({"image/jpeg"}),
+        max_image_bytes=512,
+    )
+    blocks = restored[0][TOOL_RESULT_CONTENT_BLOCKS_FIELD]
+    assert len(blocks) == 6
+    for index, color in enumerate(colors):
+        with Image.open(io.BytesIO(base64.b64decode(blocks[index * 3]["base64"]))) as image:
+            assert all(abs(a - b) <= 2 for a, b in zip(image.getpixel((0, 0)), color, strict=True))
+        assert "lossy compression" in blocks[index * 3 + 1]["text"]
+        assert f"original-{index}.png" in blocks[index * 3 + 2]["text"]
+    assert len(content) == 4
+    assert content[0]["media_type"] == "image/png"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "vision,wire_type", [(True, "image/png"), (True, "image/jpeg"), (False, "image/png")]
+    "vision,wire_type,byte_limit",
+    [
+        (True, "image/png", None),
+        (True, "image/jpeg", None),
+        (False, "image/png", None),
+        (True, "image/png", 512),
+        (True, "image/jpeg", 512),
+    ],
 )
 async def test_fallback_preserves_local_read_pixels_without_disk_copies(
-    tmp_path: Path, vision: bool, wire_type: str
+    tmp_path: Path, vision: bool, wire_type: str, byte_limit: int | None
 ) -> None:
     source = tmp_path / "original.png"
-    pixels = b"\x89PNG\r\n\x1a\noriginal"
+    stream = io.BytesIO()
+    Image.frombytes("RGB", (128, 64), random.Random(4).randbytes(128 * 64 * 3)).save(
+        stream, format="PNG"
+    )
+    pixels = stream.getvalue()
     source.write_bytes(pixels)
 
     class DeletingAdapter(StubAdapter):
@@ -74,7 +133,12 @@ async def test_fallback_preserves_local_read_pixels_without_disk_copies(
         ],
         wire_media_types=frozenset({"image/png"}),
     )
-    fallback = StubAdapter(
+
+    class LimitedAdapter(StubAdapter):
+        def image_size_limit(self, model_id: str) -> int | None:
+            return byte_limit
+
+    fallback = LimitedAdapter(
         [{"content": "done", "tool_calls": None}],
         wire_media_types=frozenset({wire_type}),
     )
@@ -114,8 +178,17 @@ async def test_fallback_preserves_local_read_pixels_without_disk_copies(
         for part in message.get(TOOL_RESULT_CONTENT_BLOCKS_FIELD, [])
     ]
     native = [part for part in parts if part.get("type") == "media"]
-    if vision and wire_type == "image/png":
-        assert [base64.b64decode(part["base64"]) for part in native] == [pixels]
+    if vision:
+        assert len(native) == 1
+        assert native[0]["media_type"] == wire_type
+        delivered = base64.b64decode(native[0]["base64"])
+        if byte_limit is not None:
+            assert len(delivered) <= byte_limit
+            assert any("byte limit" in part.get("text", "") for part in parts)
+        elif wire_type == "image/png":
+            assert delivered == pixels
+        with Image.open(io.BytesIO(delivered)) as image:
+            image.load()
     else:
         assert native == []
     assert any(source.as_posix() in part.get("text", "") for part in parts)
