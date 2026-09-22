@@ -283,6 +283,38 @@ def test_desktop_main_logs_normal_shutdown(
 # -- Probe classification ----------------------------------------------------
 
 
+@pytest.mark.parametrize("root_fails", [False, True])
+def test_probe_reuses_one_unproxied_client_and_closes_it(monkeypatch, root_fails):
+    clients: list[httpx.Client] = []
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if root_fails:
+            raise httpx.ConnectError("test transport unavailable", request=request)
+        return httpx.Response(200, text="test WebUI")
+
+    class ProbeClient(httpx.Client):
+        def __init__(self, **kwargs):
+            assert kwargs["trust_env"] is False
+            super().__init__(transport=httpx.MockTransport(respond), **kwargs)
+            clients.append(self)
+
+    monkeypatch.setattr(desktop_main.httpx, "Client", ProbeClient)
+    target = DesktopTarget("vbot.test", 8420, "http://vbot.test:8420/")
+    result = desktop_main.probe_target(target, timeout=0.75)
+
+    assert result.status == (
+        desktop_main.PROBE_WEBUI_UNAVAILABLE if root_fails else desktop_main.PROBE_WEBUI_AVAILABLE
+    )
+    assert len(clients) == 1
+    assert clients[0].is_closed
+    assert [request.url.path for request in requests] == ["/health", "/"]
+    assert all(request.extensions["timeout"]["connect"] == 0.75 for request in requests)
+
+
 def test_probe_target_classifies_available_webui() -> None:
     target = DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
 
@@ -940,6 +972,8 @@ def test_launch_with_disabled_voice_never_probes_wakeword_dependencies(
         raise AssertionError("Voice dependencies must stay lazy while Voice is disabled")
 
     monkeypatch.setattr(desktop_main, "_real_wakeword_available", fail_if_probed)
+    monkeypatch.setitem(sys.modules, "desktop.wakeword.worker", None)
+    monkeypatch.setitem(sys.modules, "desktop.wakeword._audio_capture", None)
 
     desktop_main.launch_desktop(
         [],

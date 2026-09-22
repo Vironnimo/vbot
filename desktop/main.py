@@ -274,17 +274,24 @@ def build_target_url(host: str, port: int) -> str:
 def probe_target(
     target: DesktopTarget,
     *,
-    get: HttpGet = httpx.get,
+    get: HttpGet | None = None,
     timeout: float = PROBE_TIMEOUT_SECONDS,
 ) -> DesktopProbeResult:
-    """Classify the configured server target before Desktop window creation."""
+    """Classify the target using one client and connection for both requests."""
 
     if target.configuration_error is not None:
         return DesktopProbeResult(status=PROBE_INVALID_TARGET, target=target)
 
+    if get is not None:
+        return _probe_target(target, lambda url: get(url, timeout=timeout, trust_env=False))
+    with httpx.Client(timeout=timeout, trust_env=False) as client:
+        return _probe_target(target, client.get)
+
+
+def _probe_target(target: DesktopTarget, get: Callable[[str], HttpResponse]) -> DesktopProbeResult:
     health_url = f"{target.url.rstrip('/')}/health"
     try:
-        health_response = get(health_url, timeout=timeout, trust_env=False)
+        health_response = get(health_url)
     except httpx.RequestError:
         return DesktopProbeResult(status=PROBE_SERVER_UNREACHABLE, target=target)
 
@@ -292,7 +299,7 @@ def probe_target(
         return DesktopProbeResult(status=PROBE_NOT_VBOT_SERVER, target=target)
 
     try:
-        webui_response = get(target.url, timeout=timeout, trust_env=False)
+        webui_response = get(target.url)
     except httpx.RequestError:
         return DesktopProbeResult(status=PROBE_WEBUI_UNAVAILABLE, target=target)
 
@@ -628,15 +635,16 @@ def _create_wakeword_bridge(
     mode so the WebUI can query capabilities and the concrete reason.
     """
 
+    from desktop.wakeword._worker_support import check_speech_to_text_readiness
     from desktop.wakeword.bridge import DesktopBridge
-    from desktop.wakeword.worker import (
-        MockWakewordWorker,
-        UnavailableWakewordWorker,
-        WakewordWorker,
-        check_speech_to_text_readiness,
-    )
 
     def worker_factory(bridge: DesktopBridge) -> Any:
+        from desktop.wakeword.worker import (
+            MockWakewordWorker,
+            UnavailableWakewordWorker,
+            WakewordWorker,
+        )
+
         if bool(args.mock_wakeword):
             return MockWakewordWorker(bridge=bridge)
         # The TFLite detector and sounddevice are optional Desktop extras.

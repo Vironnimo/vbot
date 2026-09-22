@@ -12,7 +12,6 @@ from pathlib import Path
 import psutil  # type: ignore[import-untyped]
 
 from cli.application import operations, processes
-from cli.application.operations import child_environment
 from cli.application.state import (
     ApplicationError,
     Installation,
@@ -24,7 +23,6 @@ from cli.application.state import (
 )
 from cli.application.tray import TrayState, run_tray
 from core.utils.logging import LogManager
-from core.utils.processes import subprocess_creation_flags
 
 _LOGGER = logging.getLogger("vbot.application.host")
 
@@ -87,36 +85,9 @@ class ApplicationFacade:
         self._clear_status_error()
 
     def open_desktop(self, *, host: str | None = None, port: int | None = None) -> None:
-        from cli.application.state import ensure_not_removing
+        from cli.application.desktop import open_desktop
 
-        # Serialize launch with the uninstaller's removal reservation.
-        with exclusive(self._install.root, "dispatch", timeout=5):
-            ensure_not_removing(self._install.root)
-            if self._install.install_shape not in {"server-desktop", "desktop-client"}:
-                raise ApplicationError("This installation does not include the Desktop app")
-            arguments = [str(self._install.interpreter(role="Desktop")), "-m", "desktop.main"]
-            if host is not None or port is not None:
-                if host is not None:
-                    arguments.extend(("--host", host))
-                if port is not None:
-                    arguments.extend(("--port", str(port)))
-            elif self._install.owns_server:
-                assert (
-                    self._install.server_host is not None and self._install.server_port is not None
-                )
-                arguments.extend(
-                    ("--host", self._install.server_host, "--port", str(self._install.server_port))
-                )
-            subprocess.Popen(
-                arguments,
-                cwd=self._install.version() / "app",
-                env=child_environment(self._install),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=subprocess_creation_flags(new_process_group=True, breakaway=True),
-                start_new_session=os.name != "nt",
-            )
+        open_desktop(self._install, host=host, port=port)
 
     def open_browser(self) -> None:
         self._require_server()
