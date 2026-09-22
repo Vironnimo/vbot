@@ -309,3 +309,91 @@ async def test_rate_limit_keeps_retry_hint(tmp_path: Path) -> None:
         assert "secret" not in str(error.value)
     finally:
         await adapter.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("platform", ["slack", "mattermost"])
+@pytest.mark.parametrize("exhausted", [False, True])
+async def test_chunk_retry_never_replays_delivered_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str, exhausted: bool
+) -> None:
+    adapter = make_adapter(tmp_path, platform)
+    monkeypatch.setattr("core.utils.retry.asyncio.sleep", AsyncMock())
+    delivered: list[str] = []
+    attempts: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("conversations.info"):
+            return httpx.Response(200, json={"ok": True, "channel": {"is_im": True}})
+        if request.url.path.endswith("/channels/C1"):
+            return httpx.Response(200, json={"type": "D"})
+        payload = json.loads(request.content)
+        chunk = payload["text" if platform == "slack" else "message"]
+        attempts.append(chunk)
+        if chunk == "tail" and (exhausted or attempts.count("tail") == 1):
+            return httpx.Response(429, headers={"retry-after": "0"})
+        delivered.append(chunk)
+        return httpx.Response(200, json={"ok": True})
+
+    adapter._http_client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    try:
+        if exhausted:
+            with pytest.raises(ChannelError) as error:
+                await adapter.send_text("C1", "x" * 3500 + "tail")
+            assert not error.value.retryable
+            assert delivered == ["x" * 3500]
+            assert attempts.count("tail") == 4
+        else:
+            await adapter.send_text("C1", "x" * 3500 + "tail")
+            assert delivered == ["x" * 3500, "tail"]
+            assert attempts.count("tail") == 2
+    finally:
+        await adapter.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["upload", "complete"])
+@pytest.mark.parametrize("status", [429, 500])
+async def test_slack_file_failure_preserves_prior_delivery_and_upload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str, status: int
+) -> None:
+    adapter = make_adapter(tmp_path, "slack")
+    monkeypatch.setattr("core.utils.retry.asyncio.sleep", AsyncMock())
+    calls: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        method = request.url.path.rsplit("/", 1)[-1]
+        calls.append(method)
+        if method == "conversations.info":
+            return httpx.Response(200, json={"ok": True, "channel": {"is_im": True}})
+        if method == "files.getUploadURLExternal":
+            return httpx.Response(
+                200,
+                json={"ok": True, "upload_url": "https://files.slack.com/upload", "file_id": "F1"},
+            )
+        failing_method = "upload" if stage == "upload" else "files.completeUploadExternal"
+        if method == failing_method and calls.count(method) == 1:
+            return httpx.Response(status)
+        return httpx.Response(200, json={"ok": True})
+
+    adapter._http_client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    try:
+        delivery = adapter.send("caption", "C1", files=[FileData("a.txt", "text/plain", b"a")])
+        if status == 500:
+            with pytest.raises(ChannelError) as error:
+                await delivery
+            assert not error.value.retryable
+        else:
+            await delivery
+        assert calls.count("chat.postMessage") == 1
+        assert calls.count("files.getUploadURLExternal") == 1
+        assert calls.count("upload") == (2 if stage == "upload" and status == 429 else 1)
+        assert calls.count("files.completeUploadExternal") == (
+            0
+            if stage == "upload" and status == 500
+            else 2
+            if stage == "complete" and status == 429
+            else 1
+        )
+    finally:
+        await adapter.stop()
