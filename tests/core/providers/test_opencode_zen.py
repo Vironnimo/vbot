@@ -14,6 +14,7 @@ import respx
 
 import core.providers.opencode_zen as zen_module
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers._opencode_zen_gemini import _normalize_gemini_stream_chunk
 from core.providers.errors import (
     CatalogEntrySkipped,
     NetworkError,
@@ -414,6 +415,60 @@ def test_gemini_response_normalizes_signature_tools_cache_usage_and_outcome(
         "reasoning_tokens": 12,
         "cache_read_tokens": 20,
     }
+
+
+@pytest.mark.parametrize(
+    ("raw_usage", "expected"),
+    [
+        ({}, None),
+        ({"promptTokenCount": 12}, {"input_tokens": 12}),
+        ({"candidatesTokenCount": 7}, {"output_tokens": 7}),
+        (
+            {"promptTokenCount": True, "candidatesTokenCount": 7},
+            {"output_tokens": 7},
+        ),
+        (
+            {"promptTokenCount": 12, "candidatesTokenCount": -1},
+            {"input_tokens": 12},
+        ),
+        ({"promptTokenCount": "12", "candidatesTokenCount": None}, None),
+        (
+            {"candidatesTokenCount": 7, "thoughtsTokenCount": 3},
+            {"output_tokens": 10, "reasoning_tokens": 3},
+        ),
+        ({"thoughtsTokenCount": 3, "cachedContentTokenCount": 4}, None),
+        (
+            {
+                "promptTokenCount": 0,
+                "candidatesTokenCount": 0,
+                "thoughtsTokenCount": 0,
+                "cachedContentTokenCount": 0,
+            },
+            {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "reasoning_tokens": 0,
+                "cache_read_tokens": 0,
+            },
+        ),
+        (
+            {"promptTokenCount": 12, "candidatesTokenCount": 7, "thoughtsTokenCount": False},
+            {"input_tokens": 12, "output_tokens": 7},
+        ),
+    ],
+)
+def test_gemini_usage_preserves_only_reported_valid_counters(
+    adapter: OpenCodeZenAdapter,
+    raw_usage: dict[str, Any],
+    expected: dict[str, int] | None,
+) -> None:
+    chunk = {"candidates": [{"finishReason": "STOP"}], "usageMetadata": raw_usage}
+    normalized = adapter.normalize_response(chunk, model_id="gemini-3.5-flash")
+    assert normalized.get("usage") == expected
+    deltas, _, _ = _normalize_gemini_stream_chunk(chunk, [], has_tool_calls=False)
+    assert [delta for delta in deltas if delta["type"] == "usage"] == (
+        [{"type": "usage", **expected}] if expected is not None else []
+    )
 
 
 def test_gemini_response_preserves_malformed_tool_call_as_rejection(
