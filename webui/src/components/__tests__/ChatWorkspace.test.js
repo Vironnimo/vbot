@@ -4,6 +4,7 @@ import {
   describe,
   expect,
   it,
+  applyConnectionSnapshotMock,
   rpcMock,
   createChatRpcMock,
   createAgent,
@@ -396,6 +397,81 @@ describe('ChatWorkspace', () => {
     expect(testChatStateRefs[1].agents[0].current_session_id).toBe(
       'created-alpha',
     );
+  });
+
+  it('starts a newly opened Chat area from the current Run state, not stale App buffers', async () => {
+    const agents = [
+      createAgent(),
+      createAgent({ id: 'beta', name: 'Beta', current_session_id: 'b-1' }),
+      createAgent({ id: 'gamma', name: 'Gamma', current_session_id: 'g-1' }),
+    ];
+    rpcMock.mockImplementation(createChatRpcMock({ agents }));
+    applyConnectionSnapshotMock.mockImplementation(function (snapshot) {
+      return this.applyConnectionSnapshot(snapshot);
+    });
+    const lifecycle = (type, runId, agentId, sessionId) => ({
+      type,
+      payload: {
+        run_id: runId,
+        agent_id: agentId,
+        session_id: sessionId,
+        run_event_type: type,
+        run_event_sequence: 9,
+        run_event_timestamp: '2026-09-22T10:00:00+00:00',
+        ...(type === 'run_completed' ? { status: 'completed' } : {}),
+      },
+    });
+    const betaRun = { run_id: 'R1', agent_id: 'beta', session_id: 'b-1' };
+    const props = reactiveProps({
+      // App connected while Beta's Run was active.
+      connectionSnapshot: {
+        type: 'connection_ready',
+        replay_status: 'fresh',
+        active_runs: [betaRun],
+        queues: [],
+      },
+      activeRuns: [betaRun],
+      runServerEvents: [],
+    });
+    harness.mount(
+      {
+        target: document.body,
+        props: {
+          sharedAgents: agents,
+          sharedSelectedAgentId: 'alpha',
+          get connectionSnapshot() {
+            return props.connectionSnapshot;
+          },
+          get activeRuns() {
+            return props.activeRuns;
+          },
+          get runServerEvents() {
+            return props.runServerEvents;
+          },
+        },
+      },
+      ChatWorkspace,
+    );
+    const tabLabels = (index) =>
+      Array.from(pane(index).querySelectorAll('.chat-header .agent-tab')).map(
+        (tab) => tab.getAttribute('aria-label'),
+      );
+    await waitForCondition(() => tabLabels(0).includes('Beta: Running'), 100);
+
+    // Beta's Run ends; later traffic pushes its terminal event out of App's
+    // bounded window, and Gamma's Run starts outside the retained window.
+    props.runServerEvents = [lifecycle('run_completed', 'R1', 'beta', 'b-1')];
+    props.activeRuns = [];
+    await waitForCondition(() => !tabLabels(0).includes('Beta: Running'), 100);
+    props.runServerEvents = [];
+    props.activeRuns = [
+      { run_id: 'R2', agent_id: 'gamma', session_id: 'g-1', status: 'running' },
+    ];
+
+    action(0, 'Split view');
+    await waitForCondition(() => tabLabels(1).includes('Gamma: Running'), 100);
+
+    expect(tabLabels(1)).not.toContain('Beta: Running');
   });
 
   describe('deleting the displayed current Session', () => {
