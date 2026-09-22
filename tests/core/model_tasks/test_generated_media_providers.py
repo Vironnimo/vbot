@@ -12,7 +12,7 @@ import respx
 from core.model_tasks.image_types import ImageInput
 from core.model_tasks.music_providers import ProviderMusicClient, _music_payload
 from core.model_tasks.video_providers import ProviderVideoClient, _video_payload
-from core.providers.errors import ProviderError
+from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 
@@ -91,6 +91,22 @@ async def test_video_client_submits_polls_and_downloads_same_origin_content() ->
     assert result.data == b"video-bytes"
     assert result.media_type == "video/mp4"
     assert result.job_id == "job-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("job_id", [None, "", 123, []])
+@respx.mock
+async def test_video_create_without_usable_job_id_preserves_unknown_outcome(job_id: object) -> None:
+    create = respx.post("https://openrouter.ai/api/v1/videos").respond(
+        202, json={"id": job_id, "status": "pending"}
+    )
+
+    with pytest.raises(ProviderOutcomeUnknownError) as caught:
+        await _openrouter_video_client().generate("A river at dawn", options={})
+
+    assert caught.value.operation_key
+    assert caught.value.retryable is False
+    assert create.call_count == 1
 
 
 def test_music_payload_uses_audio_modalities_and_reference_images() -> None:
