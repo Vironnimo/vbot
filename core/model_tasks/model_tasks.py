@@ -487,17 +487,11 @@ class TaskModelService:
     def _resolve_model(self, provider_id: str, model_id: str) -> Any | None:
         """Return the registry's ``Model`` for *(provider_id, model_id)*, or ``None``.
 
-        Returns ``None`` when the registry has no ``get`` method (test
-        double missing the seam) or when the lookup raises ``KeyError``
-        (model not in the assembled catalog). The model-aware schema builder treats
-        ``None`` as "fall back to provider-level conservative defaults".
+        Unknown Models use provider-level conservative schema defaults.
         """
 
-        get_model = getattr(self._models, "get", None)
-        if not callable(get_model):
-            return None
         try:
-            return get_model(provider_id, model_id)
+            return self._models.get(provider_id, model_id)
         except KeyError:
             return None
 
