@@ -156,6 +156,8 @@ class AgenticProgression:
         interruption_chain = context.interruption_chain
         emitted_change_stats: dict[str, object] | None = None
         tool_catalog_revision = -1
+        # Set when a final answer is followed by selected steering input.
+        awaiting_steering = False
         while True:
             run.raise_if_cancelled()
             async with self._dependencies.sessions.write_lock(session_address):
@@ -168,6 +170,14 @@ class AgenticProgression:
                     run,
                     True,
                 )
+            if awaiting_steering and not delivered:
+                # The selected input was withdrawn before delivery. Without new
+                # User input, the persisted final answer remains the Run result.
+                if self._dependencies.run_manager.pending_steering(run):
+                    continue
+                run.accepts_steering = False
+                break
+            awaiting_steering = False
             if delivered:
                 await rebuild_after_steering(context, target, self._requests)
                 assert context.request_state is not None
@@ -597,6 +607,7 @@ class AgenticProgression:
                     if terminal_error is not None:
                         raise terminal_error
                     if self._dependencies.run_manager.pending_steering(run):
+                        awaiting_steering = True
                         continue
                     # Seal admission synchronously with the last pending-input check.
                     run.accepts_steering = False

@@ -44,7 +44,7 @@ Ordinary queued User inputs advertise steering eligibility; Channel/sender-beari
 
 Before each Model request, under the Session write lock and outside Tool dispatch, Chat delivers selected Queue items in FIFO order. Each item becomes a normal User message with the current Run membership, original content/input origin, and Session image references. The append and Queue acknowledgement finish together before honoring cancellation; failed appends retain the item. The existing `user_message_persisted` event carries its `queue_item_id` for live Queue retirement. Request rebuilding uses ordinary media/Skill handling, preserves live Tool media and Continuation context, and retains the active Model and execution policy. Steering does not cancel Provider generation or a Tool batch.
 
-After a final Assistant response, a pending steer forces another iteration. Otherwise Chat synchronously closes steering admission before terminal Compaction/cleanup; later clicks fail without removing queued content. Cancel/error leaves undelivered inputs in the ordinary Queue. Tests: `test_chat_loop_steering.py`, `tests/core/runs/test_runs_queue.py`, and `tests/server/rpc/test_chat_methods_queue.py`.
+After a final Assistant response, a pending steer forces another iteration. If that input is removed before delivery, the persisted final answer remains the Run result and no further Model request is made. Otherwise Chat synchronously closes steering admission before terminal Compaction/cleanup; later clicks fail without removing queued content. Cancel/error leaves undelivered inputs in the ordinary Queue. Tests: `test_chat_loop_steering.py`, `tests/core/runs/test_runs_queue.py`, and `tests/server/rpc/test_chat_methods_queue.py`.
 
 ## Model and Connection resolution
 
