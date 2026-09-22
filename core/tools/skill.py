@@ -62,11 +62,6 @@ SKILL_RESOURCE_FILES_GUIDANCE = (
 _SKILL_NAME_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    # Anchored on purpose. A bare `\S` is one character-class atom; Grok's
-    # tool-call decoder treats that as "emit one matching character" and then
-    # the intended name, so `debugging` arrives on the wire as `tdebugging`
-    # or `cdebugging`. `^\S+$` keeps the non-whitespace rule without that prefix.
-    "pattern": r"^\S+$",
     "description": (
         "Skill to load or read. Omit to list available Skills; required when file_path is provided."
     ),
