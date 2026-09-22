@@ -808,6 +808,26 @@ def reconcile_schema(
     writing. Recovery uses this on a snapshot before replacing canonical data.
     """
     declared = declared_schema(schema_sql or SCHEMA_SQL)
+    planned = _schema_changes(connection, declared)
+    if dry_run or not planned:
+        return [change for _statement, change in planned]
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        applied = _schema_changes(connection, declared)
+        for statement, _change in applied:
+            connection.execute(statement)
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+    return [change for _statement, change in applied]
+
+
+def _schema_changes(
+    connection: sqlite3.Connection, declared: DeclaredSchema
+) -> list[tuple[str, str]]:
+    """Plan against the same database snapshot that will receive the changes."""
     applied: list[tuple[str, str]] = []
     for table_name, columns in declared.table_columns.items():
         applied.extend(
@@ -828,14 +848,7 @@ def reconcile_schema(
                 f"schema version {version} -> {SCHEMA_VERSION}",
             )
         )
-    if not applied:
-        return []
-    if dry_run:
-        return [change for _statement, change in applied]
-    connection.executescript(
-        "BEGIN IMMEDIATE;\n" + "\n".join(statement for statement, _change in applied) + "\nCOMMIT;"
-    )
-    return [change for _statement, change in applied]
+    return applied
 
 
 def _missing_column_statements(
