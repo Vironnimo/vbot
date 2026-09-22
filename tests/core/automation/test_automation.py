@@ -11,7 +11,7 @@ import pytest
 
 from core.automation import TriggerService
 from core.chat import MessageSender, ReplySurface
-from core.runs import ActiveRunError, Run
+from core.runs import ActiveRunError, ChatRunManager, Run
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
 
@@ -51,6 +51,47 @@ async def test_trigger_run_creates_new_session_and_starts_run_immediately() -> N
         project_id=None,
     )
     assert run.id == "run-one"
+
+
+@pytest.mark.parametrize("internal", [False, True])
+@pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
+async def test_new_session_trigger_releases_its_waiting_work_reservation(
+    internal: bool, outcome: str
+) -> None:
+    manager = ChatRunManager(waiting_work_limit=1)
+    run = make_run("run-one", "coder", "new-session")
+    admission_error = RuntimeError("Admission failed")
+    abort = asyncio.CancelledError()
+    starter = AsyncMock(
+        return_value=run,
+        side_effect=admission_error
+        if outcome == "error"
+        else abort
+        if outcome == "cancel"
+        else None,
+    )
+    service = TriggerService(
+        cast(Any, SimpleNamespace(start_run_in_new_session=starter)), manager, cast(Any, Mock())
+    )
+    reservation = service.reserve_waiting_work(scope="producer", scope_limit=1)
+    try:
+        if outcome == "success":
+            assert (
+                await service.trigger_run(
+                    "coder", "Work", internal=internal, waiting_work_admission=reservation
+                )
+                is run
+            )
+        else:
+            with pytest.raises(RuntimeError if outcome == "error" else asyncio.CancelledError):
+                await service.trigger_run(
+                    "coder", "Work", internal=internal, waiting_work_admission=reservation
+                )
+        assert manager.waiting_work_count() == 0
+        following = service.reserve_waiting_work(scope="producer", scope_limit=1)
+        service.release_waiting_work(following)
+    finally:
+        await manager.aclose()
 
 
 async def test_trigger_run_scopes_new_session_and_run_to_project() -> None:
