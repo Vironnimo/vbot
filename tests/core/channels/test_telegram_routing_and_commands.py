@@ -177,6 +177,7 @@ async def test_allowed_chat_ids_enforced(
 async def test_denied_group_chat_is_recorded_with_chat_title(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     adapter, _chat_sessions, trigger_mock, _bot = make_adapter(
         tmp_path,
@@ -184,6 +185,7 @@ async def test_denied_group_chat_is_recorded_with_chat_title(
         allowed_chat_ids=[12345],
     )
 
+    caplog.set_level("DEBUG", logger="vbot.channels.telegram")
     update = SimpleNamespace(
         effective_chat=SimpleNamespace(id=-10099, title="Team Chat"),
         effective_user=SimpleNamespace(id=50),
@@ -199,6 +201,8 @@ async def test_denied_group_chat_is_recorded_with_chat_title(
     assert entries[0].kind == "group"
     assert entries[0].display_name == "Team Chat"
     assert entries[0].count == 2
+    assert "-10099" not in caplog.text
+    assert "Team Chat" not in caplog.text
     await adapter.stop()
 
 

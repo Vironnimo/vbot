@@ -176,10 +176,8 @@ class ChannelConversationEngine:
                 conversation
             ):
                 _LOGGER.info(
-                    "Channel command denied for member (channel=%s chat=%s user=%s)",
+                    "Channel command denied for member (channel=%s)",
                     self._config.id,
-                    conversation.chat_id,
-                    conversation.user_id,
                 )
                 return
             reply_plan = self._routing._reply_plan_for(conversation)
@@ -215,17 +213,7 @@ class ChannelConversationEngine:
                     conversation,
                     _format_observed_message(conversation, message_text),
                 )
-                _LOGGER.debug(
-                    "Channel group message not addressed; observed (channel=%s chat=%s)",
-                    self._config.id,
-                    conversation.chat_id,
-                )
                 return
-            _LOGGER.debug(
-                "Channel group message not addressed; dropped (channel=%s chat=%s)",
-                self._config.id,
-                conversation.chat_id,
-            )
             return
 
         if not self._enqueue_chat_work(
@@ -267,18 +255,7 @@ class ChannelConversationEngine:
                         conversation,
                         _format_observed_message(conversation, body),
                     )
-                _LOGGER.debug(
-                    "Channel group media not addressed; observed (channel=%s chat=%s count=%s)",
-                    self._config.id,
-                    conversation.chat_id,
-                    len(raw_messages),
-                )
                 return
-            _LOGGER.debug(
-                "Channel group media not addressed; dropped (channel=%s chat=%s)",
-                self._config.id,
-                conversation.chat_id,
-            )
             return
 
         if not self._enqueue_chat_work(
@@ -338,10 +315,8 @@ class ChannelConversationEngine:
         conversation = self._access._snapshot_group_sender(conversation)
         if not self._access._command_sender_authorized(conversation):
             _LOGGER.info(
-                "Run-triggering tap denied for member (channel=%s chat=%s user=%s)",
+                "Run-triggering tap denied for member (channel=%s)",
                 self._config.id,
-                conversation.chat_id,
-                conversation.user_id,
             )
             return "denied"
 
@@ -425,9 +400,8 @@ class ChannelConversationEngine:
         ):
             return
         _LOGGER.warning(
-            "Observed channel context rejected by queue limit (channel=%s target=%s)",
+            "Observed channel context rejected by queue limit (channel=%s)",
             self._config.id,
-            conversation.chat_id,
         )
 
     def _enqueue_chat_work(self, platform_target: str, queued: _QueuedWork) -> bool:
@@ -473,9 +447,8 @@ class ChannelConversationEngine:
                     await self._process_queued_work(queued)
                 except Exception as error:
                     _LOGGER.error(
-                        "Channel inbound processing failed (channel=%s target=%s): %s",
+                        "Channel inbound processing failed (channel=%s): %s",
                         self._config.id,
-                        platform_target,
                         error,
                         exc_info=(type(error), error, error.__traceback__),
                     )
@@ -563,15 +536,13 @@ class ChannelConversationEngine:
         # reach this path, so processing goes straight to trigger/relay.
         route, reply_plan = await self._routing._prepare_inbound_route_async(queued.conversation)
         content: str | list[ContentBlock] = queued.message.content
-        failure_reply: str | None = None
         if queued.conversation.kind == "group" and queued.raw_message is not None:
             try:
                 quoted = await self._transport.build_quoted_message(queued.raw_message)
             except Exception as error:
                 _LOGGER.warning(
-                    "Channel quoted attachment processing failed (channel=%s target=%s): %s",
+                    "Channel quoted attachment processing failed (channel=%s): %s",
                     self._config.id,
-                    reply_plan.platform_target,
                     error,
                     exc_info=(type(error), error, error.__traceback__),
                 )
@@ -580,12 +551,9 @@ class ChannelConversationEngine:
                     user_display_name=None,
                     content=None,
                 )
-                failure_reply = _media_failure_reply(error)
             if quoted is not None:
                 content = self._content_with_quoted_message(queued, quoted)
 
-        if failure_reply is not None:
-            await self._send_reply(reply_plan, failure_reply)
         await self._trigger_and_relay(
             route,
             reply_plan,
@@ -643,9 +611,8 @@ class ChannelConversationEngine:
                 content_blocks.extend(await self._transport.build_media_blocks(message))
             except Exception as error:
                 _LOGGER.warning(
-                    "Channel inbound media processing failed (channel=%s target=%s): %s",
+                    "Channel inbound media processing failed (channel=%s): %s",
                     self._config.id,
-                    reply_plan.platform_target,
                     error,
                     exc_info=(type(error), error, error.__traceback__),
                 )
@@ -679,14 +646,6 @@ class ChannelConversationEngine:
         internal: bool = False,
         waiting_work_admission: WaitingWorkAdmission | None = None,
     ) -> None:
-        _LOGGER.info(
-            "Channel message routed (channel=%s target=%s agent=%s session=%s%s)",
-            reply_plan.channel_id,
-            reply_plan.platform_target,
-            route.agent_id,
-            route.session_id,
-            " internal" if internal else "",
-        )
         tool_restriction, tool_denial_resolver = self._access._tool_access_for(conversation)
         tool_access_kwargs: dict[str, Any] = {}
         if tool_restriction is not None:
@@ -745,11 +704,9 @@ class ChannelConversationEngine:
             return
         except Exception as error:
             _LOGGER.error(
-                "Channel trigger run failed (channel=%s agent=%s session=%s target=%s): %s",
+                "Channel trigger run failed (channel=%s agent=%s): %s",
                 reply_plan.channel_id,
                 route.agent_id,
-                route.session_id,
-                reply_plan.platform_target,
                 error,
                 exc_info=(type(error), error, error.__traceback__),
             )
@@ -837,10 +794,8 @@ class ChannelConversationEngine:
             raise
         except Exception as error:
             _LOGGER.error(
-                "Channel reply lost after retries (channel=%s target=%s thread=%s attempts=%s): %s",
+                "Channel reply lost after retries (channel=%s attempts=%s): %s",
                 reply_plan.channel_id,
-                reply_plan.platform_target,
-                reply_plan.thread_id,
                 getattr(error, "attempts_made", None),
                 error,
             )
@@ -851,16 +806,10 @@ class ChannelConversationEngine:
     async def _reject_overflow(self, conversation: ConversationFacts) -> None:
         """Log one rejected inbound item and send a throttled busy reply."""
         _LOGGER.warning(
-            "Channel inbound work rejected by queue limit (channel=%s target=%s)",
+            "Channel inbound work rejected by queue limit (channel=%s)",
             self._config.id,
-            conversation.chat_id,
         )
         if not self._should_send_busy_reply(conversation.chat_id):
-            _LOGGER.debug(
-                "Channel busy reply throttled (channel=%s target=%s)",
-                self._config.id,
-                conversation.chat_id,
-            )
             return
         await self._send_reply(self._routing._reply_plan_for(conversation), _BUSY_REPLY)
 
@@ -966,12 +915,10 @@ class ChannelConversationEngine:
         error: Exception,
     ) -> None:
         _LOGGER.error(
-            "Channel command failed (command=%s channel=%s agent=%s session=%s target=%s): %s",
+            "Channel command failed (command=%s channel=%s agent=%s): %s",
             command_name,
             reply_plan.channel_id,
             route.agent_id,
-            route.session_id,
-            reply_plan.platform_target,
             error,
             exc_info=(type(error), error, error.__traceback__),
         )
