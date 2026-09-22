@@ -14,6 +14,10 @@ RPC bodies group by owning surface under `server/rpc/*_methods.py`; envelope dis
 
 Failures while settling a cancelled mutation remain observable: expected RPC errors log only their code, while unexpected errors retain their traceback. Request parameters are never added to these logs.
 
+Private Skill mutations (including archive uploads) and sharing acquire the existing Agent reference lock before the Skill mutation lock. Scope validation, persistence, invalidation and publication remain protected against Agent rename/delete, including cancellation settlement; cancellation while waiting for either lock starts no mutation. Global Skill writes do not acquire the Agent reference lock (`tests/server/rpc/test_skill_methods.py`).
+
+Agent rename/delete likewise enter through the reference lock before cancellation-safe mutation admission. An admitted operation finishes its worker mutation, Skill invalidation and resource publication before cancellation propagates; a caller cancelled while waiting for the reference lock changes nothing (`tests/core/runtime/test_runtime_skill_lifecycle.py`).
+
 ## Transport contracts
 
 - Unexpected dispatch failures are logged with traceback and rethrown internally; the HTTP edge returns status 500 with the normal error envelope, code `internal_error`, and a generic message that withholds exception details (`tests/server/test_app_http.py`).

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 
 from core.skills.authoring import (
@@ -25,6 +26,7 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayPart,
     ToolRegistry,
+    offload_tool_handler,
     tool_failure,
     tool_success,
 )
@@ -313,19 +315,27 @@ def register_skill_manage_tool(
     invalidate_agent_skills: Callable[[str | None], None],
     resolve_shared_skills_dir: Callable[[str, str], Path | None] | None = None,
     resolve_external_skill_scope: (Callable[[str, str, str | None], str | None] | None) = None,
+    *,
+    lifecycle_guard: Callable[[], AbstractContextManager[object]] = nullcontext,
 ) -> None:
     """Register identity-only direct Skill management."""
+    handler = make_skill_manage_handler(
+        authoring,
+        resolve_agent_skills_dir,
+        invalidate_agent_skills,
+        resolve_shared_skills_dir,
+        resolve_external_skill_scope,
+    )
+
+    def guarded_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        with lifecycle_guard():
+            return handler(context, arguments)
+
     registry.register(
         SKILL_MANAGE_TOOL_NAME,
         SKILL_MANAGE_TOOL_DESCRIPTION,
         SKILL_MANAGE_TOOL_PARAMETERS,
-        make_skill_manage_handler(
-            authoring,
-            resolve_agent_skills_dir,
-            invalidate_agent_skills,
-            resolve_shared_skills_dir,
-            resolve_external_skill_scope,
-        ),
+        offload_tool_handler(guarded_handler),
         family="skills",
         constraints=("identity_agent",),
         open_input_schema=True,

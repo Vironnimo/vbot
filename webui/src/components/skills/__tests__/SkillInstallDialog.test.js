@@ -88,6 +88,42 @@ afterEach(async () => {
 });
 
 describe('Skill installation dialog', () => {
+  it('dismisses the destination selector without discarding the reviewed installation', async () => {
+    installSkill.mockResolvedValue(
+      preview({ candidates: [{ exists: true, unchanged: false }] }),
+    );
+    render();
+    input('skill-install-source', 'https://example.test/demo.skill');
+    click(button(t('skills.install.check')));
+    await settle();
+    click(document.querySelector('[role="switch"]'));
+    const destination = button(t('skills.install.destination'));
+    click(destination);
+    await settle();
+    const list = document.querySelector('[role="listbox"]');
+    expect(document.activeElement).toBe(list);
+    list.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    flushSync();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="listbox"]')).toBeNull();
+    expect(document.activeElement).toBe(destination);
+    expect(button(t('skills.install.replaceAction')).disabled).toBe(false);
+    destination.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('previews a link in the selected private scope and installs exactly the reviewed package', async () => {
     render();
     expect(button(t('skills.install.check')).disabled).toBe(true);

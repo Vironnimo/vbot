@@ -52,7 +52,8 @@
 
   function handleDocumentKeydown(event) {
     if (event.key === 'Escape') {
-      requestClose();
+      // A nested picker consumes Escape when dismissing its own popup.
+      if (!event.defaultPrevented) requestClose();
       return;
     }
 

@@ -17,7 +17,6 @@ from core.skills._packages import (
     MAX_SKILL_DOCUMENT_BYTES,
     PackageError,
     PackageFile,
-    is_redirect,
     package_path,
     package_roots,
     read_archive,
@@ -174,10 +173,6 @@ def install_package(
         )
     with authoring._write_lock:
         destination = authoring._skill_dir(target_root, name)
-        # Do not resolve an existing redirect into another package, even within this root.
-        literal = Path(target_root).expanduser() / name
-        if (literal.exists() or literal.is_symlink()) and is_redirect(literal):
-            raise PackageError("Refusing to replace a symlink or junction Skill.")
         exists = destination.exists()
         same = exists and destination.is_dir() and _digest(read_directory(destination)) == sha256
         operation = "unchanged" if same else "replaced" if exists else "installed"

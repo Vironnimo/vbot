@@ -261,6 +261,38 @@ class TestDelete:
             service.delete(tmp_path, "demo")
 
 
+@pytest.mark.parametrize("action", ["delete", "write_file", "remove_file", "patch"])
+@pytest.mark.parametrize("document_directory", [False, True])
+def test_mutations_leave_non_package_directories_untouched(
+    service: SkillAuthoringService, tmp_path: Path, action: str, document_directory: bool
+) -> None:
+    package = tmp_path / "demo"
+    resource = package / "references" / "notes.md"
+    resource.parent.mkdir(parents=True)
+    resource.write_text("keep this file", encoding="utf-8")
+    if document_directory:
+        (package / "SKILL.md").mkdir()
+
+    with pytest.raises(SkillAuthoringError):
+        if action == "delete":
+            service.delete(tmp_path, "demo")
+        elif action == "write_file":
+            service.write_file(tmp_path, "demo", "references/notes.md", "replacement")
+        elif action == "remove_file":
+            service.remove_file(tmp_path, "demo", "references/notes.md")
+        else:
+            service.patch(
+                tmp_path,
+                "demo",
+                "keep",
+                "replace",
+                author="agent",
+                relative_path="references/notes.md",
+            )
+
+    assert resource.read_text(encoding="utf-8") == "keep this file"
+
+
 class TestSupportFiles:
     def test_write_and_remove_under_scripts(
         self, service: SkillAuthoringService, tmp_path: Path
@@ -436,3 +468,79 @@ class TestProtectedRootRefusal:
 
         service.create(agent_home, "demo", skill_document(), author="agent")
         assert (agent_home / "demo" / "SKILL.md").is_file()
+
+
+@pytest.mark.parametrize("action", ["patch", "write_file", "remove_file"])
+@pytest.mark.parametrize("directory_alias", [False, True])
+def test_support_alias_cannot_bypass_document_validation(
+    service: SkillAuthoringService, tmp_path: Path, action: str, directory_alias: bool
+) -> None:
+    service.create(tmp_path, "demo", skill_document(), author="human")
+    document = tmp_path / "demo" / "SKILL.md"
+    before = document.read_bytes()
+    alias = document.parent / "references" / "alias.md"
+    try:
+        if directory_alias:
+            alias = document.parent / "references" / "SKILL.md"
+            alias.parent.symlink_to(document.parent, target_is_directory=True)
+        else:
+            alias.parent.mkdir()
+            alias.symlink_to(document)
+    except OSError as error:
+        pytest.skip(f"Symlinks unavailable: {error}")
+
+    with pytest.raises(SkillAuthoringError):
+        if action == "patch":
+            service.patch(
+                tmp_path,
+                "demo",
+                "name: demo",
+                "name: other",
+                author="agent",
+                relative_path=alias.relative_to(document.parent).as_posix(),
+            )
+        elif action == "write_file":
+            service.write_file(
+                tmp_path, "demo", alias.relative_to(document.parent).as_posix(), "invalid document"
+            )
+        else:
+            service.remove_file(tmp_path, "demo", alias.relative_to(document.parent).as_posix())
+
+    assert document.read_bytes() == before
+
+
+def test_edit_rejects_linked_document_before_reading(
+    service: SkillAuthoringService, tmp_path: Path
+) -> None:
+    source = tmp_path / "original.md"
+    source.write_text("unrelated private data", encoding="utf-8")
+    package = tmp_path / "demo"
+    package.mkdir()
+    document = package / "SKILL.md"
+    try:
+        document.symlink_to(source)
+    except OSError as error:
+        pytest.skip(f"Symlinks unavailable: {error}")
+
+    with pytest.raises(SkillAuthoringError):
+        service.edit(tmp_path, "demo", skill_document(), author="human")
+
+    assert document.is_symlink()
+    assert source.read_text(encoding="utf-8") == "unrelated private data"
+
+
+def test_delete_does_not_follow_alias_to_another_package(
+    service: SkillAuthoringService, tmp_path: Path
+) -> None:
+    service.create(tmp_path, "other", skill_document(name="other"), author="human")
+    document = tmp_path / "other" / "SKILL.md"
+    before = document.read_bytes()
+    try:
+        (tmp_path / "demo").symlink_to(document.parent, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"Symlinks unavailable: {error}")
+
+    with pytest.raises(SkillAuthoringError):
+        service.delete(tmp_path, "demo")
+
+    assert document.read_bytes() == before

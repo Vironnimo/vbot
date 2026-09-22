@@ -24,7 +24,16 @@ MAX_SKILL_DOCUMENT_BYTES = 1024 * 1024
 INSTALL_RECEIPT = ".vbot-install.json"
 EXCLUDED_PARTS = frozenset({".git", ".hg", ".svn", "__pycache__", "node_modules", INSTALL_RECEIPT})
 _DEVICES = frozenset(
-    {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(10)), *(f"lpt{i}" for i in range(10))}
+    {
+        "con",
+        "prn",
+        "aux",
+        "nul",
+        "conin$",
+        "conout$",
+        *(f"com{i}" for i in "0123456789¹²³"),
+        *(f"lpt{i}" for i in "0123456789¹²³"),
+    }
 )
 
 
@@ -46,8 +55,11 @@ def package_path(value: str) -> str:
         if (
             part in {"", ".", ".."}
             or part.endswith((".", " "))
-            or any(ord(char) < 32 or char in '<>:"|?*' for char in part)
-            or part.split(".", 1)[0].casefold() in _DEVICES
+            or any(
+                ord(char) < 32 or 0xD800 <= ord(char) <= 0xDFFF or char in '<>:"|?*'
+                for char in part
+            )
+            or part.split(".", 1)[0].rstrip(" ").casefold() in _DEVICES
         ):
             raise PackageError(f"Invalid package path: {value!r}")
     return value
@@ -119,6 +131,8 @@ def read_directory(root: Path) -> dict[str, PackageFile]:
                     collector.add(relative, 0, info.st_mode, None)
                     visit(path)
                 elif stat.S_ISREG(info.st_mode):
+                    if info.st_nlink > 1:
+                        raise PackageError(f"Skill source contains a hard link: {relative}")
                     with path.open("rb") as stream:
                         collector.add(relative, info.st_size, info.st_mode, stream)
                 else:

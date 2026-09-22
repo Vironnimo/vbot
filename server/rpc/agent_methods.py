@@ -30,6 +30,7 @@ from server.events import (
     RESOURCE_KIND_CRON,
     RESOURCE_KIND_SESSIONS,
 )
+from server.rpc._mutations import MutationHandler, serialized_mutation
 from server.rpc._session_workers import _SESSION_RPC_WORKERS
 from server.rpc.agent_refs import (
     _agent_reference_ids,
@@ -187,6 +188,19 @@ def _update_agent(state: Any, params: JsonObject) -> JsonObject:
     return response
 
 
+def _guard_agent_lifecycle(handler: MutationHandler) -> MutationHandler:
+    mutate = serialized_mutation(handler, lock_attribute="_agent_lifecycle_mutation_lock")
+
+    async def guarded(state: Any, params: JsonObject) -> JsonObject:
+        # Waiting for the shared reference lock admits no mutation. Once admitted,
+        # keep Run guards, worker persistence and publication together on cancel.
+        async with _agent_reference_lock(state):
+            return await mutate(state, params)
+
+    return guarded
+
+
+@_guard_agent_lifecycle
 async def _rename_agent(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id", "new_id"}, "agent.rename")
     agent_id = _required_string(params, "id")
@@ -198,45 +212,44 @@ async def _rename_agent(state: Any, params: JsonObject) -> JsonObject:
         )
 
     try:
-        async with _agent_reference_lock(state):
-            try:
-                async with AsyncExitStack() as guards:
-                    for guarded_agent_id in sorted((agent_id, new_agent_id)):
-                        await guards.enter_async_context(
-                            _state_chat_runs(state).agent_admission_guard(
-                                guarded_agent_id,
-                                project_id=None,
-                            )
+        try:
+            async with AsyncExitStack() as guards:
+                for guarded_agent_id in sorted((agent_id, new_agent_id)):
+                    await guards.enter_async_context(
+                        _state_chat_runs(state).agent_admission_guard(
+                            guarded_agent_id,
+                            project_id=None,
                         )
-                    busy_subagent_ids = [
-                        guarded_agent_id
-                        for guarded_agent_id in sorted((agent_id, new_agent_id))
-                        if _subagents_reference_identity_agent(state, guarded_agent_id)
-                    ]
-                    if busy_subagent_ids:
-                        raise RpcError(
-                            RPC_ERROR_AGENT_BUSY,
-                            (
-                                "cannot rename agent while the old or new id has open "
-                                f"Sub-Agent activity: {', '.join(busy_subagent_ids)}"
-                            ),
-                        )
-                    result = await _SESSION_RPC_WORKERS.run(
-                        _rename_agent_and_retarget_references,
-                        state,
-                        agent_id,
-                        new_agent_id,
                     )
-                    state.runtime.invalidate_agent_skills(agent_id)
-                    state.runtime.invalidate_agent_skills(new_agent_id)
-            except RunAdmissionBlockedError as exc:
-                raise RpcError(
-                    RPC_ERROR_AGENT_BUSY,
-                    (
-                        "cannot rename agent while the old or new id has active "
-                        f"or queued runs: {agent_id} -> {new_agent_id}"
-                    ),
-                ) from exc
+                busy_subagent_ids = [
+                    guarded_agent_id
+                    for guarded_agent_id in sorted((agent_id, new_agent_id))
+                    if _subagents_reference_identity_agent(state, guarded_agent_id)
+                ]
+                if busy_subagent_ids:
+                    raise RpcError(
+                        RPC_ERROR_AGENT_BUSY,
+                        (
+                            "cannot rename agent while the old or new id has open "
+                            f"Sub-Agent activity: {', '.join(busy_subagent_ids)}"
+                        ),
+                    )
+                result = await _SESSION_RPC_WORKERS.run(
+                    _rename_agent_and_retarget_references,
+                    state,
+                    agent_id,
+                    new_agent_id,
+                )
+                state.runtime.invalidate_agent_skills(agent_id)
+                state.runtime.invalidate_agent_skills(new_agent_id)
+        except RunAdmissionBlockedError as exc:
+            raise RpcError(
+                RPC_ERROR_AGENT_BUSY,
+                (
+                    "cannot rename agent while the old or new id has active "
+                    f"or queued runs: {agent_id} -> {new_agent_id}"
+                ),
+            ) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -314,37 +327,36 @@ def _seed_agent_custom_prompt(state: Any, agent_id: str) -> None:
     storage.seed_agent_block_layout(agent_id, default_layout)
 
 
+@_guard_agent_lifecycle
 async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "id")
     try:
-        async with _agent_reference_lock(state):
-            remaining_agents = [
-                agent for agent in state.runtime.agents.list() if agent.id != agent_id
-            ]
-            if not remaining_agents:
-                raise RpcError(RPC_ERROR_LAST_AGENT, "cannot delete the last agent")
-            try:
-                # Identity scope only: a same-named Project Team agent remains
-                # independent. The guard makes the idle check and the following
-                # archive one atomic boundary against every Run ingress path.
-                async with _state_chat_runs(state).agent_admission_guard(agent_id, project_id=None):
-                    references = _agent_reference_ids(state, agent_id)
-                    if references:
-                        raise RpcError(
-                            RPC_ERROR_AGENT_IN_USE,
-                            (
-                                "cannot delete agent referenced by "
-                                f"{', '.join(references)}: {agent_id}"
-                            ),
-                        )
-                    await state.runtime.terminal_manager.close_agent_scope(agent_id, None)
-                    state.runtime.agents.delete(agent_id)
-                    state.runtime.invalidate_agent_skills(agent_id)
-            except RunAdmissionBlockedError as exc:
-                raise RpcError(
-                    RPC_ERROR_AGENT_BUSY,
-                    f"cannot delete agent with active or queued runs: {agent_id}",
-                ) from exc
+        remaining_agents = [
+            agent
+            for agent in await _SESSION_RPC_WORKERS.run(state.runtime.agents.list)
+            if agent.id != agent_id
+        ]
+        if not remaining_agents:
+            raise RpcError(RPC_ERROR_LAST_AGENT, "cannot delete the last agent")
+        try:
+            # Identity scope only: a same-named Project Team agent remains
+            # independent. The guard makes the idle check and the following
+            # archive one atomic boundary against every Run ingress path.
+            async with _state_chat_runs(state).agent_admission_guard(agent_id, project_id=None):
+                references = _agent_reference_ids(state, agent_id)
+                if references:
+                    raise RpcError(
+                        RPC_ERROR_AGENT_IN_USE,
+                        (f"cannot delete agent referenced by {', '.join(references)}: {agent_id}"),
+                    )
+                await state.runtime.terminal_manager.close_agent_scope(agent_id, None)
+                await _SESSION_RPC_WORKERS.run(state.runtime.agents.delete, agent_id)
+                state.runtime.invalidate_agent_skills(agent_id)
+        except RunAdmissionBlockedError as exc:
+            raise RpcError(
+                RPC_ERROR_AGENT_BUSY,
+                f"cannot delete agent with active or queued runs: {agent_id}",
+            ) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     result = {
