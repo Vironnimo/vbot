@@ -347,20 +347,29 @@ class DiscordChannelAdapter(ChannelAdapter):
         self._remember_conversation(conversation)
         async with self._message_lock(conversation.chat_id):
             should_backfill = self._should_backfill(conversation, content)
-            if should_backfill:
-                await self._backfill_history(message)
+            observed_context = await self._backfill_history(message) if should_backfill else []
 
             if attachments:
-                await self._engine.handle_inbound_media(conversation, (message,))
+                admitted = await self._engine.handle_inbound_media(
+                    conversation, (message,), observed_context=observed_context
+                )
             elif content is not None:
-                await self._engine.handle_inbound_text(
+                admitted = await self._engine.handle_inbound_text(
                     conversation,
                     content,
                     raw_message=message,
+                    observed_context=observed_context,
                 )
+            else:
+                return
 
-            if should_backfill and conversation.message_id is not None:
-                self._seen_message_ids(conversation.chat_id).add(conversation.message_id)
+            if admitted and should_backfill:
+                seen_ids = self._seen_message_ids(conversation.chat_id)
+                for observed, _body in observed_context:
+                    if observed.message_id is not None:
+                        seen_ids.add(observed.message_id)
+                if conversation.message_id is not None:
+                    seen_ids.add(conversation.message_id)
 
     def _should_backfill(
         self,
@@ -375,11 +384,13 @@ class DiscordChannelAdapter(ChannelAdapter):
             return False
         return self._engine.should_respond(conversation, (content,))
 
-    async def _backfill_history(self, triggering_message: Any) -> None:
+    async def _backfill_history(
+        self, triggering_message: Any
+    ) -> list[tuple[ConversationFacts, str]]:
         channel = getattr(triggering_message, "channel", None)
         target_id = _snowflake_string(getattr(channel, "id", None))
         if channel is None or target_id is None:
-            return
+            return []
 
         seen_ids = self._seen_message_ids(target_id)
         observed: list[tuple[ConversationFacts, str]] = []
@@ -412,12 +423,9 @@ class DiscordChannelAdapter(ChannelAdapter):
                 error,
                 exc_info=(type(error), error, error.__traceback__),
             )
-            return
+            return []
 
-        for conversation, body in reversed(observed):
-            self._engine.observe_inbound_text(conversation, body)
-            if conversation.message_id is not None:
-                seen_ids.add(conversation.message_id)
+        return list(reversed(observed))
 
     def _conversation_facts(self, message: Any) -> ConversationFacts | None:
         channel = getattr(message, "channel", None)

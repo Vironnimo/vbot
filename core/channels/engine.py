@@ -167,8 +167,9 @@ class ChannelConversationEngine:
         message_text: str,
         *,
         raw_message: Any | None = None,
-    ) -> None:
-        """Gate one inbound text and execute or enqueue a prepared command/message."""
+        observed_context: Sequence[tuple[ConversationFacts, str]] = (),
+    ) -> bool:
+        """Gate and admit text with optional bounded context; report admission."""
         conversation = self._access._snapshot_group_sender(conversation)
         prepared_command = self._command_dispatcher.prepare(message_text)
         if prepared_command is not None:
@@ -182,14 +183,14 @@ class ChannelConversationEngine:
                     "Channel command denied for member (channel=%s)",
                     self._config.id,
                 )
-                return
+                return False
             reply_plan = self._routing._reply_plan_for(conversation)
             unavailable = self._command_dispatcher.unavailability(
                 prepared_command, self._reply_surface(conversation.kind)
             )
             if unavailable is not None:
                 await self._send_command_unavailability(reply_plan, unavailable)
-                return
+                return True
             if prepared_command.execution_mode == "immediate":
                 route, reply_plan = await self._routing._prepare_inbound_route_async(conversation)
                 await self._execute_prepared_command(
@@ -199,7 +200,7 @@ class ChannelConversationEngine:
                     reply_plan,
                     self._routing._derive_session_id(conversation),
                 )
-                return
+                return True
             if not self._enqueue_chat_work(
                 conversation.chat_id,
                 _QueuedPreparedCommand(
@@ -208,7 +209,8 @@ class ChannelConversationEngine:
                 ),
             ):
                 await self._reject_overflow(conversation)
-            return
+                return False
+            return True
 
         if not self._access.should_respond(conversation, (message_text,)):
             if self._config.observe_unaddressed and conversation.kind == "group":
@@ -216,8 +218,7 @@ class ChannelConversationEngine:
                     conversation,
                     _format_observed_message(conversation, message_text),
                 )
-                return
-            return
+            return False
 
         if not self._enqueue_chat_work(
             conversation.chat_id,
@@ -225,9 +226,12 @@ class ChannelConversationEngine:
                 conversation=conversation,
                 message=MessageFacts(content=message_text),
                 raw_message=raw_message,
+                observed_context=self._snapshot_observed_context(observed_context),
             ),
         ):
             await self._reject_overflow(conversation)
+            return False
+        return True
 
     async def handle_inbound_media(
         self,
@@ -235,8 +239,9 @@ class ChannelConversationEngine:
         raw_messages: tuple[Any, ...],
         *,
         companion_text: str | None = None,
-    ) -> None:
-        """Gate, route, and enqueue inbound media (one message or a buffered album)."""
+        observed_context: Sequence[tuple[ConversationFacts, str]] = (),
+    ) -> bool:
+        """Gate and admit media with optional bounded context; report admission."""
         conversation = self._access._snapshot_group_sender(conversation)
         normalized_companion = companion_text.strip() if companion_text is not None else None
         if normalized_companion == "":
@@ -258,8 +263,7 @@ class ChannelConversationEngine:
                         conversation,
                         _format_observed_message(conversation, body),
                     )
-                return
-            return
+            return False
 
         if not self._enqueue_chat_work(
             conversation.chat_id,
@@ -267,25 +271,26 @@ class ChannelConversationEngine:
                 conversation=conversation,
                 messages=tuple(raw_messages),
                 companion_text=normalized_companion,
+                observed_context=self._snapshot_observed_context(observed_context),
             ),
         ):
             await self._reject_overflow(conversation)
+            return False
+        return True
 
-    def observe_inbound_text(
-        self,
-        conversation: ConversationFacts,
-        message_text: str,
-    ) -> None:
-        """Queue platform-acquired context without starting a Run.
-
-        Discord uses this for bounded history backfill before an addressed group
-        message. Passive live observation still flows through ``handle_inbound_text``.
-        """
-        conversation = self._access._snapshot_group_sender(conversation)
-        self._enqueue_observed_message(
-            conversation,
-            _format_observed_message(conversation, message_text),
-        )
+    def _snapshot_observed_context(
+        self, context: Sequence[tuple[ConversationFacts, str]]
+    ) -> tuple[_QueuedObservedMessage, ...]:
+        observed = []
+        for conversation, text in context:
+            conversation = self._access._snapshot_group_sender(conversation)
+            observed.append(
+                _QueuedObservedMessage(
+                    conversation=conversation,
+                    note=_format_observed_message(conversation, text),
+                )
+            )
+        return tuple(observed)
 
     async def trigger_internal_reply(self, conversation: ConversationFacts, prompt: str) -> bool:
         """Queue an internal note-driven Run whose reply goes back to the conversation.
@@ -501,6 +506,11 @@ class ChannelConversationEngine:
                 self._chat_workers.pop(platform_target, None)
 
     async def _process_queued_work(self, queued: _QueuedWork) -> None:
+        if isinstance(queued, (_QueuedInboundMessage, _QueuedInboundMedia)):
+            # Bounded history belongs to the addressed turn, not independent work
+            # that could fill its capacity budget before the turn itself is admitted.
+            for observed in queued.observed_context:
+                await self._process_queued_observed_message(observed)
         if isinstance(queued, _QueuedObservedMessage):
             await self._process_queued_observed_message(queued)
             return
