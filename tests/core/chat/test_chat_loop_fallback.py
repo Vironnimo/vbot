@@ -228,6 +228,25 @@ async def test_fallback_closes_adapter_when_request_preparation_fails(tmp_path, 
 
 
 @pytest.mark.asyncio
+async def test_primary_adapter_closes_when_context_preparation_fails(tmp_path, monkeypatch):
+    adapter = ClosingStubAdapter([])
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(id="coder", model="openai/gpt-5.2"),
+        adapter=adapter,
+    )
+
+    def fail_catalog(*args, **kwargs):
+        raise ConfigError("catalog preparation failed")
+
+    monkeypatch.setattr("core.chat._run_state.pinned_skill_catalog", fail_catalog)
+    with pytest.raises(ConfigError, match="catalog preparation failed"):
+        await build_chat_loop(runtime).send("coder", "hello", session_id="session")
+    assert adapter.closed
+    assert adapter.requests == []
+
+
+@pytest.mark.asyncio
 async def test_send_closes_adapter_when_aclose_exists(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = ClosingStubAdapter([{"content": "Hello", "tool_calls": None}])
