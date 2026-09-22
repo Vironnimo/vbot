@@ -8,6 +8,8 @@ Read with the parent `channels.md`. Paths below are repository-relative.
 
 `received.json` stores the last 4096 accepted transport message IDs, written atomically on the bounded Channel I/O pool after engine admission. It suppresses recent replay across adapter restarts; it is not transactional exactly-once delivery or a durable inbox. Slack/Mattermost connections do not backfill messages missed while offline. Allowlist rejection occurs before media downloads. Files in one platform message enter the engine as separate media items, so a failed attachment does not discard its siblings. HTTP downloads enforce both advertised and actual byte limits. Request errors hide URLs and credentials; uncertain writes are non-retryable. Platform rate limits retain the shared delivery retry behavior.
 
+Slack and Mattermost outbound retries run at each individual post/upload step through the shared bounded policy. Exhaustion is non-retryable to callers, so an engine retry cannot duplicate previously acknowledged chunks or files. Uncertain write failures, including upload HTTP 5xx responses, remain non-retryable.
+
 Slack and Mattermost threads use the parent chat's Session and return replies to the supplied thread/root. Mention-only groups require an explicit bot mention or configured wake regex; these adapters do not resolve whether a thread reply addresses a bot. Neither supplies typing indicators, interactive buttons, history backfill or fetched quoted-message content. Their current upstream contracts have mocked wire tests; live account delivery remains unverified.
 
 ## Slack
