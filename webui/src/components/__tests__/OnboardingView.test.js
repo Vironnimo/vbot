@@ -252,6 +252,14 @@ describe('OnboardingView', () => {
   let server;
 
   beforeEach(() => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
     document.body.innerHTML = '';
     init('en');
     mountedComponent = null;
@@ -267,6 +275,8 @@ describe('OnboardingView', () => {
     }
     document.body.innerHTML = '';
     rpcMock.mockReset();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('stays on Providers after connecting and advances only when the user continues', async () => {
@@ -348,52 +358,89 @@ describe('OnboardingView', () => {
     });
   });
 
-  it('searches a growing catalog by Provider or subscription name and recovers from no matches', async () => {
-    rpcMock.mockImplementation(async (method, params) => {
-      const result = await server.rpc(method, params);
-      if (method === 'settings.get') {
-        for (let index = 0; index < 60; index += 1) {
-          result.providers.items.push({
-            id: `extra-${index}`,
-            name: `Extra ${index}`,
-            connections: [{ id: `extra-${index}:key`, type: 'api_key' }],
-          });
+  it.each([
+    { layout: 'wide', width: 760, previewCount: 10 },
+    { layout: 'narrow', width: 320, previewCount: 3 },
+  ])(
+    'expands a $layout catalog and searches every Provider regardless of the preview',
+    async ({ width, previewCount }) => {
+      vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(
+        width,
+      );
+      rpcMock.mockImplementation(async (method, params) => {
+        const result = await server.rpc(method, params);
+        if (method === 'settings.get') {
+          for (let index = 0; index < 60; index += 1) {
+            result.providers.items.push({
+              id: `extra-${index}`,
+              name: `Extra ${index}`,
+              connections: [{ id: `extra-${index}:key`, type: 'api_key' }],
+            });
+          }
         }
-      }
-      return result;
-    });
-    mountedComponent = mount(OnboardingView, { target: document.body });
-    await waitFor(() =>
+        return result;
+      });
+      mountedComponent = mount(OnboardingView, { target: document.body });
+      await waitFor(() =>
+        expect(
+          document.querySelectorAll('.onboarding-provider-row'),
+        ).toHaveLength(previewCount),
+      );
+      expect(byText('button', 'Continue to Model').disabled).toBe(true);
+      const expand = byText('button', 'Show all 63 Providers');
+      expect(expand.getAttribute('aria-expanded')).toBe('false');
+      const previewRows = Array.from(
+        document.querySelectorAll('.onboarding-provider-row'),
+      );
+      expand.click();
+      await waitFor(() => {
+        expect(document.activeElement.classList).toContain(
+          'onboarding-provider-row',
+        );
+        expect(previewRows).not.toContain(document.activeElement);
+      });
+      expect(expand.getAttribute('aria-expanded')).toBe('true');
       expect(
         document.querySelectorAll('.onboarding-provider-row'),
-      ).toHaveLength(63),
-    );
-    expect(byText('button', 'Continue to Model').disabled).toBe(true);
-    const search = document.querySelector('#onboarding-provider-search');
-    search.value = 'chatGPT';
-    search.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-    expect(document.querySelectorAll('.onboarding-provider-row')).toHaveLength(
-      1,
-    );
-    byText('.onboarding-provider-row', 'OpenAI').click();
-    flushSync();
-    expect(byText('.provider-pick-item', 'API Key')).toBeTruthy();
-    expect(byText('.provider-pick-item', 'ChatGPT Plus/Pro')).toBeTruthy();
-    expect(document.querySelector('#provider-api-key')).toBeNull();
-    byText('[role="dialog"] button', 'Cancel').click();
-    flushSync();
-    expect(search.value).toBe('chatGPT');
-    search.value = 'no-such-provider';
-    search.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-    expect(document.querySelector('.onboarding-provider-empty')).toBeTruthy();
-    byText('button', 'Clear').click();
-    flushSync();
-    expect(document.querySelectorAll('.onboarding-provider-row')).toHaveLength(
-      63,
-    );
-  });
+      ).toHaveLength(63);
+      expect(byText('.onboarding-provider-row', 'OpenRouter')).toBeTruthy();
+      byText('button', 'Show fewer Providers').click();
+      flushSync();
+      expect(byText('.onboarding-provider-row', 'OpenAI')).toBeFalsy();
+      const search = document.querySelector('#onboarding-provider-search');
+      search.value = 'chatGPT';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      expect(
+        document.querySelectorAll('.onboarding-provider-row'),
+      ).toHaveLength(1);
+      expect(byText('button', 'Show all')).toBeFalsy();
+      byText('.onboarding-provider-row', 'OpenAI').click();
+      flushSync();
+      expect(byText('.provider-pick-item', 'API Key')).toBeTruthy();
+      expect(byText('.provider-pick-item', 'ChatGPT Plus/Pro')).toBeTruthy();
+      expect(document.querySelector('#provider-api-key')).toBeNull();
+      byText('[role="dialog"] button', 'Cancel').click();
+      flushSync();
+      expect(search.value).toBe('chatGPT');
+      search.value = 'Extra';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      expect(
+        document.querySelectorAll('.onboarding-provider-row'),
+      ).toHaveLength(60);
+      search.value = 'no-such-provider';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      expect(document.querySelector('.onboarding-provider-empty')).toBeTruthy();
+      byText('button', 'Clear').click();
+      flushSync();
+      expect(
+        document.querySelectorAll('.onboarding-provider-row'),
+      ).toHaveLength(previewCount);
+      expect(byText('button', 'Show all 63 Providers')).toBeTruthy();
+    },
+  );
 
   it('connects multiple Providers and both sign-in and API-key methods without leaving the Provider step', async () => {
     const props = reactiveProps({

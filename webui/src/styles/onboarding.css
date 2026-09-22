@@ -13,10 +13,13 @@
   container-type: inline-size;
 }
 .onboarding-scroll {
+  --onboarding-scroll-inset: 36px;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 36px 28px;
+  scrollbar-gutter: stable;
+  scroll-padding-block: 64px 24px;
+  padding: var(--onboarding-scroll-inset) 28px;
 }
 .onboarding-layout {
   display: flex;
@@ -140,9 +143,12 @@
 .onboarding-catalog {
   border: 1px solid var(--border-2);
   border-radius: var(--r-lg);
-  overflow: hidden;
+  overflow: clip;
 }
 .onboarding-provider-search {
+  position: sticky;
+  top: calc(-1 * var(--onboarding-scroll-inset));
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -190,24 +196,28 @@
   list-style: none;
   padding: 8px;
   margin: 0;
-  max-height: clamp(200px, calc(100dvh - 560px), 350px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
 }
 .onboarding-provider-list > li {
   min-width: 0;
 }
-.onboarding-provider-list {
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-2) transparent;
+.onboarding-provider-list--single-column {
+  grid-template-columns: minmax(0, 1fr);
 }
-.onboarding-provider-list::-webkit-scrollbar {
-  width: 6px;
+.onboarding-catalog .onboarding-provider-expand {
+  width: 100%;
+  min-height: 44px;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  justify-content: center;
+  color: var(--accent);
+  background: var(--surface-2);
 }
-.onboarding-provider-list::-webkit-scrollbar-thumb {
-  background: var(--border-2);
-  border-radius: 3px;
+.onboarding-catalog .onboarding-provider-expand:hover {
+  background: var(--accent-08);
+  color: var(--accent);
+}
+.onboarding-catalog .onboarding-provider-expand:focus-visible {
+  outline-offset: -4px;
 }
 .onboarding-provider-row {
   display: flex;
@@ -541,7 +551,8 @@
    the same list and a full-width continuation action. */
 @container (max-width: 580px) {
   .onboarding-scroll {
-    padding: 20px 14px;
+    --onboarding-scroll-inset: 20px;
+    padding: var(--onboarding-scroll-inset) 14px;
   }
   .onboarding-layout {
     gap: 18px;
@@ -572,10 +583,6 @@
   }
   .onboarding-progress li + li::before {
     width: 24px;
-  }
-  .onboarding-provider-list {
-    grid-template-columns: minmax(0, 1fr);
-    max-height: clamp(176px, calc(100dvh - 620px), 284px);
   }
   .onboarding-provider-row {
     min-height: 62px;
