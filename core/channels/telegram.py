@@ -506,10 +506,8 @@ class TelegramChannelAdapter(ChannelAdapter):
             new_chat_id if allowed == old_chat_id else allowed for allowed in self._allowed_chat_ids
         )
         _LOGGER.info(
-            "Telegram chat migrated to supergroup (channel=%s old=%s new=%s)",
+            "Telegram chat migrated to supergroup (channel=%s)",
             self._config.id,
-            old_chat_id,
-            new_chat_id,
         )
 
         persister = self._chat_migration_persister
@@ -518,10 +516,8 @@ class TelegramChannelAdapter(ChannelAdapter):
                 persister(old_chat_id, new_chat_id)
             except Exception as error:
                 _LOGGER.error(
-                    "Cannot persist migrated chat id (channel=%s old=%s new=%s): %s",
+                    "Cannot persist migrated chat id (channel=%s): %s",
                     self._config.id,
-                    old_chat_id,
-                    new_chat_id,
                     error,
                     exc_info=(type(error), error, error.__traceback__),
                 )
@@ -530,10 +526,8 @@ class TelegramChannelAdapter(ChannelAdapter):
             await self._engine.migrate_group_conversation(old_chat_id, new_chat_id)
         except Exception as error:
             _LOGGER.error(
-                "Cannot bridge migrated chat conversation (channel=%s old=%s new=%s): %s",
+                "Cannot bridge migrated chat conversation (channel=%s): %s",
                 self._config.id,
-                old_chat_id,
-                new_chat_id,
                 error,
                 exc_info=(type(error), error, error.__traceback__),
             )
@@ -543,9 +537,8 @@ class TelegramChannelAdapter(ChannelAdapter):
         except ChannelError as error:
             # Best-effort courtesy note; the migration itself already succeeded.
             _LOGGER.warning(
-                "Cannot confirm chat migration in new chat (channel=%s new=%s): %s",
+                "Cannot confirm chat migration in new chat (channel=%s): %s",
                 self._config.id,
-                new_chat_id,
                 error,
             )
 
@@ -799,9 +792,7 @@ class TelegramChannelAdapter(ChannelAdapter):
     def _record_denied_inbound(self, conversation: ConversationFacts, update: Any) -> None:
         """Record an allowlist-denied inbound message for status/discovery surfaces.
 
-        The first denial per chat logs at info so operators can find the chat id
-        without any tooling; repeats stay at debug to keep a chatty denied chat
-        from flooding the log.
+        External identifiers and display names stay in channel status only.
         """
         display_name = self._denied_chat_display_name(conversation, update)
         is_new_chat = self._denied_chat_log.record(
@@ -812,11 +803,9 @@ class TelegramChannelAdapter(ChannelAdapter):
         log = _LOGGER.info if is_new_chat else _LOGGER.debug
         log(
             "Inbound Telegram message from chat not in allowlist "
-            "(channel=%s chat=%s kind=%s name=%s); chat id recorded in channel status",
+            "(channel=%s kind=%s); chat id recorded in channel status",
             self._config.id,
-            conversation.chat_id,
             conversation.kind,
-            display_name or "unknown",
         )
 
     def _denied_chat_display_name(

@@ -265,14 +265,18 @@ async def test_unaddressed_group_reply_does_not_resolve_quoted_media(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_unavailable_quoted_message_keeps_triggering_question(tmp_path: Path) -> None:
+@pytest.mark.parametrize("failed_download", [False, True])
+async def test_unavailable_quoted_message_keeps_triggering_question(
+    tmp_path: Path, failed_download: bool
+) -> None:
     transport = FakeTransport(
         quoted_builder=AsyncMock(
+            side_effect=RuntimeError("download failed") if failed_download else None,
             return_value=QuotedMessageFacts(
                 user_id=None,
                 user_display_name=None,
                 content=None,
-            )
+            ),
         )
     )
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
@@ -299,6 +303,7 @@ async def test_unavailable_quoted_message_keeps_triggering_question(tmp_path: Pa
         SESSION_ID,
         sender=MessageSender(id="50", display_name="50"),
     )
+    assert transport.sent_texts == ["ok"]
     await engine.stop()
 
 
