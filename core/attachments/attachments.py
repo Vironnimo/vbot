@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import io
 import json
+import lzma
+import zlib
 from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
@@ -207,7 +209,7 @@ class AttachmentStore:
             data = json.loads(sidecar_path.read_text(encoding="utf-8"))
         except OSError as exc:
             raise AttachmentError(f"Cannot read attachment metadata {sidecar_path}: {exc}") from exc
-        except json.JSONDecodeError as exc:
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise AttachmentError(f"Invalid attachment metadata JSON: {sidecar_path}") from exc
 
         if not isinstance(data, dict):
@@ -292,6 +294,8 @@ def sniff_media_type(data: bytes, filename: str) -> str:
 
 
 def _sniff_mime(data: bytes, filename: str) -> str:
+    """Detect one allowed MIME type using a bounded magic-bytes strategy."""
+
     if data.startswith(b"BM") and len(data) >= 26 and data[6:10] == b"\x00" * 4:
         header_size = int.from_bytes(data[14:18], "little")
         pixel_offset = int.from_bytes(data[10:14], "little")
@@ -308,8 +312,6 @@ def _sniff_mime(data: bytes, filename: str) -> str:
         brands = [data[8:12], *[data[i : i + 4] for i in range(16, box_end - 3, 4)]]
         if any(brand in {b"avif", b"avis"} for brand in brands):
             return "image/avif"
-    """Detect one allowed MIME type using a bounded magic-bytes strategy."""
-
     if data.startswith(b"\xff\xd8\xff"):
         return "image/jpeg"
     if data.startswith(b"\x89PNG"):
@@ -404,7 +406,9 @@ def _sniff_ooxml_media_type(data: bytes) -> str | None:
             # Bounded read = bounded decompression: ``read(n)`` inflates at most ``n``
             # bytes, so a zip bomb in this entry cannot exhaust memory here.
             content_types_bytes = handle.read(_MAX_OOXML_CONTENT_TYPES_BYTES + 1)
-    except (BadZipFile, KeyError, OSError):
+    except (BadZipFile, KeyError, OSError, EOFError, RuntimeError, zlib.error, lzma.LZMAError):
+        # Encrypted entries, unsupported compression and invalid compressed data
+        # are unrecognizable input, not failures of the attachment service.
         return None
 
     if len(content_types_bytes) > _MAX_OOXML_CONTENT_TYPES_BYTES:
