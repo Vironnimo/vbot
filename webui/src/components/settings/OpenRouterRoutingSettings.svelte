@@ -43,7 +43,7 @@
   let {
     provider,
     active = false,
-    onReloadSettings = noop,
+    onRefreshProviderSettings = noop,
     onToast = noop,
     onError = noop,
   } = $props();
@@ -364,7 +364,7 @@
         providers: { openrouter: { routing: JSON.parse(submitted) } },
       });
       onError('');
-      await onReloadSettings();
+      await onRefreshProviderSettings();
       if (JSON.stringify(routing) === submitted) dirty = false;
       if (reason === 'manual')
         onToast({

@@ -7,7 +7,7 @@ import { init } from '../../lib/i18n.js';
 import { rpcBackedApiMock } from './apiMock.js';
 
 const rpcMock = vi.fn();
-const onReloadSettingsMock = vi.fn();
+const onRefreshProviderSettingsMock = vi.fn();
 const onToastMock = vi.fn();
 
 vi.mock('svelte', async () => {
@@ -62,8 +62,8 @@ describe('OpenRouterRoutingSettings', () => {
         `Unexpected RPC method: ${method} ${JSON.stringify(params)}`,
       );
     });
-    onReloadSettingsMock.mockReset();
-    onReloadSettingsMock.mockResolvedValue(undefined);
+    onRefreshProviderSettingsMock.mockReset();
+    onRefreshProviderSettingsMock.mockResolvedValue(undefined);
     onToastMock.mockReset();
     mountedComponent = null;
   });
@@ -110,7 +110,7 @@ describe('OpenRouterRoutingSettings', () => {
         },
       },
     });
-    expect(onReloadSettingsMock).toHaveBeenCalledOnce();
+    expect(onRefreshProviderSettingsMock).toHaveBeenCalledOnce();
     expect(onToastMock).toHaveBeenCalledWith(
       expect.objectContaining({ variant: 'success' }),
     );
@@ -201,7 +201,7 @@ describe('OpenRouterRoutingSettings', () => {
       props: {
         provider: { id: 'openrouter', routing },
         active: true,
-        onReloadSettings: onReloadSettingsMock,
+        onRefreshProviderSettings: onRefreshProviderSettingsMock,
         onToast: onToastMock,
       },
     });
