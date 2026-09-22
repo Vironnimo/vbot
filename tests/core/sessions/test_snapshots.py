@@ -155,6 +155,103 @@ def test_unverified_manifest_is_not_a_restore_candidate(tmp_path: Path) -> None:
         sessions.close()
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("database_id", "0" * 32),
+        ("session_count", 999),
+        ("message_count", 999),
+        ("latest_history_revision", 999),
+        ("latest_state_revision", 999),
+    ],
+)
+def test_verified_snapshots_reject_manifest_database_disagreement(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    sessions, snapshot = _snapshot(tmp_path)
+    try:
+        manifest_path = snapshot / SNAPSHOT_MANIFEST_NAME
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        payload[field] = value
+        manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        assert list_snapshots(tmp_path) == []
+        assert snapshot_summaries(tmp_path) == []
+    finally:
+        sessions.close()
+
+
+@pytest.mark.parametrize(
+    ("older_time", "newer_time"),
+    [
+        ("2026-09-01T10:00:00Z", "2026-09-01T10:00:00.100000Z"),
+        ("2026-09-01T12:00:00+03:00", "2026-09-01T10:00:00Z"),
+    ],
+)
+def test_snapshot_ordering_and_retention_use_timestamp_instants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, older_time: str, newer_time: str
+) -> None:
+    sessions, older = _snapshot(tmp_path)
+    try:
+        newer = sessions.create_snapshot(reason="newer")
+        assert newer is not None
+        for snapshot, created_at in ((older, older_time), (newer, newer_time)):
+            manifest_path = snapshot / SNAPSHOT_MANIFEST_NAME
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            payload["created_at"] = created_at
+            manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        assert list_snapshots(tmp_path) == [newer, older]
+        assert [item["snapshot_id"] for item in snapshots_module.snapshot_inventory(tmp_path)] == [
+            newer.name,
+            older.name,
+        ]
+        monkeypatch.setattr(snapshots_module, "SNAPSHOT_KEEP_COUNT", 2)
+        published = sessions.create_snapshot(reason="latest")
+        assert published is not None
+        assert older.exists() is False
+        assert newer.exists() is True
+    finally:
+        sessions.close()
+
+
+@pytest.mark.parametrize(
+    "error_message", ["database is locked", "disk I/O error", "unable to open database file"]
+)
+def test_snapshot_verification_preserves_operational_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_message: str
+) -> None:
+    sessions, snapshot = _snapshot(tmp_path)
+    sessions.close()
+
+    def unavailable(*args: Any, **kwargs: Any) -> Any:
+        raise sqlite3.OperationalError(error_message)
+
+    monkeypatch.setattr(snapshots_module.sqlite3, "connect", unavailable)
+    with pytest.raises(SessionStoreUnavailableError):
+        list_snapshots(tmp_path)
+    assert snapshot.is_dir()
+
+
+@pytest.mark.parametrize("failed_operation", ["stat", "read_text", "open"])
+def test_snapshot_verification_preserves_file_access_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_operation: str
+) -> None:
+    sessions, snapshot = _snapshot(tmp_path)
+    sessions.close()
+    target = snapshot / ("sessions.db" if failed_operation == "open" else SNAPSHOT_MANIFEST_NAME)
+    original = getattr(Path, failed_operation)
+
+    def unavailable(path: Path, *args: Any, **kwargs: Any) -> Any:
+        if path == target:
+            raise PermissionError("injected inaccessible snapshot")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, failed_operation, unavailable)
+    with pytest.raises(SessionStoreUnavailableError):
+        list_snapshots(tmp_path)
+
+
 def test_acknowledgement_is_durable_and_preserves_evidence(tmp_path: Path) -> None:
     write_recovery_incident(
         tmp_path,
