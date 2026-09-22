@@ -26,6 +26,49 @@ pytestmark = pytest.mark.asyncio
 SUBPROCESS_TIMEOUT_SECONDS = 10
 
 
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_completion_observer_abort_cannot_strand_committed_run(cancelled):
+    class ObserverAbort(BaseException):
+        pass
+
+    failure = asyncio.CancelledError() if cancelled else ObserverAbort()
+    manager = ChatRunManager()
+    address = SessionAddress(project_id=None, agent_id="coder", session_id="session")
+    committed = []
+
+    class Persistence:
+        async def start_run(self, run):
+            pass
+
+        async def finish_run(self, run, status, payload):
+            committed.append((run.id, status))
+            return {}
+
+    manager.bind_persistence(Persistence())
+
+    async def observer(status):
+        assert committed[-1] == (run.id, status.value)
+        raise failure
+
+    async def execute(run):
+        run.add_completion_observer(observer)
+        return "completed output"
+
+    async def successor(run):
+        return "successor"
+
+    run = await manager.start(address, execute)
+    queued = await manager.enqueue(address, successor)
+    assert run._task is not None
+    await asyncio.gather(run._task, return_exceptions=True)
+    assert run.status == RunStatus.COMPLETED
+    assert await asyncio.wait_for(run.wait(), 1) == "completed output"
+    assert run.events[-1].payload["completion_notification_errors"]
+    next_run = await asyncio.wait_for(queued.future, 1)
+    assert await next_run.wait() == "successor"
+    await manager.aclose()
+
+
 @pytest.mark.parametrize("grouped", [False, True])
 async def test_executor_base_exception_settles_run_before_queue_advances(grouped: bool) -> None:
     class ExecutorAbort(BaseException):
