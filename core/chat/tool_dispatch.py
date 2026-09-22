@@ -449,10 +449,10 @@ class _EmittingToolRegistry(ToolRegistry):
             # later call that re-uses the same id start from a clean slate.
             self._run.clear_tool_cancel(context.tool_call_id)
 
-    def take_media_for_call(self, tool_call_id: str) -> list[JsonObject]:
+    def take_media_for_call(self, tool_call_id: str, *, tool_message_id: str) -> list[JsonObject]:
         """Transfer in-memory media to the correlated request without retaining a cache."""
         return [
-            {**media, "tool_call_id": tool_call_id}
+            {**media, "tool_call_id": tool_call_id, "tool_message_id": tool_message_id}
             for media in self._tool_media.pop(tool_call_id, [])
         ]
 
@@ -615,17 +615,20 @@ async def _dispatch_tool_calls(
     tool_messages: list[ChatMessage] = []
     media_outputs: list[JsonObject] = []
     for tool_call, result in zip(tool_calls, results, strict=True):
-        tool_messages.append(
-            ChatMessage.tool(
-                tool_call_id=tool_call.id,
-                name=tool_call.name,
-                content=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
-                timing=emitting_registry.timing_for_call(tool_call.id),
-                tool_display=emitting_registry.display_for_completed_call(tool_call.id),
-            )
+        tool_message = ChatMessage.tool(
+            tool_call_id=tool_call.id,
+            name=tool_call.name,
+            content=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+            timing=emitting_registry.timing_for_call(tool_call.id),
+            tool_display=emitting_registry.display_for_completed_call(tool_call.id),
         )
-        media_outputs.extend(_read_media_outputs(result, tool_call_id=tool_call.id))
-        media_outputs.extend(emitting_registry.take_media_for_call(tool_call.id))
+        tool_messages.append(tool_message)
+        media_outputs.extend(
+            _read_media_outputs(result, tool_call_id=tool_call.id, tool_message_id=tool_message.id)
+        )
+        media_outputs.extend(
+            emitting_registry.take_media_for_call(tool_call.id, tool_message_id=tool_message.id)
+        )
     return tool_messages, media_outputs
 
 
@@ -710,12 +713,14 @@ def _read_media_outputs(
     result: JsonObject,
     *,
     tool_call_id: str,
+    tool_message_id: str,
 ) -> list[JsonObject]:
     """Extract request-local rich-content descriptors from a Tool Result.
 
     ``web_fetch`` and other stored image results carry compact attachment
     references. Chat resolves them into media content on the correlated Tool
-    Result for the active Run. Other artifact kinds yield nothing.
+    Result for the active Run. Other artifact kinds yield nothing. Correlation
+    uses the Tool message identity: Providers may reuse Tool-call ids per turn.
     """
     artifacts = result.get("artifacts")
     if not isinstance(artifacts, list):
@@ -736,6 +741,7 @@ def _read_media_outputs(
             outputs.append(
                 {
                     "tool_call_id": tool_call_id,
+                    "tool_message_id": tool_message_id,
                     "attachment_id": attachment_id,
                     "filename": filename,
                     "media_type": media_type,

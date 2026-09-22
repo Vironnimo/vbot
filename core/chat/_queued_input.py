@@ -6,15 +6,11 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from core.chat._message_history import _append_input_origin_note
-from core.chat._request_history import (
-    _assign_session_image_references,
-    _restore_in_run_tool_result_content,
-)
+from core.chat._request_history import _assign_session_image_references
 from core.chat._run_state import RequestBuildInputs, _RunRequest
 from core.chat._skill_activation import _activate_triggered_skills
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.content_blocks import ContentBlock
-from core.chat.continuation import inject_continuation_reminder
 from core.chat.errors import ChatError
 from core.chat.events import _visible_message_payload
 from core.chat.messages import ChatMessage, InputOrigin
@@ -80,7 +76,7 @@ async def persist_steering_input(context: _RunExecutionContext, item: QueuedRunI
 async def rebuild_after_steering(
     context: _RunExecutionContext, target: _ModelTarget, requests: RequestBuilder
 ) -> None:
-    """Resolve newly supplied media and Skills through the ordinary request builder."""
+    """Resolve newly supplied media and Skills, keeping the live Run request state."""
     session = context.session
     await context.session_snapshot.refresh(session)
     session.activated_skill_contents(context.session_snapshot.active_messages)
@@ -101,26 +97,12 @@ async def rebuild_after_steering(
     finally:
         await session.flush_deferred_notes_async()
     await context.session_snapshot.refresh(session)
-    live_messages = context.request_state.messages if context.request_state else []
-    state = await requests.build_request_state(
+    context.request_state = await requests.rebuild_live_request_state(
         context.agent,
         session,
         inputs=RequestBuildInputs.from_context(context, target).with_session_messages(
             context.session_snapshot.active_messages
         ),
+        live_messages=context.request_state.messages if context.request_state else [],
+        continuation_reminder=context.continuation_reminder,
     )
-    state.messages[:] = await _restore_in_run_tool_result_content(
-        state.messages,
-        live_messages,
-        input_modalities=target.input_modalities,
-        wire_media_types=target.wire_media_types,
-        image_budget=context.image_budget,
-        image_converter=requests._tool_image_converter,
-        max_image_bytes=target.max_image_bytes,
-    )
-    if context.continuation_reminder is not None:
-        state = replace(
-            state,
-            messages=inject_continuation_reminder(state.messages, context.continuation_reminder),
-        )
-    context.request_state = state

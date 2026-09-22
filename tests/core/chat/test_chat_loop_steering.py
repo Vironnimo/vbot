@@ -8,9 +8,11 @@ from typing import Any
 
 import pytest
 
-from core.runs import ActiveRunError
+from core.providers.errors import NetworkError
+from core.runs import PROVIDER_REQUEST_STATUS_EVENT, ActiveRunError, RunStatus
 from core.tools import ToolRegistry, tool_success
 from tests.core.chat.chat_loop_support import (
+    PolicyStubAdapter,
     StubAdapter,
     StubAgent,
     StubRuntime,
@@ -19,9 +21,46 @@ from tests.core.chat.chat_loop_support import (
 )
 
 
+class SteeringAdapter(StubAdapter):
+    """Select one new steering input while each chosen request is in flight."""
+
+    def __init__(self, responses: list[Any], *, steer_requests: range) -> None:
+        super().__init__(responses)
+        self.steer_requests = steer_requests
+        self.loop: Any = None
+        self.runtime: Any = None
+        self.run: Any = None
+
+    async def send(
+        self, messages: list[dict[str, Any]], *, model_id: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        index = len(self.requests)
+        if index in self.steer_requests:
+            item = await self.loop.queue_run("coder", f"Steer {index}", session_id="one")
+            self.runtime.chat_run_manager.steer_queued(
+                "coder", "one", item.item_id, project_id=None, run_id=self.run.id
+            )
+        return await super().send(messages, model_id=model_id, **kwargs)
+
+
 class PausedAdapter(StubAdapter):
     def __init__(self, responses: list[Any]) -> None:
         super().__init__(responses)
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def send(
+        self, messages: list[dict[str, Any]], *, model_id: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        if not self.requests:
+            self.entered.set()
+            await self.release.wait()
+        return await super().send(messages, model_id=model_id, **kwargs)
+
+
+class PausedPolicyAdapter(PolicyStubAdapter):
+    def __init__(self, responses: list[Any], *, policy: Any) -> None:
+        super().__init__(responses, policy=policy)
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
 
@@ -119,3 +158,116 @@ async def test_rejects_stale_run_and_keeps_input_on_cancel(tmp_path: Path) -> No
     await asyncio.wait_for(successor.wait(), 10)
     history = runtime.chat_sessions.get(session_address("coder", "one")).load()
     assert [m.content for m in history if m.role == "user"] == ["Original", "Retained"]
+
+
+@pytest.mark.asyncio
+async def test_each_steered_step_gets_a_fresh_recovery_budget(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
+    failures: list[Any] = [NetworkError("temporarily unavailable") for _ in range(8)]
+    answers = [{"content": f"Answer {index}", "tool_calls": None} for index in range(10)]
+    # The first answer needs the ninth attempt; nine steered answers follow it.
+    adapter = SteeringAdapter([*failures, *answers], steer_requests=range(8, 17))
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path, agent=StubAgent(id="coder", model="openai/gpt-5.2"), adapter=adapter
+    )
+    runtime.chat_sessions.create("coder", session_id="one")
+    loop = build_chat_loop(runtime)
+    adapter.loop, adapter.runtime = loop, runtime
+    run = await loop.start_run("coder", "Original", session_id="one")
+    adapter.run = run
+    result = await asyncio.wait_for(run.wait(), 20)
+    assert run.status == RunStatus.COMPLETED
+    assert result.content == "Answer 9"
+    assert len(adapter.requests) == 18
+    retries = [
+        event.payload["attempt"]
+        for event in run.events
+        if event.type == PROVIDER_REQUEST_STATUS_EVENT
+        and event.payload.get("state") == "retrying"
+        and "attempt" in event.payload
+    ]
+    # Only the initial step failed; no steered request waits for a backoff.
+    assert retries == list(range(2, 10))
+    history = runtime.chat_sessions.get(session_address("coder", "one")).load()
+    assert len([m for m in history if m.role == "user"]) == 10
+
+
+@pytest.mark.asyncio
+async def test_withdrawn_steering_input_keeps_the_final_answer(tmp_path: Path) -> None:
+    address = session_address("coder", "one")
+
+    class WithdrawingAdapter(StubAdapter):
+        async def send(
+            self, messages: list[dict[str, Any]], *, model_id: str, **kwargs: Any
+        ) -> dict[str, Any]:
+            if not self.requests:
+                item = await loop.queue_run("coder", "Withdrawn", session_id="one")
+                manager.steer_queued("coder", "one", item.item_id, project_id=None, run_id=run.id)
+                withdrawals.append(asyncio.create_task(withdraw(item.item_id)))
+            return await super().send(messages, model_id=model_id, **kwargs)
+
+    async def withdraw(item_id: str) -> None:
+        # Wait on the Session lock while the final answer is persisted, so the
+        # removal lands between the pending-steering check and its delivery.
+        lock = runtime.chat_sessions.write_lock(address)
+        while not lock._lock.locked():
+            await asyncio.sleep(0)
+        async with lock:
+            assert manager.remove_queued("coder", "one", item_id, project_id=None)
+
+    withdrawals: list[asyncio.Task[None]] = []
+    adapter = WithdrawingAdapter([{"content": "Final", "tool_calls": None}])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path, agent=StubAgent(id="coder", model="openai/gpt-5.2"), adapter=adapter
+    )
+    runtime.chat_sessions.create("coder", session_id="one")
+    manager = runtime.chat_run_manager
+    loop = build_chat_loop(runtime)
+    run = await loop.start_run("coder", "Original", session_id="one")
+    result = await asyncio.wait_for(run.wait(), 10)
+    await asyncio.gather(*withdrawals)
+    assert run.status == RunStatus.COMPLETED
+    assert result.content == "Final"
+    assert len(adapter.requests) == 1
+    assert not run.accepts_steering
+    history = runtime.chat_sessions.get(address).load()
+    assert [m.content for m in history if m.role == "user"] == ["Original"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("steer", [False, True])
+async def test_steering_keeps_current_run_reasoning(tmp_path: Path, steer: bool) -> None:
+    first = {
+        "content": "Before",
+        "reasoning": "Plan the probe",
+        "reasoning_meta": {"signature": "sig-1"},
+        "tool_calls": [{"id": "a", "name": "probe", "arguments": {}}],
+        "terminal_outcome": "tool_calls",
+    }
+    adapter = PausedPolicyAdapter(
+        [first, {"content": "After", "tool_calls": None}], policy="current_run"
+    )
+    tools = ToolRegistry()
+    tools.register(
+        "probe", "Probe", {"type": "object"}, lambda _ctx, _args: tool_success({"done": True})
+    )
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["probe"])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime.chat_sessions.create("coder", session_id="one")
+    loop = build_chat_loop(runtime)
+    run = await loop.start_run("coder", "Original", session_id="one")
+    await asyncio.wait_for(adapter.entered.wait(), 5)
+    if steer:
+        item = await loop.queue_run("coder", "Steer", session_id="one")
+        runtime.chat_run_manager.steer_queued(
+            "coder", "one", item.item_id, project_id=None, run_id=run.id
+        )
+    adapter.release.set()
+    await asyncio.wait_for(run.wait(), 10)
+    sent = adapter.requests[1]["messages"]
+    tool_turn = next(m for m in sent if m["role"] == "assistant" and m.get("tool_calls"))
+    assert tool_turn["reasoning"] == "Plan the probe"
+    assert tool_turn["reasoning_meta"] == {"signature": "sig-1"}
+    assert [m["content"] for m in sent if m["role"] == "user"][-1] == (
+        "Steer" if steer else "Original"
+    )

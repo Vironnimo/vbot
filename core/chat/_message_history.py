@@ -298,15 +298,20 @@ def effective_compaction_messages(
         for message in messages[checkpoint_index + 1 :]
         if message.role != "compaction_checkpoint"
     ]
-    effective = [*projection, *appended]
-    return _overlay_pending_tool_batch(messages, effective)
+    return _overlay_pending_tool_batch(messages, projection, appended)
 
 
 def _overlay_pending_tool_batch(
     canonical_messages: Sequence[_records.ChatMessage],
-    effective_messages: list[_records.ChatMessage],
+    projection: list[_records.ChatMessage],
+    appended: list[_records.ChatMessage],
 ) -> list[_records.ChatMessage]:
-    """Keep the latest complete unconsumed Tool batch in post-Compaction Context."""
+    """Keep the latest complete unconsumed Tool batch in post-Compaction Context.
+
+    The restored batch follows the checkpoint Projection and precedes every
+    message appended after it in canonical order, such as steered User input.
+    """
+    effective_messages = [*projection, *appended]
     latest_assistant_index = next(
         (
             index
@@ -335,10 +340,22 @@ def _overlay_pending_tool_batch(
     batch_ids = {message.id for message in batch}
     if batch_ids.issubset({message.id for message in effective_messages}):
         return effective_messages
-    without_partial_batch = [
-        message for message in effective_messages if message.id not in batch_ids
+    canonical_positions = {id(message): index for index, message in enumerate(canonical_messages)}
+    kept_appended = [message for message in appended if message.id not in batch_ids]
+    later = next(
+        (
+            index
+            for index, message in enumerate(kept_appended)
+            if canonical_positions.get(id(message), latest_assistant_index) > latest_assistant_index
+        ),
+        len(kept_appended),
+    )
+    return [
+        *(message for message in projection if message.id not in batch_ids),
+        *kept_appended[:later],
+        *batch,
+        *kept_appended[later:],
     ]
-    return [*without_partial_batch, *batch]
 
 
 def _legacy_checkpoint_projection(

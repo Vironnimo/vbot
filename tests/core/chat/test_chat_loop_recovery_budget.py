@@ -503,3 +503,39 @@ async def test_interrupted_result_includes_fragments_from_all_fallback_routes(tm
     assert raised.value.result.content == "abcdefghijklmnopqr"
     history = runtime.chat_sessions.get(session_address("coder", "test")).load()
     assert [m.content for m in history if m.role == "assistant"] == list("abcdefghijklmnopqr")
+
+
+@pytest.mark.asyncio
+async def test_interrupted_result_excludes_fragments_of_completed_steps(tmp_path):
+    tools = ToolRegistry()
+    tools.register("probe", "Probe", {"type": "object"}, lambda context, args: tool_success({}))
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [{"type": "content_delta", "text": "PART-A"}, NetworkError("dropped")],
+            # The continuation completes that step with a Tool Call.
+            [
+                {"type": "content_delta", "text": "TOOL-PREAMBLE-B"},
+                {
+                    "type": "tool_call_delta",
+                    "slot": 0,
+                    "id": "call_probe",
+                    "name_delta": "probe",
+                    "arguments_delta": "{}",
+                },
+                {"type": "finish", "reason": "tool_calls"},
+            ],
+            *[NetworkError("offline") for _ in range(9)],
+        ],
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(id="coder", model="openai/test", allowed_tools=["probe"]),
+        adapter=adapter,
+        tools=tools,
+    )
+    with pytest.raises(RunInterruptedError) as raised:
+        await build_chat_loop(runtime, streaming=True).send("coder", "Work", session_id="test")
+    # The unfinished step after the Tool Result produced no output of its own.
+    assert raised.value.result is None
+    assert next(iter(runtime.chat_runs._runs.values())).status == RunStatus.INTERRUPTED

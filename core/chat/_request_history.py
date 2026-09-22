@@ -136,6 +136,7 @@ def _current_run_read_media_outputs(
                 _read_media_outputs(
                     result,
                     tool_call_id=message.tool_call_id,
+                    tool_message_id=message.id,
                 )
             )
     return outputs
@@ -198,30 +199,34 @@ def _restore_live_tool_content(
     wire_media_types: frozenset[str] | None,
     max_image_bytes: int | None,
 ) -> list[tuple[list[JsonObject], int]]:
-    """Keep history scans off the Event Loop; return only images needing work."""
+    """Keep history scans off the Event Loop; return only images needing work.
+
+    Live content is matched by Tool message identity, never by Tool-call id
+    alone: Providers may reuse one call id (such as ``tool_call_0``) per turn.
+    """
     from core.compaction import is_compacted_tool_result_content
 
-    rich_content_by_call_id = {
-        message["tool_call_id"]: message[TOOL_RESULT_CONTENT_BLOCKS_FIELD]
+    rich_content_by_message_id = {
+        message["id"]: message[TOOL_RESULT_CONTENT_BLOCKS_FIELD]
         for message in live_messages
         if message.get("role") == "tool"
-        and isinstance(message.get("tool_call_id"), str)
+        and isinstance(message.get("id"), str)
         and isinstance(message.get(TOOL_RESULT_CONTENT_BLOCKS_FIELD), list)
     }
     pending: list[tuple[list[JsonObject], int]] = []
     for message in rebuilt_messages:
-        tool_call_id = message.get("tool_call_id")
+        message_id = message.get("id")
         if (
             message.get("role") != "tool"
-            or not isinstance(tool_call_id, str)
-            or tool_call_id not in rich_content_by_call_id
+            or not isinstance(message_id, str)
+            or message_id not in rich_content_by_message_id
             or is_compacted_tool_result_content(message.get("content"))
             or (input_modalities is not None and TOOL_RESULT_CONTENT_BLOCKS_FIELD in message)
         ):
             continue
         content = [
             block
-            for block in rich_content_by_call_id[tool_call_id]
+            for block in rich_content_by_message_id[message_id]
             if block.get("type") != "media"
             or input_modalities is None
             or "image" in input_modalities

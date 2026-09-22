@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -12,11 +13,16 @@ from core.chat._message_history import (
     finalize_checkpoint_history_guidance,
     history_available,
 )
-from core.chat._request_history import _prepare_request_messages, _request_content_resolution_inputs
+from core.chat._request_history import (
+    _prepare_request_messages,
+    _request_content_resolution_inputs,
+    _restore_in_run_tool_result_content,
+)
 from core.chat._run_state import RequestBuildInputs, _ModelTarget, _RequestState
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import MediaBlock, content_block_to_dict
+from core.chat.continuation import inject_continuation_reminder
 from core.chat.errors import ChatError
 from core.chat.events import _close_adapter
 from core.chat.messages import (
@@ -34,7 +40,7 @@ from core.chat.model_resolution import (
     parse_model_with_connection,
 )
 from core.chat.usage import latest_session_context_usage
-from core.chat.wire_shaping import limit_request_images
+from core.chat.wire_shaping import _restore_in_run_assistant_reasoning, limit_request_images
 from core.extensions import invoke_extension_handler
 from core.projects import ProjectError
 from core.prompts import BLOCK_KIND_DATA, BlockDefinition, PinnedSkillCatalog, ProjectPromptContext
@@ -203,6 +209,8 @@ class RequestBuilder:
         provider_id: str,
         connection_id: str,
         model_id: str,
+        *,
+        public_model: str,
     ) -> _ModelTarget:
         connection = ConnectionRef(provider_id, connection_id)
         adapter = self._dependencies.get_adapter(connection)
@@ -216,6 +224,7 @@ class RequestBuilder:
                 connection_id,
                 model_id,
             ),
+            public_model=public_model,
             adapter=adapter,
             replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
             input_modalities=_model_input_modalities_for_target(
@@ -556,6 +565,39 @@ class RequestBuilder:
             tool_contracts,
         )
 
+    async def rebuild_live_request_state(
+        self,
+        agent: Any,
+        session: ChatSession,
+        *,
+        inputs: RequestBuildInputs,
+        live_messages: list[JsonObject] | None,
+        continuation_reminder: str | None,
+    ) -> _RequestState:
+        """Rebuild an active Run's request without losing its live-only state.
+
+        Canonical history shaping cannot see what exists only in the live
+        request: current-Run native Reasoning (stripped from history under
+        ``current_run``) and Run-local Tool media. Steering, stale-Compaction
+        recovery, post-Compaction projection and Model fallback all rebuild
+        through this one path; fallback strips native Reasoning afterward.
+        """
+        state = await self.build_request_state(agent, session, inputs=inputs)
+        messages = state.messages
+        if live_messages is not None:
+            messages = await _restore_in_run_tool_result_content(
+                _restore_in_run_assistant_reasoning(messages, live_messages),
+                live_messages,
+                input_modalities=inputs.input_modalities,
+                wire_media_types=inputs.wire_media_types,
+                image_budget=inputs.image_budget,
+                image_converter=self._tool_image_converter,
+                max_image_bytes=inputs.max_image_bytes,
+            )
+        if continuation_reminder is not None:
+            messages = inject_continuation_reminder(messages, continuation_reminder)
+        return replace(state, messages=messages)
+
     async def _route_tool_definitions(
         self,
         tools: list[JsonObject],
@@ -603,7 +645,9 @@ class RequestBuilder:
             )
         provider_id, connection_id = _resolve_agent_connection(self._dependencies, agent)
         _, model_id = _split_agent_model(agent.model)
-        target = self._create_model_target(provider_id, connection_id, model_id)
+        target = self._create_model_target(
+            provider_id, connection_id, model_id, public_model=agent.model
+        )
         try:
             return await self._route_tool_definitions(
                 tools,
@@ -627,22 +671,25 @@ class RequestBuilder:
 
         The persisted Tool message keeps only its compact result envelope. Base64
         blocks live exclusively in the in-flight request, so reading an image does
-        not fabricate or persist a user turn.
+        not fabricate or persist a user turn. Correlation uses the Tool message
+        identity because Providers may reuse Tool-call ids across turns.
         """
 
         if not media_outputs:
             return
 
-        by_tool_call_id: dict[str, list[JsonObject]] = {}
+        by_tool_message_id: dict[str, list[JsonObject]] = {}
         for media_output in media_outputs:
-            tool_call_id = media_output.get("tool_call_id")
-            if isinstance(tool_call_id, str):
-                by_tool_call_id.setdefault(tool_call_id, []).append(media_output)
+            tool_message_id = media_output.get("tool_message_id")
+            if isinstance(tool_message_id, str):
+                by_tool_message_id.setdefault(tool_message_id, []).append(media_output)
 
         for tool_message in tool_messages:
-            tool_call_id = tool_message.get("tool_call_id")
+            tool_message_id = tool_message.get("id")
             matching = (
-                by_tool_call_id.get(tool_call_id, []) if isinstance(tool_call_id, str) else []
+                by_tool_message_id.get(tool_message_id, [])
+                if isinstance(tool_message_id, str)
+                else []
             )
             if not matching:
                 continue
@@ -674,7 +721,7 @@ class RequestBuilder:
                 )
                 for media_output in matching
             ]
-            transient_message_id = f"tool-result:{tool_call_id}"
+            transient_message_id = f"tool-result:{tool_message_id}"
             resolved = await self._attachment_resolver.resolve_messages(
                 [
                     {

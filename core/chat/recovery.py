@@ -28,9 +28,10 @@ class IncompleteResponseError(ProviderError):
 class RecoveryBudget:
     """Bound one unfinished Model step, including its configured fallback routes.
 
-    Successful Tool boundaries reset the budget. Partial text, Reasoning,
-    transport heartbeats and Model switches do not. The thirty-minute deadline
-    begins at the first failure, leaving healthy initial generation unaffected.
+    A complete Model response (final answer or Tool-call turn) resets the budget
+    for the next step. Partial text, Reasoning, truncated turns, transport
+    heartbeats and Model switches do not. The thirty-minute deadline begins at
+    the first failure, leaving healthy initial generation unaffected.
     """
 
     clock: Callable[[], float] = time.monotonic

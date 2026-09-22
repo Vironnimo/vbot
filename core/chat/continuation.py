@@ -222,6 +222,17 @@ class ContinuationTracker:
         async with self._journal_lock:
             await self._ensure_started_unlocked()
 
+    async def restart_journal(self) -> None:
+        """Discard every earlier journal record and durably restart this Run's chain.
+
+        A committed history edit invalidates older checkpoint state, but the
+        editing Run still needs its own recovery record.
+        """
+        async with self._journal_lock:
+            await self._session.clear_continuation_async()
+            self._started = False
+            await self._ensure_started_unlocked()
+
     @property
     def step(self) -> int:
         return self._step
@@ -262,6 +273,9 @@ class ContinuationTracker:
                 ],
             )
         )
+        # Every persisted Assistant closes its slot. A later continuation or
+        # replayed attempt can neither overwrite nor discard this durable work.
+        self._step += 1
 
     async def record_tool_starts(self, tool_calls: list[Any]) -> None:
         await self._flush_boundary(
@@ -293,7 +307,6 @@ class ContinuationTracker:
                 )
             )
         await self._flush_boundary(*records)
-        self._step += 1
 
     def mark_interruption_cause(self, cause: ContinuationCause) -> None:
         self.interruption_cause = cause

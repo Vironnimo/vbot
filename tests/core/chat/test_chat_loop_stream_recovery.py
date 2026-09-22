@@ -14,6 +14,7 @@ from core.chat import (
 )
 from core.chat.streaming import StreamingChunkTimeoutError
 from core.providers.errors import (
+    NetworkError,
     ProviderStreamingUnsupportedError,
 )
 from core.runs import (
@@ -129,6 +130,61 @@ async def test_streaming_mode_preserves_partial_instead_of_fallback_after_visibl
     ]
     assert len(adapter.stream_requests) == 2
     assert len(adapter.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("partial", "expected_entries"),
+    [
+        (
+            [
+                {"type": "reasoning_meta", "reasoning_meta": {"signature": "partial-sig"}},
+                {"type": "reasoning_delta", "text": "Thinking."},
+                {"type": "content_delta", "text": "Visible"},
+            ],
+            [{"content": "Visible"}],
+        ),
+        # An unclosed inline thinking block leaves no visible answer text.
+        ([{"type": "content_delta", "text": "<think>partial inline thought"}], []),
+    ],
+)
+async def test_partial_continuation_never_replays_interrupted_native_reasoning(
+    tmp_path: Path,
+    monkeypatch,
+    partial: list[dict[str, Any]],
+    expected_entries: list[dict[str, Any]],
+) -> None:
+    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [*partial, NetworkError("dropped mid-stream")],
+            [{"type": "content_delta", "text": "Answer"}, {"type": "finish", "reason": "stop"}],
+        ],
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path, agent=StubAgent(id="coder", model="openai/test"), adapter=adapter
+    )
+
+    await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="s")
+
+    continuation = adapter.stream_requests[1]["messages"]
+    assert [
+        {
+            key: message[key]
+            for key in ("content", "tool_calls", "reasoning", "reasoning_meta")
+            if key in message
+        }
+        for message in continuation
+        if message["role"] == "assistant"
+    ] == expected_entries
+    partial_message = next(
+        m
+        for m in runtime.chat_sessions.get(session_address("coder", "s")).load()
+        if m.role == "assistant"
+    )
+    assert partial_message.interrupted
+    assert partial_message.reasoning is not None
 
 
 @pytest.mark.asyncio
