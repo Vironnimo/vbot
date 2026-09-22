@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from typing import Any
 
@@ -14,12 +16,15 @@ import core.providers.opencode_zen as zen_module
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.errors import (
     CatalogEntrySkipped,
+    NetworkError,
     ProviderAuthError,
     ProviderError,
     ProviderRateLimitError,
+    ProviderTimeoutError,
 )
 from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.utils.retry import caller_owns_retries
 
 BASE_URL = "https://opencode.ai/zen/v1"
 RESPONSES_URL = f"{BASE_URL}/responses"
@@ -90,6 +95,39 @@ def test_public_package_exports_opencode_zen_adapter() -> None:
     from core.providers import OpenCodeZenAdapter as PublicOpenCodeZenAdapter
 
     assert PublicOpenCodeZenAdapter is OpenCodeZenAdapter
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (httpx.ReadError, NetworkError),
+        (httpx.ReadTimeout, ProviderTimeoutError),
+        (asyncio.CancelledError, asyncio.CancelledError),
+    ],
+)
+async def test_gemini_rejected_stream_closes_when_error_body_read_fails(
+    adapter: OpenCodeZenAdapter,
+    failure: type[BaseException],
+    expected: type[BaseException],
+) -> None:
+    class BrokenBody(httpx.AsyncByteStream):
+        closed = False
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield b"partial error"
+            raise failure("body interrupted")
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    body = BrokenBody()
+    route = respx.post(GEMINI_STREAM_URL).mock(return_value=httpx.Response(503, stream=body))
+    with caller_owns_retries(), pytest.raises(expected):
+        _ = [delta async for delta in adapter.stream([], model_id="gemini-3.5-flash")]
+    assert body.closed
+    assert route.call_count == 1
 
 
 @respx.mock
