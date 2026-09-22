@@ -51,6 +51,7 @@ from core.chat.wire_shaping import (
 from core.debug import DebugContext
 from core.extensions import HookContext, SessionRequestContext
 from core.providers.adapter import (
+    TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
     TERMINAL_OUTCOME_TOOL_CALLS,
     TerminalOutcome,
     request_input_budget,
@@ -568,11 +569,16 @@ class AgenticProgression:
                 if not self._streaming:
                     _emit_assistant_events(run, assistant_message)
                 messages.extend(assistant_request_messages)
-                if (recovery != "none" or interruption_chain) and (
-                    isinstance(assistant_message.content, str)
-                    or assistant_message.reasoning is not None
-                ):
-                    interruption_chain.append(assistant_message)
+                if assistant_message.interrupted:
+                    if (
+                        isinstance(assistant_message.content, str)
+                        or assistant_message.reasoning is not None
+                    ):
+                        interruption_chain.append(assistant_message)
+                elif terminal_outcome != TERMINAL_OUTCOME_OUTPUT_TRUNCATED:
+                    # A complete response finishes the unfinished step, so its
+                    # earlier fragments are no longer a partial Run result.
+                    interruption_chain.clear()
 
                 if not assistant_message.tool_calls:
                     if assistant_step.failure is not None:
