@@ -72,7 +72,6 @@ export function createAutosaveParticipant({
 }) {
   let activeSave = null;
   let failedSnapshot = null;
-  let lastSuccessfulSnapshot = null;
 
   function runSave(reason = 'auto', { force = false } = {}) {
     if (reason !== 'auto') cancelPending();
@@ -85,8 +84,7 @@ export function createAutosaveParticipant({
         ) {
           return false;
         }
-        const currentSnapshot = snapshotKey(getSnapshot());
-        if (hasChanges() && currentSnapshot !== lastSuccessfulSnapshot) {
+        if (hasChanges()) {
           return runSave(reason, { force });
         }
         return true;
@@ -97,13 +95,6 @@ export function createAutosaveParticipant({
     }
 
     const savedSnapshot = snapshotKey(getSnapshot());
-    if (
-      !force &&
-      reason === 'auto' &&
-      savedSnapshot === lastSuccessfulSnapshot
-    ) {
-      return Promise.resolve(true);
-    }
     if (reason === 'auto' && savedSnapshot === failedSnapshot) {
       return Promise.resolve(false);
     }
@@ -116,7 +107,6 @@ export function createAutosaveParticipant({
     const complete = (succeeded) => {
       if (succeeded) {
         failedSnapshot = null;
-        lastSuccessfulSnapshot = savedSnapshot;
       } else {
         failedSnapshot = savedSnapshot;
       }
@@ -146,8 +136,7 @@ export function createAutosaveParticipant({
         return false;
       }
 
-      const currentSnapshot = snapshotKey(getSnapshot());
-      if (!hasChanges() || currentSnapshot === lastSuccessfulSnapshot) {
+      if (!hasChanges()) {
         return true;
       }
       if (!(await runSave('transition'))) {
@@ -160,9 +149,7 @@ export function createAutosaveParticipant({
 
   return {
     flush,
-    hasPending: () =>
-      activeSave !== null ||
-      (hasChanges() && snapshotKey(getSnapshot()) !== lastSuccessfulSnapshot),
+    hasPending: () => activeSave !== null || hasChanges(),
     runSave,
   };
 }

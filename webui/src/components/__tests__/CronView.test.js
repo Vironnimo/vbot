@@ -435,8 +435,13 @@ describe('CronView', () => {
   });
 
   it('saves existing edits before switching to another job', async () => {
+    const jobs = [cronJob({ id: 'job-one' }), cronJob({ id: 'job-two' })];
     listCronJobsMock.mockResolvedValue({
-      jobs: [cronJob({ id: 'job-one' }), cronJob({ id: 'job-two' })],
+      jobs,
+    });
+    updateCronJobMock.mockImplementation(async ({ id, prompt }) => {
+      jobs.find((job) => job.id === id).prompt = prompt;
+      return { ok: true };
     });
     mountView();
     await waitForCondition(() => document.getElementById('cron-job-prompt'));
