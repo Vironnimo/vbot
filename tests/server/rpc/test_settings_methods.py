@@ -72,6 +72,31 @@ def test_trace_count_logger_name() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation",
+    [
+        {"op": [], "path": "server.port", "value": 8420},
+        {"op": {}, "path": "server.port", "value": 8420},
+        {"op": "set", "path": "server.port", "value": 10**400},
+        {"op": "set", "path": "defaults.agent.temperature", "value": 10**400},
+    ],
+)
+async def test_invalid_settings_patch_returns_validation_error_without_writing(
+    tmp_path: Path, operation: dict[str, Any]
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    previous = state.runtime.storage.load_settings()
+
+    response = await dispatch_rpc(
+        state, {"method": "settings.patch", "params": {"operations": [operation]}}
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert state.runtime.storage.load_settings() == previous
+
+
+@pytest.mark.asyncio
 async def test_session_title_settings_round_trip_and_validate_model_connection(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,

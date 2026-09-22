@@ -77,6 +77,29 @@ def test_invalid_patch_leaves_input_unchanged() -> None:
     assert original == {"web_search": {"provider": "brave"}}
 
 
+@pytest.mark.parametrize("operation", [[], {}, None, True, 1])
+def test_patch_rejects_non_string_operations(operation: object) -> None:
+    with pytest.raises(SettingsPathError):
+        parse_patch_operations([{"op": operation, "path": "server.port", "value": 8420}])
+
+
+@pytest.mark.parametrize("path", ["server.port", "compaction.trigger.threshold"])
+def test_patch_rejects_oversized_numbers_as_validation_errors(path: str) -> None:
+    with pytest.raises(SettingsPathError):
+        parse_patch_operations([{"op": "set", "path": path, "value": 10**400}])
+
+
+def test_integer_patch_does_not_require_float_representation() -> None:
+    value = 10**400
+    operations = parse_patch_operations(
+        [{"op": "set", "path": "attachments.max_size_bytes", "value": value}]
+    )
+
+    updated, _changed = apply_settings_patch({}, operations)
+
+    assert updated["attachment_max_size_bytes"] == value
+
+
 def test_patch_rejects_overlapping_paths() -> None:
     with pytest.raises(SettingsPathError):
         parse_patch_operations(
