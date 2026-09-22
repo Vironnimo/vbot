@@ -65,6 +65,45 @@ def test_read_rejects_missing_artifact(tmp_path: Path) -> None:
         store.read("a" * 32)
 
 
+@pytest.mark.parametrize("metadata", [[], None, 42, "not an object"])
+def test_read_maps_non_object_metadata_to_task_error(tmp_path: Path, metadata) -> None:
+    store = _store(tmp_path)
+    written = store.write(b"audio", extension="mp3", media_type="audio/mpeg")
+    sidecar = tmp_path / "speech" / f"{written.id}.json"
+    sidecar.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(_StubConfigurationError):
+        store.read(written.id)
+
+
+@pytest.mark.parametrize("replacement", ["../outside.mp3", "absolute", "other-artifact.mp3"])
+def test_read_refuses_sidecar_redirects_to_other_files(tmp_path: Path, replacement: str) -> None:
+    store = _store(tmp_path)
+    written = store.write(b"audio", extension="mp3", media_type="audio/mpeg")
+    outside = tmp_path / "outside.mp3"
+    outside.write_bytes(b"not this artifact")
+    (tmp_path / "speech" / "other-artifact.mp3").write_bytes(b"another artifact")
+    sidecar = tmp_path / "speech" / f"{written.id}.json"
+    metadata = json.loads(sidecar.read_text(encoding="utf-8"))
+    metadata["filename"] = str(outside) if replacement == "absolute" else replacement
+    sidecar.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(_StubConfigurationError):
+        store.read(written.id)
+
+
+def test_read_rejects_mismatched_sidecar_id_and_invalid_utf8(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    written = store.write(b"audio", extension="mp3", media_type="audio/mpeg")
+    sidecar = tmp_path / "speech" / f"{written.id}.json"
+    metadata = json.loads(sidecar.read_text(encoding="utf-8"))
+    metadata["id"] = "different-artifact"
+    sidecar.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(_StubConfigurationError):
+        store.read(written.id)
+    sidecar.write_bytes(b"\xff\xfeinvalid")
+    with pytest.raises(_StubConfigurationError):
+        store.read(written.id)
+
+
 def test_read_rejects_unreadable_and_invalid_metadata(tmp_path: Path) -> None:
     store = _store(tmp_path)
     artifact_dir = tmp_path / "speech"
