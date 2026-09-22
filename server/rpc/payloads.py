@@ -60,10 +60,6 @@ def _visible_message(message: ChatMessage, *, file_delivery: Any | None = None) 
     )
 
 
-def _is_visible_history_message(message: ChatMessage) -> bool:
-    return message.role not in {"note", "history_edit"}
-
-
 def _resolve_context_window(state: Any, model: str) -> int | None:
     """Resolve a model string (provider/model-id) to the usable context window.
 
