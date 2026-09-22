@@ -50,10 +50,57 @@ const RUN_SERVER_EVENT_TYPES = new Set([
   'run_failed',
   'run_interrupted',
 ]);
+const TERMINAL_RUN_SERVER_EVENT_TYPES = new Set([
+  'run_completed',
+  'run_cancelled',
+  'run_failed',
+  'run_interrupted',
+]);
+
+// The Runs active now: the latest `connection_ready.active_runs`, plus Runs
+// started since, minus Runs that ended since. The bounded event window cannot
+// provide this for a Chat owner mounted later, because the terminal event of a
+// Run the snapshot listed may already have left the window.
+function nextActiveRuns(activeRuns, serverEvent) {
+  const payload = serverEvent.payload ?? {};
+  const runId = payload.run_id;
+  if (!runId) {
+    return activeRuns;
+  }
+  const known = activeRuns.some((run) => run?.run_id === runId);
+  if (serverEvent.type === 'run_started' && !known) {
+    return [...activeRuns, activeRunFromStartedEvent(payload)];
+  }
+  if (TERMINAL_RUN_SERVER_EVENT_TYPES.has(serverEvent.type) && known) {
+    return activeRuns.filter((run) => run?.run_id !== runId);
+  }
+  return activeRuns;
+}
+
+// Same shape as a `connection_ready.active_runs` entry; the stream derives the
+// SSE URL and fills controls/iterations from the Run's own events.
+function activeRunFromStartedEvent(payload) {
+  return {
+    run_id: payload.run_id,
+    agent_id: payload.agent_id,
+    project_id: payload.project_id ?? null,
+    session_id: payload.session_id,
+    run_kind: payload.run_kind,
+    status: 'running',
+    started_at: payload.run_event_timestamp,
+    ...(payload.contributes_to_agent_activity === false
+      ? { contributes_to_agent_activity: false }
+      : {}),
+    ...(payload.source_session_id
+      ? { source_session_id: payload.source_session_id }
+      : {}),
+  };
+}
 
 export function createAppControllerState(activeViewId) {
   return {
     activeViewId,
+    activeRuns: [],
     calendarRefreshToken: 0,
     channelsRefreshToken: 0,
     cronRefreshToken: 0,
@@ -409,6 +456,9 @@ export function createAppController({
     }
     if (event.type === CONNECTION_READY_EVENT_TYPE) {
       state.connectionSnapshot = event;
+      state.activeRuns = Array.isArray(event.active_runs)
+        ? event.active_runs
+        : [];
       const refreshOwners = [onLoadSessionStoreStatus, onReloadExtensionPages];
       if (
         event.replay_status === CONNECTION_REPLAY_STATUS_GAP ||
@@ -439,6 +489,7 @@ export function createAppController({
       state.runServerEvents = [...state.runServerEvents, event].slice(
         -MAX_RUN_SERVER_EVENTS,
       );
+      state.activeRuns = nextActiveRuns(state.activeRuns, event);
       return;
     }
     if (event.type === 'bash_process_status_changed') {

@@ -643,6 +643,17 @@ export function createChatRunStream({
     }
   }
 
+  // Mark retained events as already reflected (by a current-state snapshot)
+  // so a later `handleServerEvents` over the same window ignores them.
+  function skipServerEvents(singleEvent, events) {
+    for (const serverEvent of normalizedRunServerEvents(singleEvent, events)) {
+      const eventKey = runServerEventKey(serverEvent);
+      if (eventKey) {
+        handledRunServerEventKeys.add(eventKey);
+      }
+    }
+  }
+
   function handleRunServerEvent(serverEvent) {
     const event = runEventFromServerEvent(serverEvent);
     if (!event?.agent_id || !event?.session_id) {
@@ -934,6 +945,7 @@ export function createChatRunStream({
     closeSubscriptionsExcept,
     handleServerEvents,
     mergeRunResponse,
+    skipServerEvents,
     subscribeToRun,
   };
 }

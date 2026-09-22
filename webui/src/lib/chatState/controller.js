@@ -853,6 +853,32 @@ export function createChatController({
     runStream.handleServerEvents(event, events);
   }
 
+  // A Chat owner created after the app connected (split view's second area,
+  // leaving onboarding, recovery remounts) starts from current server state:
+  // the latest connection snapshot with the App's live Run list. The retained
+  // event window is already reflected in that list and may have lost the
+  // terminal events of Runs the snapshot named, so it is not replayed.
+  // Without a live Run list the owner keeps replaying the retained inputs.
+  function startFromServerState({
+    connectionSnapshot,
+    activeRuns,
+    runServerEvent,
+    runServerEvents,
+  } = {}) {
+    if (!connectionSnapshot || !Array.isArray(activeRuns)) {
+      return false;
+    }
+    runStream.skipServerEvents(runServerEvent, runServerEvents);
+    handledConnectionSnapshot = connectionSnapshot;
+    // A new owner holds no Sessions yet, so the snapshot's Queue scopes have
+    // nothing to reconcile; its Sessions load their Queues when opened.
+    runStream.applyConnectionSnapshot({
+      ...connectionSnapshot,
+      active_runs: activeRuns,
+    });
+    return true;
+  }
+
   async function refreshAgentActivity(agentAddresses) {
     const addresses = [
       ...new Set(
@@ -987,6 +1013,7 @@ export function createChatController({
     destroy,
     editMessage,
     handleServerEvents,
+    startFromServerState,
     listFiles: (agentAddress) => operations.listFiles(agentAddress),
     listSessions: (...args) => operations.listSessions(...args),
     loadAgents,

@@ -90,6 +90,10 @@
     // controller re-applies the whole list (idempotent merge by process id).
     backgroundBashStatusEvents = [],
     connectionSnapshot = null,
+    // App's live list of the Runs active now (the snapshot's list advanced by
+    // later lifecycle events). An owner mounted after the app connected starts
+    // from it instead of replaying the retained snapshot and event window.
+    activeRuns = null,
     // Bumped by App on `resource_changed(kind:"sessions")`; forwarded to the
     // session drawer so a new/switched session in another window appears in the
     // list. It deliberately does NOT switch the viewed conversation.
@@ -574,6 +578,16 @@
       );
     },
   });
+  // Before the snapshot/event effects run: a fresh owner adopts the current
+  // Run state instead of replaying App's retained buffers.
+  untrack(() =>
+    chatController.startFromServerState({
+      connectionSnapshot,
+      activeRuns,
+      runServerEvent,
+      runServerEvents,
+    }),
+  );
 
   $effect(() => {
     chatController.reconcileSubAgentRows(activeTimelineItems, {
