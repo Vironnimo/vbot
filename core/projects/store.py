@@ -391,12 +391,12 @@ class ProjectStore:
 
             archive_dir = self._archive_dir(project_id)
             archive_dir.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryDirectory(
-                prefix=f".{project_id}-archive-",
-                dir=archive_dir.parent,
-                ignore_cleanup_errors=True,
-            ) as backup_root:
-                previous_archive = Path(backup_root) / "previous"
+            backup_root = Path(
+                tempfile.mkdtemp(prefix=f".{project_id}-archive-", dir=archive_dir.parent)
+            )
+            previous_archive = backup_root / "previous"
+            committed = False
+            try:
                 if archive_dir.exists():
                     shutil.move(str(archive_dir), str(previous_archive))
                 project_moved = False
@@ -414,6 +414,17 @@ class ProjectStore:
                         # If move failed, archive_dir never existed.
                         shutil.move(str(previous_archive), str(archive_dir))
                     raise
+                committed = True
+            except Exception as exc:
+                if previous_archive.exists():
+                    raise ProjectError(
+                        f"Project archival failed; previous archive retained at {previous_archive}"
+                    ) from exc
+                raise
+            finally:
+                if committed or not previous_archive.exists():
+                    shutil.rmtree(backup_root, ignore_errors=True)
+
             return archive_dir
 
     def session_owning_agents(self, project_id: str) -> builtins.list[str]:

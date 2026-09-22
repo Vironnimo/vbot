@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
@@ -130,6 +131,40 @@ def test_create_persists_validatable_config(data_dir: Path, repo: Path) -> None:
     assert payload["project_id"] == "vbot"
     assert payload["default_agent"] == "orchestrator"
     assert payload["auto_load"] == ["AGENTS.md"]
+
+
+@pytest.mark.parametrize("failed_restore", ["active", "previous"])
+def test_delete_keeps_previous_archive_when_compensation_fails(
+    data_dir: Path, repo: Path, monkeypatch: pytest.MonkeyPatch, failed_restore: str
+) -> None:
+    store = ProjectStore(data_dir)
+    try:
+        store.create("vbot", "First", repo)
+        archive = store.delete("vbot")
+        (archive / "keep.txt").write_text("previous", encoding="utf-8")
+        store.create("vbot", "Second", repo)
+        original_move = shutil.move
+
+        def fail_archive(_project_id):
+            raise RuntimeError("database unavailable")
+
+        def move(source, destination):
+            if (
+                failed_restore == "active" and Path(destination) == data_dir / "projects" / "vbot"
+            ) or (failed_restore == "previous" and Path(source).name == "previous"):
+                raise OSError("rollback unavailable")
+            return original_move(source, destination)
+
+        monkeypatch.setattr(store._session_manager(), "archive_project_sessions", fail_archive)
+        monkeypatch.setattr(shutil, "move", move)
+        with pytest.raises((OSError, ProjectError)):
+            store.delete("vbot")
+
+        retained = list(archive.parent.glob(".vbot-archive-*/previous/keep.txt"))
+        assert len(retained) == 1
+        assert retained[0].read_text(encoding="utf-8") == "previous"
+    finally:
+        store.close()
 
 
 def test_create_seeds_agents_file_into_empty_auto_load(data_dir: Path, repo: Path) -> None:

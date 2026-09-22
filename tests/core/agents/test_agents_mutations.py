@@ -483,6 +483,36 @@ def test_delete_restores_active_agent_and_previous_archive_on_session_failure(
     assert marker.read_text(encoding="utf-8") == "previous"
 
 
+@pytest.mark.parametrize("failed_restore", ["active", "previous"])
+def test_delete_keeps_previous_archive_when_compensation_fails(
+    store: AgentStore, monkeypatch: pytest.MonkeyPatch, failed_restore: str
+) -> None:
+    store.create("coder", "First")
+    archive = store.delete("coder")
+    (archive / "keep.txt").write_text("previous", encoding="utf-8")
+    store.create("coder", "Second")
+    original_move = agents_module.shutil.move
+
+    def fail_archive(_agent_id):
+        raise RuntimeError("database unavailable")
+
+    def move(source, destination):
+        if (
+            failed_restore == "active" and Path(destination) == store.data_dir / "agents" / "coder"
+        ) or (failed_restore == "previous" and Path(source).name == "previous"):
+            raise OSError("rollback unavailable")
+        return original_move(source, destination)
+
+    monkeypatch.setattr(store._session_manager(), "archive_identity_agent_sessions", fail_archive)
+    monkeypatch.setattr(agents_module.shutil, "move", move)
+    with pytest.raises((OSError, AgentError)):
+        store.delete("coder")
+
+    retained = list(archive.parent.glob(".coder-archive-*/previous/keep.txt"))
+    assert len(retained) == 1
+    assert retained[0].read_text(encoding="utf-8") == "previous"
+
+
 def test_delete_agent_named_like_sibling_archive_roots_never_touches_them(
     store: AgentStore,
 ) -> None:

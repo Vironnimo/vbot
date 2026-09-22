@@ -753,12 +753,12 @@ class AgentStore:
             agent = self.get(agent_id)
             archive_dir = self._archive_dir(agent_id)
             archive_dir.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryDirectory(
-                prefix=f".{agent_id}-archive-",
-                dir=archive_dir.parent,
-                ignore_cleanup_errors=True,
-            ) as backup_root:
-                previous_archive = Path(backup_root) / "previous"
+            backup_root = Path(
+                tempfile.mkdtemp(prefix=f".{agent_id}-archive-", dir=archive_dir.parent)
+            )
+            previous_archive = backup_root / "previous"
+            committed = False
+            try:
                 if archive_dir.exists():
                     shutil.move(str(archive_dir), str(previous_archive))
                 try:
@@ -789,6 +789,16 @@ class AgentStore:
                     if not archive_dir.exists() and previous_archive.exists():
                         shutil.move(str(previous_archive), str(archive_dir))
                     raise
+                committed = True
+            except Exception as exc:
+                if previous_archive.exists():
+                    raise AgentError(
+                        f"Agent archival failed; previous archive retained at {previous_archive}"
+                    ) from exc
+                raise
+            finally:
+                if committed or not previous_archive.exists():
+                    shutil.rmtree(backup_root, ignore_errors=True)
 
             # Reconcile the collection document after the archive is committed. A
             # stale id is filtered even if persistence fails, so delete never reports
