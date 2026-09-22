@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Any
 
 from core.runs import (
@@ -231,9 +230,14 @@ async def _handle_subagent_cancel(
         await _emit_subagent_status_changed(context, data)
         return tool_success(_without_internal_handles(data))
 
-    # The queued work may have become a Run while cancellation was resolving.
+    # Queue admission may have completed before its watcher updated the tracker.
+    # Resolve the manager's exact work identity without relying on task scheduling.
     if entry.run_id is None:
-        await asyncio.sleep(0)
+        active_run = runtime.chat_run_manager.active_run(
+            agent_id=entry.agent_id, session_id=entry.session_id, project_id=entry.project_id
+        )
+        if active_run is not None and active_run.work_id == work_id:
+            batch_tracker.mark_started(parent_key, queue_item_id, active_run.id)
     if entry.run_id is None:
         return tool_failure(
             "subagent_not_running",
