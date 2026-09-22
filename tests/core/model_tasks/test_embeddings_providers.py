@@ -425,6 +425,42 @@ def test_parse_response_marks_missing_usage_as_unreported() -> None:
     assert response.usage.cost_reports == 0
 
 
+def test_unrepresentable_cost_does_not_invalidate_vectors() -> None:
+    response = _parse_embeddings_response(
+        {
+            "data": [{"index": 0, "embedding": [0.1]}],
+            "usage": {"prompt_tokens": 7, "cost": 10**400},
+        },
+        expected_count=1,
+    )
+    assert response.vectors == ([0.1],)
+    assert response.usage.input_tokens == 7
+    assert response.usage.cost_reports == 0
+
+
+def test_unrepresentable_vector_component_is_a_provider_error() -> None:
+    with pytest.raises(ProviderError) as raised:
+        _parse_embeddings_response(
+            {"data": [{"index": 0, "embedding": [10**400]}]}, expected_count=1
+        )
+    assert raised.value.retryable is False
+
+
+@pytest.mark.parametrize("second_entry", [{"index": None}, {}])
+def test_null_index_is_not_treated_as_omitted(second_entry: dict) -> None:
+    with pytest.raises(ProviderError) as raised:
+        _parse_embeddings_response(
+            {
+                "data": [
+                    {"index": None, "embedding": [0.1]},
+                    {**second_entry, "embedding": [0.2]},
+                ]
+            },
+            expected_count=2,
+        )
+    assert raised.value.retryable is False
+
+
 @pytest.mark.parametrize("model", ["", 123, False])
 def test_parse_response_rejects_invalid_advertised_model(model: object) -> None:
     with pytest.raises(ProviderError):
