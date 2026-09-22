@@ -4,7 +4,6 @@ import { reconnectBackoffDelay } from './backoff.js';
 export const CONNECTION_STATUS_CONNECTED = 'connected';
 export const CONNECTION_STATUS_RECONNECTING = 'reconnecting';
 export const CONNECTION_STATUS_DISCONNECTED = 'disconnected';
-export const CONNECTION_REPLAY_STATUS_FRESH = 'fresh';
 export const CONNECTION_REPLAY_STATUS_RESUMED = 'resumed';
 export const CONNECTION_REPLAY_STATUS_GAP = 'gap';
 export const CONNECTION_REPLAY_STATUS_EPOCH_CHANGED = 'epoch_changed';
