@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -160,17 +161,27 @@ async def send(
     if normalized_message is None and not normalized_files:
         raise ChannelConfigError("at least one of message or files must be provided")
 
-    adapter, outbound_buttons, binding = await _CHANNEL_IO_WORKERS.run(
-        _prepare_outbound_dispatch,
-        service,
-        normalized_id,
-        normalized_buttons,
-        platform_target,
-        thread_id,
-        run_origin,
-    )
+    prepared: (
+        tuple[ChannelAdapter, list[list[InteractionButton]] | None, RunButtonBinding | None] | None
+    ) = None
+
+    def prepare() -> None:
+        nonlocal prepared
+        # Retain the result inside the worker: cancellation drains the worker but
+        # does not return its result to the awaiting coroutine.
+        prepared = _prepare_outbound_dispatch(
+            service,
+            normalized_id,
+            normalized_buttons,
+            platform_target,
+            thread_id,
+            run_origin,
+        )
 
     try:
+        await _CHANNEL_IO_WORKERS.run(prepare)
+        assert prepared is not None
+        adapter, outbound_buttons, _binding = prepared
         await adapter.send(
             normalized_message,
             platform_target,
@@ -179,13 +190,21 @@ async def send(
             buttons=outbound_buttons,
         )
     except BaseException:
+        binding = prepared[2] if prepared is not None else None
         if binding is not None:
-            try:
-                await _CHANNEL_IO_WORKERS.run(
-                    service._storage.discard_run_button_binding,
-                    normalized_id,
-                    binding.id,
+            cleanup = asyncio.create_task(
+                _CHANNEL_IO_WORKERS.run(
+                    service._storage.discard_run_button_binding, normalized_id, binding.id
                 )
+            )
+            cancelled = False
+            try:
+                while not cleanup.done():
+                    try:
+                        await asyncio.shield(cleanup)
+                    except asyncio.CancelledError:
+                        cancelled = True
+                cleanup.result()
             except Exception as cleanup_error:
                 _LOGGER.warning(
                     "Could not discard unsent Run-button binding (channel=%s): %s",
@@ -197,6 +216,8 @@ async def send(
                         cleanup_error.__traceback__,
                     ),
                 )
+            if cancelled:
+                raise asyncio.CancelledError from None
         raise
 
 
