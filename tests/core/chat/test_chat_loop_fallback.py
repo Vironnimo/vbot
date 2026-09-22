@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from core.attachments import AttachmentStore
+from core.chat._request_builder import RequestBuilder
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.errors import (
@@ -195,6 +196,54 @@ async def test_fallback_rebuilds_route_gated_image_tool_visibility(
     assert (ANALYZE_IMAGE_TOOL_NAME in {definition["name"] for definition in fallback_tools}) is (
         vision_granted or not fallback_vision
     )
+
+
+@pytest.mark.asyncio
+async def test_fallback_closes_adapter_when_request_preparation_fails(tmp_path, monkeypatch):
+    primary = ClosingStubAdapter([ProviderRateLimitError("switch route")])
+    fallback = ClosingStubAdapter([])
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(
+            id="coder", model="openai/primary", fallback_models=["anthropic/fallback::api-key"]
+        ),
+        adapter=primary,
+        adapters_by_connection={"openai:api-key": primary, "anthropic:api-key": fallback},
+        provider_ids={"openai", "anthropic"},
+        models=StubModels({("openai", "primary"): 128_000, ("anthropic", "fallback"): 128_000}),
+    )
+    original = RequestBuilder.build_request_state
+
+    async def fail_fallback(self, *args, **kwargs):
+        if kwargs["inputs"].reasoning_scope_model.startswith("anthropic/fallback"):
+            raise ConfigError("fallback preparation failed")
+        return await original(self, *args, **kwargs)
+
+    monkeypatch.setattr(RequestBuilder, "build_request_state", fail_fallback)
+    with pytest.raises(ConfigError, match="fallback preparation failed"):
+        await build_chat_loop(runtime).send("coder", "hello", session_id="session")
+    assert primary.closed
+    assert fallback.closed
+    assert fallback.requests == []
+
+
+@pytest.mark.asyncio
+async def test_primary_adapter_closes_when_context_preparation_fails(tmp_path, monkeypatch):
+    adapter = ClosingStubAdapter([])
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(id="coder", model="openai/gpt-5.2"),
+        adapter=adapter,
+    )
+
+    def fail_catalog(*args, **kwargs):
+        raise ConfigError("catalog preparation failed")
+
+    monkeypatch.setattr("core.chat._run_state.pinned_skill_catalog", fail_catalog)
+    with pytest.raises(ConfigError, match="catalog preparation failed"):
+        await build_chat_loop(runtime).send("coder", "hello", session_id="session")
+    assert adapter.closed
+    assert adapter.requests == []
 
 
 @pytest.mark.asyncio

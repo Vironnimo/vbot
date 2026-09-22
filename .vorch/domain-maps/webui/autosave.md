@@ -21,7 +21,7 @@ Read before adding or changing editable configuration, an existing-record editor
 - The common idle interval is 800 ms from the latest edit. Focused number/decimal controls wait for blur; IME composition waits for completion and the idle interval. Explicit Save and transition flushes do not wait for the timer. Shared `TextField` and `TextArea` report composition through `autosaveInput`; custom native editing controls need equivalent integration.
 - Keep controls mounted and editable during automatic saves. Reconcile the response into the persisted baseline without replacing newer draft values, stealing focus, or remounting the editor through a loading state. Normalize numbers at the payload boundary, preserving incomplete input while it is edited.
 - The participant serializes writes. Transition flushing waits for in-flight work and saves remaining newer snapshots before leaving. Failed unchanged snapshots do not retry in a background loop; retain the draft and visible error. App-level navigation failure and Retry / Discard behavior belong to `webui/app-shell.md`.
-- The helper does not replace the editor's reconciliation or backend validation. A successful response for an older draft must not mark a newer draft saved.
+- The helper does not replace the editor's reconciliation or backend validation. A successful response for an older draft must not mark a newer draft saved. Pending-state and save decisions follow the current persisted baseline through `hasChanges`, never a cached formerly successful draft: an external refresh can make the same value dirty again. Successful saves must reconcile that baseline before resolving.
 
 ## Evidence and regression coverage
 

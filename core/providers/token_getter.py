@@ -275,14 +275,7 @@ class OAuthTokenGetter:
                 **copilot_token_extra(response_data, github_oauth_token, access_token),
             },
         )
-        self._token_store.save(
-            self._provider_id,
-            self._local_connection_id,
-            refreshed_token,
-            account_id=self._account_id,
-        )
-        self._log_refresh_success()
-        return refreshed_token.access_token
+        return self._save_refreshed_token(token, refreshed_token)
 
     async def _refresh_oauth_token(self, token: OAuthToken) -> str:
         if not token.refresh_token:
@@ -339,16 +332,16 @@ class OAuthTokenGetter:
                 expires_at=expires_at,
                 extra=extra,
             )
-            self._token_store.save(
-                self._provider_id,
-                self._local_connection_id,
-                refreshed_token,
-                account_id=self._account_id,
-            )
         except ProviderError as exc:
             if (
                 isinstance(exc, ProviderAuthError)
                 and self._oauth_config.device_flow in ROTATING_REFRESH_DEVICE_FLOWS
+                and self._token_store.load(
+                    self._provider_id,
+                    self._local_connection_id,
+                    account_id=self._account_id,
+                )
+                == token
             ):
                 self._token_store.delete(
                     self._provider_id,
@@ -357,8 +350,26 @@ class OAuthTokenGetter:
                 )
             self._log_refresh_failure(exc)
             raise
+        return self._save_refreshed_token(token, refreshed_token)
+
+    def _save_refreshed_token(self, original: OAuthToken, refreshed: OAuthToken) -> str:
+        # Refresh awaits network I/O; disconnect/reconnect can change the Account
+        # meanwhile. Keep the comparison and write synchronous on the runtime loop.
+        current = self._token_store.load(
+            self._provider_id, self._local_connection_id, account_id=self._account_id
+        )
+        if current != original:
+            if current is not None and not _is_expiring(current):
+                return current.access_token
+            raise ProviderAuthError("OAuth credentials changed during refresh — reconnect required")
+        self._token_store.save(
+            self._provider_id,
+            self._local_connection_id,
+            refreshed,
+            account_id=self._account_id,
+        )
         self._log_refresh_success()
-        return refreshed_token.access_token
+        return refreshed.access_token
 
     def _log_refresh_success(self) -> None:
         _LOGGER.info(

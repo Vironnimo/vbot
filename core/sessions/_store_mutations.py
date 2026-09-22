@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from core.chat.errors import ChatSessionError
 from core.sessions import _store_codec, _store_fts, _store_values
-from core.sessions._types import JsonObject
+from core.sessions._types import JsonObject, SessionIdentityReferenceUpdate
 from core.sessions.errors import SessionStoreCorruptError
 
 if TYPE_CHECKING:
@@ -369,6 +369,34 @@ def retarget_identity_agent(
         )
 
     _fn(connection)
+
+
+def retarget_identity_agent_references(
+    connection: sqlite3.Connection, old_agent_id: str, new_agent_id: str
+) -> tuple[SessionIdentityReferenceUpdate, ...]:
+    """Rewrite all matching parent references in the caller's transaction."""
+    rows = connection.execute(
+        "SELECT * FROM sessions WHERE status = 'live' "
+        "AND json_extract(subagent_parent_json, '$.project_id') IS NULL "
+        "AND json_extract(subagent_parent_json, '$.agent_id') = ?",
+        (old_agent_id,),
+    ).fetchall()
+    updates = []
+    for row in rows:
+        address = _store_values._address(row)
+        previous = _store_values._session_metadata_from_state(row)
+        metadata = deepcopy(previous)
+        metadata["subagent_parent"]["agent_id"] = new_agent_id
+        replace_metadata(connection, address, metadata)
+        updates.append(SessionIdentityReferenceUpdate(address, previous))
+    return tuple(updates)
+
+
+def restore_identity_agent_references(
+    connection: sqlite3.Connection, updates: tuple[SessionIdentityReferenceUpdate, ...]
+) -> None:
+    for update in reversed(updates):
+        replace_metadata(connection, update.address, update.previous_metadata)
 
 
 def archive_identity_agent_sessions(connection: sqlite3.Connection, agent_id: str) -> None:

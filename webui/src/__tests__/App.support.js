@@ -499,6 +499,11 @@ export function createOnboardingRpcMock({ connected = false } = {}) {
 export function createSettingsRpcMock(options = {}) {
   let debugEnabled = options.initialDebugEnabled ?? false;
   let traceLimit = options.initialTraceLimit ?? 50;
+  let subagents = {
+    max_subagent_depth: 4,
+    max_subagents_per_turn: 8,
+    subagent_timeout_minutes: 60,
+  };
 
   const baseSettings = () => ({
     general: {
@@ -507,11 +512,7 @@ export function createSettingsRpcMock(options = {}) {
     },
     appearance: { language: 'en', available_languages: ['en'] },
     skills: { default_directory: 'C:/data/skills', directories: [] },
-    subagents: {
-      max_subagent_depth: 4,
-      max_subagents_per_turn: 8,
-      subagent_timeout_minutes: 60,
-    },
+    subagents: { ...subagents },
     compaction: {
       auto: true,
       threshold: 0.8,
@@ -565,6 +566,7 @@ export function createSettingsRpcMock(options = {}) {
     }
 
     if (method === 'settings.update') {
+      if (params?.subagents) subagents = { ...subagents, ...params.subagents };
       if (params?.debug && typeof params.debug === 'object') {
         if (typeof params.debug.enabled === 'boolean') {
           debugEnabled = params.debug.enabled;

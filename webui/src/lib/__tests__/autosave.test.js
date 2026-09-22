@@ -70,6 +70,7 @@ describe('autosave coordination', () => {
   it('waits for an in-flight save and persists edits made during that save', async () => {
     const firstSave = deferred();
     const draft = { value: 'first' };
+    let baseline = '';
     const savedValues = [];
     const save = vi
       .fn()
@@ -78,10 +79,13 @@ describe('autosave coordination', () => {
     const participant = createAutosaveParticipant({
       cancelPending: vi.fn(),
       getSnapshot: () => ({ ...draft }),
-      hasChanges: () => true,
-      save: (reason) => {
-        savedValues.push(draft.value);
-        return save(reason);
+      hasChanges: () => draft.value !== baseline,
+      save: async (reason) => {
+        const value = draft.value;
+        savedValues.push(value);
+        const succeeded = await save(reason);
+        if (succeeded) baseline = value;
+        return succeeded;
       },
     });
 
@@ -110,6 +114,27 @@ describe('autosave coordination', () => {
     await expect(participant.runSave()).resolves.toBe(false);
     expect(save).toHaveBeenCalledOnce();
     expect(participant.hasPending()).toBe(true);
+  });
+
+  it('flushes a previously saved draft against a changed persisted baseline', async () => {
+    let draft = 'first';
+    let baseline = 'initial';
+    const save = vi.fn(async () => {
+      baseline = draft;
+      return true;
+    });
+    const participant = createAutosaveParticipant({
+      getSnapshot: () => draft,
+      hasChanges: () => draft !== baseline,
+      save,
+    });
+    await participant.runSave();
+    baseline = draft = 'external change';
+    draft = 'first';
+    expect(participant.hasPending()).toBe(true);
+    await expect(participant.flush()).resolves.toBe(true);
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(baseline).toBe('first');
   });
 });
 
@@ -175,10 +200,14 @@ describe('debounced autosave', () => {
 
   it('wires cancelPending into the participant so a flush clears the timer', async () => {
     vi.useFakeTimers();
-    const save = vi.fn().mockResolvedValue(true);
+    let dirty = true;
+    const save = vi.fn(async () => {
+      dirty = false;
+      return true;
+    });
     const debounced = createDebouncedAutosave({
       getSnapshot: () => ({ value: 'draft' }),
-      hasChanges: () => true,
+      hasChanges: () => dirty,
       save,
       debounceMs: 50,
     });

@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from core.runs import RunExecutionOwner
     from core.sessions._types import (
         SessionAddress,
+        SessionIdentityReferenceUpdate,
         SessionReadBatch,
         SessionReadCursor,
         SessionRunCompletion,
@@ -931,6 +932,24 @@ class SessionStore:
         return self._execute_write(
             lambda connection: _store_mutations.retarget_identity_agent(
                 connection, old_agent_id, new_agent_id
+            )
+        )
+
+    def retarget_identity_agent_references(
+        self, old_agent_id: str, new_agent_id: str
+    ) -> tuple[SessionIdentityReferenceUpdate, ...]:
+        return self._execute_write(
+            lambda connection: _store_mutations.retarget_identity_agent_references(
+                connection, old_agent_id, new_agent_id
+            )
+        )
+
+    def restore_identity_agent_references(
+        self, updates: tuple[SessionIdentityReferenceUpdate, ...]
+    ) -> None:
+        self._execute_write(
+            lambda connection: _store_mutations.restore_identity_agent_references(
+                connection, updates
             )
         )
 

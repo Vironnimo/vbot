@@ -800,34 +800,12 @@ class ChatSessionManager:
     def retarget_identity_agent_references(
         self, old_agent_id: str, new_agent_id: str
     ) -> tuple[SessionIdentityReferenceUpdate, ...]:
-        updates: builtins.list[SessionIdentityReferenceUpdate] = []
-        for address in self._store.list_addresses(include_all_scopes=True):
-            changed = False
-
-            def retarget(metadata: JsonObject) -> None:
-                nonlocal changed
-                parent = metadata.get("subagent_parent")
-                if (
-                    not isinstance(parent, dict)
-                    or parent.get("project_id") is not None
-                    or parent.get("agent_id") != old_agent_id
-                ):
-                    return
-                parent = dict(parent)
-                parent["agent_id"] = new_agent_id
-                metadata["subagent_parent"] = parent
-                changed = True
-
-            previous, _updated = self.mutate_metadata_with_previous(address, retarget)
-            if changed:
-                updates.append(SessionIdentityReferenceUpdate(address, previous))
-        return tuple(updates)
+        return self._store.retarget_identity_agent_references(old_agent_id, new_agent_id)
 
     def restore_identity_agent_references(
         self, updates: tuple[SessionIdentityReferenceUpdate, ...]
     ) -> None:
-        for update in reversed(updates):
-            self.set_metadata(update.address, update.previous_metadata)
+        self._store.restore_identity_agent_references(updates)
 
     async def move(
         self,

@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from core.extensions import InteractionButton, InteractionEvent
+from core.extensions.extensions import ExtensionRegistry
 from core.runtime.runtime import Runtime
 from core.tools import ToolContext
 from core.utils.config import Config
@@ -424,7 +427,8 @@ def test_interaction_dispatcher_reads_live_registry_across_reload(tmp_path: Path
         runtime.stop()
 
 
-def test_reload_and_disable_never_interleave(tmp_path: Path) -> None:
+@pytest.mark.parametrize("cancel_disable", [False, True])
+def test_reload_and_disable_never_interleave(tmp_path: Path, cancel_disable: bool) -> None:
     # (i) A reload and a concurrent live-disable serialize through the shared lock:
     # the disable runs entirely after the reload's swap + re-apply, so it
     # deactivates the *rebuilt* target and its tool ends up removed. Were the two to
@@ -446,11 +450,114 @@ def test_reload_and_disable_never_interleave(tmp_path: Path) -> None:
             # before the disable is launched, so the disable is forced to queue.
             await asyncio.sleep(0.01)
             disable_task = asyncio.create_task(runtime.apply_extension_disabled_change({"target"}))
-            await asyncio.gather(reload_task, disable_task)
+            if cancel_disable:
+                await asyncio.sleep(0)
+                disable_task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await disable_task
+                await reload_task
+            else:
+                await asyncio.gather(reload_task, disable_task)
 
         asyncio.run(_race())
 
-        assert "target_echo" not in _tool_names(runtime)
-        assert _extension_record(runtime, "target").status == "disabled"
+        assert ("target_echo" in _tool_names(runtime)) is cancel_disable
+        assert _extension_record(runtime, "target").status == (
+            "loaded" if cancel_disable else "disabled"
+        )
+    finally:
+        runtime.stop()
+
+
+@pytest.mark.parametrize("operation", ["reload", "disable", "startup", "close"])
+def test_cancelled_extension_lifecycle_finishes_admitted_cleanup(
+    tmp_path: Path, operation: str
+) -> None:
+    config = Config(data_dir=tmp_path / "data")
+    _write_extension(config.data_dir, "target", _tool_source("target_echo"))
+    runtime = Runtime(config)
+    runtime.start()
+
+    async def exercise() -> None:
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        finished = False
+        calls = 0
+
+        async def shutdown():
+            nonlocal finished, calls
+            calls += 1
+            entered.set()
+            await release.wait()
+            finished = True
+
+        declarations = _extension_record(runtime, "target").declarations
+        (declarations.startup if operation == "startup" else declarations.shutdown).append(shutdown)
+        action = {
+            "reload": runtime.reload_extensions,
+            "disable": lambda: runtime.apply_extension_disabled_change({"target"}),
+            "startup": runtime.fire_extension_startup,
+            "close": runtime.aclose,
+        }[operation]
+        pending = asyncio.create_task(action())
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        another_close = asyncio.create_task(runtime.aclose()) if operation == "close" else None
+        pending.cancel()
+        await asyncio.sleep(0)
+        pending.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        if another_close is not None:
+            await another_close
+
+        assert finished
+        assert calls == 1
+        if operation in {"reload", "startup"}:
+            assert "target_echo" in _tool_names(runtime)
+        elif operation == "disable":
+            assert "target_echo" not in _tool_names(runtime)
+            assert _extension_record(runtime, "target").status == "disabled"
+        else:
+            assert runtime.extensions is None
+            assert runtime._chat_sessions is None
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        runtime.stop()
+
+
+def test_close_drains_inflight_reload_before_clearing_services(tmp_path: Path, monkeypatch) -> None:
+    config = Config(data_dir=tmp_path / "data")
+    _write_extension(config.data_dir, "target", _tool_source("target_echo"))
+    runtime = Runtime(config)
+    runtime.start()
+    original_load = ExtensionRegistry.aload
+
+    async def exercise() -> None:
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def delayed_load(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return await original_load(*args, **kwargs)
+
+        monkeypatch.setattr(ExtensionRegistry, "aload", delayed_load)
+        reload_task = asyncio.create_task(runtime.reload_extensions())
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        close_task = asyncio.create_task(runtime.aclose())
+        await asyncio.sleep(0.05)
+        release.set()
+        results = await asyncio.gather(reload_task, close_task, return_exceptions=True)
+
+        assert results == [None, None]
+        assert runtime.extensions is None
+        assert runtime._tools is None
+        assert runtime._chat_sessions is None
+
+    try:
+        asyncio.run(exercise())
     finally:
         runtime.stop()

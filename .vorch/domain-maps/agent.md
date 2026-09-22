@@ -46,7 +46,7 @@ Chains: identity agents keep model -> global -> empty. Config agents resolve ove
 
 ## Conventions & Rules
 
-- Agent IDs: filesystem-safe slugs, letter/digit start, letters/digits/hyphen/underscore, max 64 chars. Writes use temp-file atomic replace; relative persisted Workspaces resolve only against the active data directory, never cwd.
+- Agent IDs: filesystem-safe slugs, letter/digit start, letters/digits/hyphen/underscore, max 64 chars. A store-local reentrant lock serializes complete lifecycle read-modify-write operations, current-Session repairs, and roster revisions across worker threads. Writes use temp-file atomic replace; relative persisted Workspaces resolve only against the active data directory, never cwd.
 - The only seeded template is `SOUL.md`; USER.md/MEMORY.md belong to the memory system and create lazily on first write - a memory-off agent has neither, and deletion does not resurrect them.
 - `scripts/converters/agent_tool_access.py` converts the retired root allowed_tools shape; the loader contains none.
 - Mutable-field validation lives server/core-side: effort vocabulary `null|""|none|minimal|low|medium|high|xhigh|max` (null inherits, "" = provider default), temperature null or 0.0-2.0 (0.0 real), strict policy shape, shell-portable env names. Enabling custom prompts seeds the agent prompt directory once; re-enabling preserves existing files.
@@ -65,7 +65,7 @@ Manual search permission consolidation is owned by `scripts/converters/search_fi
 
 ## Constraints & Gotchas
 
-- Deletion replaces an existing same-ID archive. Seeding never overwrites existing workspace files.
+- Deletion replaces an existing same-ID archive only after successful archival. If archival and compensation both fail, the staged previous archive remains on disk and its recovery path is reported. Seeding never overwrites existing workspace files.
 - Server guards refuse deleting the last Agent, one with active/queued Runs (`agent_busy`), or one referenced by Channels/Cron (`agent_in_use`); deletion holds both the reference lock and admission guard across validation and archive. Core `AgentStore.delete()` owns filesystem and live Session archiving with filesystem compensation on database failure; it does not own those product-level guards.
 - Rename holds reference lock plus admission guards for both ids, refuses open Sub-Agent relations/collisions/invalid ids, coordinates live references (Channels, non-terminal Cron, delegation entries, functional parent links), keeps terminal history/fork provenance/logs historical, and compensates completed changes on failure.
 - Roster order is the selection fallback for accessors without valid saved selection - it never changes current selections, Sessions, Rooting, or Run configuration; Config Agents come from Team scan order and are not in this document.
