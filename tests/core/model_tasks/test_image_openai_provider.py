@@ -247,6 +247,31 @@ async def test_openai_image_generate_records_output_format_in_media_type() -> No
 
 @pytest.mark.asyncio
 @respx.mock
+@pytest.mark.parametrize("endpoint", ["generations", "edits"])
+async def test_openai_image_extra_output_format_preserves_media_type(endpoint: str) -> None:
+    route = respx.post(f"https://api.openai.com/v1/images/{endpoint}").mock(
+        return_value=httpx.Response(200, json=_unified_image_response(b"jpeg-image"))
+    )
+    inputs = (
+        (ImageInput(filename="input.png", media_type="image/png", data=b"source"),)
+        if endpoint == "edits"
+        else ()
+    )
+    result = await _openai_image_client("gpt-image-1").generate(
+        "a cat", options={"extra_options": {"output_format": "jpeg"}}, input_images=inputs
+    )
+
+    assert result.media_type == "image/jpeg"
+    assert result.images == (b"jpeg-image",)
+    assert route.call_count == 1
+    if endpoint == "generations":
+        assert json.loads(route.calls[0].request.content)["output_format"] == "jpeg"
+    else:
+        assert b'name="output_format"\r\n\r\njpeg' in route.calls[0].request.content
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_openai_image_edit_posts_multipart_source_images() -> None:
     b64_payload = base64.b64encode(b"edited-png").decode("ascii")
     route = respx.post("https://api.openai.com/v1/images/edits").mock(
@@ -389,6 +414,7 @@ async def test_custom_openai_compatible_provider_uses_standard_image_wire() -> N
 
 @pytest.mark.asyncio
 @respx.mock
+@pytest.mark.parametrize("extra_options", [False, True])
 @pytest.mark.parametrize(
     "output_format,media_type,extension",
     [
@@ -403,6 +429,7 @@ async def test_image_output_format_survives_artifact_storage(
     output_format,
     media_type,
     extension,
+    extra_options,
 ) -> None:
     from typing import Any, cast
 
@@ -413,7 +440,10 @@ async def test_image_output_format_survives_artifact_storage(
         return_value=httpx.Response(200, json=_unified_image_response(image_bytes))
     )
     client = _openrouter_image_client("recraft/recraft-v4-vector")
-    result = await client.generate("a cat", options={"output_format": output_format})
+    options = {"output_format": output_format}
+    result = await client.generate(
+        "a cat", options={"extra_options": options} if extra_options else options
+    )
     assert result.media_type == media_type
     service = ImageService(cast(Any, object()), cast(Any, object()))
 
