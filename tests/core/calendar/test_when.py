@@ -94,6 +94,16 @@ class TestDateForms:
 
 
 class TestRanges:
+    def test_datetime_range_preserves_utc_designator(self) -> None:
+        assert _parse("2026-09-10T08:00Z..2026-09-10T18:00Z") == (
+            datetime(2026, 9, 10, 8, tzinfo=UTC),
+            datetime(2026, 9, 10, 18, tzinfo=UTC),
+        )
+
+    def test_rejects_range_inverted_after_spring_gap_resolution(self) -> None:
+        with pytest.raises(CalendarValidationError):
+            _parse("2026-03-29T02:30..2026-03-29T03:15")
+
     def test_date_range_end_day_is_inclusive(self) -> None:
         start, end = _parse("2026-09-10..2026-09-14")
         assert (start, end) == (
