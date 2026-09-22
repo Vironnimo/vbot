@@ -77,6 +77,70 @@ async def test_windows_unknown_pipeline_command_exits_non_interactively(
     assert "__vbot_missing_pipeline_command__" in result["data"]["output"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform != "win32", reason="Real PowerShell environment probe")
+async def test_windows_shell_env_probe_round_trips_non_ascii_and_multiline_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Legacy console code pages cannot represent these characters.
+    value = "C:/Users/J\u00fcrgen \u00c4rger/\u20ac \u65e5\u672c \U0001f600"
+    monkeypatch.setenv("VBOT_PROBE_NON_ASCII", value)
+    monkeypatch.setenv("VBOT_PROBE_MULTILINE", "first\nsecond=still value")
+
+    env = await bash_environment._probe_shell_env()
+
+    assert env["VBOT_PROBE_NON_ASCII"] == value
+    assert env["VBOT_PROBE_MULTILINE"] == "first\nsecond=still value"
+
+
+@pytest.mark.asyncio
+async def test_malformed_windows_probe_output_keeps_process_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class GarbledProbe:
+        pid = 1
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"J\x81rgen=not base64\r\n", b""
+
+    async def create_probe(*_args: Any, **_kwargs: Any) -> GarbledProbe:
+        return GarbledProbe()
+
+    monkeypatch.setattr(bash_environment.sys, "platform", "win32")
+    monkeypatch.setattr(bash_environment.asyncio, "create_subprocess_exec", create_probe)
+    monkeypatch.setattr(bash_environment, "_read_registry_path", lambda: None)
+    monkeypatch.setenv("VBOT_PROBE_FALLBACK", "J\u00fcrgen")
+
+    env = await bash_environment._probe_shell_env()
+
+    assert env == dict(os.environ)
+    assert env["VBOT_PROBE_FALLBACK"] == "J\u00fcrgen"
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name == "nt", reason="POSIX login-shell probe decoding")
+async def test_posix_shell_env_probe_preserves_undecodable_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Probe:
+        pid = 1
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"RAW=J\xfcrgen\x00UTF8=J\xc3\xbcrgen\x00", b""
+
+    async def create_probe(*_args: Any, **_kwargs: Any) -> Probe:
+        return Probe()
+
+    monkeypatch.setattr(bash_environment.asyncio, "create_subprocess_exec", create_probe)
+
+    env = await bash_environment._probe_shell_env()
+
+    assert os.fsencode(env["RAW"]) == b"J\xfcrgen"
+    assert env["UTF8"] == "J\u00fcrgen"
+
+
 def test_shell_env_probe_requests_windowless_process_group(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
