@@ -129,14 +129,20 @@ def _next_cron_fire_local(
     after local midnight of a spring-forward day answers 23:00 that evening
     instead of the following midnight. Stepping naive wall-clock time and
     resolving the zone per tick keeps wall-clock schedules on their local time.
-    A fire inside a spring-forward gap resolves to the instant right after the
-    gap; a fire inside a fall-back overlap resolves to its first occurrence.
+    A fire inside a spring-forward gap shifts forward by that gap; a fire
+    inside a fall-back overlap resolves to its first occurrence. Already elapsed
+    first occurrences are skipped while the clock repeats the overlapping hour.
     """
     wall_clock = reference_local.replace(tzinfo=None)
-    next_local = cast(datetime, croniter(expression, wall_clock).get_next(datetime))
-    if next_local.tzinfo is None:
-        return next_local.replace(tzinfo=timezone)
-    return next_local.astimezone(timezone)
+    reference_utc = reference_local.astimezone(UTC)
+    schedule = croniter(expression, wall_clock)
+    while True:
+        next_local = cast(datetime, schedule.get_next(datetime)).replace(tzinfo=timezone)
+        next_utc = next_local.astimezone(UTC)
+        if next_utc > reference_utc:
+            # Return the resolved wall time, so projection advances past a gap
+            # exactly as the live scheduler does after the shifted fire.
+            return next_utc.astimezone(timezone)
 
 
 def _project_job_occurrences(

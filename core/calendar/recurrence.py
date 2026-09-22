@@ -100,6 +100,8 @@ def normalize_rrule(payload: object) -> dict[str, Any] | None:
         )
 
     until = payload.get("until")
+    if count is not None and until is not None:
+        raise CalendarValidationError("rrule must use either count or until, not both")
     until_date = None if until is None else parse_date_string(until, field_name="rrule.until")
 
     by_weekday = payload.get("by_weekday")

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +23,95 @@ from tests.core.runtime.runtime_test_support import (
 )
 
 RELOADED_SKILL_NAME = "runtime-reloaded-skill"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("newer_reload", ["sync", "async"])
+async def test_older_skill_scan_cannot_overwrite_newer_policy(config, monkeypatch, newer_reload):
+    _write_test_skill(config.data_dir / "skills", RELOADED_SKILL_NAME, "Reload race fixture.")
+    runtime = Runtime(config, safe_startup_mode="test")
+    runtime.start()
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    owner = runtime._skill_operations()
+    original_load = owner.load_global_registry
+
+    def controlled_load():
+        snapshot = original_load()
+        if not entered.is_set():
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(10)
+        return snapshot
+
+    monkeypatch.setattr(owner, "load_global_registry", controlled_load)
+    older = asyncio.create_task(runtime.reload_skills_async())
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        runtime.skill_policy.set_disabled(RELOADED_SKILL_NAME, disabled=True)
+        if newer_reload == "sync":
+            runtime.reload_skills()
+        else:
+            await runtime.reload_skills_async()
+        latest = runtime.skills
+        with pytest.raises(KeyError):
+            latest.get(RELOADED_SKILL_NAME)
+        release.set()
+        await asyncio.wait_for(older, 5)
+        assert runtime.skills is latest
+        with pytest.raises(KeyError):
+            runtime.skills_for(None, "main").get(RELOADED_SKILL_NAME)
+    finally:
+        release.set()
+        await asyncio.gather(older, return_exceptions=True)
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shutdown", ["stop", "aclose"])
+@pytest.mark.parametrize("restart", [False, True])
+async def test_skill_scan_cannot_publish_across_runtime_shutdown(
+    config, monkeypatch, shutdown, restart
+):
+    _write_test_skill(config.data_dir / "skills", RELOADED_SKILL_NAME, "Reload race fixture.")
+    runtime = Runtime(config, safe_startup_mode="test")
+    runtime.start()
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    owner = runtime._skill_operations()
+    original_load = owner.load_global_registry
+
+    def controlled_load():
+        snapshot = original_load()
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(10)
+        return snapshot
+
+    monkeypatch.setattr(owner, "load_global_registry", controlled_load)
+    older = asyncio.create_task(runtime.reload_skills_async())
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        runtime.skill_policy.set_disabled(RELOADED_SKILL_NAME, disabled=True)
+        if shutdown == "stop":
+            runtime.stop()
+        else:
+            await runtime.aclose()
+        if restart:
+            runtime.start()
+        latest = runtime._skills
+        release.set()
+        await asyncio.wait_for(older, 5)
+        assert runtime._skills is latest
+        if restart:
+            with pytest.raises(KeyError):
+                runtime.skills.get(RELOADED_SKILL_NAME)
+        else:
+            assert runtime._skills is None
+    finally:
+        release.set()
+        await asyncio.gather(older, return_exceptions=True)
+        await runtime.aclose()
 
 
 def test_credential_reload_updates_existing_skill_registries(config, tmp_path, monkeypatch):

@@ -16,9 +16,6 @@ from core.utils.logging import get_logger
 _LOGGER = get_logger("calendar.service")
 
 
-_DATE_ONLY_PATTERN_LENGTH = 10
-
-
 def _default_timezone() -> ZoneInfo:
     """Resolve the server's local zone, falling back to UTC when undetectable."""
     try:
@@ -39,10 +36,6 @@ def _resolve_zone(tz_name: str) -> ZoneInfo:
 def _local_naive_iso(value: datetime, zone: ZoneInfo) -> str:
     """Render one UTC instant as a naive local datetime string in ``zone``."""
     return value.astimezone(zone).replace(tzinfo=None, microsecond=0).isoformat()
-
-
-def _looks_like_date(value: str) -> bool:
-    return len(value) == _DATE_ONLY_PATTERN_LENGTH and value[4] == "-" and value[7] == "-"
 
 
 def _parse_iso_datetime(value: str, *, field_name: str) -> datetime:

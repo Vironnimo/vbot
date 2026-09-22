@@ -114,7 +114,7 @@ def parse_vbot_requirements(metadata: dict[str, Any]) -> SkillRequirements:
 
     unknown_keys = set(raw_requirements) - {"all", "any", "binary", "env", "skill", "optional"}
     if unknown_keys:
-        names = ", ".join(sorted(unknown_keys))
+        names = ", ".join(sorted(str(key) for key in unknown_keys))
         raise RequirementParseError(f"metadata.vbot.requirements has unknown key(s): {names}")
 
     required_keys = [
@@ -156,7 +156,7 @@ def _parse_requirement_node(raw_node: Any, *, path: str) -> RequirementNode:
 
     unknown_keys = set(raw_node) - {"all", "any", "binary", "env", "skill"}
     if unknown_keys:
-        names = ", ".join(sorted(unknown_keys))
+        names = ", ".join(sorted(str(key) for key in unknown_keys))
         raise RequirementParseError(f"{path} has unknown key(s): {names}")
 
     present_keys = [key for key in ("all", "any", "binary", "env", "skill") if key in raw_node]

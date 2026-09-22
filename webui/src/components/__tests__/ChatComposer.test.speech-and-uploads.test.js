@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
+import { createComposerScope } from './composerScope.svelte.js';
 import {
   flushSync,
   mount,
@@ -98,6 +99,7 @@ describe('ChatComposer', () => {
 
     expect(transcribeSpeech).toHaveBeenCalledWith(expect.any(Blob), {
       filename: 'recording.webm',
+      signal: expect.any(AbortSignal),
       onProgress: expect.any(Function),
     });
     expect(composerInput().value).toBe('hello world');
@@ -192,6 +194,87 @@ describe('ChatComposer', () => {
     expect(
       document.body.querySelector('button[aria-label="Start voice input"]'),
     ).toBeTruthy();
+  });
+
+  it.each([false, true])(
+    'cancels speech on Session changes and ignores stale completion (%s)',
+    async (fail) => {
+      const scope = createComposerScope('agent::first');
+      const onTranscriptionError = vi.fn();
+      const recorder = {
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(new Blob(['audio'])),
+        cancel: vi.fn(),
+      };
+      createAudioRecorder.mockResolvedValue(recorder);
+      let complete, reject;
+      transcribeSpeech.mockImplementation(
+        () =>
+          new Promise((resolve, rejectPromise) => {
+            complete = resolve;
+            reject = rejectPromise;
+          }),
+      );
+      suite.mountedComponent = mount(ChatComposer, {
+        target: document.body,
+        props: {
+          get draftKey() {
+            return scope.draftKey;
+          },
+          onTranscriptionError,
+        },
+      });
+      flushSync();
+      document.querySelector('button[aria-label="Start voice input"]').click();
+      await flushComposerAsyncWork();
+      document.querySelector('button[aria-label="Stop recording"]').click();
+      await flushComposerAsyncWork();
+      const { signal, onProgress } = transcribeSpeech.mock.calls[0][1];
+
+      scope.draftKey = 'agent::second';
+      await flushComposerAsyncWork();
+      expect(signal.aborted).toBe(true);
+      document.querySelector('button[aria-label="Start voice input"]').click();
+      await flushComposerAsyncWork();
+      onProgress({ phase: 'loading', elapsed_seconds: 10 });
+      if (fail) reject(new Error('previous Session transcription failed'));
+      else complete({ text: 'previous Session transcript' });
+      await flushComposerAsyncWork();
+
+      expect(composerInput().value).toBe('');
+      expect(onTranscriptionError).not.toHaveBeenCalled();
+      expect(
+        document.querySelector('button[aria-label="Stop recording"]'),
+      ).toBeTruthy();
+    },
+  );
+
+  it('does not upload audio after unmount while the recorder is stopping', async () => {
+    let finishStop;
+    const recorder = {
+      start: vi.fn(),
+      stop: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            finishStop = resolve;
+          }),
+      ),
+      cancel: vi.fn(),
+    };
+    createAudioRecorder.mockResolvedValue(recorder);
+    suite.mountedComponent = mount(ChatComposer, { target: document.body });
+    flushSync();
+    document.querySelector('button[aria-label="Start voice input"]').click();
+    await flushComposerAsyncWork();
+    document.querySelector('button[aria-label="Stop recording"]').click();
+    await flushComposerAsyncWork();
+    await unmount(suite.mountedComponent);
+    suite.mountedComponent = null;
+    finishStop(new Blob(['audio']));
+    await flushComposerAsyncWork();
+
+    expect(recorder.cancel).toHaveBeenCalledOnce();
+    expect(transcribeSpeech).not.toHaveBeenCalled();
   });
 
   it('releases a recorder whose microphone permission resolves after unmount', async () => {

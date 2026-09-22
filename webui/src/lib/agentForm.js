@@ -17,7 +17,6 @@ const DEFAULT_AGENT_ALLOWED_SKILLS = Object.freeze([
   DEFAULT_AGENT_ALLOWED_LIST,
 ]);
 const DEFAULT_AGENT_MEMORY_PROMPT_MODE = 'agent_user';
-export const MEMORY_TOOL_NAME = 'memory';
 export const AGENT_MEMORY_PROMPT_MODES = Object.freeze([
   'off',
   'agent',

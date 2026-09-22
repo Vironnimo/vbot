@@ -203,7 +203,7 @@ def parse_patch_operations(raw_operations: Any) -> list[SettingsPatchOperation]:
                 f"operations[{index}] has unsupported fields: {', '.join(unknown)}"
             )
         operation = raw_operation.get("op")
-        if operation not in {"set", "unset"}:
+        if not isinstance(operation, str) or operation not in {"set", "unset"}:
             raise SettingsPathError(f"operations[{index}].op must be set or unset")
         raw_path = raw_operation.get("path")
         if not isinstance(raw_path, str):
@@ -441,9 +441,8 @@ def _match_definition(
     segments: tuple[PathSegment, ...],
 ) -> dict[str, Any] | None:
     has_remainder = bool(pattern) and isinstance(pattern[-1], DynamicRemainder)
-    minimum_length = len(pattern) if not has_remainder else len(pattern)
     if (not has_remainder and len(segments) != len(pattern)) or (
-        has_remainder and len(segments) < minimum_length
+        has_remainder and len(segments) < len(pattern)
     ):
         return None
 
@@ -490,7 +489,7 @@ def _validate_value(definition: SettingDefinition, value: Any, path: str) -> Non
         "integer": isinstance(value, int) and not isinstance(value, bool),
         "number": isinstance(value, int | float)
         and not isinstance(value, bool)
-        and math.isfinite(float(value)),
+        and (not isinstance(value, float) or math.isfinite(value)),
         "string": isinstance(value, str),
         "array": isinstance(value, list),
         "object": isinstance(value, dict),

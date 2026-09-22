@@ -41,11 +41,9 @@ from core.calendar._events import (
     validate_calendar_events_file,
 )
 from core.calendar._time import (
-    _DATE_ONLY_PATTERN_LENGTH,
     _as_utc,
     _default_timezone,
     _local_naive_iso,
-    _looks_like_date,
     _merge_intervals,
     _parse_iso_datetime,
     _parse_utc_instant,
@@ -66,7 +64,7 @@ from core.calendar.recurrence import (
     normalize_rrule,
     parse_date_string,
 )
-from core.calendar.when import parse_when
+from core.calendar.when import looks_like_date, parse_when
 from core.config_validation import (
     JsonDiagnostic,
 )
@@ -277,6 +275,12 @@ class CalendarService:
         max_per_event: int = MAX_OCCURRENCES_PER_EVENT,
     ) -> list[EventOccurrence]:
         """Expand all events into occurrences overlapping the half-open window."""
+        if (
+            isinstance(max_per_event, bool)
+            or not isinstance(max_per_event, int)
+            or max_per_event < 1
+        ):
+            raise CalendarValidationError("max_per_event must be a positive integer")
         self._ensure_events_loaded(allow_degraded=True)
         window_start = _as_utc(window_start_utc)
         window_end = _as_utc(window_end_utc)
@@ -402,7 +406,7 @@ class CalendarService:
                     occurrence_start=start_date.isoformat(),
                     occurrence_end=None,
                 )
-                for start_date, end_date in pairs
+                for start_date, end_date in pairs[:max_per_event]
             ]
         spans = self._timed_occurrence_spans(event, window_start, window_end)
         zone = _resolve_zone(event.tz_name) if event.tz_name else system_tz
@@ -420,7 +424,7 @@ class CalendarService:
                 occurrence_start=_local_naive_iso(start_utc, zone),
                 occurrence_end=_local_naive_iso(end_utc, zone),
             )
-            for start_utc, end_utc in spans
+            for start_utc, end_utc in spans[:max_per_event]
         ]
 
     def _timed_occurrence_spans(
@@ -482,7 +486,7 @@ class CalendarService:
         text = value.strip() if isinstance(value, str) else ""
         if not text:
             raise CalendarValidationError("window bounds must be non-empty strings")
-        if len(text) == _DATE_ONLY_PATTERN_LENGTH and _looks_like_date(text):
+        if looks_like_date(text):
             day = parse_date_string(text, field_name="window bound")
             local_midnight = datetime.combine(day, time.min).replace(tzinfo=self._timezone)
             if is_end:
@@ -536,7 +540,7 @@ class CalendarService:
                 "start must be a date (YYYY-MM-DD) or an ISO 8601 datetime"
             )
         start_text = start.strip()
-        is_date_only = len(start_text) == _DATE_ONLY_PATTERN_LENGTH and _looks_like_date(start_text)
+        is_date_only = looks_like_date(start_text)
 
         if is_date_only:
             if all_day is False:

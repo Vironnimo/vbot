@@ -8,6 +8,7 @@ returning 0.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ from core.extensions.extensions import ExtensionDeclarations, ExtensionRecord
 from core.extensions.settings_schema import parse_settings_fields
 from core.model_tasks import TASK_TEXT_TO_SPEECH, TaskModelService
 from core.models import Capabilities, Model, ReasoningCapabilities
+from core.storage import StorageManager
 from server.rpc import settings_methods
 from server.rpc.methods import dispatch_rpc
 from server.rpc.settings_methods import _trace_count
@@ -69,6 +71,95 @@ def test_trace_count_logs_warning_on_unexpected_error(
 
 def test_trace_count_logger_name() -> None:
     assert settings_methods._LOGGER.name == "vbot.server.rpc.settings"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation",
+    [
+        {"op": [], "path": "server.port", "value": 8420},
+        {"op": {}, "path": "server.port", "value": 8420},
+        {"op": "set", "path": "server.port", "value": 10**400},
+        {"op": "set", "path": "defaults.agent.temperature", "value": 10**400},
+    ],
+)
+async def test_invalid_settings_patch_returns_validation_error_without_writing(
+    tmp_path: Path, operation: dict[str, Any]
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    previous = state.runtime.storage.load_settings()
+
+    response = await dispatch_rpc(
+        state, {"method": "settings.patch", "params": {"operations": [operation]}}
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert state.runtime.storage.load_settings() == previous
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["settings.patch", "settings.update"])
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_skill_settings_refresh_is_async_serialized_and_survives_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str, cancel: bool
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage = StorageManager(tmp_path / "settings-data")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    refreshed: list[list[str]] = []
+    first_directory = str(tmp_path / "first")
+    second_directory = str(tmp_path / "second")
+
+    def blocking_reload() -> None:
+        raise AssertionError("Skill scans must not run synchronously on the Event Loop")
+
+    async def reload_skills() -> None:
+        directories = list(state.runtime.storage.load_settings()["skill_directories"])
+        if not entered.is_set():
+            entered.set()
+            await release.wait()
+        refreshed.append(directories)
+
+    def request(name: str, directory: str) -> dict[str, Any]:
+        params = (
+            {"skills": {"directories": [directory]}}
+            if name == "settings.update"
+            else {"operations": [{"op": "set", "path": "skills.directories", "value": [directory]}]}
+        )
+        return {"method": name, "params": params}
+
+    monkeypatch.setattr(state.runtime, "reload_skills", blocking_reload)
+    monkeypatch.setattr(state.runtime, "reload_skills_async", reload_skills)
+    first = asyncio.create_task(dispatch_rpc(state, request(method, first_directory)))
+    second = None
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        if cancel:
+            first.cancel()
+            await asyncio.sleep(0)
+            first.cancel()
+        other_method = "settings.update" if method == "settings.patch" else "settings.patch"
+        second = asyncio.create_task(dispatch_rpc(state, request(other_method, second_directory)))
+        await asyncio.sleep(0)
+        assert not first.done()
+        assert not second.done()
+        assert state.runtime.storage.load_settings()["skill_directories"] == [first_directory]
+        release.set()
+        if cancel:
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(first, 2)
+        else:
+            assert (await asyncio.wait_for(first, 2))["ok"] is True
+        assert (await asyncio.wait_for(second, 2))["ok"] is True
+        assert refreshed == [[first_directory], [second_directory]]
+        assert state.runtime.storage.load_settings()["skill_directories"] == [second_directory]
+    finally:
+        release.set()
+        await asyncio.gather(
+            first, *([second] if second is not None else []), return_exceptions=True
+        )
 
 
 @pytest.mark.asyncio
