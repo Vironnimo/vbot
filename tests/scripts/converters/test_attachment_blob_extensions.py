@@ -74,3 +74,33 @@ def test_converter_accepts_missing_attachment_directory(tmp_path: Path) -> None:
 
     assert result.converted == 0
     assert result.already_converted == 0
+
+
+def test_converter_repairs_sidecar_after_interruption_between_blob_and_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = AttachmentStore(tmp_path)
+    record = store.store("notes.txt", b"preserved")
+    typed_path = Path(record.file_path)
+    legacy_path = typed_path.with_suffix("")
+    typed_path.replace(legacy_path)
+    sidecar_path = typed_path.with_suffix(".json")
+    payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    payload["file_path"] = str(legacy_path)
+    sidecar_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(_CONVERTER, "atomic_write_text", interrupt)
+        with pytest.raises(KeyboardInterrupt):
+            convert_attachment_blob_extensions(tmp_path)
+
+    assert typed_path.read_bytes() == b"preserved"
+    result = convert_attachment_blob_extensions(tmp_path)
+
+    assert result.converted == 1
+    assert json.loads(sidecar_path.read_text(encoding="utf-8"))["file_path"] == str(typed_path)
+    assert store.get(record.id).file_path == str(typed_path)
+    assert convert_attachment_blob_extensions(tmp_path).already_converted == 1

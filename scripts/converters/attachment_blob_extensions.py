@@ -34,7 +34,7 @@ class AttachmentBlobConversionResult:
 @dataclass(frozen=True)
 class _ConversionCandidate:
     sidecar_path: Path
-    legacy_blob_path: Path
+    legacy_blob_path: Path | None
     typed_blob_path: Path
     sidecar_payload: JsonObject
 
@@ -69,7 +69,12 @@ def convert_attachment_blob_extensions(data_dir: Path) -> AttachmentBlobConversi
         legacy_blob_path = attachments_dir / attachment_id
         typed_blob_path = attachments_dir / f"{attachment_id}{extension}"
         if typed_blob_path.is_file() and not legacy_blob_path.exists():
-            already_converted += 1
+            if payload.get("file_path") == str(typed_blob_path):
+                already_converted += 1
+            else:
+                candidates.append(
+                    _ConversionCandidate(sidecar_path, None, typed_blob_path, payload)
+                )
             continue
         if typed_blob_path.exists():
             raise AttachmentBlobConversionError(
@@ -127,7 +132,8 @@ def _require_string(payload: JsonObject, key: str, sidecar_path: Path) -> str:
 
 
 def _convert_candidate(candidate: _ConversionCandidate) -> None:
-    candidate.legacy_blob_path.replace(candidate.typed_blob_path)
+    if candidate.legacy_blob_path is not None:
+        candidate.legacy_blob_path.replace(candidate.typed_blob_path)
     updated_payload = {
         **candidate.sidecar_payload,
         "file_path": str(candidate.typed_blob_path),
@@ -136,7 +142,8 @@ def _convert_candidate(candidate: _ConversionCandidate) -> None:
     try:
         atomic_write_text(candidate.sidecar_path, serialized)
     except OSError as exc:
-        candidate.typed_blob_path.replace(candidate.legacy_blob_path)
+        if candidate.legacy_blob_path is not None:
+            candidate.typed_blob_path.replace(candidate.legacy_blob_path)
         raise AttachmentBlobConversionError(
             f"Cannot update attachment sidecar {candidate.sidecar_path}: {exc}"
         ) from exc
