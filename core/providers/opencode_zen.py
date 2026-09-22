@@ -11,8 +11,8 @@ import httpx
 
 from core.models.models import Model
 from core.providers._http_shared import (
-    build_streaming_request,
     classify_http_status,
+    connect_streaming_with_retry,
     decode_response_json,
     iter_sse_events,
     parse_sse_json_data,
@@ -400,32 +400,21 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             self._token_getter, AuthConfig(header="x-goog-api-key", prefix="")
         )
 
-        async def _connect() -> httpx.Response:
-            headers = await self._gemini_headers()
-            request = build_streaming_request(
-                self._client,
-                "POST",
-                f"/models/{model_id}:streamGenerateContent?alt=sse",
-                json=payload,
-                headers=headers,
+        def _handle_error_status(status: int, body: str, headers: httpx.Headers) -> None:
+            self._classify_http_status(
+                status,
+                detail=f"{status} {body}".strip(),
+                response_headers=headers,
             )
-            try:
-                response = await self._client.send(request, stream=True)
-            except httpx.TransportError as exc:
-                raise wrap_network_error(exc) from exc
-            auth_recovery.record_response(response.status_code, headers)
-            if response.status_code >= 400:
-                body = (await response.aread()).decode("utf-8", errors="replace")
-                await response.aclose()
-                auth_recovery.record_response(response.status_code, headers, body)
-                self._classify_http_status(
-                    response.status_code,
-                    detail=f"{response.status_code} {body}".strip(),
-                    response_headers=response.headers,
-                )
-            return response
 
-        response = await auth_recovery.run(lambda: retry_async(_connect))
+        response = await connect_streaming_with_retry(
+            self._client,
+            f"/models/{model_id}:streamGenerateContent?alt=sse",
+            payload,
+            build_headers=self._gemini_headers,
+            handle_error_status=_handle_error_status,
+            auth_recovery=auth_recovery,
+        )
         replay_parts: list[dict[str, Any]] = []
         seen_finish = False
         has_tool_calls = False
