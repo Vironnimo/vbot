@@ -57,6 +57,7 @@ class ResponsesStreamState:
     tool_call_order: list[str] = field(default_factory=list)
     emitted_tool_names: dict[str, str] = field(default_factory=dict)
     emitted_tool_arguments: dict[str, str] = field(default_factory=dict)
+    started_tool_argument_deltas: set[str] = field(default_factory=set)
     emitted_output_text: str = ""
     emitted_reasoning_text: str = ""
     summary_sections: dict[tuple[int, int], str] = field(default_factory=dict)
@@ -317,7 +318,16 @@ def _function_arguments_delta(
     delta = event_data.get("delta")
     if not isinstance(delta, str) or not delta:
         return []
-    arguments_delta = _record_tool_argument_delta(tool_call_id, delta, state)
+    # Only an initial item snapshot may overlap the first argument event.
+    # Subsequent delta events are fragments, even when their bytes happen to
+    # equal (or start with) everything accumulated so far.
+    arguments_delta: str | None
+    if tool_call_id in state.started_tool_argument_deltas:
+        state.emitted_tool_arguments[tool_call_id] += delta
+        arguments_delta = delta
+    else:
+        arguments_delta = _record_tool_argument_snapshot(tool_call_id, delta, state)
+        state.started_tool_argument_deltas.add(tool_call_id)
     # The durable Responses replay carrier must agree with the canonical Call,
     # even when the terminal event omits its output array.
     for item in state.output_items_by_index.values():
@@ -375,10 +385,10 @@ def _output_item_event_deltas(
         name_delta = name
         state.emitted_tool_names[tool_call_id] = name
     if isinstance(arguments, str) and arguments:
-        arguments_delta = _record_tool_argument_delta(tool_call_id, arguments, state)
+        arguments_delta = _record_tool_argument_snapshot(tool_call_id, arguments, state)
     nested_arguments = _function_call_arguments(item)
     if arguments_delta is None and isinstance(nested_arguments, str) and nested_arguments:
-        arguments_delta = _record_tool_argument_delta(tool_call_id, nested_arguments, state)
+        arguments_delta = _record_tool_argument_snapshot(tool_call_id, nested_arguments, state)
     if name_delta or arguments_delta:
         deltas.append(
             {
@@ -391,7 +401,7 @@ def _output_item_event_deltas(
     return deltas
 
 
-def _record_tool_argument_delta(
+def _record_tool_argument_snapshot(
     tool_call_id: str,
     delta: str,
     state: ResponsesStreamState,
