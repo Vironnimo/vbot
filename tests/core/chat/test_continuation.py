@@ -230,6 +230,33 @@ def test_fold_discards_replayed_attempt_before_accepting_replacement_delta() -> 
     assert state.reasoning == "replacement"
 
 
+@pytest.mark.asyncio
+async def test_replayed_attempts_keep_every_persisted_partial(tmp_path: Path) -> None:
+    session = _session(tmp_path)
+    tracker = ContinuationTracker(session, run_id="run-one", request="work")
+    await tracker.start()
+    tracker.record_stream_delta(reasoning="PLAN", content="Visible-A")
+    await tracker.record_assistant_boundary(
+        message_id="partial-a", reasoning="PLAN", content="Visible-A", interrupted=True
+    )
+    # The continuation fails before text and is replayed.
+    tracker.record_stream_delta(reasoning="discarded thought")
+    await tracker.discard_stream_attempt()
+    tracker.record_stream_delta(content="Visible-B")
+    await tracker.record_assistant_boundary(
+        message_id="partial-b", reasoning=None, content="Visible-B", interrupted=True
+    )
+    await tracker.discard_stream_attempt()
+    await tracker.interrupt("network")
+
+    state = fold_continuation_records(session.load_continuation_records())
+
+    assert state is not None
+    assert [step.content for step in state.model_steps.values()] == ["Visible-A", "Visible-B"]
+    assert [step.reasoning for step in state.model_steps.values()] == ["PLAN", ""]
+    assert all(step.interrupted for step in state.model_steps.values())
+
+
 def test_fold_preserves_chain_across_repeated_interruptions() -> None:
     records = [
         _record(

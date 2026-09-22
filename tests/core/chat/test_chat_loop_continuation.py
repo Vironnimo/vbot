@@ -314,6 +314,43 @@ async def test_second_interrupted_message_extends_same_checkpoint(
 
 
 @pytest.mark.asyncio
+async def test_next_run_receives_partial_and_reasoning_after_exhausted_replays(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "reasoning_delta", "text": "PLAN-SENTINEL"},
+                {"type": "content_delta", "text": "PARTIAL-SENTINEL"},
+                NetworkError("dropped after text"),
+            ],
+            *[NetworkError("offline before text") for _ in range(8)],
+            [{"type": "content_delta", "text": "ok"}, {"type": "finish", "reason": "stop"}],
+        ],
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path, agent=StubAgent(id="coder", model="openai/test"), adapter=adapter
+    )
+    loop = build_chat_loop(runtime, streaming=True)
+    with pytest.raises(RunInterruptedError):
+        await loop.send("coder", "Work", session_id="s")
+
+    await loop.send("coder", "Next", session_id="s")
+
+    reminders = [
+        message["content"]
+        for message in adapter.stream_requests[-1]["messages"]
+        if "continuation-checkpoint" in str(message.get("content"))
+    ]
+    assert len(reminders) == 1
+    assert "PLAN-SENTINEL" in reminders[0]
+    assert "PARTIAL-SENTINEL" in reminders[0]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "policy",
     [REASONING_REPLAY_CURRENT_RUN, REASONING_REPLAY_FULL_HISTORY],
