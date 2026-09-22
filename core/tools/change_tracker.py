@@ -46,7 +46,11 @@ class ChangeTracker:
     """Process-wide registry of per-session run deltas."""
 
     def __init__(self) -> None:
-        self._run_changes: dict[str, dict[str, tuple[str, str]]] = {}
+        # Insertion-ordered ``(session, path)`` entries, so the oldest is evicted first.
+        self._run_changes: dict[tuple[str, str], tuple[str, str]] = {}
+        # Sessions that lost an entry report no statistics until their Run ends,
+        # so the accessor falls back to per-call counts instead of an undercount.
+        self._incomplete_sessions: set[str] = set()
         self._run_changes_lock = threading.Lock()
 
     def record_write(self, session_id: str, resolved: Path, before: str, after: str) -> None:
@@ -66,14 +70,17 @@ class ChangeTracker:
             > MAX_TRACKED_BYTES
         ):
             return
-        path = str(resolved)
+        key = (session_id, str(resolved))
         with self._run_changes_lock:
-            run_changes = self._run_changes.setdefault(session_id, {})
-            if path not in run_changes:
-                run_changes[path] = (before, after)
-            else:
-                _before, _after = run_changes[path]
-                run_changes[path] = (_before, after)
+            existing = self._run_changes.get(key)
+            if existing is not None:
+                self._run_changes[key] = (existing[0], after)
+                return
+            self._run_changes[key] = (before, after)
+            while len(self._run_changes) > _MAX_TRACKED_FILES:
+                evicted_session, _path = next(iter(self._run_changes))
+                del self._run_changes[evicted_session, _path]
+                self._incomplete_sessions.add(evicted_session)
 
     def peek_run_stats(self, session_id: str) -> dict[str, object] | None:
         """Return current git-style change statistics WITHOUT consuming them.
@@ -86,7 +93,9 @@ class ChangeTracker:
         total instead of leaving it stale.
         """
         with self._run_changes_lock:
-            snapshot = dict(self._run_changes.get(session_id, {}))
+            if session_id in self._incomplete_sessions:
+                return None
+            snapshot = self._session_changes(session_id)
         if not snapshot:
             return None
         stats = _stats_from_changes(snapshot)
@@ -103,10 +112,23 @@ class ChangeTracker:
         no tracked files. The per-run deltas are consumed and cleared.
         """
         with self._run_changes_lock:
-            run_changes = self._run_changes.pop(session_id, None)
+            run_changes = self._session_changes(session_id)
+            for path in run_changes:
+                del self._run_changes[session_id, path]
+            if session_id in self._incomplete_sessions:
+                self._incomplete_sessions.discard(session_id)
+                return None
         if not run_changes:
             return None
         return _stats_from_changes(run_changes)
+
+    def _session_changes(self, session_id: str) -> dict[str, tuple[str, str]]:
+        """Return one Session's deltas by path; the caller holds the lock."""
+        return {
+            path: change
+            for (owner, path), change in self._run_changes.items()
+            if owner == session_id
+        }
 
 
 def _stats_from_changes(run_changes: dict[str, tuple[str, str]]) -> dict[str, object] | None:

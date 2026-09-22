@@ -74,14 +74,29 @@ class FileReadState:
     def record_read(self, session_id: str, resolved: Path) -> None:
         """Stamp a file's current ``(mtime, size)`` for a session.
 
-        Called by ``read`` after resolving a file, and by ``apply_patch`` after
-        a successful write — the tool's own write is an implicit read, so the next
-        full-file write in the same session needs no re-read.
+        Called for content a Session received in one step, and by ``apply_patch``
+        after a successful write — the tool's own write is an implicit read, so the
+        next full-file write in the same session needs no re-read.
+        """
+        stamp = self.stamp(resolved)
+        if stamp is not None:
+            self.record_stamp(session_id, resolved, stamp)
+
+    def stamp(self, resolved: Path) -> tuple[float, int] | None:
+        """Capture a file's ``(mtime, size)`` before a reader consumes its bytes.
+
+        ``read`` records the captured stamp with ``record_stamp`` only after the
+        read succeeded: a failed read never counts, while an external write that
+        lands during the read leaves the stamp older than the new content, so a
+        later full replacement errs toward a harmless re-read.
         """
         if not FILE_STATE_GUARD_ENABLED:
-            return
-        stamp = _stamp(resolved)
-        if stamp is None:
+            return None
+        return _stamp(resolved)
+
+    def record_stamp(self, session_id: str, resolved: Path, stamp: tuple[float, int]) -> None:
+        """Record a stamp captured by ``stamp`` for a completed read."""
+        if not FILE_STATE_GUARD_ENABLED:
             return
         key = (session_id, str(resolved))
         with self._stamps_lock:

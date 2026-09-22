@@ -28,6 +28,7 @@ from core.tools import (
     make_read_handler,
     register_read_tool,
 )
+from core.tools.file_state import StaleReason
 from core.utils.paths import model_path
 
 
@@ -1030,3 +1031,94 @@ async def test_read_records_stamp_so_write_edit_guard_passes(tmp_path: Path) -> 
     assert file_state.check_stale("session-1", target.resolve()) is None
     # Sanity: a registry that never saw the read would block the write.
     assert FileReadState().check_stale("session-1", target.resolve()) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("filename", "data", "handler_options", "arguments", "code"),
+    [
+        (
+            "voice.mp3",
+            b"ID3\x04\x00\x00\x00\x00\x00\x0a" + b"x" * 20,
+            {"speech_max_size_bytes": 8},
+            {},
+            "audio_too_large",
+        ),
+        (
+            "voice.mp3",
+            b"ID3\x04\x00\x00\x00\x00\x00\x0a" + b"x" * 20,
+            {"speech": _FakeSpeech(error=SpeechError("stt down"))},
+            {},
+            "transcription_failed",
+        ),
+        (
+            "pic.png",
+            b"\x89PNG\r\n\x1a\n" + b"\x00" * 64,
+            {"store": _FakeAttachmentStore(max_size_bytes=8)},
+            {},
+            "attachment_error",
+        ),
+        ("notes.txt", b"one\ntwo\n", {}, {"offset": "1:x"}, "invalid_arguments"),
+    ],
+)
+async def test_failed_read_does_not_stamp_the_file(
+    tmp_path: Path,
+    filename: str,
+    data: bytes,
+    handler_options: dict[str, Any],
+    arguments: dict[str, Any],
+    code: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / filename
+    target.write_bytes(data)
+    file_state = FileReadState()
+
+    result = await make_handler(file_state=file_state, **handler_options)(
+        make_context(workspace), {"path": filename, **arguments}
+    )
+
+    assert_failure_envelope(result, code)
+    assert file_state.check_stale("session-1", target.resolve()) is StaleReason.NEVER_READ
+
+
+@pytest.mark.asyncio
+async def test_successful_transcription_stamps_the_audio_file(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "voice.mp3"
+    target.write_bytes(b"ID3\x04\x00\x00\x00\x00\x00\x0a" + b"x" * 20)
+    file_state = FileReadState()
+
+    result = await make_handler(file_state=file_state)(
+        make_context(workspace), {"path": "voice.mp3"}
+    )
+
+    assert result["ok"] is True
+    assert file_state.check_stale("session-1", target.resolve()) is None
+
+
+@pytest.mark.asyncio
+async def test_read_stamp_predates_bytes_so_a_concurrent_write_forces_reread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_bytes(b"before\n")
+    file_state = FileReadState()
+    render = read_module._render_text_path
+
+    def render_after_external_write(resolved: Path, arguments: dict[str, Any]) -> str:
+        target.write_bytes(b"written during the read\n")
+        return render(resolved, arguments)
+
+    monkeypatch.setattr(read_module, "_render_text_path", render_after_external_write)
+
+    result = await make_handler(file_state=file_state)(
+        make_context(workspace), {"path": "notes.txt"}
+    )
+
+    assert result["ok"] is True
+    assert file_state.check_stale("session-1", target.resolve()) is StaleReason.MODIFIED
