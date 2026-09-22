@@ -266,6 +266,14 @@ def _load_and_validate_json_file(
                 ),
             )
         )
+    except ValueError:
+        return _ValidatedDocument(
+            report=JsonValidationReport(
+                file_path=file_path,
+                exists=True,
+                diagnostics=(error_diagnostic("$", "JSON exceeds decoder limits"),),
+            )
+        )
     except OSError as exc:
         return _ValidatedDocument(
             report=JsonValidationReport(

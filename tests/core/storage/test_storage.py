@@ -1,5 +1,6 @@
 """Tests for storage."""
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -123,6 +124,25 @@ def test_load_settings_ignores_non_utf8_without_rewriting(tmp_path: Path) -> Non
     with pytest.raises(StorageError):
         storage.update_settings(lambda settings: settings.update({"keep_awake": False}))
     assert storage.settings_path.read_bytes() == original
+
+
+def test_settings_json_integer_limit_is_reported_without_overwriting(tmp_path: Path) -> None:
+    from core.settings import validate_settings_file
+
+    storage = StorageManager(tmp_path)
+    previous_limit = sys.get_int_max_str_digits()
+    try:
+        sys.set_int_max_str_digits(640)
+        original = '{"unknown": ' + "9" * 641 + "}"
+        storage.settings_path.write_text(original, encoding="utf-8")
+
+        assert storage.load_settings() == {}
+        assert not validate_settings_file(storage.settings_path).ok
+        with pytest.raises(StorageError):
+            storage.update_settings(lambda settings: settings.update({"keep_awake": False}))
+        assert storage.settings_path.read_text(encoding="utf-8") == original
+    finally:
+        sys.set_int_max_str_digits(previous_limit)
 
 
 def test_update_settings_rejects_invalid_file_without_overwriting_it(tmp_path: Path) -> None:
