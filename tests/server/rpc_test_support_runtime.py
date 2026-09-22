@@ -335,6 +335,9 @@ class StubRuntime:
     def skills_for(self, _project_id: str | None = None, _agent_id: str | None = None) -> Any:
         return self.skills
 
+    def invalidate_agent_skills(self, _agent_id: str | None = None) -> None:
+        return None
+
     def project_skill_names(self, _project_id: str | None = None) -> frozenset[str]:
         return frozenset()
 
