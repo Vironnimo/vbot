@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
+
+import pytest
 
 from cli import session_store_management
 from cli.main import dispatch_session_store_command
@@ -102,6 +105,32 @@ def test_snapshot_status_rpc_is_rendered_without_session_content(
     assert "sessions" not in result.message
 
 
+def test_verify_reports_the_snapshot_from_its_verified_read(tmp_path: Path, monkeypatch) -> None:
+    instance = _instance(tmp_path)
+    write_bootstrap_marker(tmp_path)
+    sessions = ChatSessionManager(tmp_path)
+    marker = read_session_store_marker(tmp_path)
+    assert marker is not None
+    try:
+        snapshot = create_snapshot(
+            tmp_path,
+            tmp_path / "sessions.db",
+            sessions.backup_snapshot,
+            database_id=str(marker["database_id"]),
+            reason="test",
+        )
+    finally:
+        sessions.close()
+    assert snapshot is not None
+    # Retention can change a later inventory after the requested image was verified.
+    monkeypatch.setattr(session_store_management, "snapshot_summaries", lambda *_a, **_k: [])
+
+    result = session_store_management.session_store_snapshot_verify(instance, snapshot.name)
+
+    assert result.ok
+    assert snapshot.name in result.message
+
+
 def test_status_falls_back_to_offline_unrecoverable_projection(tmp_path: Path, monkeypatch) -> None:
     instance = _instance(tmp_path)
     write_bootstrap_marker(tmp_path)
@@ -128,6 +157,21 @@ def test_status_falls_back_to_offline_unrecoverable_projection(tmp_path: Path, m
     assert result.ok is False
     assert '"state": "unrecoverable"' in result.message
     assert '"snapshots": []' in result.message
+
+
+def test_offline_status_reports_invalid_recovery_evidence(tmp_path: Path) -> None:
+    instance = _instance(tmp_path)
+    write_bootstrap_marker(tmp_path)
+    sessions = ChatSessionManager(tmp_path)
+    sessions.close()
+    (tmp_path / "session-recovery.json").write_text("[]", encoding="utf-8")
+
+    projection = session_store_management._offline_status_projection(instance)
+
+    assert projection["state"] == "unrecoverable"
+    assert "SessionStoreCorruptError" in str(projection["reason"])
+    assert projection["incident"] is None
+    assert json.loads((tmp_path / "session-recovery.json").read_text(encoding="utf-8")) == []
 
 
 def test_restore_stops_verifies_and_restarts_the_previously_running_server(
@@ -174,3 +218,41 @@ def test_restore_stops_verifies_and_restarts_the_previously_running_server(
     assert result.ok is True
     assert calls == ["stop", "start"]
     assert "restarted the server" in result.message
+
+
+@pytest.mark.parametrize("stop_succeeds", [True, False])
+def test_restore_checks_process_shutdown_even_after_listener_closed(
+    tmp_path: Path, monkeypatch, stop_succeeds: bool
+) -> None:
+    instance = _instance(tmp_path)
+    write_bootstrap_marker(tmp_path)
+    snapshot = tmp_path / "session-snapshots" / "snapshot"
+    calls: list[str] = []
+
+    def stop(resolved):
+        calls.append("stop")
+        return CommandResult(ok=stop_succeeds, message="shutdown result", instance=resolved)
+
+    def restore(*_args, **_kwargs):
+        calls.append("restore")
+        return False
+
+    monkeypatch.setattr(session_store_management, "list_snapshots", lambda *_a, **_k: [snapshot])
+    monkeypatch.setattr(
+        session_store_management,
+        "probe_health",
+        lambda _instance: HealthProbeResult(reachable=False, is_vbot=False),
+    )
+    monkeypatch.setattr(session_store_management, "is_systemd_managed", lambda *_args: False)
+    monkeypatch.setattr(session_store_management, "stop_server", stop)
+    monkeypatch.setattr(session_store_management, "restore_snapshot_with_incident", restore)
+    monkeypatch.setattr(
+        session_store_management,
+        "start_server",
+        lambda *_args: pytest.fail("an already stopped target must remain stopped"),
+    )
+
+    result = session_store_management.session_store_snapshot_restore(instance, "snapshot", True)
+
+    assert not result.ok
+    assert calls == (["stop", "restore"] if stop_succeeds else ["stop"])

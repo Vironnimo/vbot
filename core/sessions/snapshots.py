@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sqlite3
+import stat
 import time
 import uuid
 from collections.abc import Callable
@@ -25,7 +26,11 @@ from core.sessions.errors import (
     SessionStoreUnavailableError,
 )
 from core.sessions.schema import APPLICATION_ID, DATABASE_ID_META_KEY, SCHEMA_VERSION
-from core.sessions.sqlite_runtime import readonly_sqlite_uri
+from core.sessions.sqlite_runtime import (
+    classify_unavailable,
+    classify_write_error,
+    readonly_sqlite_uri,
+)
 
 SNAPSHOT_ROOT_NAME = "session-snapshots"
 SNAPSHOT_MANIFEST_NAME = "manifest.json"
@@ -369,8 +374,8 @@ def _safe_snapshot_paths(data_dir: Path, snapshot_dir: Path) -> tuple[Path, Path
     try:
         root_resolved = root.resolve()
         candidate_resolved = candidate.resolve()
-    except OSError:
-        return None
+    except OSError as exc:
+        raise SessionStoreUnavailableError("snapshot paths are unavailable") from exc
     if candidate.is_symlink() or candidate_resolved.parent != root_resolved:
         return None
     if candidate.name.startswith(".") or candidate.parent.resolve() != root_resolved:
@@ -392,12 +397,18 @@ def _read_manifest(snapshot_dir: Path, data_dir: Path) -> tuple[SnapshotManifest
     if paths is None:
         return None
     candidate, manifest_path, database_path = paths
-    if not manifest_path.is_file() or not database_path.is_file():
-        return None
     try:
+        if not stat.S_ISREG(manifest_path.stat().st_mode) or not stat.S_ISREG(
+            database_path.stat().st_mode
+        ):
+            return None
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
         return _parse_manifest(payload, child_name=candidate.name), database_path
-    except (OSError, UnicodeError, json.JSONDecodeError, SessionStoreCorruptError):
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise SessionStoreUnavailableError("snapshot manifest is unavailable") from exc
+    except (UnicodeError, json.JSONDecodeError, SessionStoreCorruptError):
         return None
 
 
@@ -457,11 +468,62 @@ def _verify_snapshot_db(
     except sqlite3.Error as exc:
         if cancelled is not None and cancelled():
             raise _SnapshotCancelledError from exc
+        if classify_unavailable(exc) or classify_write_error(exc) == "unavailable":
+            raise SessionStoreUnavailableError("snapshot database is unavailable") from exc
         raise SessionStoreCorruptError("snapshot database verification failed") from exc
     finally:
         if connection is not None:
             with suppress(BaseException):
                 connection.close()
+
+
+def _verify_snapshot_manifest(
+    database_path: Path,
+    manifest: SnapshotManifest,
+    *,
+    expected_database_id: str | None = None,
+) -> None:
+    """Verify the database and all manifest claims derived from its contents."""
+    if expected_database_id is not None and manifest.database_id != expected_database_id:
+        raise SessionStoreCorruptError("snapshot manifest database_id mismatch")
+    try:
+        if database_path.stat().st_size != manifest.file_size:
+            raise SessionStoreCorruptError("snapshot file size mismatch")
+        if _sha256(database_path) != manifest.sha256:
+            raise SessionStoreCorruptError("snapshot file hash mismatch")
+        verification = _verify_snapshot_db(database_path, expected_database_id=manifest.database_id)
+    except FileNotFoundError as exc:
+        raise SessionStoreCorruptError("snapshot database is missing") from exc
+    except OSError as exc:
+        raise SessionStoreUnavailableError("snapshot database is unavailable") from exc
+    for field in (
+        "session_count",
+        "message_count",
+        "latest_history_revision",
+        "latest_state_revision",
+    ):
+        if getattr(manifest, field) != getattr(verification, field):
+            raise SessionStoreCorruptError(f"snapshot manifest {field} mismatch")
+
+
+def read_verified_snapshot_summary(
+    data_dir: Path,
+    snapshot_dir: Path,
+    *,
+    expected_database_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Verify one published snapshot, preserving operational verification failures."""
+    parsed = _read_manifest(snapshot_dir, data_dir)
+    if parsed is None:
+        return None
+    manifest, database_path = parsed
+    try:
+        _verify_snapshot_manifest(
+            database_path, manifest, expected_database_id=expected_database_id
+        )
+    except SessionStoreCorruptError:
+        return None
+    return _snapshot_summary(manifest)
 
 
 def _read_database_identity(path: Path) -> str | None:
@@ -643,46 +705,50 @@ def list_snapshots(
 ) -> list[Path]:
     """Return only fixed-root, strict-manifest, hash- and DB-verified snapshots."""
 
+    return [
+        path
+        for path, _summary in _verified_snapshot_entries(
+            data_dir, expected_database_id=expected_database_id
+        )
+    ]
+
+
+def _verified_snapshot_entries(
+    data_dir: Path, *, expected_database_id: str | None = None
+) -> list[tuple[Path, dict[str, Any]]]:
     root = snapshot_root(data_dir)
-    if not root.is_dir():
-        return []
-    verified: list[tuple[str, Path]] = []
+    verified: list[tuple[datetime, Path, dict[str, Any]]] = []
     try:
+        if not stat.S_ISDIR(root.stat().st_mode):
+            return []
         children = list(root.iterdir())
-    except OSError:
+    except FileNotFoundError:
         return []
+    except OSError as exc:
+        raise SessionStoreUnavailableError("snapshot inventory is unavailable") from exc
     for child in children:
         if not child.is_dir() or child.is_symlink() or child.name.startswith("."):
             continue
-        parsed = _read_manifest(child, data_dir)
-        if parsed is None:
+        summary = read_verified_snapshot_summary(
+            data_dir, child, expected_database_id=expected_database_id
+        )
+        if summary is None:
             continue
-        manifest, database_path = parsed
-        try:
-            if database_path.stat().st_size != manifest.file_size:
-                continue
-            if _sha256(database_path) != manifest.sha256:
-                continue
-            _verify_snapshot_db(database_path, expected_database_id=expected_database_id)
-        except (OSError, SessionStoreCorruptError):
-            continue
-        verified.append((manifest.created_at, child))
+        verified.append((datetime.fromisoformat(summary["created_at"]), child, summary))
     verified.sort(key=lambda item: item[0], reverse=True)
-    return [path for _created_at, path in verified]
+    return [(path, summary) for _created_at, path, summary in verified]
 
 
 def snapshot_summaries(
     data_dir: Path, *, expected_database_id: str | None = None
 ) -> list[dict[str, Any]]:
     """Return verified snapshot metadata without exposing Session content."""
-    summaries: list[dict[str, Any]] = []
-    for snapshot_dir in list_snapshots(data_dir, expected_database_id=expected_database_id):
-        parsed = _read_manifest(snapshot_dir, data_dir)
-        if parsed is None:
-            continue
-        manifest, _database_path = parsed
-        summaries.append(_snapshot_summary(manifest))
-    return summaries
+    return [
+        summary
+        for _path, summary in _verified_snapshot_entries(
+            data_dir, expected_database_id=expected_database_id
+        )
+    ]
 
 
 def _snapshot_summary(manifest: SnapshotManifest) -> dict[str, Any]:
@@ -711,7 +777,7 @@ def _snapshot_inventory_entry(
 ) -> _SnapshotInventoryEntry | None:
     try:
         parsed = _read_manifest(snapshot_dir, data_dir)
-    except OSError:
+    except (OSError, SessionStoreUnavailableError):
         return None
     if parsed is None:
         return None
@@ -749,7 +815,7 @@ def snapshot_inventory(
     root = snapshot_root(data_dir)
     if not root.is_dir():
         return []
-    candidates: list[tuple[str, dict[str, Any]]] = []
+    candidates: list[tuple[datetime, dict[str, Any]]] = []
     try:
         children = list(root.iterdir())
     except OSError:
@@ -766,7 +832,7 @@ def snapshot_inventory(
             continue
         candidates.append(
             (
-                entry.manifest.created_at,
+                datetime.fromisoformat(entry.manifest.created_at),
                 _snapshot_summary(entry.manifest),
             )
         )
@@ -792,7 +858,10 @@ def _prune_snapshots(root: Path, *, protected_snapshot: Path) -> None:
         return
     others = sorted(
         (entry for entry in entries if entry.path != protected_snapshot),
-        key=lambda entry: (entry.manifest.created_at, entry.manifest.snapshot_id),
+        key=lambda entry: (
+            datetime.fromisoformat(entry.manifest.created_at),
+            entry.manifest.snapshot_id,
+        ),
         reverse=True,
     )
     if not others:

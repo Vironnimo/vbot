@@ -84,6 +84,7 @@ def test_converter_removes_retired_tools_from_current_policy(tmp_path: Path) -> 
             "mode": "selected",
             "allowed": ["read", "retired_allowed"],
             "denied": ["write", "retired_denied"],
+            "granted": ["mcp_calendar", "retired_allowed"],
         },
     )
 
@@ -100,7 +101,18 @@ def test_converter_removes_retired_tools_from_current_policy(tmp_path: Path) -> 
         "mode": "selected",
         "allowed": ["read"],
         "denied": ["write"],
+        "granted": ["mcp_calendar"],
     }
+
+
+def test_removing_absent_tool_preserves_current_grants(tmp_path: Path) -> None:
+    path = _write_agent(tmp_path, "main", tool_access={"mode": "all", "granted": ["mcp_calendar"]})
+    original = path.read_bytes()
+
+    result = convert_agent_tool_access(tmp_path, apply=True, remove_tools=("retired",))
+
+    assert result.planned == 0
+    assert path.read_bytes() == original
 
 
 @pytest.mark.parametrize(

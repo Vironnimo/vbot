@@ -577,20 +577,8 @@ class SQLiteRuntime:
                 if connection is not None:
                     with contextlib.suppress(BaseException):
                         connection.close()
-                if isinstance(exc, sqlite3.OperationalError) and (
-                    is_busy_error(exc)
-                    or any(
-                        marker in str(exc).lower()
-                        for marker in (
-                            "readonly",
-                            "read-only",
-                            "disk full",
-                            "disk i/o",
-                            "unable to open",
-                            "cannot open",
-                            "permission",
-                        )
-                    )
+                if isinstance(exc, sqlite3.Error) and (
+                    is_busy_error(exc) or classify_write_error(exc) == "unavailable"
                 ):
                     raise SessionStoreUnavailableError(
                         f"Session database cannot be opened safely: {self.db_path}"

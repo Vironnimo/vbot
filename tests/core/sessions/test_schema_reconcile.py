@@ -9,6 +9,7 @@ import sqlite3
 import pytest
 
 from core.chat.messages import ChatMessage, ToolCall
+from core.sessions import _store_schema
 from core.sessions import schema as session_schema
 from core.sessions._types import SessionAddress
 from core.sessions.errors import SessionStoreCorruptError, SessionStoreSchemaMismatchError
@@ -626,3 +627,96 @@ def test_reopen_repairs_zero_active_sort_for_metadata_only_ensure_live_session(t
         )
     finally:
         reopened.close()
+
+
+def test_metadata_backfill_reads_after_acquiring_write_transaction(tmp_path) -> None:
+    database = tmp_path / "sessions.db"
+    address = SessionAddress(None, "agent", "concurrent-backfill")
+    store = SessionStore(database)
+    store.ensure_live(address)
+    store.replace_metadata(address, {"custom": "before"})
+    store._writer.execute(
+        "DELETE FROM store_meta WHERE key = 'session_metadata_projection_version'"
+    )
+
+    class ConcurrentConnection(sqlite3.Connection):
+        def execute(self, sql, parameters=()):
+            if sql == "BEGIN IMMEDIATE":
+                store.mutate_metadata(address, lambda metadata: metadata.update(custom="after"))
+            return super().execute(sql, parameters)
+
+    connection = sqlite3.connect(database, isolation_level=None, factory=ConcurrentConnection)
+    connection.row_factory = sqlite3.Row
+    try:
+        _store_schema._reconcile_session_metadata_projection(connection, database)
+        assert store.metadata(address)["custom"] == "after"
+    finally:
+        connection.close()
+        store.close()
+
+
+def test_schema_reconcile_rolls_back_all_ddl_when_a_later_statement_fails(tmp_path) -> None:
+    connection = _create_current_database(tmp_path / "sessions.db")
+    try:
+        connection.execute("CREATE TABLE duplicate_values(value TEXT) STRICT")
+        connection.executemany("INSERT INTO duplicate_values VALUES (?)", [("same",), ("same",)])
+        connection.commit()
+        future_schema = SCHEMA_SQL + (
+            "\nCREATE TABLE duplicate_values(value TEXT) STRICT;"
+            "\nCREATE TABLE new_table(value TEXT) STRICT;"
+            "\nCREATE UNIQUE INDEX unique_values ON duplicate_values(value);"
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            reconcile_schema(connection, schema_sql=future_schema)
+        assert not connection.in_transaction
+        assert (
+            connection.execute("SELECT name FROM sqlite_schema WHERE name = 'new_table'").fetchone()
+            is None
+        )
+        assert connection.execute("SELECT COUNT(*) FROM duplicate_values").fetchone()[0] == 2
+    finally:
+        connection.close()
+
+
+def test_schema_reconcile_plans_again_after_another_opener_commits(tmp_path) -> None:
+    database = tmp_path / "sessions.db"
+    connection = _create_current_database(database)
+    future_schema = SCHEMA_SQL + (
+        "\nALTER TABLE sessions ADD COLUMN concurrent_column INTEGER NOT NULL DEFAULT 0;"
+    )
+    competing_open = False
+
+    def authorize(action, operation, _table, _database, _trigger):
+        nonlocal competing_open
+        if action == sqlite3.SQLITE_TRANSACTION and operation == "BEGIN" and not competing_open:
+            competing_open = True
+            other = sqlite3.connect(database)
+            try:
+                reconcile_schema(other, schema_sql=future_schema)
+            finally:
+                other.close()
+        return sqlite3.SQLITE_OK
+
+    connection.set_authorizer(authorize)
+    try:
+        assert reconcile_schema(connection, schema_sql=future_schema) == []
+        assert competing_open
+        assert "concurrent_column" in {
+            row[1] for row in connection.execute("PRAGMA table_info(sessions)")
+        }
+    finally:
+        connection.close()
+
+
+def test_current_schema_can_open_while_another_writer_holds_admission(tmp_path) -> None:
+    database = tmp_path / "sessions.db"
+    store = SessionStore(database)
+    store.close()
+    writer = sqlite3.connect(database)
+    writer.execute("BEGIN IMMEDIATE")
+    try:
+        reopened = SessionStore(database)
+        reopened.close()
+    finally:
+        writer.rollback()
+        writer.close()

@@ -14,6 +14,8 @@ Data-directory bootstrap, temporary-file lifecycle, atomic settings and credenti
 
 Directory creation does not transfer ownership: Agents own their trees, Channels theirs, Cron/Bootstrap their job stores, Attachments/Speech their artifacts, Models the Model DB, Providers `statistics/provider-usage/`, Statistics its read model, Terminal Manager launch history. Layout changes belong in `layout.py`; format/retention changes stay with owning domains.
 
+The explicit `scripts/converters/data_dir_artifacts_layout.py` converter preflights all supported legacy files and collisions before moving them. Canonical destination ancestry below the chosen data root must contain no symbolic links, including when the destination directory already exists.
+
 Runtime creates `<data-dir>/extension-data/<owner>/` for a loaded Extension's persistent host state. It is separate from `extensions/`, which contains executable overrides, and is not temporary-file cleanup data. The Extension owns its format; canonical temporary Session bindings, delivery receipts and Run ownership remain in `sessions.db` (`extensions.md`, `sessions.md`).
 
 The archived Browser Use Extension previously owned `artifacts/browser-use/` (including its `refs.db` counter) and `~/.agent-browser/browsers`. Removal from bundled discovery does not delete these existing files or make them Storage cleanup categories; see `extensions/browser-use.md`.

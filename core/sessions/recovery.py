@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import uuid
+from collections.abc import Callable
 from contextlib import closing, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -20,7 +22,11 @@ from core.sessions.errors import (
     SessionStoreUnavailableError,
 )
 from core.sessions.schema import APPLICATION_ID, DATABASE_ID_META_KEY, SCHEMA_VERSION
-from core.sessions.sqlite_runtime import readonly_sqlite_uri
+from core.sessions.sqlite_runtime import (
+    classify_unavailable,
+    classify_write_error,
+    readonly_sqlite_uri,
+)
 
 
 @dataclass(frozen=True)
@@ -44,7 +50,17 @@ def _bundle_members(database_path: Path) -> list[Path]:
     ]
 
 
-def _quarantine_database(database_path: Path) -> QuarantineResult:
+def _new_quarantine_path(data_dir: Path) -> Path:
+    return (
+        data_dir
+        / "session-quarantine"
+        / (f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}")
+    )
+
+
+def _quarantine_database(
+    database_path: Path, *, destination: Path | None = None
+) -> QuarantineResult:
     """Move a complete bundle, or roll back every member on the first failure."""
 
     data_dir = database_path.parent
@@ -54,7 +70,7 @@ def _quarantine_database(database_path: Path) -> QuarantineResult:
     try:
         root = data_dir / "session-quarantine"
         root.mkdir(parents=True, exist_ok=True)
-        batch = root / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
+        batch = destination or _new_quarantine_path(data_dir)
         batch.mkdir()
     except OSError as exc:
         return QuarantineResult("failed", reason=str(exc))
@@ -64,6 +80,9 @@ def _quarantine_database(database_path: Path) -> QuarantineResult:
             destination = batch / member.name
             os.replace(member, destination)
             moved.append((member, destination))
+        snapshots._fsync_dir(batch)
+        snapshots._fsync_dir(root)
+        snapshots._fsync_dir(data_dir)
     except OSError as exc:
         rollback_errors: list[str] = []
         for original, destination in reversed(moved):
@@ -98,8 +117,72 @@ def _snapshot_schema_compatible(database_source: Path) -> bool:
         with closing(sqlite3.connect(readonly_sqlite_uri(database_source), uri=True)) as source:
             reconcile_schema(source, dry_run=True)
         return True
-    except (sqlite3.Error, SessionStoreCorruptError, OSError):
+    except sqlite3.Error as exc:
+        if classify_write_error(exc) == "unavailable" or classify_unavailable(exc):
+            raise SessionStoreUnavailableError("snapshot schema could not be read") from exc
         return False
+    except SessionStoreCorruptError:
+        return False
+    except OSError as exc:
+        raise SessionStoreUnavailableError("snapshot schema could not be read") from exc
+
+
+def _prepare_snapshot(
+    data_dir: Path, database_path: Path, snapshot_dir: Path
+) -> tuple[snapshots.SnapshotManifest, Path] | None:
+    """Reject invalid candidates before changing canonical data or incident evidence."""
+    from core.sessions.format import read_session_store_marker, validate_session_store_paths
+    from core.sessions.sqlite_runtime import has_live_connection
+
+    validate_session_store_paths(data_dir, database_path)
+    parsed = snapshots._read_manifest(snapshot_dir, data_dir)
+    if parsed is None:
+        return None
+    manifest, database_source = parsed
+    marker = read_session_store_marker(data_dir)
+    if marker is None or manifest.database_id != marker["database_id"]:
+        return None
+    if has_live_connection(database_path) or not _snapshot_schema_compatible(database_source):
+        return None
+    try:
+        snapshots._verify_snapshot_manifest(database_source, manifest)
+    except SessionStoreCorruptError:
+        return None
+    return parsed
+
+
+def _install_snapshot(
+    database_path: Path,
+    manifest: snapshots.SnapshotManifest,
+    database_source: Path,
+    *,
+    before_replace: Callable[[Path | None], None] | None = None,
+) -> Path | None:
+    """Stage verified bytes before quarantine; operational failures never select older data."""
+    temporary = database_path.with_name(f".{database_path.name}.restore.{uuid.uuid4().hex}.tmp")
+    try:
+        shutil.copy2(database_source, temporary)
+        snapshots._verify_snapshot_manifest(temporary, manifest)
+        snapshots._fsync_file(temporary)
+        quarantine_path = (
+            _new_quarantine_path(database_path.parent) if _bundle_members(database_path) else None
+        )
+        if before_replace is not None:
+            before_replace(quarantine_path)
+        quarantine = _quarantine_database(database_path, destination=quarantine_path)
+        if quarantine.had_bundle and not quarantine.succeeded:
+            raise SessionStoreUnavailableError(quarantine.reason or "Session quarantine failed")
+        os.replace(temporary, database_path)
+        snapshots._fsync_dir(database_path.parent)
+        snapshots._verify_snapshot_db(database_path, expected_database_id=manifest.database_id)
+        return quarantine.path
+    except (OSError, sqlite3.Error, SessionStoreCorruptError) as exc:
+        # The published database or quarantined original can be the only good copy.
+        # Keep both on post-publication failures; the next open verifies them again.
+        raise SessionStoreUnavailableError("Session snapshot could not be installed") from exc
+    finally:
+        with suppress(OSError):
+            temporary.unlink()
 
 
 def _restore_snapshot_locked(
@@ -107,51 +190,12 @@ def _restore_snapshot_locked(
     database_path: Path,
     snapshot_dir: Path,
 ) -> bool:
-    parsed = snapshots._read_manifest(snapshot_dir, data_dir)
-    if parsed is None:
+    prepared = _prepare_snapshot(data_dir, database_path, snapshot_dir)
+    if prepared is None:
         return False
-    manifest, database_source = parsed
-    if not _snapshot_schema_compatible(database_source):
-        return False
-    marker_id = None
-    try:
-        from core.sessions.format import read_session_store_marker
-
-        marker = read_session_store_marker(data_dir)
-        marker_id = None if marker is None else str(marker["database_id"])
-    except Exception:
-        return False
-    if marker_id is not None and manifest.database_id != marker_id:
-        return False
-    try:
-        snapshots._verify_snapshot_db(database_source, expected_database_id=manifest.database_id)
-        if database_source.stat().st_size != manifest.file_size:
-            return False
-        if snapshots._sha256(database_source) != manifest.sha256:
-            return False
-    except (OSError, SessionStoreCorruptError):
-        return False
-    from core.sessions.sqlite_runtime import has_live_connection
-
-    if has_live_connection(database_path):
-        return False
-    quarantine = _quarantine_database(database_path)
-    if quarantine.had_bundle and not quarantine.succeeded:
-        return False
-    temporary = database_path.with_name(f".{database_path.name}.restore.{uuid.uuid4().hex}.tmp")
-    try:
-        __import__("shutil").copy2(database_source, temporary)
-        snapshots._fsync_file(temporary)
-        os.replace(temporary, database_path)
-        snapshots._fsync_dir(database_path.parent)
-        snapshots._verify_snapshot_db(database_path, expected_database_id=manifest.database_id)
-        return True
-    except (OSError, sqlite3.Error, SessionStoreCorruptError):
-        with suppress(OSError):
-            temporary.unlink()
-        with suppress(OSError):
-            database_path.unlink()
-        return False
+    manifest, database_source = prepared
+    _install_snapshot(database_path, manifest, database_source)
+    return True
 
 
 def restore_snapshot(
@@ -252,39 +296,42 @@ def _restore_snapshot_with_incident_locked(
     cause: str,
     failure_detected_at: str,
 ) -> bool:
-    parsed = snapshots._read_manifest(snapshot_dir, data_dir)
-    if parsed is None:
+    prepared = _prepare_snapshot(data_dir, database_path, snapshot_dir)
+    if prepared is None:
         return False
-    manifest, database_source = parsed
-    if not _snapshot_schema_compatible(database_source):
-        return False
+    manifest, database_source = prepared
     pending = _pending_incident_for_snapshot(data_dir, manifest.snapshot_id)
     incident_id = str(pending["incident_id"]) if pending else uuid.uuid4().hex
-    write_recovery_incident(
-        data_dir,
-        cause=cause,
-        quarantine_path=None,
-        restored_snapshot_id=manifest.snapshot_id,
-        restored_snapshot_time=manifest.created_at,
-        failure_detected_at=failure_detected_at,
-        verification="pending",
-        incident_id=incident_id,
-        recovered_at=None,
+    retained_quarantine = pending["quarantine"] if pending else None
+    if retained_quarantine and not _bundle_members(Path(retained_quarantine) / database_path.name):
+        # A fully rolled-back attempt only reserved this path; it holds no evidence.
+        retained_quarantine = None
+    if pending is not None:
+        failure_detected_at = pending["possible_loss_interval"]["end"]
+        cause = pending["cause"]
+
+    def publish_pending(quarantine_path: Path | None) -> None:
+        write_recovery_incident(
+            data_dir,
+            cause=cause,
+            quarantine_path=retained_quarantine or quarantine_path,
+            restored_snapshot_id=manifest.snapshot_id,
+            restored_snapshot_time=manifest.created_at,
+            failure_detected_at=failure_detected_at,
+            verification="pending",
+            incident_id=incident_id,
+        )
+
+    quarantine_path = _install_snapshot(
+        database_path, manifest, database_source, before_replace=publish_pending
     )
-    quarantine_root = data_dir / "session-quarantine"
-    before = set(quarantine_root.iterdir()) if quarantine_root.exists() else set()
-    if not _restore_snapshot_locked(data_dir, database_path, snapshot_dir):
-        return False
-    after = set(quarantine_root.iterdir()) if quarantine_root.exists() else set()
-    created = sorted(after - before, key=lambda path: path.name)
-    quarantine_path = created[-1] if created else None
     # Publication failure is operational, not evidence that this snapshot is
     # unusable. Propagate it so auto-recovery stops instead of restoring an
     # older candidate over the already verified database.
     write_recovery_incident(
         data_dir,
         cause=cause,
-        quarantine_path=quarantine_path,
+        quarantine_path=retained_quarantine or quarantine_path,
         restored_snapshot_id=manifest.snapshot_id,
         restored_snapshot_time=manifest.created_at,
         failure_detected_at=failure_detected_at,
@@ -323,10 +370,62 @@ def restore_snapshot_with_incident(
 def read_recovery_incident(data_dir: Path) -> dict[str, Any] | None:
     path = _incident_path(data_dir)
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
+        serialized = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return None
-    return payload if isinstance(payload, dict) else None
+    except UnicodeError as exc:
+        raise SessionStoreCorruptError("recovery incident is not valid UTF-8") from exc
+    except OSError as exc:
+        raise SessionStoreUnavailableError("recovery incident could not be read") from exc
+    try:
+        payload = json.loads(serialized)
+    except json.JSONDecodeError as exc:
+        raise SessionStoreCorruptError("recovery incident is not valid JSON") from exc
+    if (
+        not isinstance(payload, dict)
+        or not {
+            "incident_id",
+            "cause",
+            "restored_snapshot_id",
+            "restored_snapshot_time",
+            "verification",
+            "recovered_at",
+            "quarantine",
+            "possible_loss_interval",
+            "acknowledged",
+        }.issubset(payload)
+        or any(
+            not isinstance(payload.get(key), str) or not payload[key]
+            for key in ("incident_id", "cause", "restored_snapshot_id", "restored_snapshot_time")
+        )
+        or not isinstance(payload.get("acknowledged"), bool)
+        or payload.get("verification") not in ("pending", "ok")
+        or not isinstance(payload.get("possible_loss_interval"), dict)
+        or any(
+            not isinstance(payload["possible_loss_interval"].get(key), str)
+            or not payload["possible_loss_interval"][key]
+            for key in ("start", "end")
+        )
+        or (payload.get("quarantine") is not None and not isinstance(payload["quarantine"], str))
+        or (
+            payload["verification"] == "ok"
+            and (not isinstance(payload.get("recovered_at"), str) or not payload["recovered_at"])
+        )
+        or (payload["verification"] == "pending" and payload.get("recovered_at") is not None)
+    ):
+        raise SessionStoreCorruptError("recovery incident has an invalid shape")
+    for value in (
+        payload["restored_snapshot_time"],
+        payload["possible_loss_interval"]["start"],
+        payload["possible_loss_interval"]["end"],
+        *([payload["recovered_at"]] if payload["verification"] == "ok" else []),
+    ):
+        try:
+            if datetime.fromisoformat(value.replace("Z", "+00:00")).tzinfo is None:
+                raise ValueError("timestamp is not timezone-aware")
+        except ValueError as exc:
+            raise SessionStoreCorruptError("recovery incident has an invalid timestamp") from exc
+    return payload
 
 
 def acknowledge_recovery_incident(data_dir: Path, incident_id: str | None = None) -> bool:
@@ -343,25 +442,9 @@ def acknowledge_recovery_incident(data_dir: Path, incident_id: str | None = None
         raise SessionStoreUnavailableError("recovery incident acknowledgement lock is busy")
     path = _incident_path(data_dir)
     try:
-        try:
-            serialized = path.read_text(encoding="utf-8")
-        except FileNotFoundError:
+        payload = read_recovery_incident(data_dir)
+        if payload is None:
             return False
-        except UnicodeError as exc:
-            raise SessionStoreCorruptError("recovery incident is not valid UTF-8") from exc
-        except OSError as exc:
-            raise SessionStoreUnavailableError("recovery incident could not be read") from exc
-        try:
-            payload = json.loads(serialized)
-        except json.JSONDecodeError as exc:
-            raise SessionStoreCorruptError("recovery incident is not valid JSON") from exc
-        if (
-            not isinstance(payload, dict)
-            or not isinstance(payload.get("incident_id"), str)
-            or not payload["incident_id"]
-            or not isinstance(payload.get("acknowledged"), bool)
-        ):
-            raise SessionStoreCorruptError("recovery incident has an invalid shape")
         current_id = payload.get("incident_id")
         if incident_id is not None and current_id != incident_id:
             raise SessionRecoveryConflictError("recovery incident has changed; refresh status")
@@ -420,10 +503,14 @@ def _canonical_probe(data_dir: Path, database_path: Path) -> _CanonicalProbe:
             return _CanonicalProbe(False, True, "Session database integrity failure", detected_at)
         if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
             return _CanonicalProbe(False, True, "Session foreign-key failure", detected_at)
+        if not _snapshot_schema_compatible(database_path):
+            return _CanonicalProbe(False, True, "Session table schema mismatch", detected_at)
         return _CanonicalProbe(True, False, "", detected_at)
+    except SessionStoreUnavailableError:
+        return _CanonicalProbe(False, False, "operational Session-store failure", detected_at)
     except sqlite3.OperationalError as exc:
         message = str(exc).lower()
-        if any(
+        if classify_write_error(exc) == "unavailable" or any(
             marker in message
             for marker in (
                 "busy",
@@ -457,25 +544,30 @@ def auto_restore_if_needed(data_dir: Path, database_path: Path) -> bool:
         probe = _canonical_probe(data_dir, database_path)
         if probe.usable:
             pending = read_recovery_incident(data_dir)
-            if pending and pending.get("verification") == "pending":
-                with suppress(KeyError, SessionStoreUnavailableError):
-                    write_recovery_incident(
-                        data_dir,
-                        cause=str(pending.get("cause") or "Session recovery"),
-                        quarantine_path=pending.get("quarantine"),
-                        restored_snapshot_id=str(pending.get("restored_snapshot_id") or "unknown"),
-                        restored_snapshot_time=str(
-                            pending.get("restored_snapshot_time") or probe.failure_detected_at
-                        ),
-                        failure_detected_at=str(
-                            pending.get("possible_loss_interval", {}).get(
-                                "end", probe.failure_detected_at
-                            )
-                        ),
-                        verification="ok",
-                        incident_id=str(pending["incident_id"]),
-                        recovered_at=snapshots._utc_now(),
-                    )
+            if pending and pending["verification"] == "pending":
+                parsed = snapshots._read_manifest(
+                    snapshots.snapshot_root(data_dir) / pending["restored_snapshot_id"], data_dir
+                )
+                if parsed is None:
+                    return False
+                manifest, _source = parsed
+                try:
+                    snapshots._verify_snapshot_manifest(database_path, manifest)
+                except SessionStoreCorruptError:
+                    # Interruption before quarantine left the original usable. It
+                    # is not evidence that the requested snapshot was restored.
+                    return False
+                write_recovery_incident(
+                    data_dir,
+                    cause=pending["cause"],
+                    quarantine_path=pending["quarantine"],
+                    restored_snapshot_id=pending["restored_snapshot_id"],
+                    restored_snapshot_time=pending["restored_snapshot_time"],
+                    failure_detected_at=pending["possible_loss_interval"]["end"],
+                    verification="ok",
+                    incident_id=pending["incident_id"],
+                    recovered_at=snapshots._utc_now(),
+                )
             return False
         if not probe.recoverable:
             return False
