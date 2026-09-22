@@ -81,6 +81,11 @@ describe('ChatTimeline copy actions', () => {
             path: 'src/main.js',
             status: 'inlined',
           },
+          {
+            type: 'file_mention',
+            path: 'notes/meeting notes.md',
+            status: 'inlined',
+          },
         ],
         timestamp: '2026-07-23T12:00:00Z',
       },
@@ -90,7 +95,10 @@ describe('ChatTimeline copy actions', () => {
     document.querySelector('.msg.user .message-copy').click();
     await flushAsync();
 
-    expect(writeText).toHaveBeenCalledWith('Inspect this file\n\n@src/main.js');
+    // Copied mentions use the composer's mention form, so pasting resends them.
+    expect(writeText).toHaveBeenCalledWith(
+      'Inspect this file\n\n@src/main.js\n\n@"notes/meeting notes.md"',
+    );
     expect(writeText.mock.calls[0][0]).not.toContain('archive.zip');
   });
 
