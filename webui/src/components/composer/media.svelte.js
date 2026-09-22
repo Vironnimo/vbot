@@ -53,6 +53,8 @@ export function createComposerMedia(context) {
 
   let activeRecorder = null;
 
+  let transcriptionAbort = null;
+
   let recorderRequestGeneration = 0;
 
   let destroyed = false;
@@ -316,13 +318,17 @@ export function createComposerMedia(context) {
       return;
     }
 
-    activeRecorder = null;
     recordingState = 'transcribing';
     transcriptionProgress = { phase: 'uploading', elapsed_seconds: 0 };
     const requestGeneration = ++recorderRequestGeneration;
+    const abort = new AbortController();
+    transcriptionAbort = abort;
     try {
       const audioBlob = await recorder.stop();
+      if (destroyed || requestGeneration !== recorderRequestGeneration) return;
+      activeRecorder = null;
       const result = await transcribeSpeech(audioBlob, {
+        signal: abort.signal,
         filename:
           typeof recorder.filename === 'function'
             ? recorder.filename()
@@ -335,6 +341,7 @@ export function createComposerMedia(context) {
       if (destroyed || requestGeneration !== recorderRequestGeneration) return;
       await context.insertTranscript(result.text);
     } catch (error) {
+      if (destroyed || requestGeneration !== recorderRequestGeneration) return;
       try {
         recorder.cancel?.();
       } catch {
@@ -344,12 +351,19 @@ export function createComposerMedia(context) {
         `${t('chat.voice.transcriptionFailed', 'Speech transcription failed.')} ${error.message ?? ''}`.trim(),
       );
     } finally {
-      recordingState = 'idle';
+      if (requestGeneration === recorderRequestGeneration) {
+        activeRecorder = null;
+        transcriptionAbort = null;
+        recordingState = 'idle';
+      }
     }
   };
 
   const cancelActiveRecording = () => {
     recorderRequestGeneration += 1;
+    transcriptionAbort?.abort();
+    transcriptionAbort = null;
+    recordingState = 'idle';
     if (!activeRecorder) {
       return;
     }
@@ -425,7 +439,6 @@ export function createComposerMedia(context) {
   };
   function destroy() {
     destroyed = true;
-    recorderRequestGeneration += 1;
     if (attachmentToastTimeoutId !== null) {
       clearTimeout(attachmentToastTimeoutId);
       attachmentToastTimeoutId = null;
