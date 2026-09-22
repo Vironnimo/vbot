@@ -16,6 +16,7 @@ from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
+from weakref import WeakValueDictionary
 
 from core.channels.adapter import (
     ChannelAccessRegistry,
@@ -132,6 +133,7 @@ class ChannelConversationEngine:
         self._chat_queues: dict[str, asyncio.Queue[_QueuedWork]] = {}
         self._chat_workers: dict[str, asyncio.Task[None]] = {}
         self._busy_reply_times: OrderedDict[str, float] = OrderedDict()
+        self._bound_tap_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 
     def prepare_inbound_route(
         self, conversation: ConversationFacts
@@ -331,81 +333,98 @@ class ChannelConversationEngine:
         registry = self._run_button_binding_registry
         if registry is None:
             return "unavailable"
-        binding_id, button_index = parsed_binding
-        claim: RunButtonClaim | None = None
-        previous_anchor_metadata: dict[str, Any] | None = None
-        restored_event: InteractionEvent | None = None
-        terminal = False
-        admitted = False
+        # Bindings share an anchor, including DM scopes that span platform chats.
+        # Hold ownership through compensation so an older aborted tap cannot undo
+        # a later admitted tap to the same Session. Waiters retain the lock; the
+        # weak index retires idle anchors without splitting a waiting cohort.
+        anchor = self._routing._derive_session_id(conversation)
+        lock = self._bound_tap_locks.get(anchor)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._bound_tap_locks[anchor] = lock
+        async with lock:
+            binding_id, button_index = parsed_binding
+            claim: RunButtonClaim | None = None
+            previous_anchor_metadata: dict[str, Any] | None = None
+            restored_event: InteractionEvent | None = None
+            terminal = False
+            admitted = False
 
-        def prepare() -> InteractionTriggerStatus | None:
-            nonlocal claim, previous_anchor_metadata, restored_event, terminal
-            claim = registry.claim_run_button_binding(
-                self._config.id,
-                binding_id,
-                platform_target=conversation.chat_id,
-                thread_id=conversation.thread_id,
-            )
-            if claim.status == "consumed":
-                return "already_handled"
-            if claim.status != "claimed" or claim.binding is None:
-                return "unavailable"
-            binding = claim.binding
-            restored_event = _restore_bound_interaction_event(binding, event, button_index)
-            if restored_event is None or not self._chat_sessions.exists(
-                _session_address(self._config.agent_id, binding.origin_session_id)
-            ):
-                terminal = True
-                return "unavailable"
-            previous_anchor_metadata = self._routing._point_conversation_at_session(
-                conversation, binding.origin_session_id
-            )
-            return None
+            def prepare() -> InteractionTriggerStatus | None:
+                nonlocal claim, previous_anchor_metadata, restored_event, terminal
+                claim = registry.claim_run_button_binding(
+                    self._config.id,
+                    binding_id,
+                    platform_target=conversation.chat_id,
+                    thread_id=conversation.thread_id,
+                )
+                if claim.status == "consumed":
+                    return "already_handled"
+                if claim.status != "claimed" or claim.binding is None:
+                    return "unavailable"
+                binding = claim.binding
+                restored_event = _restore_bound_interaction_event(binding, event, button_index)
+                if restored_event is None or not self._chat_sessions.exists(
+                    _session_address(self._config.agent_id, binding.origin_session_id)
+                ):
+                    terminal = True
+                    return "unavailable"
+                previous_anchor_metadata = self._routing._point_conversation_at_session(
+                    conversation, binding.origin_session_id
+                )
+                return None
 
-        def rollback() -> None:
-            assert claim is not None and claim.binding is not None
+            def rollback() -> None:
+                assert claim is not None and claim.binding is not None
+                try:
+                    if previous_anchor_metadata is not None:
+                        self._routing._restore_conversation_pointer(
+                            conversation,
+                            previous_anchor_metadata,
+                            expected_session_id=claim.binding.origin_session_id,
+                        )
+                finally:
+                    registry.restore_run_button_binding(self._config.id, claim.binding.id)
+
             try:
-                if previous_anchor_metadata is not None:
-                    self._routing._restore_conversation_pointer(
-                        conversation,
-                        previous_anchor_metadata,
-                        expected_session_id=claim.binding.origin_session_id,
-                    )
-            finally:
-                registry.restore_run_button_binding(self._config.id, claim.binding.id)
-
-        try:
-            # Keep compensation state inside the worker: cancellation waits for
-            # it to settle, but deliberately does not return the worker's result.
-            status = await _CHANNEL_SESSION_WORKERS.run(prepare)
-            if status is not None:
-                return status
-            assert claim is not None and claim.binding is not None and restored_event is not None
-            admitted = self._enqueue_chat_work(
-                conversation.chat_id,
-                _QueuedInternalPrompt(
-                    conversation=conversation,
-                    prompt=_format_interaction_note(conversation, restored_event),
-                    route=RouteFacts(
-                        agent_id=self._config.agent_id,
-                        session_id=claim.binding.origin_session_id,
+                # Keep compensation state inside the worker: cancellation waits for
+                # it to settle, but deliberately does not return the worker's result.
+                status = await _CHANNEL_SESSION_WORKERS.run(prepare)
+                if status is not None:
+                    return status
+                assert (
+                    claim is not None and claim.binding is not None and restored_event is not None
+                )
+                admitted = self._enqueue_chat_work(
+                    conversation.chat_id,
+                    _QueuedInternalPrompt(
+                        conversation=conversation,
+                        prompt=_format_interaction_note(conversation, restored_event),
+                        route=RouteFacts(
+                            agent_id=self._config.agent_id,
+                            session_id=claim.binding.origin_session_id,
+                        ),
                     ),
-                ),
-            )
-            if admitted:
-                return "enqueued"
-        finally:
-            if not admitted and not terminal and claim is not None and claim.status == "claimed":
-                cleanup = asyncio.create_task(_CHANNEL_SESSION_WORKERS.run(rollback))
-                cancelled = False
-                while not cleanup.done():
-                    try:
-                        await asyncio.shield(cleanup)
-                    except asyncio.CancelledError:
-                        cancelled = True
-                cleanup.result()
-                if cancelled:
-                    raise asyncio.CancelledError
+                )
+                if admitted:
+                    return "enqueued"
+            finally:
+                if (
+                    not admitted
+                    and not terminal
+                    and claim is not None
+                    and claim.status == "claimed"
+                ):
+                    cleanup = asyncio.create_task(_CHANNEL_SESSION_WORKERS.run(rollback))
+                    cancelled = False
+                    while not cleanup.done():
+                        try:
+                            await asyncio.shield(cleanup)
+                        except asyncio.CancelledError:
+                            cancelled = True
+                    cleanup.result()
+                    if cancelled:
+                        raise asyncio.CancelledError
 
         await self._reject_overflow(conversation)
         return "busy"
