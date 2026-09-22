@@ -62,6 +62,61 @@ function message(child, data) {
 }
 
 describe('ExtensionPage', () => {
+  it.each(['reload', 'unmount'])(
+    'ignores pending operation and Run-open replies after frame %s',
+    async (transition) => {
+      let resolveOperation;
+      let resolveRun;
+      const api = await import('$lib/api.js');
+      operation.mockReturnValue(
+        new Promise((resolve) => {
+          resolveOperation = resolve;
+        }),
+      );
+      api.openExtensionPageRun.mockReturnValue(
+        new Promise((resolve) => {
+          resolveRun = resolve;
+        }),
+      );
+      component = mount(ExtensionPageHost, {
+        target: document.body,
+        props: { initialDescriptor: descriptor },
+      });
+      flushSync();
+      const { child, sent, init } = loadFrame();
+      message(child, { ...init, type: 'vbot.extension.ready' });
+      message(child, {
+        ...init,
+        type: 'vbot.extension.call',
+        id: 'pending-operation',
+        method: 'operation',
+        params: { operation: 'read', arguments: {} },
+      });
+      message(child, {
+        ...init,
+        type: 'vbot.extension.call',
+        id: 'pending-stream',
+        method: 'run.subscribe',
+        params: { group_id: 'group', run_id: 'run' },
+      });
+      expect(operation).toHaveBeenCalledOnce();
+      expect(api.openExtensionPageRun).toHaveBeenCalledOnce();
+      if (transition === 'reload')
+        document.querySelector('iframe').dispatchEvent(new Event('load'));
+      else {
+        await unmount(component);
+        component = null;
+      }
+      const sentBefore = sent.mock.calls.length;
+      resolveOperation({ stale: true });
+      resolveRun({ stream: { url: '/api/extension-runs/stale' } });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(sent.mock.calls).toHaveLength(sentBefore);
+      expect(api.subscribeRunEvents).not.toHaveBeenCalled();
+    },
+  );
+
   it('invalidates page snapshots when a broken Run stream has no live replacement', async () => {
     vi.useFakeTimers();
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
