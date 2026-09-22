@@ -38,6 +38,7 @@ afterEach(async () => {
   api.openExtensionPageRun.mockReset();
   api.subscribeRunEvents.mockReset();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 function loadFrame() {
@@ -61,6 +62,49 @@ function message(child, data) {
 }
 
 describe('ExtensionPage', () => {
+  it('invalidates page snapshots when a broken Run stream has no live replacement', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const api = await import('$lib/api.js');
+    api.openExtensionPageRun
+      .mockResolvedValueOnce({ stream: { url: '/api/extension-runs/one' } })
+      .mockResolvedValueOnce({ stream: null });
+    const close = vi.fn();
+    api.subscribeRunEvents.mockReturnValue({ close });
+    component = mount(ExtensionPageHost, {
+      target: document.body,
+      props: { initialDescriptor: descriptor },
+    });
+    flushSync();
+    const { child, sent, init } = loadFrame();
+    message(child, { ...init, type: 'vbot.extension.ready' });
+    message(child, {
+      ...init,
+      type: 'vbot.extension.call',
+      id: 'sub',
+      method: 'run.subscribe',
+      params: { group_id: 'group', run_id: 'run', after_sequence: 3 },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    api.subscribeRunEvents.mock.calls[0][1].onError();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(close).toHaveBeenCalledOnce();
+    expect(api.openExtensionPageRun).toHaveBeenLastCalledWith(
+      'alpha',
+      { id: 'main', epoch: 'epoch-a' },
+      'group',
+      'run',
+      3,
+    );
+    expect(sent.mock.calls.map(([data]) => data)).toContainEqual(
+      expect.objectContaining({
+        type: 'vbot.extension.invalidate',
+        nonce: init.nonce,
+        reason: 'run_stream_recovered',
+      }),
+    );
+  });
+
   it('permits clipboard writes from the opaque frame without granting reads or same-origin access', () => {
     component = mount(ExtensionPageHost, {
       target: document.body,
