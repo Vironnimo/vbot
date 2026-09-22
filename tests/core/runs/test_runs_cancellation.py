@@ -32,7 +32,6 @@ async def test_completion_observer_abort_cannot_strand_committed_run(cancelled):
         pass
 
     failure = asyncio.CancelledError() if cancelled else ObserverAbort()
-    manager = ChatRunManager()
     address = SessionAddress(project_id=None, agent_id="coder", session_id="session")
     committed = []
 
@@ -44,7 +43,7 @@ async def test_completion_observer_abort_cannot_strand_committed_run(cancelled):
             committed.append((run.id, status))
             return {}
 
-    manager.bind_persistence(Persistence())
+    manager = ChatRunManager(persistence=Persistence())
 
     async def observer(status):
         assert committed[-1] == (run.id, status.value)
