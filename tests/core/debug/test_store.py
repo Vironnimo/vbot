@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -54,6 +57,69 @@ def _make_trace_data(
 
 
 class TestSaveTrace:
+    def test_failed_index_replace_preserves_previous_trace_and_removes_new_file(
+        self, tmp_path, monkeypatch
+    ):
+        store = DebugTraceStore(tmp_path, trace_limit=1)
+        store.save_trace(TRACE_ID_1, _make_trace_data(TRACE_ID_1, "2025-01-01T00:00:00Z"))
+        replace = os.replace
+
+        def fail_index(source, target):
+            if Path(target).name == "index.json":
+                raise OSError("index write failed")
+            replace(source, target)
+
+        monkeypatch.setattr("core.utils.atomic.os.replace", fail_index)
+        for trace_id in [TRACE_ID_2, TRACE_ID_3]:
+            with pytest.raises(OSError, match="index write failed"):
+                store.save_trace(trace_id, _make_trace_data(trace_id, "2025-01-02T00:00:00Z"))
+        assert [entry["trace_id"] for entry in store.get_traces()] == [TRACE_ID_1]
+        assert store.get_trace(TRACE_ID_1)["trace_id"] == TRACE_ID_1
+        assert {path.name for path in (store.get_data_dir() / "traces").iterdir()} == {
+            f"{TRACE_ID_1}.json"
+        }
+
+    def test_next_save_removes_crash_orphans_and_partial_atomic_files(self, tmp_path):
+        store = DebugTraceStore(tmp_path, trace_limit=1)
+        traces = store.get_data_dir() / "traces"
+        traces.mkdir(parents=True)
+        (traces / f"{TRACE_ID_1}.json").write_text("raw orphan")
+        (traces / f".{TRACE_ID_2}.json.{TRACE_ID_3}.tmp").write_text("partial wire body")
+        store.save_trace(TRACE_ID_4, _make_trace_data(TRACE_ID_4, "2025-01-04T00:00:00Z"))
+        assert [path.name for path in traces.iterdir()] == [f"{TRACE_ID_4}.json"]
+
+    def test_failure_after_index_publication_keeps_the_published_capture(
+        self, tmp_path, monkeypatch
+    ):
+        store = DebugTraceStore(tmp_path, trace_limit=1)
+        store.save_trace(TRACE_ID_1, _make_trace_data(TRACE_ID_1, "2025-01-01T00:00:00Z"))
+        write_index = store._write_index
+
+        def fail_after_publication(entries):
+            write_index(entries)
+            raise OSError("directory sync failed")
+
+        monkeypatch.setattr(store, "_write_index", fail_after_publication)
+        with pytest.raises(OSError, match="directory sync failed"):
+            store.save_trace(TRACE_ID_2, _make_trace_data(TRACE_ID_2, "2025-01-02T00:00:00Z"))
+        assert [entry["trace_id"] for entry in store.get_traces()] == [TRACE_ID_2]
+        assert store.get_trace(TRACE_ID_2)["trace_id"] == TRACE_ID_2
+        assert not (store.get_data_dir() / "traces" / f"{TRACE_ID_1}.json").exists()
+
+    def test_concurrent_adapter_stores_retain_one_consistent_bounded_index(self, tmp_path):
+        def save(_):
+            trace_id = uuid4().hex
+            DebugTraceStore(tmp_path, 5).save_trace(
+                trace_id, _make_trace_data(trace_id, "2025-01-01T00:00:00Z")
+            )
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(save, range(20)))
+        store = DebugTraceStore(tmp_path, 5)
+        retained = {entry["trace_id"] for entry in store.get_traces()}
+        assert len(retained) == 5
+        assert {path.stem for path in (store.get_data_dir() / "traces").iterdir()} == retained
+
     def test_persists_trace_file_and_index_entry(self, tmp_path: Path) -> None:
         """Saving a trace writes the file and a metadata-only index entry."""
         store = DebugTraceStore(tmp_path, trace_limit=10)
@@ -247,6 +313,21 @@ class TestRetentionPruning:
 
 
 class TestClearAll:
+    def test_clear_all_removes_nested_trace_artifacts_only(self, tmp_path):
+        store = DebugTraceStore(tmp_path, trace_limit=10)
+        store.save_trace(TRACE_ID_1, _make_trace_data(TRACE_ID_1, "2025-01-01T00:00:00Z"))
+        nested = store.get_data_dir() / "traces" / "nested"
+        nested.mkdir()
+        (nested / "leftover.json").write_text("sensitive trace")
+        other = store.get_data_dir().parent / "keep.txt"
+        other.write_text("unrelated artifact")
+
+        store.clear_all()
+
+        assert not (store.get_data_dir() / "traces").exists()
+        assert not (store.get_data_dir() / "index.json").exists()
+        assert other.read_text() == "unrelated artifact"
+
     def test_removes_all_traces_and_index(self, tmp_path: Path) -> None:
         """clear_all() deletes every trace file and the index."""
         store = DebugTraceStore(tmp_path, trace_limit=10)
