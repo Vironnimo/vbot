@@ -407,6 +407,10 @@ class WireRequestRunner:
                     # A stream break carries its real error (including Retry-After)
                     # separately from a fatal error to raise after persistence.
                     budget.failed(step.recovery_error or IncompleteResponseError(), response_model)
+                elif not step.message.interrupted:
+                    # A complete response ends this Model step. The next request
+                    # starts a new step without its attempts, deadline or backoff.
+                    budget.reset()
                 return step
         finally:
             run.emit(PROVIDER_REQUEST_STATUS_EVENT, {"state": "finished"})
