@@ -2,7 +2,7 @@
 
 Applies ordered V4A file operations. It replaces the archived `edit` and `write` Tools (see `edit.md` and `write.md`).
 Add File creation-or-replacement is a vBot extension to the V4A-style interface.
-`core/tools/apply_patch.py` owns the in-memory plan, filesystem execution, results, and display metadata. Its internal `_patch_syntax.py` owns V4A parsing and parsed operation values; `_change_preview.py` owns bounded before/after previews.
+`core/tools/apply_patch.py` owns the in-memory plan, filesystem execution, results, and display metadata. Its internal `_patch_syntax.py` owns V4A parsing and parsed operation values; `_patch_entries.py` owns entry snapshots, Delete/Move entry resolution, and entry renames; `_change_preview.py` owns bounded before/after previews.
 
 ## Contract
 
@@ -24,7 +24,15 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 - Add, Update, Delete, standalone `Move File: source -> destination`, and
   Update plus `Move to: destination` are supported. Paths use ordinary
   `ToolContext.resolve_path` semantics: cwd-relative or absolute, with resolved
-  aliases sharing the same mutation history and lock.
+  aliases sharing the same mutation history and lock. Add/Update change content
+  and resolve through links to the target file. Delete/Move act on the named
+  entry: a final symbolic link or Windows junction is deleted or renamed itself
+  (`resolve_path(..., follow_final_link=False)`), never its target; a link at a
+  move destination, even a dangling one, is an existing destination. Link moves
+  and case-only renames (the same entry under another spelling on Windows) use
+  one `os.rename` instead of copy-then-delete; relative link targets are not
+  rewritten. Their `files` entries report the destination addition and source
+  deletion; link entries carry no preview (`test__patch_entries.py`).
 - The complete patch structure is parsed before mutation; unparseable framing or
   operation syntax rejects the call without writes. Once parsed, each Update
   hunk and each Add/Delete/Move is attempted in order against actual current
