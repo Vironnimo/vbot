@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from cli import server_management
+from cli import _server_target, server_management
 from cli.server_management import (
     HealthProbeResult,
     stop_server,
@@ -16,6 +17,62 @@ from cli.server_management import (
 from tests.cli.server_management_test_support import (
     make_instance,
 )
+
+
+@pytest.mark.parametrize("reachable", [False, True])
+@pytest.mark.parametrize("host", ["192.0.2.40", "remote.example"])
+def test_stop_remote_target_never_controls_local_wildcard_or_control_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reachable: bool, host: str
+) -> None:
+    instance = replace(make_instance(tmp_path), host=host, url=f"http://{host}:8420")
+    calls: list[str] = []
+    process = SimpleNamespace(
+        pid=456,
+        create_time=lambda: 1000.25,
+        net_connections=lambda kind: [
+            SimpleNamespace(
+                status=server_management.psutil.CONN_LISTEN,
+                laddr=SimpleNamespace(ip="0.0.0.0", port=instance.port),
+            )
+        ],
+        terminate=lambda: calls.append("terminate"),
+        wait=lambda **_kwargs: calls.append("wait"),
+        kill=lambda: calls.append("kill"),
+    )
+    monkeypatch.setattr(
+        _server_target.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(2, 1, 6, "", ("192.0.2.40", 0))],
+    )
+    monkeypatch.setattr(
+        server_management.psutil,
+        "net_if_addrs",
+        lambda: {"ethernet": [SimpleNamespace(family=2, address="192.0.2.10")]},
+    )
+    monkeypatch.setattr(
+        server_management,
+        "probe_health",
+        lambda _instance: HealthProbeResult(
+            reachable=reachable,
+            is_vbot=reachable,
+        ),
+    )
+    monkeypatch.setattr(server_management.psutil, "process_iter", lambda: [process])
+    monkeypatch.setattr(server_management.psutil, "Process", lambda _pid: process)
+    monkeypatch.setattr(
+        server_management,
+        "read_server_control",
+        lambda *_args: SimpleNamespace(
+            pid=456,
+            process_create_time=1000.25,
+        ),
+    )
+    monkeypatch.setattr(server_management, "_request_cooperative_shutdown", lambda *_args: False)
+
+    result = stop_server(instance)
+
+    assert result.ok is False
+    assert calls == []
 
 
 def test_stop_server_does_not_terminate_non_vbot_conflict(
