@@ -151,16 +151,17 @@ class AgentStore:
         self._sessions = sessions
         self._owns_sessions = sessions is None
         self._reported_order_error: str | None = None
-        # Agent updates can arrive from separate RPC worker pools. Serialize
-        # replacement of the same config files so Windows never sees two
-        # concurrent os.replace calls targeting one agent.json or order.json.
+        # RPC workers can overlap reads that repair state and lifecycle updates.
+        # Hold this across each complete read-modify-write, including Session
+        # repair and roster revisions, rather than just the final file replace.
         self._write_lock = RLock()
 
     def close(self) -> None:
-        if self._owns_sessions and self._sessions is not None:
-            self._sessions.close()
-            self._sessions = None
-            self._owns_sessions = False
+        with self._write_lock:
+            if self._owns_sessions and self._sessions is not None:
+                self._sessions.close()
+                self._sessions = None
+                self._owns_sessions = False
 
     @property
     def data_dir(self) -> Path:
@@ -185,89 +186,91 @@ class AgentStore:
         compaction_policy: dict[str, Any] | None = None,
     ) -> Agent:
         """Create and persist a new Agent, initial Session, and Workspace."""
-        _validate_agent_id(agent_id)
-        agent_dir = self._agent_dir(agent_id)
-        if agent_dir.exists():
-            raise AgentAlreadyExistsError(f"Agent already exists: {agent_id}")
+        with self._write_lock:
+            _validate_agent_id(agent_id)
+            agent_dir = self._agent_dir(agent_id)
+            if agent_dir.exists():
+                raise AgentAlreadyExistsError(f"Agent already exists: {agent_id}")
 
-        validated_name = _normalize_agent_name(agent_id, name)
-        validated_model = _validate_string_field("model", model, allow_empty=True)
-        validated_fallback_models = _validate_fallback_models(
-            "fallback_models", fallback_models or []
-        )
-        validated_temperature = _validate_temperature(temperature)
-        validated_thinking_effort = _validate_thinking_effort(thinking_effort)
-        validated_memory_prompt_mode = _validate_memory_prompt_mode(memory_prompt_mode)
-        validated_tool_access = _validate_tool_access(tool_access)
-        validated_allowed_skills = _validate_allowed_items("allowed_skills", allowed_skills)
-        validated_tools = _normalize_agent_tools(tools)
-        validated_custom_system_prompt_enabled = _validate_bool_field(
-            "custom_system_prompt_enabled", custom_system_prompt_enabled
-        )
-        validated_compaction_policy = (
-            normalize_compaction_policy(compaction_policy)
-            if compaction_policy is not None
-            else None
-        )
-        now = _utc_now()
-        workspace_value = workspace
-        if workspace_value is None or (
-            isinstance(workspace_value, str) and not workspace_value.strip()
-        ):
-            workspace_value = self._default_workspace(agent_id)
-        workspace_path = _resolve_workspace(workspace_value, data_dir=self._data_dir)
+            validated_name = _normalize_agent_name(agent_id, name)
+            validated_model = _validate_string_field("model", model, allow_empty=True)
+            validated_fallback_models = _validate_fallback_models(
+                "fallback_models", fallback_models or []
+            )
+            validated_temperature = _validate_temperature(temperature)
+            validated_thinking_effort = _validate_thinking_effort(thinking_effort)
+            validated_memory_prompt_mode = _validate_memory_prompt_mode(memory_prompt_mode)
+            validated_tool_access = _validate_tool_access(tool_access)
+            validated_allowed_skills = _validate_allowed_items("allowed_skills", allowed_skills)
+            validated_tools = _normalize_agent_tools(tools)
+            validated_custom_system_prompt_enabled = _validate_bool_field(
+                "custom_system_prompt_enabled", custom_system_prompt_enabled
+            )
+            validated_compaction_policy = (
+                normalize_compaction_policy(compaction_policy)
+                if compaction_policy is not None
+                else None
+            )
+            now = _utc_now()
+            workspace_value = workspace
+            if workspace_value is None or (
+                isinstance(workspace_value, str) and not workspace_value.strip()
+            ):
+                workspace_value = self._default_workspace(agent_id)
+            workspace_path = _resolve_workspace(workspace_value, data_dir=self._data_dir)
 
-        # Create the Session first so a failure cannot leave a ghost Agent directory.
-        session = self._session_manager().create(agent_id)
-        try:
-            agent_dir.mkdir(parents=True)
-        except Exception:
-            with suppress(Exception):
+            # Create the Session first so a failure cannot leave a ghost Agent directory.
+            session = self._session_manager().create(agent_id)
+            try:
+                agent_dir.mkdir(parents=True)
+            except Exception:
+                with suppress(Exception):
+                    session.delete()
+                raise
+            agent = Agent(
+                id=agent_id,
+                name=validated_name,
+                model=validated_model,
+                fallback_models=validated_fallback_models,
+                workspace=str(workspace_path.resolve()),
+                root_project_id=None,
+                temperature=validated_temperature,
+                thinking_effort=validated_thinking_effort,
+                memory_prompt_mode=validated_memory_prompt_mode,
+                tool_access=validated_tool_access,
+                allowed_skills=validated_allowed_skills,
+                tools=validated_tools,
+                custom_system_prompt_enabled=validated_custom_system_prompt_enabled,
+                compaction_policy=validated_compaction_policy,
+                current_session_id=session.id,
+                created_at=now,
+                updated_at=now,
+            )
+
+            try:
+                self._seed_workspace(Path(agent.workspace))
+                self._write_agent(agent)
+            except Exception:
                 session.delete()
-            raise
-        agent = Agent(
-            id=agent_id,
-            name=validated_name,
-            model=validated_model,
-            fallback_models=validated_fallback_models,
-            workspace=str(workspace_path.resolve()),
-            root_project_id=None,
-            temperature=validated_temperature,
-            thinking_effort=validated_thinking_effort,
-            memory_prompt_mode=validated_memory_prompt_mode,
-            tool_access=validated_tool_access,
-            allowed_skills=validated_allowed_skills,
-            tools=validated_tools,
-            custom_system_prompt_enabled=validated_custom_system_prompt_enabled,
-            compaction_policy=validated_compaction_policy,
-            current_session_id=session.id,
-            created_at=now,
-            updated_at=now,
-        )
-
-        try:
-            self._seed_workspace(Path(agent.workspace))
-            self._write_agent(agent)
-        except Exception:
-            session.delete()
-            shutil.rmtree(agent_dir, ignore_errors=True)
-            raise
-        # ``list_with_order`` appends this newly valid Agent after every existing
-        # roster entry and persists that projection. The config write remains the
-        # creation commit point; an auxiliary order write failure is logged there
-        # and never turns a successfully created identity into a false failure.
-        self.list_with_order()
-        return _apply_defaults(agent, self._agent_defaults())
+                shutil.rmtree(agent_dir, ignore_errors=True)
+                raise
+            # ``list_with_order`` appends this newly valid Agent after every existing
+            # roster entry and persists that projection. The config write remains the
+            # creation commit point; an auxiliary order write failure is logged there
+            # and never turns a successfully created identity into a false failure.
+            self.list_with_order()
+            return _apply_defaults(agent, self._agent_defaults())
 
     def get(self, agent_id: str) -> Agent:
         """Load an agent from disk."""
-        _validate_agent_id(agent_id)
-        agent_path = self._agent_path(agent_id)
-        if not agent_path.exists():
-            raise AgentNotFoundError(f"Agent not found: {agent_id}")
+        with self._write_lock:
+            _validate_agent_id(agent_id)
+            agent_path = self._agent_path(agent_id)
+            if not agent_path.exists():
+                raise AgentNotFoundError(f"Agent not found: {agent_id}")
 
-        raw_agent = self._load_raw_agent(agent_path)
-        return _apply_defaults(raw_agent, self._agent_defaults())
+            raw_agent = self._load_raw_agent(agent_path)
+            return _apply_defaults(raw_agent, self._agent_defaults())
 
     def get_raw(self, agent_id: str) -> Agent:
         """Load an agent with its **un-baked** persisted values (no defaults applied).
@@ -280,12 +283,13 @@ class AgentStore:
         own persisted value from a baked global default; ``get``/``list``/``update``
         keep baking for every other consumer.
         """
-        _validate_agent_id(agent_id)
-        agent_path = self._agent_path(agent_id)
-        if not agent_path.exists():
-            raise AgentNotFoundError(f"Agent not found: {agent_id}")
+        with self._write_lock:
+            _validate_agent_id(agent_id)
+            agent_path = self._agent_path(agent_id)
+            if not agent_path.exists():
+                raise AgentNotFoundError(f"Agent not found: {agent_id}")
 
-        return self._load_raw_agent(agent_path)
+            return self._load_raw_agent(agent_path)
 
     def exists(self, agent_id: str) -> bool:
         """Return whether a valid identity Agent with this id can be loaded.
@@ -294,16 +298,17 @@ class AgentStore:
         configs whose persisted id disagrees with their directory all yield
         ``False`` so a broken Agent is never treated as an available target.
         """
-        if not is_valid_agent_id(agent_id):
-            return False
-        agent_path = self._agent_path(agent_id)
-        if not agent_path.exists():
-            return False
-        try:
-            self._read_agent_config(agent_path)
-        except (AgentError, OSError):
-            return False
-        return True
+        with self._write_lock:
+            if not is_valid_agent_id(agent_id):
+                return False
+            agent_path = self._agent_path(agent_id)
+            if not agent_path.exists():
+                return False
+            try:
+                self._read_agent_config(agent_path)
+            except (AgentError, OSError):
+                return False
+            return True
 
     def list(self) -> list[Agent]:
         """Return valid persisted Agents in the canonical roster order."""
@@ -318,60 +323,61 @@ class AgentStore:
         never hides Agents: the roster falls back to id order and the invalid
         file remains available for ``doctor config`` diagnostics.
         """
-        agents_dir = self._data_dir / "agents"
-        if not agents_dir.exists():
-            return AgentListResult(agents=(), order_revision=0)
+        with self._write_lock:
+            agents_dir = self._data_dir / "agents"
+            if not agents_dir.exists():
+                return AgentListResult(agents=(), order_revision=0)
 
-        defaults = self._agent_defaults()
-        agents: list[Agent] = []
-        try:
-            agent_paths = sorted(agents_dir.glob("*/agent.json"))
-        except OSError as error:
-            _LOGGER.warning("Could not scan Agent configs in %s: %s", agents_dir, error)
-            agent_paths = []
-
-        for agent_path in agent_paths:
+            defaults = self._agent_defaults()
+            agents: list[Agent] = []
             try:
-                raw_agent = self._load_raw_agent(agent_path)
-                agents.append(_apply_defaults(raw_agent, defaults))
-            except (AgentError, OSError) as error:
-                _LOGGER.warning("Skipping invalid Agent config %s: %s", agent_path, error)
+                agent_paths = sorted(agents_dir.glob("*/agent.json"))
+            except OSError as error:
+                _LOGGER.warning("Could not scan Agent configs in %s: %s", agents_dir, error)
+                agent_paths = []
 
-        order = self._load_agent_order()
-        ordered_agents = _apply_agent_order(agents, order)
-        if not agents and order is None:
+            for agent_path in agent_paths:
+                try:
+                    raw_agent = self._load_raw_agent(agent_path)
+                    agents.append(_apply_defaults(raw_agent, defaults))
+                except (AgentError, OSError) as error:
+                    _LOGGER.warning("Skipping invalid Agent config %s: %s", agent_path, error)
+
+            order = self._load_agent_order()
+            ordered_agents = _apply_agent_order(agents, order)
+            if not agents and order is None:
+                return AgentListResult(
+                    agents=(),
+                    order_revision=0,
+                )
+
+            effective_ids = tuple(agent.id for agent in ordered_agents)
+            order_path = self._agent_order_path()
+            order_is_invalid = order is None and order_path.exists()
+            if order is None and not order_is_invalid:
+                materialized = _AgentOrderDocument(agent_ids=effective_ids, revision=1)
+                try:
+                    self._write_agent_order(materialized)
+                except OSError as error:
+                    _LOGGER.warning("Could not persist Identity Agent order: %s", error)
+                else:
+                    order = materialized
+            elif order is not None and order.agent_ids != effective_ids:
+                reconciled = _AgentOrderDocument(
+                    agent_ids=effective_ids,
+                    revision=order.revision + 1,
+                )
+                try:
+                    self._write_agent_order(reconciled)
+                except OSError as error:
+                    _LOGGER.warning("Could not reconcile Identity Agent order: %s", error)
+                else:
+                    order = reconciled
+
             return AgentListResult(
-                agents=(),
-                order_revision=0,
+                agents=tuple(ordered_agents),
+                order_revision=order.revision if order is not None else 0,
             )
-
-        effective_ids = tuple(agent.id for agent in ordered_agents)
-        order_path = self._agent_order_path()
-        order_is_invalid = order is None and order_path.exists()
-        if order is None and not order_is_invalid:
-            materialized = _AgentOrderDocument(agent_ids=effective_ids, revision=1)
-            try:
-                self._write_agent_order(materialized)
-            except OSError as error:
-                _LOGGER.warning("Could not persist Identity Agent order: %s", error)
-            else:
-                order = materialized
-        elif order is not None and order.agent_ids != effective_ids:
-            reconciled = _AgentOrderDocument(
-                agent_ids=effective_ids,
-                revision=order.revision + 1,
-            )
-            try:
-                self._write_agent_order(reconciled)
-            except OSError as error:
-                _LOGGER.warning("Could not reconcile Identity Agent order: %s", error)
-            else:
-                order = reconciled
-
-        return AgentListResult(
-            agents=tuple(ordered_agents),
-            order_revision=order.revision if order is not None else 0,
-        )
 
     def reorder(
         self,
@@ -380,47 +386,48 @@ class AgentStore:
         expected_revision: int,
     ) -> AgentListResult:
         """Atomically replace the canonical order when roster and revision match."""
-        if isinstance(expected_revision, bool) or not isinstance(expected_revision, int):
-            raise InvalidAgentOrderError("expected_revision must be a non-negative integer")
-        if expected_revision < 0:
-            raise InvalidAgentOrderError("expected_revision must be a non-negative integer")
-        if not isinstance(agent_ids, list) or not all(
-            isinstance(agent_id, str) for agent_id in agent_ids
-        ):
-            raise InvalidAgentOrderError("agent_ids must be a list of strings")
-        if any(not is_valid_agent_id(agent_id) for agent_id in agent_ids):
-            raise InvalidAgentOrderError("agent_ids must contain only valid Agent ids")
-        if len(agent_ids) != len(set(agent_ids)):
-            raise InvalidAgentOrderError("agent_ids must not contain duplicates")
+        with self._write_lock:
+            if isinstance(expected_revision, bool) or not isinstance(expected_revision, int):
+                raise InvalidAgentOrderError("expected_revision must be a non-negative integer")
+            if expected_revision < 0:
+                raise InvalidAgentOrderError("expected_revision must be a non-negative integer")
+            if not isinstance(agent_ids, list) or not all(
+                isinstance(agent_id, str) for agent_id in agent_ids
+            ):
+                raise InvalidAgentOrderError("agent_ids must be a list of strings")
+            if any(not is_valid_agent_id(agent_id) for agent_id in agent_ids):
+                raise InvalidAgentOrderError("agent_ids must contain only valid Agent ids")
+            if len(agent_ids) != len(set(agent_ids)):
+                raise InvalidAgentOrderError("agent_ids must not contain duplicates")
 
-        current = self.list_with_order()
-        current_ids = [agent.id for agent in current.agents]
-        if len(agent_ids) != len(current_ids) or set(agent_ids) != set(current_ids):
-            raise AgentOrderConflictError(
-                "Identity Agent roster changed; reload it before reordering",
-                current_revision=current.order_revision,
+            current = self.list_with_order()
+            current_ids = [agent.id for agent in current.agents]
+            if len(agent_ids) != len(current_ids) or set(agent_ids) != set(current_ids):
+                raise AgentOrderConflictError(
+                    "Identity Agent roster changed; reload it before reordering",
+                    current_revision=current.order_revision,
+                )
+
+            order_needs_repair = self._load_agent_order() is None
+            if agent_ids == current_ids and not order_needs_repair:
+                return current
+            if expected_revision != current.order_revision:
+                raise AgentOrderConflictError(
+                    "Identity Agent order changed; reload it before reordering",
+                    current_revision=current.order_revision,
+                )
+
+            next_order = _AgentOrderDocument(
+                agent_ids=tuple(agent_ids),
+                revision=current.order_revision + 1,
             )
-
-        order_needs_repair = self._load_agent_order() is None
-        if agent_ids == current_ids and not order_needs_repair:
-            return current
-        if expected_revision != current.order_revision:
-            raise AgentOrderConflictError(
-                "Identity Agent order changed; reload it before reordering",
-                current_revision=current.order_revision,
+            self._write_agent_order(next_order)
+            agents_by_id = {agent.id: agent for agent in current.agents}
+            return AgentListResult(
+                agents=tuple(agents_by_id[agent_id] for agent_id in agent_ids),
+                order_revision=next_order.revision,
+                order_changed=True,
             )
-
-        next_order = _AgentOrderDocument(
-            agent_ids=tuple(agent_ids),
-            revision=current.order_revision + 1,
-        )
-        self._write_agent_order(next_order)
-        agents_by_id = {agent.id: agent for agent in current.agents}
-        return AgentListResult(
-            agents=tuple(agents_by_id[agent_id] for agent_id in agent_ids),
-            order_revision=next_order.revision,
-            order_changed=True,
-        )
 
     def ensure_bootstrap(self) -> Agent | None:
         """Create one valid bootstrap Agent when the store has none.
@@ -428,15 +435,16 @@ class AgentStore:
         Invalid Agent directories are preserved for diagnosis. If one already
         occupies ``main``, the bootstrap Agent uses the first free ``main-N`` id.
         """
-        if self.list():
-            return None
+        with self._write_lock:
+            if self.list():
+                return None
 
-        candidate = _BOOTSTRAP_AGENT_ID
-        suffix = 2
-        while self._agent_dir(candidate).exists():
-            candidate = f"{_BOOTSTRAP_AGENT_ID}-{suffix}"
-            suffix += 1
-        return self.create(candidate, _BOOTSTRAP_AGENT_NAME)
+            candidate = _BOOTSTRAP_AGENT_ID
+            suffix = 2
+            while self._agent_dir(candidate).exists():
+                candidate = f"{_BOOTSTRAP_AGENT_ID}-{suffix}"
+                suffix += 1
+            return self.create(candidate, _BOOTSTRAP_AGENT_NAME)
 
     def update(self, agent_id: str, **changes: Any) -> Agent:
         """Update mutable fields for an existing agent."""
@@ -457,123 +465,127 @@ class AgentStore:
         a failure restores every destination touched before leaving the config on
         its original Workspace.
         """
-        _validate_agent_id(agent_id)
-        if "id" in changes and changes["id"] != agent_id:
-            raise AgentError("Agent id is immutable")
+        with self._write_lock:
+            _validate_agent_id(agent_id)
+            if "id" in changes and changes["id"] != agent_id:
+                raise AgentError("Agent id is immutable")
 
-        changes.pop("id", None)
-        agent_path = self._agent_path(agent_id)
-        if not agent_path.exists():
-            raise AgentNotFoundError(f"Agent not found: {agent_id}")
+            changes.pop("id", None)
+            agent_path = self._agent_path(agent_id)
+            if not agent_path.exists():
+                raise AgentNotFoundError(f"Agent not found: {agent_id}")
 
-        agent = self._load_raw_agent(agent_path)
-        if not changes:
-            if copy_workspace_identity_files:
-                raise AgentError("copy_workspace_identity_files requires a workspace change")
-            return AgentUpdateResult(_apply_defaults(agent, self._agent_defaults()))
-
-        allowed_fields = set(Agent.__dataclass_fields__) - {
-            "id",
-            "created_at",
-            "updated_at",
-        }
-        unknown_fields = sorted(set(changes) - allowed_fields)
-        if unknown_fields:
-            raise AgentError(f"Unknown agent fields: {', '.join(unknown_fields)}")
-
-        if "name" in changes:
-            changes["name"] = _normalize_agent_name(agent_id, changes["name"])
-        string_fields = {"model", "current_session_id"}
-        for field_name in sorted(string_fields & set(changes)):
-            changes[field_name] = _validate_string_field(
-                field_name,
-                changes[field_name],
-                allow_empty=field_name == "model",
-            )
-        if "fallback_models" in changes:
-            changes["fallback_models"] = _validate_fallback_models(
-                "fallback_models", changes["fallback_models"]
-            )
-        if "workspace" in changes:
-            workspace = changes["workspace"]
-            if workspace is None or (isinstance(workspace, str) and not workspace.strip()):
-                workspace = self._default_workspace(agent_id)
-            changes["workspace"] = str(_resolve_workspace(workspace, data_dir=self._data_dir))
-            if changes["workspace"] == agent.workspace:
+            agent = self._load_raw_agent(agent_path)
+            if not changes:
                 if copy_workspace_identity_files:
-                    raise AgentError("copy_workspace_identity_files requires a changed workspace")
-                changes.pop("workspace")
-        elif copy_workspace_identity_files:
-            raise AgentError("copy_workspace_identity_files requires a workspace change")
-        if "root_project_id" in changes:
-            changes["root_project_id"] = _validate_root_project_id(changes["root_project_id"])
-        if "temperature" in changes:
-            changes["temperature"] = _validate_temperature(changes["temperature"])
-        if "thinking_effort" in changes:
-            changes["thinking_effort"] = _validate_thinking_effort(changes["thinking_effort"])
-        if "memory_prompt_mode" in changes:
-            changes["memory_prompt_mode"] = _validate_memory_prompt_mode(
-                changes["memory_prompt_mode"]
-            )
-        if "tool_access" in changes:
-            changes["tool_access"] = _validate_tool_access(changes["tool_access"])
-        if "allowed_skills" in changes:
-            changes["allowed_skills"] = _validate_allowed_items(
-                "allowed_skills", changes["allowed_skills"]
-            )
-        if "tools" in changes:
-            changes["tools"] = _normalize_agent_tools(changes["tools"])
-        if "custom_system_prompt_enabled" in changes:
-            changes["custom_system_prompt_enabled"] = _validate_bool_field(
-                "custom_system_prompt_enabled", changes["custom_system_prompt_enabled"]
-            )
-        if "compaction_policy" in changes:
-            policy = changes["compaction_policy"]
-            changes["compaction_policy"] = (
-                normalize_compaction_policy(policy) if policy is not None else None
-            )
-        if "current_session_id" in changes:
-            self._validate_current_session(agent_id, changes["current_session_id"])
+                    raise AgentError("copy_workspace_identity_files requires a workspace change")
+                return AgentUpdateResult(_apply_defaults(agent, self._agent_defaults()))
 
-        if not changes:
-            return AgentUpdateResult(_apply_defaults(agent, self._agent_defaults()))
+            allowed_fields = set(Agent.__dataclass_fields__) - {
+                "id",
+                "created_at",
+                "updated_at",
+            }
+            unknown_fields = sorted(set(changes) - allowed_fields)
+            if unknown_fields:
+                raise AgentError(f"Unknown agent fields: {', '.join(unknown_fields)}")
 
-        updated_agent = replace(agent, **changes, updated_at=_utc_now())
-        relocation = _WorkspaceRelocation()
-        try:
-            if "workspace" in changes:
-                relocation = workspace_ops.relocate_workspace(
-                    self._agent_dir(agent_id),
-                    self._template_dir,
-                    agent,
-                    Path(updated_agent.workspace),
-                    copy_identity_files=copy_workspace_identity_files,
+            if "name" in changes:
+                changes["name"] = _normalize_agent_name(agent_id, changes["name"])
+            string_fields = {"model", "current_session_id"}
+            for field_name in sorted(string_fields & set(changes)):
+                changes[field_name] = _validate_string_field(
+                    field_name,
+                    changes[field_name],
+                    allow_empty=field_name == "model",
                 )
-            self._write_agent(updated_agent)
-        except Exception:
-            relocation.rollback()
-            raise
-        return AgentUpdateResult(
-            agent=_apply_defaults(updated_agent, self._agent_defaults()),
-            copied_files=relocation.copied_files,
-            backed_up_files=relocation.backed_up_files,
-            backup_dir=str(relocation.backup_dir) if relocation.backup_dir else None,
-            created_files=relocation.created_files,
-            destination=str(relocation.destination) if relocation.destination else None,
-        )
+            if "fallback_models" in changes:
+                changes["fallback_models"] = _validate_fallback_models(
+                    "fallback_models", changes["fallback_models"]
+                )
+            if "workspace" in changes:
+                workspace = changes["workspace"]
+                if workspace is None or (isinstance(workspace, str) and not workspace.strip()):
+                    workspace = self._default_workspace(agent_id)
+                changes["workspace"] = str(_resolve_workspace(workspace, data_dir=self._data_dir))
+                if changes["workspace"] == agent.workspace:
+                    if copy_workspace_identity_files:
+                        raise AgentError(
+                            "copy_workspace_identity_files requires a changed workspace"
+                        )
+                    changes.pop("workspace")
+            elif copy_workspace_identity_files:
+                raise AgentError("copy_workspace_identity_files requires a workspace change")
+            if "root_project_id" in changes:
+                changes["root_project_id"] = _validate_root_project_id(changes["root_project_id"])
+            if "temperature" in changes:
+                changes["temperature"] = _validate_temperature(changes["temperature"])
+            if "thinking_effort" in changes:
+                changes["thinking_effort"] = _validate_thinking_effort(changes["thinking_effort"])
+            if "memory_prompt_mode" in changes:
+                changes["memory_prompt_mode"] = _validate_memory_prompt_mode(
+                    changes["memory_prompt_mode"]
+                )
+            if "tool_access" in changes:
+                changes["tool_access"] = _validate_tool_access(changes["tool_access"])
+            if "allowed_skills" in changes:
+                changes["allowed_skills"] = _validate_allowed_items(
+                    "allowed_skills", changes["allowed_skills"]
+                )
+            if "tools" in changes:
+                changes["tools"] = _normalize_agent_tools(changes["tools"])
+            if "custom_system_prompt_enabled" in changes:
+                changes["custom_system_prompt_enabled"] = _validate_bool_field(
+                    "custom_system_prompt_enabled", changes["custom_system_prompt_enabled"]
+                )
+            if "compaction_policy" in changes:
+                policy = changes["compaction_policy"]
+                changes["compaction_policy"] = (
+                    normalize_compaction_policy(policy) if policy is not None else None
+                )
+            if "current_session_id" in changes:
+                self._validate_current_session(agent_id, changes["current_session_id"])
+
+            if not changes:
+                return AgentUpdateResult(_apply_defaults(agent, self._agent_defaults()))
+
+            updated_agent = replace(agent, **changes, updated_at=_utc_now())
+            relocation = _WorkspaceRelocation()
+            try:
+                if "workspace" in changes:
+                    relocation = workspace_ops.relocate_workspace(
+                        self._agent_dir(agent_id),
+                        self._template_dir,
+                        agent,
+                        Path(updated_agent.workspace),
+                        copy_identity_files=copy_workspace_identity_files,
+                    )
+                self._write_agent(updated_agent)
+            except Exception:
+                relocation.rollback()
+                raise
+            return AgentUpdateResult(
+                agent=_apply_defaults(updated_agent, self._agent_defaults()),
+                copied_files=relocation.copied_files,
+                backed_up_files=relocation.backed_up_files,
+                backup_dir=str(relocation.backup_dir) if relocation.backup_dir else None,
+                created_files=relocation.created_files,
+                destination=str(relocation.destination) if relocation.destination else None,
+            )
 
     def restore_update(self, previous_agent: Agent, result: AgentUpdateResult) -> None:
         """Compensate a completed update during a larger coordinated operation."""
-        if result.destination is not None:
-            relocation = _WorkspaceRelocation(
-                destination=Path(result.destination),
-                copied_files=result.copied_files,
-                backed_up_files=result.backed_up_files,
-                created_files=result.created_files,
-                backup_dir=Path(result.backup_dir) if result.backup_dir else None,
-            )
-            relocation.rollback()
-        self._write_agent(previous_agent)
+        with self._write_lock:
+            if result.destination is not None:
+                relocation = _WorkspaceRelocation(
+                    destination=Path(result.destination),
+                    copied_files=result.copied_files,
+                    backed_up_files=result.backed_up_files,
+                    created_files=result.created_files,
+                    backup_dir=Path(result.backup_dir) if result.backup_dir else None,
+                )
+                relocation.rollback()
+            self._write_agent(previous_agent)
 
     def rename(self, agent_id: str, new_agent_id: str) -> AgentRenameResult:
         """Rename one complete Identity Agent tree as a rollback-capable mutation.
@@ -583,90 +595,94 @@ class AgentStore:
         preserves the whole identity. A Workspace anywhere inside the tree is
         rebased to the same relative location; an external Workspace is unchanged.
         """
-        _validate_agent_id(agent_id)
-        _validate_agent_id(new_agent_id)
-        if agent_id == new_agent_id:
-            raise AgentError("new agent id must differ from the current id")
+        with self._write_lock:
+            _validate_agent_id(agent_id)
+            _validate_agent_id(new_agent_id)
+            if agent_id == new_agent_id:
+                raise AgentError("new agent id must differ from the current id")
 
-        source_dir = self._agent_dir(agent_id)
-        destination_dir = self._agent_dir(new_agent_id)
-        if not self._agent_path(agent_id).is_file():
-            raise AgentNotFoundError(f"Agent not found: {agent_id}")
-        if destination_dir.exists() and not _paths_are_same_location(source_dir, destination_dir):
-            raise AgentAlreadyExistsError(f"Agent already exists: {new_agent_id}")
+            source_dir = self._agent_dir(agent_id)
+            destination_dir = self._agent_dir(new_agent_id)
+            if not self._agent_path(agent_id).is_file():
+                raise AgentNotFoundError(f"Agent not found: {agent_id}")
+            if destination_dir.exists() and not _paths_are_same_location(
+                source_dir, destination_dir
+            ):
+                raise AgentAlreadyExistsError(f"Agent already exists: {new_agent_id}")
 
-        previous_listing = self.list_with_order()
-        previous_order = self._load_agent_order()
-        previous_agent = self._load_raw_agent(self._agent_path(agent_id))
-        renamed_workspace = _rebase_path_with_tree(
-            previous_agent.workspace,
-            source_dir,
-            destination_dir,
-        )
-        renamed_agent = replace(
-            previous_agent,
-            id=new_agent_id,
-            workspace=str(renamed_workspace),
-            updated_at=_utc_now(),
-        )
+            previous_listing = self.list_with_order()
+            previous_order = self._load_agent_order()
+            previous_agent = self._load_raw_agent(self._agent_path(agent_id))
+            renamed_workspace = _rebase_path_with_tree(
+                previous_agent.workspace,
+                source_dir,
+                destination_dir,
+            )
+            renamed_agent = replace(
+                previous_agent,
+                id=new_agent_id,
+                workspace=str(renamed_workspace),
+                updated_at=_utc_now(),
+            )
 
-        order_updated = False
-        agent_config_updated = False
-        sessions_retargeted = False
-        tree_moved = False
-        try:
-            self._session_manager().retarget_identity_agent_sessions(agent_id, new_agent_id)
-            sessions_retargeted = True
-            workspace_ops._move_agent_tree(source_dir, destination_dir)
-            tree_moved = True
-            self._write_agent(renamed_agent)
-            agent_config_updated = True
-            if previous_order is not None:
-                renamed_ids = tuple(
-                    new_agent_id if listed.id == agent_id else listed.id
-                    for listed in previous_listing.agents
-                )
-                self._write_agent_order(
-                    _AgentOrderDocument(
-                        agent_ids=renamed_ids,
-                        revision=previous_order.revision + 1,
+            order_updated = False
+            agent_config_updated = False
+            sessions_retargeted = False
+            tree_moved = False
+            try:
+                self._session_manager().retarget_identity_agent_sessions(agent_id, new_agent_id)
+                sessions_retargeted = True
+                workspace_ops._move_agent_tree(source_dir, destination_dir)
+                tree_moved = True
+                self._write_agent(renamed_agent)
+                agent_config_updated = True
+                if previous_order is not None:
+                    renamed_ids = tuple(
+                        new_agent_id if listed.id == agent_id else listed.id
+                        for listed in previous_listing.agents
                     )
-                )
-                order_updated = True
-        except Exception:
-            if tree_moved:
-                workspace_ops._move_agent_tree(destination_dir, source_dir)
-            if sessions_retargeted:
-                self._session_manager().retarget_identity_agent_sessions(new_agent_id, agent_id)
-            if agent_config_updated:
-                self._write_agent(previous_agent)
-            raise
+                    self._write_agent_order(
+                        _AgentOrderDocument(
+                            agent_ids=renamed_ids,
+                            revision=previous_order.revision + 1,
+                        )
+                    )
+                    order_updated = True
+            except Exception:
+                if tree_moved:
+                    workspace_ops._move_agent_tree(destination_dir, source_dir)
+                if sessions_retargeted:
+                    self._session_manager().retarget_identity_agent_sessions(new_agent_id, agent_id)
+                if agent_config_updated:
+                    self._write_agent(previous_agent)
+                raise
 
-        return AgentRenameResult(
-            agent=_apply_defaults(renamed_agent, self._agent_defaults()),
-            previous_agent=previous_agent,
-            previous_order=previous_order,
-            order_updated=order_updated,
-        )
+            return AgentRenameResult(
+                agent=_apply_defaults(renamed_agent, self._agent_defaults()),
+                previous_agent=previous_agent,
+                previous_order=previous_order,
+                order_updated=order_updated,
+            )
 
     def restore_rename(self, result: AgentRenameResult) -> None:
         """Restore the exact pre-rename Agent tree and config snapshot."""
-        self._session_manager().retarget_identity_agent_sessions(
-            result.agent.id, result.previous_agent.id
-        )
-        try:
-            workspace_ops._move_agent_tree(
-                self._agent_dir(result.agent.id),
-                self._agent_dir(result.previous_agent.id),
-            )
-        except Exception:
+        with self._write_lock:
             self._session_manager().retarget_identity_agent_sessions(
-                result.previous_agent.id, result.agent.id
+                result.agent.id, result.previous_agent.id
             )
-            raise
-        self._write_agent(result.previous_agent)
-        if result.order_updated:
-            self._restore_agent_order(result.previous_order)
+            try:
+                workspace_ops._move_agent_tree(
+                    self._agent_dir(result.agent.id),
+                    self._agent_dir(result.previous_agent.id),
+                )
+            except Exception:
+                self._session_manager().retarget_identity_agent_sessions(
+                    result.previous_agent.id, result.agent.id
+                )
+                raise
+            self._write_agent(result.previous_agent)
+            if result.order_updated:
+                self._restore_agent_order(result.previous_order)
 
     def retarget_allowed_agent_references(
         self,
@@ -680,37 +696,39 @@ class AgentStore:
         untouched. Exact config snapshots make this mutation reversible without
         reconstructing prior list order or timestamps.
         """
-        _validate_agent_id(old_agent_id)
-        _validate_agent_id(new_agent_id)
-        previous_agents: list[Agent] = []
-        try:
-            for listed_agent in self.list():
-                agent = self.get_raw(listed_agent.id)
-                tools = deepcopy(agent.tools)
-                subagent = tools.get("subagent")
-                if not isinstance(subagent, dict):
-                    continue
-                allowed_agents = subagent.get("allowed_agents")
-                if not isinstance(allowed_agents, list) or old_agent_id not in allowed_agents:
-                    continue
-                retargeted = _replace_list_item_once(
-                    allowed_agents,
-                    old_agent_id,
-                    new_agent_id,
-                )
-                subagent["allowed_agents"] = retargeted
-                previous_agents.append(agent)
-                self._write_agent(replace(agent, tools=tools, updated_at=_utc_now()))
-        except Exception:
-            for previous_agent in reversed(previous_agents):
-                self._write_agent(previous_agent)
-            raise
-        return AgentReferenceUpdateResult(previous_agents=tuple(previous_agents))
+        with self._write_lock:
+            _validate_agent_id(old_agent_id)
+            _validate_agent_id(new_agent_id)
+            previous_agents: list[Agent] = []
+            try:
+                for listed_agent in self.list():
+                    agent = self.get_raw(listed_agent.id)
+                    tools = deepcopy(agent.tools)
+                    subagent = tools.get("subagent")
+                    if not isinstance(subagent, dict):
+                        continue
+                    allowed_agents = subagent.get("allowed_agents")
+                    if not isinstance(allowed_agents, list) or old_agent_id not in allowed_agents:
+                        continue
+                    retargeted = _replace_list_item_once(
+                        allowed_agents,
+                        old_agent_id,
+                        new_agent_id,
+                    )
+                    subagent["allowed_agents"] = retargeted
+                    previous_agents.append(agent)
+                    self._write_agent(replace(agent, tools=tools, updated_at=_utc_now()))
+            except Exception:
+                for previous_agent in reversed(previous_agents):
+                    self._write_agent(previous_agent)
+                raise
+            return AgentReferenceUpdateResult(previous_agents=tuple(previous_agents))
 
     def restore_allowed_agent_references(self, result: AgentReferenceUpdateResult) -> None:
         """Restore exact Agent configs changed by a reference retarget."""
-        for previous_agent in reversed(result.previous_agents):
-            self._write_agent(previous_agent)
+        with self._write_lock:
+            for previous_agent in reversed(result.previous_agents):
+                self._write_agent(previous_agent)
 
     def agents_rooted_in(self, project_id: str) -> builtins.list[Agent]:
         """Return Identity Agents explicitly referencing one Project."""
@@ -731,51 +749,52 @@ class AgentStore:
         custom workspace outside the agent tree (e.g. a repo an identity agent is
         rooted in) still exists after the first move and is archived beside it.
         """
-        agent = self.get(agent_id)
-        archive_dir = self._archive_dir(agent_id)
-        archive_dir.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(
-            prefix=f".{agent_id}-archive-",
-            dir=archive_dir.parent,
-            ignore_cleanup_errors=True,
-        ) as backup_root:
-            previous_archive = Path(backup_root) / "previous"
-            if archive_dir.exists():
-                shutil.move(str(archive_dir), str(previous_archive))
-            try:
-                archive_dir.mkdir()
-                agent_archive = archive_dir / "agent"
-                workspace_archive = archive_dir / "workspace"
-                workspace_path = Path(agent.workspace)
-                agent_moved = False
-                workspace_moved = False
+        with self._write_lock:
+            agent = self.get(agent_id)
+            archive_dir = self._archive_dir(agent_id)
+            archive_dir.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(
+                prefix=f".{agent_id}-archive-",
+                dir=archive_dir.parent,
+                ignore_cleanup_errors=True,
+            ) as backup_root:
+                previous_archive = Path(backup_root) / "previous"
+                if archive_dir.exists():
+                    shutil.move(str(archive_dir), str(previous_archive))
                 try:
-                    shutil.move(str(self._agent_dir(agent_id)), str(agent_archive))
-                    agent_moved = True
-                    if workspace_path.exists():
-                        shutil.move(str(workspace_path), str(workspace_archive))
-                        workspace_moved = True
-                    self._session_manager().archive_identity_agent_sessions(agent_id)
+                    archive_dir.mkdir()
+                    agent_archive = archive_dir / "agent"
+                    workspace_archive = archive_dir / "workspace"
+                    workspace_path = Path(agent.workspace)
+                    agent_moved = False
+                    workspace_moved = False
+                    try:
+                        shutil.move(str(self._agent_dir(agent_id)), str(agent_archive))
+                        agent_moved = True
+                        if workspace_path.exists():
+                            shutil.move(str(workspace_path), str(workspace_archive))
+                            workspace_moved = True
+                        self._session_manager().archive_identity_agent_sessions(agent_id)
+                    except Exception:
+                        if workspace_moved:
+                            shutil.move(str(workspace_archive), str(workspace_path))
+                        if agent_moved:
+                            shutil.move(str(agent_archive), str(self._agent_dir(agent_id)))
+                        shutil.rmtree(archive_dir, ignore_errors=True)
+                        if previous_archive.exists():
+                            shutil.move(str(previous_archive), str(archive_dir))
+                        raise
                 except Exception:
-                    if workspace_moved:
-                        shutil.move(str(workspace_archive), str(workspace_path))
-                    if agent_moved:
-                        shutil.move(str(agent_archive), str(self._agent_dir(agent_id)))
-                    shutil.rmtree(archive_dir, ignore_errors=True)
-                    if previous_archive.exists():
+                    # Covers mkdir failure after previous archive was staged away.
+                    if not archive_dir.exists() and previous_archive.exists():
                         shutil.move(str(previous_archive), str(archive_dir))
                     raise
-            except Exception:
-                # Covers mkdir failure after previous archive was staged away.
-                if not archive_dir.exists() and previous_archive.exists():
-                    shutil.move(str(previous_archive), str(archive_dir))
-                raise
 
-        # Reconcile the collection document after the archive is committed. A
-        # stale id is filtered even if persistence fails, so delete never reports
-        # failure after the irreversible archive already succeeded.
-        self.list_with_order()
-        return archive_dir
+            # Reconcile the collection document after the archive is committed. A
+            # stale id is filtered even if persistence fails, so delete never reports
+            # failure after the irreversible archive already succeeded.
+            self.list_with_order()
+            return archive_dir
 
     def reset_current_after_session_removed(self, agent_id: str, removed_session_id: str) -> Agent:
         """Re-point an identity agent's current session after one is gone.
@@ -792,25 +811,37 @@ class AgentStore:
         sees the pointer dangling at the just-removed id, preempting the
         last-active landing this method exists to provide.
         """
-        _validate_agent_id(agent_id)
-        agent_path = self._agent_path(agent_id)
-        if not agent_path.exists():
-            raise AgentNotFoundError(f"Agent not found: {agent_id}")
+        with self._write_lock:
+            _validate_agent_id(agent_id)
+            agent_path = self._agent_path(agent_id)
+            if not agent_path.exists():
+                raise AgentNotFoundError(f"Agent not found: {agent_id}")
 
-        agent = self._read_agent_config(agent_path)
-        if agent.current_session_id != removed_session_id:
-            return _apply_defaults(agent, self._agent_defaults())
+            agent = self._read_agent_config(agent_path)
+            if agent.current_session_id != removed_session_id:
+                return _apply_defaults(agent, self._agent_defaults())
 
-        remaining = self._session_manager().list_with_metadata(agent_id)
-        if remaining:
-            newest: dict[str, Any] = max(remaining, key=lambda session: session["last_active_at"])
-            landing_session_id = newest["id"]
-        else:
-            landing_session_id = self._session_manager().create(agent_id).id
+            remaining = self._session_manager().list_with_metadata(agent_id)
+            created_session = None
+            if remaining:
+                newest: dict[str, Any] = max(
+                    remaining, key=lambda session: session["last_active_at"]
+                )
+                landing_session_id = newest["id"]
+            else:
+                created_session = self._session_manager().create(agent_id)
+                landing_session_id = created_session.id
 
-        updated_agent = replace(agent, current_session_id=landing_session_id, updated_at=_utc_now())
-        self._write_agent(updated_agent)
-        return _apply_defaults(updated_agent, self._agent_defaults())
+            updated_agent = replace(
+                agent, current_session_id=landing_session_id, updated_at=_utc_now()
+            )
+            try:
+                self._write_agent(updated_agent)
+            except Exception:
+                if created_session is not None:
+                    created_session.delete()
+                raise
+            return _apply_defaults(updated_agent, self._agent_defaults())
 
     def _agent_dir(self, agent_id: str) -> Path:
         return self._data_dir / "agents" / agent_id
@@ -912,17 +943,18 @@ class AgentStore:
         return AgentDefaults.from_dict(defaults)
 
     def _load_raw_agent(self, agent_path: Path) -> Agent:
-        data = _validated_agent_data(agent_path)
-        workspace_missing = _is_missing_workspace(data.get("workspace"))
-        agent = _agent_from_dict(
-            data,
-            data_dir=self._data_dir,
-            default_workspace=self._default_workspace(data["id"]),
-        )
-        self._seed_workspace(Path(agent.workspace))
-        if workspace_missing:
-            self._write_agent(agent)
-        return self._ensure_current_session(agent)
+        with self._write_lock:
+            data = _validated_agent_data(agent_path)
+            workspace_missing = _is_missing_workspace(data.get("workspace"))
+            agent = _agent_from_dict(
+                data,
+                data_dir=self._data_dir,
+                default_workspace=self._default_workspace(data["id"]),
+            )
+            self._seed_workspace(Path(agent.workspace))
+            if workspace_missing:
+                self._write_agent(agent)
+            return self._ensure_current_session(agent)
 
     def _read_agent_config(self, agent_path: Path) -> Agent:
         """Load and construct an agent from its config file with no side effects.
@@ -962,22 +994,23 @@ class AgentStore:
         return self._session_manager().exists(address)
 
     def _session_manager(self) -> ChatSessionManager:
-        if self._sessions is None:
-            from core.sessions import ChatSessionManager
-            from core.storage.layout import initialize_data_directory
+        with self._write_lock:
+            if self._sessions is None:
+                from core.sessions import ChatSessionManager
+                from core.storage.layout import initialize_data_directory
 
-            # Standalone/test usage: ensure a current-format marker exists for a
-            # freshly created data directory without silently manufacturing
-            # authorization for an already-initialized root that deliberately
-            # lacks one. ``initialize_data_directory`` only writes the bootstrap
-            # marker when it created the root itself.
-            marker = self._data_dir / "session-store.json"
-            if not marker.exists():
-                with suppress(Exception):
-                    initialize_data_directory(self._data_dir)
-            self._sessions = ChatSessionManager(self._data_dir)
-            self._owns_sessions = True
-        return self._sessions
+                # Standalone/test usage: ensure a current-format marker exists for a
+                # freshly created data directory without silently manufacturing
+                # authorization for an already-initialized root that deliberately
+                # lacks one. ``initialize_data_directory`` only writes the bootstrap
+                # marker when it created the root itself.
+                marker = self._data_dir / "session-store.json"
+                if not marker.exists():
+                    with suppress(Exception):
+                        initialize_data_directory(self._data_dir)
+                self._sessions = ChatSessionManager(self._data_dir)
+                self._owns_sessions = True
+            return self._sessions
 
     def _seed_workspace(self, workspace_path: Path) -> None:
         workspace_ops.seed_workspace(self._template_dir, workspace_path)

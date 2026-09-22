@@ -1,8 +1,10 @@
 """Tests for agents mutations."""
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -26,6 +28,78 @@ EARLY_TIMESTAMP = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 
 LATE_TIMESTAMP = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("repair", [False, True])
+def test_concurrent_updates_and_current_session_repairs_do_not_lose_state(
+    store: AgentStore, monkeypatch: pytest.MonkeyPatch, repair: bool
+) -> None:
+    agent = store.create("coder", "Original")
+    if repair:
+        store._session_manager().delete(SessionAddress(None, "coder", agent.current_session_id))
+    first_write = Event()
+    release_first = Event()
+    second_started = Event()
+    second_read = Event()
+    original_write = store._write_agent
+    original_read = agents_module._validated_agent_data
+
+    def write(updated):
+        if not first_write.is_set():
+            first_write.set()
+            assert release_first.wait(5)
+        original_write(updated)
+
+    def read(path):
+        result = original_read(path)
+        if second_started.is_set():
+            second_read.set()
+        return result
+
+    def second():
+        second_started.set()
+        return store.get("coder") if repair else store.update("coder", model="other/model")
+
+    monkeypatch.setattr(store, "_write_agent", write)
+    monkeypatch.setattr(agents_module, "_validated_agent_data", read)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = (
+            executor.submit(store.get, "coder")
+            if repair
+            else executor.submit(store.update, "coder", name="Changed")
+        )
+        try:
+            assert first_write.wait(5)
+            following = executor.submit(second)
+            assert second_started.wait(5)
+            second_read.wait(0.2)
+        finally:
+            release_first.set()
+        first.result(timeout=5)
+        following.result(timeout=5)
+
+    if repair:
+        sessions = store._session_manager().list_with_metadata("coder")
+        assert [session["id"] for session in sessions] == [store.get("coder").current_session_id]
+    else:
+        persisted = store.get("coder")
+        assert (persisted.name, persisted.model) == ("Changed", "other/model")
+
+
+def test_failed_current_session_reset_removes_new_session(
+    store: AgentStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent = store.create("coder")
+    store._session_manager().delete(SessionAddress(None, "coder", agent.current_session_id))
+
+    def fail_write(_agent):
+        raise OSError("config unavailable")
+
+    monkeypatch.setattr(store, "_write_agent", fail_write)
+    with pytest.raises(OSError, match="config unavailable"):
+        store.reset_current_after_session_removed("coder", agent.current_session_id)
+
+    assert store._session_manager().list_with_metadata("coder") == []
 
 
 def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> None:
