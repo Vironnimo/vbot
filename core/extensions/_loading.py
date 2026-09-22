@@ -161,10 +161,10 @@ def _register_extension(
     )
     try:
         result = register_fn(api)
-    except Exception as exc:
+    except (Exception, asyncio.CancelledError) as exc:
         _LOGGER.error("Extension %r register() raised: %s", name, exc, exc_info=True)
         record.status = "failed"
-        record.error = f"register() raised: {exc}"
+        record.error = f"register() raised: {exc or type(exc).__name__}"
         return record
 
     if inspect.iscoroutine(result):
@@ -211,12 +211,31 @@ def _await_pending_registers(pending: list[tuple[ExtensionRecord, Any]]) -> None
             _LOGGER.error("Extension %r %s", record.name, exc)
             record.status = "failed"
             record.error = str(exc)
-        except Exception as exc:
+        except (Exception, asyncio.CancelledError) as exc:
             _LOGGER.error(
                 "Extension %r async register() raised: %s", record.name, exc, exc_info=True
             )
             record.status = "failed"
-            record.error = f"async register() raised: {exc}"
+            record.error = f"async register() raised: {exc or type(exc).__name__}"
+
+
+def _detach_register_task(task: asyncio.Task[None], record: ExtensionRecord) -> None:
+    """Retain abandoned registration work and report failures after detachment."""
+    _detached_register_tasks.add(task)
+
+    def finished(completed: asyncio.Task[None]) -> None:
+        _detached_register_tasks.discard(completed)
+        if completed.cancelled():
+            return
+        try:
+            completed.result()
+        except Exception as exc:
+            _LOGGER.error(
+                "Extension %r detached register() raised: %s", record.name, exc, exc_info=True
+            )
+
+    task.add_done_callback(finished)
+    task.cancel()
 
 
 async def _await_pending_registers_async(pending: list[tuple[ExtensionRecord, Any]]) -> None:
@@ -230,26 +249,32 @@ async def _await_pending_registers_async(pending: list[tuple[ExtensionRecord, An
     it may keep running, but it can no longer hold server start or reload.
     """
     loop = asyncio.get_running_loop()
-    for record, coro in pending:
+    for index, (record, coro) in enumerate(pending):
         task = loop.create_task(coro)
-        _detached_register_tasks.add(task)
-        task.add_done_callback(_detached_register_tasks.discard)
-        done, _ = await asyncio.wait({task}, timeout=_ASYNC_REGISTER_TIMEOUT_SECONDS)
+        try:
+            done, _ = await asyncio.wait({task}, timeout=_ASYNC_REGISTER_TIMEOUT_SECONDS)
+        except asyncio.CancelledError:
+            _detach_register_task(task, record)
+            for _, unstarted in pending[index + 1 :]:
+                unstarted.close()
+            raise
         if not done:
-            task.cancel()
             message = str(_AsyncRegisterTimeoutError(_ASYNC_REGISTER_TIMEOUT_SECONDS))
             _LOGGER.error("Extension %r %s", record.name, message)
             record.status = "failed"
             record.error = message
+            _detach_register_task(task, record)
             continue
         try:
-            await task
-        except Exception as exc:
+            # The child is complete: its cancellation is a registration failure,
+            # distinct from cancellation of the loader while it was waiting.
+            task.result()
+        except (Exception, asyncio.CancelledError) as exc:
             _LOGGER.error(
                 "Extension %r async register() raised: %s", record.name, exc, exc_info=True
             )
             record.status = "failed"
-            record.error = f"async register() raised: {exc}"
+            record.error = f"async register() raised: {exc or type(exc).__name__}"
 
 
 def _run_coroutine_to_completion(coro: Any, timeout_seconds: float | None = None) -> None:
