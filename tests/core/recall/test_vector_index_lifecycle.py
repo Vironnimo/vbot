@@ -11,6 +11,7 @@ from core.chat import ChatMessage
 from core.model_tasks import (
     EmbeddingError,
     EmbeddingResult,
+    EmbeddingSpaceIdentity,
 )
 from core.recall import (
     RecallBackendContext,
@@ -31,7 +32,7 @@ pytestmark = pytest.mark.asyncio
 class _NullEmbeddings:
     """Stand-in embedding service that always raises configuration errors."""
 
-    def resolve_model_id(self) -> tuple[str, str]:
+    def resolve_space(self) -> EmbeddingSpaceIdentity:
         raise EmbeddingError("no text_embedding binding configured")
 
     async def embed(

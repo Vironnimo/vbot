@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
-from core.model_tasks import EmbeddingResult
+from core.model_tasks import EmbeddingResult, EmbeddingSpaceIdentity
 from core.recall import RecallBackendContext, RecallSearchRequest
 from core.recall.hybrid import (
     HybridRecallBackend,
@@ -55,9 +55,9 @@ class _StubEmbeddings:
         self.embed_calls: list[list[str]] = []
         self.resolve_calls = 0
 
-    def resolve_model_id(self) -> tuple[str, str]:
+    def resolve_space(self) -> EmbeddingSpaceIdentity:
         self.resolve_calls += 1
-        return (self.provider_id, self.model_id)
+        return EmbeddingSpaceIdentity(self.provider_id, self.model_id, "")
 
     async def embed(
         self,
