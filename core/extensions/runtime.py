@@ -63,7 +63,7 @@ class ExtensionRuntime:
         async with self._mutation_lock:
             if self._closing:
                 raise RuntimeError("Extension runtime is closing")
-            await self._finish_mutation(self._reload())
+            await self._finish_mutation(self._reload(), name="reload")
 
     async def _reload(self) -> None:
         settings = self._storage.load_settings()
@@ -124,7 +124,7 @@ class ExtensionRuntime:
         async with self._mutation_lock:
             if self._closing:
                 raise RuntimeError("Extension runtime is closing")
-            await self._finish_mutation(self._apply_disabled_change(newly_disabled))
+            await self._finish_mutation(self._apply_disabled_change(newly_disabled), name="disable")
 
     async def _apply_disabled_change(self, newly_disabled: set[str]) -> None:
         registry = self._get_registry()
@@ -147,7 +147,7 @@ class ExtensionRuntime:
             if registry is not None:
                 if self._make_host is not None:
                     registry.bind_host(self._make_host())
-                await self._finish_mutation(registry.fire_startup())
+                await self._finish_mutation(registry.fire_startup(), name="startup")
 
     async def aclose(self) -> None:
         """Reject new mutations and drain the admitted one before shutdown."""
@@ -155,25 +155,29 @@ class ExtensionRuntime:
         async with self._mutation_lock:
             registry = self._get_registry()
             if registry is not None:
-                await self._finish_mutation(registry.fire_shutdown())
+                await self._finish_mutation(registry.fire_shutdown(), name="shutdown")
 
-    @staticmethod
-    async def _finish_mutation(operation: Coroutine[Any, Any, None]) -> None:
+    async def _finish_mutation(self, operation: Coroutine[Any, Any, None], *, name: str) -> None:
         """Keep the mutation lock until an admitted operation has settled."""
         task = asyncio.create_task(operation)
         try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError as cancellation:
+            # Waiting leaves the admitted task running if its caller is cancelled,
+            # without transferring late failure reporting to asyncio's shield.
+            await asyncio.wait({task})
+            task.result()
+        except asyncio.CancelledError:
             while not task.done():
-                try:
-                    await asyncio.shield(task)
-                except asyncio.CancelledError:
-                    continue
-                except BaseException:
-                    break
-            with suppress(BaseException):
-                task.result()
-            raise cancellation
+                with suppress(asyncio.CancelledError):
+                    await asyncio.wait({task})
+            if not task.cancelled():
+                error = task.exception()
+                if error is not None:
+                    self._logger.error(
+                        "Cancelled Extension mutation failed (operation=%s)",
+                        name,
+                        exc_info=(type(error), error, error.__traceback__),
+                    )
+            raise
 
     @staticmethod
     def _recall_backend_names(
