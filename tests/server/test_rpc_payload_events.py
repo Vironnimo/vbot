@@ -97,7 +97,7 @@ async def test_agent_delete_publishes_agents_resource_changed(tmp_path: Path) ->
 @pytest.mark.asyncio
 async def test_agent_crud_events_not_published_without_event_bus(tmp_path: Path) -> None:
     runtime: Any = StubRuntime(tmp_path, StubAdapter())
-    chat_runs = ChatRunManager()
+    chat_runs = ChatRunManager(persistence=runtime.chat_sessions)
     runtime.chat_runs = chat_runs
     state = SimpleNamespace(
         runtime=runtime,

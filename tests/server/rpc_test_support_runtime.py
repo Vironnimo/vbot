@@ -327,7 +327,7 @@ class StubRuntime:
     @property
     def chat_run_manager(self) -> ChatRunManager:
         if self.chat_runs is None:
-            self.chat_runs = ChatRunManager()
+            self.chat_runs = ChatRunManager(persistence=self.chat_sessions)
         return self.chat_runs
 
     def skills_for(self, _project_id: str | None = None, _agent_id: str | None = None) -> Any:
@@ -488,7 +488,7 @@ def make_state(
     compaction_service: Any | None = None,
 ) -> SimpleNamespace:
     runtime: Any = StubRuntime(tmp_path, adapter)
-    chat_runs = ChatRunManager()
+    chat_runs = ChatRunManager(persistence=runtime.chat_sessions)
     runtime.chat_runs = chat_runs
     chat_loop = build_chat_loop(runtime, compaction_service=compaction_service)
     streaming_chat_loop = build_chat_loop(

@@ -16,8 +16,7 @@ from tests.core.sessions.sessions_test_support import manager as manager
 @pytest.mark.asyncio
 async def test_completion_commits_entities_before_publishing_terminal_event(manager):
     session = manager.create("coder")
-    runs = ChatRunManager()
-    runs.bind_persistence(manager)
+    runs = ChatRunManager(persistence=manager)
 
     async def execute(run):
         writer = session.for_run(run.id)
@@ -89,8 +88,7 @@ def test_restart_settles_run_and_unfinished_calls_once(manager):
 @pytest.mark.asyncio
 async def test_failed_terminal_transaction_never_claims_persistence(manager, monkeypatch):
     session = manager.create("coder")
-    runs = ChatRunManager()
-    runs.bind_persistence(manager)
+    runs = ChatRunManager(persistence=manager)
 
     async def fail_finish(*args):
         raise OSError("storage unavailable")
@@ -145,8 +143,7 @@ async def test_fork_is_a_snapshot_not_another_executing_run(manager):
 @pytest.mark.asyncio
 async def test_settled_run_rejects_late_output_and_duplicate_completion(manager):
     session = manager.create("coder")
-    runs = ChatRunManager()
-    runs.bind_persistence(manager)
+    runs = ChatRunManager(persistence=manager)
     observed = []
 
     async def execute(run):

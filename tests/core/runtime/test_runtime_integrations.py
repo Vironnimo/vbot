@@ -443,7 +443,7 @@ class _ChatRuntimeStub:
         self.provider_credentials = _StubCredentials()
         _authorize_session_store(tmp_path)
         self.chat_sessions = ChatSessionManager(tmp_path)
-        self.chat_runs = ChatRunManager()
+        self.chat_runs = ChatRunManager(persistence=self.chat_sessions)
         self.chat_run_manager = self.chat_runs
         self.extensions = None
         self.system_prompts = _StubPrompts()

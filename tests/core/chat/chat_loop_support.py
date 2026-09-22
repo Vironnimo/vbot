@@ -498,7 +498,7 @@ class StubRuntime:
         self.file_read_state = FileReadState()
         self.tools = tools or ToolRegistry()
         self.system_prompts = StubPrompts(self.tools)
-        self.chat_runs = ChatRunManager()
+        self.chat_runs = ChatRunManager(persistence=self.chat_sessions)
         self.chat_run_manager = self.chat_runs
         self.process_manager = StubProcessManager()
         self.extensions: Any = None
