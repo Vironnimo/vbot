@@ -409,8 +409,7 @@ export function createAppController({
     }
     if (event.type === CONNECTION_READY_EVENT_TYPE) {
       state.connectionSnapshot = event;
-      await onLoadSessionStoreStatus();
-      await onReloadExtensionPages();
+      const refreshOwners = [onLoadSessionStoreStatus, onReloadExtensionPages];
       if (
         event.replay_status === CONNECTION_REPLAY_STATUS_GAP ||
         event.replay_status === CONNECTION_REPLAY_STATUS_EPOCH_CHANGED
@@ -427,8 +426,13 @@ export function createAppController({
         state.debugTracesRefreshToken += 1;
         state.terminalsRefreshToken += 1;
         state.skillsRefreshToken += 1;
-        await Promise.all([onLoadProjects(), onReloadAgents()]);
+        refreshOwners.push(onLoadProjects, onReloadAgents);
       }
+      // Recovery owners are independent. Optional projections cannot hold up
+      // resource invalidation or another owner's refresh, even on failure.
+      await Promise.all(
+        refreshOwners.map((refresh) => Promise.resolve().then(refresh)),
+      );
       return;
     }
     if (RUN_SERVER_EVENT_TYPES.has(event.type)) {

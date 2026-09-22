@@ -199,6 +199,71 @@ describe('App controller', () => {
     expect(onReloadExtensionPages).toHaveBeenCalledOnce();
   });
 
+  it('starts independent replay-gap recovery without waiting for optional projections', async () => {
+    let finishStatus;
+    let finishPages;
+    const onLoadSessionStoreStatus = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          finishStatus = resolve;
+        }),
+    );
+    const onReloadExtensionPages = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          finishPages = resolve;
+        }),
+    );
+    const { actions, controller, state } = setup({
+      onLoadSessionStoreStatus,
+      onReloadExtensionPages,
+    });
+
+    const recovery = controller.handleServerEvent({
+      type: 'connection_ready',
+      replay_status: 'gap',
+      active_runs: [],
+      queues: [],
+    });
+    await Promise.resolve();
+
+    expect(state.modelsRefreshToken).toBe(1);
+    expect(state.sessionsRefreshToken).toBe(1);
+    expect(actions.onLoadProjects).toHaveBeenCalledOnce();
+    expect(actions.onReloadAgents).toHaveBeenCalledOnce();
+    expect(onLoadSessionStoreStatus).toHaveBeenCalledOnce();
+    expect(onReloadExtensionPages).toHaveBeenCalledOnce();
+    controller.destroy();
+    finishStatus();
+    finishPages();
+    await recovery;
+    expect(state.modelsRefreshToken).toBe(1);
+    expect(actions.onReloadAgents).toHaveBeenCalledOnce();
+  });
+
+  it('starts every recovery owner even when another owner fails synchronously', async () => {
+    const failure = new Error('optional projection failed');
+    const onLoadSessionStoreStatus = vi.fn(() => {
+      throw failure;
+    });
+    const onReloadExtensionPages = vi.fn();
+    const { actions, controller, state } = setup({
+      onLoadSessionStoreStatus,
+      onReloadExtensionPages,
+    });
+    await expect(
+      controller.handleServerEvent({
+        type: 'connection_ready',
+        replay_status: 'epoch_changed',
+      }),
+    ).rejects.toBe(failure);
+
+    expect(state.modelsRefreshToken).toBe(1);
+    expect(actions.onLoadProjects).toHaveBeenCalledOnce();
+    expect(actions.onReloadAgents).toHaveBeenCalledOnce();
+    expect(onReloadExtensionPages).toHaveBeenCalledOnce();
+  });
+
   it('refreshes an Extension page after its owner-qualified invalidation', async () => {
     const onReloadExtensionPages = vi.fn().mockResolvedValue(undefined);
     const { controller } = setup({ onReloadExtensionPages });
