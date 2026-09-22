@@ -116,3 +116,5 @@ export {
   compactToolValue,
   toolDetailPresentation,
 } from '$lib/chatToolDetails.js';
+
+export { reasoningSummaryTitle } from './chatTimelinePresentation/reasoning.js';

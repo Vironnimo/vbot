@@ -291,11 +291,11 @@ def _insert_message(
             INSERT INTO assistant_messages (
                 message_key, reasoning, reasoning_meta_json, reasoning_scope,
                 reasoning_started_at, reasoning_completed_at, reasoning_duration_ms,
-                reasoning_timing_extra_json, phase, input_tokens, output_tokens,
+                reasoning_timing_extra_json, phase, input_tokens, output_tokens, reasoning_summary_json,
                 cache_read_tokens, cache_write_tokens, reasoning_tokens, usage_estimated,
                 input_tokens_estimated, output_tokens_estimated, usage_present,
                 usage_extra_json, tool_calls_present, interrupted, interruption_cause
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 message_key,
@@ -309,6 +309,9 @@ def _insert_message(
                 message.phase,
                 usage.get("input_tokens"),
                 usage.get("output_tokens"),
+                json.dumps(message.reasoning_summary, ensure_ascii=False)
+                if message.reasoning_summary is not None
+                else None,
                 usage.get("cache_read_tokens"),
                 usage.get("cache_write_tokens"),
                 usage.get("reasoning_tokens"),
@@ -429,6 +432,7 @@ def message_from_row(row: sqlite3.Row) -> ChatMessage:
                 data[field] = row[field]
         json_fields = {
             "reasoning_meta_json": "reasoning_meta",
+            "reasoning_summary_json": "reasoning_summary",
             "tool_display_json": "tool_display",
             "projection_json": "projection",
         }

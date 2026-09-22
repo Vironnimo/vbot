@@ -201,6 +201,7 @@ def _validate_system_message(message: _records.ChatMessage) -> None:
         "reasoning",
         "reasoning_meta",
         "reasoning_timing",
+        "reasoning_summary",
         "usage",
         "timing",
         "tool_calls",
@@ -231,6 +232,7 @@ def _validate_user_message(message: _records.ChatMessage) -> None:
         "reasoning",
         "reasoning_meta",
         "reasoning_timing",
+        "reasoning_summary",
         "usage",
         "timing",
         "tool_calls",
@@ -279,6 +281,14 @@ def _validate_assistant_message(message: _records.ChatMessage) -> None:
     )
     if message.reasoning_meta is not None and not isinstance(message.reasoning_meta, dict):
         raise ChatMessageValidationError("reasoning_meta must be an object")
+    if message.reasoning_summary is not None and (
+        not message.reasoning
+        or not isinstance(message.reasoning_summary, list)
+        or not all(isinstance(part, str) for part in message.reasoning_summary)
+    ):
+        raise ChatMessageValidationError(
+            "reasoning_summary requires reasoning and an array of strings"
+        )
     if message.reasoning_timing is not None:
         if message.reasoning is None:
             raise ChatMessageValidationError(
@@ -361,6 +371,7 @@ def _validate_tool_message(message: _records.ChatMessage) -> None:
         "reasoning",
         "reasoning_meta",
         "reasoning_timing",
+        "reasoning_summary",
         "usage",
         "tool_calls",
         "error_kind",
@@ -382,6 +393,7 @@ def _validate_note_message(message: _records.ChatMessage) -> None:
         "reasoning",
         "reasoning_meta",
         "reasoning_timing",
+        "reasoning_summary",
         "usage",
         "timing",
         "tool_calls",
@@ -407,6 +419,7 @@ def _validate_error_message(message: _records.ChatMessage) -> None:
         "reasoning",
         "reasoning_meta",
         "reasoning_timing",
+        "reasoning_summary",
         "usage",
         "timing",
         "tool_calls",
@@ -479,6 +492,7 @@ def _validate_compaction_checkpoint_message(message: _records.ChatMessage) -> No
         "reasoning",
         "reasoning_meta",
         "reasoning_timing",
+        "reasoning_summary",
         "timing",
         "tool_calls",
         "tool_call_id",
@@ -515,6 +529,7 @@ def _validate_run_summary_message(message: _records.ChatMessage) -> None:
         "reasoning",
         "reasoning_meta",
         "reasoning_timing",
+        "reasoning_summary",
         "usage",
         "tool_calls",
         "tool_call_id",
@@ -553,6 +568,7 @@ def _validate_agent_takeover_message(message: _records.ChatMessage) -> None:
         "reasoning",
         "reasoning_meta",
         "reasoning_timing",
+        "reasoning_summary",
         "usage",
         "timing",
         "tool_calls",
@@ -575,6 +591,7 @@ def _validate_history_edit_message(message: _records.ChatMessage) -> None:
         "reasoning",
         "reasoning_meta",
         "reasoning_timing",
+        "reasoning_summary",
         "usage",
         "timing",
         "tool_calls",

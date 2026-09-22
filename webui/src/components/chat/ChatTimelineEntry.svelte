@@ -6,10 +6,7 @@
     floatingHoverCard,
     tooltip,
   } from '$lib/tooltip.js';
-  import {
-    linkifiedTextSegments,
-    reasoningMarkdownSource,
-  } from '$lib/markdown.js';
+  import { linkifiedTextSegments } from '$lib/markdown.js';
   import {
     attachmentFilename,
     attachmentPreviewLabel,
@@ -60,6 +57,7 @@
   import TextArea from '../ui/TextArea.svelte';
   import ChatCompactionSeparator from './ChatCompactionSeparator.svelte';
   import MarkdownContent from './MarkdownContent.svelte';
+  import ChatReasoning from './ChatReasoning.svelte';
 
   let {
     item,
@@ -235,42 +233,6 @@
       >
     {/if}
   </div>
-{/snippet}
-
-{#snippet reasoningSummary(
-  isStreaming = false,
-  isOpen = false,
-  durationLabel = '',
-)}
-  <summary class="reasoning-header">
-    <svg class="reasoning-icon" viewBox="0 0 16 16" aria-hidden="true">
-      <path
-        d="M8 2a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5A4 4 0 0 0 12 6a4 4 0 0 0-4-4z"
-      />
-      <path d="M6 13h4" />
-    </svg>
-    <span
-      >{isStreaming
-        ? t('chat.reasoning.active', 'thinking...')
-        : t('chat.reasoning.done', 'thought')}</span
-    >
-    {#if durationLabel}
-      <span class="reasoning-duration">{durationLabel}</span>
-    {/if}
-    {#if isStreaming}
-      <span class="streaming-caret" aria-hidden="true"></span>
-    {/if}
-    <svg
-      class="r-chevron"
-      viewBox="0 0 16 16"
-      width="10"
-      height="10"
-      style:transform={isOpen ? 'rotate(180deg)' : 'none'}
-      aria-hidden="true"
-    >
-      <path d="M4 6l4 4 4-4" />
-    </svg>
-  </summary>
 {/snippet}
 
 {#snippet toolArgumentLine(primary)}
@@ -510,36 +472,16 @@
           </span>
         </div>
       {:else}
-        {#if hasReadableReasoning(item.message) && hasAssistantContent(item.message)}
-          <details
-            class="reasoning-block"
+        {#if hasReadableReasoning(item.message) && (hasAssistantContent(item.message) || item.message.reasoning_summary?.length)}
+          <ChatReasoning
+            source={item.message.reasoning ?? ''}
+            summary={item.message.reasoning_summary}
             open={isReasoningOpen(item.id)}
-            ontoggle={(event) =>
-              onReasoningOpenChange(item.id, event.currentTarget.open)}
-          >
-            {@render reasoningSummary(
-              false,
-              isReasoningOpen(item.id),
-              reasoningDurationLabel({
-                durationMs: item.message.reasoning_timing?.duration_ms,
-              }),
-            )}
-            <div class="reasoning-body">
-              <div class="reasoning-body__actions">
-                <CopyButton
-                  text={reasoningMarkdownSource(item.message.reasoning ?? '')}
-                  class="chat-copy-action reasoning-copy"
-                  label={t('chat.copyReasoning', 'Copy thinking')}
-                  copiedLabel={t('chat.reasoningCopied', 'Thinking copied')}
-                />
-              </div>
-              <MarkdownContent
-                source={item.message.reasoning ?? ''}
-                reasoning
-                class="reasoning-markdown"
-              />
-            </div>
-          </details>
+            durationLabel={reasoningDurationLabel({
+              durationMs: item.message.reasoning_timing?.duration_ms,
+            })}
+            onOpenChange={(open) => onReasoningOpenChange(item.id, open)}
+          />
         {/if}
         {#if hasUserContentBlocks(item.message)}
           <div class="msg-body-blocks">
@@ -550,7 +492,11 @@
         {:else if textFromMessage(item.message)}
           {#if item.message.role === 'assistant'}
             {#if isReasoningOnlyAssistantMessage(item.message)}
-              <p class="msg-body-text">{textFromMessage(item.message)}</p>
+              {#if !item.message.reasoning_summary?.length}<p
+                  class="msg-body-text"
+                >
+                  {textFromMessage(item.message)}
+                </p>{/if}
             {:else}
               <MarkdownContent
                 source={textFromMessage(item.message)}
@@ -689,38 +635,16 @@
       </div>
       <div class="msg-content">
         {#if item.event.type === 'reasoning'}
-          <details
-            class="reasoning-block"
+          <ChatReasoning
+            source={textFromEvent(item.event)}
+            summary={messageFromEvent(item.event)?.reasoning_summary}
             open={isReasoningOpen(item.id)}
-            ontoggle={(event) =>
-              onReasoningOpenChange(item.id, event.currentTarget.open)}
-          >
-            {@render reasoningSummary(
-              false,
-              isReasoningOpen(item.id),
-              reasoningDurationLabel({
-                durationMs: messageFromEvent(item.event)?.reasoning_timing
-                  ?.duration_ms,
-              }),
-            )}
-            <div class="reasoning-body">
-              <div class="reasoning-body__actions">
-                <CopyButton
-                  text={reasoningMarkdownSource(
-                    textFromEvent(item.event) ?? '',
-                  )}
-                  class="chat-copy-action reasoning-copy"
-                  label={t('chat.copyReasoning', 'Copy thinking')}
-                  copiedLabel={t('chat.reasoningCopied', 'Thinking copied')}
-                />
-              </div>
-              <MarkdownContent
-                source={textFromEvent(item.event) ?? ''}
-                reasoning
-                class="reasoning-markdown"
-              />
-            </div>
-          </details>
+            durationLabel={reasoningDurationLabel({
+              durationMs: messageFromEvent(item.event)?.reasoning_timing
+                ?.duration_ms,
+            })}
+            onOpenChange={(open) => onReasoningOpenChange(item.id, open)}
+          />
         {:else if hasUserContentBlocks(messageFromEvent(item.event))}
           <div class="msg-body-blocks">
             {#each userContentBlocks(messageFromEvent(item.event)) as block, blockIndex (`${item.id}-block-${blockIndex}`)}

@@ -135,6 +135,7 @@ def test_role_specific_relational_message_storage_round_trips(
         model="provider/model",
         content="file:C:\\tmp\\result.txt",
         reasoning="reasoning text",
+        reasoning_summary=["**First**\n\nReasoning", "**Second**\n\nMore reasoning"],
         reasoning_meta={"provider_state": {"opaque": True}},
         reasoning_scope="turn",
         reasoning_timing={

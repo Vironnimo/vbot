@@ -173,6 +173,9 @@ export function appendCompressedStreamingRunEvent(sessionState, event) {
   ) {
     lastEvent.payload[payloadKey] =
       `${lastEvent.payload?.[payloadKey] ?? ''}${deltaText}`;
+    if (Number.isInteger(event.payload?.summary_index)) {
+      lastEvent.payload.summary_text = `${lastEvent.payload.summary_text ?? ''}${event.payload.summary_text ?? ''}`;
+    }
     lastEvent.sequence = firstSeenSequence(lastEvent.sequence, event.sequence);
     lastEvent._streamChunkCount = streamEventChunkCount(lastEvent) + 1;
     lastEvent._streamLatestSequence = streamEventLatestSequence(event);
@@ -329,6 +332,8 @@ function canMergeCompressedStreamingEvent(
     existingEvent?.type === incomingEvent.type &&
     existingEvent?.run_id === incomingEvent.run_id &&
     existingEvent?._streamingPhase === streamingPhase &&
+    existingEvent?.payload?.summary_index ===
+      incomingEvent.payload?.summary_index &&
     typeof existingEvent.payload?.[payloadKey] === 'string'
   );
 }
