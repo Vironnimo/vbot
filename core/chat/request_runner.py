@@ -88,14 +88,14 @@ def _normalize_non_streaming_step(
     *,
     model_id: str,
     response_model: str,
-    agent_model: str,
+    public_model: str,
 ) -> _AssistantStep:
     """Normalize one Provider response and build its canonical Assistant step."""
     normalized = adapter.normalize_response(response, model_id=model_id)
     terminal_outcome = terminal_outcome_from_response(normalized)
     _check_empty_response(normalized, terminal_outcome)
     message = _assistant_message_from_response(
-        agent_model,
+        public_model,
         normalized,
         reasoning_scope=response_model,
     )
@@ -275,9 +275,15 @@ class WireRequestRunner:
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
         continuation_tracker: ContinuationTracker | None = None,
         *,
+        public_model: str,
         provider_id: str = "",
         recovery: RecoveryBudget | None = None,
     ) -> _AssistantStep:
+        """Send one Model step; its Assistant messages name ``public_model``.
+
+        ``public_model`` is the user-facing Model string of the answering route:
+        the Agent's primary Model, or the fallback candidate serving this Run.
+        """
         request_context = _resolve_request_context_kwargs(
             adapter,
             run,
@@ -337,6 +343,7 @@ class WireRequestRunner:
                                 messages,
                                 tools,
                                 run,
+                                public_model=public_model,
                                 can_restart=budget.available(response_model),
                                 chunk_timeout_seconds=chunk_timeout_seconds,
                                 request_context=request_context,
@@ -362,6 +369,7 @@ class WireRequestRunner:
                                         response_model,
                                         messages,
                                         tools,
+                                        public_model=public_model,
                                         request_context=request_context,
                                         temperature=temperature,
                                         top_p=top_p,
@@ -424,6 +432,7 @@ class WireRequestRunner:
         messages: list[JsonObject],
         tools: list[JsonObject],
         *,
+        public_model: str,
         request_context: dict[str, Any],
         temperature: float | None,
         top_p: float | None,
@@ -443,7 +452,7 @@ class WireRequestRunner:
             response,
             model_id=model_id,
             response_model=response_model,
-            agent_model=agent.model,
+            public_model=public_model,
         )
 
     async def _consume_stream_attempt(
@@ -456,6 +465,7 @@ class WireRequestRunner:
         tools: list[JsonObject],
         run: Run,
         *,
+        public_model: str,
         can_restart: bool,
         output_cwd: Path | None,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
@@ -575,7 +585,7 @@ class WireRequestRunner:
                     exc,
                 )
                 return self._finalize_interrupted_partial(
-                    agent,
+                    public_model,
                     response_model,
                     accumulator,
                     run,
@@ -598,7 +608,7 @@ class WireRequestRunner:
                 )
                 if accumulator.partial_reasoning is not None:
                     return self._finalize_interrupted_partial(
-                        agent,
+                        public_model,
                         response_model,
                         accumulator,
                         run,
@@ -614,7 +624,7 @@ class WireRequestRunner:
                 ):
                     return replace(
                         self._finalize_interrupted_partial(
-                            agent,
+                            public_model,
                             response_model,
                             accumulator,
                             run,
@@ -637,7 +647,7 @@ class WireRequestRunner:
                 accumulator.partial_content is not None or accumulator.partial_reasoning is not None
             ):
                 return self._finalize_interrupted_partial(
-                    agent,
+                    public_model,
                     response_model,
                     accumulator,
                     run,
@@ -651,7 +661,7 @@ class WireRequestRunner:
 
         _check_empty_response(assistant_fields.to_response_dict(), assistant_fields.finish_reason)
         assistant_message = _assistant_message_from_response(
-            agent.model,
+            public_model,
             assistant_fields.to_response_dict(),
             reasoning_scope=response_model,
             reasoning_timing=assistant_fields.reasoning_timing,
@@ -664,7 +674,7 @@ class WireRequestRunner:
             ended_in_reasoning=accumulator.ends_with_reasoning,
         ):
             return self._finalize_interrupted_partial(
-                agent,
+                public_model,
                 response_model,
                 accumulator,
                 run,
@@ -683,7 +693,7 @@ class WireRequestRunner:
 
     def _finalize_interrupted_partial(
         self,
-        agent: Any,
+        public_model: str,
         response_model: str,
         accumulator: StreamingAccumulator,
         run: Run,
@@ -712,7 +722,7 @@ class WireRequestRunner:
         """
         partial_fields = accumulator.finalize_partial_fields()
         assistant_message = _assistant_message_from_response(
-            agent.model,
+            public_model,
             partial_fields.to_response_dict(),
             reasoning_scope=response_model,
             reasoning_timing=partial_fields.reasoning_timing,

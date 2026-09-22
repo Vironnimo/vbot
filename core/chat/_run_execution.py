@@ -665,6 +665,7 @@ class RunExecution:
                     provider_id,
                     connection_id,
                     candidate_model_id,
+                    public_model=binding,
                 )
             except (ConfigError, VBotError) as construction_exc:
                 _LOGGER.warning(

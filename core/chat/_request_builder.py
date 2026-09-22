@@ -209,6 +209,8 @@ class RequestBuilder:
         provider_id: str,
         connection_id: str,
         model_id: str,
+        *,
+        public_model: str,
     ) -> _ModelTarget:
         connection = ConnectionRef(provider_id, connection_id)
         adapter = self._dependencies.get_adapter(connection)
@@ -222,6 +224,7 @@ class RequestBuilder:
                 connection_id,
                 model_id,
             ),
+            public_model=public_model,
             adapter=adapter,
             replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
             input_modalities=_model_input_modalities_for_target(
@@ -642,7 +645,9 @@ class RequestBuilder:
             )
         provider_id, connection_id = _resolve_agent_connection(self._dependencies, agent)
         _, model_id = _split_agent_model(agent.model)
-        target = self._create_model_target(provider_id, connection_id, model_id)
+        target = self._create_model_target(
+            provider_id, connection_id, model_id, public_model=agent.model
+        )
         try:
             return await self._route_tool_definitions(
                 tools,
