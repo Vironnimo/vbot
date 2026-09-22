@@ -15,9 +15,17 @@ from core.model_tasks import (
     TaskModelOptionChoice,
     TaskModelOptionField,
     TaskModelOptionSchema,
+    TaskModelService,
 )
 from core.model_tasks.speech_setup import LocalSpeechSetup
 from server.rpc.methods import dispatch_rpc
+from tests.core.model_tasks.model_tasks_test_support import (
+    _Credentials,
+    _model,
+    _Models,
+    _Providers,
+    _Storage,
+)
 
 
 @pytest.mark.asyncio
@@ -128,6 +136,53 @@ async def test_task_model_update_validates_payload() -> None:
 
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["update", "options"])
+async def test_unknown_local_task_target_is_an_invalid_request(method: str) -> None:
+    service = TaskModelService(_Providers(), _Models(), _Credentials(), _Storage())
+    state = SimpleNamespace(runtime=SimpleNamespace(model_tasks=service))
+    binding = {"target": "local/missing"}
+    params = (
+        {"model_tasks": {TASK_TEXT_TO_SPEECH: binding}}
+        if method == "update"
+        else {"task_type": TASK_TEXT_TO_SPEECH, **binding}
+    )
+
+    result = await dispatch_rpc(state, {"method": f"task_model.{method}", "params": params})
+
+    assert result["error"]["code"] == "invalid_request"
+    assert service.settings() == {}
+
+
+@pytest.mark.asyncio
+async def test_overflowing_task_option_is_an_invalid_request() -> None:
+    service = TaskModelService(
+        _Providers(),
+        _Models([_model("tts", (TASK_TEXT_TO_SPEECH,))]),
+        _Credentials(),
+        _Storage(),
+    )
+    state = SimpleNamespace(runtime=SimpleNamespace(model_tasks=service))
+
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": "task_model.update",
+            "params": {
+                "model_tasks": {
+                    TASK_TEXT_TO_SPEECH: {
+                        "target": "openrouter/tts::api-key",
+                        "options": {"speed": 10**400},
+                    }
+                }
+            },
+        },
+    )
+
+    assert result["error"]["code"] == "invalid_request"
+    assert service.settings() == {}
 
 
 @pytest.mark.asyncio

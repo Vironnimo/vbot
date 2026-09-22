@@ -174,11 +174,13 @@ def _validate_task_model_option_value(
                 )
         return
     if field.type == "number":
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, int | float)
-            or not math.isfinite(value)
-        ):
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise TaskModelOptionValidationError(f"{label} must be a finite number")
+        try:
+            finite = math.isfinite(value)
+        except OverflowError:
+            finite = False
+        if not finite:
             raise TaskModelOptionValidationError(f"{label} must be a finite number")
         if field.min_value is not None and value < field.min_value:
             raise TaskModelOptionValidationError(f"{label} must be at least {field.min_value}")

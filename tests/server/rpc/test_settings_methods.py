@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -330,6 +331,46 @@ async def test_settings_update_rejects_invalid_task_model_option_before_persiste
     assert result["error"]["code"] == "invalid_request"
     assert "must be one of: alloy, echo" in result["error"]["message"]
     assert state.runtime.storage.load_model_task_settings() == {}
+
+
+@pytest.mark.asyncio
+async def test_settings_update_persists_target_switch_with_validated_options(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage = StorageManager(tmp_path)
+    _add_tts_model(state)
+    model = state.runtime.models.get("openai", "gpt-4o-mini-tts")
+    state.runtime.models._models["openai"].append(
+        replace(
+            model,
+            model_id="tts-default",
+            capabilities=replace(model.capabilities, supported_voices=()),
+        )
+    )
+    state.runtime.storage.update_model_task_settings(
+        {
+            TASK_TEXT_TO_SPEECH: {
+                "target": "openai/retired-tts::api-key",
+                "options": {"retired_option": True},
+            }
+        }
+    )
+
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {
+                "model_tasks": {TASK_TEXT_TO_SPEECH: {"target": "openai/tts-default::api-key"}}
+            },
+        },
+    )
+
+    assert result["ok"] is True
+    binding = state.runtime.storage.load_model_task_settings()[TASK_TEXT_TO_SPEECH]
+    assert binding == {"target": "openai/tts-default::api-key", "options": {}}
+    state.runtime.model_tasks.validate_binding(TASK_TEXT_TO_SPEECH, binding)
 
 
 @pytest.mark.asyncio
