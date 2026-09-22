@@ -683,3 +683,21 @@ def test_soul_block_never_aborts_run_on_unreadable_file(
 
     assert '<file name="SOUL.md">' not in prompt
     assert any(record.levelno == logging.WARNING for record in caplog.records)
+
+
+@pytest.mark.parametrize("mode", [MEMORY_PROMPT_MODE_AGENT, MEMORY_PROMPT_MODE_AGENT_USER])
+def test_memory_without_workspace_never_reads_server_cwd(tmp_path, monkeypatch, mode):
+    manager = _manager(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "MEMORY.md").write_text("- SERVER_MEMORY_SENTINEL", encoding="utf-8")
+    (tmp_path / "USER.md").write_text("- SERVER_USER_SENTINEL", encoding="utf-8")
+    reads = []
+    agent = _agent("", memory_prompt_mode=mode)
+
+    assert manager.render_memory_files(agent, on_read=reads.append) == ""
+    prompt = manager.build_system_prompt(agent)
+
+    assert "SERVER_MEMORY_SENTINEL" not in prompt
+    assert "SERVER_USER_SENTINEL" not in prompt
+    assert "<memory>" not in prompt
+    assert reads == []
