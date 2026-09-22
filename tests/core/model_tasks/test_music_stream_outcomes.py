@@ -134,6 +134,27 @@ async def test_stop_without_done_cannot_return_audio(client: ProviderMusicClient
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("data", [123, True, [], {}, "!invalid!", "YQ"])
+@respx.mock
+async def test_malformed_audio_fragment_cannot_be_silently_dropped(
+    client: ProviderMusicClient, data: object
+) -> None:
+    stream = _Stream(
+        _event({"delta": {"audio": {"data": "YWJj"}}})
+        + _event({"delta": {"audio": {"data": data}}})
+        + b"data: [DONE]\n\n"
+    )
+    route = respx.post("https://openrouter.ai/api/v1/chat/completions").respond(200, stream=stream)
+
+    with pytest.raises(ProviderError) as exc:
+        await client.generate("Music", options={})
+
+    assert not exc.value.retryable
+    assert stream.closed
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [200, 400])
 @pytest.mark.parametrize("cancel", [False, True])
 @respx.mock
