@@ -357,13 +357,16 @@ def test_fold_references_ten_completed_tools_and_keeps_one_dangling_unknown(tool
     )
 
 
-def test_prompt_truncation_keeps_original_request_operations_warning_and_marker() -> None:
+@pytest.mark.parametrize("request_size", [1, 5000])
+def test_prompt_truncation_keeps_original_request_operations_warning_and_marker(
+    request_size: int,
+) -> None:
     records = [
         _record(
             "run_started",
             checkpoint_id="checkpoint",
             origin_run_id="run-one",
-            request="ORIGINAL REQUEST",
+            request="ORIGINAL REQUEST" * request_size,
         ),
         _record(
             "stream_delta",
@@ -381,8 +384,10 @@ def test_prompt_truncation_keeps_original_request_operations_warning_and_marker(
 
     assert len(reminder) <= 4_000
     assert "ORIGINAL REQUEST" in reminder
-    assert "bash-1" in reminder
-    assert "SAFETY:" in reminder
+    assert reminder.endswith("</continuation-checkpoint>")
+    if request_size == 1:
+        assert "bash-1" in reminder
+        assert "SAFETY:" in reminder
     assert "truncated to fit" in reminder
 
 
