@@ -227,14 +227,8 @@ async def _rename_agent(state: Any, params: JsonObject) -> JsonObject:
                         agent_id,
                         new_agent_id,
                     )
-                    invalidate_agent_skills = getattr(
-                        state.runtime,
-                        "invalidate_agent_skills",
-                        None,
-                    )
-                    if callable(invalidate_agent_skills):
-                        invalidate_agent_skills(agent_id)
-                        invalidate_agent_skills(new_agent_id)
+                    state.runtime.invalidate_agent_skills(agent_id)
+                    state.runtime.invalidate_agent_skills(new_agent_id)
             except RunAdmissionBlockedError as exc:
                 raise RpcError(
                     RPC_ERROR_AGENT_BUSY,
@@ -345,6 +339,7 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
                         )
                     await state.runtime.terminal_manager.close_agent_scope(agent_id, None)
                     state.runtime.agents.delete(agent_id)
+                    state.runtime.invalidate_agent_skills(agent_id)
             except RunAdmissionBlockedError as exc:
                 raise RpcError(
                     RPC_ERROR_AGENT_BUSY,

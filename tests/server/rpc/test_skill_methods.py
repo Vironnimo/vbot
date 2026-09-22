@@ -79,7 +79,7 @@ async def test_install_publishes_complete_package_and_invalidates_live_scopes(tm
     )
     assert (root / "demo/assets/template.bin").read_bytes() == b"\x00\xff"
     assert state.runtime.reload_calls == (1 if scope == "global" else 0)
-    assert state.runtime.invalidated == ([] if scope == "global" else [None])
+    assert state.runtime.invalidated == ([] if scope == "global" else ["builder"])
 
 
 @pytest.mark.asyncio

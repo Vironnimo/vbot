@@ -186,8 +186,10 @@ async def no_models_dev_catalog() -> None:
 
 
 def make_state(tmp_path: Any, provider: ProviderConfig) -> SimpleNamespace:
+    refresh_lock = asyncio.Lock()
     return SimpleNamespace(
         runtime=SimpleNamespace(
+            model_database_refresh=lambda: refresh_lock,
             providers=StubProviderRegistry(provider),
             token_store=TokenStore(tmp_path),
             provider_credentials=StubProviderCredentials(

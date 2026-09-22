@@ -31,6 +31,7 @@ from cli._server_target import (
     _probe_url,
     build_server_base_url,
     find_listening_process,
+    is_local_target,
     probe_health,
     probe_webui,
     resolve_instance,
@@ -317,6 +318,12 @@ def stop_server(
 ) -> CommandResult:
     """Request Runtime shutdown, with bounded terminate/kill fallback."""
 
+    if not is_local_target(instance):
+        return CommandResult(
+            ok=False,
+            message="server stop requires a local target",
+            instance=instance,
+        )
     health = probe_health(instance)
     if not health.reachable:
         process = _resolve_control_process(instance)

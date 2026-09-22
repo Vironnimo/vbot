@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import socket
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -10,7 +12,7 @@ from typing import Any
 import httpx
 import pytest
 
-from cli import server_management
+from cli import _server_target, server_management
 from cli.server_management import (
     CommandResult,
     HealthProbeResult,
@@ -25,6 +27,61 @@ from core.utils.logging import resolve_daily_log_path
 from tests.cli.server_management_test_support import (
     make_instance,
 )
+
+
+@pytest.mark.parametrize(
+    ("host", "resolved", "wildcard", "expected"),
+    [
+        ("192.0.2.10", ["192.0.2.10"], "0.0.0.0", True),
+        ("192.0.2.40", ["192.0.2.40"], "0.0.0.0", False),
+        ("local.example", ["192.0.2.10"], "0.0.0.0", True),
+        ("remote.example", ["192.0.2.40"], "0.0.0.0", False),
+        ("mixed.example", ["192.0.2.10", "192.0.2.40"], "0.0.0.0", False),
+        ("2001:db8::10", ["2001:db8::10"], "::", True),
+        ("2001:db8::40", ["2001:db8::40"], "::", False),
+        ("remote.example", ["2001:db8::40"], "::", False),
+        ("localhost", ["127.0.0.1", "::1"], "::", True),
+        ("0.0.0.0", ["0.0.0.0"], "0.0.0.0", True),
+    ],
+)
+def test_wildcard_listener_only_owns_locally_addressed_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    host: str,
+    resolved: list[str],
+    wildcard: str,
+    expected: bool,
+) -> None:
+    instance = replace(make_instance(tmp_path), host=host)
+    process = SimpleNamespace(
+        net_connections=lambda kind: [
+            SimpleNamespace(
+                status=server_management.psutil.CONN_LISTEN,
+                laddr=SimpleNamespace(ip=wildcard, port=instance.port),
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        _server_target.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET6 if ":" in address else socket.AF_INET, 1, 6, "", (address, 0))
+            for address in resolved
+        ],
+    )
+    monkeypatch.setattr(
+        server_management.psutil,
+        "net_if_addrs",
+        lambda: {
+            "ethernet": [
+                SimpleNamespace(family=socket.AF_INET, address="192.0.2.10"),
+                SimpleNamespace(family=socket.AF_INET6, address="2001:db8::10"),
+            ]
+        },
+    )
+    monkeypatch.setattr(server_management.psutil, "process_iter", lambda: [process])
+
+    assert _server_target.find_listening_process(instance) is (process if expected else None)
 
 
 def test_resolve_instance_uses_explicit_port_before_environment_and_settings(

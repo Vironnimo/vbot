@@ -197,6 +197,10 @@ class ReflectionService:
                 + (max(iteration_count, 0) if count_run else 0)
             )
             counter_generation = _non_negative_int(counters.get(COUNTER_GENERATION_KEY))
+            if memory_tool_called or skill_manage_called:
+                # A reset changes the baseline just like manual /reflect. An
+                # older in-flight review must not consume later activity.
+                counter_generation += 1
             memory_due = turns >= settings["memory_turn_interval"]
             skill_due = iterations >= settings["skill_model_step_interval"]
             state.update(

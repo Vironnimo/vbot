@@ -388,15 +388,25 @@ def retarget_identity_agent_references(
         metadata = deepcopy(previous)
         metadata["subagent_parent"]["agent_id"] = new_agent_id
         replace_metadata(connection, address, metadata)
-        updates.append(SessionIdentityReferenceUpdate(address, previous))
+        updates.append(
+            SessionIdentityReferenceUpdate(
+                address, previous["subagent_parent"], metadata["subagent_parent"]
+            )
+        )
     return tuple(updates)
 
 
 def restore_identity_agent_references(
     connection: sqlite3.Connection, updates: tuple[SessionIdentityReferenceUpdate, ...]
 ) -> None:
+    """Compensate unchanged retargeted links in the caller's transaction."""
     for update in reversed(updates):
-        replace_metadata(connection, update.address, update.previous_metadata)
+        state = _store_values._require_live(connection, update.address)
+        metadata = _store_values._session_metadata_from_state(state)
+        if metadata.get("subagent_parent") != update.updated_parent:
+            continue
+        metadata["subagent_parent"] = deepcopy(update.previous_parent)
+        replace_metadata(connection, update.address, metadata)
 
 
 def archive_identity_agent_sessions(connection: sqlite3.Connection, agent_id: str) -> None:

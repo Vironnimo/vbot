@@ -743,9 +743,8 @@ class TriggerService:
                         resume_process_restart,
                     ),
                 )
-            except BaseException:
+            finally:
                 self.release_waiting_work(waiting_work_admission)
-                raise
 
         target_session_id = session_id
         try:

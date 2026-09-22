@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -215,10 +216,21 @@ class ProviderRuntime:
             effort=effort,
         )
 
-    async def maybe_refresh_local_catalogs(self, *, force: bool = False) -> None:
+    @asynccontextmanager
+    async def model_database_refresh(self) -> AsyncIterator[None]:
+        """Serialize complete catalog refreshes from staging through live reload.
+
+        Manual refreshes and automatic local sweeps publish whole snapshots.
+        They must share admission before copying the active root, otherwise a
+        later publication can silently restore another Provider's old catalog.
+        """
         if self._catalog_refresh_lock is None:
             self._catalog_refresh_lock = asyncio.Lock()
         async with self._catalog_refresh_lock:
+            yield
+
+    async def maybe_refresh_local_catalogs(self, *, force: bool = False) -> None:
+        async with self.model_database_refresh():
             now = time.monotonic()
             if (
                 not force

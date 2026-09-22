@@ -285,6 +285,7 @@ class StubTerminalManager:
 
 class StubRuntime:
     def __init__(self, tmp_path: Path, adapter: StubAdapter) -> None:
+        self._model_database_refresh_lock = asyncio.Lock()
         self.storage = StubStorage(tmp_path)
         self.agents = StubAgents(
             StubAgent(id="coder", allowed_tools=["*"]),
@@ -335,6 +336,9 @@ class StubRuntime:
     def skills_for(self, _project_id: str | None = None, _agent_id: str | None = None) -> Any:
         return self.skills
 
+    def invalidate_agent_skills(self, _agent_id: str | None = None) -> None:
+        return None
+
     def project_skill_names(self, _project_id: str | None = None) -> frozenset[str]:
         return frozenset()
 
@@ -346,6 +350,9 @@ class StubRuntime:
 
     def get_adapter(self, connection: ConnectionRef) -> StubAdapter:
         return self.adapter
+
+    def model_database_refresh(self) -> asyncio.Lock:
+        return self._model_database_refresh_lock
 
     @property
     def models(self) -> Any:
