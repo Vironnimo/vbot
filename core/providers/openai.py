@@ -619,10 +619,9 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             reasoning_supported = capabilities.reasoning.supported
         supports_tools = capabilities.tools if capabilities is not None else True
         supports_structured_outputs = capabilities.json_mode if capabilities is not None else True
+        allowed_reasoning_efforts = self._allowed_reasoning_efforts(model_id, reasoning_supported)
         return OpenAISubscriptionResponsesPolicy(
-            allowed_reasoning_efforts=self._allowed_reasoning_efforts(
-                model_id, reasoning_supported
-            ),
+            allowed_reasoning_efforts=allowed_reasoning_efforts,
             supports_tools=supports_tools,
             supports_parallel_tool_calls=(
                 supports_tools
@@ -637,6 +636,10 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 self._model_wire_policy(model_id).get("minimum_reasoning_effort")
             )
             or None,
+            supports_explicit_none_effort=(
+                self._connection_mode != CODEX_RESPONSES_MODE
+                and "none" in allowed_reasoning_efforts
+            ),
             supported_request_parameters=(
                 OPENAI_SUBSCRIPTION_REQUEST_PARAMETERS
                 if self._connection_mode == CODEX_RESPONSES_MODE
