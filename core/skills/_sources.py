@@ -69,7 +69,19 @@ def _download(url: str, *, limit: int = MAX_DOWNLOAD_BYTES) -> bytes:
                             "Use a public download/repository URL or a server-local package."
                         )
                     length = response.headers.get("content-length", "")
-                    if length.isdigit() and int(length) > limit:
+                    # Compare decimal text so hostile headers cannot exceed
+                    # Python's integer-conversion limit before error mapping.
+                    declared = length.lstrip("0") or "0"
+                    bound = str(limit)
+                    if (
+                        length.isascii()
+                        and length.isdigit()
+                        and (
+                            len(declared) > len(bound)
+                            or len(declared) == len(bound)
+                            and declared > bound
+                        )
+                    ):
                         raise PackageError("Skill download exceeds its size limit.")
                     result = bytearray()
                     for chunk in response.iter_bytes():
@@ -226,7 +238,7 @@ def load_source(source: str, *, ref: str | None = None) -> SkillSource:
                 revision, *subpath = parts[3:]
                 path = "/".join(subpath) or None
             if parts[2] == "blob":
-                if path is None or not path.endswith("SKILL.md"):
+                if path is None or path.rsplit("/", 1)[-1] != "SKILL.md":
                     raise PackageError("Use a GitHub Skill directory or SKILL.md link.")
                 path = path.removesuffix("SKILL.md").rstrip("/") or "."
         return _github(owner, repo, ref=revision, path=path)
