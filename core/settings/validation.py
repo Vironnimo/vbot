@@ -172,6 +172,8 @@ def load_runtime_settings_json(
             f"{path}: error $: Invalid JSON: {error.msg} "
             f"at line {error.lineno} column {error.colno}"
         ) from error
+    except ValueError as error:
+        raise SettingsValidationError(f"{path}: error $: JSON exceeds decoder limits") from error
     if not isinstance(data, dict):
         raise SettingsValidationError(
             f"{path}: error $: Expected a JSON object, got {type(data).__name__}"
