@@ -97,12 +97,6 @@ class EmbeddingResult:
     usage: EmbeddingUsage = field(default_factory=EmbeddingUsage)
 
     @property
-    def resolved_model_id(self) -> tuple[str, str]:
-        """``(provider_id, model_id)`` tuple for identity pinning."""
-
-        return (self.provider_id, self.actual_model_id)
-
-    @property
     def actual_model_id(self) -> str:
         """Provider-reported model id, or the configured id when omitted."""
 
@@ -219,18 +213,6 @@ class EmbeddingService:
                 f"Embedding does not support local targets: {target_ref.target}"
             )
         return self._space_identity(target_ref, options)
-
-    def resolve_model_id(self) -> tuple[str, str]:
-        """Return ``(provider_id, model_id)`` for the configured binding.
-
-        Compatibility projection of :meth:`resolve_space`; new callers that
-        persist vectors must use the full fingerprint. It raises the same
-        errors as :meth:`embed` for unconfigured or malformed bindings, but
-        never executes a request.
-        """
-
-        identity = self.resolve_space()
-        return (identity.provider_id, identity.model_id)
 
     @staticmethod
     def _space_identity(target_ref: Any, options: JsonObject) -> EmbeddingSpaceIdentity:

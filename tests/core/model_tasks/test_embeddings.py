@@ -132,7 +132,10 @@ async def test_embed_returns_vectors_in_input_order_and_resolves_model_id() -> N
     assert result.model_id == "google/gemini-embedding-2"
     assert result.dimension == 3
     assert result.space_fingerprint == service.resolve_space().fingerprint
-    assert result.resolved_model_id == ("openrouter", "google/gemini-embedding-2")
+    assert (result.provider_id, result.actual_model_id) == (
+        "openrouter",
+        "google/gemini-embedding-2",
+    )
 
     # The factory was called with the parsed target reference and the
     # runtime (the service does not pass the binding or options into
@@ -228,7 +231,7 @@ async def test_embed_surfaces_actual_model_usage_and_purpose() -> None:
 
     assert result.model_id == "google/gemini-embedding-2"
     assert result.response_model_id == "google/gemini-embedding-2-202607"
-    assert result.resolved_model_id == (
+    assert (result.provider_id, result.actual_model_id) == (
         "openrouter",
         "google/gemini-embedding-2-202607",
     )
@@ -359,12 +362,12 @@ async def test_embed_raises_execution_error_when_no_vectors_returned() -> None:
 
 
 # ---------------------------------------------------------------------------
-# resolve_model_id: identity pinning for the recall store
+# resolve_space: identity pinning for the recall store
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_model_id_returns_provider_and_model_id() -> None:
-    """``resolve_model_id`` returns the ``(provider_id, model_id)`` tuple
+def test_resolve_space_returns_provider_and_model_id() -> None:
+    """``resolve_space`` returns the complete embedding identity
     for the configured binding without executing a request.
     """
 
@@ -373,7 +376,8 @@ def test_resolve_model_id_returns_provider_and_model_id() -> None:
         _RuntimeStub(),
     )
 
-    assert service.resolve_model_id() == ("openrouter", "google/gemini-embedding-2")
+    identity = service.resolve_space()
+    assert (identity.provider_id, identity.model_id) == ("openrouter", "google/gemini-embedding-2")
 
 
 def test_resolve_space_fingerprint_covers_target_and_effective_options() -> None:
@@ -411,19 +415,19 @@ def test_resolve_space_fingerprint_covers_target_and_effective_options() -> None
     assert baseline.fingerprint != other_options.fingerprint
 
 
-def test_resolve_model_id_without_binding_raises_configuration_error() -> None:
-    """``resolve_model_id`` raises the same configuration error as
+def test_resolve_space_without_binding_raises_configuration_error() -> None:
+    """``resolve_space`` raises the same configuration error as
     :meth:`embed` when the binding is missing.
     """
 
     service = EmbeddingService(_MissingModelTasks(), _RuntimeStub())
 
     with pytest.raises(EmbeddingConfigurationError):
-        service.resolve_model_id()
+        service.resolve_space()
 
 
-def test_resolve_model_id_with_local_target_raises_unsupported_target_error() -> None:
-    """A local target is rejected at ``resolve_model_id`` time too —
+def test_resolve_space_with_local_target_raises_unsupported_target_error() -> None:
+    """A local target is rejected at ``resolve_space`` time too —
     the recall store uses the result to pin identity, and a local
     engine is not a real provider binding for this iteration.
     """
@@ -434,7 +438,7 @@ def test_resolve_model_id_with_local_target_raises_unsupported_target_error() ->
     )
 
     with pytest.raises(EmbeddingUnsupportedTargetError):
-        service.resolve_model_id()
+        service.resolve_space()
 
 
 # ---------------------------------------------------------------------------

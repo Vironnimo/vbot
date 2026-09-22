@@ -20,7 +20,6 @@ from core.model_tasks import (
     EmbeddingPurpose,
     EmbeddingResult,
     EmbeddingService,
-    EmbeddingSpaceIdentity,
     EmbeddingUsage,
 )
 from core.models.models import ModelRegistry
@@ -321,16 +320,7 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
         if self.embeddings is None:
             return None
         try:
-            resolve_space = getattr(self.embeddings, "resolve_space", None)
-            if callable(resolve_space):
-                identity = cast(EmbeddingSpaceIdentity, resolve_space())
-            else:
-                provider_id, model_id = self.embeddings.resolve_model_id()
-                identity = EmbeddingSpaceIdentity(
-                    provider_id=provider_id,
-                    model_id=model_id,
-                    fingerprint="",
-                )
+            identity = self.embeddings.resolve_space()
         except EmbeddingError as error:
             self._warning("Vector recall binding lookup failed: %s", error)
             return None
