@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -128,6 +129,10 @@ class SkillRuntime:
         self._reload = reload_skills
         self._project_skills: dict[str, _ProjectSkillBundle] = {}
         self._agent_skills: dict[tuple[str | None, str], SkillRegistry] = {}
+        # Scans run in workers as well as on the Event Loop. Hold this lock only
+        # around cache metadata; mutations must never wait for filesystem scans.
+        self._cache_lock = threading.RLock()
+        self._cache_generation = 0
 
     @property
     def registry(self) -> SkillRegistry:
@@ -149,17 +154,20 @@ class SkillRuntime:
         self._logger = logger
 
     def replace_registry(self, registry: SkillRegistry) -> None:
-        self._skills = registry
-        self.invalidate_project_skills()
+        with self._cache_lock:
+            self._skills = registry
+            self.invalidate_project_skills()
 
     def reload_environment(self, fallback_environment: dict[str, str]) -> None:
         """Refresh requirements in every cached scope, including held Run references."""
         environment = self._skill_environment(fallback_environment)
-        self._skills.reload_environment(environment)
-        for bundle in self._project_skills.values():
-            bundle.registry.reload_environment(environment)
-        for registry in self._agent_skills.values():
-            registry.reload_environment(environment)
+        with self._cache_lock:
+            self._cache_generation += 1
+            self._skills.reload_environment(environment)
+            for bundle in self._project_skills.values():
+                bundle.registry.reload_environment(environment)
+            for registry in self._agent_skills.values():
+                registry.reload_environment(environment)
 
     def load_global_registry(self) -> SkillRegistry:
         return load_global_skill_registry(
@@ -172,18 +180,6 @@ class SkillRuntime:
             logger=self._logger,
         )
 
-    def _ensure_started(self) -> None:
-        return
-
-    def _extra_skill_directories(self, settings: dict[str, object]) -> list[Path]:
-        return _scan_roots(
-            self._storage,
-            self._resources_path,
-            settings,
-            None,
-            self._logger,
-        )[2:]
-
     def _disabled_skill_names(self) -> frozenset[str]:
         return self._policy.load().disabled
 
@@ -193,68 +189,14 @@ class SkillRuntime:
         return environment
 
     def _skill_scan_roots(self, settings: dict[str, object], resources_path: Path) -> list[Path]:
-        """Return the ordered bundled skill scan roots, data dir first.
-
-        One source of the bundled skill roots so the global registry and every
-        project-scoped registry scan exactly the same directories
-        (``<data_dir>/skills``, the bundled ``resources/skills``, the
-        settings-configured extras, then the ``skills/`` folder of every loaded
-        extension). A project registry prepends its own skill directory (its
-        declared source format's location) ahead of these. Everything from the
-        bundled root onward is tagged ``global`` by ``_bundled_skill_origins``, so
-        extension-bundled skills present as global skills; the user's own
-        ``<data_dir>/skills`` is scanned first and therefore wins a name collision.
-        """
-        if self._storage is None:
-            raise RuntimeError("Storage service not available")
-        return [
-            self._storage.data_dir / _SKILLS_DIRNAME,
-            resources_path / _SKILLS_DIRNAME,
-            *self._extra_skill_directories(settings),
-            *self._extension_skill_dirs(),
-        ]
-
-    def _extension_skill_dirs(self) -> list[Path]:
-        """Return the ``skills/`` directory of every currently-loaded extension.
-
-        A loaded extension in package/directory form may bundle skills under
-        ``<extension>/skills/`` (GLOSSARY -> Skill); ``_skill_scan_roots`` folds
-        them into the global pool, so an extension ships a skill with no code —
-        only the folder. Only ``loaded`` records contribute: a disabled, failed, or
-        overridden extension adds nothing. A single-file extension's ``root_path``
-        is its ``.py`` file, whose ``skills`` child is not a directory and is simply
-        skipped by the scan. Empty until the extension layer exists.
-        """
-        if self._extensions is None:
-            return []
-        return [
-            record.root_path / _SKILLS_DIRNAME
-            for record in self._extensions.records()
-            if record.status == "loaded"
-        ]
-
-    @staticmethod
-    def _bundled_skill_origins(scan_roots: list[Path]) -> list[str | None]:
-        """Origin tags parallel to ``_skill_scan_roots``: data-dir global, then bundled.
-
-        The first root is the data-dir global pool, the second the shipped bundled
-        pool; any configured extra ``skill_directories`` after them are user-curated,
-        so they are tagged global too.
-        """
-        origins: list[str | None] = [SKILL_ORIGIN_GLOBAL, SKILL_ORIGIN_BUNDLED]
-        origins.extend(SKILL_ORIGIN_GLOBAL for _ in scan_roots[2:])
-        return origins
+        return _scan_roots(self._storage, resources_path, settings, self._extensions, self._logger)
 
     def agent_skills_dir(self, agent_id: str) -> Path:
         """Return an agent's private skill home (``<data_dir>/agents/<id>/skills``)."""
-        if self._storage is None:
-            raise RuntimeError("Storage service not available")
         return self._storage.data_dir / _AGENTS_DIRNAME / agent_id / _SKILLS_DIRNAME
 
     def agent_owns_private_skill(self, agent_id: str, name: str) -> bool:
         """Whether an Identity Agent's private home currently loads that Skill name."""
-        if self._policy is None:
-            return False
         environment = self._skill_environment(self._storage.load_environment())
         return (
             find_skill_package_dir(self.agent_skills_dir(agent_id), name, environment) is not None
@@ -263,8 +205,6 @@ class SkillRuntime:
     @property
     def global_skills_dir(self) -> Path:
         """Return the user-curated global skills directory (``<data_dir>/skills``)."""
-        if self._storage is None:
-            raise RuntimeError("Storage service not available")
         return self._storage.data_dir / _SKILLS_DIRNAME
 
     def skills_for(
@@ -295,7 +235,6 @@ class SkillRuntime:
         The identity-store existence check below is defense in depth against a stray
         ``agents/<id>/skills`` directory that belongs to no stored agent.
         """
-        self._ensure_started()
         if (
             identity_agent_id is not None
             and self._agents.exists(identity_agent_id)
@@ -332,7 +271,6 @@ class SkillRuntime:
         Chat routes later Skill activation through that loaded Project context. A
         missing directory yields an empty list.
         """
-        self._ensure_started()
         project = self._projects.get(project_id)
         environment = self._skill_environment(self._storage.load_environment())
         registry = SkillRegistry.load(
@@ -350,18 +288,15 @@ class SkillRuntime:
         lists. This is the same Project policy used for Config Agents and the
         temporary Project grant applied to Identity Runs.
         """
-        self._ensure_started()
         project = self._projects.get(project_id)
         bundle = self._project_skill_bundle(project_id)
         allowed_names = set(effective_project_allowed_skills(project, bundle.names))
         return [skill for skill in bundle.registry.list_all() if skill.name in allowed_names]
 
     def _manager_sources(self) -> list[tuple[Path, str | None, str | None]]:
-        self._ensure_started()
         roots = self._skill_scan_roots(self._storage.load_settings(), self._resources_path)
         sources: list[tuple[Path, str | None, str | None]] = [
-            (root, origin, None)
-            for root, origin in zip(roots, self._bundled_skill_origins(roots), strict=True)
+            (root, origin, None) for root, origin in zip(roots, _origin_layers(roots), strict=True)
         ]
         sources.extend(
             (
@@ -410,7 +345,6 @@ class SkillRuntime:
         owner or a vanished package) are reported for cleanup, not silently
         dropped.
         """
-        self._ensure_started()
         environment = self._skill_environment(self._storage.load_environment())
         policy = self._policy.load()
 
@@ -517,7 +451,6 @@ class SkillRuntime:
         ``(project skills − disabled) ∪ enabled-bundled``. Cached with the project's
         merged registry so it does not re-scan the repo every resolve.
         """
-        self._ensure_started()
         if project_id is None:
             return frozenset()
         return self._project_skill_bundle(project_id).names
@@ -529,12 +462,14 @@ class SkillRuntime:
         cached agent registries for that project (or all of them when ``None``) to
         keep them coherent with the project pool.
         """
-        if project_id is None:
-            self._project_skills.clear()
-            self._agent_skills.clear()
-            return
-        self._project_skills.pop(project_id, None)
-        self._drop_agent_skills(lambda key: key[0] == project_id)
+        with self._cache_lock:
+            self._cache_generation += 1
+            if project_id is None:
+                self._project_skills.clear()
+                self._agent_skills.clear()
+                return
+            self._project_skills.pop(project_id, None)
+            self._drop_agent_skills(lambda key: key[0] == project_id)
 
     def invalidate_agent_skills(self, agent_id: str | None = None) -> None:
         """Drop a Skill owner's and its receivers' caches, or all when ``None``.
@@ -544,13 +479,16 @@ class SkillRuntime:
         including when creating or deleting a package named by an existing share.
         All Project contexts of each affected Identity Agent must rebuild.
         """
-        if agent_id is None:
-            self._agent_skills.clear()
-            return
         affected = {agent_id}
-        for receivers in self._policy.load().shared.get(agent_id, {}).values():
-            affected.update(receivers)
-        self._drop_agent_skills(lambda key: key[1] in affected)
+        if agent_id is not None:
+            for receivers in self._policy.load().shared.get(agent_id, {}).values():
+                affected.update(receivers)
+        with self._cache_lock:
+            self._cache_generation += 1
+            if agent_id is None:
+                self._agent_skills.clear()
+                return
+            self._drop_agent_skills(lambda key: key[1] in affected)
 
     def _drop_agent_skills(self, predicate: Callable[[tuple[str | None, str]], bool]) -> None:
         for key in [key for key in self._agent_skills if predicate(key)]:
@@ -558,12 +496,16 @@ class SkillRuntime:
 
     def _agent_skill_registry(self, project_id: str | None, agent_id: str) -> SkillRegistry:
         key = (project_id, agent_id)
-        cached = self._agent_skills.get(key)
-        if cached is not None:
-            return cached
-        registry = self._build_agent_skill_registry(project_id, agent_id)
-        self._agent_skills[key] = registry
-        return registry
+        while True:
+            with self._cache_lock:
+                cached = self._agent_skills.get(key)
+                if cached is not None:
+                    return cached
+                generation = self._cache_generation
+            registry = self._build_agent_skill_registry(project_id, agent_id)
+            with self._cache_lock:
+                if generation == self._cache_generation:
+                    return self._agent_skills.setdefault(key, registry)
 
     def _build_agent_skill_registry(self, project_id: str | None, agent_id: str) -> SkillRegistry:
         settings = self._storage.load_settings()
@@ -594,7 +536,7 @@ class SkillRuntime:
         roots.extend(shared_package_dirs)
         origins.extend(SKILL_ORIGIN_AGENT for _ in shared_package_dirs)
         roots.extend(scan_roots)
-        origins.extend(self._bundled_skill_origins(scan_roots))
+        origins.extend(_origin_layers(scan_roots))
         # First-found-wins ordering makes agent skills win over project, project over
         # shared, shared over bundled. The agent's own skills are always-allowed for
         # it, so they bypass the owner's ``allowed_skills`` filter without leaking to
@@ -618,8 +560,6 @@ class SkillRuntime:
         Part of the ``skills_for`` scoping decision: an agent with no private home
         and no Project must still get a scoped registry when others share to it.
         """
-        if self._policy is None:
-            return False
         shared = self._policy.load().shared
         for owner_id, skills in shared.items():
             if owner_id == receiver_agent_id:
@@ -636,8 +576,6 @@ class SkillRuntime:
         ``skill_manage`` mutation lands in exactly the package activation serves.
         ``None`` when no other agent shares that name with the receiver.
         """
-        if self._policy is None:
-            return None
         shared = self._policy.load().shared
         if not shared:
             return None
@@ -691,8 +629,6 @@ class SkillRuntime:
         for the human manager to clean up. Only skills whose receiver list
         includes this receiver are inserted.
         """
-        if self._policy is None:
-            return []
         shared = self._policy.load().shared
         if not shared:
             return []
@@ -727,12 +663,16 @@ class SkillRuntime:
         return directories
 
     def _project_skill_bundle(self, project_id: str) -> _ProjectSkillBundle:
-        cached = self._project_skills.get(project_id)
-        if cached is not None:
-            return cached
-        bundle = self._build_project_skill_bundle(project_id)
-        self._project_skills[project_id] = bundle
-        return bundle
+        while True:
+            with self._cache_lock:
+                cached = self._project_skills.get(project_id)
+                if cached is not None:
+                    return cached
+                generation = self._cache_generation
+            bundle = self._build_project_skill_bundle(project_id)
+            with self._cache_lock:
+                if generation == self._cache_generation:
+                    return self._project_skills.setdefault(project_id, bundle)
 
     def _build_project_skill_bundle(self, project_id: str) -> _ProjectSkillBundle:
         project = self._projects.get(project_id)
@@ -747,7 +687,7 @@ class SkillRuntime:
             scan_roots,
             environment,
             project_origin=project_skill_origin(project.display_name),
-            bundled_origins=self._bundled_skill_origins(scan_roots),
+            bundled_origins=_origin_layers(scan_roots),
             excluded_names=disabled,
         )
         # The resolver's config-agent input must be clean of disabled names too —

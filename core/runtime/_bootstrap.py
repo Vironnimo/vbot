@@ -321,7 +321,7 @@ def bootstrap(runtime: Runtime) -> None:
             resolve_credential=runtime.resolve_environment_credential,
             reload_recall=runtime.reload_recall_backend,
             refresh_prompts=runtime._refresh_prompt_block_definitions,
-            reload_skills=runtime.reload_skills,
+            reload_skills=runtime.reload_skills_async,
             recover_recall=runtime._recover_recall_backend_if_deactivated,
             logger=runtime.logger,
             make_host=runtime._extension_host,

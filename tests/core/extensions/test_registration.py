@@ -726,3 +726,119 @@ def test_register_command_lands_on_declarations() -> None:
     assert declaration.catalog_result == "state_change"
     assert declaration.execution_mode == "serialized"
     assert declaration.unavailable_surfaces == frozenset({"channel"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("loader", ["load", "aload"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_cancelled_registration_fails_only_its_extension(
+    tmp_path: Path, loader: str, asynchronous: bool
+) -> None:
+    root = tmp_path / "extensions"
+    declaration = "async def" if asynchronous else "def"
+    _write_single_file(
+        root,
+        "a_cancelled",
+        f"import asyncio\n{declaration} register(api):\n    raise asyncio.CancelledError()\n",
+    )
+    _write_single_file(
+        root,
+        "z_healthy",
+        "async def register(api):\n    api.on('run_start', lambda ctx, **payload: None)\n",
+    )
+
+    registry = (
+        await ExtensionRegistry.aload(root) if loader == "aload" else ExtensionRegistry.load(root)
+    )
+
+    assert _record(registry, "a_cancelled").status == "failed"
+    assert _record(registry, "a_cancelled").error
+    healthy = _record(registry, "z_healthy")
+    assert healthy.status == "loaded"
+    assert healthy.declarations.hooks
+
+
+@pytest.mark.asyncio
+async def test_cancelling_aload_cancels_active_and_closes_pending_registrations(
+    tmp_path: Path,
+) -> None:
+    import inspect
+
+    root = tmp_path / "extensions"
+    _write_single_file(
+        root,
+        "a_active",
+        "import asyncio\n"
+        "started = asyncio.Event()\n"
+        "finished = asyncio.Event()\n"
+        "async def register(api):\n"
+        "    started.set()\n"
+        "    try:\n"
+        "        await asyncio.Event().wait()\n"
+        "    finally:\n"
+        "        finished.set()\n",
+    )
+    _write_single_file(
+        root,
+        "z_pending",
+        "async def _register(api):\n"
+        "    raise AssertionError('cancelled load must not start pending registration')\n"
+        "def register(api):\n"
+        "    global pending\n"
+        "    pending = _register(api)\n"
+        "    return pending\n",
+    )
+    loading = asyncio.create_task(ExtensionRegistry.aload(root))
+    await asyncio.sleep(0)
+    active = sys.modules["vbot_ext.a_active"]
+    pending = sys.modules["vbot_ext.z_pending"].pending
+    await active.started.wait()
+    loading.cancel()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await loading
+        await asyncio.sleep(0)
+        assert active.finished.is_set()
+        assert inspect.getcoroutinestate(pending) == inspect.CORO_CLOSED
+    finally:
+        pending.close()
+        for task in tuple(extension_loading._detached_register_tasks):
+            task.cancel()
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_timed_out_registration_logs_late_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    root = tmp_path / "extensions"
+    monkeypatch.setattr(extension_loading, "_ASYNC_REGISTER_TIMEOUT_SECONDS", 0.01)
+    _write_single_file(
+        root,
+        "late_failure",
+        "import asyncio\n"
+        "release = asyncio.Event()\n"
+        "async def register(api):\n"
+        "    global task\n"
+        "    task = asyncio.current_task()\n"
+        "    try:\n"
+        "        await asyncio.Event().wait()\n"
+        "    except asyncio.CancelledError:\n"
+        "        await release.wait()\n"
+        "        raise ValueError('late failure sentinel')\n",
+    )
+
+    registry = await ExtensionRegistry.aload(root)
+    assert _record(registry, "late_failure").status == "failed"
+    module = sys.modules["vbot_ext.late_failure"]
+    module.release.set()
+    with pytest.raises(ValueError):
+        await module.task
+    await asyncio.sleep(0)
+
+    assert any(
+        record.name == "vbot.extensions"
+        and record.exc_info
+        and isinstance(record.exc_info[1], ValueError)
+        for record in caplog.records
+    )

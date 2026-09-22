@@ -114,6 +114,71 @@ async def test_skill_scan_cannot_publish_across_runtime_shutdown(
         await runtime.aclose()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("credential_change", ["add", "remove", "process_override"])
+async def test_global_scan_keeps_latest_credential_availability(
+    config, monkeypatch, credential_change
+):
+    key = "VBOT_GLOBAL_SKILL_SCAN_CREDENTIAL"
+    monkeypatch.delenv(key, raising=False)
+    runtime = Runtime(config, safe_startup_mode="test")
+    runtime.start()
+    package = runtime.global_skills_dir / RELOADED_SKILL_NAME
+    package.mkdir(parents=True)
+    (package / "SKILL.md").write_text(
+        f"---\nname: {RELOADED_SKILL_NAME}\ndescription: Credential race fixture.\n"
+        f"metadata:\n  vbot:\n    requirements:\n      env: {key}\n---\nBody\n",
+        encoding="utf-8",
+    )
+    if credential_change in {"remove", "process_override"}:
+        runtime.storage.set_data_dir_credential(key, "test-initial")
+        runtime.reload_environment_credentials()
+    runtime.reload_skills()
+    held_registry = runtime.skills
+    new_package = runtime.global_skills_dir / "added-during-credential-refresh"
+    new_package.mkdir()
+    (new_package / "SKILL.md").write_text(
+        "---\nname: added-during-credential-refresh\ndescription: Pending addition.\n---\nBody\n",
+        encoding="utf-8",
+    )
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    owner = runtime._skill_operations()
+    original_load = owner.load_global_registry
+
+    def scan():
+        registry = original_load()
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(10)
+        return registry
+
+    monkeypatch.setattr(owner, "load_global_registry", scan)
+    pending = asyncio.create_task(runtime.reload_skills_async())
+    try:
+        await entered.wait()
+        if credential_change == "add":
+            runtime.storage.set_data_dir_credential(key, "test-current")
+        elif credential_change == "remove":
+            runtime.storage.remove_data_dir_credential(key)
+        if credential_change == "process_override":
+            # Even an explicitly empty process value takes precedence over the
+            # file snapshot captured by the pending scan.
+            monkeypatch.setenv(key, "")
+        runtime.reload_environment_credentials()
+        expected = "available" if credential_change == "add" else "unavailable"
+        assert held_registry.availability_for(RELOADED_SKILL_NAME, ["*"]).state == expected
+        release.set()
+        await pending
+        assert runtime.skills is not held_registry
+        assert runtime.skills.get("added-during-credential-refresh").name
+        assert runtime.skills.availability_for(RELOADED_SKILL_NAME, ["*"]).state == expected
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+        await runtime.aclose()
+
+
 def test_credential_reload_updates_existing_skill_registries(config, tmp_path, monkeypatch):
     key = "VBOT_SKILL_RELOAD_TEST"
     monkeypatch.delenv(key, raising=False)

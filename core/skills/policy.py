@@ -124,8 +124,9 @@ class SkillPolicyService:
 
     def set_disabled(self, name: str, *, disabled: bool) -> SkillPolicy:
         """Add or remove one Skill name from the global disable switch."""
+        self._validate_skill_name(name)
         with self._lock:
-            policy = self.load()
+            policy, _ = self._read_policy(strict=True)
             names = set(policy.disabled)
             if disabled:
                 names.add(name)
@@ -151,8 +152,20 @@ class SkillPolicyService:
         Agent id; the skill becomes visible to exactly those agents. When False,
         the entry is removed entirely.
         """
+        from core.settings import is_valid_agent_id
+
+        self._validate_skill_name(name)
+        if not is_valid_agent_id(owner_id):
+            raise SkillPolicyError("Skill owner must be a valid Identity Agent id")
+        if shared and (
+            not receivers
+            or any(
+                not is_valid_agent_id(receiver) or receiver == owner_id for receiver in receivers
+            )
+        ):
+            raise SkillPolicyError("Sharing requires valid receiver Agent ids other than the owner")
         with self._lock:
-            policy = self.load()
+            policy, _ = self._read_policy(strict=True)
             per_owner: dict[str, dict[str, frozenset[str]]] = {
                 owner: dict(skills) for owner, skills in policy.shared.items()
             }
@@ -175,14 +188,21 @@ class SkillPolicyService:
                 target=f"{owner_id}/{name}",
             )
 
-    def _read_policy(self) -> tuple[SkillPolicy, list[str]]:
+    @staticmethod
+    def _validate_skill_name(name: str) -> None:
+        if not isinstance(name, str) or not SKILL_NAME_TRIGGER_PATTERN.fullmatch(name):
+            raise SkillPolicyError("Skill policy requires a trigger-safe Skill name")
+
+    def _read_policy(self, *, strict: bool = False) -> tuple[SkillPolicy, list[str]]:
         path = self.policy_path
         if not path.is_file():
             return SkillPolicy(), []
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        except (OSError, ValueError) as error:
             message = f"Cannot read skill policy {path}: {error}"
+            if strict:
+                raise SkillPolicyError(message) from error
             _LOGGER.warning(message)
             return SkillPolicy(), [message]
         diagnostics = _validate_policy_document(data)
@@ -191,6 +211,10 @@ class SkillPolicyService:
                 f"{diagnostic.severity} {diagnostic.path}: {diagnostic.message}"
                 for diagnostic in diagnostics
             ]
+            if strict:
+                raise SkillPolicyError(
+                    f"Cannot update invalid skill policy {path}: {'; '.join(messages)}"
+                )
             _LOGGER.warning("Ignoring invalid skill policy %s: %s", path, "; ".join(messages))
             return SkillPolicy(), messages
         policy = self._build_effective_policy(data, diagnostics)
@@ -204,9 +228,10 @@ class SkillPolicyService:
         data: Mapping[str, Any], diagnostics: list[JsonDiagnostic]
     ) -> SkillPolicy:
         """Project a valid document into its effective policy, dropping bad names."""
+        from core.settings import is_valid_agent_id
 
         def usable_name(name: Any, path: str) -> bool:
-            if isinstance(name, str) and SKILL_NAME_TRIGGER_PATTERN.match(name):
+            if isinstance(name, str) and SKILL_NAME_TRIGGER_PATTERN.fullmatch(name):
                 return True
             diagnostics.append(
                 JsonDiagnostic(
@@ -231,9 +256,7 @@ class SkillPolicyService:
                 if not usable_name(skill_name, f"{path}[{index}]"):
                     continue
                 receivers = frozenset(
-                    receiver
-                    for r_index, receiver in enumerate(raw_receivers or [])
-                    if isinstance(receiver, str) and SKILL_NAME_TRIGGER_PATTERN.match(receiver)
+                    receiver for receiver in raw_receivers or [] if is_valid_agent_id(receiver)
                 )
                 if receivers:
                     skills[str(skill_name)] = receivers

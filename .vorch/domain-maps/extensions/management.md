@@ -4,9 +4,11 @@ Read this reference only for Extension discovery, manifests, records, settings s
 
 ## Discoverable shapes and manifests
 
-Each scan root accepts immediate `.py` files and directories with an Extension entry point. Import names live under the synthetic `vbot_ext` package so package-relative imports work. Identity is the file stem or directory name; the optional directory manifest enriches display metadata but never replaces filesystem identity.
+Each scan root accepts immediate `.py` files and directories with an Extension entry point. Import names live under the synthetic `vbot_ext` package; both directory entry points (`__init__.py` and `extension.py`) support relative sibling imports. Identity is the file stem or directory name; the optional directory manifest enriches display metadata but never replaces filesystem identity.
 
 Async `register(api)` calls run one at a time with a hard 10-second deadline. On the serving loop (`ExtensionRegistry.aload`, used by Runtime startup and full reload) each coroutine runs on the live loop; a timeout marks only that Extension as failed and detaches the cancellation request, so even Extension code that suppresses cancellation cannot keep server start or Extension Reload blocked - it may keep running detached, but no longer gates the load. Synchronous off-loop callers (`ExtensionRegistry.load`, tests and tooling) keep the private-event-loop daemon-worker join path with identical semantics.
+
+A registration that cancels itself fails only its Extension. Cancelling the live-loop loader requests cancellation of its active registration and closes registrations that have not started; later failures from detached registration work remain observable in the Extension log.
 
 `settings.extension_directories` is the only configurable extra-root list; the bundled root is fixed separately and cannot be removed through that setting. Runtime ignores a non-list value with a warning, skips non-string or empty entries, expands `~`, and preserves configured order before the final bundled root.
 
@@ -43,7 +45,9 @@ Successful explicit reload and Settings mutations that reload/enable/disable Ext
 
 `Runtime.reload_extensions()` runs on the serving loop under the ExtensionRuntime mutation lock: read fresh roots/settings; detach old Extension Tools and Commands; await old shutdown; purge all `vbot_ext` modules; load a fresh registry; swap it in; reapply Tools and Commands to their stable owners; rebuild Recall, Prompt blocks, and Skills against the new loaded set; then await new startup.
 
-Once admitted, reload, live disable, and startup finish their structural work before propagating caller cancellation; cancellation while waiting for admission makes no changes. Async Runtime shutdown closes Extension mutation admission and drains the admitted operation under the same lock before shutting down the final registry and clearing service references.
+Once admitted, reload, live disable, and startup finish their structural work before propagating caller cancellation; cancellation while waiting for admission makes no changes. A later mutation failure is logged with its operation and traceback before caller cancellation propagates. Async Runtime shutdown closes Extension mutation admission and drains the admitted operation under the same lock before shutting down the final registry and clearing service references.
+
+Reload and live disable await the bounded asynchronous Skill scan before completing structural work. Registry installation remains on the Event Loop, and cancellation/shutdown wait for that publication.
 
 The rebuild is restart-equivalent for the Extension layer, not atomic Run draining. A concurrently executing handler may finish against old code; normal per-handler fail-open isolation is the accepted boundary. Prepared Extension Commands carry a registration identity, so deferred Channel work that has not started execution cannot invoke removed code or a replacement owner.
 

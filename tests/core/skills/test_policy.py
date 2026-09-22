@@ -139,6 +139,44 @@ class TestLoad:
 
 
 class TestMutations:
+    @pytest.mark.parametrize("operation", ["disable", "share"])
+    @pytest.mark.parametrize("original", [b"{broken", b'{"version": 999}', b'{"version":"\xff"}'])
+    def test_mutation_preserves_invalid_existing_policy(
+        self, storage: StorageManager, operation: str, original: bytes
+    ) -> None:
+        path = policy_path(storage)
+        path.parent.mkdir(parents=True)
+        path.write_bytes(original)
+        service = SkillPolicyService(storage)
+
+        assert service.load() == SkillPolicy()
+        with pytest.raises(SkillPolicyError):
+            if operation == "disable":
+                service.set_disabled("deploy", disabled=True)
+            else:
+                service.set_shared("main", "deploy", shared=True, receivers=["two"])
+        assert path.read_bytes() == original
+
+    @pytest.mark.parametrize("name", ["bad name", "deploy\n", "x" * 65])
+    def test_mutation_rejects_skill_names_that_cannot_round_trip(
+        self, storage: StorageManager, name: str
+    ) -> None:
+        service = SkillPolicyService(storage)
+        with pytest.raises(SkillPolicyError):
+            service.set_disabled(name, disabled=True)
+        with pytest.raises(SkillPolicyError):
+            service.set_shared("main", name, shared=True, receivers=["two"])
+        assert not policy_path(storage).exists()
+
+    @pytest.mark.parametrize("receivers", [[], ["bad name"], ["two\n"], ["main"]])
+    def test_share_rejects_receivers_that_cannot_round_trip(
+        self, storage: StorageManager, receivers: list[str]
+    ) -> None:
+        service = SkillPolicyService(storage)
+        with pytest.raises(SkillPolicyError):
+            service.set_shared("main", "deploy", shared=True, receivers=receivers)
+        assert not policy_path(storage).exists()
+
     def test_set_disabled_persists_atomically_and_toggles(self, storage: StorageManager) -> None:
         service = SkillPolicyService(storage)
 
