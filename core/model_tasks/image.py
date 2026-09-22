@@ -357,8 +357,7 @@ class ImageService:
         """Execute one bounded image-understanding request."""
 
         try:
-            binding = self._resolver.binding_for(TASK_IMAGE_UNDERSTANDING)
-            target_ref = self._resolver.parse_target(binding.target)
+            _binding, _options, target_ref = self._resolver.resolve(TASK_IMAGE_UNDERSTANDING)
         except ImageConfigurationError as exc:
             raise ImageUnderstandingUnavailableError(str(exc)) from exc
         if target_ref.kind == "local":

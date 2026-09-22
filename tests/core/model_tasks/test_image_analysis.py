@@ -27,6 +27,7 @@ from core.model_tasks import (
     ImageUnderstandingRunContext,
     ImageUnderstandingUnavailableError,
     ImageUnsupportedMediaTypeError,
+    TaskModelError,
 )
 from core.model_tasks import image as image_module
 from core.model_tasks.image import (
@@ -76,6 +77,14 @@ class _UnderstandingModelTasks:
 
     def model_for_target(self, _target_ref: object) -> Any:
         return self._model
+
+    def validate_execution_target(self, binding: Any) -> None:
+        assert binding.target == self._target
+        if not self._binding_usable:
+            raise TaskModelError("The selected target is no longer usable")
+
+    def options_with_defaults(self, binding: Any) -> dict[str, Any]:
+        return dict(binding.options)
 
 
 class _UnderstandingAdapter:
@@ -254,6 +263,19 @@ async def test_analysis_availability_ignores_adapter_cleanup_failure(
     assert available is True
     assert adapter.closed is True
     assert "adapter cleanup failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_analyze_revalidates_target_before_loading_images(tmp_path: Path) -> None:
+    adapter = _UnderstandingAdapter()
+    runtime = _UnderstandingRuntime(adapter)
+    service = ImageService(_UnderstandingModelTasks(binding_usable=False), cast(Any, runtime))
+
+    with pytest.raises(ImageUnderstandingUnavailableError):
+        await service.analyze("Describe this", image_paths=[tmp_path / "not-read.png"])
+
+    assert runtime.calls == []
+    assert adapter.requests == []
 
 
 @pytest.mark.asyncio
