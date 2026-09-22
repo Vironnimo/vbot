@@ -34,7 +34,7 @@ def test_runtime_get_adapter_selects_opencode_go_adapter_from_provider_config(
 ) -> None:
     """opencode_go provider adapter keys resolve to OpenCodeGoAdapter at runtime."""
     # Arrange
-    monkeypatch.setenv("OPENCODE_GO_API_KEY", "opencode-go-token")
+    monkeypatch.setenv("OPENCODE_API_KEY", "opencode-go-token")
     runtime = Runtime(Config(data_dir=tmp_path / "data"))
     runtime.start()
 
@@ -77,7 +77,7 @@ def test_runtime_wires_opencode_go_adapter_with_model_lookup(runtime: Runtime) -
                 auth=AuthConfig(
                     header="Authorization",
                     prefix="Bearer ",
-                    credential_key="OPENCODE_GO_API_KEY",
+                    credential_key="OPENCODE_API_KEY",
                 ),
             )
         ],
@@ -85,7 +85,7 @@ def test_runtime_wires_opencode_go_adapter_with_model_lookup(runtime: Runtime) -
     runtime._providers = ProviderRegistry({"opencode-go": provider_config})  # type: ignore[attr-defined]
     runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
         runtime.providers,
-        process_env={"OPENCODE_GO_API_KEY": "opencode-go-token"},
+        process_env={"OPENCODE_API_KEY": "opencode-go-token"},
     )
     runtime._models = ModelRegistry({})  # type: ignore[attr-defined]
 

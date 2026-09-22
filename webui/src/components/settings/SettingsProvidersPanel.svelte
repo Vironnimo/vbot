@@ -4,6 +4,8 @@
   import EmptyState from '../ui/EmptyState.svelte';
   import {
     describeProvider,
+    isSharedOpenCodeConnection,
+    describeSharedOpenCodeKey,
     getConfiguredConnections,
     isConnectionEnabled,
     connectionReachability,
@@ -301,6 +303,9 @@
   }
 
   function connectionDescription(connection) {
+    if (isSharedOpenCodeConnection(connection)) {
+      return describeSharedOpenCodeKey(t);
+    }
     if (!isConnectionEnabled(connection)) {
       return t(
         'settings.providers.disabledDescription',
@@ -795,7 +800,12 @@
                                   onClick={() =>
                                     removeApiKey(provider, connection, account)}
                                 >
-                                  {t('common.remove', 'Remove')}
+                                  {isSharedOpenCodeConnection(connection)
+                                    ? t(
+                                        'settings.providers.opencode.removeKey',
+                                        'Remove shared key',
+                                      )
+                                    : t('common.remove', 'Remove')}
                                 </Button>
                               {/if}
                             {/if}

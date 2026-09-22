@@ -191,7 +191,7 @@ def opencode_go_config() -> ProviderConfig:
                 auth=AuthConfig(
                     header="Authorization",
                     prefix="Bearer ",
-                    credential_key="OPENCODE_GO_API_KEY",
+                    credential_key="OPENCODE_API_KEY",
                 ),
             )
         ],

@@ -528,23 +528,92 @@ async def test_gemini_stream_preserves_malformed_tool_values_for_chat_rejection(
     }
 
 
-def test_catalog_policy_is_exact_and_marks_privacy_and_deprecation() -> None:
-    responses = OpenCodeZenAdapter.normalize_catalog_entry({"id": "gpt-5.6-sol"}, {})
-    messages = OpenCodeZenAdapter.normalize_catalog_entry({"id": "claude-opus-4-1"}, {})
-    gemini = OpenCodeZenAdapter.normalize_catalog_entry({"id": "gemini-3.5-flash"}, {})
-    free = OpenCodeZenAdapter.normalize_catalog_entry({"id": "big-pickle"}, {})
+@pytest.mark.parametrize(
+    ("model_id", "protocol"),
+    [
+        ("gpt-6-astra", "responses"),
+        ("grok-4.7", "responses"),
+        ("muse-spark-1.3", "responses"),
+        ("claude-fable-5-1", "messages"),
+        ("qwen3.8-flash", "messages"),
+        ("gemini-3.8-flash", "gemini_generate_content"),
+        ("glm-5.3-flash", "chat_completions"),
+        ("deepseek-v4.1-flash", "chat_completions"),
+    ],
+)
+def test_catalog_uses_reviewed_current_endpoints(model_id: str, protocol: str) -> None:
+    model = OpenCodeZenAdapter.normalize_catalog_entry({"id": model_id}, {})
+    assert model.metadata["opencode_zen"]["protocol"] == protocol
 
-    assert responses.metadata["opencode_zen"]["protocol"] == "responses"
-    assert messages.metadata["opencode_zen"]["protocol"] == "messages"
-    assert messages.metadata["opencode_zen"]["deprecates_at"] == "2026-08-05"
-    assert gemini.metadata["opencode_zen"]["protocol"] == "gemini_generate_content"
-    assert "reasoning_replay" not in gemini.metadata["opencode_zen"]
-    assert free.metadata["opencode_zen"]["privacy"] == "free_model_data_collection"
 
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "big-pickle",
+        "mimo-v2.6-flash-free",
+        "muse-spark-1.3-contributor-free",
+        "claude-opus-4-1",
+        "minimax-m2.5",
+        "kimi-k2.5",
+        "glm-5",
+        "jev-1.13",
+        "future-model",
+    ],
+)
+def test_catalog_skips_restricted_retired_and_unreviewed_models(model_id: str) -> None:
     with pytest.raises(CatalogEntrySkipped):
-        OpenCodeZenAdapter.normalize_catalog_entry({"id": "glm-5"}, {})
-    with pytest.raises(CatalogEntrySkipped):
-        OpenCodeZenAdapter.normalize_catalog_entry({"id": "future-model"}, {})
+        OpenCodeZenAdapter.normalize_catalog_entry({"id": model_id}, {})
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_id", ["big-pickle", "mimo-v2.6-flash-free", "claude-opus-4-1"])
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_stale_restricted_selection_fails_before_network(
+    model_id: str,
+    streaming: bool,
+) -> None:
+    stale_model = replace(_model("deepseek-v4-flash"), model_id=model_id)
+    adapter = OpenCodeZenAdapter(_config(), "test-key", model_lookup=lambda _: stale_model)
+    try:
+        with pytest.raises(ProviderError) as caught:
+            if streaming:
+                _ = [item async for item in adapter.stream([], model_id=model_id)]
+            else:
+                await adapter.send([], model_id=model_id)
+        assert type(caught.value) is ProviderError
+        assert caught.value.retryable is False
+        assert not respx.calls
+    finally:
+        await adapter.aclose()
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_id", ["gpt-5.6-sol", "claude-sonnet-5", "deepseek-v4-flash", "gemini-3.5-flash"]
+)
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("error_field", ["name", "type"])
+async def test_free_tier_rejection_is_not_an_auth_failure(
+    adapter: OpenCodeZenAdapter,
+    model_id: str,
+    streaming: bool,
+    error_field: str,
+) -> None:
+    route = respx.route(method="POST").mock(
+        return_value=httpx.Response(403, json={"error": {error_field: "FreeTierError"}})
+    )
+    with pytest.raises(ProviderError) as caught:
+        if streaming:
+            _ = [item async for item in adapter.stream([], model_id=model_id)]
+        else:
+            await adapter.send([], model_id=model_id)
+    assert type(caught.value) is ProviderError
+    assert caught.value.status_code == 403
+    assert caught.value.retryable is False
+    assert route.call_count == 1
+    await adapter.aclose()
 
 
 def test_unknown_model_is_rejected_without_alias_or_protocol_guess(

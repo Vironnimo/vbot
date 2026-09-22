@@ -1,4 +1,11 @@
 export default Object.freeze({
+  'settings.providers.opencode.sharedKey':
+    'This Account key is shared by OpenCode Go and Zen. Replacing or removing it affects both. Each connection can be enabled separately.',
+  'settings.providers.opencode.go':
+    'Uses your OpenCode Go subscription. OpenCode may charge Zen credits if you enabled Use balance in your OpenCode account.',
+  'settings.providers.opencode.zen':
+    'Paid Models use Zen credits. Free Models are restricted to the OpenCode app and cannot be used in vBot, even with another key.',
+  'settings.providers.opencode.removeKey': 'Remove shared key',
   'settings.pages.general': 'General',
   'settings.pages.generalDescription':
     'Display, conversation titles, and regional preferences.',

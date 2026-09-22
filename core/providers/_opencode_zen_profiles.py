@@ -6,10 +6,6 @@ OPENCODE_ZEN_METADATA_KEY = "opencode_zen"
 
 PROTOCOL_METADATA_KEY = "protocol"
 
-PRIVACY_METADATA_KEY = "privacy"
-
-DEPRECATES_AT_METADATA_KEY = "deprecates_at"
-
 PROTOCOL_RESPONSES = "responses"
 
 PROTOCOL_MESSAGES = "messages"
@@ -24,6 +20,11 @@ _KNOWN_PROTOCOLS = frozenset(
 
 _RESPONSES_MODELS = frozenset(
     {
+        "gpt-6-astra",
+        "grok-4.7",
+        "grok-4.6",
+        "muse-spark-1.3",
+        "muse-spark-1.2",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
@@ -51,6 +52,8 @@ _RESPONSES_MODELS = frozenset(
 
 _MESSAGES_MODELS = frozenset(
     {
+        "claude-fable-5-1",
+        "qwen3.8-flash",
         "claude-fable-5",
         "claude-opus-5",
         "claude-opus-4-8",
@@ -72,6 +75,8 @@ _MESSAGES_MODELS = frozenset(
 
 _GEMINI_MODELS = frozenset(
     {
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
         "gemini-3.6-flash",
         "gemini-3.5-flash",
         "gemini-3.5-flash-lite",
@@ -82,6 +87,10 @@ _GEMINI_MODELS = frozenset(
 
 _CHAT_MODELS = frozenset(
     {
+        "deepseek-v4.1-flash",
+        "deepseek-v4-flash-vision-exp",
+        "glm-5.3",
+        "glm-5.3-flash",
         "deepseek-v4-pro",
         "deepseek-v4-flash",
         "minimax-m3",
@@ -94,13 +103,6 @@ _CHAT_MODELS = frozenset(
         "kimi-k2.7-code",
         "kimi-k2.6",
         "kimi-k2.5",
-        "big-pickle",
-        "mimo-v2.5-free",
-        "laguna-s-2.1-free",
-        "ling-3.0-flash-free",
-        "north-mini-code-free",
-        "nemotron-3-ultra-free",
-        "deepseek-v4-flash-free",
     }
 )
 
@@ -112,17 +114,28 @@ _PROTOCOL_BY_MODEL = {
 }
 
 _FREE_MODELS = frozenset(
-    model_id for model_id in _CHAT_MODELS if model_id == "big-pickle" or model_id.endswith("-free")
+    {
+        "big-pickle",
+        "mimo-v2.6-flash-free",
+        "mimo-v2.5-free",
+        "laguna-s-2.1-free",
+        "ling-3.0-flash-fin-free",
+        "ling-3.0-flash-free",
+        "north-mini-code-free",
+        "nemotron-3-ultra-free",
+        "nemotron-3.5-lightning-free",
+        "deepseek-v4-flash-free",
+        "muse-spark-1.2-contributor-free",
+        "muse-spark-1.3-contributor-free",
+        "jev-1.13-free",
+    }
 )
-
-_IMMINENT_DEPRECATIONS = {
-    "claude-opus-4-1": "2026-08-05",
-    "kimi-k2.5": "2026-08-05",
-    "minimax-m2.5": "2026-08-05",
-}
 
 _RETIRED_MODELS = frozenset(
     {
+        "claude-opus-4-1",
+        "kimi-k2.5",
+        "minimax-m2.5",
         "gpt-5.2-codex",
         "gpt-5.1-codex",
         "gpt-5.1-codex-max",

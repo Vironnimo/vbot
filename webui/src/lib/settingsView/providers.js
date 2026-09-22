@@ -239,8 +239,38 @@ export function buildProviderDisconnectPayload(
   };
 }
 
+export function isSharedOpenCodeConnection(connection) {
+  return (
+    connection?.type === 'api_key' &&
+    connection?.credential_key === 'OPENCODE_API_KEY'
+  );
+}
+
+export function describeSharedOpenCodeKey(translate) {
+  return translate(
+    'settings.providers.opencode.sharedKey',
+    'This Account key is shared by OpenCode Go and Zen. Replacing or removing it affects both. Each connection can be enabled separately.',
+  );
+}
+
 export function describeProvider(provider, translate) {
   const fragments = [];
+
+  if (provider?.id === 'opencode-go') {
+    fragments.push(
+      translate(
+        'settings.providers.opencode.go',
+        'Uses your OpenCode Go subscription. OpenCode may charge Zen credits if you enabled Use balance in your OpenCode account.',
+      ),
+    );
+  } else if (provider?.id === 'opencode-zen') {
+    fragments.push(
+      translate(
+        'settings.providers.opencode.zen',
+        'Paid Models use Zen credits. Free Models are restricted to the OpenCode app and cannot be used in vBot, even with another key.',
+      ),
+    );
+  }
 
   if (
     typeof provider?.credential_key === 'string' &&
