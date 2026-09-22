@@ -25,6 +25,23 @@ from .openai_compatible_test_support import openrouter_adapter as openrouter_ada
 class TestSendSuccess:
     """Verify that send() returns the parsed response dict on success."""
 
+    @pytest.mark.parametrize("bad_counter", [True, False, -1, "12", 1.5, None])
+    @pytest.mark.parametrize("bad_field", ["prompt_tokens", "completion_tokens"])
+    def test_malformed_primary_usage_stays_absent_on_both_paths(
+        self, openai_adapter, bad_counter, bad_field
+    ):
+        usage = {"prompt_tokens": 12, "completion_tokens": 4, bad_field: bad_counter}
+        response = {
+            "choices": [{"message": {"content": "Done"}, "finish_reason": "stop"}],
+            "usage": usage,
+        }
+        expected = {"output_tokens": 4} if bad_field == "prompt_tokens" else {"input_tokens": 12}
+
+        assert openai_adapter.normalize_response(response)["usage"] == expected
+        assert openai_adapter._normalize_stream_chunk({"choices": [], "usage": usage}, set()) == [
+            {"type": "usage", **expected}
+        ]
+
     @respx.mock
     @pytest.mark.asyncio
     async def test_send_returns_parsed_response(self, openai_adapter):
