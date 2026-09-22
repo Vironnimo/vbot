@@ -85,7 +85,7 @@ def plan_data_directory_conversion(data_dir: str | Path) -> DataDirectoryConvers
         if not source_root.exists() and not source_root.is_symlink():
             continue
         _validate_directory(source_root, label="Legacy source")
-        _validate_destination_root(destination_root)
+        _validate_destination_root(destination_root, data_root=data_root)
         existing_source_roots.append(source_root)
         moves.extend(_inventory_moves(source_root, destination_root))
 
@@ -161,26 +161,19 @@ def _validate_directory(path: Path, *, label: str) -> None:
         raise DataDirectoryConversionError(f"{label} is not a directory: {path}")
 
 
-def _validate_destination_root(destination_root: Path) -> None:
-    current = destination_root
-    existing_chain: list[Path] = []
-    while not current.exists() and not current.is_symlink():
-        existing_chain.append(current)
-        if current.parent == current:
-            break
-        current = current.parent
-    if current.is_symlink():
-        raise DataDirectoryConversionError(
-            f"Canonical destination must not traverse a symbolic link: {current}"
-        )
-    if current.exists() and not current.is_dir():
-        raise DataDirectoryConversionError(
-            f"Canonical destination parent is not a directory: {current}"
-        )
-    for path in reversed(existing_chain):
-        if path.exists() and not path.is_dir():
+def _validate_destination_root(destination_root: Path, *, data_root: Path) -> None:
+    # An existing child directory can still sit below a linked ancestor. Check
+    # the complete canonical path, not just the first existing destination.
+    current = data_root
+    for part in destination_root.relative_to(data_root).parts:
+        current = current / part
+        if current.is_symlink():
             raise DataDirectoryConversionError(
-                f"Canonical destination path is not a directory: {path}"
+                f"Canonical destination must not traverse a symbolic link: {current}"
+            )
+        if current.exists() and not current.is_dir():
+            raise DataDirectoryConversionError(
+                f"Canonical destination path is not a directory: {current}"
             )
 
 
