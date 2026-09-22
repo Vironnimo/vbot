@@ -562,19 +562,22 @@ export function createChatController({
 
   async function cancelActiveRun(sessionState) {
     const runId = sessionState?.currentRun?.runId;
-    if (!runId) {
+    if (!runId || sessionState.cancellingRunIds.includes(runId)) {
       return;
     }
-    chatState.cancellingRun = true;
+    sessionState.cancellingRunIds.push(runId);
     sessionState.actionError = '';
     try {
       const run = await operations.cancelRun(runId, { reason: 'user' });
       runStream.mergeRunResponse(sessionState, run);
       await reconcileRunSession(sessionState, runId);
     } catch (error) {
-      sessionState.actionError = `${translate('chat.cancelError', 'Run could not be cancelled.')} ${errorMessage(error)}`;
+      if (sessionState.currentRun?.runId === runId)
+        sessionState.actionError = `${translate('chat.cancelError', 'Run could not be cancelled.')} ${errorMessage(error)}`;
     } finally {
-      chatState.cancellingRun = false;
+      sessionState.cancellingRunIds = sessionState.cancellingRunIds.filter(
+        (pendingId) => pendingId !== runId,
+      );
     }
   }
 
