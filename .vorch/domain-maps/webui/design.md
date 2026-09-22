@@ -75,6 +75,10 @@ Current configuration editors commonly combine debounced autosave and an explici
 
 ## Current view patterns
 
+### First-run setup
+
+`OnboardingView.svelte`, `OnboardingProviders.svelte` and `styles/onboarding.css` use a compact header, horizontal two-step progress and a single working panel. One searchable, alphabetically ordered catalog contains API-key, account-sign-in and local Providers; its scroll area stays bounded as the catalog grows. Provider selection precedes method selection. Connected status stays visible in the list and a separate summary; adding a connection does not advance the guide. Model selection offers a Provider picker, readable Model names with exact ids as secondary text, an explicit free filter and a selection summary before completion. Narrow containers use one Provider column and full-width continuation. The view owns scrolling, keyboard step focus and reduced-motion styling. Setup uses a simplified variant of the shared Provider dialog. Behavioral ownership and tests: `settings.md`.
+
 ### Navigation and action placement
 
 The Main menu groups Work, Configure, and Insights. Its expanded headings are muted small Mono labels; the compact mode hides text and separates later groups with small hairlines. A compact toggle changes desktop presentation, and mobile uses a scrolling navigation row. The optional Live voice control sits above the connection/microphone indicators. `AppShell.svelte`, `LiveVoice.svelte`, and `app.css` own these surfaces; lifecycle details are in `app-shell.md` and `../model_tasks/live.md`.

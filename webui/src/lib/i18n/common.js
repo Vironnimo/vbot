@@ -143,41 +143,70 @@ export default Object.freeze({
   'voice.toast.errorMessage':
     'Open Voice settings for details. The failure was written to the Desktop log.',
   'onboarding.title': 'Set up vBot',
-  'onboarding.dismiss': 'Skip for now',
+  'onboarding.dismiss': 'Explore first',
+  'onboarding.progress': 'Setup progress',
+  'onboarding.progress.service': 'Providers',
+  'onboarding.progress.model': 'First Model',
+  'onboarding.provider': 'Provider',
+  'onboarding.retry': 'Try again',
   'onboarding.finishSetup': 'Finish setup',
   'onboarding.finishSetupHint': 'Connect an AI service to start chatting.',
-  'onboarding.step.service.kicker': 'Step 1 of 2',
-  'onboarding.step.service.title': 'Choose an AI service',
+  'onboarding.service.loading': 'Loading Providers…',
+  'onboarding.service.loadError': 'Providers could not be loaded.',
+  'onboarding.service.search': 'Search Providers…',
+  'onboarding.service.count': '{count} Providers',
+  'onboarding.service.clearSearch': 'Clear',
+  'onboarding.service.noMatches': 'No Providers match your search.',
+  'onboarding.service.existing': 'Connected Providers',
+  'onboarding.service.connected': 'Connected',
+  'onboarding.service.connectedCount': '{count} connected',
+  'onboarding.service.addMore': 'Add another, or continue when you’re ready.',
+  'onboarding.service.required': 'Connect at least one Provider to continue.',
+  'onboarding.service.later':
+    'You can add or change Providers later in Settings.',
+  'onboarding.service.continue': 'Continue to Model',
+  'onboarding.service.manage': 'Manage in Settings',
+  'onboarding.service.empty':
+    'No connection is available here. Open Settings → Providers to check disabled connections or add a custom Provider.',
+  'onboarding.step.service.title': 'Connect your Providers',
   'onboarding.step.service.subtitle':
-    'vBot reaches AI models through a service. Pick one to connect — you can add more later in Settings.',
-  'onboarding.hero.badge': 'Recommended to start',
-  'onboarding.hero.title': 'OpenRouter',
-  'onboarding.hero.description':
-    'One account unlocks many models, including free ones — so you can reach a working chat at no cost, without an existing subscription.',
-  'onboarding.hero.action': 'Connect OpenRouter',
-  'onboarding.subscription.title': 'Already subscribed?',
-  'onboarding.subscription.description':
-    'Sign in with an existing subscription — no API key needed.',
-  'onboarding.subscription.action': 'Sign in with {provider}',
-  'onboarding.more.toggle': 'More services',
-  'onboarding.more.description': 'Connect another provider with an API key.',
-  'onboarding.more.action': 'Connect {provider}',
-  'onboarding.step.model.kicker': 'Step 2 of 2',
-  'onboarding.step.model.title': 'Choose a model',
+    'Choose a Provider, then how to connect. Add as many as you use.',
+  'onboarding.connect.apiKey': 'API key',
+  'onboarding.connect.local': 'Local',
+  'onboarding.connect.signIn': 'Sign in',
+  'onboarding.connect.apiKeyDescription':
+    'Paste a key from your Provider account.',
+  'onboarding.connect.localDescription':
+    'Use a Model server on your computer. No API key needed.',
+  'onboarding.connect.signInDescription':
+    'Sign in with your subscription or account in the browser.',
+  'onboarding.connect.keyHelp':
+    'Create an API key in your Provider account, then paste it below. Your Provider may require credits before a Model can respond.',
+  'onboarding.connect.openrouterKeys': 'Open OpenRouter API keys ↗',
+  'onboarding.step.model.title': 'Choose your first Model',
   'onboarding.step.model.subtitle':
-    'Pick the model this agent will use. You can change it anytime in Agents.',
+    'Choose the Model your Agent starts with. All your connected Providers remain available.',
   'onboarding.model.label': 'Model',
-  'onboarding.model.placeholder': 'Select a model',
-  'onboarding.model.searchPlaceholder': 'Filter models…',
-  'onboarding.model.searchEmpty': 'No models match',
-  'onboarding.model.loading': 'Loading models…',
+  'onboarding.model.placeholder': 'Find a Model…',
+  'onboarding.model.searchPlaceholder': 'Search by name…',
+  'onboarding.model.searchEmpty':
+    'No Models match. Try another search or show all Models below.',
+  'onboarding.model.loading': 'Finding available Models…',
   'onboarding.model.loadError': 'Models could not be loaded.',
+  'onboarding.model.emptyTitle': 'No Models available yet',
   'onboarding.model.empty':
-    'No models are available yet. Retry once the model list finishes updating.',
-  'onboarding.model.retry': 'Retry',
+    'Check that your Provider has Models available. For a local Provider, start its server and install a Model, then try again.',
+  'onboarding.model.disconnected':
+    'This Provider is no longer connected. Go back to Providers to reconnect.',
+  'onboarding.model.freeOnly': 'Free Models only',
+  'onboarding.model.noFree':
+    'No free Models match. Turn off the free filter to see more.',
+  'onboarding.model.help':
+    'Models suited to Agent work are shown first. Search by name, or use “Show all models” in the list to see the rest.',
+  'onboarding.model.ready':
+    'Start chatting to save this Model for your Agent. You can change it later in Agents.',
+  'onboarding.model.prompt': 'Choose a Model above to continue.',
   'onboarding.model.start': 'Start chatting',
-  'onboarding.model.assignError': 'The model could not be assigned.',
-  'onboarding.model.back': 'Choose a different service',
-  'onboarding.provider.tip.openrouter':
-    'Type free in the model search to list models you can use at no cost.',
+  'onboarding.model.assignError': 'The Model could not be assigned.',
+  'onboarding.model.back': 'Back to Providers',
 });

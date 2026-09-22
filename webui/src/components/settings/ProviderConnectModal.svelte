@@ -29,6 +29,9 @@
     scopedProvider = null,
     scopedConnection = null,
     scopedAccount = null,
+    // First-run setup uses the default Account and keeps storage details out of
+    // the connection task. Provider management retains its full account form.
+    setupMode = false,
     providerAuthEvent = null,
     connectProvider = null,
     disconnectProvider = null,
@@ -371,6 +374,9 @@
   }
 
   function connectionMethodLabel(connection) {
+    if (setupMode && connection.label) {
+      return connection.label;
+    }
     if (connection.type === 'api_key') {
       return t('settings.providers.add.methodApiKey', 'API key');
     }
@@ -381,6 +387,24 @@
   }
 
   function connectionMethodDescription(connection) {
+    if (setupMode) {
+      if (connection.type === 'api_key') {
+        return t(
+          'onboarding.connect.apiKeyDescription',
+          'Paste a key from your Provider account.',
+        );
+      }
+      if (connection.type === 'none') {
+        return t(
+          'onboarding.connect.localDescription',
+          'Use a Model server on your computer. No API key needed.',
+        );
+      }
+      return t(
+        'onboarding.connect.signInDescription',
+        'Sign in with your subscription or account in the browser.',
+      );
+    }
     if (connection.type === 'api_key') {
       return t(
         'settings.providers.add.methodApiKeyDescription',
@@ -444,7 +468,9 @@
       )
     : t('settings.providers.add.title', 'Add provider')}
   labelledById="provider-connect-modal-title"
-  class="provider-connect-modal"
+  class={setupMode
+    ? 'provider-connect-modal provider-connect-modal--setup'
+    : 'provider-connect-modal'}
   closeDisabled={saving}
   onClose={close}
 >
@@ -504,9 +530,9 @@
               >
                 <span class="provider-pick-item__name">
                   {connectionMethodLabel(connection)}
-                  <span class="provider-pick-item__connection">
-                    {connection.label ?? connection.id}
-                  </span>
+                  {#if !setupMode}<span class="provider-pick-item__connection">
+                      {connection.label ?? connection.id}
+                    </span>{/if}
                 </span>
                 <span class="provider-pick-item__detail">
                   {connectionMethodDescription(connection)}
@@ -517,6 +543,31 @@
         </div>
       {:else if step === 'api-key'}
         <form id="provider-connect-key-form" onsubmit={submitApiKey}>
+          {#if setupMode}
+            <strong class="provider-connect-method"
+              >{selectedConnection.label ??
+                connectionMethodLabel(selectedConnection)}</strong
+            >
+            <p class="provider-connect-modal__hint">
+              {t(
+                'onboarding.connect.keyHelp',
+                'Create an API key in your Provider account, then paste it below. Your Provider may require credits before a Model can respond.',
+              )}
+            </p>
+            {#if selectedProvider.id === 'openrouter'}
+              <a
+                class="device-flow-link"
+                href="https://openrouter.ai/settings/keys"
+                target="_blank"
+                rel="noreferrer"
+              >
+                {t(
+                  'onboarding.connect.openrouterKeys',
+                  'Open OpenRouter API keys ↗',
+                )}
+              </a>
+            {/if}
+          {/if}
           {#if isSharedOpenCodeConnection(selectedConnection)}
             <p class="provider-connect-modal__hint" role="note">
               {describeSharedOpenCodeKey(t)}
@@ -542,8 +593,8 @@
               }}
             />
           </FormField>
-          {@render accountField(saving)}
-          {#if selectedConnection.credential_key}
+          {#if !setupMode}{@render accountField(saving)}{/if}
+          {#if !setupMode && selectedConnection.credential_key}
             <p class="provider-connect-modal__hint">
               {t(
                 'settings.providers.add.apiKeyHint',
@@ -559,6 +610,10 @@
           {/if}
         </form>
       {:else if step === 'keyless'}
+        {#if setupMode}<strong class="provider-connect-method"
+            >{selectedConnection.label ??
+              connectionMethodLabel(selectedConnection)}</strong
+          >{/if}
         <p class="provider-connect-modal__hint">
           {t(
             'settings.providers.add.localIntro',
@@ -566,6 +621,10 @@
           )}
         </p>
       {:else if step === 'oauth'}
+        {#if setupMode}<strong class="provider-connect-method"
+            >{selectedConnection.label ??
+              connectionMethodLabel(selectedConnection)}</strong
+          >{/if}
         {#if oauthActive && oauthData}
           <p class="device-flow-instructions">
             {t(
@@ -627,7 +686,7 @@
               providerValues(selectedProvider),
             )}
           </p>
-          {@render accountField(false)}
+          {#if !setupMode}{@render accountField(false)}{/if}
         {/if}
       {/if}
 
