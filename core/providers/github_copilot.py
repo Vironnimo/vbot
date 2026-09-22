@@ -82,6 +82,13 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     # Payload / request helpers
     # ------------------------------------------------------------------
 
+    def image_size_limit(self, model_id: str) -> int | None:
+        vision = self._runtime_metadata_for_model(model_id).get("vision")
+        value = vision.get("max_prompt_image_size") if isinstance(vision, Mapping) else None
+        return (
+            value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+        )
+
     def _build_payload(
         self,
         messages: list[dict[str, Any]],

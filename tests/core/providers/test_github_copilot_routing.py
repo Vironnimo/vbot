@@ -465,12 +465,27 @@ async def test_copilot_vision_headers_and_media_limits_follow_catalog_metadata()
 
     assert route.calls.last.request.headers["Copilot-Vision-Request"] == "true"
     assert adapter.wire_media_support("gpt-5.4") == frozenset({"image/png"})
+    assert adapter.image_size_limit("gpt-5.4") == 4
 
     with pytest.raises(ProviderError, match="image-count limit exceeded"):
         await adapter.send(
             [{"role": "user", "content": [image, image]}],
             model_id="gpt-5.4",
         )
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [(None, None), (0, None), (-1, None), (True, None), ("2048", None), (2048, 2048)],
+)
+def test_copilot_exposes_only_known_positive_image_byte_limits(value, expected):
+    metadata = {"github_copilot": {"vision": {"max_prompt_image_size": value}}}
+    adapter = GitHubCopilotAdapter(
+        COPILOT_CONFIG,
+        API_KEY,
+        model_lookup=lambda model_id: _copilot_model_with_metadata(model_id, metadata),
+    )
+    assert adapter.image_size_limit("vision-model") == expected
 
 
 @respx.mock

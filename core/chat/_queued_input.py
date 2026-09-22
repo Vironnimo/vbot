@@ -109,13 +109,14 @@ async def rebuild_after_steering(
             context.session_snapshot.active_messages
         ),
     )
-    state.messages[:] = await _CHAT_TRANSFORM_WORKERS.run(
-        _restore_in_run_tool_result_content,
+    state.messages[:] = await _restore_in_run_tool_result_content(
         state.messages,
         live_messages,
         input_modalities=target.input_modalities,
         wire_media_types=target.wire_media_types,
         image_budget=context.image_budget,
+        image_converter=requests._tool_image_converter,
+        max_image_bytes=target.max_image_bytes,
     )
     if context.continuation_reminder is not None:
         state = replace(
