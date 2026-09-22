@@ -738,6 +738,8 @@ class SystemPromptManager:
         """
         mode = getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
         workspace = agent.workspace
+        if not workspace:
+            return ""
         rendered = read_memory_files(Path(workspace), mode, provider=self._memory_provider)
         if on_read is not None and workspace:
             for path in memory_prompt_file_paths(Path(workspace), mode):
@@ -771,7 +773,7 @@ class SystemPromptManager:
             return bool(agent.workspace)
         if owner == "memory":
             mode = getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
-            return memory_tool_enabled(mode)
+            return bool(agent.workspace) and memory_tool_enabled(mode)
         if owner == "channel":
             return bool(self._agent_enabled_channels(agent))
         tool_prefix = "tool:"
