@@ -100,7 +100,7 @@ class ProviderSpeechClient(ProviderTaskClient):
         normalized_filename = filename or f"recording.{audio_format_from(media_type=media_type)}"
         data = {"model": self._model_id}
         data.update(_multipart_stt_options(options))
-        data.update(_multipart_extra_options(options, protected_fields=data))
+        data.update(_multipart_extra_options(options, protected_fields={*data, "file"}))
         files = {"file": (normalized_filename, audio, media_type or "application/octet-stream")}
 
         def _parse(response: httpx.Response) -> SpeechTranscriptionResult:
