@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-16T15:27:44.280671+00:00",
+  "fetched_at": "2026-09-22T08:09:50.611587+00:00",
   "provider_id": "xai",
   "raw_response": {
     "models": [
@@ -19,7 +19,7 @@
         "completion_text_token_price": 25000,
         "completion_text_token_price_long_context": 50000,
         "created": 1773014400,
-        "fingerprint": "fp_babf5254ba",
+        "fingerprint": "fp_41d52165d8",
         "id": "grok-4.20-0309-non-reasoning",
         "input_modalities": [
           "text",
@@ -60,7 +60,7 @@
         "completion_text_token_price": 25000,
         "completion_text_token_price_long_context": 50000,
         "created": 1773014400,
-        "fingerprint": "fp_d44b4eeb21",
+        "fingerprint": "fp_b965085801",
         "id": "grok-4.20-0309-reasoning",
         "input_modalities": [
           "text",
@@ -92,7 +92,7 @@
         "completion_text_token_price": 25000,
         "completion_text_token_price_long_context": 50000,
         "created": 1773014400,
-        "fingerprint": "fp_4e45aede83",
+        "fingerprint": "fp_aea1788280",
         "id": "grok-4.20-multi-agent-0309",
         "input_modalities": [
           "text",
@@ -116,10 +116,20 @@
         ],
         "cached_prompt_text_token_price": 2000,
         "cached_prompt_text_token_price_long_context": 4000,
+        "capabilities": {
+          "default_reasoning_effort": "low",
+          "reasoning_effort": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ]
+        },
         "completion_text_token_price": 25000,
         "completion_text_token_price_long_context": 50000,
         "created": 1776384000,
-        "fingerprint": "fp_1ea772b5b9",
+        "fingerprint": "fp_5bdbcb6cb6",
         "id": "grok-4.3",
         "input_modalities": [
           "text",
@@ -144,10 +154,19 @@
         ],
         "cached_prompt_text_token_price": 3000,
         "cached_prompt_text_token_price_long_context": 6000,
+        "capabilities": {
+          "default_reasoning_effort": "high",
+          "reasoning_effort": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ]
+        },
         "completion_text_token_price": 60000,
         "completion_text_token_price_long_context": 120000,
         "created": 1782691200,
-        "fingerprint": "fp_5f75a018a4",
+        "fingerprint": "fp_291be6530b",
         "id": "grok-4.5",
         "input_modalities": [
           "text",
@@ -169,11 +188,54 @@
         "aliases": [],
         "cached_prompt_text_token_price": 5000,
         "cached_prompt_text_token_price_long_context": 10000,
+        "capabilities": {
+          "default_reasoning_effort": "high",
+          "reasoning_effort": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ]
+        },
         "completion_text_token_price": 60000,
         "completion_text_token_price_long_context": 120000,
         "created": 1785974400,
-        "fingerprint": "fp_ce33d1c7a0",
+        "fingerprint": "fp_9a755add8c",
         "id": "grok-4.6",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "long_context_threshold": 200000,
+        "object": "model",
+        "output_modalities": [
+          "text"
+        ],
+        "owned_by": "xai",
+        "prompt_image_token_price": 20000,
+        "prompt_text_token_price": 20000,
+        "prompt_text_token_price_long_context": 40000,
+        "search_price": 0,
+        "version": "1.0"
+      },
+      {
+        "aliases": [],
+        "cached_prompt_text_token_price": 5000,
+        "cached_prompt_text_token_price_long_context": 10000,
+        "capabilities": {
+          "default_reasoning_effort": "high",
+          "reasoning_effort": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ]
+        },
+        "completion_text_token_price": 60000,
+        "completion_text_token_price_long_context": 120000,
+        "created": 1788307200,
+        "fingerprint": "fp_b68f62e321",
+        "id": "grok-4.7",
         "input_modalities": [
           "text",
           "image"
@@ -201,7 +263,7 @@
         "completion_text_token_price": 20000,
         "completion_text_token_price_long_context": 40000,
         "created": 1776297600,
-        "fingerprint": "fp_b8df82e993",
+        "fingerprint": "fp_697fda935d",
         "id": "grok-build-0.1",
         "input_modalities": [
           "text",

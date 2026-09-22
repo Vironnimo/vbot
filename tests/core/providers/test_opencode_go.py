@@ -116,28 +116,62 @@ def test_public_package_exports_opencode_go_adapter() -> None:
     assert PublicOpenCodeGoAdapter is OpenCodeGoAdapter
 
 
+@pytest.mark.parametrize("model_id", ["mimo-v2.6-flash", "mimo-v2.6-pro"])
 @pytest.mark.parametrize(
     "effort", [None, "none", "minimal", "low", "medium", "high", "xhigh", "max"]
 )
-@respx.mock
 @pytest.mark.asyncio
-async def test_union_alpha_keeps_provider_default_without_discarding_native_history(effort):
-    """No verified control is distinct from disabling Reasoning or its replay."""
-    from core.chat import ChatMessage
-    from core.chat.wire_shaping import _assemble_request_history
+async def test_mimo26_has_a_binary_thinking_control_without_an_effort_ladder(model_id, effort):
     from core.providers.providers import ProviderRegistry
 
     resources = Path(__file__).resolve().parents[3] / "resources"
     registry = ModelRegistry.load(resources)
     config = ProviderRegistry.load(resources).get("opencode-go")
 
+    def lookup(candidate):
+        return registry.get("opencode-go", candidate)
+
+    adapter = OpenCodeGoAdapter(config, "test-token", model_lookup=lookup)
+    try:
+        payload = adapter._build_payload(
+            [{"role": "user", "content": "test"}], model_id, thinking_effort=effort
+        )
+        assert payload["model"] == model_id
+        assert payload["thinking"] == {"type": "disabled" if effort == "none" else "enabled"}
+        assert "reasoning_effort" not in payload
+        assert adapter._model_protocol(model_id) == "openai"
+        assert adapter.reasoning_replay_policy(model_id) == "full_history"
+        assert adapter.reasoning_replay_fidelity(model_id) == "readable_only"
+        intent = adapter.describe_reasoning_render(
+            model_lookup=lookup, model_id=model_id, effort=effort
+        )
+        assert intent.kind == ("off" if effort == "none" else "on")
+        assert intent.effort_level is None
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.parametrize(
+    "effort", [None, "none", "minimal", "low", "medium", "high", "xhigh", "max"]
+)
+@respx.mock
+@pytest.mark.asyncio
+async def test_provider_default_messages_profile_preserves_native_history(effort):
+    """Keep Union Alpha's retired profile as a test-owned wire contract fixture."""
+    from core.chat import ChatMessage
+    from core.chat.wire_shaping import _assemble_request_history
+    from core.providers.providers import ProviderRegistry
+
+    resources = Path(__file__).resolve().parents[3] / "resources"
+    config = ProviderRegistry.load(resources).get("opencode-go")
+    from tests.core.providers.opencode_go_helpers import _protocol_lookup
+
     def lookup(model_id):
-        return registry.get("opencode-go", model_id)
+        return _protocol_lookup(model_id)
 
     adapter = OpenCodeGoAdapter(config, "test-token", model_lookup=lookup)
     scope = "opencode-go/union-alpha::api-key"
-    # Test-owned native state protects future replay; current live Union Alpha
-    # responses have no Thinking blocks, so this is not live transport evidence.
+    # Native state protects the wire contract independently of a live catalog.
     native = {"type": "thinking", "thinking": "test-native-state", "signature": "test-signature"}
     history = [
         ChatMessage.user("First"),
@@ -497,6 +531,12 @@ class TestOpenCodeGoAdapter:
 
         assert payload["thinking"] == {"type": "enabled", "keep": "all"}
         assert "reasoning_effort" not in payload
+        assert (
+            opencode_go_adapter.describe_reasoning_render(
+                model_lookup=opencode_go_adapter._model_lookup, model_id="kimi-k2.6", effort=None
+            ).kind
+            == "on"
+        )
 
     def test_kimi_k2_6_respects_explicit_thinking_off(
         self,
@@ -510,6 +550,12 @@ class TestOpenCodeGoAdapter:
 
         assert payload["thinking"] == {"type": "disabled"}
         assert "reasoning_effort" not in payload
+        assert (
+            opencode_go_adapter.describe_reasoning_render(
+                model_lookup=opencode_go_adapter._model_lookup, model_id="kimi-k2.6", effort="none"
+            ).kind
+            == "off"
+        )
 
     def test_kimi_k2_7_never_sends_unsupported_reasoning_effort_or_disables_thinking(
         self,
@@ -523,6 +569,14 @@ class TestOpenCodeGoAdapter:
 
         assert payload["thinking"] == {"type": "enabled"}
         assert "reasoning_effort" not in payload
+        assert (
+            opencode_go_adapter.describe_reasoning_render(
+                model_lookup=opencode_go_adapter._model_lookup,
+                model_id="kimi-k2.7-code",
+                effort="none",
+            ).kind
+            == "on"
+        )
 
     @pytest.mark.parametrize("model_id", ["grok-4.5", "kimi-k3"])
     def test_always_reasoning_effort_models_map_none_to_lowest_supported_level(
