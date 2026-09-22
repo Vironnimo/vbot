@@ -8,6 +8,8 @@ import pytest
 from core.models.models import (
     ModelRegistry,
 )
+from core.providers.opencode_zen import OpenCodeZenAdapter
+from core.providers.providers import ProviderRegistry
 from core.providers.reasoning import resolve_reasoning_intent
 from tests.core.models.models_test_support import (
     _clear_registry_cache as _clear_registry_cache,
@@ -24,6 +26,21 @@ RESOURCES_DIR = PROJECT_ROOT / "resources"
 # ---------------------------------------------------------------------------
 class TestModelRegistryRealResources:
     """Smoke-check: shipped sanitized JSON files load without error."""
+
+    def test_zen_public_snapshot_reconciles_all_ids_for_both_connections(self) -> None:
+        registry = ModelRegistry.load(RESOURCES_DIR)
+        provider = ProviderRegistry.load(RESOURCES_DIR).get("opencode-zen")
+        raw = json.loads((RESOURCES_DIR / "models" / "opencode-zen.raw.json").read_text())
+        live_ids = {entry["id"] for entry in raw["raw_response"]["data"]}
+        usable = registry.list_for_provider("opencode-zen")
+        assert {model.model_id for model in usable} == live_ids - provider.catalog_exclusions
+        for model in usable:
+            assert set(model.connections) == {"api-key", "account"}
+            reviewed = OpenCodeZenAdapter.normalize_catalog_entry({"id": model.model_id})
+            assert (
+                model.metadata["opencode_zen"]["protocol"]
+                == reviewed.metadata["opencode_zen"]["protocol"]
+            )
 
     @pytest.fixture(autouse=True)
     def _reset_cache_for_real_resources(self):

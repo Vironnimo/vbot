@@ -28,9 +28,9 @@ Examples:
     python scripts/probe_reasoning_replay.py --provider ollama-cloud \\
         --model deepseek-v4-flash:0731 --scenario tool_loop
     python scripts/probe_reasoning_replay.py --provider opencode-go --model glm-5.3 \\
-        --api-key-env OPENCODE_GO_API_KEY
+        --api-key-env OPENCODE_API_KEY
     python scripts/probe_reasoning_replay.py --provider opencode-go \\
-        --model ox-alpha-free --api-key-env OPENCODE_GO_API_KEY \\
+        --model ox-alpha-free --api-key-env OPENCODE_API_KEY \\
         --data-dir ~/.vbot-dev --scenario tool_loop
     python scripts/probe_reasoning_replay.py --base-url https://ollama.com \\
         --endpoint native --carrier thinking

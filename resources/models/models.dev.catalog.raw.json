@@ -74540,6 +74540,98 @@
           "temperature": true,
           "tool_call": true
         },
+        "xiaomi/mimo-v2.6-flash": {
+          "attachment": true,
+          "cost": {
+            "cache_read": 0.004,
+            "cache_write": 0.16,
+            "input": 0.16,
+            "output": 0.32
+          },
+          "description": "MiMo Flash model for multimodal coding agents and long-context automation",
+          "family": "mimo",
+          "id": "xiaomi/mimo-v2.6-flash",
+          "knowledge": "2026-09-22",
+          "last_updated": "2026-09-22",
+          "limit": {
+            "context": 1048576,
+            "output": 131072
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "audio",
+              "video"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "name": "MiMo-V2.6-Flash",
+          "open_weights": false,
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "none",
+                "low",
+                "medium",
+                "high"
+              ]
+            }
+          ],
+          "release_date": "2026-09-22",
+          "temperature": true,
+          "tool_call": true
+        },
+        "xiaomi/mimo-v2.6-pro": {
+          "attachment": true,
+          "cost": {
+            "cache_read": 0.005,
+            "cache_write": 0.47,
+            "input": 0.47,
+            "output": 0.94
+          },
+          "description": "Stronger MiMo Pro tier for multimodal reasoning and coding-agent execution",
+          "family": "mimo",
+          "id": "xiaomi/mimo-v2.6-pro",
+          "knowledge": "2026-09-22",
+          "last_updated": "2026-09-22",
+          "limit": {
+            "context": 1048576,
+            "output": 131072
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "audio",
+              "video"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "name": "MiMo-V2.6-Pro",
+          "open_weights": false,
+          "reasoning": true,
+          "reasoning_options": [
+            {
+              "type": "effort",
+              "values": [
+                "none",
+                "low",
+                "medium",
+                "high"
+              ]
+            }
+          ],
+          "release_date": "2026-09-22",
+          "temperature": true,
+          "tool_call": true
+        },
         "z-ai/glm-4.7": {
           "attachment": false,
           "cost": {
@@ -192945,8 +193037,8 @@
         "abliteration-ai/abliterated-model": {
           "attachment": true,
           "cost": {
-            "cache_read": 0.3,
-            "input": 3,
+            "cache_read": 0.1,
+            "input": 1,
             "output": 3
           },
           "description": "Abliteration.ai's multimodal reasoning model supports text and image input, structured output, automatic prompt caching, and a 262K-token context window.",
@@ -192990,8 +193082,8 @@
         "abliteration-ai/abliterated-model-large": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.5,
-            "input": 5,
+            "cache_read": 0.3,
+            "input": 3,
             "output": 5
           },
           "description": "Abliteration.ai's large text reasoning model is derived from GLM-5.2 and supports native tool calling, structured output, automatic prompt caching, and a one-million-token context window.",
@@ -193034,8 +193126,8 @@
         "abliteration-ai/abliterated-model-large-v2": {
           "attachment": false,
           "cost": {
-            "cache_read": 0.5,
-            "input": 5,
+            "cache_read": 0.3,
+            "input": 3,
             "output": 5
           },
           "description": "Abliteration.ai's default large text reasoning model is derived from GLM-5.3 for harder reasoning and evaluation workloads, with automatic prompt caching and a one-million-token context window.",

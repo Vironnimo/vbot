@@ -13,6 +13,8 @@
   import { t } from '$lib/i18n.js';
   import {
     DEFAULT_ACCOUNT_ID,
+    isSharedOpenCodeConnection,
+    describeSharedOpenCodeKey,
     deriveAccountCredentialKey,
     getAddableConnections,
     getPublicConnectionId,
@@ -515,6 +517,11 @@
         </div>
       {:else if step === 'api-key'}
         <form id="provider-connect-key-form" onsubmit={submitApiKey}>
+          {#if isSharedOpenCodeConnection(selectedConnection)}
+            <p class="provider-connect-modal__hint" role="note">
+              {describeSharedOpenCodeKey(t)}
+            </p>
+          {/if}
           <FormField
             controlId="provider-api-key"
             label={t('settings.providers.add.apiKeyLabel', 'API key')}
