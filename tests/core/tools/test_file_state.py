@@ -195,6 +195,58 @@ def test_atomic_write_failure_keeps_original_and_removes_temp(
     assert list(file_root.iterdir()) == [target]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+@pytest.mark.parametrize(("umask", "expected"), [(0o022, 0o644), (0o077, 0o600)])
+def test_atomic_write_gives_new_files_the_umask_derived_mode(
+    tmp_path: Path, umask: int, expected: int
+) -> None:
+    target = tmp_path / "new.txt"
+    previous = os.umask(umask)
+    try:
+        atomic_write_bytes(target, b"x\n")
+    finally:
+        os.umask(previous)
+
+    assert stat.S_IMODE(target.stat().st_mode) == expected
+    assert list(tmp_path.iterdir()) == [target]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows read-only attribute")
+def test_read_only_target_fails_immediately_without_temporary_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "read-only.txt"
+    target.write_bytes(b"before")
+    target.chmod(stat.S_IREAD)
+    monkeypatch.setattr(
+        file_state_module.time, "sleep", lambda _delay: pytest.fail("read-only is not transient")
+    )
+    try:
+        with pytest.raises(file_state_module.ReadOnlyFileError) as raised:
+            atomic_write_bytes(target, b"after", before_replace=lambda: None)
+
+        assert not hasattr(raised.value, "attempts_made")
+        assert target.read_bytes() == b"before"
+        assert list(tmp_path.iterdir()) == [target]
+    finally:
+        target.chmod(stat.S_IREAD | stat.S_IWRITE)
+
+
+def test_failed_replacement_removes_a_read_only_temporary_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_replace(_source: Path, _target: Path) -> None:
+        raise PermissionError("replace denied")
+
+    monkeypatch.setattr(file_state_module.os, "replace", fail_replace)
+
+    with pytest.raises(PermissionError, match="replace denied"):
+        # A move destination receives the source's (here read-only) mode.
+        atomic_write_bytes(tmp_path / "moved.txt", b"after", mode=stat.S_IREAD)
+
+    assert list(tmp_path.iterdir()) == []
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows sharing handles")
 def test_atomic_replace_recovers_from_a_real_reader_without_delete_sharing(tmp_path, monkeypatch):
     import ctypes

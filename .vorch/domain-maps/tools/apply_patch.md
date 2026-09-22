@@ -2,7 +2,7 @@
 
 Applies ordered V4A file operations. It replaces the archived `edit` and `write` Tools (see `edit.md` and `write.md`).
 Add File creation-or-replacement is a vBot extension to the V4A-style interface.
-`core/tools/apply_patch.py` owns the in-memory plan, filesystem execution, results, and display metadata. Its internal `_patch_syntax.py` owns V4A parsing and parsed operation values; `_change_preview.py` owns bounded before/after previews.
+`core/tools/apply_patch.py` owns the in-memory plan, filesystem execution, results, and display metadata. Its internal `_patch_syntax.py` owns V4A parsing and parsed operation values; `_patch_hunks.py` owns matching and applying one hunk to current text (including patch recoveries); `_patch_entries.py` owns entry snapshots, Delete/Move entry resolution, and entry renames; `_change_preview.py` owns bounded before/after previews.
 
 ## Contract
 
@@ -24,7 +24,15 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 - Add, Update, Delete, standalone `Move File: source -> destination`, and
   Update plus `Move to: destination` are supported. Paths use ordinary
   `ToolContext.resolve_path` semantics: cwd-relative or absolute, with resolved
-  aliases sharing the same mutation history and lock.
+  aliases sharing the same mutation history and lock. Add/Update change content
+  and resolve through links to the target file. Delete/Move act on the named
+  entry: a final symbolic link or Windows junction is deleted or renamed itself
+  (`resolve_path(..., follow_final_link=False)`), never its target; a link at a
+  move destination, even a dangling one, is an existing destination. Link moves
+  and case-only renames (the same entry under another spelling on Windows) use
+  one `os.rename` instead of copy-then-delete; relative link targets are not
+  rewritten. Their `files` entries report the destination addition and source
+  deletion; link entries carry no preview (`test__patch_entries.py`).
 - The complete patch structure is parsed before mutation; unparseable framing or
   operation syntax rejects the call without writes. Once parsed, each Update
   hunk and each Add/Delete/Move is attempted in order against actual current
@@ -98,8 +106,17 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   require whole-line matches, permit precise-only retry checks, and constrain
   EOF. The matcher retains its default substring mode for direct callers. Precise matches win;
   ambiguity at a winning strategy never falls through to a looser strategy.
-- Newline/Unicode/whitespace/indentation differences and the existing bounded
-  block/context similarity strategies are supported. Only changed lines are
+  Ambiguity counts every occurrence, including overlapping ones (repeated
+  closing-brace lines) and ones following a filtered partial occurrence, for
+  hunks and `@@` anchors alike; `replace_all` still replaces leftmost
+  non-overlapping spans.
+- Newline/Unicode/typography/whitespace/indentation differences are supported
+  for every hunk line. The bounded block-anchor and context-similarity
+  strategies may absorb differences only in context lines: each removed (`-`)
+  line must still equal its actual line up to those normalizations (user
+  decision). Otherwise the hunk fails with `text_not_found` and candidate
+  excerpts; similar candidates failing this rule are discarded before the
+  ambiguity check (`replace_fuzzy(required_lines=...)`). Only changed lines are
   emitted from the replacement; context lines keep their actual original bytes.
 - Read-output gutters recover after raw matching misses, including single lines,
   mixed raw/numbered locators, and stale line numbers. Their stripped contents
@@ -143,8 +160,10 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   after planning, before mutation, and after completed writes. Later entries
   detect drift from earlier observations and leave affected paths alone.
 - Updates reject NUL bytes and invalid UTF-8. BOM, surviving context bytes,
-  existing EOF newline state, and file permissions are preserved. New lines
-  adopt the detected file style; explicit no-newline markers apply only at EOF.
+  existing EOF newline state, and file permissions are preserved. Lines are
+  delimited like `read` (LF, CRLF, lone CR only; U+2028 and similar separators
+  are line content). New lines adopt the detected CRLF/LF/CR style, else LF;
+  explicit no-newline markers apply only at EOF.
   Binary files may be moved or deleted without text decoding.
 - Writes reuse `atomic_write_bytes`; its optional `mode` carries source
   permissions to a move destination. Its `before_replace` callback rechecks all

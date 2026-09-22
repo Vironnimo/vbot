@@ -15,17 +15,21 @@ singleton.
 
 from __future__ import annotations
 
+import errno
 import os
+import secrets
 import stat
-import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
 
+from core.utils.logging import get_logger
 from core.utils.paths import model_path
+
+_LOGGER = get_logger("tools.file_state")
 
 # Single off-switch for read-stamp tracking. Path locks and atomic writes remain
 # active because they protect mutation integrity independently of stale policy.
@@ -42,6 +46,13 @@ class _ReplaceRetriesExhaustedError(OSError):
     def __init__(self, error: OSError, attempts_made: int):
         super().__init__(str(error))
         self.attempts_made = attempts_made
+
+
+class ReadOnlyFileError(PermissionError):
+    """Windows refuses to replace a file marked read-only; retrying cannot help."""
+
+    def __init__(self) -> None:
+        super().__init__("the file is read-only")
 
 
 class StaleReason(Enum):
@@ -63,14 +74,29 @@ class FileReadState:
     def record_read(self, session_id: str, resolved: Path) -> None:
         """Stamp a file's current ``(mtime, size)`` for a session.
 
-        Called by ``read`` after resolving a file, and by ``apply_patch`` after
-        a successful write — the tool's own write is an implicit read, so the next
-        full-file write in the same session needs no re-read.
+        Called for content a Session received in one step, and by ``apply_patch``
+        after a successful write — the tool's own write is an implicit read, so the
+        next full-file write in the same session needs no re-read.
+        """
+        stamp = self.stamp(resolved)
+        if stamp is not None:
+            self.record_stamp(session_id, resolved, stamp)
+
+    def stamp(self, resolved: Path) -> tuple[float, int] | None:
+        """Capture a file's ``(mtime, size)`` before a reader consumes its bytes.
+
+        ``read`` records the captured stamp with ``record_stamp`` only after the
+        read succeeded: a failed read never counts, while an external write that
+        lands during the read leaves the stamp older than the new content, so a
+        later full replacement errs toward a harmless re-read.
         """
         if not FILE_STATE_GUARD_ENABLED:
-            return
-        stamp = _stamp(resolved)
-        if stamp is None:
+            return None
+        return _stamp(resolved)
+
+    def record_stamp(self, session_id: str, resolved: Path, stamp: tuple[float, int]) -> None:
+        """Record a stamp captured by ``stamp`` for a completed read."""
+        if not FILE_STATE_GUARD_ENABLED:
             return
         key = (session_id, str(resolved))
         with self._stamps_lock:
@@ -175,34 +201,33 @@ def atomic_write_bytes(
     """Replace ``resolved`` atomically with ``payload``.
 
     The temporary file lives beside the target so ``os.replace`` stays on one
-    filesystem. Existing permission bits are copied before the replace. Any
-    failure removes the temporary file and leaves the original target intact.
-    An explicit mode carries source permissions to a patch move's destination.
-    With a caller-supplied precondition check, briefly retry Windows replace
-    access/sharing failures. Check all caller preconditions before every attempt;
-    never replay a write whose replacement completed or retry other I/O stages.
-    Exhausted replacement errors carry their one-based ``attempts_made`` count.
+    filesystem. Existing permission bits are copied before the replace; a new
+    file receives the ordinary umask-derived mode. Any failure removes the
+    temporary file and leaves the original target intact. An explicit mode
+    carries source permissions to a patch move's destination. A read-only target
+    on Windows raises ``ReadOnlyFileError`` without retrying, because Windows
+    refuses to replace it. With a caller-supplied precondition check, briefly
+    retry Windows replace access/sharing failures. Check all caller
+    preconditions before every attempt; never replay a write whose replacement
+    completed or retry other I/O stages. Exhausted replacement errors carry their
+    one-based ``attempts_made`` count.
     """
-    existing_mode = mode
-    if existing_mode is None:
-        with suppress(OSError):
-            existing_mode = stat.S_IMODE(resolved.stat().st_mode)
+    target_mode = _existing_mode(resolved)
+    if _is_windows_read_only(target_mode):
+        raise ReadOnlyFileError()
+    final_mode = mode if mode is not None else target_mode
 
     descriptor = -1
     temporary: Path | None = None
     try:
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=".vbot-tmp-",
-            dir=resolved.parent,
-        )
-        temporary = Path(temporary_name)
+        descriptor, temporary = _create_temporary(resolved.parent)
         with os.fdopen(descriptor, "wb") as handle:
             descriptor = -1
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-        if existing_mode is not None:
-            os.chmod(temporary, existing_mode)
+        if final_mode is not None:
+            os.chmod(temporary, final_mode)
         for attempt in range(len(_REPLACE_RETRY_DELAYS) + 1):
             if before_replace is not None:
                 before_replace()
@@ -210,6 +235,8 @@ def atomic_write_bytes(
                 os.replace(temporary, resolved)
                 break
             except OSError as error:
+                if _is_windows_read_only(_existing_mode(resolved)):
+                    raise ReadOnlyFileError() from error
                 if before_replace is None or getattr(error, "winerror", None) not in {5, 32, 33}:
                     raise
                 if attempt == len(_REPLACE_RETRY_DELAYS):
@@ -220,14 +247,53 @@ def atomic_write_bytes(
         if descriptor >= 0:
             os.close(descriptor)
         if temporary is not None:
-            with suppress(OSError):
-                temporary.unlink()
+            _discard_temporary(temporary)
         raise
+
+
+def _existing_mode(resolved: Path) -> int | None:
+    try:
+        return stat.S_IMODE(resolved.stat().st_mode)
+    except OSError:
+        return None
+
+
+def _is_windows_read_only(mode: int | None) -> bool:
+    return os.name == "nt" and mode is not None and not mode & stat.S_IWRITE
+
+
+def _create_temporary(directory: Path) -> tuple[int, Path]:
+    """Create an exclusive same-directory temporary file for a replacement.
+
+    ``tempfile.mkstemp`` always creates owner-only files. Opening with ``0o666``
+    lets the process umask derive the mode a newly created file normally gets.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    for _ in range(100):
+        candidate = directory / f".vbot-tmp-{secrets.token_hex(6)}"
+        try:
+            return os.open(candidate, flags, 0o666), candidate
+        except FileExistsError:
+            continue
+    raise FileExistsError(errno.EEXIST, "no unused temporary file name", str(directory))
+
+
+def _discard_temporary(temporary: Path) -> None:
+    """Remove a temporary file, clearing a copied Windows read-only attribute."""
+    try:
+        try:
+            temporary.unlink(missing_ok=True)
+        except PermissionError:
+            os.chmod(temporary, stat.S_IREAD | stat.S_IWRITE)
+            temporary.unlink(missing_ok=True)
+    except OSError as error:
+        _LOGGER.warning("Could not remove temporary file %s: %s", model_path(temporary), error)
 
 
 __all__ = [
     "FILE_STATE_GUARD_ENABLED",
     "FileReadState",
+    "ReadOnlyFileError",
     "StaleReason",
     "atomic_write_bytes",
     "stale_failure_text",

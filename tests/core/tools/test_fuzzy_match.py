@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from core.tools.fuzzy_match import (
     AmbiguousFuzzyMatch,
     FuzzyReplacement,
@@ -38,25 +40,20 @@ def test_exact_match_preserves_cr_only_endings() -> None:
     assert result.strategy == "exact"
 
 
-def test_exact_match_preserves_exotic_line_endings() -> None:
-    # The read tool renders U+2028 as a line break; an edit must keep the
-    # file's exotic style instead of mixing in LF.
+def test_unicode_line_separator_is_line_content_not_a_line_ending() -> None:
+    # Like read and search_files, U+2028 is an ordinary in-line character.
     result = replace_fuzzy("alpha\u2028beta\u2028", "beta", "one\ntwo", replace_all=False)
 
     assert isinstance(result, FuzzyReplacement)
-    assert result.new_content == "alpha\u2028one\u2028two\u2028"
+    assert result.new_content == "alpha\u2028one\ntwo\u2028"
     assert result.strategy == "exact"
+    assert result.first_changed_line == 1
 
 
-def test_normalized_matches_across_exotic_endings() -> None:
-    # An LF-flavored locator matches a U+2028 file, exactly like CRLF tolerance.
+def test_lf_locator_does_not_match_across_unicode_line_separators() -> None:
     content = "alpha\u2028beta\u2028gamma\u2028"
 
-    result = replace_fuzzy(content, "alpha\nbeta", "one\ntwo", replace_all=False)
-
-    assert isinstance(result, FuzzyReplacement)
-    assert result.strategy == "normalized"
-    assert result.new_content == "one\u2028two\u2028gamma\u2028"
+    assert replace_fuzzy(content, "alpha\nbeta", "one\ntwo", replace_all=False) is None
 
 
 def test_cr_only_line_numbers() -> None:
@@ -123,7 +120,7 @@ def test_line_trimmed_preserves_crlf_endings() -> None:
     assert result.new_content == "def f():\r\n    a = 1\r\n    c = 3\r\n"
 
 
-def test_line_trimmed_reindents_without_normalizing_explicit_exotic_separator() -> None:
+def test_line_trimmed_reindents_without_normalizing_explicit_unicode_separator() -> None:
     content = "def f():\n    alpha\n    beta\n"
 
     result = replace_fuzzy(
@@ -135,7 +132,8 @@ def test_line_trimmed_reindents_without_normalizing_explicit_exotic_separator() 
 
     assert isinstance(result, FuzzyReplacement)
     assert result.strategy == "line_trimmed"
-    assert result.new_content == "def f():\n    alpha\u2028    BETA\n"
+    # The separator stays literal line content, so only the line start is reindented.
+    assert result.new_content == "def f():\n    alpha\u2028  BETA\n"
 
 
 def test_line_trimmed_does_not_match_genuinely_different_text() -> None:
@@ -317,6 +315,88 @@ def test_context_aware_keeps_approximate_ambiguity() -> None:
     assert isinstance(result, AmbiguousFuzzyMatch)
     assert result.occurrences == 2
     assert result.line_numbers == [1, 2]
+
+
+@pytest.mark.parametrize(
+    ("content", "old_string"),
+    [
+        # block_anchor: exact boundaries around a middle that names another call.
+        (
+            "def process(data):\n    validate(data)\n    save_to_database(data)\n    return True\n",
+            "def process(data):\n    validate(data)\n    log(data)\n    return True",
+        ),
+        # context_aware: every line is similar, but the required value differs.
+        (
+            "TIMEOUT = 30\nRETRIES = 5\nMAX_SIZE = 1024\n",
+            "TIMEOUT = 30\nRETRIES = 3\nMAX_SIZE = 1024",
+        ),
+    ],
+)
+def test_similarity_strategies_cannot_absorb_required_line_differences(
+    content: str, old_string: str
+) -> None:
+    unconstrained = replace_fuzzy(content, old_string, "x", replace_all=False)
+    assert isinstance(unconstrained, FuzzyReplacement)
+    assert unconstrained.strategy in {"block_anchor", "context_aware"}
+
+    required = replace_fuzzy(
+        content, old_string, "x", replace_all=False, typographic=True, required_lines=[1, 2]
+    )
+
+    assert required is None
+
+
+def test_required_lines_allow_precise_normalizations_and_context_drift() -> None:
+    content = "    alpha_setting = 1\n    value = “x”\t\n    omega\n"
+    old_string = 'alpha_setting = 2\nvalue  =  "x"\nomega'
+
+    result = replace_fuzzy(
+        content, old_string, "replaced", replace_all=False, typographic=True, required_lines=[1]
+    )
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.strategy == "context_aware"
+
+
+def test_required_lines_select_the_block_with_the_precise_line_before_ambiguity() -> None:
+    content = "start\nalpha = 1\nvalue = 9\nend\nstart\nalpha = 2\nvalue = 8\nend\n"
+    old_string = "start\nalpha = 3\nvalue = 8\nend"
+
+    assert isinstance(
+        replace_fuzzy(content, old_string, "x", replace_all=False), AmbiguousFuzzyMatch
+    )
+    result = replace_fuzzy(content, old_string, "x", replace_all=False, required_lines=[2])
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.before_spans == ((content.index("start", 1), len(content) - 1),)
+
+
+@pytest.mark.parametrize(
+    ("content", "old_string", "lines"),
+    [
+        # Occurrences overlap at the shared middle line.
+        ("x\n}\n}\n}\ny\n", "}\n}", [2, 3]),
+        # A partial occurrence must not shadow a later whole-line one.
+        ("a {\n}\n}\nb {\n  c {\n    }\n}\n}\n", "}\n}", [2, 7]),
+    ],
+)
+def test_overlapping_whole_line_occurrences_are_ambiguous(
+    content: str, old_string: str, lines: list[int]
+) -> None:
+    result = replace_fuzzy(
+        content, old_string, "}\nnew\n}", replace_all=False, whole_lines=True, typographic=True
+    )
+
+    assert isinstance(result, AmbiguousFuzzyMatch)
+    assert result.line_numbers == lines
+
+
+def test_replace_all_replaces_leftmost_non_overlapping_occurrences() -> None:
+    result = replace_fuzzy("aaaa", "aa", "b", replace_all=True)
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.new_content == "bb"
+    assert result.replacements == 2
 
 
 def test_replace_all_does_not_use_approximate_strategies() -> None:

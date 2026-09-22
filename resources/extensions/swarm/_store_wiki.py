@@ -277,14 +277,16 @@ def _mutate(
         title = arguments.get("title", source["title"])
         content = arguments.get("content", source["content"])
         if "old_text" in arguments:
-            # A stale revision permits representation repair, never similarity
-            # matching that could overwrite another participant's changed text.
+            # All of old_text is replaced, so it must match precisely, up to
+            # newline, whitespace, Unicode, and typography normalization. Similarity
+            # matching could select a different passage, such as one another
+            # participant changed, and overwrite it.
             replacement = replace_fuzzy(
                 content,
                 arguments["old_text"],
                 arguments["new_text"],
                 replace_all=False,
-                precise_only=stale,
+                precise_only=True,
                 typographic=True,
             )
             if not isinstance(replacement, FuzzyReplacement):

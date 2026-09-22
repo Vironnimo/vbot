@@ -15,7 +15,33 @@ from tests.core.tools.apply_patch_helpers import (
 )
 
 
-@pytest.mark.parametrize("ending", [b"\n", b"\r\n", b"\r", b"\xc2\x85", b"\xe2\x80\xa8"])
+@pytest.mark.parametrize("separator", ["\f", "\x85", " ", " "])
+def test_unicode_separators_are_line_content_not_line_breaks(tmp_path, separator):
+    path = tmp_path / "file.txt"
+    before = f"alpha{separator}beta\nomega".encode()
+    path.write_bytes(before)
+
+    missing = apply(tmp_path, update("@@\n-beta\n+changed"))
+    appended = apply(tmp_path, update(f"@@\n-alpha{separator}beta\n+changed\n omega"))
+
+    assert missing["error"]["code"] == "text_not_found"
+    assert appended["ok"], appended
+    assert path.read_bytes() == b"changed\nomega"
+
+
+def test_add_and_append_use_lf_when_a_file_has_only_unicode_separators(tmp_path):
+    path = tmp_path / "one-line.json"
+    path.write_bytes('{"k":"x y"}'.encode())
+    state = FileReadState()
+    state.record_read("session-test", path.resolve())
+
+    assert apply(tmp_path, update("@@\n+more", "one-line.json"), state=state)["ok"]
+    assert path.read_bytes() == '{"k":"x y"}\nmore\n'.encode()
+    assert apply(tmp_path, "*** Add File: one-line.json\n+{\n+}", state=state)["ok"]
+    assert path.read_bytes() == b"{\n}\n"
+
+
+@pytest.mark.parametrize("ending", [b"\n", b"\r\n", b"\r"])
 @pytest.mark.parametrize("bom", [b"", b"\xef\xbb\xbf"])
 @pytest.mark.parametrize("final", [True, False])
 def test_update_preserves_encoding_context_and_endings(tmp_path, ending, bom, final):
@@ -62,11 +88,6 @@ def test_tolerates_patch_fences_missing_markers_and_crlf(tmp_path, wrapper, mark
             "@@\n alpha  = 1\n-old\n+new\n tail",
             "alpha\t = 1\nnew\ntail\n",
         ),
-        (
-            "start\nvalue = 100\nend\n",
-            "@@\n start\n-value = 101\n+value = 200\n end",
-            "start\nvalue = 200\nend\n",
-        ),
         ("keep\nremove\ntail\n", "@@\n-remove", "keep\ntail\n"),
         ("keep\nremove", "@@\n-remove", "keep\n"),
         ("keep", "@@\n keep\n+added", "keep\nadded"),
@@ -96,6 +117,30 @@ def test_repeated_blocks_require_context_and_never_select_first(tmp_path):
     assert path.read_bytes() == before
     assert apply(tmp_path, update("@@ section two\n-value\n+changed"))["ok"]
     assert path.read_bytes() == before.replace(b"two\nvalue", b"two\nchanged")
+
+
+@pytest.mark.parametrize(
+    ("before", "hunk"),
+    [
+        (b"x\n}\n}\n}\ny\n", "@@\n }\n+INSERTED\n }"),
+        (b"a {\n}\n}\nb {\n  c {\n    }\n}\n}\n", "@@\n }\n+INSERTED\n }"),
+        (
+            b"def a():\n    return 1\n    return 1\n\ndef b():\n"
+            b"    if x:\n        return 1\n    return 1\n    return 1\n",
+            "@@\n-    return 1\n     return 1",
+        ),
+        # A multi-line context anchor can overlap its own other occurrence too.
+        (b"x\n}\n}\n}\ny\n", "@@\n }\n }\n@@\n+INSERTED"),
+    ],
+)
+def test_overlapping_occurrences_are_ambiguous_not_first_match(tmp_path, before, hunk):
+    path = tmp_path / "file.txt"
+    path.write_bytes(before)
+
+    result = apply(tmp_path, update(hunk))
+
+    assert result["error"]["code"] in {"ambiguous_match", "ambiguous_context"}
+    assert path.read_bytes() == before
 
 
 def test_whole_lines_do_not_match_substrings(tmp_path):
@@ -236,6 +281,50 @@ def test_escape_recovery_preserves_literal_replacement_escapes(tmp_path, before,
     result = apply(tmp_path, update("@@\n" + body))
     assert result["ok"], result
     assert path.read_bytes() == expected.encode()
+
+
+@pytest.mark.parametrize(
+    ("before", "body"),
+    [
+        # A similar block with exact boundaries must not delete another call.
+        (
+            "def process(data):\n    validate(data)\n    save_to_database(data)\n    return True\n",
+            " def process(data):\n-    validate(data)\n-    log(data)\n"
+            "+    validate(data, strict=True)\n     return True",
+        ),
+        # A similar line must not stand in for a different removed value.
+        (
+            "TIMEOUT = 30\nRETRIES = 5\nMAX_SIZE = 1024\n",
+            " TIMEOUT = 30\n-RETRIES = 3\n+RETRIES = 4\n MAX_SIZE = 1024",
+        ),
+        ("start\nvalue = 100\nend\n", " start\n-value = 101\n+value = 200\n end"),
+    ],
+)
+def test_similarity_never_replaces_a_different_removed_line(tmp_path, before, body):
+    path = tmp_path / "file.txt"
+    path.write_bytes(before.encode())
+
+    result = apply(tmp_path, update("@@\n" + body))
+
+    assert result["error"]["code"] == "text_not_found"
+    assert '"candidates": [{"line": 1' in result["error"]["message"]
+    assert path.read_bytes() == before.encode()
+
+
+def test_similarity_absorbs_context_drift_around_precise_removed_lines(tmp_path):
+    path = tmp_path / "file.py"
+    path.write_bytes("def process(data):\n    value = “x”\n    return True\n".encode())
+
+    result = apply(
+        tmp_path,
+        update(
+            ' def process(data, strict):\n-    value = "x"\n+    value = "y"\n     return True',
+            "file.py",
+        ),
+    )
+
+    assert result["ok"], result
+    assert path.read_bytes() == ("def process(data):\n    value = “y”\n    return True\n".encode())
 
 
 @pytest.mark.parametrize(

@@ -4,32 +4,33 @@ from __future__ import annotations
 
 import json
 import re
-import stat
 from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from difflib import SequenceMatcher
-from os.path import commonprefix
 from pathlib import Path
 
 from core.tools._argument_repair import normalize_call_arguments
 from core.tools._change_preview import _change_preview
+from core.tools._patch_entries import (
+    _ABSENT,
+    _entry_path,
+    _observe_renamed,
+    _rename_entry,
+    _renames_entry,
+    _resolve,
+    _Snapshot,
+    _snapshot,
+)
+from core.tools._patch_hunks import _apply_hunk, _clean_additions, _ending, _hunk_text
 from core.tools._patch_syntax import (
     _MESSAGES,
-    _Hunk,
     _Operation,
     _parse,
     _PatchError,
 )
-from core.tools.arguments import line_number_gutter_candidates, strip_line_number_gutters
+from core.tools.arguments import split_text_lines
 from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.file_state import FileReadState, StaleReason, atomic_write_bytes, stale_failure_text
-from core.tools.fuzzy_match import (
-    AmbiguousFuzzyMatch,
-    FuzzyReplacement,
-    find_closest_candidates,
-    preserve_typography,
-    replace_fuzzy,
-)
 from core.tools.syntax_check import warning_for_edited_file, warning_for_written_file
 from core.tools.tools import (
     JsonObject,
@@ -112,383 +113,9 @@ _PRECISE_RECOVERY = (
     "whitespace-normalized match. Inspect current content and retry this hunk "
     "with matching context."
 )
-_GUTTER_WARNING = "Removed read-output line-number prefixes before applying the hunk."
-_ESCAPE_WARNING = "Normalized escaped patch text after the literal text did not match."
 _STALE_WARNING = (
     "{path} changed since this Session last read it. The patch was applied to current content."
 )
-_BREAK = re.compile(r"\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
-_GUTTER = re.compile(r"^\s*[1-9][0-9]*(?::[1-9][0-9]*)?\|")
-_ESCAPE = re.compile(r"\\(n|r|t|\\|\"|')")
-
-
-def _line_parts(content: str) -> list[tuple[str, str]]:
-    parts: list[tuple[str, str]] = []
-    start = 0
-    for match in _BREAK.finditer(content):
-        parts.append((content[start : match.start()], match.group()))
-        start = match.end()
-    if start < len(content):
-        parts.append((content[start:], ""))
-    return parts
-
-
-def _ending(content: str) -> str:
-    for ending in ("\r\n", "\n", "\r"):
-        if ending in content:
-            return ending
-    found = _BREAK.search(content)
-    return found.group() if found else "\n"
-
-
-def _hunk_text(hunk: _Hunk, prefixes: str) -> str:
-    return "\n".join(text for prefix, text in hunk.lines if prefix in prefixes)
-
-
-def _candidates(content: str, pattern: str, offset: int = 0) -> JsonObject:
-    return {
-        "candidates": [
-            {
-                "line": candidate.line_number + offset,
-                "text": candidate.text,
-                "truncated": candidate.truncated,
-            }
-            for candidate in find_closest_candidates(content, pattern)
-        ]
-    }
-
-
-def _ambiguous_candidates(content: str, match: AmbiguousFuzzyMatch, offset: int = 0) -> JsonObject:
-    lines = content.splitlines()
-    candidates = []
-    for number in dict.fromkeys(match.line_numbers):
-        number += len(_BREAK.findall(content[:offset]))
-        start, end = max(0, number - 2), min(len(lines), number + 1)
-        candidates.append(
-            {
-                "line": start + 1,
-                "text": "\n".join(line[:240] for line in lines[start:end]),
-                "truncated": any(len(line) > 240 for line in lines[start:end]),
-            }
-        )
-        if len(candidates) == 3:
-            break
-    return {"occurrences": match.occurrences, "candidates": candidates}
-
-
-def _match(
-    content: str, old: str, new: str, *, precise: bool = False, eof: bool = False
-) -> FuzzyReplacement | AmbiguousFuzzyMatch | None:
-    if old == "":
-        positions = []
-        offset = 0
-        for line, (text, ending) in enumerate(_line_parts(content), 1):
-            if text == "" and (not eof or offset + len(ending) == len(content)):
-                positions.append((offset, line))
-            offset += len(text) + len(ending)
-        if not positions:
-            return None
-        if len(positions) > 1:
-            return AmbiguousFuzzyMatch(
-                len(positions), [line for _, line in positions], [1] * len(positions)
-            )
-        start, line = positions[0]
-        return FuzzyReplacement(
-            content[:start] + new + content[start:],
-            line,
-            line,
-            1,
-            "exact",
-            ((start, start),),
-            ((start, start + len(new)),),
-        )
-    return replace_fuzzy(
-        content,
-        old,
-        new,
-        replace_all=False,
-        whole_lines=True,
-        precise_only=precise,
-        at_eof=eof,
-        typographic=True,
-    )
-
-
-def _normalize_gutters(hunk: _Hunk) -> _Hunk | None:
-    old_lines = [text for prefix, text in hunk.lines if prefix in " -"]
-    old = "\n".join(old_lines)
-    if strip_line_number_gutters(old) is None:
-        return None
-    # Locators may mix raw lines with copied gutters. Only a unique whole-line
-    # match against the current file authorizes this recovery.
-    lines = []
-    for prefix, text in hunk.lines:
-        stripped = strip_line_number_gutters(text)
-        if stripped is not None and re.match(r"^\s*\d+:\d+\|", text):
-            return None
-        lines.append((prefix, text if stripped is None else stripped))
-    return replace(hunk, lines=lines)
-
-
-def _unescape(text: str, *, replacement_for: str | None = None) -> str:
-    values = {"n": "\n", "r": "\r", "t": "\t", "\\": "\\", '"': '"', "'": "'"}
-
-    def decode(match: re.Match[str]) -> str:
-        kind = match[1]
-        if replacement_for is not None:
-            if kind == "n" or match[0] not in replacement_for:
-                return match[0]
-            if kind in "tr" and not re.fullmatch(r"(?:[ \t]|\\[tr])*", text[: match.start()]):
-                return match[0]
-        return values[kind]
-
-    return _ESCAPE.sub(decode, text)
-
-
-def _clean_additions(hunk: _Hunk, path: str, index: int) -> tuple[_Hunk, list[str]]:
-    # Existing literal gutter-shaped context is authoritative. New standalone
-    # additions require complete-block gutter recovery.
-    if any(_GUTTER.match(text) for prefix, text in hunk.lines if prefix in " -"):
-        return hunk, []
-    lines = list(hunk.lines)
-    warnings = []
-    start = 0
-    while start < len(lines):
-        if lines[start][0] != "+":
-            start += 1
-            continue
-        end = start + 1
-        while end < len(lines) and lines[end][0] == "+":
-            end += 1
-        texts = [text for _, text in lines[start:end]]
-        if sum(bool(_GUTTER.match(text)) for text in texts) >= 2:
-            candidates = line_number_gutter_candidates("\n".join(texts), allow_continuations=False)
-            if not candidates:
-                raise _PatchError("line_numbered_content", path=path, hunk=index)
-            lines[start:end] = [("+", text) for text in candidates[0].split("\n")]
-            warnings.append(_GUTTER_WARNING)
-        start = end
-    return replace(hunk, lines=lines), warnings
-
-
-def _inline_context_identifies(content: str, old: str, new: str) -> bool:
-    """Identify a single-line replacement by two retained, unique text anchors."""
-    if "\n" in old or "\n" in new:
-        return False
-    prefix = commonprefix((old, new))
-    suffix = commonprefix((old[len(prefix) :][::-1], new[len(prefix) :][::-1]))[::-1]
-    # Syntax/indentation alone cannot identify a target. Both sides must retain
-    # substantive text, and together they must select exactly one current line.
-    if any(
-        len(anchor.strip()) < 4 or not re.search(r"\w{3}", anchor) for anchor in (prefix, suffix)
-    ):
-        return False
-    candidates = [
-        line for line in content.splitlines() if line.startswith(prefix) and line.endswith(suffix)
-    ]
-    return candidates == [new]
-
-
-def _apply_hunk(content: str, hunk: _Hunk, path: str, index: int) -> tuple[str, list[str]]:
-    if not any(prefix in "+-" for prefix, _ in hunk.lines):
-        return content, []
-    hunk, warnings = _clean_additions(hunk, path, index)
-    offset = 0
-    hint_start = 0
-    for hint in hunk.hints:
-        found = _match(content[offset:], hint, hint, precise=True)
-        if isinstance(found, AmbiguousFuzzyMatch):
-            raise _PatchError(
-                "ambiguous_context",
-                path=path,
-                hint=hint,
-                details=_ambiguous_candidates(content, found, offset),
-            )
-        if found is None:
-            raise _PatchError(
-                "context_not_found", path=path, hint=hint, details=_candidates(content, hint)
-            )
-        hint_start = offset + found.before_spans[0][0]
-        offset += found.before_spans[0][1]
-        ending = _BREAK.match(content, offset)
-        if ending:
-            offset = ending.end()
-    window = content[offset:]
-    old, new = _hunk_text(hunk, " -"), _hunk_text(hunk, " +")
-    if not any(prefix in " -" for prefix, _ in hunk.lines):
-        position = offset if hunk.hints else len(content)
-        if hunk.no_newline and position != len(content):
-            raise _PatchError("invalid_patch", line=index, text="\\ No newline at end of file")
-        if hunk.eof and position != len(content):
-            raise _PatchError(
-                "text_not_found", path=path, hunk=index, details=_candidates(content, new)
-            )
-        inserted = new.replace("\n", _ending(content))
-        if not hunk.no_newline:
-            inserted += _ending(content)
-        # A hint ties the post-state to an insertion point. A suffix alone
-        # cannot distinguish a retry from an intentional repeated append.
-        if hunk.hints and inserted.strip() and content[position:].startswith(inserted):
-            return content, warnings
-        separator = (
-            _ending(content)
-            if position and not _BREAK.search(content[position - 1 : position])
-            else ""
-        )
-        return content[:position] + separator + inserted + content[position:], warnings
-    if hunk.hints:
-        # Models sometimes repeat the final hint as the first context/removal
-        # line. Include that line in the search without weakening earlier hints.
-        offset = hint_start
-        window = content[offset:]
-    found = _match(window, old, new, precise=True, eof=hunk.eof)
-    normalized = _normalize_gutters(hunk)
-    if found is None and normalized is not None:
-        candidate_old, candidate_new = _hunk_text(normalized, " -"), _hunk_text(normalized, " +")
-        candidate_match = _match(window, candidate_old, candidate_new, precise=True, eof=hunk.eof)
-        hunk, old, new, found = normalized, candidate_old, candidate_new, candidate_match
-        warnings.append(_GUTTER_WARNING)
-    if found is None and any(_GUTTER.match(t) for _, t in hunk.lines):
-        raise _PatchError(
-            "line_numbered_content", path=path, hunk=index, details=_candidates(content, old)
-        )
-    if found is None and _unescape(old) != old:
-        escaped = replace(
-            hunk,
-            lines=[
-                (p, _unescape(t, replacement_for=old if p == "+" else None)) for p, t in hunk.lines
-            ],
-        )
-        # Unescaping line separators changes the hunk's physical line structure.
-        escaped.lines = [(p, line) for p, text in escaped.lines for line in text.split("\n")]
-        candidate_old, candidate_new = _hunk_text(escaped, " -"), _hunk_text(escaped, " +")
-        candidate_match = _match(window, candidate_old, candidate_new, precise=True, eof=hunk.eof)
-        if candidate_match is not None:
-            hunk, old, new, found = escaped, candidate_old, candidate_new, candidate_match
-            warnings.append(_ESCAPE_WARNING)
-    if found is None:
-        # Ignore surplus blank context at a hunk boundary only after the full
-        # locator misses. Removed blank lines remain part of the operation.
-        lines = list(hunk.lines)
-        while lines and lines[0][0] == " " and not lines[0][1].strip():
-            lines.pop(0)
-        while lines and lines[-1][0] == " " and not lines[-1][1].strip():
-            lines.pop()
-        if lines != hunk.lines and any(p in " -" for p, _ in lines):
-            trimmed = replace(hunk, lines=lines)
-            candidate_old, candidate_new = _hunk_text(trimmed, " -"), _hunk_text(trimmed, " +")
-            candidate_match = _match(
-                window, candidate_old, candidate_new, precise=True, eof=hunk.eof
-            )
-            if candidate_match is not None:
-                hunk, old, new, found = trimmed, candidate_old, candidate_new, candidate_match
-    if found is None:
-        context = "".join(text.strip() for prefix, text in hunk.lines if prefix == " ")
-        poststate = (
-            _match(window, new, new, precise=True, eof=hunk.eof or hunk.no_newline) if new else None
-        )
-        if (
-            (len(context) >= 4 or _inline_context_identifies(window, old, new))
-            and isinstance(poststate, FuzzyReplacement)
-            and (not hunk.no_newline or poststate.before_spans[0][1] == len(window))
-        ):
-            return content, warnings
-        # An exact post-state elsewhere does not prove this target is satisfied.
-        # Do not let approximate matching choose it (or a similar other target)
-        # after the independent locator above failed to establish that fact.
-        if not hunk.precise_only and (not new or _match(window, new, new, precise=True) is None):
-            found = _match(window, old, new, eof=hunk.eof)
-    if isinstance(found, AmbiguousFuzzyMatch):
-        raise _PatchError(
-            "ambiguous_match",
-            path=path,
-            hunk=index,
-            details=_ambiguous_candidates(content, found, offset),
-        )
-    if found is None:
-        code = (
-            "line_numbered_content"
-            if any(_GUTTER.match(t) for _, t in hunk.lines)
-            else "text_not_found"
-        )
-        raise _PatchError(code, path=path, hunk=index, details=_candidates(content, old))
-    if [t for p, t in hunk.lines if p in " -"] == [t for p, t in hunk.lines if p in " +"]:
-        return content, warnings
-    start, end = found.before_spans[0]
-    after_start, after_end = found.after_spans[0]
-    actual = _line_parts(window[start:end])
-    if found.strategy != "exact" and any(
-        token in old and token in new and token not in window[start:end]
-        for token in ('\\"', "\\'", "\\\\")
-    ):
-        raise _PatchError(
-            "text_not_found", path=path, hunk=index, details=_candidates(content, old)
-        )
-    prepared = _line_parts(found.new_content[after_start:after_end])
-    # splitlines omits the final empty line; the hunk still gives it a position.
-    old_count = sum(p in " -" for p, _ in hunk.lines)
-    new_count = sum(p in " +" for p, _ in hunk.lines)
-    if len(actual) < old_count:
-        actual.append(("", ""))
-    if len(prepared) < new_count:
-        prepared.append(("", ""))
-    if len(actual) != old_count or len(prepared) != new_count:
-        raise _PatchError(
-            "text_not_found", path=path, hunk=index, details=_candidates(content, old)
-        )
-    trailing = _BREAK.match(window, end)
-    final_ending = trailing.group() if trailing else ""
-    if trailing:
-        end = trailing.end()
-    if hunk.no_newline and end != len(window):
-        raise _PatchError("invalid_patch", line=index, text="\\ No newline at end of file")
-    if actual:
-        actual[-1] = (actual[-1][0], final_ending)
-    output: list[tuple[str, str]] = []
-    last_output_prefix = ""
-    old_index = new_index = 0
-    removed_lines: list[tuple[str, str]] = []
-    for prefix, locator_line in hunk.lines:
-        if prefix == " ":
-            removed_lines.clear()
-            output.append(actual[old_index])  # Preserve every context byte.
-            last_output_prefix = prefix
-        elif prefix == "+":
-            replacement_line = prepared[new_index][0]
-            if removed_lines:
-                actual_line, old_line = removed_lines.pop(0)
-                if found.strategy != "exact":
-                    replacement_line = preserve_typography(actual_line, old_line, replacement_line)
-            output.append((replacement_line, _ending(content)))
-            last_output_prefix = prefix
-        elif prefix == "-":
-            removed_lines.append((actual[old_index][0], locator_line))
-        if prefix in " -":
-            old_index += 1
-        if prefix in " +":
-            new_index += 1
-    if output:
-        output = [(text, ending or _ending(content)) for text, ending in output[:-1]] + output[-1:]
-        if last_output_prefix == "+" or hunk.no_newline:
-            output[-1] = (output[-1][0], "" if hunk.no_newline else final_ending)
-    replacement_text = "".join(text + ending for text, ending in output)
-    return content[: offset + start] + replacement_text + window[end:], warnings
-
-
-@dataclass(frozen=True)
-class _Snapshot:
-    payload: bytes | None
-    mode: int | None = None
-
-
-def _snapshot(path: Path) -> _Snapshot:
-    try:
-        info = path.stat()
-    except FileNotFoundError:
-        return _Snapshot(None)
-    if not stat.S_ISREG(info.st_mode):
-        raise _PatchError("not_a_file", path=model_path(path))
-    return _Snapshot(path.read_bytes(), stat.S_IMODE(info.st_mode))
 
 
 def _decode(payload: bytes, path: str) -> str:
@@ -498,15 +125,6 @@ def _decode(payload: bytes, path: str) -> str:
         return payload.decode("utf-8-sig")
     except UnicodeDecodeError as error:
         raise _PatchError("unsupported_encoding", path=path) from error
-
-
-def _resolve(context: ToolContext, path: str) -> Path:
-    try:
-        if "\x00" in path:
-            raise ValueError(path)
-        return context.resolve_path(path)
-    except (ValueError, OSError, RuntimeError) as error:
-        raise _PatchError("invalid_path", path=path, reason=str(error)) from error
 
 
 def _plan(
@@ -535,14 +153,17 @@ def _plan(
                 raise _PatchError("binary_file", path=displayed)
             pending[path] = _Snapshot(payload, source.mode)
             continue
-        if payload is None:
+        if not source.exists:
             raise _PatchError("file_not_found", path=displayed)
         target = paths[operation.destination] if operation.destination else path
-        if target != path and pending[target].payload is not None:
+        if target != path and pending[target].exists:
             raise _PatchError("destination_exists", path=model_path(target))
         if operation.action == "delete":
-            pending[path] = _Snapshot(None)
+            pending[path] = _ABSENT
             continue
+        if payload is None:
+            # Content paths resolve through links; a link here appeared concurrently.
+            raise _PatchError("file_changed", path=displayed)
         if operation.action == "update":
             content = _decode(payload, displayed)
             for index, hunk in enumerate(operation.hunks, operation.hunk_number):
@@ -553,19 +174,22 @@ def _plan(
             if b"\x00" in payload:
                 raise _PatchError("binary_file", path=displayed)
         if target != path:
-            pending[path] = _Snapshot(None)
+            pending[path] = _ABSENT
             warnings.setdefault(target, []).extend(warnings.pop(path, []))
         pending[target] = _Snapshot(payload, source.mode)
     return pending, warnings
 
 
 def _change_details(
-    path: Path, before: bytes | None, after: bytes | None, *, replaced: bool = False
+    path: Path, previous: _Snapshot, current: _Snapshot, *, replaced: bool = False
 ) -> tuple[JsonObject, int, int]:
     result: JsonObject = {
         "path": model_path(path),
-        "action": "add" if before is None else "delete" if after is None else "update",
+        "action": ("add" if not previous.exists else "delete" if not current.exists else "update"),
     }
+    if previous.link is not None or current.link is not None:
+        return result, 0, 0  # A link entry has no text content to preview.
+    before, after = previous.payload, current.payload
     try:
         new = _decode(after or b"", model_path(path))
         if replaced and after is not None:
@@ -575,7 +199,8 @@ def _change_details(
         old = _decode(before or b"", model_path(path))
     except _PatchError:
         return result, 0, 0
-    old_lines, new_lines = old.splitlines(keepends=True), new.splitlines(keepends=True)
+    old_lines = split_text_lines(old, keepends=True)
+    new_lines = split_text_lines(new, keepends=True)
     old_starts, new_starts = [0], [0]
     for line in old_lines:
         old_starts.append(old_starts[-1] + len(line))
@@ -621,6 +246,8 @@ class _Batch:
     blocked: set[Path] = field(default_factory=set)
     failed_text: set[Path] = field(default_factory=set)
     replaced: set[Path] = field(default_factory=set)
+    # Case-only renames keep one path key: (original spelling, current spelling).
+    respelled: dict[Path, tuple[Path, Path]] = field(default_factory=dict)
     results: list[JsonObject] = field(default_factory=list)
 
 
@@ -648,7 +275,7 @@ def _commit(
 
     changed = [path for path in pending if pending[path] != before[path]]
     # A move first materializes its destination; a failure never silently loses its source.
-    for path in sorted(changed, key=lambda p: pending[p].payload is None):
+    for path in sorted(changed, key=lambda p: not pending[p].exists):
         target = pending[path]
         try:
             check_expected()
@@ -677,7 +304,7 @@ def _commit(
         notes.extend(warnings.get(path, []))
         if stale:
             notes.append(_STALE_WARNING.format(path=model_path(path)))
-        if context.change_tracker is not None:
+        if context.change_tracker is not None and before[path].link is None:
             try:
                 old = _decode(before[path].payload or b"", model_path(path))
                 new = _decode(target.payload or b"", model_path(path))
@@ -706,6 +333,46 @@ def _commit(
     return completed, None
 
 
+def _rename(
+    context: ToolContext,
+    state: FileReadState,
+    batch: _Batch,
+    source: Path,
+    destination: Path,
+    before: dict[Path, _Snapshot],
+) -> tuple[list[str], JsonObject | None]:
+    """Move a link itself, or respell a file name, as one directory-entry rename."""
+    snapshot = before[source]
+    try:
+        _rename_entry(source, destination, before)
+    except OSError as error:
+        batch.blocked.update(before)
+        return [], {
+            "code": "file_write_error",
+            "message": _WRITE_FAILED.format(path=model_path(source), reason=str(error)),
+        }
+    completed = [model_path(destination)]
+    batch.before.setdefault(source, snapshot)
+    if destination == source:
+        origin = batch.respelled.get(source, (source, destination))[0]
+        batch.respelled[source] = (origin, destination)
+    else:
+        completed.append(model_path(source))
+        batch.before.setdefault(destination, before[destination])
+        batch.after[source] = batch.observed[source] = _ABSENT
+    # Record the completed rename before observing it, like completed writes.
+    batch.after[destination] = batch.observed[destination] = snapshot
+    try:
+        actual = _observe_renamed(destination, snapshot)
+    except (OSError, _PatchError) as error:
+        batch.blocked.update({source, destination})
+        return completed, _error_data(error)
+    batch.after[destination] = batch.observed[destination] = actual
+    if actual.payload is not None:
+        state.record_read(context.session_id, destination)
+    return completed, None
+
+
 def _run_step(
     context: ToolContext,
     state: FileReadState,
@@ -731,27 +398,31 @@ def _run_step(
             if path in batch.observed and snapshot != batch.observed[path]:
                 batch.blocked.update(resolved)
                 raise _PatchError("file_changed", path=model_path(path))
-        if source in batch.failed_text:
-            operation = replace(
-                operation, hunks=[replace(h, precise_only=True) for h in operation.hunks]
-            )
-        pending, warnings = _plan([operation], paths, before)
-        if (
-            operation.action == "add"
-            and before[source].payload is not None
-            and pending[source] != before[source]
-        ):
-            stale = state.check_stale(context.session_id, source)
-            if stale is not None:
-                code, message = stale_failure_text(stale, source)
-                outcome.update(status="failed", error={"code": code, "message": message})
-                batch.blocked.update(resolved)
-                return
-        for path in resolved:
-            if _snapshot(path) != before[path]:
-                batch.blocked.update(resolved)
-                raise _PatchError("file_changed", path=model_path(path))
-        completed, failure = _commit(context, state, batch, before, pending, warnings)
+        destination = paths[operation.destination] if operation.destination else None
+        if destination is not None and _renames_entry(source, destination, before[source]):
+            completed, failure = _rename(context, state, batch, source, destination, before)
+        else:
+            if source in batch.failed_text:
+                operation = replace(
+                    operation, hunks=[replace(h, precise_only=True) for h in operation.hunks]
+                )
+            pending, warnings = _plan([operation], paths, before)
+            if (
+                operation.action == "add"
+                and before[source].payload is not None
+                and pending[source] != before[source]
+            ):
+                stale = state.check_stale(context.session_id, source)
+                if stale is not None:
+                    code, message = stale_failure_text(stale, source)
+                    outcome.update(status="failed", error={"code": code, "message": message})
+                    batch.blocked.update(resolved)
+                    return
+            for path in resolved:
+                if _snapshot(path) != before[path]:
+                    batch.blocked.update(resolved)
+                    raise _PatchError("file_changed", path=model_path(path))
+            completed, failure = _commit(context, state, batch, before, pending, warnings)
         if operation.action == "add" and completed:
             batch.replaced.add(source)
         elif operation.destination and source in batch.replaced:
@@ -787,19 +458,29 @@ def _run_step(
             batch.failed_text.add(source)
 
 
+def _file_effects(batch: _Batch) -> list[tuple[Path, _Snapshot, _Snapshot]]:
+    """Return net per-entry effects; a case-only rename reads like any other move."""
+    effects = []
+    for path, before in batch.before.items():
+        after = batch.after[path]
+        origin, current = batch.respelled.get(path, (path, path))
+        if origin.name == current.name:
+            effects.append((path, before, after))
+        else:
+            effects += [(current, _ABSENT, after), (origin, before, _ABSENT)]
+    return effects
+
+
 def _batch_result(context: ToolContext, batch: _Batch) -> JsonObject:
     files = []
     added = removed = 0
-    for path, before in batch.before.items():
-        after = batch.after[path]
+    for path, before, after in _file_effects(batch):
         if before == after:
             continue
-        details, plus, minus = _change_details(
-            path, before.payload, after.payload, replaced=path in batch.replaced
-        )
+        details, plus, minus = _change_details(path, before, after, replaced=path in batch.replaced)
         added += plus
         removed += minus
-        notes = list(dict.fromkeys(batch.warnings.get(path, [])))
+        notes = list(dict.fromkeys(batch.warnings.get(path, []))) if after.exists else []
         if notes:
             details["warnings"] = notes
         files.append(details)
@@ -863,7 +544,20 @@ def _execute(context: ToolContext, arguments: JsonObject, state: FileReadState) 
                     resolved[name] = _resolve(context, name)
                 except _PatchError as error:
                     resolution_errors[name] = _error_data(error)
-    all_paths = set(resolved.values())
+    # Delete and Move act on the named entry: a final link itself, not its target.
+    entries: dict[tuple[str, bool], Path] = {}
+    for operation in operations:
+        if operation.action in {"delete", "move"} or operation.destination:
+            roles = [(operation.path, False), (operation.destination, True)]
+            for name, is_destination in roles:
+                if name in resolved and (name, is_destination) not in entries:
+                    try:
+                        entries[name, is_destination] = _entry_path(
+                            context, name, resolved[name], destination=is_destination
+                        )
+                    except _PatchError as error:
+                        resolution_errors[name] = _error_data(error)
+    all_paths = set(resolved.values()) | set(entries.values())
     overlaps = {
         p for p in all_paths if any(p in q.parents or q in p.parents for q in all_paths if p != q)
     }
@@ -881,25 +575,33 @@ def _execute(context: ToolContext, arguments: JsonObject, state: FileReadState) 
                     steps.append(_Operation("move", operation.path, operation.destination))
             operation_failed = False
             for step in steps:
+                names = [n for n in (step.path, step.destination) if n is not None]
+                paths: dict[str, Path] = {}
+                for name in names:
+                    target = (
+                        entries.get((name, name == step.destination))
+                        if step.action in {"delete", "move"}
+                        else resolved.get(name)
+                    )
+                    if target is not None:
+                        paths[name] = target
                 outcome: JsonObject = {
                     "operation": number,
                     "action": step.action,
-                    "path": model_path(resolved[step.path]) if step.path in resolved else step.path,
+                    "path": model_path(paths[step.path]) if step.path in paths else step.path,
                 }
                 if step.action == "update":
                     outcome["hunk"] = step.hunk_number
                 if step.destination:
                     outcome["destination"] = (
-                        model_path(resolved[step.destination])
-                        if step.destination in resolved
+                        model_path(paths[step.destination])
+                        if step.destination in paths
                         else step.destination
                     )
                 batch.results.append(outcome)
-                names = [n for n in (step.path, step.destination) if n is not None]
                 entry_error = next(
                     (resolution_errors[n] for n in names if n in resolution_errors), None
                 )
-                paths = {n: resolved[n] for n in names if n in resolved}
                 overlap = next((p for p in paths.values() if p in overlaps), None)
                 if overlap is not None:
                     entry_error = _error_data(

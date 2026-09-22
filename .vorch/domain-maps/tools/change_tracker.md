@@ -50,6 +50,6 @@ authoritative and suppresses the fallback. Specifically not tracked:
 
 ## Limits
 
-- `_MAX_TRACKED_FILES` (4096) session entries, oldest evicted first.
+- `_MAX_TRACKED_FILES` (4096) `(session, path)` entries across all Sessions, oldest insertion evicted first. A Session that lost an entry reports no statistics (`peek`/`take` return `None`) until its Run's stats are taken, so the UI uses its per-call fallback instead of an undercount (`test_tracked_file_cap_*`).
 - `_MAX_REPORTED_PATHS` (200) paths per run payload.
 - Per-run deltas are in-memory only: a server restart loses them (the UI falls back to the tool-fact sum for that run).

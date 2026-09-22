@@ -75,7 +75,7 @@ Tool execution normally consumes the shared 500-slot semaphore (also the default
 - Relative paths resolve from `effective_cwd` (Project repo else Workspace); absolute bypass unless a specific Tool forbids. File tools and `bash` use it; `memory` deliberately stays on Workspace (identity home, not project-relative).
 - A live per-name denial resolver runs before hooks and handler for every sibling; the dispatcher also carries that resolver and the Run Tool restriction through ToolContext for delegated calls. Denial returns `tool_not_allowed` without side effects.
 
-- `ToolContext.resolve_path` follows host path grammar without filesystem-dependent fallback. Windows double quotes may wrap a path because they cannot be literal filename characters; single quotes remain literal. POSIX quotes and backslashes remain literal even when a different unquoted/slash-separated file exists. Path objects remain literal. Scope, read-state, and mutation checks still use the resolved target.
+- `ToolContext.resolve_path` follows host path grammar without filesystem-dependent fallback. Windows double quotes may wrap a path because they cannot be literal filename characters; single quotes remain literal. POSIX quotes and backslashes remain literal even when a different unquoted/slash-separated file exists. Path objects remain literal. Scope, read-state, and mutation checks still use the resolved target. `follow_final_link=False` resolves only the parent, for operations on a link entry itself (apply_patch Delete/Move); `is_link_entry` in `_tool_context.py` is the shared symlink-or-junction test (`Path.is_symlink` misses junctions).
 
 ## References
 

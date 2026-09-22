@@ -327,7 +327,7 @@ def _sniff_mime(data: bytes, filename: str) -> str:
         return "image/jpeg"
     if data.startswith(b"\x89PNG"):
         return "image/png"
-    if data.startswith(b"GIF8"):
+    if data[:6] in (b"GIF87a", b"GIF89a") and len(data) >= 13:
         return "image/gif"
     if len(data) >= 12 and data.startswith(b"RIFF"):
         riff_format = data[8:12]
@@ -360,16 +360,29 @@ def _sniff_mime(data: bytes, filename: str) -> str:
 
 
 def _sniff_audio_video_media_type(data: bytes) -> str | None:
-    if data.startswith(b"OggS"):
+    # ASCII magic words alone also start ordinary text ("ID3 tags", "OggS notes"),
+    # so each requires the binary header fields that must follow it.
+    if data.startswith(b"OggS") and len(data) >= 6 and data[4] == 0 and data[5] <= 0x07:
         # Ogg can also carry video (Theora), but in practice — especially Telegram
         # voice messages — it is audio (Opus/Vorbis).
         return "audio/ogg"
-    if data.startswith(b"ID3"):
+    if (
+        data.startswith(b"ID3")
+        and len(data) >= 5
+        and data[3] in (2, 3, 4)
+        and data[4] != 0xFF
+        and all(byte < 0x80 for byte in data[6:10])
+    ):
         return "audio/mpeg"
     if data.startswith((b"\xff\xfb", b"\xff\xf3", b"\xff\xf2")):
         # Raw MP3 frame sync without an ID3 tag.
         return "audio/mpeg"
-    if data.startswith(b"fLaC"):
+    if (
+        data.startswith(b"fLaC")
+        and data[4:5] in (b"\x00", b"\x80")
+        and data[5:8] == b"\x00\x00\x22"
+    ):
+        # The first metadata block is always a 34-byte STREAMINFO block.
         return "audio/flac"
     if len(data) >= 12 and data[4:8] == b"ftyp":
         brand = data[8:12]
