@@ -8,7 +8,8 @@ from typing import Any
 
 import pytest
 
-from core.runs import ActiveRunError
+from core.providers.errors import NetworkError
+from core.runs import PROVIDER_REQUEST_STATUS_EVENT, ActiveRunError, RunStatus
 from core.tools import ToolRegistry, tool_success
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
@@ -17,6 +18,28 @@ from tests.core.chat.chat_loop_support import (
     build_chat_loop,
     session_address,
 )
+
+
+class SteeringAdapter(StubAdapter):
+    """Select one new steering input while each chosen request is in flight."""
+
+    def __init__(self, responses: list[Any], *, steer_requests: range) -> None:
+        super().__init__(responses)
+        self.steer_requests = steer_requests
+        self.loop: Any = None
+        self.runtime: Any = None
+        self.run: Any = None
+
+    async def send(
+        self, messages: list[dict[str, Any]], *, model_id: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        index = len(self.requests)
+        if index in self.steer_requests:
+            item = await self.loop.queue_run("coder", f"Steer {index}", session_id="one")
+            self.runtime.chat_run_manager.steer_queued(
+                "coder", "one", item.item_id, project_id=None, run_id=self.run.id
+            )
+        return await super().send(messages, model_id=model_id, **kwargs)
 
 
 class PausedAdapter(StubAdapter):
@@ -119,3 +142,35 @@ async def test_rejects_stale_run_and_keeps_input_on_cancel(tmp_path: Path) -> No
     await asyncio.wait_for(successor.wait(), 10)
     history = runtime.chat_sessions.get(session_address("coder", "one")).load()
     assert [m.content for m in history if m.role == "user"] == ["Original", "Retained"]
+
+
+@pytest.mark.asyncio
+async def test_each_steered_step_gets_a_fresh_recovery_budget(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
+    failures: list[Any] = [NetworkError("temporarily unavailable") for _ in range(8)]
+    answers = [{"content": f"Answer {index}", "tool_calls": None} for index in range(10)]
+    # The first answer needs the ninth attempt; nine steered answers follow it.
+    adapter = SteeringAdapter([*failures, *answers], steer_requests=range(8, 17))
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path, agent=StubAgent(id="coder", model="openai/gpt-5.2"), adapter=adapter
+    )
+    runtime.chat_sessions.create("coder", session_id="one")
+    loop = build_chat_loop(runtime)
+    adapter.loop, adapter.runtime = loop, runtime
+    run = await loop.start_run("coder", "Original", session_id="one")
+    adapter.run = run
+    result = await asyncio.wait_for(run.wait(), 20)
+    assert run.status == RunStatus.COMPLETED
+    assert result.content == "Answer 9"
+    assert len(adapter.requests) == 18
+    retries = [
+        event.payload["attempt"]
+        for event in run.events
+        if event.type == PROVIDER_REQUEST_STATUS_EVENT
+        and event.payload.get("state") == "retrying"
+        and "attempt" in event.payload
+    ]
+    # Only the initial step failed; no steered request waits for a backoff.
+    assert retries == list(range(2, 10))
+    history = runtime.chat_sessions.get(session_address("coder", "one")).load()
+    assert len([m for m in history if m.role == "user"]) == 10

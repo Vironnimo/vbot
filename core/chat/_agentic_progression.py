@@ -678,7 +678,6 @@ class AgenticProgression:
                             )
                             media_outputs = []
                         else:
-                            context.recovery.reset()
                             context.tool_progress.iteration_count += 1
                             tool_messages, media_outputs = await _dispatch_tool_calls(
                                 tool_dispatch_context,
