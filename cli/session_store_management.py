@@ -23,6 +23,7 @@ from core.sessions.recovery import read_recovery_incident, restore_snapshot_with
 from core.sessions.snapshots import (
     list_snapshots,
     read_snapshot_health,
+    read_verified_snapshot_summary,
     snapshot_root,
     snapshot_summaries,
 )
@@ -129,18 +130,15 @@ def session_store_snapshot_verify(instance: ServerInstance, snapshot_id: str) ->
         return CommandResult(ok=False, message=str(exc), instance=instance)
     marker = read_session_store_marker(instance.data_dir)
     expected_id = None if marker is None else str(marker["database_id"])
-    verified = snapshot in list_snapshots(instance.data_dir, expected_database_id=expected_id)
-    if not verified:
+    summary = read_verified_snapshot_summary(
+        instance.data_dir, snapshot, expected_database_id=expected_id
+    )
+    if summary is None:
         return CommandResult(
             ok=False,
             message=f"snapshot is missing or failed verification: {snapshot_id}",
             instance=instance,
         )
-    summary = next(
-        item
-        for item in snapshot_summaries(instance.data_dir, expected_database_id=expected_id)
-        if item["snapshot_id"] == snapshot_id
-    )
     return CommandResult(
         ok=True,
         message=json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True),
@@ -199,20 +197,21 @@ def session_store_snapshot_restore(
             health=health,
         )
     was_running = health.is_vbot
-    systemd_managed = was_running and is_systemd_managed(instance, DEFAULT_SERVICE_NAME)
-    if was_running:
-        stopped = (
-            stop_systemd_server(instance, DEFAULT_SERVICE_NAME)
-            if systemd_managed
-            else stop_server(instance)
+    systemd_managed = is_systemd_managed(instance, DEFAULT_SERVICE_NAME)
+    # A closed listener can still belong to a Runtime draining its database.
+    # The lifecycle owner also waits for that exact control-record process.
+    stopped = (
+        stop_systemd_server(instance, DEFAULT_SERVICE_NAME)
+        if systemd_managed
+        else stop_server(instance)
+    )
+    if not stopped.ok or probe_health(instance).reachable:
+        return CommandResult(
+            ok=False,
+            message=f"could not stop and verify the exact vBot target: {stopped.message}",
+            instance=instance,
+            health=stopped.health,
         )
-        if not stopped.ok or probe_health(instance).reachable:
-            return CommandResult(
-                ok=False,
-                message=f"could not stop and verify the exact vBot target: {stopped.message}",
-                instance=instance,
-                health=stopped.health,
-            )
     restored = restore_snapshot_with_incident(
         instance.data_dir,
         instance.data_dir / "sessions.db",
@@ -279,10 +278,17 @@ def _offline_status_projection(instance: ServerInstance) -> dict[str, object]:
             store.close()
     except (OSError, SessionStorageError) as exc:
         expected_id = None if marker is None else str(marker.get("database_id"))
-        incident = read_recovery_incident(instance.data_dir)
+        reason = f"{type(exc).__name__}: {exc}"
+        try:
+            incident = read_recovery_incident(instance.data_dir)
+        except (OSError, SessionStorageError) as incident_error:
+            incident = None
+            incident_reason = f"{type(incident_error).__name__}: {incident_error}"
+            if incident_reason != reason:
+                reason += f"; {incident_reason}"
         return {
             "state": "unrecoverable",
-            "reason": f"{type(exc).__name__}: {exc}",
+            "reason": reason,
             "database_id": expected_id,
             "marker_state": None if marker is None else marker.get("state"),
             "schema_version": None if marker is None else marker.get("schema_version"),
