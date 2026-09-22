@@ -73,9 +73,16 @@ def convert_mcp_access(
         raise ValueError("MCP connections must be an array")
     prior: dict[str, set[str]] = {}
     for connection in connections:
-        for address in connection.pop("agents", []):
-            prior.setdefault(address, set()).add(f"mcp_{connection['id']}")
+        if not isinstance(connection, dict):
+            raise ValueError("MCP connections must contain objects")
+        addresses = connection.pop("agents", [])
+        if not isinstance(addresses, list) or not all(
+            isinstance(address, str) and bool(address.strip()) for address in addresses
+        ):
+            raise ValueError("Legacy MCP agents must be an array of non-empty addresses")
         validate_connection(connection)
+        for address in addresses:
+            prior.setdefault(address, set()).add(f"mcp_{connection['id']}")
     files: list[tuple[Path, str, str]] = []
     for path in sorted([*root.glob("agents/*/agent.json"), *root.glob("projects/*/project.json")]):
         original = path.read_text(encoding="utf-8")
