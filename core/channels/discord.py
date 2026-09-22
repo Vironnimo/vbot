@@ -29,6 +29,7 @@ from core.channels.engine import ChannelConversationEngine
 from core.chat.content_blocks import ContentBlock, TextBlock
 from core.extensions import InteractionButton
 from core.utils.logging import get_logger
+from core.utils.retry import retry_async
 
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
@@ -554,6 +555,9 @@ class DiscordChannelAdapter(ChannelAdapter):
             try:
                 target = await client.fetch_channel(target_id)
             except Exception as error:
+                classified = _classify_discord_send_error(error)
+                if classified.retryable:
+                    raise classified from error
                 raise ChannelConfigError(
                     f"Cannot resolve Discord platform_target {platform_target}: {error}"
                 ) from error
@@ -587,37 +591,53 @@ class DiscordChannelAdapter(ChannelAdapter):
             for start in range(0, len(files), _DISCORD_FILE_BATCH_LIMIT)
         ]
         send_count = max(len(chunks), len(file_batches))
-        discord = _load_discord()
-
         for index in range(send_count):
-            payload: dict[str, Any] = {}
-            if index < len(chunks):
-                payload["content"] = chunks[index]
-
-            discord_files: list[Any] = []
-            if index < len(file_batches):
-                discord_files = [
-                    discord.File(
-                        io.BytesIO(file_data.data),
-                        filename=file_data.filename,
-                    )
-                    for file_data in file_batches[index]
-                ]
-                payload["files"] = discord_files
-
-            if index == 0 and reference is not None:
-                payload["reference"] = reference
-                payload["mention_author"] = False
-
             try:
-                await target.send(**payload)
-            except Exception as error:
-                raise _classify_discord_send_error(error) from error
-            finally:
-                for discord_file in discord_files:
-                    close = getattr(discord_file, "close", None)
-                    if callable(close):
-                        close()
+                await retry_async(
+                    self._send_payload,
+                    target,
+                    chunks[index] if index < len(chunks) else None,
+                    file_batches[index] if index < len(file_batches) else [],
+                    reference=reference if index == 0 else None,
+                )
+            except ChannelError as error:
+                # Retrying the whole message would resend earlier acknowledged chunks.
+                error.retryable = False
+                raise
+
+    async def _send_payload(
+        self,
+        target: Any,
+        content: str | None,
+        files: list[FileData],
+        *,
+        reference: Any | None,
+    ) -> None:
+        payload: dict[str, Any] = {}
+        if content is not None:
+            payload["content"] = content
+        if reference is not None:
+            payload["reference"] = reference
+            payload["mention_author"] = False
+
+        # discord.py consumes upload streams even on failure; each attempt owns
+        # fresh handles so a retry uploads the original bytes from the beginning.
+        discord_files: list[Any] = []
+        try:
+            if files:
+                discord = _load_discord()
+                for file_data in files:
+                    discord_files.append(
+                        discord.File(io.BytesIO(file_data.data), filename=file_data.filename)
+                    )
+                payload["files"] = discord_files
+            await target.send(**payload)
+        except Exception as error:
+            raise _classify_discord_send_error(error) from error
+        finally:
+            for discord_file in discord_files:
+                discord_file.close()
+                discord_file.fp.close()
 
     def _reply_reference(self, target: Any, reply_to_message_id: str | None) -> Any | None:
         if reply_to_message_id is None:
