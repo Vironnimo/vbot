@@ -613,6 +613,33 @@ async def test_read_strips_utf8_bom(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("separator", ["\f", "\v", "\x1c", "\x85", " ", " "])
+async def test_line_numbers_break_only_at_lf_crlf_and_cr_like_search_files(
+    tmp_path: Path, separator: str
+) -> None:
+    from core.tools.search_files import search_files_handler
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    raw = f"import os\n{separator}\ndef foo():\r\n    pass\nx = 1\n".encode()
+    workspace.joinpath("ff.py").write_bytes(raw)
+
+    handler = make_handler()
+    whole = assert_success_envelope(await handler(make_context(workspace), {"path": "ff.py"}))
+    line = assert_success_envelope(
+        await handler(make_context(workspace), {"path": "ff.py", "offset": 4, "limit": 1})
+    )
+    search = search_files_handler(make_context(workspace, "search_files"), {"args": ["pass"]})
+
+    assert whole["content"] == (
+        f"1| import os\n2| {separator}\n3| def foo():\r\n4|     pass\n5| x = 1\n"
+    )
+    assert str(line["content"]).startswith("4|     pass\n")
+    assert search["data"]["content"] == "ff.py:4:    pass"
+    assert read_module.render_text_file(raw) == whole["content"]
+
+
+@pytest.mark.asyncio
 async def test_streaming_text_matches_byte_renderer_across_chunked_line_endings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

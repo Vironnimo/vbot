@@ -40,25 +40,20 @@ def test_exact_match_preserves_cr_only_endings() -> None:
     assert result.strategy == "exact"
 
 
-def test_exact_match_preserves_exotic_line_endings() -> None:
-    # The read tool renders U+2028 as a line break; an edit must keep the
-    # file's exotic style instead of mixing in LF.
+def test_unicode_line_separator_is_line_content_not_a_line_ending() -> None:
+    # Like read and search_files, U+2028 is an ordinary in-line character.
     result = replace_fuzzy("alpha\u2028beta\u2028", "beta", "one\ntwo", replace_all=False)
 
     assert isinstance(result, FuzzyReplacement)
-    assert result.new_content == "alpha\u2028one\u2028two\u2028"
+    assert result.new_content == "alpha\u2028one\ntwo\u2028"
     assert result.strategy == "exact"
+    assert result.first_changed_line == 1
 
 
-def test_normalized_matches_across_exotic_endings() -> None:
-    # An LF-flavored locator matches a U+2028 file, exactly like CRLF tolerance.
+def test_lf_locator_does_not_match_across_unicode_line_separators() -> None:
     content = "alpha\u2028beta\u2028gamma\u2028"
 
-    result = replace_fuzzy(content, "alpha\nbeta", "one\ntwo", replace_all=False)
-
-    assert isinstance(result, FuzzyReplacement)
-    assert result.strategy == "normalized"
-    assert result.new_content == "one\u2028two\u2028gamma\u2028"
+    assert replace_fuzzy(content, "alpha\nbeta", "one\ntwo", replace_all=False) is None
 
 
 def test_cr_only_line_numbers() -> None:
@@ -125,7 +120,7 @@ def test_line_trimmed_preserves_crlf_endings() -> None:
     assert result.new_content == "def f():\r\n    a = 1\r\n    c = 3\r\n"
 
 
-def test_line_trimmed_reindents_without_normalizing_explicit_exotic_separator() -> None:
+def test_line_trimmed_reindents_without_normalizing_explicit_unicode_separator() -> None:
     content = "def f():\n    alpha\n    beta\n"
 
     result = replace_fuzzy(
@@ -137,7 +132,8 @@ def test_line_trimmed_reindents_without_normalizing_explicit_exotic_separator() 
 
     assert isinstance(result, FuzzyReplacement)
     assert result.strategy == "line_trimmed"
-    assert result.new_content == "def f():\n    alpha\u2028    BETA\n"
+    # The separator stays literal line content, so only the line start is reindented.
+    assert result.new_content == "def f():\n    alpha\u2028  BETA\n"
 
 
 def test_line_trimmed_does_not_match_genuinely_different_text() -> None:

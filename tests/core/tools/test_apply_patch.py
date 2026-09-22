@@ -15,7 +15,33 @@ from tests.core.tools.apply_patch_helpers import (
 )
 
 
-@pytest.mark.parametrize("ending", [b"\n", b"\r\n", b"\r", b"\xc2\x85", b"\xe2\x80\xa8"])
+@pytest.mark.parametrize("separator", ["\f", "\x85", " ", " "])
+def test_unicode_separators_are_line_content_not_line_breaks(tmp_path, separator):
+    path = tmp_path / "file.txt"
+    before = f"alpha{separator}beta\nomega".encode()
+    path.write_bytes(before)
+
+    missing = apply(tmp_path, update("@@\n-beta\n+changed"))
+    appended = apply(tmp_path, update(f"@@\n-alpha{separator}beta\n+changed\n omega"))
+
+    assert missing["error"]["code"] == "text_not_found"
+    assert appended["ok"], appended
+    assert path.read_bytes() == b"changed\nomega"
+
+
+def test_add_and_append_use_lf_when_a_file_has_only_unicode_separators(tmp_path):
+    path = tmp_path / "one-line.json"
+    path.write_bytes('{"k":"x y"}'.encode())
+    state = FileReadState()
+    state.record_read("session-test", path.resolve())
+
+    assert apply(tmp_path, update("@@\n+more", "one-line.json"), state=state)["ok"]
+    assert path.read_bytes() == '{"k":"x y"}\nmore\n'.encode()
+    assert apply(tmp_path, "*** Add File: one-line.json\n+{\n+}", state=state)["ok"]
+    assert path.read_bytes() == b"{\n}\n"
+
+
+@pytest.mark.parametrize("ending", [b"\n", b"\r\n", b"\r"])
 @pytest.mark.parametrize("bom", [b"", b"\xef\xbb\xbf"])
 @pytest.mark.parametrize("final", [True, False])
 def test_update_preserves_encoding_context_and_endings(tmp_path, ending, bom, final):

@@ -14,7 +14,12 @@ from dataclasses import replace
 from os.path import commonprefix
 
 from core.tools._patch_syntax import _Hunk, _PatchError
-from core.tools.arguments import line_number_gutter_candidates, strip_line_number_gutters
+from core.tools.arguments import (
+    TEXT_LINE_BREAK,
+    line_number_gutter_candidates,
+    split_text_lines,
+    strip_line_number_gutters,
+)
 from core.tools.fuzzy_match import (
     AmbiguousFuzzyMatch,
     FuzzyReplacement,
@@ -26,7 +31,7 @@ from core.tools.tools import JsonObject
 
 _GUTTER_WARNING = "Removed read-output line-number prefixes before applying the hunk."
 _ESCAPE_WARNING = "Normalized escaped patch text after the literal text did not match."
-_BREAK = re.compile(r"\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
+_BREAK = TEXT_LINE_BREAK
 _GUTTER = re.compile(r"^\s*[1-9][0-9]*(?::[1-9][0-9]*)?\|")
 _ESCAPE = re.compile(r"\\(n|r|t|\\|\"|')")
 
@@ -46,8 +51,7 @@ def _ending(content: str) -> str:
     for ending in ("\r\n", "\n", "\r"):
         if ending in content:
             return ending
-    found = _BREAK.search(content)
-    return found.group() if found else "\n"
+    return "\n"
 
 
 def _hunk_text(hunk: _Hunk, prefixes: str) -> str:
@@ -68,7 +72,7 @@ def _candidates(content: str, pattern: str, offset: int = 0) -> JsonObject:
 
 
 def _ambiguous_candidates(content: str, match: AmbiguousFuzzyMatch, offset: int = 0) -> JsonObject:
-    lines = content.splitlines()
+    lines = split_text_lines(content)
     candidates = []
     for number in dict.fromkeys(match.line_numbers):
         number += len(_BREAK.findall(content[:offset]))
@@ -206,7 +210,9 @@ def _inline_context_identifies(content: str, old: str, new: str) -> bool:
     ):
         return False
     candidates = [
-        line for line in content.splitlines() if line.startswith(prefix) and line.endswith(suffix)
+        line
+        for line in split_text_lines(content)
+        if line.startswith(prefix) and line.endswith(suffix)
     ]
     return candidates == [new]
 
@@ -349,7 +355,7 @@ def _apply_hunk(content: str, hunk: _Hunk, path: str, index: int) -> tuple[str, 
             "text_not_found", path=path, hunk=index, details=_candidates(content, old)
         )
     prepared = _line_parts(found.new_content[after_start:after_end])
-    # splitlines omits the final empty line; the hunk still gives it a position.
+    # Line splitting omits the final empty line; the hunk still gives it a position.
     old_count = sum(p in " -" for p, _ in hunk.lines)
     new_count = sum(p in " +" for p, _ in hunk.lines)
     if len(actual) < old_count:

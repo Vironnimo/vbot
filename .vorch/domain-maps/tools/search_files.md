@@ -89,7 +89,9 @@ SQLite spool keeps union, deduplication, and sorting off unbounded Python lists.
 
 Success returns `data.content` and `complete`. Paths are relative to effective cwd
 when possible, absolute otherwise; directory rows end in `/`. Content includes
-source line numbers, and occurrence output adds byte columns. No matches is success.
+source line numbers, and occurrence output adds byte columns. Line numbers equal
+`read`'s (both ignore form feed, U+2028 and similar separators) except in files
+with lone-CR line endings, which ripgrep does not count. No matches is success.
 Quiet returns `matched=true/false`, or null when an incomplete scan proves neither.
 `complete` is true only when the scan completed and no further result page remains.
 A paginated result has `complete=false` and `next_offset`; an interrupted scan also
