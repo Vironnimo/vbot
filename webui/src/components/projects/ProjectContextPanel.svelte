@@ -1,5 +1,6 @@
 <script>
   import { t } from '$lib/i18n.js';
+  import { isImeComposing } from '$lib/keyboard.js';
   import InfoHint from '../ui/InfoHint.svelte';
   import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
@@ -39,7 +40,7 @@
   }
 
   function handleAutoLoadKeydown(event) {
-    if (event.key === 'Enter') {
+    if (event.key === 'Enter' && !isImeComposing(event)) {
       event.preventDefault();
       addAutoLoadEntry();
     }

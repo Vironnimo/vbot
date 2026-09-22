@@ -1,6 +1,7 @@
 <script>
   import { tick } from 'svelte';
   import { t, activeLocaleTag } from '$lib/i18n.js';
+  import { isImeComposing } from '$lib/keyboard.js';
   import {
     rawBodyText,
     formattedBodyText,
@@ -92,7 +93,7 @@
       value={query}
       oninput={find}
       onkeydown={(event) => {
-        if (event.key === 'Enter') {
+        if (event.key === 'Enter' && !isImeComposing(event)) {
           event.preventDefault();
           nextMatch(event.shiftKey ? -1 : 1);
         }

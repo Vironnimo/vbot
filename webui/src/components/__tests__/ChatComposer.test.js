@@ -611,6 +611,47 @@ describe('ChatComposer', () => {
     expect(document.body.querySelector('.model-autocomplete')).toBeNull();
   });
 
+  it.each([
+    ['isComposing', { isComposing: true }],
+    ['keyCode 229', { keyCode: 229 }],
+  ])(
+    'leaves an IME-confirming Enter to the composition (%s)',
+    async (_label, compositionFlags) => {
+      const onSendMessage = vi.fn().mockResolvedValue(true);
+      suite.mountedComponent = mount(ChatComposer, {
+        target: document.body,
+        props: { draftKey: 'a::s1', historyKey: 'a', onSendMessage },
+      });
+      flushSync();
+
+      const input = composerInput();
+      typeInComposer(input, 'にほんご');
+      const confirming = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true,
+        ...compositionFlags,
+      });
+      input.dispatchEvent(confirming);
+      await flushComposerAsyncWork();
+
+      expect(confirming.defaultPrevented).toBe(false);
+      expect(onSendMessage).not.toHaveBeenCalled();
+      expect(input.value).toBe('にほんご');
+
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Enter',
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await flushComposerAsyncWork();
+
+      expect(onSendMessage).toHaveBeenCalledWith('にほんご');
+    },
+  );
+
   it('lets Enter select the active model option', async () => {
     const onSendMessage = vi.fn().mockResolvedValue(true);
     const onLoadModelCatalog = vi.fn().mockResolvedValue(modelCatalogFixture());

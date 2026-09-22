@@ -304,6 +304,18 @@ describe('SessionListDrawer', () => {
     expect(input).not.toBeNull();
     input.value = 'Release planning';
     input.dispatchEvent(new Event('input', { bubbles: true }));
+    // An Enter/Escape that confirms or cancels an IME candidate stays with
+    // the composition instead of committing or abandoning the rename.
+    for (const key of ['Enter', 'Escape']) {
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', { key, bubbles: true, isComposing: true }),
+      );
+    }
+    flushSync();
+    await Promise.resolve();
+    expect(renameSessionMock).not.toHaveBeenCalled();
+    expect(document.querySelector('.session-row__edit-input')).toBe(input);
+
     input.dispatchEvent(
       new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
     );

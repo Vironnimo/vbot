@@ -1,6 +1,7 @@
 <script>
   import { toolDetailImages } from '$lib/chatToolDetails.js';
   import { t } from '$lib/i18n.js';
+  import { isImeComposing } from '$lib/keyboard.js';
   import {
     INTENTIONAL_HOVER_SHOW_DELAY_MS,
     floatingHoverCard,
@@ -101,6 +102,9 @@
   }
 
   function handleEditKeydown(event, message) {
+    if (isImeComposing(event)) {
+      return;
+    }
     if (event.key === 'Escape') {
       event.preventDefault();
       cancelEditing();
