@@ -386,6 +386,40 @@ async def test_settings_update_persists_target_switch_with_validated_options(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["settings.update", "settings.patch", "task_model.update"])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("account_suffix", ["", ":work"])
+@pytest.mark.parametrize("options", [{"voice": "echo"}, {"retired_option": True}])
+async def test_equivalent_task_target_spelling_preserves_options(
+    tmp_path: Path, method: str, reverse: bool, account_suffix: str, options: dict[str, Any]
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage = StorageManager(tmp_path)
+    _add_tts_model(state)
+    plain = f"openai/gpt-4o-mini-tts::api-key{account_suffix}"
+    prefixed = f"openai/gpt-4o-mini-tts::openai:api-key{account_suffix}"
+    previous_target, next_target = (prefixed, plain) if reverse else (plain, prefixed)
+    state.runtime.storage.update_model_task_settings(
+        {TASK_TEXT_TO_SPEECH: {"target": previous_target, "options": options}}
+    )
+    params = (
+        {
+            "operations": [
+                {"op": "set", "path": 'model_tasks["text_to_speech"].target', "value": next_target}
+            ]
+        }
+        if method == "settings.patch"
+        else {"model_tasks": {TASK_TEXT_TO_SPEECH: {"target": next_target}}}
+    )
+
+    result = await dispatch_rpc(state, {"method": method, "params": params})
+
+    assert result["ok"] is True, result
+    binding = state.runtime.storage.load_model_task_settings()[TASK_TEXT_TO_SPEECH]
+    assert binding["options"] == options
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["settings.update", "settings.patch"])
 @pytest.mark.parametrize("options", [{"retired_option": True}, {}])
 async def test_unchanged_task_binding_does_not_block_other_settings(

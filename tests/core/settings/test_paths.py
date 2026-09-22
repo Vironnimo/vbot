@@ -195,6 +195,33 @@ def test_same_task_target_patch_preserves_options() -> None:
     assert changed == ()
 
 
+@pytest.mark.parametrize(
+    ("previous_target", "next_target"),
+    [
+        ("openai/model::api-key", "openai/other::api-key"),
+        ("openai/model::api-key", "openai/model::other-key"),
+        ("openai/model::api-key:work", "openai/model::api-key:home"),
+        ("local/engine", "local/other"),
+    ],
+)
+def test_changed_task_identity_resets_options(previous_target: str, next_target: str) -> None:
+    original = {
+        "model_tasks": {"text_to_speech": {"target": previous_target, "options": {"voice": "echo"}}}
+    }
+
+    updated, _changed = apply_settings_patch(
+        original,
+        parse_patch_operations(
+            [{"op": "set", "path": 'model_tasks["text_to_speech"].target', "value": next_target}]
+        ),
+    )
+
+    assert build_effective_settings(updated)["model_tasks"]["text_to_speech"] == {
+        "target": next_target,
+        "options": {},
+    }
+
+
 def test_unset_removes_override_and_restores_default() -> None:
     original = {"web_search": {"provider": "searxng"}}
     operations = parse_patch_operations([{"op": "unset", "path": "web_search.provider"}])

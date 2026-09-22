@@ -10,7 +10,7 @@ from typing import Any
 from core.debug.store import DebugTraceStore
 from core.extensions import validate_extension_config
 from core.fetch_config import WEB_FETCH_CREDENTIALS, WEB_FETCH_PRICING, WEB_FETCH_PROVIDERS
-from core.model_tasks import SUPPORTED_TASK_TYPES
+from core.model_tasks import SUPPORTED_TASK_TYPES, task_model_targets_equal
 from core.recall.recall import FIRST_PARTY_RECALL_BACKENDS
 from core.search_config import FIRST_PARTY_WEB_SEARCH_PROVIDERS
 from core.settings import (
@@ -289,10 +289,14 @@ def _validate_public_settings_candidate(
             previous_tasks = normalize_model_task_settings(previous.get("model_tasks"))
     for task_type in changed_tasks:
         binding = effective["model_tasks"].get(task_type)
+        previous_binding = previous_tasks.get(task_type, {})
         if (
             isinstance(binding, dict)
             and binding.get("target")
-            and binding != previous_tasks.get(task_type)
+            and (
+                not task_model_targets_equal(binding["target"], previous_binding.get("target"))
+                or binding.get("options", {}) != previous_binding.get("options", {})
+            )
         ):
             runtime.model_tasks.validate_binding(task_type, binding)
     _validate_changed_provider_connections(runtime, operations)
