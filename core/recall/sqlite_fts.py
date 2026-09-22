@@ -225,12 +225,15 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             )
         except Exception as error:  # pragma: no cover
             self._warning("Canonical FTS page failed; falling back: %s", error)
-        fallback_request = (
-            replace(request, order="newest") if request.order == "relevance" else request
+        fallback_request = replace(
+            request,
+            order="newest" if request.order == "relevance" else request.order,
+            snapshot_id=None,
         )
         page = await self._fallback.search_page(fallback_request)
         return replace(
             page,
+            snapshot_id=snapshot_id,
             ranking=f"substring_scan_{fallback_request.order}",
             degraded=True,
             degradation_reason=(
