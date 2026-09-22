@@ -351,7 +351,9 @@ def _assistant_continuation_dict(
     Keeps readable ``reasoning`` and opaque ``reasoning_meta`` so reasoning-aware
     adapters can round-trip the active tool-use turn, but drops ``usage`` because
     token accounting is never part of the provider request contract. Under the
-    ``none`` replay policy even the live turn loses its reasoning fields.
+    ``none`` replay policy even the live turn loses its reasoning fields. An
+    interrupted turn is a hard native-reasoning boundary under every policy:
+    its readable work returns only through provider-neutral recovery text.
     """
     data = message.to_dict()
     data.pop("run_id", None)
@@ -364,7 +366,7 @@ def _assistant_continuation_dict(
     data.pop("interruption_cause", None)
     data.pop("output_files", None)
     data.pop("reasoning_scope", None)
-    if replay_policy == REASONING_REPLAY_NONE:
+    if replay_policy == REASONING_REPLAY_NONE or message.interrupted:
         data.pop("reasoning", None)
         data.pop("reasoning_meta", None)
     return data

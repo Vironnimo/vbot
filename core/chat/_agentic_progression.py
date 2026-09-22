@@ -57,7 +57,6 @@ from core.providers.adapter import (
     request_input_budget,
 )
 from core.providers.errors import ProviderRequestTooLargeError
-from core.providers.reasoning import REASONING_REPLAY_NONE
 from core.runs import (
     MODEL_STEP_USAGE_EVENT,
     RUN_CHANGE_STATS_EVENT,
@@ -462,19 +461,18 @@ class AgenticProgression:
                 assistant_request_message = await _CHAT_TRANSFORM_WORKERS.run(
                     _assistant_continuation_dict,
                     assistant_message,
-                    replay_policy=(
-                        replay_policy if assistant_step.replay_reasoning else REASONING_REPLAY_NONE
-                    ),
+                    replay_policy=replay_policy,
                 )
-                assistant_request_messages: list[JsonObject] = [assistant_request_message]
-                if (
-                    not assistant_step.replay_reasoning
-                    and not assistant_request_message.get("content")
-                    and not assistant_request_message.get("tool_calls")
-                ):
-                    # A Reasoning-only integrity boundary becomes empty after native
-                    # Reasoning is stripped. Do not send an empty Assistant entry.
-                    assistant_request_messages = []
+                # An interrupted Reasoning-only boundary becomes empty once its
+                # native Reasoning is stripped. Never send an empty Assistant entry.
+                assistant_request_messages: list[JsonObject] = (
+                    [assistant_request_message]
+                    if any(
+                        assistant_request_message.get(field)
+                        for field in ("content", "tool_calls", "reasoning", "reasoning_meta")
+                    )
+                    else []
+                )
                 assert isinstance(assistant_message.usage, dict)
                 await _CHAT_TRANSFORM_WORKERS.run(
                     context.context_usage.observe,

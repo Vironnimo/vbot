@@ -120,7 +120,6 @@ def _normalize_non_streaming_step(
             terminal_outcome=None,
             recovery="continue",
             recovery_note=OUTPUT_INTEGRITY_RECOVERY_NOTE,
-            replay_reasoning=False,
         )
     return _AssistantStep(
         message=message,
@@ -681,7 +680,6 @@ class WireRequestRunner:
                 interruption_cause="provider",
                 recovery="continue",
                 recovery_note=OUTPUT_INTEGRITY_RECOVERY_NOTE,
-                replay_reasoning=False,
                 output_cwd=output_cwd,
             )
         assistant_message = _with_assistant_output_files(assistant_message, cwd=output_cwd)
@@ -702,7 +700,6 @@ class WireRequestRunner:
         output_cwd: Path | None,
         recovery: Literal["none", "continue", "interrupt"] = "none",
         recovery_note: str | None = None,
-        replay_reasoning: bool = True,
         recovery_error: Exception | None = None,
     ) -> _AssistantStep:
         """Preserve a stream broken after visible output as an interrupted turn.
@@ -736,7 +733,6 @@ class WireRequestRunner:
             terminal_outcome=None,
             recovery=recovery,
             recovery_note=recovery_note,
-            replay_reasoning=replay_reasoning,
             recovery_error=recovery_error,
         )
 

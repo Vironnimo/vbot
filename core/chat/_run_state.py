@@ -99,7 +99,6 @@ class _AssistantStep:
     terminal_outcome: TerminalOutcome | None
     recovery: Literal["none", "continue", "interrupt"] = "none"
     recovery_note: str | None = None
-    replay_reasoning: bool = True
     failure: Exception | None = None
     recovery_error: Exception | None = None
 
