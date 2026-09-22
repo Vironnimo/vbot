@@ -252,9 +252,13 @@ async def test_oauth_token_getter_returns_valid_stored_token(
 
 @respx.mock
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "expiry_value", [None, "0001-01-01T00:00:00+14:00", "9999-12-31T23:59:59-14:00"]
+)
 async def test_oauth_token_getter_refreshes_expired_token_with_exchange_url(
     tmp_path: Path,
     oauth_config: OAuthConfig,
+    expiry_value: str | None,
 ) -> None:
     """Expired Copilot tokens refresh through the token exchange URL."""
 
@@ -274,7 +278,7 @@ async def test_oauth_token_getter_refreshes_expired_token_with_exchange_url(
             200,
             json={
                 "token": "fresh-copilot-token",
-                "expires_at": expires_at.timestamp(),
+                "expires_at": expires_at.timestamp() if expiry_value is None else expiry_value,
                 "endpoints": {"api": "https://api.enterprise.githubcopilot.com"},
             },
         )
@@ -293,7 +297,11 @@ async def test_oauth_token_getter_refreshes_expired_token_with_exchange_url(
     stored = token_store.load(PROVIDER_ID, CONNECTION_ID)
     assert stored is not None
     assert stored.access_token == "fresh-copilot-token"
-    assert stored.expires_at == expires_at
+    if expiry_value is None:
+        assert stored.expires_at == expires_at
+    else:
+        assert stored.expires_at is not None
+        assert stored.expires_at > datetime.now(UTC)
     assert stored.extra["github_oauth_token"] == "github-oauth-secret"
     assert stored.extra["copilot_api_endpoint"] == ("https://api.enterprise.githubcopilot.com")
 
