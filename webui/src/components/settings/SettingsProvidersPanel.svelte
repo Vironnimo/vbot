@@ -55,10 +55,10 @@
     providerAuthEvent = null,
     connectProvider = null,
     disconnectProvider = null,
-    onCommit = noop,
+    onCommitProviderSettings = noop,
     onToast = noop,
     onError = noop,
-    onReloadSettings = noop,
+    onRefreshProviderSettings = noop,
     modelsRefreshToken = 0,
   } = $props();
   const localModels = createLocalProviderModels({
@@ -71,8 +71,8 @@
     get onError() {
       return onError;
     },
-    get onReloadSettings() {
-      return onReloadSettings;
+    get onRefreshProviderSettings() {
+      return onRefreshProviderSettings;
     },
   });
 
@@ -84,9 +84,9 @@
   let modalScope = $state(null);
   let forwardedAuthEvent = $state(null);
 
-  // A provider change elsewhere is mirrored here through a settings reload, but
+  // A provider change elsewhere refreshes the Provider projection, but is
   // held while the key-input modal is open so a live edit is never interrupted.
-  let pendingSettingsReload = $state(false);
+  let pendingProviderRefresh = $state(false);
   let customModalOpen = $state(false);
   let customModalProvider = $state(null);
   let deleteCustomCandidate = $state(null);
@@ -209,7 +209,7 @@
     }
   });
 
-  // A `resource_changed(models|providers)` signal queues a settings reload so
+  // A `resource_changed(models|providers)` signal queues a Provider refresh so
   // this window reflects the change (first run is a no-op: mount has the prop).
   $effect(() => {
     if (lastModelsRefreshToken === null) {
@@ -218,19 +218,23 @@
     }
     if (modelsRefreshToken !== lastModelsRefreshToken) {
       lastModelsRefreshToken = modelsRefreshToken;
-      pendingSettingsReload = true;
+      pendingProviderRefresh = true;
     }
   });
 
-  // Run the queued reload once the key-input modal is closed, so a live
+  // Run the queued refresh once the key-input modal is closed, so a live
   // credential edit is never swapped out from under the user.
   $effect(() => {
     if (
-      pendingSettingsReload &&
+      pendingProviderRefresh &&
       shouldApplyReloadNow(SURFACE_FORM, { focused: modalScope !== null })
     ) {
-      pendingSettingsReload = false;
-      void onReloadSettings();
+      pendingProviderRefresh = false;
+      void Promise.resolve(onRefreshProviderSettings()).catch((error) => {
+        onError(
+          `${t('settings.loadError', 'Settings could not be loaded.')} ${error.message}`,
+        );
+      });
     }
   });
 
@@ -292,7 +296,7 @@
         });
       }
 
-      await onReloadSettings();
+      await onRefreshProviderSettings();
     } catch (error) {
       onError(
         `${t('settings.providers.toggleError', 'Provider connection could not be updated.')} ${error.message}`,
@@ -357,7 +361,7 @@
   }
 
   async function reloadAfterCustomProviderSave() {
-    await onReloadSettings();
+    await onRefreshProviderSettings();
   }
 
   async function confirmDeleteCustomProvider() {
@@ -375,7 +379,7 @@
         ),
         variant: 'success',
       });
-      await onReloadSettings();
+      await onRefreshProviderSettings();
     } catch (error) {
       onError(
         `${t(
@@ -403,7 +407,7 @@
   }
 
   async function reloadAfterConnect() {
-    await onReloadSettings();
+    await onRefreshProviderSettings();
   }
 
   async function disconnectOAuthAccount(provider, connection, account) {
@@ -415,7 +419,7 @@
         getPublicConnectionId(connection),
         account.id,
       );
-      await onReloadSettings();
+      await onRefreshProviderSettings();
     } catch (error) {
       onError(
         `${t('settings.providers.disconnectError', 'Provider connection could not be disconnected.')} ${error.message}`,
@@ -448,7 +452,7 @@
         });
       }
 
-      await onReloadSettings();
+      await onRefreshProviderSettings();
     } catch (error) {
       onError(
         `${t('settings.providers.removeKeyError', 'API key could not be removed.')} ${error.message}`,
@@ -476,10 +480,8 @@
       const result = await refreshModels();
       applyProviderRefreshResult(result);
       await listModels();
-      // Success is a toast, not inline text: the refresh triggers a settings
-      // reload (resource_changed → onReloadSettings) that briefly unmounts this
-      // panel, so an inline result would flash and vanish. The app-level toast
-      // survives that reload.
+      // The operation result remains visible through the app-level toast while
+      // Provider invalidation refreshes the catalog in place.
       onToast({
         title: t(
           'settings.providers.refreshSuccess',
@@ -528,7 +530,7 @@
         .map((provider) => [provider.provider_id, provider.model_count]),
     );
 
-    onCommit({
+    onCommitProviderSettings({
       ...settings,
       providers: {
         ...settings.providers,
@@ -872,7 +874,7 @@
               {provider}
               active={expandedProviders.has(provider.id) &&
                 providerSummaryStatus(provider) === 'connected'}
-              {onReloadSettings}
+              {onRefreshProviderSettings}
               {onToast}
               {onError}
             />

@@ -113,9 +113,8 @@ describe('SettingsView', () => {
       refreshed_count: 2,
       model_count: 5,
     });
-    // The refresh result is now a success toast (auto-dismiss), not inline
-    // text — an inline result would flash and vanish when the settings reload
-    // briefly unmounts the panel.
+    // The operation result is a success toast; Provider snapshots refresh the
+    // mounted rows independently.
     await waitForCondition(() =>
       toastMock.mock.calls.some(([toast]) => toast?.variant === 'success'),
     );
