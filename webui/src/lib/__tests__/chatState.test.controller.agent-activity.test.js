@@ -1,8 +1,95 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ensureSessionState } from '../chatState.js';
-import { setup, deferred } from './chatState.controller.support.js';
+import { deferred, setup } from './chatState.controller.support.js';
 
 describe('chat controller', () => {
+  it.each(['resolve', 'reject'])(
+    'ignores an older roster %s after a silent refresh completes initial loading',
+    async (outcome) => {
+      const older = deferred();
+      const newer = deferred();
+      const loadChatHistory = vi
+        .fn()
+        .mockResolvedValue({ messages: [], active_run: null });
+      const { chatState, controller, onAgentsChanged, onAgentSelected } = setup(
+        {
+          operationOverrides: {
+            listAgents: vi
+              .fn()
+              .mockReturnValueOnce(older.promise)
+              .mockReturnValueOnce(newer.promise),
+            loadChatHistory,
+          },
+        },
+      );
+      const initial = controller.loadAgents();
+      const refresh = controller.loadAgents({ silent: true });
+      expect(chatState.loadingAgents).toBe(true);
+      const agents = [{ id: 'beta', current_session_id: 'beta-session' }];
+      newer.resolve({ agents });
+      expect(await refresh).toBe(true);
+      expect(chatState.loadingAgents).toBe(false);
+      expect(loadChatHistory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent_id: 'beta',
+          session_id: 'beta-session',
+        }),
+      );
+      if (outcome === 'resolve') older.resolve({ agents: [{ id: 'deleted' }] });
+      else older.reject(new Error('stale failure'));
+      expect(await initial).toBe(false);
+      expect(chatState.agents).toEqual(agents);
+      expect(chatState.selectedAgentId).toBe('beta');
+      expect(chatState.agentsError).toBeNull();
+      expect(onAgentsChanged).toHaveBeenCalledExactlyOnceWith(agents);
+      expect(onAgentSelected).toHaveBeenCalledExactlyOnceWith('beta');
+      expect(loadChatHistory).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('does not clear a newer roster loading state when an older request finishes', async () => {
+    const older = deferred();
+    const newer = deferred();
+    const { chatState, controller } = setup({
+      operationOverrides: {
+        listAgents: vi
+          .fn()
+          .mockReturnValueOnce(older.promise)
+          .mockReturnValueOnce(newer.promise),
+      },
+    });
+    const initial = controller.loadAgents();
+    const refresh = controller.loadAgents({ silent: true });
+    older.resolve({ agents: [{ id: 'deleted' }] });
+    expect(await initial).toBe(false);
+    expect(chatState.loadingAgents).toBe(true);
+    newer.resolve({ agents: [] });
+    await refresh;
+    expect(chatState.loadingAgents).toBe(false);
+  });
+
+  it.each(['resolve', 'reject'])(
+    'ignores pending roster %s after disposal',
+    async (outcome) => {
+      const response = deferred();
+      const { chatState, controller, onAgentsChanged, onAgentSelected } = setup(
+        {
+          operationOverrides: { listAgents: vi.fn(() => response.promise) },
+        },
+      );
+      const loading = controller.loadAgents();
+      controller.destroy();
+      if (outcome === 'resolve')
+        response.resolve({ agents: [{ id: 'alpha' }] });
+      else response.reject(new Error('late failure'));
+      expect(await loading).toBe(false);
+      expect(chatState.agents).toEqual([]);
+      expect(chatState.loadingAgents).toBe(false);
+      expect(chatState.agentsError).toBeNull();
+      expect(onAgentsChanged).not.toHaveBeenCalled();
+      expect(onAgentSelected).not.toHaveBeenCalled();
+    },
+  );
   it('loads the roster, current history, Run truth, and Queue as one lifecycle', async () => {
     const loadChatHistory = vi.fn().mockResolvedValue({
       active_run: null,
