@@ -4,6 +4,7 @@ import {
   describe,
   expect,
   it,
+  applyConnectionSnapshotMock,
   rpcMock,
   createChatRpcMock,
   createAgent,
@@ -17,6 +18,7 @@ import {
 import { unmount } from 'svelte';
 import { resetComposerMemory } from '../../lib/composerMemory.js';
 import ChatWorkspace from '../ChatWorkspace.svelte';
+import { reactiveProps } from './reactiveProps.svelte.js';
 
 describe('ChatWorkspace', () => {
   const harness = setupChatViewTestSuite();
@@ -395,6 +397,260 @@ describe('ChatWorkspace', () => {
     expect(testChatStateRefs[1].agents[0].current_session_id).toBe(
       'created-alpha',
     );
+  });
+
+  it('starts a newly opened Chat area from the current Run state, not stale App buffers', async () => {
+    const agents = [
+      createAgent(),
+      createAgent({ id: 'beta', name: 'Beta', current_session_id: 'b-1' }),
+      createAgent({ id: 'gamma', name: 'Gamma', current_session_id: 'g-1' }),
+    ];
+    rpcMock.mockImplementation(createChatRpcMock({ agents }));
+    applyConnectionSnapshotMock.mockImplementation(function (snapshot) {
+      return this.applyConnectionSnapshot(snapshot);
+    });
+    const lifecycle = (type, runId, agentId, sessionId) => ({
+      type,
+      payload: {
+        run_id: runId,
+        agent_id: agentId,
+        session_id: sessionId,
+        run_event_type: type,
+        run_event_sequence: 9,
+        run_event_timestamp: '2026-09-22T10:00:00+00:00',
+        ...(type === 'run_completed' ? { status: 'completed' } : {}),
+      },
+    });
+    const betaRun = { run_id: 'R1', agent_id: 'beta', session_id: 'b-1' };
+    const props = reactiveProps({
+      // App connected while Beta's Run was active.
+      connectionSnapshot: {
+        type: 'connection_ready',
+        replay_status: 'fresh',
+        active_runs: [betaRun],
+        queues: [],
+      },
+      activeRuns: [betaRun],
+      runServerEvents: [],
+    });
+    harness.mount(
+      {
+        target: document.body,
+        props: {
+          sharedAgents: agents,
+          sharedSelectedAgentId: 'alpha',
+          get connectionSnapshot() {
+            return props.connectionSnapshot;
+          },
+          get activeRuns() {
+            return props.activeRuns;
+          },
+          get runServerEvents() {
+            return props.runServerEvents;
+          },
+        },
+      },
+      ChatWorkspace,
+    );
+    const tabLabels = (index) =>
+      Array.from(pane(index).querySelectorAll('.chat-header .agent-tab')).map(
+        (tab) => tab.getAttribute('aria-label'),
+      );
+    await waitForCondition(() => tabLabels(0).includes('Beta: Running'), 100);
+
+    // Beta's Run ends; later traffic pushes its terminal event out of App's
+    // bounded window, and Gamma's Run starts outside the retained window.
+    props.runServerEvents = [lifecycle('run_completed', 'R1', 'beta', 'b-1')];
+    props.activeRuns = [];
+    await waitForCondition(() => !tabLabels(0).includes('Beta: Running'), 100);
+    props.runServerEvents = [];
+    props.activeRuns = [
+      { run_id: 'R2', agent_id: 'gamma', session_id: 'g-1', status: 'running' },
+    ];
+
+    action(0, 'Split view');
+    await waitForCondition(() => tabLabels(1).includes('Gamma: Running'), 100);
+
+    expect(tabLabels(1)).not.toContain('Beta: Running');
+  });
+
+  describe('deleting the displayed current Session', () => {
+    const rows = {
+      'session-1': {
+        id: 'session-1',
+        title: 'First topic',
+        created_at: '2026-05-10T00:00:00+00:00',
+        last_active_at: '2026-05-10T02:00:00+00:00',
+      },
+      'session-2': {
+        id: 'session-2',
+        title: 'Second topic',
+        created_at: '2026-05-10T00:00:00+00:00',
+        last_active_at: '2026-05-10T01:00:00+00:00',
+      },
+    };
+    let deleted;
+
+    function mountDeletableWorkspace() {
+      deleted = false;
+      const baseRpc = createChatRpcMock({
+        sessionMessages: {
+          'session-2': [
+            {
+              id: 'second-answer',
+              role: 'assistant',
+              content: 'Second conversation sentinel',
+            },
+          ],
+        },
+      });
+      rpcMock.mockImplementation(async (method, params) => {
+        if (method === 'session.delete') {
+          deleted = true;
+          return { ...params, next_session_id: 'session-2' };
+        }
+        if (method === 'agent.list') {
+          return {
+            agents: [
+              createAgent({
+                current_session_id: deleted ? 'session-2' : 'session-1',
+              }),
+            ],
+          };
+        }
+        if (
+          deleted &&
+          method === 'chat.history' &&
+          params.session_id === 'session-1'
+        ) {
+          throw new Error('Session not found: session-1');
+        }
+        return baseRpc(method, params);
+      });
+      listSessionsMock.mockImplementation(async () => ({
+        sessions: deleted
+          ? [rows['session-2']]
+          : [rows['session-1'], rows['session-2']],
+      }));
+      const props = reactiveProps({
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        agentsRefreshToken: 0,
+      });
+      harness.mount(
+        {
+          target: document.body,
+          props: {
+            get sharedAgents() {
+              return props.sharedAgents;
+            },
+            get sharedSelectedAgentId() {
+              return props.sharedSelectedAgentId;
+            },
+            get agentsRefreshToken() {
+              return props.agentsRefreshToken;
+            },
+          },
+        },
+        ChatWorkspace,
+      );
+      return props;
+    }
+
+    async function deleteFromDrawer(index, title) {
+      action(index, 'Sessions');
+      await waitForCondition(
+        () =>
+          Array.from(pane(index).querySelectorAll('.session-row')).some((row) =>
+            row.textContent.includes(title),
+          ),
+        100,
+      );
+      Array.from(pane(index).querySelectorAll('.session-row'))
+        .find((row) => row.textContent.includes(title))
+        .querySelector('.session-row__menu-trigger')
+        .click();
+      flushSync();
+      document.querySelector('.session-row__menu-item--danger').click();
+      flushSync();
+      Array.from(document.querySelectorAll('.modal-footer button'))
+        .find((element) => element.textContent.trim() === 'Delete')
+        .click();
+      flushSync();
+    }
+
+    // Lets any (unwanted) History load triggered by the last action start.
+    async function settle(ticks = 10) {
+      for (let tick = 0; tick < ticks; tick += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        flushSync();
+      }
+    }
+
+    const deletedHistoryReads = () =>
+      rpcMock.mock.calls.filter(
+        ([method, params]) =>
+          method === 'chat.history' && params.session_id === 'session-1',
+      ).length;
+
+    it('lands on the server landing and never reopens the deleted Session', async () => {
+      const props = mountDeletableWorkspace();
+      await waitForCondition(() => deletedHistoryReads() > 0, 100);
+      await deleteFromDrawer(0, 'First topic');
+      await waitForCondition(
+        () => pane(0).textContent.includes('Second conversation sentinel'),
+        100,
+      );
+      const readsAtDeletion = deletedHistoryReads();
+
+      // App publishes rosters (refreshed and still-stale) and bumps the token.
+      props.sharedAgents = [createAgent({ current_session_id: 'session-2' })];
+      props.agentsRefreshToken = 1;
+      flushSync();
+      await waitForCondition(
+        () =>
+          rpcMock.mock.calls.filter(([method]) => method === 'agent.list')
+            .length >= 2,
+        100,
+      );
+      props.sharedAgents = [createAgent()];
+      flushSync();
+
+      // Selecting the same Agent returns to its current Session.
+      pane(0).querySelector('.agent-tab').click();
+      flushSync();
+      await settle();
+
+      expect(testChatStateRefs[0].agents[0].current_session_id).toBe(
+        'session-2',
+      );
+      expect(deletedHistoryReads()).toBe(readsAtDeletion);
+      expect(pane(0).textContent).toContain('Second conversation sentinel');
+    });
+
+    it('releases the deleted Session in the other Chat area too', async () => {
+      mountDeletableWorkspace();
+      await waitForCondition(() => deletedHistoryReads() > 0, 100);
+      action(0, 'Split view');
+      await waitForCondition(() => testChatStateRefs.length === 2, 100);
+      await waitForCondition(() => deletedHistoryReads() > 1, 100);
+
+      await deleteFromDrawer(0, 'First topic');
+      await waitForCondition(
+        () =>
+          pane(0).textContent.includes('Second conversation sentinel') &&
+          testChatStateRefs[1].agents[0].current_session_id === 'session-2',
+        100,
+      );
+      const readsAtDeletion = deletedHistoryReads();
+
+      pane(1).querySelector('.agent-tab').click();
+      flushSync();
+      await settle();
+
+      expect(deletedHistoryReads()).toBe(readsAtDeletion);
+      expect(pane(1).textContent).toContain('Second conversation sentinel');
+    });
   });
 
   it('resizes with keyboard, clamps widths and restores equal sizes', async () => {

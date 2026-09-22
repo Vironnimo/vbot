@@ -15,13 +15,18 @@ import {
   resetSettingsViewHarness,
   rpcMock,
   setInputValue,
+  settingsPayload,
   SettingsView,
   waitForCondition,
 } from './SettingsView.support.js';
+import { createAutosaveCoordinator } from '../../lib/autosave.js';
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
+
+const { default: AutosaveContextHost } =
+  await import('./AutosaveContextHost.svelte');
 
 describe('SettingsView', () => {
   let mountedComponent;
@@ -160,6 +165,54 @@ describe('SettingsView', () => {
       },
     });
   });
+
+  it.each([
+    ['a stored custom value', 6, 1],
+    ['the stored default value', 4, 0],
+  ])(
+    'settles a cleared number field over %s instead of blocking navigation',
+    async (_label, storedDepth, expectedWrites) => {
+      rpcMock.mockImplementation(
+        createSettingsRpcMock({
+          settings: {
+            ...settingsPayload(),
+            subagents: {
+              max_subagent_depth: storedDepth,
+              max_subagents_per_turn: 8,
+              subagent_timeout_minutes: 60,
+            },
+          },
+        }),
+      );
+      const coordinator = createAutosaveCoordinator();
+      mountedComponent = mount(AutosaveContextHost, {
+        target: document.body,
+        props: { component: SettingsView, coordinator },
+      });
+      flushSync();
+      await openSubAgentsPanel();
+      vi.useFakeTimers();
+
+      setInputValue('input[aria-label="Max sub-agent depth"]', '');
+      await vi.advanceTimersByTimeAsync(800);
+      await flushAsyncUpdates();
+
+      const writes = getSettingsUpdateCalls();
+      expect(writes).toHaveLength(expectedWrites);
+      if (expectedWrites > 0) {
+        expect(writes[0][1].subagents.max_subagent_depth).toBe(4);
+        // The field shows what was saved rather than staying blank.
+        expect(
+          document.querySelector('input[aria-label="Max sub-agent depth"]')
+            .value,
+        ).toBe('4');
+      }
+      expect(coordinator.hasPending()).toBe(false);
+
+      await expect(coordinator.flushPending()).resolves.toBe(true);
+      expect(getSettingsUpdateCalls()).toHaveLength(expectedWrites);
+    },
+  );
 
   it('reports a successful no-op when manual save is clicked with no changes', async () => {
     const toastMock = vi.fn();

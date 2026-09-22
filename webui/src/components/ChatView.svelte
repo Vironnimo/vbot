@@ -78,12 +78,22 @@
     navigateToSubAgent = () => {},
     pendingSessionNavigation = null,
     onSessionNavigation = () => {},
+    // Workspace coordination between retained Chat areas: this area reports
+    // Sessions deleted from its drawer, and releases its own pointer to a
+    // Session the other area deleted (`{ requestId, deletedSessionId,
+    // nextSessionId, agentAddress }`).
+    onSessionDeleted = () => {},
+    siblingSessionDeletion = null,
     runServerEvent = null,
     runServerEvents = [],
     // Bounded list of `bash_process_status_changed` accessor events; the
     // controller re-applies the whole list (idempotent merge by process id).
     backgroundBashStatusEvents = [],
     connectionSnapshot = null,
+    // App's live list of the Runs active now (the snapshot's list advanced by
+    // later lifecycle events). An owner mounted after the app connected starts
+    // from it instead of replaying the retained snapshot and event window.
+    activeRuns = null,
     // Bumped by App on `resource_changed(kind:"sessions")`; forwarded to the
     // session drawer so a new/switched session in another window appears in the
     // list. It deliberately does NOT switch the viewed conversation.
@@ -174,6 +184,12 @@
     },
     get onSessionNavigation() {
       return onSessionNavigation;
+    },
+    get onSessionDeleted() {
+      return onSessionDeleted;
+    },
+    get siblingSessionDeletion() {
+      return siblingSessionDeletion;
     },
     get selectedProjectId() {
       return selectedProjectId;
@@ -562,6 +578,16 @@
       );
     },
   });
+  // Before the snapshot/event effects run: a fresh owner adopts the current
+  // Run state instead of replaying App's retained buffers.
+  untrack(() =>
+    chatController.startFromServerState({
+      connectionSnapshot,
+      activeRuns,
+      runServerEvent,
+      runServerEvents,
+    }),
+  );
 
   $effect(() => {
     chatController.reconcileSubAgentRows(activeTimelineItems, {

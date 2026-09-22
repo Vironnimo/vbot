@@ -5,7 +5,10 @@ import {
   createChatState,
   ensureSessionState,
   setAgents,
+  startRun,
+  visibleTimelineItemsForRender,
 } from '../chatState.js';
+import { createChatRunStream } from '../chatRunStream.js';
 import { makeStreamHarness } from './chatRunStream.support.js';
 
 describe('createChatRunStream() SSE reconnect budget (regression for B2)', () => {
@@ -527,5 +530,97 @@ describe('createChatRunStream() queue removal on run_started (regression for B7)
 
     expect(sessionState.queue.map((item) => item.id)).toEqual([QUEUED_ITEM_ID]);
     expect(harness.syncSessionQueue).not.toHaveBeenCalled();
+  });
+});
+
+describe('createChatRunStream() returning to a running Session', () => {
+  const RUN_ID = 'run-returned';
+  const identity = { run_id: RUN_ID, agent_id: 'alpha', session_id: 's1' };
+  const firstAnswer = {
+    id: 'm1',
+    role: 'assistant',
+    content: 'Checking files.',
+    tool_calls: [{ id: 'tc1', name: 'read' }],
+  };
+  const stable = [
+    [4, 'assistant_output', { message: firstAnswer }],
+    [5, 'tool_call_started', { tool_call_id: 'tc1', name: 'read' }],
+    [6, 'tool_call_result', { tool_call_id: 'tc1', name: 'read' }],
+  ];
+  const sseEvent = ([sequence, type, payload]) => ({
+    data: { ...identity, sequence, type, payload },
+  });
+  const wsEvent = ([sequence, type, output]) => ({
+    type: 'run_output',
+    payload: {
+      ...identity,
+      run_event_type: type,
+      run_event_sequence: sequence,
+      output,
+    },
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('keeps answer text streamed after hidden tool boundaries visible', () => {
+    vi.useFakeTimers();
+    const chatState = createChatState();
+    let displayed = true;
+    const subscriptions = [];
+    const stream = createChatRunStream({
+      chatState,
+      subscribeRunEvents: (_url, handlers, options) => {
+        subscriptions.push({ handlers, options });
+        return { close: vi.fn() };
+      },
+      syncSessionQueue: vi.fn(async () => {}),
+      isDisplayedSession: () => displayed,
+      updateSubAgentRunStatuses: vi.fn(),
+      reportStreamDiagnostic: vi.fn(),
+    });
+    const sessionState = ensureSessionState(chatState, 'alpha', 's1');
+    const sseUrl = `/api/runs/${RUN_ID}/events`;
+    startRun(sessionState, {
+      run_id: RUN_ID,
+      sse_url: sseUrl,
+      status: 'running',
+      events: [{ ...identity, sequence: 1, type: 'run_started', payload: {} }],
+    });
+    stream.subscribeToRun(sessionState, sseUrl, { afterSequence: 0 });
+
+    // Leaving the Session closes its SSE; the WebSocket mirrors stable events.
+    displayed = false;
+    stream.closeSubscriptionsExcept('alpha::other');
+    stream.handleServerEvents(null, stable.map(wsEvent));
+
+    // Returning replays SSE from the highest contiguous sequence.
+    displayed = true;
+    stream.attachRunStream(sessionState, {
+      run_id: RUN_ID,
+      status: 'running',
+      sse_url: sseUrl,
+      events: [],
+    });
+    const replay = subscriptions.at(-1);
+    expect(replay.options.afterSequence).toBe(1);
+    for (const replayed of [
+      [2, 'assistant_output_delta', { content_delta: 'Checking ' }],
+      [3, 'assistant_output_delta', { content_delta: 'files.' }],
+      ...stable,
+      [7, 'assistant_output_delta', { content_delta: 'Second ' }],
+      [8, 'assistant_output_delta', { content_delta: 'answer' }],
+    ]) {
+      replay.handlers.onEvent(sseEvent(replayed));
+    }
+    vi.advanceTimersByTime(100);
+
+    const answers = visibleTimelineItemsForRender(sessionState)
+      .flatMap((item) => item.items ?? [])
+      .filter((child) => child.type === 'assistant_output')
+      .map((child) => child.content);
+    expect(answers).toEqual(['Checking files.', 'Second answer']);
+    stream.closeSubscriptions();
   });
 });

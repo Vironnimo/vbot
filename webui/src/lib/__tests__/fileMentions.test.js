@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   extractMentionTokens,
+  formatMentionToken,
   fuzzyFilterFiles,
   isMentionTokenChar,
   matchMentionCandidates,
@@ -18,6 +19,29 @@ describe('extractMentionTokens', () => {
   it('ignores mid-word @ such as email addresses', () => {
     expect(extractMentionTokens('mail user@example.com now')).toEqual([]);
     expect(extractMentionTokens('agent@projekt is not a file')).toEqual([]);
+    expect(extractMentionTokens('mail jürgen@exämple.de now')).toEqual([]);
+    expect(extractMentionTokens('mail x@"quoted" now')).toEqual([]);
+  });
+
+  it('reads bare tokens in any script', () => {
+    expect(extractMentionTokens('read @docs/Übersicht.md now')).toEqual([
+      'docs/Übersicht.md',
+    ]);
+    expect(extractMentionTokens('@笔记/计划.md')).toEqual(['笔记/计划.md']);
+  });
+
+  it('reads quoted tokens with escaped quotes and backslashes', () => {
+    expect(
+      extractMentionTokens(
+        String.raw`see @"notes/meeting notes.md" and @"a \"b\".txt"`,
+      ),
+    ).toEqual(['notes/meeting notes.md', 'a "b".txt']);
+    expect(extractMentionTokens(String.raw`@"dir\\x y"`)).toEqual([
+      String.raw`dir\x y`,
+    ]);
+    expect(extractMentionTokens('unclosed @"notes/meeting notes.md')).toEqual(
+      [],
+    );
   });
 
   it('deduplicates repeated mentions', () => {
@@ -61,10 +85,47 @@ describe('matchMentionCandidates', () => {
     ]);
   });
 
+  it('matches a literal backslash in a listed name before normalizing', () => {
+    expect(
+      matchMentionCandidates([String.raw`a\b.txt`], [String.raw`a\b.txt`]),
+    ).toEqual([String.raw`a\b.txt`]);
+  });
+
   it('deduplicates matches', () => {
     expect(matchMentionCandidates(['README.md', 'README.md.'], files)).toEqual([
       'README.md',
     ]);
+  });
+});
+
+describe('formatMentionToken', () => {
+  it('keeps simple paths bare and quotes everything else', () => {
+    expect(formatMentionToken('docs/Übersicht.md')).toBe('@docs/Übersicht.md');
+    expect(formatMentionToken('notes/meeting notes.md')).toBe(
+      '@"notes/meeting notes.md"',
+    );
+    expect(formatMentionToken('a "b".txt')).toBe('@"a \\"b\\".txt"');
+  });
+
+  it('round-trips every listed path into a mention', () => {
+    const files = [
+      'README.md',
+      'docs/Übersicht.md',
+      'docs/U\u0308bersicht-nfd.md',
+      'notes/meeting notes.md',
+      'src/app+util.js',
+      'node_modules/@scope/pkg/index.js',
+      'a "quoted" name.txt',
+      String.raw`dir\with\backslash.txt`,
+      'report (final).md',
+      'trailing.dot.',
+    ];
+    for (const file of files) {
+      const text = `please read ${formatMentionToken(file)} now, thanks.`;
+      expect(matchMentionCandidates(extractMentionTokens(text), files)).toEqual(
+        [file],
+      );
+    }
   });
 });
 
@@ -121,10 +182,10 @@ describe('fuzzyFilterFiles', () => {
 
 describe('isMentionTokenChar', () => {
   it('accepts path characters and rejects separators', () => {
-    for (const char of ['a', 'Z', '0', '_', '-', '.', '/', '\\']) {
+    for (const char of ['a', 'Z', '0', '_', '-', '.', '/', '\\', 'ü', '中']) {
       expect(isMentionTokenChar(char)).toBe(true);
     }
-    for (const char of [' ', '\n', '@', '(', '"', ':']) {
+    for (const char of [' ', '\n', '@', '(', '"', ':', '+']) {
       expect(isMentionTokenChar(char)).toBe(false);
     }
   });

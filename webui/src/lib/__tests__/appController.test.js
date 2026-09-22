@@ -150,6 +150,53 @@ describe('App controller', () => {
     expect(actions.onReloadAgents).toHaveBeenCalledOnce();
   });
 
+  it('keeps the active Run list current beyond the bounded event window', async () => {
+    const { controller, state } = setup();
+    const lifecycle = (type, runId, extra = {}) => ({
+      type,
+      payload: {
+        run_id: runId,
+        agent_id: 'beta',
+        project_id: null,
+        session_id: `session-${runId}`,
+        run_kind: 'chat',
+        run_event_type: type,
+        run_event_sequence: 1,
+        run_event_timestamp: '2026-09-22T10:00:00+00:00',
+        ...extra,
+      },
+    });
+
+    await controller.handleServerEvent({
+      type: 'connection_ready',
+      active_runs: [{ run_id: 'listed', agent_id: 'beta', session_id: 's' }],
+    });
+    await controller.handleServerEvent(lifecycle('run_started', 'new'));
+    await controller.handleServerEvent(lifecycle('run_completed', 'listed'));
+    // The listed Run's terminal event leaves the bounded window...
+    for (let index = 0; index < 500; index += 1) {
+      await controller.handleServerEvent(lifecycle('run_output', 'new'));
+    }
+
+    // ...but the active list still reflects it; the new Run is running.
+    expect(state.runServerEvents).toHaveLength(500);
+    expect(state.activeRuns).toEqual([
+      {
+        run_id: 'new',
+        agent_id: 'beta',
+        project_id: null,
+        session_id: 'session-new',
+        run_kind: 'chat',
+        status: 'running',
+        started_at: '2026-09-22T10:00:00+00:00',
+      },
+    ]);
+
+    const hello = { type: 'connection_ready', active_runs: [] };
+    await controller.handleServerEvent(hello);
+    expect(state.activeRuns).toEqual([]);
+  });
+
   it('buffers background Bash status events as a bounded accessor list', async () => {
     const { controller, state } = setup();
 

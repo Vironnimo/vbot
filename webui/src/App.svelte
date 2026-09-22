@@ -248,6 +248,7 @@
     appControllerState.backgroundBashStatusEvents,
   );
   let connectionSnapshot = $derived(appControllerState.connectionSnapshot);
+  let activeRuns = $derived(appControllerState.activeRuns);
 
   let serverSwitcherOpen = $state(false);
 
@@ -715,6 +716,7 @@
         {runServerEvents}
         {backgroundBashStatusEvents}
         {connectionSnapshot}
+        {activeRuns}
         {sessionsRefreshToken}
         {commandsRefreshToken}
         {queueInvalidation}
