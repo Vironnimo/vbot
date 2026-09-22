@@ -37,6 +37,12 @@ pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 TEXT_ONLY = frozenset({"text"})
 
 
+def _png_bytes() -> bytes:
+    stream = io.BytesIO()
+    Image.new("RGB", (12, 8), "blue").save(stream, format="PNG")
+    return stream.getvalue()
+
+
 IMAGE_PDF_WIRE = IMAGE_WIRE | frozenset({"application/pdf"})
 
 
@@ -117,7 +123,7 @@ class _StubAgent:
 def test_current_turn_image_media_block_resolves_to_base64(tmp_path: Path) -> None:
     # Arrange
     store = AttachmentStore(tmp_path)
-    image_bytes = b"\x89PNG\r\n\x1a\nimage-bytes"
+    image_bytes = _png_bytes()
     record = store.store("photo.png", image_bytes)
     resolver = ContentBlockResolver(store)
     messages = [_media_message(record)]
@@ -152,7 +158,7 @@ def test_current_turn_image_media_block_resolves_to_base64(tmp_path: Path) -> No
 
 def test_image_reference_is_rendered_for_the_model(tmp_path: Path) -> None:
     store = AttachmentStore(tmp_path)
-    record = store.store("image.png", b"\x89PNG\r\n\x1a\nimage-bytes")
+    record = store.store("image.png", _png_bytes())
     resolver = ContentBlockResolver(store)
     message = _media_message(record)
     message["content"][0]["image_reference"] = 2
@@ -239,7 +245,7 @@ def test_file_mention_block_resolves_identically_on_historical_turns(tmp_path: P
 def test_historical_turn_image_resolves_to_placeholder_text(tmp_path: Path) -> None:
     # Arrange
     store = AttachmentStore(tmp_path)
-    record = store.store("old-photo.png", b"\x89PNG\r\n\x1a\nold")
+    record = store.store("old-photo.png", _png_bytes())
     resolver = ContentBlockResolver(store)
     messages = [_media_message(record, message_id="user-historical")]
 
@@ -268,7 +274,7 @@ def test_historical_turn_image_with_deleted_attachment_degrades_gracefully(
 ) -> None:
     # Arrange
     store = AttachmentStore(tmp_path)
-    record = store.store("gone.png", b"\x89PNG\r\n\x1a\ngone")
+    record = store.store("gone.png", _png_bytes())
     store.delete(record.id)
     resolver = ContentBlockResolver(store)
     messages = [_media_message(record, message_id="user-historical")]
@@ -553,7 +559,7 @@ def test_current_turn_image_degrades_to_path_note_when_vision_not_supported(
     # A current-turn image to a non-vision model must not abort the run: it
     # degrades to a path note that explains the model cannot see it.
     store = AttachmentStore(tmp_path)
-    record = store.store("photo.png", b"\x89PNG\r\n\x1a\nimage")
+    record = store.store("photo.png", _png_bytes())
     resolver = ContentBlockResolver(store)
     messages = [_media_message(record)]
 
@@ -633,7 +639,7 @@ def test_current_turn_video_resolves_natively_when_model_and_wire_support_it(
 def test_mixed_text_and_image_blocks_resolve_in_order(tmp_path: Path) -> None:
     # Arrange
     store = AttachmentStore(tmp_path)
-    image_bytes = b"\x89PNG\r\n\x1a\nmixed"
+    image_bytes = _png_bytes()
     record = store.store("photo.png", image_bytes)
     resolver = ContentBlockResolver(store)
     messages = [
@@ -701,7 +707,7 @@ def test_chat_loop_resolves_historical_blocks_when_latest_user_turn_is_plain_tex
 ) -> None:
     # Arrange
     store = AttachmentStore(tmp_path)
-    record = store.store("old-photo.png", b"\x89PNG\r\n\x1a\nold")
+    record = store.store("old-photo.png", _png_bytes())
     session = ChatSessionManager(tmp_path).create("agent", session_id="session-one")
     session.append(
         ChatMessage.user(
@@ -794,5 +800,5 @@ async def test_local_tool_image_conversion_failure_retains_original_path() -> No
     )
     assert len(parts) == 1
     assert parts[0]["type"] == "text"
-    assert "could not be converted" in parts[0]["text"]
+    assert "damaged or unreadable" in parts[0]["text"]
     assert "broken.bmp" in parts[0]["text"]

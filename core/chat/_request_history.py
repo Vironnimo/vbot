@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
+from core.attachments.images import ImageConversionError, ImageConverter
 from core.chat._message_history import (
     _last_user_message,
     _last_user_message_with_content_blocks,
     _session_has_any_content_blocks,
     effective_compaction_messages,
 )
+from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.content_blocks import ContentBlock, MediaBlock, content_block_to_dict
 from core.chat.messages import (
     ChatMessage,
@@ -138,16 +141,64 @@ def _current_run_read_media_outputs(
     return outputs
 
 
-def _restore_in_run_tool_result_content(
+async def _restore_in_run_tool_result_content(
     rebuilt_messages: list[JsonObject],
     live_messages: list[JsonObject],
     *,
     input_modalities: frozenset[str] | None = None,
     wire_media_types: frozenset[str] | None = None,
     image_budget: RequestImageBudget | None = None,
+    image_converter: ImageConverter | None = None,
+    max_image_bytes: int | None = None,
 ) -> list[JsonObject]:
     """Restore live Tool pixels after Compaction or a capability-aware fallback."""
 
+    pending = await _CHAT_TRANSFORM_WORKERS.run(
+        _restore_live_tool_content,
+        rebuilt_messages,
+        live_messages,
+        input_modalities,
+        wire_media_types,
+        max_image_bytes,
+    )
+    for content, index in pending:
+        assert wire_media_types is not None
+        block = content[index]
+        if image_converter is None:
+            image_converter = ImageConverter()
+        try:
+            raw = await _CHAT_TRANSFORM_WORKERS.run(base64.b64decode, block["base64"])
+            prepared = await image_converter.convert(
+                raw,
+                block["media_type"],
+                wire_media_types,
+                max_output_bytes=max_image_bytes,
+            )
+        except ImageConversionError as exc:
+            content[index : index + 1] = [{"type": "text", "text": f"[Image not shown: {exc}]"}]
+            continue
+        encoded = await _CHAT_TRANSFORM_WORKERS.run(
+            lambda data: base64.b64encode(data).decode("ascii"), prepared.data
+        )
+        replacement = [{"type": "media", "media_type": prepared.media_type, "base64": encoded}]
+        if prepared.note:
+            replacement.append(
+                {"type": "text", "text": f"[For the current Model, {prepared.note}.]"}
+            )
+        content[index : index + 1] = replacement
+    return await _CHAT_TRANSFORM_WORKERS.run(
+        limit_request_images, rebuilt_messages, budget=image_budget
+    )
+
+
+def _restore_live_tool_content(
+    rebuilt_messages: list[JsonObject],
+    live_messages: list[JsonObject],
+    input_modalities: frozenset[str] | None,
+    wire_media_types: frozenset[str] | None,
+    max_image_bytes: int | None,
+) -> list[tuple[list[JsonObject], int]]:
+    """Keep history scans off the Event Loop; return only images needing work."""
     from core.compaction import is_compacted_tool_result_content
 
     rich_content_by_call_id = {
@@ -157,25 +208,39 @@ def _restore_in_run_tool_result_content(
         and isinstance(message.get("tool_call_id"), str)
         and isinstance(message.get(TOOL_RESULT_CONTENT_BLOCKS_FIELD), list)
     }
+    pending: list[tuple[list[JsonObject], int]] = []
     for message in rebuilt_messages:
         tool_call_id = message.get("tool_call_id")
         if (
-            message.get("role") == "tool"
-            and isinstance(tool_call_id, str)
-            and tool_call_id in rich_content_by_call_id
-            and not is_compacted_tool_result_content(message.get("content"))
-            and not (input_modalities is not None and TOOL_RESULT_CONTENT_BLOCKS_FIELD in message)
+            message.get("role") != "tool"
+            or not isinstance(tool_call_id, str)
+            or tool_call_id not in rich_content_by_call_id
+            or is_compacted_tool_result_content(message.get("content"))
+            or (input_modalities is not None and TOOL_RESULT_CONTENT_BLOCKS_FIELD in message)
         ):
-            message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] = [
-                block
-                for block in rich_content_by_call_id[tool_call_id]
-                if block.get("type") != "media"
+            continue
+        content = [
+            block
+            for block in rich_content_by_call_id[tool_call_id]
+            if block.get("type") != "media"
+            or input_modalities is None
+            or "image" in input_modalities
+        ]
+        message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] = content
+        if wire_media_types is None:
+            continue
+        # Work backwards so replacing one image with image + note preserves indices.
+        for index in range(len(content) - 1, -1, -1):
+            block = content[index]
+            if block.get("type") == "media" and (
+                block.get("media_type") not in wire_media_types
                 or (
-                    (input_modalities is None or "image" in input_modalities)
-                    and (wire_media_types is None or block.get("media_type") in wire_media_types)
+                    max_image_bytes is not None
+                    and len(block["base64"]) > 4 * (max_image_bytes // 3)
                 )
-            ]
-    return limit_request_images(rebuilt_messages, budget=image_budget)
+            ):
+                pending.append((content, index))
+    return pending
 
 
 def _serialize_continuation_request(

@@ -6,6 +6,7 @@ import asyncio
 import base64
 import io
 import logging
+import random
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from typing import Any, cast
 import pytest
 from PIL import Image
 
+import core.attachments.images as conversion_module
 from core.debug import DebugContext
 from core.model_tasks import (
     TASK_IMAGE_UNDERSTANDING,
@@ -93,6 +95,7 @@ class _UnderstandingAdapter:
         response: object | None = None,
         *,
         wire_media_types: frozenset[str] = frozenset({"image/png"}),
+        max_image_bytes: int | None = None,
         close_error: Exception | None = None,
     ) -> None:
         self.response = response or {
@@ -100,6 +103,7 @@ class _UnderstandingAdapter:
             "usage": {"input_tokens": 12, "output_tokens": 7},
         }
         self.wire_media_types = wire_media_types
+        self.max_image_bytes = max_image_bytes
         self.wire_media_models: list[str] = []
         self.requests: list[dict[str, Any]] = []
         self.debug_contexts: list[DebugContext] = []
@@ -112,6 +116,9 @@ class _UnderstandingAdapter:
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         self.wire_media_models.append(model_id)
         return self.wire_media_types
+
+    def image_size_limit(self, model_id: str) -> int | None:
+        return self.max_image_bytes
 
     async def send(
         self,
@@ -194,7 +201,9 @@ class _UnderstandingRuntime:
 
 
 def _png(path: Path, suffix: bytes = b"pixels") -> Path:
-    path.write_bytes(b"\x89PNG\r\n\x1a\n" + suffix)
+    stream = io.BytesIO()
+    Image.new("RGB", (12, 8), "blue").save(stream, format="PNG")
+    path.write_bytes(stream.getvalue() + suffix)
     return path
 
 
@@ -341,19 +350,106 @@ async def test_analyze_sends_fixed_isolated_prompt_and_ordered_images(
 
 
 @pytest.mark.asyncio
-async def test_analysis_converts_for_the_actual_target_without_changing_original(tmp_path: Path):
-    source = tmp_path / "diagram.bmp"
-    Image.new("RGB", (12, 8), "blue").save(source)
+@pytest.mark.parametrize("format", ["BMP", "HEIF"])
+async def test_analysis_converts_for_the_actual_target_without_changing_original(
+    tmp_path: Path, format
+):
+    source = tmp_path / "diagram.input"
+    Image.new("RGB", (12, 8), "blue").save(source, format=format)
     original = source.read_bytes()
     adapter = _UnderstandingAdapter()
     service = ImageService(_UnderstandingModelTasks(), cast(Any, _UnderstandingRuntime(adapter)))
     for target in ("image/png", "image/jpeg"):
         adapter.wire_media_types = frozenset({target})
-        await service.analyze("Describe it", image_paths=[source])
+        result = await service.analyze("Describe it", image_paths=[source])
         part = adapter.requests[-1]["messages"][1]["content"][1]
         assert part["media_type"] == target
         with Image.open(io.BytesIO(base64.b64decode(part["base64"]))) as converted:
             assert converted.size == (12, 8)
+        assert "converted copy" in result.content
+        assert "converted copy" in adapter.requests[-1]["messages"][1]["content"][0]["text"]
+        assert ("lossy compression" in result.content) == (target == "image/jpeg")
+    assert source.read_bytes() == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure,code,advice",
+    [
+        ("damaged", "image_read_error", "fresh copy"),
+        ("pixels", "image_too_large", "changing the file format alone will not help"),
+        ("bytes", "image_too_large", "1 byte limit"),
+    ],
+)
+async def test_analysis_preparation_failures_are_actionable_before_provider_send(
+    tmp_path, monkeypatch, failure, code, advice
+):
+    source = _png(tmp_path / "source.png")
+    if failure == "damaged":
+        source.write_bytes(source.read_bytes()[:25])
+    if failure == "pixels":
+        monkeypatch.setattr(conversion_module, "_PIXEL_LIMIT", 10)
+    adapter = _UnderstandingAdapter(max_image_bytes=1 if failure == "bytes" else None)
+    service = ImageService(_UnderstandingModelTasks(), cast(Any, _UnderstandingRuntime(adapter)))
+    with pytest.raises(ImageInputError) as error:
+        await service.analyze("Describe it", image_paths=[source])
+    assert error.value.code == code
+    assert advice in str(error.value)
+    assert not adapter.requests
+    assert adapter.closed
+
+
+@pytest.mark.asyncio
+async def test_analysis_byte_limit_preserves_original_and_reports_the_sent_copy(tmp_path):
+    source = tmp_path / "large.png"
+    Image.frombytes("RGB", (128, 64), random.Random(3).randbytes(128 * 64 * 3)).save(source)
+    original = source.read_bytes()
+    adapter = _UnderstandingAdapter(max_image_bytes=512)
+    service = ImageService(_UnderstandingModelTasks(), cast(Any, _UnderstandingRuntime(adapter)))
+    result = await service.analyze("Read its small text", image_paths=[source])
+    content = adapter.requests[0]["messages"][1]["content"]
+    assert len(base64.b64decode(content[1]["base64"])) <= 512
+    assert "resized from 128x64" in content[0]["text"]
+    assert "resized from 128x64" in result.content
+    assert source.read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_analysis_does_not_split_total_budget_when_uneven_native_images_fit(
+    tmp_path, monkeypatch
+):
+    small = _png(tmp_path / "small.png")
+    large = _png(tmp_path / "large.png", b"padding" * 100)
+    originals = [path.read_bytes() for path in (small, large)]
+    monkeypatch.setattr(
+        image_module, "DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES", sum(map(len, originals))
+    )
+    adapter = _UnderstandingAdapter()
+    service = ImageService(_UnderstandingModelTasks(), cast(Any, _UnderstandingRuntime(adapter)))
+    await service.analyze("Compare", image_paths=[small, large])
+    content = adapter.requests[0]["messages"][1]["content"]
+    assert [base64.b64decode(part["base64"]) for part in content[1:]] == originals
+
+
+@pytest.mark.asyncio
+async def test_analysis_conversion_growth_fits_actual_total_budget(tmp_path, monkeypatch):
+    source = tmp_path / "small.webp"
+    # A small palette gives lossless WebP a substantial size advantage over PNG.
+    values = random.Random(5).choices(range(0, 256, 32), k=64 * 64 * 3)
+    image = Image.frombytes("RGB", (64, 64), bytes(values))
+    image.save(source, format="WEBP", lossless=True)
+    original = source.read_bytes()
+    png = io.BytesIO()
+    image.save(png, format="PNG")
+    assert len(original) < len(png.getvalue())
+    ceiling = len(original) * 2
+    monkeypatch.setattr(image_module, "DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES", ceiling)
+    adapter = _UnderstandingAdapter()
+    service = ImageService(_UnderstandingModelTasks(), cast(Any, _UnderstandingRuntime(adapter)))
+    result = await service.analyze("Compare", image_paths=[source, source])
+    parts = adapter.requests[0]["messages"][1]["content"][1:]
+    assert sum(len(base64.b64decode(part["base64"])) for part in parts) <= ceiling
+    assert "resized" in result.content
     assert source.read_bytes() == original
 
 
