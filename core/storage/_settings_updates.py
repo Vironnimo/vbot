@@ -365,7 +365,9 @@ def apply_model_task_settings(
             merged_model_tasks.pop(task_type, None)
             continue
 
-        options = current_binding.get("options", {})
+        options = (
+            current_binding.get("options", {}) if target == current_binding.get("target") else {}
+        )
         if "options" in raw_binding:
             options = normalize_json_object(
                 raw_binding["options"],
