@@ -78,6 +78,12 @@
     navigateToSubAgent = () => {},
     pendingSessionNavigation = null,
     onSessionNavigation = () => {},
+    // Workspace coordination between retained Chat areas: this area reports
+    // Sessions deleted from its drawer, and releases its own pointer to a
+    // Session the other area deleted (`{ requestId, deletedSessionId,
+    // nextSessionId, agentAddress }`).
+    onSessionDeleted = () => {},
+    siblingSessionDeletion = null,
     runServerEvent = null,
     runServerEvents = [],
     // Bounded list of `bash_process_status_changed` accessor events; the
@@ -174,6 +180,12 @@
     },
     get onSessionNavigation() {
       return onSessionNavigation;
+    },
+    get onSessionDeleted() {
+      return onSessionDeleted;
+    },
+    get siblingSessionDeletion() {
+      return siblingSessionDeletion;
     },
     get selectedProjectId() {
       return selectedProjectId;
