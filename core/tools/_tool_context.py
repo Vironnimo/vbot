@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import os
+import stat
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +25,22 @@ def _path_argument(path: str | Path, *, windows: bool) -> str | Path:
     # Single quotes are legal on Windows. POSIX also permits double quotes and
     # backslashes. Existence must not redirect a missing literal to another file.
     return path
+
+
+def is_link_entry(path: Path) -> bool:
+    """Return whether the final path component is a symbolic link or Windows junction.
+
+    Junctions are directory links that ``Path.is_symlink`` does not report; other
+    reparse points (for example cloud-file placeholders) remain ordinary entries.
+    """
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return False
+    return (
+        stat.S_ISLNK(info.st_mode)
+        or getattr(info, "st_reparse_tag", 0) == stat.IO_REPARSE_TAG_MOUNT_POINT
+    )
 
 
 ToolEmitHook = Callable[[str, JsonObject], None | Awaitable[None]]
@@ -147,12 +164,19 @@ class ToolContext:
         """
         return self.cwd if self.cwd is not None else self.workspace
 
-    def resolve_path(self, path: str | Path) -> Path:
-        """Resolve one user-supplied path against this call's working directory."""
+    def resolve_path(self, path: str | Path, *, follow_final_link: bool = True) -> Path:
+        """Resolve one user-supplied path against this call's working directory.
+
+        ``follow_final_link=False`` resolves only the parent directory, so a final
+        symbolic link or junction names the link entry itself (as Delete or Move
+        of that entry requires) and the final name keeps the requested spelling.
+        """
 
         candidate = Path(_path_argument(path, windows=os.name == "nt")).expanduser()
         target = candidate if candidate.is_absolute() else self.effective_cwd / candidate
-        return target.resolve()
+        if follow_final_link or target.name in {"", ".", ".."}:
+            return target.resolve()
+        return target.parent.resolve() / target.name
 
     def add_display_count(self, value: int, unit: str, *, at_least: bool = False) -> None:
         """Record one presentation-only count without changing the Tool result."""

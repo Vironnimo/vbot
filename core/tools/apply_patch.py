@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import stat
 from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from difflib import SequenceMatcher
@@ -13,6 +12,16 @@ from pathlib import Path
 
 from core.tools._argument_repair import normalize_call_arguments
 from core.tools._change_preview import _change_preview
+from core.tools._patch_entries import (
+    _ABSENT,
+    _entry_path,
+    _observe_renamed,
+    _rename_entry,
+    _renames_entry,
+    _resolve,
+    _Snapshot,
+    _snapshot,
+)
 from core.tools._patch_syntax import (
     _MESSAGES,
     _Hunk,
@@ -490,22 +499,6 @@ def _apply_hunk(content: str, hunk: _Hunk, path: str, index: int) -> tuple[str, 
     return content[: offset + start] + replacement_text + window[end:], warnings
 
 
-@dataclass(frozen=True)
-class _Snapshot:
-    payload: bytes | None
-    mode: int | None = None
-
-
-def _snapshot(path: Path) -> _Snapshot:
-    try:
-        info = path.stat()
-    except FileNotFoundError:
-        return _Snapshot(None)
-    if not stat.S_ISREG(info.st_mode):
-        raise _PatchError("not_a_file", path=model_path(path))
-    return _Snapshot(path.read_bytes(), stat.S_IMODE(info.st_mode))
-
-
 def _decode(payload: bytes, path: str) -> str:
     if b"\x00" in payload:
         raise _PatchError("binary_file", path=path)
@@ -513,15 +506,6 @@ def _decode(payload: bytes, path: str) -> str:
         return payload.decode("utf-8-sig")
     except UnicodeDecodeError as error:
         raise _PatchError("unsupported_encoding", path=path) from error
-
-
-def _resolve(context: ToolContext, path: str) -> Path:
-    try:
-        if "\x00" in path:
-            raise ValueError(path)
-        return context.resolve_path(path)
-    except (ValueError, OSError, RuntimeError) as error:
-        raise _PatchError("invalid_path", path=path, reason=str(error)) from error
 
 
 def _plan(
@@ -550,14 +534,17 @@ def _plan(
                 raise _PatchError("binary_file", path=displayed)
             pending[path] = _Snapshot(payload, source.mode)
             continue
-        if payload is None:
+        if not source.exists:
             raise _PatchError("file_not_found", path=displayed)
         target = paths[operation.destination] if operation.destination else path
-        if target != path and pending[target].payload is not None:
+        if target != path and pending[target].exists:
             raise _PatchError("destination_exists", path=model_path(target))
         if operation.action == "delete":
-            pending[path] = _Snapshot(None)
+            pending[path] = _ABSENT
             continue
+        if payload is None:
+            # Content paths resolve through links; a link here appeared concurrently.
+            raise _PatchError("file_changed", path=displayed)
         if operation.action == "update":
             content = _decode(payload, displayed)
             for index, hunk in enumerate(operation.hunks, operation.hunk_number):
@@ -568,19 +555,22 @@ def _plan(
             if b"\x00" in payload:
                 raise _PatchError("binary_file", path=displayed)
         if target != path:
-            pending[path] = _Snapshot(None)
+            pending[path] = _ABSENT
             warnings.setdefault(target, []).extend(warnings.pop(path, []))
         pending[target] = _Snapshot(payload, source.mode)
     return pending, warnings
 
 
 def _change_details(
-    path: Path, before: bytes | None, after: bytes | None, *, replaced: bool = False
+    path: Path, previous: _Snapshot, current: _Snapshot, *, replaced: bool = False
 ) -> tuple[JsonObject, int, int]:
     result: JsonObject = {
         "path": model_path(path),
-        "action": "add" if before is None else "delete" if after is None else "update",
+        "action": ("add" if not previous.exists else "delete" if not current.exists else "update"),
     }
+    if previous.link is not None or current.link is not None:
+        return result, 0, 0  # A link entry has no text content to preview.
+    before, after = previous.payload, current.payload
     try:
         new = _decode(after or b"", model_path(path))
         if replaced and after is not None:
@@ -636,6 +626,8 @@ class _Batch:
     blocked: set[Path] = field(default_factory=set)
     failed_text: set[Path] = field(default_factory=set)
     replaced: set[Path] = field(default_factory=set)
+    # Case-only renames keep one path key: (original spelling, current spelling).
+    respelled: dict[Path, tuple[Path, Path]] = field(default_factory=dict)
     results: list[JsonObject] = field(default_factory=list)
 
 
@@ -663,7 +655,7 @@ def _commit(
 
     changed = [path for path in pending if pending[path] != before[path]]
     # A move first materializes its destination; a failure never silently loses its source.
-    for path in sorted(changed, key=lambda p: pending[p].payload is None):
+    for path in sorted(changed, key=lambda p: not pending[p].exists):
         target = pending[path]
         try:
             check_expected()
@@ -692,7 +684,7 @@ def _commit(
         notes.extend(warnings.get(path, []))
         if stale:
             notes.append(_STALE_WARNING.format(path=model_path(path)))
-        if context.change_tracker is not None:
+        if context.change_tracker is not None and before[path].link is None:
             try:
                 old = _decode(before[path].payload or b"", model_path(path))
                 new = _decode(target.payload or b"", model_path(path))
@@ -721,6 +713,46 @@ def _commit(
     return completed, None
 
 
+def _rename(
+    context: ToolContext,
+    state: FileReadState,
+    batch: _Batch,
+    source: Path,
+    destination: Path,
+    before: dict[Path, _Snapshot],
+) -> tuple[list[str], JsonObject | None]:
+    """Move a link itself, or respell a file name, as one directory-entry rename."""
+    snapshot = before[source]
+    try:
+        _rename_entry(source, destination, before)
+    except OSError as error:
+        batch.blocked.update(before)
+        return [], {
+            "code": "file_write_error",
+            "message": _WRITE_FAILED.format(path=model_path(source), reason=str(error)),
+        }
+    completed = [model_path(destination)]
+    batch.before.setdefault(source, snapshot)
+    if destination == source:
+        origin = batch.respelled.get(source, (source, destination))[0]
+        batch.respelled[source] = (origin, destination)
+    else:
+        completed.append(model_path(source))
+        batch.before.setdefault(destination, before[destination])
+        batch.after[source] = batch.observed[source] = _ABSENT
+    # Record the completed rename before observing it, like completed writes.
+    batch.after[destination] = batch.observed[destination] = snapshot
+    try:
+        actual = _observe_renamed(destination, snapshot)
+    except (OSError, _PatchError) as error:
+        batch.blocked.update({source, destination})
+        return completed, _error_data(error)
+    batch.after[destination] = batch.observed[destination] = actual
+    if actual.payload is not None:
+        state.record_read(context.session_id, destination)
+    return completed, None
+
+
 def _run_step(
     context: ToolContext,
     state: FileReadState,
@@ -746,27 +778,31 @@ def _run_step(
             if path in batch.observed and snapshot != batch.observed[path]:
                 batch.blocked.update(resolved)
                 raise _PatchError("file_changed", path=model_path(path))
-        if source in batch.failed_text:
-            operation = replace(
-                operation, hunks=[replace(h, precise_only=True) for h in operation.hunks]
-            )
-        pending, warnings = _plan([operation], paths, before)
-        if (
-            operation.action == "add"
-            and before[source].payload is not None
-            and pending[source] != before[source]
-        ):
-            stale = state.check_stale(context.session_id, source)
-            if stale is not None:
-                code, message = stale_failure_text(stale, source)
-                outcome.update(status="failed", error={"code": code, "message": message})
-                batch.blocked.update(resolved)
-                return
-        for path in resolved:
-            if _snapshot(path) != before[path]:
-                batch.blocked.update(resolved)
-                raise _PatchError("file_changed", path=model_path(path))
-        completed, failure = _commit(context, state, batch, before, pending, warnings)
+        destination = paths[operation.destination] if operation.destination else None
+        if destination is not None and _renames_entry(source, destination, before[source]):
+            completed, failure = _rename(context, state, batch, source, destination, before)
+        else:
+            if source in batch.failed_text:
+                operation = replace(
+                    operation, hunks=[replace(h, precise_only=True) for h in operation.hunks]
+                )
+            pending, warnings = _plan([operation], paths, before)
+            if (
+                operation.action == "add"
+                and before[source].payload is not None
+                and pending[source] != before[source]
+            ):
+                stale = state.check_stale(context.session_id, source)
+                if stale is not None:
+                    code, message = stale_failure_text(stale, source)
+                    outcome.update(status="failed", error={"code": code, "message": message})
+                    batch.blocked.update(resolved)
+                    return
+            for path in resolved:
+                if _snapshot(path) != before[path]:
+                    batch.blocked.update(resolved)
+                    raise _PatchError("file_changed", path=model_path(path))
+            completed, failure = _commit(context, state, batch, before, pending, warnings)
         if operation.action == "add" and completed:
             batch.replaced.add(source)
         elif operation.destination and source in batch.replaced:
@@ -802,19 +838,29 @@ def _run_step(
             batch.failed_text.add(source)
 
 
+def _file_effects(batch: _Batch) -> list[tuple[Path, _Snapshot, _Snapshot]]:
+    """Return net per-entry effects; a case-only rename reads like any other move."""
+    effects = []
+    for path, before in batch.before.items():
+        after = batch.after[path]
+        origin, current = batch.respelled.get(path, (path, path))
+        if origin.name == current.name:
+            effects.append((path, before, after))
+        else:
+            effects += [(current, _ABSENT, after), (origin, before, _ABSENT)]
+    return effects
+
+
 def _batch_result(context: ToolContext, batch: _Batch) -> JsonObject:
     files = []
     added = removed = 0
-    for path, before in batch.before.items():
-        after = batch.after[path]
+    for path, before, after in _file_effects(batch):
         if before == after:
             continue
-        details, plus, minus = _change_details(
-            path, before.payload, after.payload, replaced=path in batch.replaced
-        )
+        details, plus, minus = _change_details(path, before, after, replaced=path in batch.replaced)
         added += plus
         removed += minus
-        notes = list(dict.fromkeys(batch.warnings.get(path, [])))
+        notes = list(dict.fromkeys(batch.warnings.get(path, []))) if after.exists else []
         if notes:
             details["warnings"] = notes
         files.append(details)
@@ -878,7 +924,20 @@ def _execute(context: ToolContext, arguments: JsonObject, state: FileReadState) 
                     resolved[name] = _resolve(context, name)
                 except _PatchError as error:
                     resolution_errors[name] = _error_data(error)
-    all_paths = set(resolved.values())
+    # Delete and Move act on the named entry: a final link itself, not its target.
+    entries: dict[tuple[str, bool], Path] = {}
+    for operation in operations:
+        if operation.action in {"delete", "move"} or operation.destination:
+            roles = [(operation.path, False), (operation.destination, True)]
+            for name, is_destination in roles:
+                if name in resolved and (name, is_destination) not in entries:
+                    try:
+                        entries[name, is_destination] = _entry_path(
+                            context, name, resolved[name], destination=is_destination
+                        )
+                    except _PatchError as error:
+                        resolution_errors[name] = _error_data(error)
+    all_paths = set(resolved.values()) | set(entries.values())
     overlaps = {
         p for p in all_paths if any(p in q.parents or q in p.parents for q in all_paths if p != q)
     }
@@ -896,25 +955,33 @@ def _execute(context: ToolContext, arguments: JsonObject, state: FileReadState) 
                     steps.append(_Operation("move", operation.path, operation.destination))
             operation_failed = False
             for step in steps:
+                names = [n for n in (step.path, step.destination) if n is not None]
+                paths: dict[str, Path] = {}
+                for name in names:
+                    target = (
+                        entries.get((name, name == step.destination))
+                        if step.action in {"delete", "move"}
+                        else resolved.get(name)
+                    )
+                    if target is not None:
+                        paths[name] = target
                 outcome: JsonObject = {
                     "operation": number,
                     "action": step.action,
-                    "path": model_path(resolved[step.path]) if step.path in resolved else step.path,
+                    "path": model_path(paths[step.path]) if step.path in paths else step.path,
                 }
                 if step.action == "update":
                     outcome["hunk"] = step.hunk_number
                 if step.destination:
                     outcome["destination"] = (
-                        model_path(resolved[step.destination])
-                        if step.destination in resolved
+                        model_path(paths[step.destination])
+                        if step.destination in paths
                         else step.destination
                     )
                 batch.results.append(outcome)
-                names = [n for n in (step.path, step.destination) if n is not None]
                 entry_error = next(
                     (resolution_errors[n] for n in names if n in resolution_errors), None
                 )
-                paths = {n: resolved[n] for n in names if n in resolved}
                 overlap = next((p for p in paths.values() if p in overlaps), None)
                 if overlap is not None:
                     entry_error = _error_data(
