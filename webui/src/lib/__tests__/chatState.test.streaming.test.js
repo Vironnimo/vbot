@@ -59,6 +59,95 @@ describe('chat state helpers', () => {
     ]);
   });
 
+  describe('when stable boundaries arrive before replayed deltas', () => {
+    const runId = 'run-returned';
+    const event = (sequence, type, payload = {}) => ({
+      run_id: runId,
+      agent_id: 'alpha',
+      session_id: 'session-returned',
+      sequence,
+      type,
+      payload,
+    });
+    const firstAnswer = {
+      id: 'm1',
+      role: 'assistant',
+      content: 'Checking files.',
+      tool_calls: [{ id: 'tc1', name: 'read' }],
+    };
+
+    function returnedSession() {
+      const sessionState = ensureSessionState(
+        createChatState(),
+        'alpha',
+        'session-returned',
+      );
+      startRun(sessionState, { run_id: runId, sse_url: '/x' });
+      appendRunEvent(sessionState, event(1, 'run_started'));
+      return sessionState;
+    }
+
+    function renderedChildren(sessionState) {
+      return visibleTimelineItemsForRender(sessionState).flatMap((item) =>
+        (item.items ?? []).map(
+          (child) => `${child.type}:${child.content ?? ''}`,
+        ),
+      );
+    }
+
+    it('keeps later-phase answer text visible after the earlier replay', () => {
+      const sessionState = returnedSession();
+      const stable = [
+        event(4, 'assistant_output', { message: firstAnswer }),
+        event(5, 'tool_call_started', { tool_call_id: 'tc1', name: 'read' }),
+        event(6, 'tool_call_result', { tool_call_id: 'tc1', name: 'read' }),
+      ];
+      const text = (sequence, delta) =>
+        event(sequence, 'assistant_output_delta', { content_delta: delta });
+      // Hidden: the WebSocket mirrored only the stable events.
+      stable.forEach((stableEvent) =>
+        appendRunEvent(sessionState, stableEvent),
+      );
+      // Returned: SSE replays everything after the highest contiguous sequence.
+      for (const replayed of [
+        text(2, 'Checking '),
+        text(3, 'files.'),
+        ...stable,
+        text(7, 'Second '),
+        text(8, 'answer'),
+      ]) {
+        appendRunEvent(sessionState, replayed);
+      }
+
+      expect(renderedChildren(sessionState)).toEqual([
+        'assistant_output:Checking files.',
+        'tool_call:',
+        'assistant_output:Second answer',
+      ]);
+    });
+
+    it('drops replayed deltas of an attempt whose restart was already applied', () => {
+      const sessionState = returnedSession();
+      appendRunEvent(sessionState, event(4, 'stream_attempt_restarted'));
+      appendRunEvent(
+        sessionState,
+        event(2, 'assistant_output_delta', { content_delta: 'Failed ' }),
+      );
+      appendRunEvent(
+        sessionState,
+        event(3, 'assistant_output_delta', { content_delta: 'attempt' }),
+      );
+      appendRunEvent(
+        sessionState,
+        event(5, 'assistant_output_delta', { content_delta: 'Recovered' }),
+      );
+
+      expect(renderedChildren(sessionState)).toEqual([
+        'assistant_output:Recovered',
+      ]);
+    });
+  });
+
   it('captures the persisted reasoning duration from the stable reasoning event', () => {
     const sessionState = ensureSessionState(
       createChatState(),
