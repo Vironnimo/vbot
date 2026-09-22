@@ -124,14 +124,14 @@ def read_settings(path: Path | None = None) -> dict[str, Any]:
 
     resolved_path = _resolve_settings_path(path)
     with _settings_lock(resolved_path):
-        return _read_settings_unlocked(resolved_path)
+        try:
+            return _read_settings_unlocked(resolved_path)
+        except (OSError, ValueError):
+            return {}
 
 
 def _read_settings_unlocked(resolved_path: Path) -> dict[str, Any]:
-    """Read a resolved settings path while its caller owns the file lock."""
-
-    if not resolved_path.exists():
-        return {}
+    """Read under the file lock, retaining read failures for mutation callers."""
 
     for attempt in range(_IO_RETRY_ATTEMPTS):
         try:
@@ -140,13 +140,13 @@ def _read_settings_unlocked(resolved_path: Path) -> dict[str, Any]:
             if attempt < _IO_RETRY_ATTEMPTS - 1:
                 time.sleep(_IO_RETRY_BASE_DELAY_SECONDS * (attempt + 1))
                 continue
-            return {}
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            raise
+        except FileNotFoundError:
             return {}
         else:
             break
     if not isinstance(data, dict):
-        return {}
+        raise ValueError("Desktop settings must be a JSON object")
     return data
 
 

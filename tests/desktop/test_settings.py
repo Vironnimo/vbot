@@ -268,6 +268,43 @@ def test_write_servers_preserves_other_keys(tmp_path: Path) -> None:
     assert stored["wakeword"] == wakeword
 
 
+@pytest.mark.parametrize("error_type", [PermissionError, OSError])
+def test_section_write_preserves_unreadable_existing_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[OSError]
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    original = b'{"servers": [{"host": "pi.lan", "port": 9000}]}'
+    settings_file.write_bytes(original)
+
+    def fail_read(_path: Path, **_kwargs: object) -> str:
+        raise error_type("test-owned read failure")
+
+    monkeypatch.setattr(Path, "read_text", fail_read)
+    monkeypatch.setattr(desktop_settings.time, "sleep", lambda _delay: None)
+
+    # Startup can still fall back, but a later resize/settings save must not
+    # mistake an unreadable document for a new one and discard other sections.
+    assert desktop_settings.read_settings(settings_file) == {}
+    with pytest.raises(error_type):
+        desktop_settings.write_window_size(1280, 800, settings_file)
+
+    assert settings_file.read_bytes() == original
+
+
+@pytest.mark.parametrize("original", [b"not json", b'{"label": "\xff"}', b"[]", b"null"])
+def test_section_write_preserves_malformed_existing_settings(
+    tmp_path: Path, original: bytes
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_bytes(original)
+
+    assert desktop_settings.read_settings(settings_file) == {}
+    with pytest.raises(ValueError):
+        desktop_settings.write_window_size(1280, 800, settings_file)
+
+    assert settings_file.read_bytes() == original
+
+
 # -- Last-used target --------------------------------------------------------
 
 
