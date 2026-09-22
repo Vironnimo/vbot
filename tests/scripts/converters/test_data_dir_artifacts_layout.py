@@ -168,6 +168,25 @@ def test_preflight_rejects_source_symlink(tmp_path: Path) -> None:
         plan_data_directory_conversion(data_dir)
 
 
+def test_preflight_rejects_linked_ancestor_of_existing_destination(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    source = data_dir / "attachments" / "payload.bin"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"legacy")
+    external = tmp_path / "external"
+    (external / "attachments").mkdir(parents=True)
+    try:
+        (data_dir / "artifacts").symlink_to(external, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"Symlink creation is unavailable: {error}")
+
+    with pytest.raises(DataDirectoryConversionError):
+        apply_data_directory_conversion(data_dir)
+
+    assert source.read_bytes() == b"legacy"
+    assert list((external / "attachments").iterdir()) == []
+
+
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO creation is unavailable")
 def test_preflight_rejects_special_file(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
