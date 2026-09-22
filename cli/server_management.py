@@ -36,8 +36,8 @@ from cli._server_target import (
     probe_webui,
     resolve_instance,
 )
-from core.tools.process_manager import subprocess_creation_flags
 from core.utils.logging import CONSOLE_LOGGING_ENV_VAR, LogManager
+from core.utils.processes import subprocess_creation_flags
 from core.utils.server_control import (
     CONTROL_SHUTDOWN_PATH,
     CONTROL_TOKEN_HEADER,

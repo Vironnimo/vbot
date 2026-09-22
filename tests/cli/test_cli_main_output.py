@@ -282,9 +282,11 @@ def test_run_update_announces_before_work_and_ends_with_version_summary(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from cli import _commands
+
     versions = iter(["0.1.22", "0.1.23"])
     instance = make_instance(tmp_path)
-    monkeypatch.setattr(cli_main, "read_checkout_version", lambda: next(versions))
+    monkeypatch.setattr(_commands, "read_checkout_version", lambda: next(versions))
 
     def fake_dispatch(
         _args: object,
@@ -302,7 +304,7 @@ def test_run_update_announces_before_work_and_ends_with_version_summary(
         assert "0.1.22" in announcement
         return CommandResult(ok=True, message="updated checkout", instance=instance)
 
-    monkeypatch.setattr(cli_main, "dispatch_update_command", fake_dispatch)
+    monkeypatch.setattr(_commands, "dispatch_update_command", fake_dispatch)
 
     exit_code = cli_main.run(["update"])
 
@@ -367,7 +369,9 @@ def test_exit_code_mapping(command: str, result: CommandResult, expected_exit_co
 
 
 def test_main_exits_with_run_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(cli_main, "run", lambda argv: 7)
+    from cli import _commands
+
+    monkeypatch.setattr(_commands, "run", lambda argv: 7)
 
     with pytest.raises(SystemExit) as exc_info:
         cli_main.main(["server", "status"])
