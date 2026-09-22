@@ -706,13 +706,14 @@ class RunExecution:
                         context, candidate_target
                     ).with_session_messages(context.session_snapshot.active_messages),
                 )
-                context.request_state.messages[:] = await _CHAT_TRANSFORM_WORKERS.run(
-                    _restore_in_run_tool_result_content,
+                context.request_state.messages[:] = await _restore_in_run_tool_result_content(
                     context.request_state.messages,
                     live_messages,
                     input_modalities=candidate_target.input_modalities,
                     wire_media_types=candidate_target.wire_media_types,
                     image_budget=context.image_budget,
+                    image_converter=self._requests._tool_image_converter,
+                    max_image_bytes=candidate_target.max_image_bytes,
                 )
                 if context.continuation_reminder is not None:
                     assert context.prior_continuation is not None

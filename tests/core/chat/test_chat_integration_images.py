@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import random
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -39,7 +40,98 @@ from tests.core.chat.chat_integration_test_support import (
 )
 from tests.core.chat.chat_loop_support import session_address
 
-_PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+_png_stream = io.BytesIO()
+Image.new("RGB", (12, 8), "blue").save(_png_stream, format="PNG")
+_PNG_BYTES = _png_stream.getvalue()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["user", "tool"])
+@pytest.mark.parametrize("damaged", [False, True])
+async def test_image_validation_and_known_limits_reach_chat_requests(
+    tmp_path,
+    resources_dir,
+    monkeypatch,
+    source,
+    damaged,
+):
+    class LimitedAdapter(FakeAdapter):
+        def image_size_limit(self, model_id):
+            return 512
+
+        def wire_media_support(self, model_id):
+            return frozenset({"image/png"})
+
+    responses = [{"content": "done", "tool_calls": None}]
+    if source == "tool":
+        responses.insert(
+            0,
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "read-image", "name": "read", "arguments": {"path": "image.png"}},
+                ],
+            },
+        )
+    adapter = LimitedAdapter(responses)
+    config = Config(data_dir=tmp_path / "data")
+    config._data["RESOURCES_PATH"] = str(resources_dir)
+    config._data["VBOT_VERSION"] = "test-version"
+    runtime = Runtime(config)
+    monkeypatch.setenv("FAKE_API_KEY", "test-key")
+    monkeypatch.setattr(runtime, "get_adapter", lambda connection: adapter)
+    runtime.start()
+    try:
+        agent = runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
+        stream = io.BytesIO()
+        Image.frombytes("RGB", (128, 64), random.Random(9).randbytes(128 * 64 * 3)).save(
+            stream, format="PNG"
+        )
+        original = stream.getvalue()
+        if damaged:
+            original = original[: len(original) // 2]
+        path = Path(agent.workspace) / "image.png"
+        path.write_bytes(original)
+        content = "Inspect image.png"
+        if source == "user":
+            record = runtime.attachment_store.store("image.png", original)
+            content = [
+                MediaBlock(
+                    type="media",
+                    attachment_id=record.id,
+                    filename=record.filename,
+                    media_type=record.media_type,
+                )
+            ]
+        await runtime.chat_loop.send("coder", content, session_id="bounded-images")
+        messages = adapter.requests[-1].messages
+        parts = (
+            _tool_result_content_parts(messages)
+            if source == "tool"
+            else [
+                part
+                for message in messages
+                if message.get("role") == "user" and isinstance(message.get("content"), list)
+                for part in message["content"]
+            ]
+        )
+        media = [part for part in parts if part.get("type") == "media"]
+        notes = " ".join(part.get("text", "") for part in parts)
+        if damaged:
+            assert media == []
+            assert "damaged or unreadable" in notes
+        else:
+            assert len(media) == 1
+            delivered = base64.b64decode(media[0]["base64"])
+            assert len(delivered) <= 512
+            with Image.open(io.BytesIO(delivered)) as image:
+                image.load()
+                assert image.width < 128
+            assert "resized from 128x64" in notes
+            assert "original file is unchanged" in notes
+        assert path.read_bytes() == original
+    finally:
+        runtime.stop()
 
 
 @pytest.mark.asyncio
@@ -245,7 +337,7 @@ def _tool_result_content_parts(messages: list[JsonObject]) -> list[JsonObject]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source_format", ["PNG", "BMP", "TIFF", "AVIF"])
+@pytest.mark.parametrize("source_format", ["PNG", "BMP", "TIFF", "AVIF", "HEIF"])
 async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_model(
     tmp_path: Path,
     resources_dir: Path,
@@ -504,7 +596,7 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
             if len(self.requests) == 10:
                 session = runtime.chat_sessions.get(session_address("coder", "session-one"))
                 rebuilt_requests.append(
-                    _restore_in_run_tool_result_content(
+                    await _restore_in_run_tool_result_content(
                         (
                             await loop._requests.build_request_state(
                                 agent,

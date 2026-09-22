@@ -186,6 +186,7 @@ class _ModelTarget:
     input_modalities: frozenset[str]
     wire_media_types: frozenset[str]
     chunk_timeout_seconds: float | None
+    max_image_bytes: int | None = None
 
 
 @dataclass
@@ -300,6 +301,7 @@ class RequestBuildInputs:
     reasoning_scope_model: str | None = None
     input_modalities: frozenset[str] | None = None
     wire_media_types: frozenset[str] = frozenset()
+    max_image_bytes: int | None = None
     # Pinned prompt-epoch state; replaced wholesale by a Compaction refresh.
     agent_body: str = ""
     project_context: ProjectPromptContext | None = None
@@ -326,6 +328,7 @@ class RequestBuildInputs:
             reasoning_scope_model=target.model_reference,
             input_modalities=target.input_modalities,
             wire_media_types=target.wire_media_types,
+            max_image_bytes=target.max_image_bytes,
             agent_body=context.agent_body,
             project_context=context.project_prompt_context,
             working_project_context=context.working_project_context,

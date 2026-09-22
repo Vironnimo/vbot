@@ -352,6 +352,15 @@ class ProviderAdapter(ABC):
     # Request-context estimation
     # ------------------------------------------------------------------
 
+    def image_size_limit(self, model_id: str) -> int | None:
+        """Known per-image encoded-file byte ceiling, excluding base64 overhead.
+
+        Callers can prepare compatible copies before serialization. Unknown
+        limits stay absent; request-body and image-count limits remain separate.
+        """
+        del model_id
+        return None
+
     def request_body_limit(self, model_id: str) -> int | None:
         """Verified maximum serialized request bytes for this Model's wire, if known.
 

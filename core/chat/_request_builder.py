@@ -139,6 +139,12 @@ def _resolved_model_reference(
     return f"{bare_reference}::{connection_suffix}"
 
 
+def _resolve_image_size_limit(adapter: Any, model_id: str) -> int | None:
+    getter = getattr(adapter, "image_size_limit", None)
+    value = getter(model_id) if callable(getter) else None
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
 SEEN_SKILLS_META_KEY = "seen_skills"
 
 
@@ -219,7 +225,15 @@ class RequestBuilder:
             ),
             wire_media_types=_resolve_wire_media_support(adapter, model_id),
             chunk_timeout_seconds=self._wire_requests.resolve_chunk_timeout(connection),
+            max_image_bytes=self._image_size_limit(adapter, model_id),
         )
+
+    def _image_size_limit(self, adapter: Any, model_id: str) -> int | None:
+        limit = _resolve_image_size_limit(adapter, model_id)
+        if self._attachment_resolver is not None:
+            configured = self._attachment_resolver.max_image_bytes
+            return min(configured, limit) if limit is not None else configured
+        return limit
 
     def resolve_project_cwd(self, project_id: str | None) -> Path | None:
         """Resolve a working Project cwd, failing closed when unavailable."""
@@ -301,6 +315,7 @@ class RequestBuilder:
         reasoning_scope_model: str | None = None,
         input_modalities: frozenset[str] | None = None,
         wire_media_types: frozenset[str] = frozenset(),
+        max_image_bytes: int | None = None,
         agent_body: str = "",
         project_context: ProjectPromptContext | None = None,
         working_project_context: str | None = None,
@@ -316,6 +331,7 @@ class RequestBuilder:
                 reasoning_scope_model=reasoning_scope_model,
                 input_modalities=input_modalities,
                 wire_media_types=wire_media_types,
+                max_image_bytes=max_image_bytes,
                 agent_body=agent_body,
                 project_context=project_context,
                 working_project_context=working_project_context,
@@ -520,6 +536,7 @@ class RequestBuilder:
                 current_user_message_id=current_user_message.id,
                 input_modalities=effective_input_modalities,
                 wire_media_types=inputs.wire_media_types,
+                max_image_bytes=inputs.max_image_bytes,
             )
 
         await self._attach_tool_result_content(
@@ -527,6 +544,7 @@ class RequestBuilder:
             read_media_outputs,
             effective_input_modalities,
             inputs.wire_media_types,
+            max_image_bytes=inputs.max_image_bytes,
         )
         return _RequestState(
             await _CHAT_TRANSFORM_WORKERS.run(
@@ -602,6 +620,8 @@ class RequestBuilder:
         media_outputs: list[JsonObject],
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
+        *,
+        max_image_bytes: int | None = None,
     ) -> None:
         """Attach resolved media blocks to their correlated Tool Results.
 
@@ -631,7 +651,11 @@ class RequestBuilder:
                 for media_output in matching
                 if "base64" in media_output
                 for block in await ContentBlockResolver.resolve_tool_image(
-                    media_output, input_modalities, wire_media_types, self._tool_image_converter
+                    media_output,
+                    input_modalities,
+                    wire_media_types,
+                    self._tool_image_converter,
+                    max_image_bytes=max_image_bytes,
                 )
             ]
             if local_content:
@@ -662,6 +686,7 @@ class RequestBuilder:
                 current_user_message_id=transient_message_id,
                 input_modalities=input_modalities,
                 wire_media_types=wire_media_types,
+                max_image_bytes=max_image_bytes,
             )
             resolved_content = resolved[0].get("content")
             if isinstance(resolved_content, list):

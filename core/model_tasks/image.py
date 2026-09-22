@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from core.attachments import sniff_media_type
-from core.attachments.images import ImageConversionError, ImageConverter
+from core.attachments.images import ImageConversionError, ImageConverter, PreparedImage
 from core.chat.model_resolution import resolve_request_temperature
 from core.debug import DebugContext
 from core.model_tasks.constants import TASK_IMAGE_GENERATION, TASK_IMAGE_UNDERSTANDING
@@ -399,28 +399,20 @@ class ImageService:
                 )
                 raise ImageUnderstandingUnavailableError(safe_error) from exc
             wire_media_types = _adapter_wire_media_types(adapter, target_ref.model_id)
-            compatible_images: list[ImageInput] = []
-            converted_total = 0
-            for image in input_images:
-                try:
-                    data, media_type = await self._image_converter.convert(
-                        image.data, image.media_type, wire_media_types
-                    )
-                except ImageConversionError as exc:
-                    raise ImageUnsupportedMediaTypeError(
-                        f"Image format conversion failed for {image.filename}. "
-                        "Export a single-frame PNG or JPEG copy and try again."
-                    ) from exc
-                converted_total += len(data)
-                _ensure_analysis_total_size(len(data), self._max_input_bytes)
-                _ensure_analysis_total_size(converted_total, DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES)
-                compatible_images.append(replace(image, data=data, media_type=media_type))
-            input_images = tuple(compatible_images)
+            get_limit = getattr(adapter, "image_size_limit", None)
+            wire_limit = get_limit(target_ref.model_id) if callable(get_limit) else None
+            max_image_bytes = self._max_input_bytes
+            if isinstance(wire_limit, int) and not isinstance(wire_limit, bool) and wire_limit > 0:
+                max_image_bytes = min(max_image_bytes, wire_limit)
+            input_images, preparation_notes = await self._prepare_analysis_images(
+                input_images, wire_media_types, max_image_bytes
+            )
 
             content = await asyncio.to_thread(
                 _analysis_content,
                 normalized_prompt,
                 input_images,
+                preparation_notes,
             )
             _set_analysis_debug_context(adapter, target_ref, run_context)
             response = await adapter.send(
@@ -443,7 +435,7 @@ class ImageService:
                 raise ImageExecutionError("Image-understanding model returned no text analysis")
             usage = normalized.get("usage")
             return ImageUnderstandingResult(
-                content=analysis.strip(),
+                content="\n".join([*preparation_notes, analysis.strip()]),
                 model=target_ref.model_id,
                 image_count=len(input_images),
                 usage=dict(usage) if isinstance(usage, Mapping) else None,
@@ -465,6 +457,54 @@ class ImageService:
         finally:
             if adapter is not None:
                 await _close_adapter_safely(adapter, target_ref)
+
+    async def _prepare_analysis_images(
+        self,
+        images: tuple[ImageInput, ...],
+        wire_media_types: frozenset[str],
+        max_image_bytes: int,
+    ) -> tuple[tuple[ImageInput, ...], list[str]]:
+        # Preserve every full-quality copy first. Only distribute the total byte
+        # budget if the actual prepared batch exceeds it, proportionally to size.
+        ceilings = [max_image_bytes] * len(images)
+        prepared_images: list[PreparedImage] = []
+        for _attempt in range(2):
+            prepared_images = []
+            for image, ceiling in zip(images, ceilings, strict=True):
+                try:
+                    prepared_images.append(
+                        await self._image_converter.convert(
+                            image.data,
+                            image.media_type,
+                            wire_media_types,
+                            max_output_bytes=ceiling,
+                        )
+                    )
+                except ImageConversionError as exc:
+                    message = f"Image {image.filename}: {exc}"
+                    if exc.reason in {"image_too_large", "output_too_large"}:
+                        raise ImageTooLargeError(message) from exc
+                    if exc.reason == "invalid_image":
+                        raise ImageReadError(message) from exc
+                    raise ImageUnsupportedMediaTypeError(message) from exc
+            total = sum(len(prepared.data) for prepared in prepared_images)
+            if total <= DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES:
+                break
+            ceilings = [
+                max(1, DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES * len(prepared.data) // total)
+                for prepared in prepared_images
+            ]
+        _ensure_analysis_total_size(total, DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES)
+        compatible = tuple(
+            replace(image, data=prepared.data, media_type=prepared.media_type)
+            for image, prepared in zip(images, prepared_images, strict=True)
+        )
+        notes = [
+            f"Image {index}: {prepared.note}."
+            for index, prepared in enumerate(prepared_images, start=1)
+            if prepared.note is not None
+        ]
+        return compatible, notes
 
     async def generate_artifacts(
         self,
@@ -724,11 +764,15 @@ def _ensure_analysis_total_size(total_bytes: int, max_total_bytes: int | None) -
     )
 
 
-def _analysis_content(prompt: str, input_images: Sequence[ImageInput]) -> list[JsonObject]:
+def _analysis_content(
+    prompt: str,
+    input_images: Sequence[ImageInput],
+    preparation_notes: Sequence[str] = (),
+) -> list[JsonObject]:
     """Build canonical analysis content outside the async event loop."""
 
     return [
-        {"type": "text", "text": prompt},
+        {"type": "text", "text": "\n".join([prompt, *preparation_notes])},
         *[
             {
                 "type": "media",
