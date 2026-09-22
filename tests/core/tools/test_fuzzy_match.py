@@ -375,6 +375,34 @@ def test_required_lines_select_the_block_with_the_precise_line_before_ambiguity(
     assert result.before_spans == ((content.index("start", 1), len(content) - 1),)
 
 
+@pytest.mark.parametrize(
+    ("content", "old_string", "lines"),
+    [
+        # Occurrences overlap at the shared middle line.
+        ("x\n}\n}\n}\ny\n", "}\n}", [2, 3]),
+        # A partial occurrence must not shadow a later whole-line one.
+        ("a {\n}\n}\nb {\n  c {\n    }\n}\n}\n", "}\n}", [2, 7]),
+    ],
+)
+def test_overlapping_whole_line_occurrences_are_ambiguous(
+    content: str, old_string: str, lines: list[int]
+) -> None:
+    result = replace_fuzzy(
+        content, old_string, "}\nnew\n}", replace_all=False, whole_lines=True, typographic=True
+    )
+
+    assert isinstance(result, AmbiguousFuzzyMatch)
+    assert result.line_numbers == lines
+
+
+def test_replace_all_replaces_leftmost_non_overlapping_occurrences() -> None:
+    result = replace_fuzzy("aaaa", "aa", "b", replace_all=True)
+
+    assert isinstance(result, FuzzyReplacement)
+    assert result.new_content == "bb"
+    assert result.replacements == 2
+
+
 def test_replace_all_does_not_use_approximate_strategies() -> None:
     content = 'message = "finish the current Run now"\n'
 

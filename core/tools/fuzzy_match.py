@@ -195,6 +195,9 @@ def replace_fuzzy(
             ]
         if not matches:
             continue
+        # Matchers report overlapping occurrences too: a shadowed second
+        # occurrence still makes a single-target request ambiguous.
+        matches = sorted(set(matches))
         if len(matches) > 1 and not replace_all:
             locations = [_line_and_character_at(content, start) for start, _ in matches]
             return AmbiguousFuzzyMatch(
@@ -203,7 +206,7 @@ def replace_fuzzy(
                 [character for _, character in locations],
             )
 
-        selected = matches if replace_all else matches[:1]
+        selected = _leftmost_non_overlapping(matches) if replace_all else matches[:1]
         new_content, before_spans, after_spans = _apply_replacements(
             content,
             selected,
@@ -445,7 +448,7 @@ def _normalize_text(text: str) -> str:
 
 
 def _match_exact(content: str, pattern: str) -> list[tuple[int, int]]:
-    return _find_non_overlapping(content, pattern)
+    return _find_all(content, pattern)
 
 
 def _match_normalized(
@@ -474,7 +477,7 @@ def _match_normalized(
                 and (end == len(normalized_content) or normalized_content[end] == "\n")
             ):
                 matches.append((left, right))
-        start = position + pattern_length
+        start = position + 1
     if not matches and typographic:
         matches = [
             (spans[start][0], spans[end - 1][1])
@@ -544,18 +547,13 @@ def _match_line_trimmed(content: str, pattern: str) -> list[tuple[int, int]]:
         cursor += len(line) + 1  # +1 for the splitting "\n"
 
     matches: list[tuple[int, int]] = []
-    index = 0
-    last_start = len(trimmed_content) - window
-    while index <= last_start:
+    for index in range(len(trimmed_content) - window + 1):
         if trimmed_content[index : index + window] == trimmed_pattern:
             norm_start = line_offsets[index]
             last_line = index + window - 1
             norm_end = line_offsets[last_line] + len(content_lines[last_line])
             if norm_start < len(spans) and norm_end > norm_start:
                 matches.append((spans[norm_start][0], spans[norm_end - 1][1]))
-                index += window  # non-overlapping, so replace_all cannot self-corrupt
-                continue
-        index += 1
     return matches
 
 
@@ -595,7 +593,7 @@ def _match_whitespace_normalized(content: str, pattern: str) -> list[tuple[int, 
         if position < 0:
             break
         matches.append((spans[position][0], spans[position + pattern_length - 1][1]))
-        start = position + pattern_length
+        start = position + 1
     return matches
 
 
@@ -699,18 +697,25 @@ def _match_context_aware(content: str, pattern: str) -> list[tuple[int, int]]:
     return matches
 
 
-def _find_non_overlapping(haystack: str, needle: str) -> list[tuple[int, int]]:
+def _find_all(haystack: str, needle: str) -> list[tuple[int, int]]:
+    """Return every occurrence of ``needle``, including overlapping ones."""
     if not needle:
         return []
     matches: list[tuple[int, int]] = []
-    start = 0
-    while True:
-        position = haystack.find(needle, start)
-        if position < 0:
-            break
+    position = haystack.find(needle)
+    while position >= 0:
         matches.append((position, position + len(needle)))
-        start = position + len(needle)
+        position = haystack.find(needle, position + 1)
     return matches
+
+
+def _leftmost_non_overlapping(matches: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Select sorted spans left to right so ``replace_all`` cannot self-corrupt."""
+    selected: list[tuple[int, int]] = []
+    for start, end in matches:
+        if not selected or start >= selected[-1][1]:
+            selected.append((start, end))
+    return selected
 
 
 def _apply_replacements(
