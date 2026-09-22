@@ -302,13 +302,12 @@ class SkillAuthoringService:
         skill_dir = self._skill_dir(target_root, skill_name)
         if not skill_dir.is_dir():
             raise SkillAuthoringError(f"Skill '{skill_name}' not found.")
+        if not (skill_dir / SKILL_FILENAME).is_file():
+            raise SkillAuthoringError(f"Skill '{skill_name}' has no {SKILL_FILENAME}.")
         return skill_dir
 
     def _existing_skill_file(self, target_root: Path, skill_name: str) -> Path:
-        skill_file = self._existing_skill_dir(target_root, skill_name) / SKILL_FILENAME
-        if not skill_file.is_file():
-            raise SkillAuthoringError(f"Skill '{skill_name}' has no {SKILL_FILENAME}.")
-        return skill_file
+        return self._existing_skill_dir(target_root, skill_name) / SKILL_FILENAME
 
     def _resource_path(self, skill_dir: Path, relative_path: str) -> Path:
         normalized = _normalized_support_path(relative_path)

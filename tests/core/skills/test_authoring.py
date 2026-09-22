@@ -261,6 +261,38 @@ class TestDelete:
             service.delete(tmp_path, "demo")
 
 
+@pytest.mark.parametrize("action", ["delete", "write_file", "remove_file", "patch"])
+@pytest.mark.parametrize("document_directory", [False, True])
+def test_mutations_leave_non_package_directories_untouched(
+    service: SkillAuthoringService, tmp_path: Path, action: str, document_directory: bool
+) -> None:
+    package = tmp_path / "demo"
+    resource = package / "references" / "notes.md"
+    resource.parent.mkdir(parents=True)
+    resource.write_text("keep this file", encoding="utf-8")
+    if document_directory:
+        (package / "SKILL.md").mkdir()
+
+    with pytest.raises(SkillAuthoringError):
+        if action == "delete":
+            service.delete(tmp_path, "demo")
+        elif action == "write_file":
+            service.write_file(tmp_path, "demo", "references/notes.md", "replacement")
+        elif action == "remove_file":
+            service.remove_file(tmp_path, "demo", "references/notes.md")
+        else:
+            service.patch(
+                tmp_path,
+                "demo",
+                "keep",
+                "replace",
+                author="agent",
+                relative_path="references/notes.md",
+            )
+
+    assert resource.read_text(encoding="utf-8") == "keep this file"
+
+
 class TestSupportFiles:
     def test_write_and_remove_under_scripts(
         self, service: SkillAuthoringService, tmp_path: Path
