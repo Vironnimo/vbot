@@ -376,6 +376,71 @@ class TestModelRegistryRealResources:
             "minimum_reasoning_effort": "low",
         }
 
+    @pytest.mark.parametrize(
+        ("model_id", "short_rates", "long_rates"),
+        [
+            ("gpt-6-sol", (2.0, 0.2, 2.5, 10.0), (4.0, 0.4, 5.0, 15.0)),
+            ("gpt-6-luna", (0.1, 0.01, 0.125, 0.5), (0.2, 0.02, 0.25, 0.75)),
+        ],
+    )
+    def test_gpt6_openai_connections_load_with_official_limits_and_pricing(
+        self, model_id, short_rates, long_rates
+    ):
+        registry = ModelRegistry.load(RESOURCES_DIR)
+        model = registry.get("openai", model_id)
+
+        assert model.name == "GPT-6 " + model_id.rsplit("-", 1)[1].title()
+        assert model.connections == ("api-key", "subscription")
+        assert model.context_window_for("api-key") == 1_050_000
+        assert model.context_window_for("subscription") == 272_000
+        assert model.max_output_tokens == 128_000
+        assert model.capabilities.input_modalities[:2] == ("text", "image")
+        assert model.capabilities.output_modalities == ("text",)
+        assert model.capabilities.tools is True
+        assert model.capabilities.json_mode is True
+        assert model.capabilities.reasoning.levels == (
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        )
+        assert model.metadata["openai"]["wire_policies"] == {
+            "api-key": {"protocol": "responses"},
+            "subscription": {"protocol": "responses", "minimum_reasoning_effort": "low"},
+        }
+        assert model.pricing is not None
+        assert model.pricing.source == f"models.dev:openai/{model_id}"
+        assert (
+            model.pricing.rates.input,
+            model.pricing.rates.cache_read,
+            model.pricing.rates.cache_write,
+            model.pricing.rates.output,
+        ) == short_rates
+        assert len(model.pricing.tiers) == 1
+        assert model.pricing.tiers[0].above_tokens == 272_000
+        assert (
+            model.pricing.tiers[0].rates.input,
+            model.pricing.tiers[0].rates.cache_read,
+            model.pricing.tiers[0].rates.cache_write,
+            model.pricing.tiers[0].rates.output,
+        ) == long_rates
+
+    @pytest.mark.parametrize("model_id", ["gpt-6-sol", "gpt-6-luna"])
+    def test_gpt6_models_are_selectable_on_all_published_vbot_providers(self, model_id):
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        zen = registry.get("opencode-zen", model_id)
+        assert zen.connections == ("api-key", "account")
+        assert zen.metadata["opencode_zen"]["protocol"] == "responses"
+        assert zen.capabilities.tools is True
+
+        openrouter = registry.get("openrouter", f"openai/{model_id}")
+        assert openrouter.connections == ("api-key",)
+        assert openrouter.capabilities.tools is True
+        assert openrouter.context_window == 1_050_000
+
     @pytest.mark.parametrize("model_id", ["deepseek-flash", "deepseek-v4.1-flash"])
     def test_deepseek41_profiles_load(self, model_id):
         registry = ModelRegistry.load(RESOURCES_DIR)

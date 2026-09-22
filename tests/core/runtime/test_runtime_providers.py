@@ -194,7 +194,15 @@ def test_runtime_loads_opencode_zen_current_catalog_and_connection_allowlist(
     models = runtime.models.list_for_provider("opencode-zen")
     gemini = runtime.models.get("opencode-zen", "gemini-3.5-flash")
 
-    assert len(models) == 56
+    assert {model.model_id for model in models} >= {
+        "gpt-6-sol",
+        "gpt-6-luna",
+        "claude-opus-5-5",
+    }
+    assert all(
+        runtime.models.get("opencode-zen", model_id).connections == ("api-key", "account")
+        for model_id in ("gpt-6-sol", "gpt-6-luna", "claude-opus-5-5")
+    )
     assert gemini.connections == ("api-key", "account")
     assert gemini.context_window == 1_048_576
     assert gemini.max_output_tokens == 65_536

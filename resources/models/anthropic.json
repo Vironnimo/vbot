@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-22T08:08:51.771767+00:00",
+  "fetched_at": "2026-09-22T19:30:25.669909+00:00",
   "models": {
     "claude-fable-5": {
       "canonical": "anthropic/claude-fable-5",
@@ -359,6 +359,51 @@
           "output": 25.0
         },
         "source": "models.dev:anthropic/claude-opus-5"
+      }
+    },
+    "claude-opus-5-5": {
+      "canonical": "anthropic/claude-opus-5-5",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "claude-opus",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "anthropic": {
+          "supports_temperature": false
+        }
+      },
+      "name": "Claude Opus 5.5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 5.0,
+          "input": 4.0,
+          "output": 20.0
+        },
+        "source": "models.dev:anthropic/claude-opus-5-5"
       }
     },
     "claude-sonnet-4-5-20250929": {

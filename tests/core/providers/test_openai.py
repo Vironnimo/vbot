@@ -272,6 +272,86 @@ async def test_platform_gpt_5_6_uses_responses_all_turns_and_preserves_phase() -
 
 @respx.mock
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model_id", ["gpt-6-sol", "gpt-6-luna"])
+@pytest.mark.parametrize("effort", ["none", "max"])
+async def test_platform_gpt6_models_use_responses_with_catalog_effort_and_tools(
+    model_id: str, effort: str
+) -> None:
+    registry = ModelRegistry.load(Path(__file__).resolve().parents[3] / "resources")
+
+    def lookup(selected_model_id: str) -> Model:
+        return registry.get("openai", selected_model_id)
+
+    adapter = OpenAIAdapter(_platform_config(), "sk-test", model_lookup=lookup)
+    route = respx.post(OPENAI_PLATFORM_RESPONSES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp_gpt6",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Done."}],
+                    }
+                ],
+            },
+        )
+    )
+
+    try:
+        response = await adapter.send(
+            SAMPLE_MESSAGES,
+            model_id=model_id,
+            thinking_effort=effort,
+            tools=_CODEX_TOOLS,
+        )
+        payload = json.loads(route.calls.last.request.content)
+
+        assert payload["model"] == model_id
+        assert payload["reasoning"]["effort"] == effort
+        assert "context" not in payload["reasoning"]
+        assert payload["store"] is False
+        assert all(tool["strict"] is False for tool in payload["tools"])
+        assert adapter.normalize_response(response, model_id=model_id)["content"] == "Done."
+    finally:
+        await adapter.aclose()
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_id", ["gpt-6-sol", "gpt-6-luna"])
+@pytest.mark.parametrize(("effort", "wire_effort"), [("none", "low"), ("max", "max")])
+async def test_subscription_gpt6_models_use_codex_responses(
+    model_id: str, effort: str, wire_effort: str
+) -> None:
+    registry = ModelRegistry.load(Path(__file__).resolve().parents[3] / "resources")
+    adapter = OpenAIAdapter(
+        _subscription_config(),
+        _jwt_with_account(),
+        connection_mode=CODEX_RESPONSES_MODE,
+        model_lookup=lambda selected: registry.get("openai", selected),
+    )
+    route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+        return_value=_codex_sse_response(
+            {"id": "resp_sub_gpt6", "status": "completed", "output": []}
+        )
+    )
+
+    try:
+        await adapter.send(SAMPLE_MESSAGES, model_id=model_id, thinking_effort=effort)
+        payload = json.loads(route.calls.last.request.content)
+        assert payload["model"] == model_id
+        assert payload["reasoning"] == {"effort": wire_effort, "summary": "auto"}
+        assert payload["store"] is False
+        assert "context" not in payload["reasoning"]
+    finally:
+        await adapter.aclose()
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_subscription_gpt_5_6_does_not_assume_public_reasoning_context() -> None:
     adapter = OpenAIAdapter(
         _subscription_config(),
