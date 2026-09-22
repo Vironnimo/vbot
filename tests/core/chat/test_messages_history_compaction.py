@@ -193,3 +193,27 @@ class TestHistoryCompactionPrimitives:
 
         assert carrier.id not in {message.id for message in effective}
         assert result.id not in {message.id for message in effective}
+
+    def test_pending_batch_overlay_precedes_messages_appended_after_checkpoint(self) -> None:
+        request = ChatMessage.user("Original")
+        carrier = ChatMessage.assistant(
+            model="openai/gpt",
+            content="Checking",
+            tool_calls=[ToolCall(id="call-read", name="read", arguments={})],
+        )
+        result = ChatMessage.tool(
+            tool_call_id="call-read",
+            name="read",
+            content='{"ok":true}',
+        )
+        checkpoint = ChatMessage.compaction_checkpoint(
+            summary="Compacted",
+            projection=[],
+            compacted_token_count=1,
+        )
+        steered = ChatMessage.user("Steer")
+
+        effective = effective_compaction_messages([request, carrier, result, checkpoint, steered])
+
+        assert [message.role for message in effective] == ["note", "assistant", "tool", "user"]
+        assert [message.id for message in effective[1:]] == [carrier.id, result.id, steered.id]

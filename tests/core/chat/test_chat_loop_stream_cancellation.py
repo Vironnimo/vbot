@@ -136,11 +136,14 @@ async def test_user_cancel_while_complete_stream_waits_to_persist_preserves_answ
     with pytest.raises(RunCancelledError):
         await run.wait()
 
-    messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    session = runtime.chat_sessions.get(session_address("coder", "session-one"))
+    messages = session.load()
     assert run.status == RunStatus.CANCELLED
     assert [message.role for message in messages] == ["user", "assistant", "run_summary"]
     assert messages[1].content == "Complete answer"
     assert messages[1].interrupted is False
+    # A complete answer resolves the Continuation checkpoint even though Stop won.
+    assert session.load_continuation_records() == []
 
 
 @pytest.mark.asyncio

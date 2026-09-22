@@ -51,12 +51,12 @@ from core.chat.wire_shaping import (
 from core.debug import DebugContext
 from core.extensions import HookContext, SessionRequestContext
 from core.providers.adapter import (
+    TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
     TERMINAL_OUTCOME_TOOL_CALLS,
     TerminalOutcome,
     request_input_budget,
 )
 from core.providers.errors import ProviderRequestTooLargeError
-from core.providers.reasoning import REASONING_REPLAY_NONE
 from core.runs import (
     MODEL_STEP_USAGE_EVENT,
     RUN_CHANGE_STATS_EVENT,
@@ -156,6 +156,8 @@ class AgenticProgression:
         interruption_chain = context.interruption_chain
         emitted_change_stats: dict[str, object] | None = None
         tool_catalog_revision = -1
+        # Set when a final answer is followed by selected steering input.
+        awaiting_steering = False
         while True:
             run.raise_if_cancelled()
             async with self._dependencies.sessions.write_lock(session_address):
@@ -168,6 +170,14 @@ class AgenticProgression:
                     run,
                     True,
                 )
+            if awaiting_steering and not delivered:
+                # The selected input was withdrawn before delivery. Without new
+                # User input, the persisted final answer remains the Run result.
+                if self._dependencies.run_manager.pending_steering(run):
+                    continue
+                run.accepts_steering = False
+                break
+            awaiting_steering = False
             if delivered:
                 await rebuild_after_steering(context, target, self._requests)
                 assert context.request_state is not None
@@ -373,6 +383,7 @@ class AgenticProgression:
                             chunk_timeout_seconds=target.chunk_timeout_seconds,
                             continuation_tracker=context.continuation_tracker,
                             output_cwd=output_cwd,
+                            public_model=target.public_model,
                             provider_id=target.provider_id,
                             recovery=context.recovery,
                         )
@@ -450,19 +461,18 @@ class AgenticProgression:
                 assistant_request_message = await _CHAT_TRANSFORM_WORKERS.run(
                     _assistant_continuation_dict,
                     assistant_message,
-                    replay_policy=(
-                        replay_policy if assistant_step.replay_reasoning else REASONING_REPLAY_NONE
-                    ),
+                    replay_policy=replay_policy,
                 )
-                assistant_request_messages: list[JsonObject] = [assistant_request_message]
-                if (
-                    not assistant_step.replay_reasoning
-                    and not assistant_request_message.get("content")
-                    and not assistant_request_message.get("tool_calls")
-                ):
-                    # A Reasoning-only integrity boundary becomes empty after native
-                    # Reasoning is stripped. Do not send an empty Assistant entry.
-                    assistant_request_messages = []
+                # An interrupted Reasoning-only boundary becomes empty once its
+                # native Reasoning is stripped. Never send an empty Assistant entry.
+                assistant_request_messages: list[JsonObject] = (
+                    [assistant_request_message]
+                    if any(
+                        assistant_request_message.get(field)
+                        for field in ("content", "tool_calls", "reasoning", "reasoning_meta")
+                    )
+                    else []
+                )
                 assert isinstance(assistant_message.usage, dict)
                 await _CHAT_TRANSFORM_WORKERS.run(
                     context.context_usage.observe,
@@ -557,11 +567,16 @@ class AgenticProgression:
                 if not self._streaming:
                     _emit_assistant_events(run, assistant_message)
                 messages.extend(assistant_request_messages)
-                if (recovery != "none" or interruption_chain) and (
-                    isinstance(assistant_message.content, str)
-                    or assistant_message.reasoning is not None
-                ):
-                    interruption_chain.append(assistant_message)
+                if assistant_message.interrupted:
+                    if (
+                        isinstance(assistant_message.content, str)
+                        or assistant_message.reasoning is not None
+                    ):
+                        interruption_chain.append(assistant_message)
+                elif terminal_outcome != TERMINAL_OUTCOME_OUTPUT_TRUNCATED:
+                    # A complete response finishes the unfinished step, so its
+                    # earlier fragments are no longer a partial Run result.
+                    interruption_chain.clear()
 
                 if not assistant_message.tool_calls:
                     if assistant_step.failure is not None:
@@ -597,6 +612,7 @@ class AgenticProgression:
                     if terminal_error is not None:
                         raise terminal_error
                     if self._dependencies.run_manager.pending_steering(run):
+                        awaiting_steering = True
                         continue
                     # Seal admission synchronously with the last pending-input check.
                     run.accepts_steering = False
@@ -678,7 +694,6 @@ class AgenticProgression:
                             )
                             media_outputs = []
                         else:
-                            context.recovery.reset()
                             context.tool_progress.iteration_count += 1
                             tool_messages, media_outputs = await _dispatch_tool_calls(
                                 tool_dispatch_context,
@@ -905,17 +920,24 @@ class AgenticProgression:
                 tools = compacted_state.tools
 
         if self._compaction_service is not None:
-            await self._compaction_runs.maybe_auto_compact_state(
-                context,
-                target,
-                usage=assistant_message.usage,
-                continuation_request_messages=[
-                    *messages_for_request,
-                    assistant_request_message,
-                ],
-                context_usage=assistant_context_usage,
-                continue_same_run=False,
-            )
+            try:
+                await self._compaction_runs.maybe_auto_compact_state(
+                    context,
+                    target,
+                    usage=assistant_message.usage,
+                    continuation_request_messages=[
+                        *messages_for_request,
+                        assistant_request_message,
+                    ],
+                    context_usage=assistant_context_usage,
+                    continue_same_run=False,
+                )
+            except asyncio.CancelledError:
+                if not run.cancel_requested:
+                    raise
+                # Stop ends only this optional post-answer Compaction. The final
+                # answer is already durable and remains the Run result; the Run
+                # manager sees ``cancel_requested`` and marks the Run cancelled.
         return assistant_message
 
 

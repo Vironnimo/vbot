@@ -57,6 +57,7 @@ class TestReadMediaOutputs:
         assert media_outputs == [
             {
                 "tool_call_id": "call-1",
+                "tool_message_id": tool_messages[0].id,
                 "attachment_id": "att-1",
                 "filename": "diagram.png",
                 "media_type": "image/png",

@@ -296,8 +296,7 @@ def _portable_assistant_reasoning_note(
     has_readable_answer = isinstance(message.content, str) and bool(message.content.strip())
     if has_readable_answer and not message.tool_calls:
         return None
-    quoted = json.dumps({"readable_reasoning": reasoning}, ensure_ascii=False)
-    quoted = quoted.replace("<", "\\u003c").replace(">", "\\u003e")
+    quoted = _quote_external_text("readable_reasoning", reasoning)
     return ChatMessage.note(
         f"{PORTABLE_REASONING_NOTE_HEADER}\n{quoted}",
         timestamp=datetime.fromisoformat(message.timestamp),
@@ -351,7 +350,9 @@ def _assistant_continuation_dict(
     Keeps readable ``reasoning`` and opaque ``reasoning_meta`` so reasoning-aware
     adapters can round-trip the active tool-use turn, but drops ``usage`` because
     token accounting is never part of the provider request contract. Under the
-    ``none`` replay policy even the live turn loses its reasoning fields.
+    ``none`` replay policy even the live turn loses its reasoning fields. An
+    interrupted turn is a hard native-reasoning boundary under every policy:
+    its readable work returns only through provider-neutral recovery text.
     """
     data = message.to_dict()
     data.pop("run_id", None)
@@ -364,7 +365,7 @@ def _assistant_continuation_dict(
     data.pop("interruption_cause", None)
     data.pop("output_files", None)
     data.pop("reasoning_scope", None)
-    if replay_policy == REASONING_REPLAY_NONE:
+    if replay_policy == REASONING_REPLAY_NONE or message.interrupted:
         data.pop("reasoning", None)
         data.pop("reasoning_meta", None)
     return data
@@ -651,12 +652,17 @@ def _untrusted_channel_messages_request(notes: list[ChatMessage]) -> JsonObject:
         note.validate()
         content = note.content if isinstance(note.content, str) else ""
         quoted = content.removeprefix(CHANNEL_MESSAGE_NOTE_PREFIX)
-        lines.append(_escape_untrusted_channel_quote(quoted))
+        lines.append(_quote_external_text("quoted_group_message", quoted))
     return {"role": "user", "content": "\n".join(lines)}
 
 
-def _escape_untrusted_channel_quote(content: str) -> str:
-    serialized = json.dumps({"quoted_group_message": content}, ensure_ascii=False)
+def _quote_external_text(field: str, text: str) -> str:
+    """JSON-quote external text for kernel-authored request context.
+
+    Angle brackets are escaped too, so the quoted text can neither close nor
+    impersonate a System Reminder or another context marker.
+    """
+    serialized = json.dumps({field: text}, ensure_ascii=False)
     return serialized.replace("<", "\\u003c").replace(">", "\\u003e")
 
 
@@ -666,6 +672,9 @@ def _system_reminder_block(message: ChatMessage) -> str:
     reply_surface = reply_surface_from_note(message)
     if reply_surface is not None:
         content = reply_surface.reminder_text()
+    if message.role == "error" and isinstance(content, str):
+        # Model-visible error text can carry raw Provider payloads.
+        content = _quote_external_text("run_error", content)
     if isinstance(content, str):
         for prefix in (
             SKILL_AVAILABLE_NOTE_PREFIX,

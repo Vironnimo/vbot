@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, cast
+
+import pytest
 
 from core.chat import (
     ChatMessage,
@@ -11,14 +14,23 @@ from core.chat import (
 )
 from core.chat._request_history import (
     _assign_session_image_references,
+    _current_run_read_media_outputs,
 )
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
 from core.chat.streaming import StreamingChunkTimeoutError
+from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.errors import (
     NetworkError,
 )
 from core.tools import (
+    read_media_artifact,
     tool_success,
+)
+from tests.core.chat.chat_loop_support import (
+    StubAdapter,
+    StubAgent,
+    StubRuntime,
+    build_chat_loop,
 )
 
 JsonObject = dict[str, Any]
@@ -71,6 +83,81 @@ class TestSessionImageReferences:
                 media_type="image/png",
                 image_reference=3,
             ),
+        ]
+
+
+class TestToolMediaCorrelation:
+    """Providers may reuse a Tool-call id (tool_call_0) in every response."""
+
+    @staticmethod
+    def _results_with_repeated_call_id() -> list[ChatMessage]:
+        return [
+            ChatMessage.tool(
+                tool_call_id="tool_call_0",
+                name="read",
+                content=json.dumps(
+                    tool_success(
+                        {"read": attachment_id},
+                        artifacts=[
+                            read_media_artifact(
+                                attachment_id=attachment_id,
+                                filename=f"{attachment_id}.png",
+                                media_type="image/png",
+                            )
+                        ],
+                    )
+                ),
+            )
+            for attachment_id in ("first-image", "second-image")
+        ]
+
+    def test_history_media_outputs_carry_their_tool_message_identity(self) -> None:
+        results = self._results_with_repeated_call_id()
+
+        outputs = _current_run_read_media_outputs(results)
+
+        assert [(output["tool_message_id"], output["attachment_id"]) for output in outputs] == [
+            (results[0].id, "first-image"),
+            (results[1].id, "second-image"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_rebuilt_results_receive_only_their_own_media(self, tmp_path: Path) -> None:
+        class NamingResolver:
+            async def resolve_messages(
+                self, messages: list[JsonObject], **_kwargs: Any
+            ) -> list[JsonObject]:
+                return [
+                    {
+                        **message,
+                        "content": [
+                            {"type": "text", "text": block["attachment_id"]}
+                            for block in message["content"]
+                        ],
+                    }
+                    for message in messages
+                ]
+
+        runtime: Any = StubRuntime(
+            data_dir=tmp_path,
+            agent=StubAgent(id="coder", model="openai/test"),
+            adapter=StubAdapter([]),
+        )
+        requests = build_chat_loop(runtime)._requests
+        requests._attachment_resolver = cast(Any, NamingResolver())
+        results = self._results_with_repeated_call_id()
+        tool_messages = [message.to_dict() for message in results]
+
+        await requests._attach_tool_result_content(
+            tool_messages,
+            _current_run_read_media_outputs(results),
+            frozenset({"text", "image"}),
+            frozenset({"image/png"}),
+        )
+
+        assert [message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] for message in tool_messages] == [
+            [{"type": "text", "text": "first-image"}],
+            [{"type": "text", "text": "second-image"}],
         ]
 
 

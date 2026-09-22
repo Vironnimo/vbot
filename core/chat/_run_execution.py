@@ -13,7 +13,6 @@ from core.chat._message_history import (
 )
 from core.chat._request_history import (
     _assign_session_image_references,
-    _restore_in_run_tool_result_content,
     _serialize_continuation_request,
 )
 from core.chat._run_state import (
@@ -344,7 +343,10 @@ class RunExecution:
                     await session.append_many_async(persisted_messages)
                     if request.edit_message_id is not None:
                         context.session_snapshot.commit_edit()
-                        await session.clear_continuation_async()
+                        if context.continuation_tracker is not None:
+                            await context.continuation_tracker.restart_journal()
+                        else:
+                            await session.clear_continuation_async()
                         context.prompt_cache_affinity_id = await _CHAT_TRANSFORM_WORKERS.run(
                             self._dependencies.sessions.rotate_prompt_cache_affinity_id,
                             session_address,
@@ -542,13 +544,15 @@ class RunExecution:
                     "Failed to compute change statistics for run %s", run.id, exc_info=True
                 )
             if context.continuation_tracker is not None:
+                answered = completed_assistant is not None and not completed_assistant.interrupted
                 try:
-                    if (
-                        outcome == "success"
-                        and completed_assistant is not None
-                        and not completed_assistant.interrupted
-                    ):
+                    if outcome == "success" and answered:
                         await context.continuation_tracker.prepare_completion()
+                    elif outcome == "cancelled" and answered:
+                        # Stop after a complete, persisted final answer (for example
+                        # during post-answer Compaction) leaves nothing to recover.
+                        # Only a completed terminal commit removes the journal.
+                        await context.continuation_tracker.resolve()
                     else:
                         if outcome == "cancelled":
                             cause: ContinuationCause = (
@@ -661,6 +665,7 @@ class RunExecution:
                     provider_id,
                     connection_id,
                     candidate_model_id,
+                    public_model=binding,
                 )
             except (ConfigError, VBotError) as construction_exc:
                 _LOGGER.warning(
@@ -698,23 +703,6 @@ class RunExecution:
                 ):
                     await session.add_note_async(OUTPUT_INTEGRITY_RECOVERY_NOTE)
                 await context.session_snapshot.refresh(session)
-                live_messages = context.request_state.messages if context.request_state else []
-                context.request_state = await self._requests.build_request_state(
-                    agent,
-                    session,
-                    inputs=RequestBuildInputs.from_context(
-                        context, candidate_target
-                    ).with_session_messages(context.session_snapshot.active_messages),
-                )
-                context.request_state.messages[:] = await _restore_in_run_tool_result_content(
-                    context.request_state.messages,
-                    live_messages,
-                    input_modalities=candidate_target.input_modalities,
-                    wire_media_types=candidate_target.wire_media_types,
-                    image_budget=context.image_budget,
-                    image_converter=self._requests._tool_image_converter,
-                    max_image_bytes=candidate_target.max_image_bytes,
-                )
                 if context.continuation_reminder is not None:
                     assert context.prior_continuation is not None
                     context.continuation_reminder = render_continuation_reminder(
@@ -723,16 +711,15 @@ class RunExecution:
                             agent, candidate_target
                         ),
                     )
-                    context.request_state = _RequestState(
-                        inject_continuation_reminder(
-                            context.request_state.messages,
-                            context.continuation_reminder,
-                        ),
-                        context.request_state.tools,
-                        context.request_state.allowed_tool_names,
-                        context.request_state.session_tool_grants,
-                        context.request_state.tool_contracts,
-                    )
+                context.request_state = await self._requests.rebuild_live_request_state(
+                    agent,
+                    session,
+                    inputs=RequestBuildInputs.from_context(
+                        context, candidate_target
+                    ).with_session_messages(context.session_snapshot.active_messages),
+                    live_messages=context.request_state.messages if context.request_state else [],
+                    continuation_reminder=context.continuation_reminder,
+                )
                 # Rebuilding applies the fallback route's media and Tool
                 # capabilities. The persisted previous tool cycle may still carry
                 # Provider-specific reasoning, which must never cross the Provider

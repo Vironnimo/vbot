@@ -261,9 +261,12 @@ async def test_compaction_does_not_restore_rich_content_for_aged_tool_result() -
             "outcome": {"ok": True},
         }
     )
-    rebuilt = [{"role": "tool", "tool_call_id": call_id, "content": aged_content}]
+    rebuilt = [
+        {"id": "msg_image", "role": "tool", "tool_call_id": call_id, "content": aged_content}
+    ]
     live = [
         {
+            "id": "msg_image",
             "role": "tool",
             "tool_call_id": call_id,
             "content": '{"ok":true}',
@@ -274,6 +277,32 @@ async def test_compaction_does_not_restore_rich_content_for_aged_tool_result() -
     restored = await _restore_in_run_tool_result_content(rebuilt, live)
 
     assert TOOL_RESULT_CONTENT_BLOCKS_FIELD not in restored[0]
+
+
+@pytest.mark.asyncio
+async def test_restore_keeps_each_turns_media_when_tool_call_ids_repeat() -> None:
+    # Ollama and id-less streams name the first call of every response tool_call_0.
+    live = [
+        {
+            "id": f"msg_result_{turn}",
+            "role": "tool",
+            "tool_call_id": "tool_call_0",
+            "content": '{"ok":true}',
+            TOOL_RESULT_CONTENT_BLOCKS_FIELD: [{"type": "text", "text": f"turn-{turn}"}],
+        }
+        for turn in (1, 2)
+    ]
+    rebuilt = [
+        {key: value for key, value in message.items() if key != TOOL_RESULT_CONTENT_BLOCKS_FIELD}
+        for message in live
+    ]
+
+    restored = await _restore_in_run_tool_result_content(rebuilt, live)
+
+    assert [message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] for message in restored] == [
+        [{"type": "text", "text": "turn-1"}],
+        [{"type": "text", "text": "turn-2"}],
+    ]
 
 
 @pytest.mark.asyncio
