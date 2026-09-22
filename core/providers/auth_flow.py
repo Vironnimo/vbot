@@ -148,6 +148,13 @@ class DeviceFlowEngine:
             if self._closed or self._active_authorizations.get(flow_key) is not authorization:
                 self._minimax_code_verifiers.pop((*flow_key, session.user_code), None)
                 raise asyncio.CancelledError
+        except BaseException:
+            # Cancellation may arrive after the child stored a verifier but
+            # before this await delivered its session. Retire only this Account's
+            # still-current authorization, never a replacement flow's verifier.
+            if self._active_authorizations.get(flow_key) is authorization:
+                self._drop_minimax_verifiers(*flow_key)
+            raise
         finally:
             self._authorization_tasks.discard(authorization)
             if self._active_authorizations.get(flow_key) is authorization:
@@ -193,7 +200,7 @@ class DeviceFlowEngine:
         local_connection_id: str,
         account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> bool:
-        """Whether this exact Account has an accepted, unfinished poll."""
+        """Whether this Account has pending authorization or unfinished polling."""
         key = (provider_id, local_connection_id, account_id)
         task = self._active_flows.get(key)
         authorization = self._active_authorizations.get(key)

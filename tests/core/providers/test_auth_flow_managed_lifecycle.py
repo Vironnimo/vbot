@@ -59,6 +59,37 @@ async def test_managed_flow_owns_pending_authorization(tmp_path: Path, stop: str
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("response_ready", [False, True])
+async def test_cancelled_connect_retires_authorization_verifier(tmp_path, response_ready):
+    engine = DeviceFlowEngine(TokenStore(tmp_path))
+
+    async def authorize(*args, **kwargs):
+        engine._minimax_code_verifiers[("provider", "oauth", "default", "user")] = "verifier"
+        asyncio.get_running_loop().call_soon(pending.cancel)
+        if not response_ready:
+            # Cancellation can also arrive during HTTP-client cleanup after
+            # authorization has already installed its verifier.
+            await asyncio.Event().wait()
+        return DeviceFlowSession("device", "user", "https://example.test", 900, 5)
+
+    with (
+        patch.object(engine, "_request_device_session", side_effect=authorize),
+        patch.object(engine, "_poll_until_complete", AsyncMock()) as poll,
+    ):
+        pending = asyncio.create_task(
+            engine.connect("provider", "oauth", _oauth_config(), AsyncMock())
+        )
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+            assert not engine._minimax_code_verifiers
+            assert not engine.is_flow_active("provider", "oauth")
+            poll.assert_not_awaited()
+        finally:
+            await engine.aclose()
+
+
+@pytest.mark.asyncio
 async def test_closed_engine_rejects_new_authorization(tmp_path: Path) -> None:
     engine = DeviceFlowEngine(TokenStore(tmp_path))
     await engine.aclose()
