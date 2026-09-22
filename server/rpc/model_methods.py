@@ -312,6 +312,11 @@ async def shutdown_background_refresh_tasks(runtime: Any) -> None:
 
 
 async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:
+    async with state.runtime.model_database_refresh():
+        return await _refresh_model_db_admitted(state, params)
+
+
+async def _refresh_model_db_admitted(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
         {"expected_resources_dir", "provider_id", "target"},

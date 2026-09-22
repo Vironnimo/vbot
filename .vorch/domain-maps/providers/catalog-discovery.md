@@ -43,6 +43,8 @@ The RPC catches expected credential-resolution and OAuth-refresh failures at the
 
 ## Local auto-refresh and reachability
 
+`ProviderRuntime.model_database_refresh()` owns one Runtime-local admission guard shared by manual RPC refreshes and automatic local sweeps, exposed through the Runtime facade. It spans active-root copy, network discovery, complete-root publication, and in-place registry reload. Acquiring only at publication would let a queued old snapshot erase another completed refresh. Cancellation discards its unpublished staging copy before releasing admission.
+
 Connections with `auto_refresh: true` are refreshed by `Runtime.maybe_refresh_local_catalogs()` only while enabled and usable. Startup triggers a background sweep; `model.list` waits within a short budget; sweeps are throttled, including failures, so an offline local server is not probed on every picker open.
 
 Success reloads the existing `ModelRegistry` in place and records reachable. Failure keeps the previous catalog and records unreachable. `model.list` exposes `reachable: false` only when every usable serving Connection is an auto-refresh Connection whose last probe failed; remote or unprobed alternatives prevent that claim.
