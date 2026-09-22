@@ -222,6 +222,17 @@ class ContinuationTracker:
         async with self._journal_lock:
             await self._ensure_started_unlocked()
 
+    async def restart_journal(self) -> None:
+        """Discard every earlier journal record and durably restart this Run's chain.
+
+        A committed history edit invalidates older checkpoint state, but the
+        editing Run still needs its own recovery record.
+        """
+        async with self._journal_lock:
+            await self._session.clear_continuation_async()
+            self._started = False
+            await self._ensure_started_unlocked()
+
     @property
     def step(self) -> int:
         return self._step

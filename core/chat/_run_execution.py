@@ -343,7 +343,10 @@ class RunExecution:
                     await session.append_many_async(persisted_messages)
                     if request.edit_message_id is not None:
                         context.session_snapshot.commit_edit()
-                        await session.clear_continuation_async()
+                        if context.continuation_tracker is not None:
+                            await context.continuation_tracker.restart_journal()
+                        else:
+                            await session.clear_continuation_async()
                         context.prompt_cache_affinity_id = await _CHAT_TRANSFORM_WORKERS.run(
                             self._dependencies.sessions.rotate_prompt_cache_affinity_id,
                             session_address,
