@@ -148,18 +148,6 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
             self._vector.remove_session(agent_id, session_id, project_id),
         )
 
-    # ------------------------------------------------------------------
-    # Match grouping
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
-    # Match ordering
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
-    # Result shape
-    # ------------------------------------------------------------------
-
 
 def _fuse_rrf(
     literal_page: RecallSearchPage | None,
@@ -228,7 +216,4 @@ def _hybrid_snapshot(
     return hashlib.sha256(f"{literal}\0{semantic}".encode()).hexdigest()
 
 
-# Re-export the vector renderer so callers can still reach it
-# through the hybrid module if they want to mirror its visual
-# style elsewhere.
 __all__ = ["HybridRecallBackend"]
