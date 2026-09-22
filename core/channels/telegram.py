@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
+import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from core.attachments import AttachmentStore
 from core.channels.adapter import (
+    TELEGRAM_UPDATE_OFFSET_TTL_SECONDS,
     ChannelAccessRegistry,
     ChannelAdapter,
     ConversationFacts,
@@ -117,6 +119,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         # None keeps dedup in-memory only (tests).
         self._update_offset_store = update_offset_store
         self._last_update_id = -1
+        self._last_update_claimed_at = time.monotonic()
         self._offset_save_tasks: set[asyncio.Task[None]] = set()
         self._engine = ChannelConversationEngine(
             config,
@@ -165,6 +168,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         bot_user = await application.bot.get_me()
         self._set_bot_identity(bot_user)
         self._last_update_id = self._load_update_offset()
+        self._last_update_claimed_at = time.monotonic()
         await application.bot.delete_webhook(drop_pending_updates=False)
         await application.start()
 
@@ -307,6 +311,9 @@ class TelegramChannelAdapter(ChannelAdapter):
         update_id = getattr(update, "update_id", None)
         if not isinstance(update_id, int) or isinstance(update_id, bool):
             return True
+        now = time.monotonic()
+        if now - self._last_update_claimed_at >= TELEGRAM_UPDATE_OFFSET_TTL_SECONDS:
+            self._last_update_id = -1
         if update_id <= self._last_update_id:
             _LOGGER.debug(
                 "Skipping re-delivered Telegram update (channel=%s update_id=%s)",
@@ -315,6 +322,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             )
             return False
         self._last_update_id = update_id
+        self._last_update_claimed_at = now
         self._schedule_offset_save(update_id)
         return True
 

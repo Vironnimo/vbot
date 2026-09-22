@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import threading
+import time
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from core.channels.adapter import (
+    TELEGRAM_UPDATE_OFFSET_TTL_SECONDS,
     RunButtonBinding,
     RunButtonClaim,
 )
@@ -334,13 +337,19 @@ class ChannelStorage:
             self._write_run_button_bindings(normalized_id, bindings)
 
     def load_update_offset(self, channel_id: str) -> int:
-        """Return the persisted Telegram update high-water mark (0 when unknown)."""
+        """Return the fresh Telegram update high-water mark (0 when unknown/expired)."""
         normalized_id = _normalize_channel_id(channel_id)
         path = self._channel_dir(normalized_id) / _POLLING_STATE_FILENAME
         if not path.is_file():
             return 0
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            # Read age and contents from the same atomically replaced file. An
+            # expired generation must not prevent a fresh, randomized lower id.
+            with path.open(encoding="utf-8") as stream:
+                age = time.time() - os.fstat(stream.fileno()).st_mtime
+                if age >= TELEGRAM_UPDATE_OFFSET_TTL_SECONDS:
+                    return 0
+                payload = json.load(stream)
             if not isinstance(payload, dict) or payload.get("version") != _POLLING_STATE_VERSION:
                 raise ValueError("unsupported polling-state version")
             update_id = payload.get("last_update_id")

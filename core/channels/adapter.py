@@ -62,13 +62,19 @@ class RunButtonBindingRegistry(Protocol):
     def restore_run_button_binding(self, channel_id: str, binding_id: str) -> None: ...
 
 
+# Telegram retains undelivered updates for 24 hours and may randomize update ids
+# after a week idle. Keep a safety margin over replay retention, below that reset.
+TELEGRAM_UPDATE_OFFSET_TTL_SECONDS = 48 * 60 * 60
+
+
 class UpdateOffsetStore(Protocol):
     """Durable polling-offset seam for long-polling adapters (Telegram).
 
     Long-polling platforms redeliver unconfirmed updates after an adapter
     restart; without a persisted watermark every restart replays recent inbound
     messages as duplicate Runs. The adapter claims each delivered update id and
-    skips ids at or below the persisted high-water mark.
+    skips ids at or below the persisted high-water mark while it is fresh.
+    Storage and live adapters expire idle watermarks so randomized ids remain usable.
     """
 
     def load_update_offset(self, channel_id: str) -> int: ...
