@@ -16,9 +16,9 @@ from core.utils.errors import ProviderError, VBotError
 class NetworkError(VBotError):
     """Network-level error (dropped connection, DNS failure, etc.).
 
-    Not a subclass of ProviderError - a network error is not provider-specific
-    and must not trigger model fallback. Retryable - the user can retry once
-    connectivity is restored.
+    Remains Provider-neutral and retryable. Chat owns same-Model recovery and
+    may then advance an explicitly configured Model fallback chain, since
+    another route can reach a different host.
     """
 
     retryable: bool = True
