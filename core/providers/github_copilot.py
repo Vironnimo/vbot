@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import Any
+from collections.abc import AsyncGenerator, Mapping, Sequence
+from contextlib import aclosing
+from typing import Any, cast
 
 import httpx
 
@@ -138,23 +139,31 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         *,
         model_id: str,
         **kwargs: Any,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Stream one Copilot request as normalized vBot deltas."""
 
         policy = self._policy_for_model(model_id)
         if policy.endpoint_path == CHAT_COMPLETIONS_ENDPOINT:
             emitted_visible_reasoning = ""
-            async for delta in super().stream(
-                messages,
-                model_id=model_id,
-                **self._chat_request_kwargs(policy, kwargs),
-            ):
-                normalized_deltas, emitted_visible_reasoning = _normalize_copilot_chat_stream_delta(
-                    delta,
-                    emitted_visible_reasoning,
+            async with aclosing(
+                cast(
+                    AsyncGenerator[dict[str, Any], None],
+                    super().stream(
+                        messages,
+                        model_id=model_id,
+                        **self._chat_request_kwargs(policy, kwargs),
+                    ),
                 )
-                for normalized_delta in normalized_deltas:
-                    yield normalized_delta
+            ) as deltas:
+                async for delta in deltas:
+                    normalized_deltas, emitted_visible_reasoning = (
+                        _normalize_copilot_chat_stream_delta(
+                            delta,
+                            emitted_visible_reasoning,
+                        )
+                    )
+                    for normalized_delta in normalized_deltas:
+                        yield normalized_delta
             return
         if policy.endpoint_path == RESPONSES_ENDPOINT:
             payload = build_responses_payload(
@@ -164,8 +173,9 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                 stream=True,
                 **self._responses_request_kwargs_with_defaults(messages, model_id, kwargs),
             )
-            async for delta in self._stream_responses(payload, messages):
-                yield delta
+            async with aclosing(self._stream_responses(payload, messages)) as deltas:
+                async for delta in deltas:
+                    yield delta
             return
         if policy.endpoint_path == MESSAGES_ENDPOINT:
             payload = build_copilot_messages_payload(
@@ -175,15 +185,22 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                 **self._request_kwargs_with_defaults(messages, model_id, kwargs),
             )
             payload["stream"] = True
-            async for delta in self._stream_messages(payload, messages):
-                yield delta
+            async with aclosing(self._stream_messages(payload, messages)) as deltas:
+                async for delta in deltas:
+                    yield delta
             return
-        async for delta in super().stream(
-            messages,
-            model_id=model_id,
-            **self._chat_request_kwargs(policy, kwargs),
-        ):
-            yield delta
+        async with aclosing(
+            cast(
+                AsyncGenerator[dict[str, Any], None],
+                super().stream(
+                    messages,
+                    model_id=model_id,
+                    **self._chat_request_kwargs(policy, kwargs),
+                ),
+            )
+        ) as deltas:
+            async for delta in deltas:
+                yield delta
 
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
@@ -411,7 +428,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         self,
         payload: dict[str, Any],
         messages: list[dict[str, Any]],
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         response = await self._connect_stream(RESPONSES_ENDPOINT, payload, messages)
         state = ResponsesStreamState()
         event_lines: list[str] = []
@@ -444,7 +461,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         self,
         payload: dict[str, Any],
         messages: list[dict[str, Any]],
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         response = await self._connect_stream(MESSAGES_ENDPOINT, payload, messages)
         state = CopilotMessagesStreamState()
         seen_finish_delta = False

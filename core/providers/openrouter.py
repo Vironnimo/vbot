@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from contextlib import aclosing
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote
 
 import httpx
@@ -173,12 +174,18 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         *,
         model_id: str,
         **kwargs: Any,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Stream GPT-5.6 via Responses; retain Chat Completions for other Models."""
 
         if not self._uses_all_turns_responses(model_id):
-            async for delta in super().stream(messages, model_id=model_id, **kwargs):
-                yield delta
+            async with aclosing(
+                cast(
+                    AsyncGenerator[dict[str, Any], None],
+                    super().stream(messages, model_id=model_id, **kwargs),
+                )
+            ) as deltas:
+                async for delta in deltas:
+                    yield delta
             return
         payload = self._build_openrouter_responses_payload(
             messages,
@@ -186,8 +193,9 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             stream=True,
             **self._request_kwargs_with_defaults(kwargs),
         )
-        async for delta in self._stream_responses(payload):
-            yield delta
+        async with aclosing(self._stream_responses(payload)) as deltas:
+            async for delta in deltas:
+                yield delta
 
     def normalize_response(
         self,
@@ -363,7 +371,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
     async def _stream_responses(
         self,
         payload: dict[str, Any],
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         response = await self._connect_responses_stream(payload)
         state = ResponsesStreamState(lenient_unknown_errors=True)
         newline_state: dict[str, Any] = {}
