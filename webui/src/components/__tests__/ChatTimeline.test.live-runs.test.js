@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
+import { fileURLToPath } from 'node:url';
+import { readStyleSheet } from '../../__tests__/styles.support.js';
 import {
   flushSync,
   mount,
@@ -663,6 +665,12 @@ describe('ChatTimeline', () => {
   });
 
   it('renders a stable-sized thinking chevron and only rotates it when expanded', () => {
+    const stylesheet = document.createElement('style');
+    const stylesheetPath = '../../styles/app.css';
+    stylesheet.textContent = readStyleSheet(
+      fileURLToPath(new URL(stylesheetPath, import.meta.url)),
+    );
+    document.body.append(stylesheet);
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -695,7 +703,7 @@ describe('ChatTimeline', () => {
     expect(reasoningBlock.open).toBe(false);
     expect(chevron.getAttribute('width')).toBe('10');
     expect(chevron.getAttribute('height')).toBe('10');
-    expect(chevron.style.transform).toBe('none');
+    expect(getComputedStyle(chevron).transform || 'none').toBe('none');
 
     reasoningBlock.open = true;
     reasoningBlock.dispatchEvent(new Event('toggle'));
@@ -704,6 +712,6 @@ describe('ChatTimeline', () => {
     expect(reasoningBlock.open).toBe(true);
     expect(chevron.getAttribute('width')).toBe('10');
     expect(chevron.getAttribute('height')).toBe('10');
-    expect(chevron.style.transform).toBe('rotate(180deg)');
+    expect(getComputedStyle(chevron).transform).toBe('rotate(180deg)');
   });
 });
