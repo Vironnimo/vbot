@@ -31,8 +31,8 @@ from core.config_validation import (
     warn_unknown_keys as _warn_unknown_keys,
 )
 from core.fetch_config import parse_web_fetch_settings
-from core.model_tasks import SUPPORTED_TASK_TYPES
 from core.model_tasks.constants import (
+    SUPPORTED_TASK_TYPES,
     SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS,
     SUPPORTED_TRANSCRIPTION_AUDIO_PROFILES,
     SUPPORTED_TRANSCRIPTION_AUDIO_SAMPLE_RATES,

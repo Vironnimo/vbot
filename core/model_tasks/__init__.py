@@ -1,103 +1,204 @@
 """Task-model bindings, discovery, and specialized task execution."""
 
-from core.model_tasks.constants import (
-    SPEECH_TASK_TYPES,
-    SUPPORTED_TASK_TYPES,
-    TASK_IMAGE_GENERATION,
-    TASK_IMAGE_UNDERSTANDING,
-    TASK_MUSIC_GENERATION,
-    TASK_SPEECH_TO_TEXT,
-    TASK_TEXT_EMBEDDING,
-    TASK_TEXT_TO_SPEECH,
-    TASK_VIDEO_GENERATION,
-)
-from core.model_tasks.embeddings import (
-    EmbeddingConfigurationError,
-    EmbeddingError,
-    EmbeddingExecutionError,
-    EmbeddingPurpose,
-    EmbeddingResult,
-    EmbeddingService,
-    EmbeddingSpaceIdentity,
-    EmbeddingUnsupportedTargetError,
-)
-from core.model_tasks.embeddings_providers import EmbeddingUsage, ProviderEmbeddingClient
-from core.model_tasks.image import (
-    ImageConfigurationError,
-    ImageError,
-    ImageExecutionError,
-    ImageInputError,
-    ImageNotFoundError,
-    ImageOutcomeUnknownError,
-    ImageReadError,
-    ImageService,
-    ImageTooLargeError,
-    ImageUnderstandingUnavailableError,
-    ImageUnsupportedMediaTypeError,
-    ImageUnsupportedTargetError,
-)
-from core.model_tasks.image_providers import ProviderImageClient
-from core.model_tasks.image_types import (
-    ImageArtifact,
-    ImageGenerationResult,
-    ImageUnderstandingResult,
-    ImageUnderstandingRunContext,
-)
-from core.model_tasks.local_targets import (
-    DEFAULT_LOCAL_TASK_TARGET_REGISTRY,
-    LocalTaskTargetDescriptor,
-    LocalTaskTargetError,
-    LocalTaskTargetRegistry,
-)
-from core.model_tasks.model_tasks import (
-    TaskModelBinding,
-    TaskModelError,
-    TaskModelService,
-    TaskModelTarget,
-    TaskModelTargetRef,
-    TaskModelValidationError,
-    parse_task_model_target_id,
-    public_provider_target_id,
-    task_model_targets_equal,
-    validate_task_type,
-)
-from core.model_tasks.music import (
-    MusicConfigurationError,
-    MusicError,
-    MusicExecutionError,
-    MusicOutcomeUnknownError,
-    MusicService,
-)
-from core.model_tasks.music_providers import ProviderMusicClient
-from core.model_tasks.music_types import MusicGenerationResult
-from core.model_tasks.options import (
-    TaskModelOptionChoice,
-    TaskModelOptionField,
-    TaskModelOptionSchema,
-    option_schema_for,
-    validate_task_model_options,
-)
-from core.model_tasks.speech import (
-    SpeechArtifact,
-    SpeechConfigurationError,
-    SpeechError,
-    SpeechExecutionError,
-    SpeechOutcomeUnknownError,
-    SpeechService,
-    SpeechUnsupportedTargetError,
-)
-from core.model_tasks.speech_local import LocalSpeechError, LocalSpeechExecutor
-from core.model_tasks.speech_providers import ProviderSpeechClient, audio_format_from
-from core.model_tasks.speech_types import SpeechSynthesisResult, SpeechTranscriptionResult
-from core.model_tasks.video import (
-    VideoConfigurationError,
-    VideoError,
-    VideoExecutionError,
-    VideoOutcomeUnknownError,
-    VideoService,
-)
-from core.model_tasks.video_providers import ProviderVideoClient
-from core.model_tasks.video_types import VideoGenerationResult
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from core.model_tasks.constants import (
+        SPEECH_TASK_TYPES,
+        SUPPORTED_TASK_TYPES,
+        TASK_IMAGE_GENERATION,
+        TASK_IMAGE_UNDERSTANDING,
+        TASK_MUSIC_GENERATION,
+        TASK_SPEECH_TO_TEXT,
+        TASK_TEXT_EMBEDDING,
+        TASK_TEXT_TO_SPEECH,
+        TASK_VIDEO_GENERATION,
+    )
+    from core.model_tasks.embeddings import (
+        EmbeddingConfigurationError,
+        EmbeddingError,
+        EmbeddingExecutionError,
+        EmbeddingPurpose,
+        EmbeddingResult,
+        EmbeddingService,
+        EmbeddingSpaceIdentity,
+        EmbeddingUnsupportedTargetError,
+    )
+    from core.model_tasks.embeddings_providers import EmbeddingUsage, ProviderEmbeddingClient
+    from core.model_tasks.image import (
+        ImageConfigurationError,
+        ImageError,
+        ImageExecutionError,
+        ImageInputError,
+        ImageNotFoundError,
+        ImageOutcomeUnknownError,
+        ImageReadError,
+        ImageService,
+        ImageTooLargeError,
+        ImageUnderstandingUnavailableError,
+        ImageUnsupportedMediaTypeError,
+        ImageUnsupportedTargetError,
+    )
+    from core.model_tasks.image_providers import ProviderImageClient
+    from core.model_tasks.image_types import (
+        ImageArtifact,
+        ImageGenerationResult,
+        ImageUnderstandingResult,
+        ImageUnderstandingRunContext,
+    )
+    from core.model_tasks.local_targets import (
+        DEFAULT_LOCAL_TASK_TARGET_REGISTRY,
+        LocalTaskTargetDescriptor,
+        LocalTaskTargetError,
+        LocalTaskTargetRegistry,
+    )
+    from core.model_tasks.model_tasks import (
+        TaskModelBinding,
+        TaskModelError,
+        TaskModelService,
+        TaskModelTarget,
+        TaskModelTargetRef,
+        TaskModelValidationError,
+        parse_task_model_target_id,
+        public_provider_target_id,
+        task_model_targets_equal,
+        validate_task_type,
+    )
+    from core.model_tasks.music import (
+        MusicConfigurationError,
+        MusicError,
+        MusicExecutionError,
+        MusicOutcomeUnknownError,
+        MusicService,
+    )
+    from core.model_tasks.music_providers import ProviderMusicClient
+    from core.model_tasks.music_types import MusicGenerationResult
+    from core.model_tasks.options import (
+        TaskModelOptionChoice,
+        TaskModelOptionField,
+        TaskModelOptionSchema,
+        option_schema_for,
+        validate_task_model_options,
+    )
+    from core.model_tasks.speech import (
+        SpeechArtifact,
+        SpeechConfigurationError,
+        SpeechError,
+        SpeechExecutionError,
+        SpeechOutcomeUnknownError,
+        SpeechService,
+        SpeechUnsupportedTargetError,
+    )
+    from core.model_tasks.speech_local import LocalSpeechError, LocalSpeechExecutor
+    from core.model_tasks.speech_providers import ProviderSpeechClient, audio_format_from
+    from core.model_tasks.speech_types import SpeechSynthesisResult, SpeechTranscriptionResult
+    from core.model_tasks.video import (
+        VideoConfigurationError,
+        VideoError,
+        VideoExecutionError,
+        VideoOutcomeUnknownError,
+        VideoService,
+    )
+    from core.model_tasks.video_providers import ProviderVideoClient
+    from core.model_tasks.video_types import VideoGenerationResult
+
+
+_EXPORT_MODULES = {
+    "SPEECH_TASK_TYPES": "core.model_tasks.constants",
+    "SUPPORTED_TASK_TYPES": "core.model_tasks.constants",
+    "TASK_IMAGE_GENERATION": "core.model_tasks.constants",
+    "TASK_IMAGE_UNDERSTANDING": "core.model_tasks.constants",
+    "TASK_MUSIC_GENERATION": "core.model_tasks.constants",
+    "TASK_SPEECH_TO_TEXT": "core.model_tasks.constants",
+    "TASK_TEXT_EMBEDDING": "core.model_tasks.constants",
+    "TASK_TEXT_TO_SPEECH": "core.model_tasks.constants",
+    "TASK_VIDEO_GENERATION": "core.model_tasks.constants",
+    "EmbeddingConfigurationError": "core.model_tasks.embeddings",
+    "EmbeddingError": "core.model_tasks.embeddings",
+    "EmbeddingExecutionError": "core.model_tasks.embeddings",
+    "EmbeddingPurpose": "core.model_tasks.embeddings",
+    "EmbeddingResult": "core.model_tasks.embeddings",
+    "EmbeddingService": "core.model_tasks.embeddings",
+    "EmbeddingSpaceIdentity": "core.model_tasks.embeddings",
+    "EmbeddingUnsupportedTargetError": "core.model_tasks.embeddings",
+    "EmbeddingUsage": "core.model_tasks.embeddings_providers",
+    "ProviderEmbeddingClient": "core.model_tasks.embeddings_providers",
+    "ImageConfigurationError": "core.model_tasks.image",
+    "ImageError": "core.model_tasks.image",
+    "ImageExecutionError": "core.model_tasks.image",
+    "ImageInputError": "core.model_tasks.image",
+    "ImageNotFoundError": "core.model_tasks.image",
+    "ImageOutcomeUnknownError": "core.model_tasks.image",
+    "ImageReadError": "core.model_tasks.image",
+    "ImageService": "core.model_tasks.image",
+    "ImageTooLargeError": "core.model_tasks.image",
+    "ImageUnderstandingUnavailableError": "core.model_tasks.image",
+    "ImageUnsupportedMediaTypeError": "core.model_tasks.image",
+    "ImageUnsupportedTargetError": "core.model_tasks.image",
+    "ProviderImageClient": "core.model_tasks.image_providers",
+    "ImageArtifact": "core.model_tasks.image_types",
+    "ImageGenerationResult": "core.model_tasks.image_types",
+    "ImageUnderstandingResult": "core.model_tasks.image_types",
+    "ImageUnderstandingRunContext": "core.model_tasks.image_types",
+    "DEFAULT_LOCAL_TASK_TARGET_REGISTRY": "core.model_tasks.local_targets",
+    "LocalTaskTargetDescriptor": "core.model_tasks.local_targets",
+    "LocalTaskTargetError": "core.model_tasks.local_targets",
+    "LocalTaskTargetRegistry": "core.model_tasks.local_targets",
+    "TaskModelBinding": "core.model_tasks.model_tasks",
+    "TaskModelError": "core.model_tasks.model_tasks",
+    "TaskModelService": "core.model_tasks.model_tasks",
+    "TaskModelTarget": "core.model_tasks.model_tasks",
+    "TaskModelTargetRef": "core.model_tasks.model_tasks",
+    "TaskModelValidationError": "core.model_tasks.model_tasks",
+    "parse_task_model_target_id": "core.model_tasks.model_tasks",
+    "public_provider_target_id": "core.model_tasks.model_tasks",
+    "task_model_targets_equal": "core.model_tasks.model_tasks",
+    "validate_task_type": "core.model_tasks.model_tasks",
+    "MusicConfigurationError": "core.model_tasks.music",
+    "MusicError": "core.model_tasks.music",
+    "MusicExecutionError": "core.model_tasks.music",
+    "MusicOutcomeUnknownError": "core.model_tasks.music",
+    "MusicService": "core.model_tasks.music",
+    "ProviderMusicClient": "core.model_tasks.music_providers",
+    "MusicGenerationResult": "core.model_tasks.music_types",
+    "TaskModelOptionChoice": "core.model_tasks.options",
+    "TaskModelOptionField": "core.model_tasks.options",
+    "TaskModelOptionSchema": "core.model_tasks.options",
+    "option_schema_for": "core.model_tasks.options",
+    "validate_task_model_options": "core.model_tasks.options",
+    "SpeechArtifact": "core.model_tasks.speech",
+    "SpeechConfigurationError": "core.model_tasks.speech",
+    "SpeechError": "core.model_tasks.speech",
+    "SpeechExecutionError": "core.model_tasks.speech",
+    "SpeechOutcomeUnknownError": "core.model_tasks.speech",
+    "SpeechService": "core.model_tasks.speech",
+    "SpeechUnsupportedTargetError": "core.model_tasks.speech",
+    "LocalSpeechError": "core.model_tasks.speech_local",
+    "LocalSpeechExecutor": "core.model_tasks.speech_local",
+    "ProviderSpeechClient": "core.model_tasks.speech_providers",
+    "audio_format_from": "core.model_tasks.speech_providers",
+    "SpeechSynthesisResult": "core.model_tasks.speech_types",
+    "SpeechTranscriptionResult": "core.model_tasks.speech_types",
+    "VideoConfigurationError": "core.model_tasks.video",
+    "VideoError": "core.model_tasks.video",
+    "VideoExecutionError": "core.model_tasks.video",
+    "VideoOutcomeUnknownError": "core.model_tasks.video",
+    "VideoService": "core.model_tasks.video",
+    "ProviderVideoClient": "core.model_tasks.video_providers",
+    "VideoGenerationResult": "core.model_tasks.video_types",
+}
+
+
+def __getattr__(name: str) -> Any:
+    """Load public task-model exports only when a caller requests them."""
+    module_name = _EXPORT_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module_name), name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "DEFAULT_LOCAL_TASK_TARGET_REGISTRY",
