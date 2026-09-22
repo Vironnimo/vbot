@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from itertools import islice
@@ -12,7 +11,12 @@ from typing import Any
 
 from core.attachments import AttachmentError, sniff_media_type
 from core.model_tasks import SpeechError
-from core.tools.arguments import LINE_NUMBER_GUTTER_SEPARATOR, optional_int
+from core.tools.arguments import (
+    LINE_NUMBER_GUTTER_SEPARATOR,
+    TEXT_LINE_BREAK,
+    optional_int,
+    split_text_lines,
+)
 from core.tools.file_state import FileReadState
 from core.tools.read_extract import (
     ExtractionError,
@@ -45,7 +49,6 @@ _UTF8_BOM_BYTES = b"\xef\xbb\xbf"
 _BINARY_DETECTION_BYTES = 8192
 _FILE_PROBE_BYTES = 64 * 1024
 _TEXT_STREAM_CHUNK_CHARACTERS = 64 * 1024
-_LINE_BREAK_PATTERN = re.compile(r"\r\n|[\n\v\f\x1c-\x1e\x85\u2028\u2029\r]")
 _SIMILAR_FILE_SCAN_LIMIT = 50
 _SIMILAR_FILE_RESULT_LIMIT = 5
 _SIMILAR_FILE_MIN_RATIO = 0.55
@@ -299,7 +302,7 @@ def _render_text(
     the extracted-document path (``number=False`` — a rendering of an Office or
     notebook file is not editable source, so the gutter would only mislead).
     """
-    all_lines = text.splitlines(keepends=True)
+    all_lines = split_text_lines(text, keepends=True)
     total_lines = len(all_lines)
 
     if total_lines == 0:
@@ -416,7 +419,7 @@ def _split_stream_fragments(
 
     fragments: list[tuple[str, bool]] = []
     start = 0
-    for match in _LINE_BREAK_PATTERN.finditer(text):
+    for match in TEXT_LINE_BREAK.finditer(text):
         fragments.append((text[start : match.end()], True))
         start = match.end()
     if start < len(text):

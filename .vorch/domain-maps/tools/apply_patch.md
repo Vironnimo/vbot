@@ -160,8 +160,10 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   after planning, before mutation, and after completed writes. Later entries
   detect drift from earlier observations and leave affected paths alone.
 - Updates reject NUL bytes and invalid UTF-8. BOM, surviving context bytes,
-  existing EOF newline state, and file permissions are preserved. New lines
-  adopt the detected file style; explicit no-newline markers apply only at EOF.
+  existing EOF newline state, and file permissions are preserved. Lines are
+  delimited like `read` (LF, CRLF, lone CR only; U+2028 and similar separators
+  are line content). New lines adopt the detected CRLF/LF/CR style, else LF;
+  explicit no-newline markers apply only at EOF.
   Binary files may be moved or deleted without text decoding.
 - Writes reuse `atomic_write_bytes`; its optional `mode` carries source
   permissions to a move destination. Its `before_replace` callback rechecks all

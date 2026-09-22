@@ -28,6 +28,7 @@ from core.tools._patch_syntax import (
     _parse,
     _PatchError,
 )
+from core.tools.arguments import split_text_lines
 from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.file_state import FileReadState, StaleReason, atomic_write_bytes, stale_failure_text
 from core.tools.syntax_check import warning_for_edited_file, warning_for_written_file
@@ -198,7 +199,8 @@ def _change_details(
         old = _decode(before or b"", model_path(path))
     except _PatchError:
         return result, 0, 0
-    old_lines, new_lines = old.splitlines(keepends=True), new.splitlines(keepends=True)
+    old_lines = split_text_lines(old, keepends=True)
+    new_lines = split_text_lines(new, keepends=True)
     old_starts, new_starts = [0], [0]
     for line in old_lines:
         old_starts.append(old_starts[-1] + len(line))

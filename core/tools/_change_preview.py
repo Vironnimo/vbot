@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import re
 from bisect import bisect_right
 
-from core.tools.arguments import LINE_NUMBER_GUTTER_SEPARATOR
+from core.tools.arguments import LINE_NUMBER_GUTTER_SEPARATOR, TEXT_LINE_BREAK, split_text_lines
 from core.tools.tools import JsonObject
 
 _PREVIEW_CONTEXT_LINES = 1
 _PREVIEW_MAX_LINES_PER_SIDE = 8
 _PREVIEW_MAX_LINE_CHARS = 240
 _PREVIEW_MAX_REGIONS = 2
-_LINE_BREAK_PATTERN = re.compile(r"\r\n|[\n\v\f\x1c-\x1e\x85\u2028\u2029\r]")
 
 
 def _bounded_preview_indices(start: int, end: int) -> tuple[list[int], int]:
@@ -56,11 +54,11 @@ def _render_preview_side(
 
 
 def _line_starts(text: str) -> list[int]:
-    return [0, *(match.end() for match in _LINE_BREAK_PATTERN.finditer(text))]
+    return [0, *(match.end() for match in TEXT_LINE_BREAK.finditer(text))]
 
 
 def _preview_span(text: str, span: tuple[int, int]) -> tuple[list[str], int, int, int, int]:
-    lines = text.splitlines()
+    lines = split_text_lines(text)
     starts = _line_starts(text)
     span_start, span_end = span
     focus_line = bisect_right(starts, span_start) - 1

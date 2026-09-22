@@ -43,6 +43,8 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from heapq import heappush, heapreplace
 
+from core.tools.arguments import TEXT_LINE_BREAK, split_text_lines
+
 _CANDIDATE_ANCHOR_COUNT = 3
 _CANDIDATE_ANCHOR_POOL_SIZE = 20
 _CANDIDATE_SCAN_LINE_LIMIT = 50_000
@@ -83,25 +85,11 @@ _TYPOGRAPHIC_NORMALIZATION = {
     ),
 }
 
-# Every line-ending flavor the read tool renders as a separate line (mirrors
-# read.py's _LINE_BREAK_PATTERN). Detection order matters: CRLF first, then LF
-# before CR (write.py's _detect_file_line_ending prefers the same way for
-# mixed files), then the exotic flavors.
-_LINE_ENDINGS = (
-    "\r\n",
-    "\n",
-    "\r",
-    "\v",
-    "\f",
-    "\x1c",
-    "\x1d",
-    "\x1e",
-    "\x85",
-    "\u2028",
-    "\u2029",
-)
-_EXOTIC_LINE_ENDINGS = _LINE_ENDINGS[3:]
-_LINE_BREAK_RE = re.compile(r"\r\n|[\n\v\f\x1c-\x1e\x85\u2028\u2029\r]")
+# The line endings file Tools number (``TEXT_LINE_BREAK``). Detection order
+# matters: CRLF first, then LF before CR for mixed files. Other separators such
+# as U+2028 or form feed are ordinary characters within a line.
+_LINE_ENDINGS = ("\r\n", "\n", "\r")
+_LINE_BREAK_RE = TEXT_LINE_BREAK
 _HORIZONTAL_WHITESPACE_RE = re.compile(r"[ \t]+")
 
 
@@ -186,8 +174,8 @@ def replace_fuzzy(
             matches = [
                 (start, end)
                 for start, end in matches
-                if (start == 0 or content[start - 1] in "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
-                and (end == len(content) or content[end] in "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
+                if (start == 0 or content[start - 1] in "\n\r")
+                and (end == len(content) or content[end] in "\n\r")
             ]
         if at_eof:
             matches = [
@@ -291,7 +279,7 @@ def find_closest_candidates(content: str, pattern: str) -> list[ClosestFuzzyCand
     if not content or not pattern:
         return []
 
-    pattern_lines = pattern.splitlines()
+    pattern_lines = split_text_lines(pattern)
     while pattern_lines and not pattern_lines[0].strip():
         pattern_lines.pop(0)
     while pattern_lines and not pattern_lines[-1].strip():
@@ -299,7 +287,7 @@ def find_closest_candidates(content: str, pattern: str) -> list[ClosestFuzzyCand
     if not pattern_lines:
         return []
 
-    content_lines = content.splitlines()
+    content_lines = split_text_lines(content)
     window_size = len(pattern_lines)
     if not content_lines or window_size > len(content_lines):
         return []
@@ -365,12 +353,10 @@ def _normalize_newlines(text: str) -> str:
 
 
 def _normalize_replacement_newlines(text: str) -> str:
-    """Normalize standard newlines while preserving explicit exotic separators.
+    """Normalize CRLF and CR to LF; other separators stay literal line content.
 
     Models normally author multiline replacement text with LF regardless of the
-    target file's standard newline style. Exotic separators can instead be
-    literal file content copied from read output, so collapsing those to LF would
-    silently mutate bytes outside the intended edit.
+    target file's newline style, which the replacement then adopts.
     """
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
@@ -425,11 +411,6 @@ def _normalize_with_spans(
             index += 2
             continue
         if char == "\r":
-            chars.append("\n")
-            spans.append((index, index + 1))
-            index += 1
-            continue
-        if char in _EXOTIC_LINE_ENDINGS:
             chars.append("\n")
             spans.append((index, index + 1))
             index += 1

@@ -24,6 +24,8 @@ import difflib
 import threading
 from pathlib import Path
 
+from core.tools.arguments import split_text_lines
+
 # Cap on tracked ``(session, path)`` content entries so a long-lived server
 # process does not grow the map without bound; oldest insertions are evicted
 # first. A rarely evicted entry only costs a harmless fallback to the
@@ -138,8 +140,8 @@ def _line_diff_counts(before: str, after: str) -> tuple[int, int]:
     frequently repeated lines in long files as junk and reports inflated
     replace blocks where git reports a minimal diff.
     """
-    before_lines = before.splitlines()
-    after_lines = after.splitlines()
+    before_lines = split_text_lines(before)
+    after_lines = split_text_lines(after)
     matcher = difflib.SequenceMatcher(None, before_lines, after_lines, autojunk=False)
     added = 0
     removed = 0

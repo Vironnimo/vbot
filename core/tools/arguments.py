@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import overload
 
 # The read tool prefixes every line with an unpadded ``N| `` reference gutter. This
 # separator is the single source of truth shared by the read builder and the
 # detector below, so the two never drift apart.
 LINE_NUMBER_GUTTER_SEPARATOR = "|"
+# File Tools number text lines at LF, CRLF, and lone CR only - the boundaries
+# editors use and, for LF and CRLF, ripgrep. Form feed, vertical tab, NEL, and the
+# Unicode line/paragraph separators are ordinary characters within a line.
+TEXT_LINE_BREAK = re.compile(r"\r\n|[\n\r]")
 # A block is treated as the gutter (not ordinary content that merely contains a
 # pipe) only when at least this share of its non-blank lines carry a consecutive
 # ``N|`` prefix (with or without its separator space after model reproduction).
@@ -16,19 +21,7 @@ _LINE_NUMBER_GUTTER_DOMINANCE = 0.6
 # Two consecutive numbered lines is the minimum signal: a lone ``1|value`` line
 # or a sparse pipe table must still pass through.
 _LINE_NUMBER_GUTTER_MIN_LINES = 2
-_SUPPORTED_LINE_ENDINGS = (
-    "\r\n",
-    "\n",
-    "\v",
-    "\f",
-    "\x1c",
-    "\x1d",
-    "\x1e",
-    "\x85",
-    "\u2028",
-    "\u2029",
-    "\r",
-)
+_SUPPORTED_LINE_ENDINGS = ("\r\n", "\n", "\r")
 
 
 class ToolArgumentError(ValueError):
@@ -161,6 +154,18 @@ def optional_bool(value: object, *, field_name: str, default: bool) -> bool:
     raise ToolArgumentError(f"{field_name} must be a boolean")
 
 
+def split_text_lines(text: str, *, keepends: bool = False) -> list[str]:
+    """Split like ``str.splitlines`` but only at ``TEXT_LINE_BREAK`` boundaries."""
+    lines: list[str] = []
+    start = 0
+    for match in TEXT_LINE_BREAK.finditer(text):
+        lines.append(text[start : match.end() if keepends else match.start()])
+        start = match.end()
+    if start < len(text):
+        lines.append(text[start:])
+    return lines
+
+
 def logical_line_count(text: str) -> int:
     """Count ordinary text-file lines without inventing one after a final newline."""
     if not text:
@@ -183,7 +188,7 @@ def looks_like_line_numbered_content(text: str) -> bool:
     if not isinstance(text, str):
         return False
 
-    lines = [line for line in text.splitlines() if line.strip()]
+    lines = [line for line in split_text_lines(text) if line.strip()]
     if len(lines) < _LINE_NUMBER_GUTTER_MIN_LINES:
         return False
 
@@ -232,7 +237,7 @@ def line_number_gutter_candidates(
     if not isinstance(text, str):
         return ()
 
-    lines = text.splitlines(keepends=True)
+    lines = split_text_lines(text, keepends=True)
     if len(lines) < _LINE_NUMBER_GUTTER_MIN_LINES:
         return ()
 
@@ -279,7 +284,7 @@ def strip_line_number_gutters(text: str) -> str | None:
     if not isinstance(text, str):
         return None
 
-    lines = text.splitlines(keepends=True)
+    lines = split_text_lines(text, keepends=True)
     stripped_any = False
     result_lines: list[str] = []
 
@@ -346,6 +351,7 @@ def _check_float_minimum(
 
 __all__ = [
     "LINE_NUMBER_GUTTER_SEPARATOR",
+    "TEXT_LINE_BREAK",
     "ToolArgumentError",
     "line_number_gutter_candidates",
     "looks_like_line_numbered_content",
@@ -356,4 +362,5 @@ __all__ = [
     "optional_string",
     "required_int",
     "required_string",
+    "split_text_lines",
 ]
