@@ -16,6 +16,8 @@ Video creation is non-idempotent and uses the shared outcome-unknown retry polic
 
 The polling deadline includes poll intervals, active status requests and their retry waits. Expiry cancels the outstanding poll without submitting another generation; caller cancellation remains cancellation. The completed-content download has its own request timeout.
 
+Non-null job statuses must be strings before polling logic inspects them. Malformed initial statuses retain outcome-unknown classification; malformed poll statuses fail as ordinary non-retryable Provider errors without resubmission. Missing/null statuses and unknown string values remain pending rather than claiming an unverified terminal meaning.
+
 ## Tests
 
 Discovery/filter coverage lives in `tests/core/providers/test_openrouter_task_catalog.py`; wire payload, polling, same-origin download, and content decoding live in `tests/core/model_tasks/test_generated_media_providers.py`; Tool profiles and caller-owned paths live in `tests/core/tools/test_media_generation.py`.

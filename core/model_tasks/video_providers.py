@@ -150,6 +150,12 @@ def _parse_video_response(response: httpx.Response) -> JsonObject:
     payload = decode_response_json(response, "OpenRouter video generation")
     if not isinstance(payload, Mapping):
         raise ProviderError("OpenRouter did not return a video job id.", retryable=False)
+    status = payload.get("status")
+    if status is not None and not isinstance(status, str):
+        raise ProviderError(
+            "OpenRouter video generation failed: invalid job status.",
+            retryable=False,
+        )
     return dict(payload)
 
 

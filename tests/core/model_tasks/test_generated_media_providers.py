@@ -116,6 +116,41 @@ async def test_video_create_without_usable_job_id_preserves_unknown_outcome(job_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", [[], {}, 123, True])
+@respx.mock
+async def test_video_create_with_malformed_status_preserves_unknown_outcome(status: object) -> None:
+    create = respx.post("https://openrouter.ai/api/v1/videos").respond(
+        202, json={"id": "job-1", "status": status}
+    )
+
+    with pytest.raises(ProviderOutcomeUnknownError) as caught:
+        await _openrouter_video_client().generate("A river at dawn", options={})
+
+    assert caught.value.operation_key
+    assert caught.value.retryable is False
+    assert create.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [[], {}, 123, True])
+@respx.mock
+async def test_video_poll_with_malformed_status_fails_without_resubmission(status: object) -> None:
+    create = respx.post("https://openrouter.ai/api/v1/videos").respond(
+        202, json={"id": "job-1", "status": "pending"}
+    )
+    poll = respx.get("https://openrouter.ai/api/v1/videos/job-1").respond(
+        200, json={"id": "job-1", "status": status}
+    )
+
+    with pytest.raises(ProviderError) as caught:
+        await _openrouter_video_client().generate("A river at dawn", options={}, poll_interval=0)
+
+    assert not isinstance(caught.value, ProviderOutcomeUnknownError)
+    assert caught.value.retryable is False
+    assert create.call_count == poll.call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_video_poll_deadline_includes_poll_interval(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _openrouter_video_client()
     monkeypatch.setattr(
