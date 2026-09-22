@@ -92,6 +92,39 @@ def test_load_settings_logs_unchanged_degradation_only_once(
     assert len(caplog.records) == 1
 
 
+@pytest.mark.parametrize(
+    "invalid_section",
+    [
+        {"appearance": {"chat_width": []}},
+        {"appearance": {"chat_working_mode": {}}},
+        {"compaction": {"trigger": {"threshold": 10**400}}},
+        {"defaults": {"agent": {"temperature": 10**400}}},
+    ],
+)
+def test_load_settings_isolates_malformed_values_without_losing_valid_siblings(
+    tmp_path: Path, invalid_section: dict[str, Any]
+) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings({"keep_awake": True, **invalid_section})
+    original = storage.settings_path.read_bytes()
+
+    assert storage.load_settings() == {"keep_awake": True}
+    with pytest.raises(StorageError):
+        storage.update_settings(lambda settings: settings.update({"keep_awake": False}))
+    assert storage.settings_path.read_bytes() == original
+
+
+def test_load_settings_ignores_non_utf8_without_rewriting(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    original = b'{"appearance":{"language":"\xff"}}'
+    storage.settings_path.write_bytes(original)
+
+    assert storage.load_settings() == {}
+    with pytest.raises(StorageError):
+        storage.update_settings(lambda settings: settings.update({"keep_awake": False}))
+    assert storage.settings_path.read_bytes() == original
+
+
 def test_update_settings_rejects_invalid_file_without_overwriting_it(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
     storage.ensure_directories()

@@ -160,6 +160,8 @@ def load_runtime_settings_json(
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return {}, ()
+    except UnicodeDecodeError as error:
+        raise SettingsValidationError(f"{path}: error $: File is not valid UTF-8") from error
     except OSError as error:
         raise SettingsValidationError(f"{path}: error $: Cannot read file: {error}") from error
 
@@ -444,7 +446,7 @@ def _validate_appearance(diagnostics: list[JsonDiagnostic], value: Any) -> None:
 def _validate_appearance_chat_width(diagnostics: list[JsonDiagnostic], value: Any) -> None:
     if value is None:
         return
-    if value not in SUPPORTED_APPEARANCE_CHAT_WIDTHS:
+    if not isinstance(value, str) or value not in SUPPORTED_APPEARANCE_CHAT_WIDTHS:
         supported = ", ".join(sorted(SUPPORTED_APPEARANCE_CHAT_WIDTHS))
         _error(
             diagnostics,
@@ -456,7 +458,7 @@ def _validate_appearance_chat_width(diagnostics: list[JsonDiagnostic], value: An
 def _validate_appearance_chat_working_mode(diagnostics: list[JsonDiagnostic], value: Any) -> None:
     if value is None:
         return
-    if value not in SUPPORTED_APPEARANCE_CHAT_WORKING_MODES:
+    if not isinstance(value, str) or value not in SUPPORTED_APPEARANCE_CHAT_WORKING_MODES:
         supported = ", ".join(sorted(SUPPORTED_APPEARANCE_CHAT_WORKING_MODES))
         _error(
             diagnostics,
@@ -534,7 +536,7 @@ def _validate_compaction_trigger(diagnostics: list[JsonDiagnostic], value: Any, 
             threshold = value["threshold"]
             if isinstance(threshold, bool) or not isinstance(threshold, int | float):
                 _error(diagnostics, f"{path}.threshold", "must be a number")
-            elif not 0 < float(threshold) <= 1:
+            elif not 0 < threshold <= 1:
                 _error(diagnostics, f"{path}.threshold", "must be in (0, 1]")
         if "tokens" in value:
             _validate_positive_integer(

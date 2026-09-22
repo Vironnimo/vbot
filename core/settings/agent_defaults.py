@@ -16,7 +16,6 @@ canonical validators in those modules the one implementation of each value rule.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -145,17 +144,15 @@ def _normalize_fallback_models(value: Any) -> list[str]:
 
 
 def _normalize_temperature(value: Any) -> float:
-    from core.settings.settings import MAX_TEMPERATURE, MIN_TEMPERATURE
+    from core.settings.settings import SettingsValidationError, validate_temperature
 
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise StorageError("Agent default temperature must be a number or null")
-    temperature = float(value)
-    if not math.isfinite(temperature):
-        raise StorageError("Agent default temperature must be finite")
-    if temperature < MIN_TEMPERATURE or temperature > MAX_TEMPERATURE:
-        raise StorageError(
-            f"Agent default temperature must be between {MIN_TEMPERATURE:g} and {MAX_TEMPERATURE:g}"
-        )
+    try:
+        temperature = validate_temperature(value, label="Agent default temperature")
+    except SettingsValidationError as error:
+        raise StorageError(str(error)) from error
+    assert temperature is not None
     return temperature
 
 
