@@ -48,17 +48,13 @@ class ProviderVideoClient(ProviderTaskClient):
             options=options,
             frame_images=frame_images,
         )
-        created = await self.post_and_parse(
+        job_id, created = await self.post_and_parse(
             VIDEO_CREATE_ENDPOINT,
             timeout=VIDEO_REQUEST_TIMEOUT_SECONDS,
             json=payload,
-            parse=_parse_video_response,
+            parse=_parse_created_video_response,
             retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
         )
-        job_id = created.get("id")
-        if not isinstance(job_id, str) or not job_id:
-            raise ProviderError("OpenRouter did not return a video job id.", retryable=False)
-
         deadline = time.monotonic() + poll_timeout
         status_payload = created
         while status_payload.get("status") != "completed":
@@ -140,6 +136,14 @@ def _video_payload(
         ]
     merge_extra_options(payload, options)
     return payload
+
+
+def _parse_created_video_response(response: httpx.Response) -> tuple[str, JsonObject]:
+    payload = _parse_video_response(response)
+    job_id = payload.get("id")
+    if not isinstance(job_id, str) or not job_id:
+        raise ProviderError("OpenRouter did not return a video job id.", retryable=False)
+    return job_id, payload
 
 
 def _parse_video_response(response: httpx.Response) -> JsonObject:
