@@ -112,6 +112,7 @@ class ChannelService:
                 except Exception as error:
                     reason = str(error) or type(error).__name__
                     self._mark_channel_failed(config.id, reason)
+                    self._schedule_restart(config.id)
                     _LOGGER.error(
                         "Cannot start channel adapter during service startup (channel=%s): %s",
                         config.id,
@@ -780,6 +781,8 @@ class ChannelService:
                 config_override=config_override,
             )
         except Exception as error:
+            self._mark_channel_failed(channel_id, str(error) or type(error).__name__)
+            self._schedule_restart(channel_id)
             _LOGGER.error(
                 "Cannot start queued channel adapter after stop completed (channel=%s): %s",
                 channel_id,
@@ -965,17 +968,20 @@ class ChannelService:
         return config.enabled
 
     def _cancel_restart_task(self, channel_id: str) -> None:
-        task = self._adapter_restart_tasks.pop(channel_id, None)
-        if task is None or task.done():
+        task = self._adapter_restart_tasks.get(channel_id)
+        if task is None:
             return
 
         if task is asyncio.current_task():
             return
 
-        task.cancel()
+        self._adapter_restart_tasks.pop(channel_id, None)
+        if not task.done():
+            task.cancel()
 
     def _on_restart_task_done(self, channel_id: str, task: asyncio.Task[None]) -> None:
-        if self._adapter_restart_tasks.get(channel_id) is task:
+        owns_restart = self._adapter_restart_tasks.get(channel_id) is task
+        if owns_restart:
             self._adapter_restart_tasks.pop(channel_id, None)
 
         if task.cancelled():
@@ -984,6 +990,10 @@ class ChannelService:
         error = task.exception()
         if error is None:
             return
+
+        if owns_restart:
+            self._mark_channel_failed(channel_id, str(error) or type(error).__name__)
+            self._schedule_restart(channel_id)
 
         _LOGGER.error(
             "Channel adapter restart task failed for channel=%s: %s",
