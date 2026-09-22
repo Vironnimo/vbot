@@ -18,7 +18,7 @@ async def read_file(root, state, path="file.txt"):
     assert result["ok"]
 
 
-@pytest.mark.parametrize("ending", [b"\n", b"\r\n", b"\r", b"\xc2\x85"])
+@pytest.mark.parametrize("ending", [b"\n", b"\r\n", b"\r"])
 @pytest.mark.parametrize("bom", [b"", b"\xef\xbb\xbf"])
 @pytest.mark.parametrize("final", [True, False])
 @pytest.mark.asyncio

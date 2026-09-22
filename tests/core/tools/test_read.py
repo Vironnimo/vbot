@@ -28,6 +28,7 @@ from core.tools import (
     make_read_handler,
     register_read_tool,
 )
+from core.tools.file_state import StaleReason
 from core.utils.paths import model_path
 
 
@@ -613,6 +614,51 @@ async def test_read_strips_utf8_bom(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("first_line", ["ID3 tags", "OggS notes", "fLaC header", "GIF8 frames"])
+async def test_text_starting_with_a_media_magic_word_is_read_as_text(
+    tmp_path: Path, first_line: str
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.md").write_bytes(f"{first_line}\nsecond\n".encode())
+    speech = _FakeSpeech()
+    context = make_context(workspace)
+
+    result = await make_handler(speech=speech)(context, {"path": "notes.md"})
+
+    assert assert_success_envelope(result)["content"] == f"1| {first_line}\n2| second\n"
+    assert speech.calls == []
+    assert context.result_media == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("separator", ["\f", "\v", "\x1c", "\x85", " ", " "])
+async def test_line_numbers_break_only_at_lf_crlf_and_cr_like_search_files(
+    tmp_path: Path, separator: str
+) -> None:
+    from core.tools.search_files import search_files_handler
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    raw = f"import os\n{separator}\ndef foo():\r\n    pass\nx = 1\n".encode()
+    workspace.joinpath("ff.py").write_bytes(raw)
+
+    handler = make_handler()
+    whole = assert_success_envelope(await handler(make_context(workspace), {"path": "ff.py"}))
+    line = assert_success_envelope(
+        await handler(make_context(workspace), {"path": "ff.py", "offset": 4, "limit": 1})
+    )
+    search = search_files_handler(make_context(workspace, "search_files"), {"args": ["pass"]})
+
+    assert whole["content"] == (
+        f"1| import os\n2| {separator}\n3| def foo():\r\n4|     pass\n5| x = 1\n"
+    )
+    assert str(line["content"]).startswith("4|     pass\n")
+    assert search["data"]["content"] == "ff.py:4:    pass"
+    assert read_module.render_text_file(raw) == whole["content"]
+
+
+@pytest.mark.asyncio
 async def test_streaming_text_matches_byte_renderer_across_chunked_line_endings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -734,7 +780,7 @@ async def test_read_audio_maps_speech_error_to_failure(tmp_path: Path) -> None:
 async def test_read_audio_rejects_oversized_file_before_transcription(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    workspace.joinpath("voice.mp3").write_bytes(b"ID3" + b"x" * 20)
+    workspace.joinpath("voice.mp3").write_bytes(b"ID3\x04\x00\x00\x00\x00\x00\x0a" + b"x" * 20)
     speech = _FakeSpeech()
 
     result = await make_handler(speech=speech, speech_max_size_bytes=8)(
@@ -985,3 +1031,94 @@ async def test_read_records_stamp_so_write_edit_guard_passes(tmp_path: Path) -> 
     assert file_state.check_stale("session-1", target.resolve()) is None
     # Sanity: a registry that never saw the read would block the write.
     assert FileReadState().check_stale("session-1", target.resolve()) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("filename", "data", "handler_options", "arguments", "code"),
+    [
+        (
+            "voice.mp3",
+            b"ID3\x04\x00\x00\x00\x00\x00\x0a" + b"x" * 20,
+            {"speech_max_size_bytes": 8},
+            {},
+            "audio_too_large",
+        ),
+        (
+            "voice.mp3",
+            b"ID3\x04\x00\x00\x00\x00\x00\x0a" + b"x" * 20,
+            {"speech": _FakeSpeech(error=SpeechError("stt down"))},
+            {},
+            "transcription_failed",
+        ),
+        (
+            "pic.png",
+            b"\x89PNG\r\n\x1a\n" + b"\x00" * 64,
+            {"store": _FakeAttachmentStore(max_size_bytes=8)},
+            {},
+            "attachment_error",
+        ),
+        ("notes.txt", b"one\ntwo\n", {}, {"offset": "1:x"}, "invalid_arguments"),
+    ],
+)
+async def test_failed_read_does_not_stamp_the_file(
+    tmp_path: Path,
+    filename: str,
+    data: bytes,
+    handler_options: dict[str, Any],
+    arguments: dict[str, Any],
+    code: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / filename
+    target.write_bytes(data)
+    file_state = FileReadState()
+
+    result = await make_handler(file_state=file_state, **handler_options)(
+        make_context(workspace), {"path": filename, **arguments}
+    )
+
+    assert_failure_envelope(result, code)
+    assert file_state.check_stale("session-1", target.resolve()) is StaleReason.NEVER_READ
+
+
+@pytest.mark.asyncio
+async def test_successful_transcription_stamps_the_audio_file(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "voice.mp3"
+    target.write_bytes(b"ID3\x04\x00\x00\x00\x00\x00\x0a" + b"x" * 20)
+    file_state = FileReadState()
+
+    result = await make_handler(file_state=file_state)(
+        make_context(workspace), {"path": "voice.mp3"}
+    )
+
+    assert result["ok"] is True
+    assert file_state.check_stale("session-1", target.resolve()) is None
+
+
+@pytest.mark.asyncio
+async def test_read_stamp_predates_bytes_so_a_concurrent_write_forces_reread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_bytes(b"before\n")
+    file_state = FileReadState()
+    render = read_module._render_text_path
+
+    def render_after_external_write(resolved: Path, arguments: dict[str, Any]) -> str:
+        target.write_bytes(b"written during the read\n")
+        return render(resolved, arguments)
+
+    monkeypatch.setattr(read_module, "_render_text_path", render_after_external_write)
+
+    result = await make_handler(file_state=file_state)(
+        make_context(workspace), {"path": "notes.txt"}
+    )
+
+    assert result["ok"] is True
+    assert file_state.check_stale("session-1", target.resolve()) is StaleReason.MODIFIED

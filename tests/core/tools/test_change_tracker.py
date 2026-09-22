@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+import core.tools.change_tracker as change_tracker_module
 from core.tools.change_tracker import MAX_TRACKED_BYTES, ChangeTracker
 
 
@@ -182,3 +185,37 @@ def test_large_file_with_repeated_lines_diffs_like_git() -> None:
     assert stats is not None
     assert stats["added"] == 1
     assert stats["removed"] == 1
+
+
+def test_tracked_file_cap_evicts_oldest_and_falls_back_for_that_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(change_tracker_module, "_MAX_TRACKED_FILES", 2)
+    tracker = ChangeTracker()
+
+    tracker.record_write("session-a", Path("a1.txt"), "", "one\n")
+    tracker.record_write("session-a", Path("a1.txt"), "one\n", "two\n")  # same entry
+    tracker.record_write("session-b", Path("b1.txt"), "", "one\n")
+    tracker.record_write("session-b", Path("b2.txt"), "", "one\n")  # evicts a1
+
+    # A Session that lost an entry reports nothing rather than an undercount.
+    assert tracker.peek_run_stats("session-a") is None
+    assert tracker.take_run_stats("session-a") is None
+    b_stats = tracker.take_run_stats("session-b")
+    assert b_stats is not None and b_stats["files"] == 2
+
+    # The next Run of the evicted Session is tracked normally again.
+    tracker.record_write("session-a", Path("a2.txt"), "", "one\n")
+    a_stats = tracker.take_run_stats("session-a")
+    assert a_stats is not None and a_stats["files"] == 1
+
+
+def test_tracked_file_cap_bounds_retained_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(change_tracker_module, "_MAX_TRACKED_FILES", 3)
+    tracker = ChangeTracker()
+
+    for index in range(10):
+        tracker.record_write(f"session-{index}", Path("a.txt"), "", "x\n")
+
+    assert len(tracker._run_changes) == 3
+    assert tracker.peek_run_stats("session-9") is not None

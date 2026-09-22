@@ -79,6 +79,8 @@ negative `-g`/`--iglob` filters apply to roots independently; negatives can excl
 directory descendants. File type/size filters on path searches require `--files`.
 Overlapping roots deduplicate lexical paths; following symlinks remains opt-in
 except an explicit root, preserves its spelling, and detects ancestor loops.
+Windows junctions count as links (`is_link_entry`), like ripgrep's own walker
+(`test_junctions_are_followed_only_on_request_or_as_explicit_roots`).
 
 Default content ordering is path ascending; path discovery uses newest modification
 first, with path tie-breaks. Explicit sorts cover path, modified, accessed, created,
@@ -89,7 +91,9 @@ SQLite spool keeps union, deduplication, and sorting off unbounded Python lists.
 
 Success returns `data.content` and `complete`. Paths are relative to effective cwd
 when possible, absolute otherwise; directory rows end in `/`. Content includes
-source line numbers, and occurrence output adds byte columns. No matches is success.
+source line numbers, and occurrence output adds byte columns. Line numbers equal
+`read`'s (both ignore form feed, U+2028 and similar separators) except in files
+with lone-CR line endings, which ripgrep does not count. No matches is success.
 Quiet returns `matched=true/false`, or null when an incomplete scan proves neither.
 `complete` is true only when the scan completed and no further result page remains.
 A paginated result has `complete=false` and `next_offset`; an interrupted scan also
@@ -105,7 +109,8 @@ the outcome to the native engine.
 duplicate field/flag values must agree, and option-value or post-`--` payloads
 retain their literal meaning. These page controls never reach the native engine.
 Logical matches or path/count rows define pages; context does not
-consume match slots. `next_offset` and a continuation instruction appear when
+consume match slots. Trailing context stops before a match that falls on the
+next page, so a page never shows context around a hidden match. `next_offset` and a continuation instruction appear when
 another result was observed. Continuation repeats a live query; filesystem edits
 can change page boundaries. Long lines contain marked excerpts around the match;
 context omission is explicit and never prevents continuation progress.

@@ -144,6 +144,18 @@ def test_context_and_paging(tree: Path) -> None:
     assert "offset 50" in beyond["content"]
 
 
+def test_page_boundary_context_stops_before_the_next_pages_match(tmp_path: Path) -> None:
+    (tmp_path / "g.txt").write_text("m1\nc2\nm3\nc4\nc5\nc6\nc7\n")
+    args = {"action": "content", "patterns": ["^m"], "options": ["-A", "4"], "limit": 1}
+
+    first = search(tmp_path, **args)
+    second = search(tmp_path, **args, offset=first["next_offset"])
+
+    assert first["content"] == "g.txt:1:m1\ng.txt:2-c2"
+    assert first["next_offset"] == 1
+    assert second["content"] == "g.txt:3:m3\ng.txt:4-c4\ng.txt:5-c5\ng.txt:6-c6\ng.txt:7-c7"
+
+
 def test_context_overlap_and_line_coordinates(tmp_path: Path) -> None:
     (tmp_path / "a").write_text("before\nrun\nrun\nafter\n")
     data = search(tmp_path, action="content", patterns=["run"], options=["-C", "1"])

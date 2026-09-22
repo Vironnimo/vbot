@@ -30,15 +30,20 @@ terminal — it does not fall through to a looser strategy):
 All non-exact strategies search a normalized copy of the content and map the
 match back to the original characters through a per-character span map, so CRLF line
 endings and the exact original characters are always preserved. Similarity strategies
-remain uniqueness-gated and are never used for ``replace_all``.
+remain uniqueness-gated and are never used for ``replace_all``. A caller can name
+``required_lines`` that similarity strategies must still match up to the precise
+normalizations, so similarity only absorbs differences in the remaining lines.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from heapq import heappush, heapreplace
+
+from core.tools.arguments import TEXT_LINE_BREAK, split_text_lines
 
 _CANDIDATE_ANCHOR_COUNT = 3
 _CANDIDATE_ANCHOR_POOL_SIZE = 20
@@ -80,25 +85,12 @@ _TYPOGRAPHIC_NORMALIZATION = {
     ),
 }
 
-# Every line-ending flavor the read tool renders as a separate line (mirrors
-# read.py's _LINE_BREAK_PATTERN). Detection order matters: CRLF first, then LF
-# before CR (write.py's _detect_file_line_ending prefers the same way for
-# mixed files), then the exotic flavors.
-_LINE_ENDINGS = (
-    "\r\n",
-    "\n",
-    "\r",
-    "\v",
-    "\f",
-    "\x1c",
-    "\x1d",
-    "\x1e",
-    "\x85",
-    "\u2028",
-    "\u2029",
-)
-_EXOTIC_LINE_ENDINGS = _LINE_ENDINGS[3:]
-_LINE_BREAK_RE = re.compile(r"\r\n|[\n\v\f\x1c-\x1e\x85\u2028\u2029\r]")
+# The line endings file Tools number (``TEXT_LINE_BREAK``). Detection order
+# matters: CRLF first, then LF before CR for mixed files. Other separators such
+# as U+2028 or form feed are ordinary characters within a line.
+_LINE_ENDINGS = ("\r\n", "\n", "\r")
+_LINE_BREAK_RE = TEXT_LINE_BREAK
+_HORIZONTAL_WHITESPACE_RE = re.compile(r"[ \t]+")
 
 
 @dataclass(frozen=True)
@@ -142,6 +134,7 @@ def replace_fuzzy(
     precise_only: bool = False,
     at_eof: bool = False,
     typographic: bool = False,
+    required_lines: Collection[int] = (),
 ) -> FuzzyReplacement | AmbiguousFuzzyMatch | None:
     """Find ``old_string`` in ``content`` via the strategy chain and replace it.
 
@@ -150,8 +143,12 @@ def replace_fuzzy(
     ``None`` when no strategy matched.
 
     Patch callers can require whole-line spans, restrict matching to precise
-    strategies for retry evidence, or anchor a hunk at EOF. Defaults retain
-    the default substring and fuzzy-matching behavior.
+    strategies for retry evidence, or anchor a hunk at EOF. ``required_lines``
+    names 0-based ``old_string`` lines that similarity strategies must match up
+    to the newline, Unicode/typography, and whitespace normalizations of the
+    precise strategies; candidates failing that are discarded before the
+    ambiguity check. Defaults retain the default substring and fuzzy-matching
+    behavior.
     """
     replacement_text = _normalize_replacement_newlines(new_string)
     old_lf = _normalize_newlines(old_string)
@@ -165,12 +162,20 @@ def replace_fuzzy(
             if typographic and name == "normalized"
             else matcher(content, old_string)
         )
+        if approximate and required_lines:
+            matches = [
+                (start, end)
+                for start, end in matches
+                if _required_lines_match(
+                    content[start:end], old_string, required_lines, typographic=typographic
+                )
+            ]
         if whole_lines:
             matches = [
                 (start, end)
                 for start, end in matches
-                if (start == 0 or content[start - 1] in "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
-                and (end == len(content) or content[end] in "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
+                if (start == 0 or content[start - 1] in "\n\r")
+                and (end == len(content) or content[end] in "\n\r")
             ]
         if at_eof:
             matches = [
@@ -178,6 +183,9 @@ def replace_fuzzy(
             ]
         if not matches:
             continue
+        # Matchers report overlapping occurrences too: a shadowed second
+        # occurrence still makes a single-target request ambiguous.
+        matches = sorted(set(matches))
         if len(matches) > 1 and not replace_all:
             locations = [_line_and_character_at(content, start) for start, _ in matches]
             return AmbiguousFuzzyMatch(
@@ -186,7 +194,7 @@ def replace_fuzzy(
                 [character for _, character in locations],
             )
 
-        selected = matches if replace_all else matches[:1]
+        selected = _leftmost_non_overlapping(matches) if replace_all else matches[:1]
         new_content, before_spans, after_spans = _apply_replacements(
             content,
             selected,
@@ -210,6 +218,28 @@ def replace_fuzzy(
         )
 
     return None
+
+
+def _required_lines_match(
+    region: str, pattern: str, required_lines: Collection[int], *, typographic: bool
+) -> bool:
+    """Return whether a similarity match keeps every required line precise."""
+    region_lines = _LINE_BREAK_RE.split(region)
+    pattern_lines = _LINE_BREAK_RE.split(pattern)
+    if len(region_lines) != len(pattern_lines):
+        return False
+    return all(
+        0 <= index < len(pattern_lines)
+        and _precise_line_key(region_lines[index], typographic=typographic)
+        == _precise_line_key(pattern_lines[index], typographic=typographic)
+        for index in required_lines
+    )
+
+
+def _precise_line_key(line: str, *, typographic: bool) -> str:
+    """Fold one line like the precise strategies: Unicode, typography, whitespace."""
+    folded = _normalize_with_spans(line, typographic=typographic)[0]
+    return _HORIZONTAL_WHITESPACE_RE.sub(" ", folded).strip()
 
 
 def _candidate_normalize_line(line: str) -> str:
@@ -249,7 +279,7 @@ def find_closest_candidates(content: str, pattern: str) -> list[ClosestFuzzyCand
     if not content or not pattern:
         return []
 
-    pattern_lines = pattern.splitlines()
+    pattern_lines = split_text_lines(pattern)
     while pattern_lines and not pattern_lines[0].strip():
         pattern_lines.pop(0)
     while pattern_lines and not pattern_lines[-1].strip():
@@ -257,7 +287,7 @@ def find_closest_candidates(content: str, pattern: str) -> list[ClosestFuzzyCand
     if not pattern_lines:
         return []
 
-    content_lines = content.splitlines()
+    content_lines = split_text_lines(content)
     window_size = len(pattern_lines)
     if not content_lines or window_size > len(content_lines):
         return []
@@ -323,12 +353,10 @@ def _normalize_newlines(text: str) -> str:
 
 
 def _normalize_replacement_newlines(text: str) -> str:
-    """Normalize standard newlines while preserving explicit exotic separators.
+    """Normalize CRLF and CR to LF; other separators stay literal line content.
 
     Models normally author multiline replacement text with LF regardless of the
-    target file's standard newline style. Exotic separators can instead be
-    literal file content copied from read output, so collapsing those to LF would
-    silently mutate bytes outside the intended edit.
+    target file's newline style, which the replacement then adopts.
     """
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
@@ -387,11 +415,6 @@ def _normalize_with_spans(
             spans.append((index, index + 1))
             index += 1
             continue
-        if char in _EXOTIC_LINE_ENDINGS:
-            chars.append("\n")
-            spans.append((index, index + 1))
-            index += 1
-            continue
         mapping = _TYPOGRAPHIC_NORMALIZATION if typographic else _UNICODE_NORMALIZATION
         folded = mapping.get(char, char)
         chars.extend(folded)
@@ -406,7 +429,7 @@ def _normalize_text(text: str) -> str:
 
 
 def _match_exact(content: str, pattern: str) -> list[tuple[int, int]]:
-    return _find_non_overlapping(content, pattern)
+    return _find_all(content, pattern)
 
 
 def _match_normalized(
@@ -435,7 +458,7 @@ def _match_normalized(
                 and (end == len(normalized_content) or normalized_content[end] == "\n")
             ):
                 matches.append((left, right))
-        start = position + pattern_length
+        start = position + 1
     if not matches and typographic:
         matches = [
             (spans[start][0], spans[end - 1][1])
@@ -505,18 +528,13 @@ def _match_line_trimmed(content: str, pattern: str) -> list[tuple[int, int]]:
         cursor += len(line) + 1  # +1 for the splitting "\n"
 
     matches: list[tuple[int, int]] = []
-    index = 0
-    last_start = len(trimmed_content) - window
-    while index <= last_start:
+    for index in range(len(trimmed_content) - window + 1):
         if trimmed_content[index : index + window] == trimmed_pattern:
             norm_start = line_offsets[index]
             last_line = index + window - 1
             norm_end = line_offsets[last_line] + len(content_lines[last_line])
             if norm_start < len(spans) and norm_end > norm_start:
                 matches.append((spans[norm_start][0], spans[norm_end - 1][1]))
-                index += window  # non-overlapping, so replace_all cannot self-corrupt
-                continue
-        index += 1
     return matches
 
 
@@ -556,7 +574,7 @@ def _match_whitespace_normalized(content: str, pattern: str) -> list[tuple[int, 
         if position < 0:
             break
         matches.append((spans[position][0], spans[position + pattern_length - 1][1]))
-        start = position + pattern_length
+        start = position + 1
     return matches
 
 
@@ -660,18 +678,25 @@ def _match_context_aware(content: str, pattern: str) -> list[tuple[int, int]]:
     return matches
 
 
-def _find_non_overlapping(haystack: str, needle: str) -> list[tuple[int, int]]:
+def _find_all(haystack: str, needle: str) -> list[tuple[int, int]]:
+    """Return every occurrence of ``needle``, including overlapping ones."""
     if not needle:
         return []
     matches: list[tuple[int, int]] = []
-    start = 0
-    while True:
-        position = haystack.find(needle, start)
-        if position < 0:
-            break
+    position = haystack.find(needle)
+    while position >= 0:
         matches.append((position, position + len(needle)))
-        start = position + len(needle)
+        position = haystack.find(needle, position + 1)
     return matches
+
+
+def _leftmost_non_overlapping(matches: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Select sorted spans left to right so ``replace_all`` cannot self-corrupt."""
+    selected: list[tuple[int, int]] = []
+    for start, end in matches:
+        if not selected or start >= selected[-1][1]:
+            selected.append((start, end))
+    return selected
 
 
 def _apply_replacements(

@@ -3,16 +3,27 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import os
 import signal
 import sys
 import time
 
+from core.utils.logging import get_logger
 from core.utils.processes import subprocess_creation_flags, windows_taskkill_tree
 
 SHELL_ENV_PROBE_TIMEOUT_SECONDS = 5.0
 SHELL_ENV_PROBE_REAP_TIMEOUT_SECONDS = 1.0
+_LOGGER = get_logger("tools.bash")
+
+# PowerShell encodes redirected output in the console's legacy code page, which
+# cannot represent most non-ASCII values. The probe therefore transfers Base64 of
+# the UTF-8 ``NAME=VALUE`` pairs; NUL separators also keep multi-line values whole.
+_WINDOWS_ENV_PROBE_SCRIPT = (
+    '$pairs = foreach ($entry in Get-ChildItem Env:) { "$($entry.Name)=$($entry.Value)" }; '
+    "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pairs -join [char]0))"
+)
 
 
 # A freshly installed program does not appear in a shell spawned by Bash until
@@ -90,7 +101,7 @@ async def _probe_shell_env() -> dict[str, str]:
                 "pwsh",
                 "-NoProfile",
                 "-Command",
-                'Get-ChildItem Env: | ForEach-Object { "$($_.Name)=$($_.Value)" }',
+                _WINDOWS_ENV_PROBE_SCRIPT,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 creationflags=_probe_creationflags(),
@@ -99,8 +110,15 @@ async def _probe_shell_env() -> dict[str, str]:
             stdout = await _communicate_with_probe_timeout(proc)
             if proc.returncode != 0:
                 return _overlay_registry_path(os.environ.copy())
-            env = _parse_line_env(stdout.decode("utf-8", errors="replace"))
-            return _overlay_registry_path(env)
+            try:
+                pairs = base64.b64decode(stdout.strip(), validate=True).decode("utf-8")
+            except ValueError as error:
+                _LOGGER.warning(
+                    "Ignoring malformed shell environment probe output: %s",
+                    type(error).__name__,
+                )
+                return _overlay_registry_path(os.environ.copy())
+            return _overlay_registry_path(_parse_null_env(pairs))
 
         proc = await asyncio.create_subprocess_exec(
             "bash",
@@ -115,7 +133,8 @@ async def _probe_shell_env() -> dict[str, str]:
         stdout = await _communicate_with_probe_timeout(proc)
         if proc.returncode != 0:
             return os.environ.copy()
-        return _parse_null_env(stdout.decode("utf-8", errors="replace"))
+        # Decode exactly like ``os.environ`` so undecodable bytes round-trip.
+        return _parse_null_env(os.fsdecode(stdout))
     except (OSError, TimeoutError):
         if sys.platform == "win32":
             return _overlay_registry_path(os.environ.copy())
@@ -219,15 +238,6 @@ async def _terminate_probe_process(proc: asyncio.subprocess.Process) -> None:
         )
     except (ProcessLookupError, RuntimeError, TimeoutError):
         return
-
-
-def _parse_line_env(output: str) -> dict[str, str]:
-    env: dict[str, str] = {}
-    for line in output.splitlines():
-        key, separator, value = line.partition("=")
-        if separator and key:
-            env[key] = value
-    return env
 
 
 def _parse_null_env(output: str) -> dict[str, str]:
