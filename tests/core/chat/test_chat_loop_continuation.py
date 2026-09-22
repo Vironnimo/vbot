@@ -351,6 +351,44 @@ async def test_next_run_receives_partial_and_reasoning_after_exhausted_replays(
 
 
 @pytest.mark.asyncio
+async def test_interrupted_edit_run_keeps_its_own_checkpoint(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("core.chat.recovery.compute_retry_delay", lambda *a, **kw: (0, False))
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            *[NetworkError("offline") for _ in range(9)],
+            [{"type": "content_delta", "text": "ok"}, {"type": "finish", "reason": "stop"}],
+        ],
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path, agent=StubAgent(id="coder", model="openai/test"), adapter=adapter
+    )
+    session = runtime.chat_sessions.create("coder", session_id="s")
+    original = ChatMessage.user("old request")
+    session.append_many([original, ChatMessage.assistant(model="openai/test", content="old")])
+    # A stale checkpoint from an earlier Run must not survive the committed edit.
+    await ContinuationTracker(session, run_id="stale-run", request="STALE-REQUEST").start()
+    loop = build_chat_loop(runtime, streaming=True)
+
+    edit = await loop.edit_run("coder", "EDITED-REQUEST", session_id="s", message_id=original.id)
+    with pytest.raises(RunInterruptedError):
+        await edit.wait()
+    next_run = await loop.start_run("coder", "Next", session_id="s")
+    await next_run.wait()
+
+    assert edit.status == RunStatus.INTERRUPTED
+    reminders = [
+        message["content"]
+        for message in adapter.stream_requests[-1]["messages"]
+        if "continuation-checkpoint" in str(message.get("content"))
+    ]
+    assert len(reminders) == 1
+    assert "EDITED-REQUEST" in reminders[0]
+    assert "STALE-REQUEST" not in reminders[0]
+    assert session.load_continuation_records() == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "policy",
     [REASONING_REPLAY_CURRENT_RUN, REASONING_REPLAY_FULL_HISTORY],
