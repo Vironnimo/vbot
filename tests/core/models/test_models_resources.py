@@ -272,13 +272,14 @@ class TestModelRegistryRealResources:
         assert model.metadata["opencode_go"]["reasoning_response_field"] == "reasoning_content"
 
     def test_opencode_go_current_endpoint_profiles_load(self):
-        """Protect verified endpoint profiles, including Union Alpha's Messages wire."""
+        """Protect current endpoint profiles, including MiMo 2.6 and Grok 4.7."""
 
         registry = ModelRegistry.load(RESOURCES_DIR)
 
         expected_by_protocol = {
             "responses": (
                 "grok-4.6",
+                "grok-4.7",
                 "gpt-5.6-luna",
                 "muse-spark-1.2-contributor",
                 "muse-spark-1.3-contributor",
@@ -299,11 +300,12 @@ class TestModelRegistryRealResources:
                 "deepseek-v4-flash-vision-exp",
                 "mimo-v2.5",
                 "mimo-v2.5-pro",
+                "mimo-v2.6-flash",
+                "mimo-v2.6-pro",
                 "hy4-preview",
                 "hy3",
             ),
             "anthropic": (
-                "union-alpha",
                 "minimax-m3",
                 "minimax-m2.7",
                 "minimax-m2.5",
@@ -314,25 +316,28 @@ class TestModelRegistryRealResources:
                 "qwen3.6-plus",
             ),
         }
-        assert sum(len(model_ids) for model_ids in expected_by_protocol.values()) == 30
+        assert sum(len(model_ids) for model_ids in expected_by_protocol.values()) == 32
         for protocol, model_ids in expected_by_protocol.items():
             for model_id in model_ids:
                 model = registry.get("opencode-go", model_id)
                 assert model.metadata["opencode_go"]["protocol"] == protocol
 
-    def test_union_alpha_opencode_gateway_facts(self):
+    @pytest.mark.parametrize("model_id", ["mimo-v2.6-flash", "mimo-v2.6-pro"])
+    def test_mimo26_opencode_gateway_facts(self, model_id):
         registry = ModelRegistry.load(RESOURCES_DIR)
-        go = registry.get("opencode-go", "union-alpha")
-        # OpenRouter retired stealth/union-alpha from its current catalog.
-        assert go.context_window == 262_144
+        go = registry.get("opencode-go", model_id)
+        assert go.context_window == 1_048_576
         assert go.max_output_tokens == 131_072
-        assert go.capabilities.input_modalities == ("text", "image")
         assert go.capabilities.tools is True
         assert go.capabilities.reasoning.supported is True
-        assert go.capabilities.reasoning.control is None
+        assert go.capabilities.reasoning.control == "on_off"
+        assert not go.capabilities.reasoning.levels
+        assert go.reasoning_replay is None
+        assert registry.provider_reasoning_replay("opencode-go") == "full_history"
         assert go.metadata["opencode_go"] == {
-            "protocol": "anthropic",
-            "thinking_control": "provider_default",
+            "protocol": "openai",
+            "reasoning_response_field": "reasoning_content",
+            "thinking_control": "toggle",
         }
 
     @pytest.mark.parametrize("model_id", ["typesafe/jev-1.13", "~typesafe/jev-latest"])
@@ -381,7 +386,7 @@ class TestModelRegistryRealResources:
         for model_id in ("kimi-k2.6", "kimi-k3", "hy3", "hy4-preview"):
             metadata = registry.get("opencode-go", model_id).metadata["opencode_go"]
             assert metadata["reasoning_response_field"] == "reasoning"
-        for model_id in ("mimo-v2.5", "mimo-v2.5-pro"):
+        for model_id in ("mimo-v2.5", "mimo-v2.5-pro", "mimo-v2.6-flash", "mimo-v2.6-pro"):
             metadata = registry.get("opencode-go", model_id).metadata["opencode_go"]
             assert metadata["reasoning_response_field"] == "reasoning_content"
 

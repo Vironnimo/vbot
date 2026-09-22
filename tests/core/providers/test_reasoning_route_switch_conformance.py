@@ -343,6 +343,8 @@ def test_same_route_full_history_keeps_exact_provider_owned_reasoning(profile: s
     [
         ("openai", "gpt-6-astra", "subscription"),
         ("opencode-go", "deepseek-flash", "api-key"),
+        ("opencode-go", "mimo-v2.6-flash", "api-key"),
+        ("opencode-go", "mimo-v2.6-pro", "api-key"),
         ("ollama-cloud", "deepseek-v4.1-flash", "api-key"),
     ],
 )
