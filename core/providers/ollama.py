@@ -477,6 +477,9 @@ class OllamaAdapter(ProviderAdapter):
             "reasoning_meta": None,
             "tool_calls": _extract_ollama_tool_calls(message.get("tool_calls")),
         }
+        normalized["terminal_outcome"] = _normalize_ollama_done_reason(
+            response.get("done_reason"), has_tool_calls=bool(normalized["tool_calls"])
+        )
         usage = _extract_ollama_usage(response)
         if usage is not None:
             normalized["usage"] = usage

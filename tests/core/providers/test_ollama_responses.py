@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 import pytest
 import respx
 
+from core.chat.streaming import StreamingAccumulator
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.ollama import (
     OllamaAdapter,
@@ -27,6 +30,36 @@ from tests.core.providers.ollama_helpers import (
 
 # Response normalization
 class TestNormalizeResponse:
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("has_tool_calls", [False, True])
+    @pytest.mark.parametrize("done_reason", ["stop", "tool_calls", "unrecognized", None, {}])
+    async def test_stream_and_completed_response_preserve_terminal_safety(
+        self, adapter: OllamaAdapter, has_tool_calls: bool, done_reason: object
+    ) -> None:
+        message: dict[str, Any] = {"role": "assistant", "content": "answer"}
+        if has_tool_calls:
+            message["tool_calls"] = [
+                {"id": "call_1", "function": {"name": "status", "arguments": {}}}
+            ]
+        response = {"message": message, "done": True, "done_reason": done_reason}
+        expected = "unknown"
+        if done_reason == "tool_calls" or done_reason == "stop" and has_tool_calls:
+            expected = "tool_calls"
+        elif done_reason == "stop":
+            expected = "stop"
+
+        normalized = adapter.normalize_response(response)
+        assert normalized["terminal_outcome"] == expected
+
+        respx.post(OLLAMA_CHAT_URL).mock(return_value=httpx.Response(200, text=_ndjson(response)))
+        accumulator = StreamingAccumulator()
+        async for delta in adapter.stream(SAMPLE_MESSAGES, model_id="ministral-3:8b"):
+            accumulator.add_delta(delta)
+        streamed = accumulator.finalize_assistant_fields()
+        assert streamed.finish_reason == expected
+        assert streamed.tool_calls == normalized["tool_calls"]
+
     def test_tool_call_response_maps_object_arguments(self, adapter: OllamaAdapter) -> None:
         # Act
         normalized = adapter.normalize_response(TOOL_CALL_RESPONSE)
