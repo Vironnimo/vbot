@@ -12,7 +12,11 @@ import pytest
 import respx
 
 from core.model_tasks.image_types import ImageInput
-from core.model_tasks.music_providers import ProviderMusicClient, _music_payload
+from core.model_tasks.music_providers import (
+    MUSIC_REQUEST_TIMEOUT_SECONDS,
+    ProviderMusicClient,
+    _music_payload,
+)
 from core.model_tasks.video_providers import ProviderVideoClient, _video_payload
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
@@ -223,6 +227,20 @@ async def test_music_client_rejects_error_after_partial_audio(error: object) -> 
         await _openrouter_music_client().generate("Dreamy synthwave", options={})
 
     assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_music_stream_retains_task_read_timeout() -> None:
+    route = respx.post("https://openrouter.ai/api/v1/chat/completions").respond(
+        200,
+        text=_sse({"choices": [{"delta": {"audio": {"data": "YWJj"}}}]}) + "data: [DONE]\n\n",
+        headers={"content-type": "text/event-stream"},
+    )
+
+    await _openrouter_music_client().generate("Dreamy synthwave", options={})
+
+    assert route.calls[0].request.extensions["timeout"]["read"] == MUSIC_REQUEST_TIMEOUT_SECONDS
 
 
 def _sse(payload: dict) -> str:

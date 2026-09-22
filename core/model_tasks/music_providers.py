@@ -13,7 +13,6 @@ import httpx
 from core.model_tasks.image_types import ImageInput
 from core.model_tasks.music_types import MusicGenerationResult
 from core.providers._http_shared import (
-    build_streaming_request,
     iter_sse_data,
     parse_sse_json_data,
     wrap_network_error,
@@ -87,8 +86,8 @@ class ProviderMusicClient(ProviderTaskClient):
             base_url=self._base_url,
             timeout=MUSIC_REQUEST_TIMEOUT_SECONDS,
         ) as client:
-            request = build_streaming_request(
-                client,
+            # Music has no Chat streaming clocks; keep the task's read timeout.
+            request = client.build_request(
                 "POST",
                 MUSIC_ENDPOINT,
                 json=payload,
