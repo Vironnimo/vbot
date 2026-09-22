@@ -33,7 +33,7 @@ Readiness is a display projection, not a stored Extension status. A loaded Exten
 The disabled set and config are persisted together under Settings, but their runtime consequences differ:
 
 - Config-only change: persist and return; Extension handlers read new values through `get_config()` with no rebuild.
-- Disable-only change: under `_extension_reload_lock`, deactivate newly disabled loaded records, remove their applied Commands, refresh Prompt blocks and Extension-bundled Skills, and recover the active Recall backend if necessary.
+- Disable-only change: under the ExtensionRuntime mutation lock, deactivate newly disabled loaded records, remove their applied Commands, refresh Prompt blocks and Extension-bundled Skills, and recover the active Recall backend if necessary.
 - Any newly enabled name: perform one full `reload_extensions()` after persistence. A mixed enable/disable save needs no second disable pass because the rebuild reads the final persisted set.
 - Explicit reload: rebuild the whole layer even when the disabled set did not change, so disk edits/additions/deletions and repaired failures become visible.
 
@@ -41,7 +41,9 @@ Successful explicit reload and Settings mutations that reload/enable/disable Ext
 
 ## Full reload sequence
 
-`Runtime.reload_extensions()` runs on the serving loop under `_extension_reload_lock`: read fresh roots/settings; detach old Extension Tools and Commands; await old shutdown; purge all `vbot_ext` modules; load a fresh registry; swap it in; reapply Tools and Commands to their stable owners; rebuild Recall, Prompt blocks, and Skills against the new loaded set; then await new startup.
+`Runtime.reload_extensions()` runs on the serving loop under the ExtensionRuntime mutation lock: read fresh roots/settings; detach old Extension Tools and Commands; await old shutdown; purge all `vbot_ext` modules; load a fresh registry; swap it in; reapply Tools and Commands to their stable owners; rebuild Recall, Prompt blocks, and Skills against the new loaded set; then await new startup.
+
+Once admitted, reload, live disable, and startup finish their structural work before propagating caller cancellation; cancellation while waiting for admission makes no changes. Async Runtime shutdown closes Extension mutation admission and drains the admitted operation under the same lock before shutting down the final registry and clearing service references.
 
 The rebuild is restart-equivalent for the Extension layer, not atomic Run draining. A concurrently executing handler may finish against old code; normal per-handler fail-open isolation is the accepted boundary. Prepared Extension Commands carry a registration identity, so deferred Channel work that has not started execution cannot invoke removed code or a replacement owner.
 
@@ -56,7 +58,7 @@ Loaded Extensions fire startup in load order after runtime capability applicatio
 ## Source and tests
 
 - Discovery/import/registration deadlines: `core/extensions/_loading.py`; records: `_declarations.py`; schema declarations: `_api.py` and `settings_schema.py`; lifecycle and public API: `extensions.py` (internal files under `core/extensions/`).
-- Runtime mutation: `core/runtime/runtime.py`
+- Serialized lifecycle mutation: `core/extensions/runtime.py`; Runtime readiness and service teardown: `core/runtime/runtime.py`
 - RPC catalog/secrets and Settings persistence: `server/rpc/extensions_methods.py`, `server/rpc/settings_methods.py`; post-write live Settings coordination: `core/runtime/_settings.py`
 - Focused coverage: `tests/core/extensions/test_loader.py`, `test_registration.py`, `test_settings_schema.py`, `test_reload_primitives.py`, `test_deactivate.py`, and Extension RPC/Runtime tests
 
