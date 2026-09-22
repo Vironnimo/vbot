@@ -197,8 +197,8 @@ def make_skill_manage_handler(
         except OSError as error:
             return tool_failure("skill_write_error", str(error))
 
-        # A shared-package mutation changes every receiver's pool, so all
-        # agent-aware registries rebuild; an own-home write touches one agent.
+        # An own-home invalidation also reaches its shared receivers. Receiver
+        # edits conservatively invalidate all Agent scopes through the same owner.
         invalidate_agent_skills(None if shared_target else context.agent_id)
         _LOGGER.info(
             "Skill mutated (skill=%s scope=%s owner=%s action=%s actor_agent=%s)",
