@@ -738,7 +738,7 @@ def _parse_appearance_update(appearance: Any) -> JsonObject:
 
     if "chat_width" in appearance:
         chat_width = appearance.get("chat_width")
-        if chat_width not in SUPPORTED_APPEARANCE_CHAT_WIDTHS:
+        if not isinstance(chat_width, str) or chat_width not in SUPPORTED_APPEARANCE_CHAT_WIDTHS:
             supported = ", ".join(sorted(SUPPORTED_APPEARANCE_CHAT_WIDTHS))
             raise SettingsValidationError(
                 f"params.appearance.chat_width must be one of: {supported}"
@@ -747,7 +747,10 @@ def _parse_appearance_update(appearance: Any) -> JsonObject:
 
     if "chat_working_mode" in appearance:
         chat_working_mode = appearance.get("chat_working_mode")
-        if chat_working_mode not in SUPPORTED_APPEARANCE_CHAT_WORKING_MODES:
+        if (
+            not isinstance(chat_working_mode, str)
+            or chat_working_mode not in SUPPORTED_APPEARANCE_CHAT_WORKING_MODES
+        ):
             supported = ", ".join(sorted(SUPPORTED_APPEARANCE_CHAT_WORKING_MODES))
             raise SettingsValidationError(
                 f"params.appearance.chat_working_mode must be one of: {supported}"
@@ -837,9 +840,9 @@ def _parse_compaction_trigger(value: Any) -> JsonObject:
         threshold_value = value["threshold"]
         if isinstance(threshold_value, bool) or not isinstance(threshold_value, int | float):
             raise SettingsValidationError("params.compaction.trigger.threshold must be a number")
-        threshold = float(threshold_value)
-        if threshold <= 0 or threshold > 1:
+        if not 0 < threshold_value <= 1:
             raise SettingsValidationError("params.compaction.trigger.threshold must be in (0, 1]")
+        threshold = float(threshold_value)
         parsed: JsonObject = {"type": trigger_type, "threshold": threshold}
         if "tokens" in value:
             parsed["tokens"] = _positive_integer(
@@ -973,13 +976,13 @@ def validate_temperature(
 
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise SettingsValidationError(f"{label} must be a number")
-    temperature = float(value)
-    if not math.isfinite(temperature):
-        raise SettingsValidationError(f"{label} must be finite")
-    if temperature < MIN_TEMPERATURE or temperature > MAX_TEMPERATURE:
+    if value < MIN_TEMPERATURE or value > MAX_TEMPERATURE:
         raise SettingsValidationError(
             f"{label} must be between {MIN_TEMPERATURE:g} and {MAX_TEMPERATURE:g}"
         )
+    temperature = float(value)
+    if not math.isfinite(temperature):
+        raise SettingsValidationError(f"{label} must be finite")
     return temperature
 
 

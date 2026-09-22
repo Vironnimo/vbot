@@ -46,6 +46,7 @@ from core.settings.normalizers import (
     normalize_web_search_settings,
 )
 from core.settings.paths import SUBAGENT_SETTING_DEFAULTS
+from core.settings.settings import SETTINGS_UPDATE_SECTIONS
 from core.storage import _settings_updates as settings_updates
 from core.storage.errors import StorageError
 from core.storage.layout import DataDirectoryLayout, initialize_data_directory
@@ -66,27 +67,6 @@ _LOGGER = get_logger("storage")
 
 DEFAULT_DATA_DIR = Path.home() / ".vbot"
 ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-SETTINGS_UPDATE_SECTIONS = frozenset(
-    {
-        "appearance",
-        "server",
-        "skills",
-        "subagents",
-        "compaction",
-        "defaults",
-        "recall",
-        "model_tasks",
-        "providers",
-        "web_search",
-        "web_fetch",
-        "debug",
-        "extensions",
-        "reflection",
-        "local_models",
-        "session_titles",
-        "speech",
-    }
-)
 
 
 class ConfigProtocol(Protocol):

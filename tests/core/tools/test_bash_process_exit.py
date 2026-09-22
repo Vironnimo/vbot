@@ -25,6 +25,34 @@ async def test_descendant_pipe_does_not_hide_exit_or_block_timeout(
 ):
     caplog.set_level(logging.DEBUG, logger="vbot.tools.process_manager")
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    original_spawn = manager.spawn
+    original_readers = manager._await_reader_tasks
+    original_kill = manager.kill
+    draining = asyncio.Event()
+    deadline_entered = asyncio.Event()
+
+    async def delayed_readers(tracked):
+        draining.set()
+        await deadline_entered.wait()
+        await original_readers(tracked)
+
+    async def spawn_exited(scope_key, agent_id, argv, **kwargs):
+        process_id = await original_spawn(scope_key, agent_id, argv, **kwargs)
+        # Observe real OS exit separately from pipe EOF before Bash starts its
+        # deadline. Interpreter startup speed is not part of this regression.
+        await draining.wait()
+        return process_id
+
+    async def observe_kill(process_id, agent_id, **kwargs):
+        tracked = manager.get_process(process_id, agent_id, **kwargs)
+        assert tracked.proc.returncode == exit_code
+        assert tracked.status == "running"
+        deadline_entered.set()
+        await original_kill(process_id, agent_id, **kwargs)
+
+    monkeypatch.setattr(manager, "spawn", spawn_exited)
+    monkeypatch.setattr(manager, "_await_reader_tasks", delayed_readers)
+    monkeypatch.setattr(manager, "kill", observe_kill)
     pid_path = tmp_path / "descendant.pid"
     command = (
         "import subprocess, sys; from pathlib import Path; "
@@ -40,8 +68,8 @@ async def test_descendant_pipe_does_not_hide_exit_or_block_timeout(
             context,
             {
                 "command": command,
-                **({"mode": mode} if mode is not None else {}),
-                "timeout": 0.5,
+                "mode": mode,
+                "timeout": 0.01,
             },
             manager,
         )
@@ -50,6 +78,7 @@ async def test_descendant_pipe_does_not_hide_exit_or_block_timeout(
         result = await asyncio.wait_for(asyncio.shield(task), 5)
         tracked = manager.list_processes(context.agent_id)[0]
         await asyncio.wait_for(asyncio.shield(tracked.wait_task), 5)
+        assert deadline_entered.is_set()
         assert tracked.proc.returncode == exit_code
         assert tracked.exit_code == exit_code
         assert tracked.status == ("completed" if exit_code == 0 else "failed")
@@ -71,12 +100,16 @@ async def test_descendant_pipe_does_not_hide_exit_or_block_timeout(
         # The CLI's own exit completes the command; no arbitrary descendant kill.
         assert psutil.Process(int(pid_path.read_text())).is_running()
     finally:
-        if pid_path.exists():
+        deadline_entered.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        pid_text = pid_path.read_text().strip() if pid_path.exists() else ""
+        if pid_text.isdecimal():
             with contextlib.suppress(psutil.NoSuchProcess):
-                child = psutil.Process(int(pid_path.read_text()))
+                child = psutil.Process(int(pid_text))
                 child.kill()
                 await asyncio.to_thread(child.wait, timeout=5)
-        await asyncio.wait_for(task, 5)
 
 
 @pytest.mark.asyncio

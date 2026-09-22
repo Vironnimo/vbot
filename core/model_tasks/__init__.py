@@ -58,6 +58,7 @@ from core.model_tasks.model_tasks import (
     TaskModelValidationError,
     parse_task_model_target_id,
     public_provider_target_id,
+    task_model_targets_equal,
     validate_task_type,
 )
 from core.model_tasks.music import (
@@ -178,6 +179,7 @@ __all__ = [
     "option_schema_for",
     "parse_task_model_target_id",
     "public_provider_target_id",
+    "task_model_targets_equal",
     "validate_task_model_options",
     "validate_task_type",
 ]

@@ -173,6 +173,27 @@ def public_provider_target_id(provider_id: str, model_id: str, local_connection_
     return f"{provider_id}/{model_id}::{local_connection_id}"
 
 
+def task_model_targets_equal(left: str | None, right: str | None) -> bool:
+    """Compare binding identity without rewriting stored target spellings."""
+
+    if not isinstance(left, str) or not isinstance(right, str):
+        return False
+    if left.strip() == right.strip():
+        return True
+    try:
+        left_ref = parse_task_model_target_id(left)
+        right_ref = parse_task_model_target_id(right)
+    except TaskModelValidationError:
+        return False
+    return (
+        left_ref.kind == right_ref.kind
+        and left_ref.provider_id == right_ref.provider_id
+        and left_ref.model_id == right_ref.model_id
+        and left_ref.connection_id == right_ref.connection_id
+        and left_ref.local_id == right_ref.local_id
+    )
+
+
 def model_supports_task(model: Any, task_type: str) -> bool:
     """Return whether a Model can execute one specialized task.
 
@@ -317,7 +338,7 @@ class TaskModelService:
                 prepared[task_type] = {"target": ""}
                 continue
 
-            target_changed = target != previous_target
+            target_changed = not task_model_targets_equal(target, previous_target)
             if "options" in raw_binding:
                 raw_options = raw_binding["options"]
             elif target_changed:
@@ -327,7 +348,7 @@ class TaskModelService:
             if not isinstance(raw_options, Mapping):
                 raise TaskModelValidationError(f"{task_type} options must be an object")
             binding = {"target": target, "options": dict(raw_options)}
-            if binding == previous:
+            if not target_changed and binding["options"] == previous.get("options", {}):
                 continue
             self.validate_binding(task_type, binding)
             prepared[task_type] = binding

@@ -16,6 +16,7 @@ from core.model_tasks import (
     TaskModelService,
     TaskModelValidationError,
     parse_task_model_target_id,
+    task_model_targets_equal,
 )
 from tests.core.model_tasks.model_tasks_test_support import (
     _Credentials,
@@ -96,6 +97,25 @@ def test_parse_target_with_provider_prefixed_connection_and_account() -> None:
     assert ref.connection_id == "openai:api-key:work"
     assert ref.local_connection_id == "api-key"
     assert ref.account_id == "work"
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "equal"),
+    [
+        ("local/engine", " local/engine ", True),
+        ("local/engine", "local/other", False),
+        ("openai/model::api-key", "openai/model::openai:api-key", True),
+        ("openai/model::api-key:work", "openai/model::api-key:home", False),
+        ("openai/model::api-key:work", "openai/model::api-key", False),
+        ("openai/model::api-key", "other/model::api-key", False),
+        ("malformed", "malformed", True),
+        ("malformed", "other", False),
+    ],
+)
+def test_task_target_identity_preserves_local_provider_and_account_boundaries(
+    left: str, right: str, equal: bool
+) -> None:
+    assert task_model_targets_equal(left, right) is equal
 
 
 def test_parse_target_without_account_leaves_account_empty() -> None:
