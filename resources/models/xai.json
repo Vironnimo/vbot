@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-16T15:27:44.280671+00:00",
+  "fetched_at": "2026-09-22T08:09:50.611587+00:00",
   "models": {
     "grok-4.20-0309-non-reasoning": {
       "canonical": "xai/grok-4.20-0309-non-reasoning",
@@ -338,6 +338,61 @@
           ]
         },
         "source": "models.dev:xai/grok-4.6"
+      }
+    },
+    "grok-4.7": {
+      "canonical": "xai/grok-4.7",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "subscription"
+      ],
+      "context_window": 500000,
+      "family": "grok",
+      "max_output_tokens": 500000,
+      "name": "grok-4.7",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.5,
+          "input": 2.0,
+          "output": 6.0,
+          "tiers": [
+            {
+              "cache_read": 1.0,
+              "input": 4.0,
+              "output": 12.0,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:xai/grok-4.7"
       }
     },
     "grok-build-0.1": {
