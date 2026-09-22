@@ -1,4 +1,5 @@
 export default Object.freeze({
+  'extensions.pageUnavailable': 'This Extension page is unavailable.',
   'settings.providers.opencode.sharedKey':
     'This Account key is shared by OpenCode Go and Zen. Replacing or removing it affects both. Each connection can be enabled separately.',
   'settings.providers.opencode.go':
