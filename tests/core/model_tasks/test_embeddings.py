@@ -448,6 +448,9 @@ class _MissingModelTasks:
     def binding_for(self, _task_type: str) -> Any:
         raise TaskModelError("No task model configured for text_embedding")
 
+    def validate_execution_target(self, _binding: object) -> None:
+        pass
+
     def options_with_defaults(self, _binding: Any) -> dict[str, Any]:
         return {}
 
@@ -461,6 +464,9 @@ class _BindingModelTasks:
 
     def binding_for(self, task_type: str) -> Any:
         return SimpleNamespace(task_type=task_type, target=self._target, options=self._options)
+
+    def validate_execution_target(self, _binding: object) -> None:
+        pass
 
     def options_with_defaults(self, _binding: Any) -> dict[str, Any]:
         # The embedding option schema currently has a single field

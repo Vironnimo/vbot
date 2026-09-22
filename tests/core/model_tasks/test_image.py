@@ -322,6 +322,9 @@ class _RoutingModelTasks:
             options={},
         )
 
+    def validate_execution_target(self, _binding: object) -> None:
+        pass
+
     def options_with_defaults(self, _binding: object) -> dict[str, Any]:
         return dict(self._binding_options)
 
@@ -440,6 +443,9 @@ class _LocalModelTasks:
     def binding_for(self, task_type: str) -> object:
         return SimpleNamespace(task_type=task_type, target="local/sd", options={})
 
+    def validate_execution_target(self, _binding: object) -> None:
+        pass
+
     def options_with_defaults(self, _binding: object) -> dict[str, object]:
         return {}
 
@@ -458,6 +464,9 @@ class _ProviderModelTasks:
             target=self._target,
             options={},
         )
+
+    def validate_execution_target(self, _binding: object) -> None:
+        pass
 
     def options_with_defaults(self, _binding: object) -> dict[str, object]:
         return {}

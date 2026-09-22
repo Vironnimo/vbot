@@ -392,54 +392,38 @@ class TaskModelService:
         return sorted(targets, key=lambda target: (target.kind, target.label.lower(), target.id))
 
     def binding_is_usable(self, task_type: str) -> bool:
-        """Return whether the configured binding currently resolves to a usable target.
-
-        This is the live, non-mutating availability gate used by route-specific
-        Tool visibility. It rejects stale model ids, unsupported task
-        capabilities, missing/forbidden Connections, unusable credentials, and
-        local targets without an available execution owner.
-        """
+        """Return whether the configured binding has a live, executable target."""
 
         try:
             binding = self.binding_for(task_type)
+            self.validate_execution_target(binding)
             target_ref = parse_task_model_target_id(binding.target)
-        except VBotError:
-            return False
-        if target_ref.kind == "local":
-            try:
-                descriptor = self._local_targets.get(target_ref.local_id)
+            if target_ref.kind == "local":
                 self.validate_binding(task_type, binding.to_dict())
-                return task_type in descriptor.task_types and descriptor.can_execute()
-            except (VBotError, ValueError):
-                return False
-
-        model = self._resolve_model(target_ref.provider_id, target_ref.model_id)
-        if model is None:
-            return False
-        if not model_supports_task(model, task_type):
-            return False
-        allows_connection = getattr(model, "allows_connection", None)
-        if callable(allows_connection) and not allows_connection(target_ref.local_connection_id):
+                return self._local_targets.get(target_ref.local_id).can_execute()
+            return True
+        except (VBotError, ValueError):
             return False
 
-        try:
-            provider = self._providers.get(target_ref.provider_id)
-        except KeyError:
-            return False
-        if not any(
-            getattr(connection, "id", None) == target_ref.local_connection_id
-            for connection in getattr(provider, "connections", ())
+    def validate_execution_target(self, binding: TaskModelBinding) -> None:
+        """Validate the selected binding against live target and credential state.
+
+        Save-time validation and target discovery cannot authorize a later
+        execution: catalog restrictions, Connection enablement, and Accounts
+        can change while the stored binding remains unchanged. Validate the
+        exact binding snapshot the execution will use, without rereading it.
+        Local executors retain ownership of their availability/error details.
+        """
+
+        self._validate_target(binding.task_type, binding.target)
+        target_ref = parse_task_model_target_id(binding.target)
+        if target_ref.kind == "provider" and not self._credentials.is_usable(
+            target_ref.provider_id, target_ref.connection_id
         ):
-            return False
-        try:
-            return bool(
-                self._credentials.is_usable(
-                    target_ref.provider_id,
-                    target_ref.connection_id,
-                )
+            raise TaskModelValidationError(
+                f"The configured {binding.task_type} Connection is disabled "
+                "or has no usable Account"
             )
-        except VBotError:
-            return False
 
     def options(self, task_type: str, target: str) -> TaskModelOptionSchema:
         """Return the backend-owned option schema for a target.
@@ -482,9 +466,10 @@ class TaskModelService:
 
         Local targets have no provider model, so they resolve to ``None``;
         provider targets delegate to the same registry lookup the option-schema
-        builder uses, so an unknown or override-only model resolves to ``None``
-        rather than raising. The image execution layer uses this to route
-        per-call knobs against the model's advertised ``task_options``.
+        builder uses, so an unknown model resolves to ``None`` rather than
+        raising. Valid override-only Models are already assembled by the registry.
+        The image execution layer uses this to route per-call knobs against the
+        model's advertised ``task_options``.
         """
 
         if target_ref.kind == "local":
@@ -496,8 +481,7 @@ class TaskModelService:
 
         Returns ``None`` when the registry has no ``get`` method (test
         double missing the seam) or when the lookup raises ``KeyError``
-        (model not in the catalog, e.g. an override-only entry that has
-        not been refreshed yet). The model-aware schema builder treats
+        (model not in the assembled catalog). The model-aware schema builder treats
         ``None`` as "fall back to provider-level conservative defaults".
         """
 
