@@ -19,6 +19,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -160,7 +161,7 @@ async def test_reload_quiesces_active_owner_before_detaching_its_tools(tmp_path:
         resolve_credential=lambda _key: "",
         reload_recall=lambda: None,
         refresh_prompts=lambda: None,
-        reload_skills=lambda: None,
+        reload_skills=AsyncMock(),
         recover_recall=lambda _names: None,
         logger=SimpleNamespace(
             info=lambda *_args, **_kwargs: None, warning=lambda *_args, **_kwargs: None
