@@ -334,8 +334,10 @@ async def test_settings_update_rejects_invalid_task_model_option_before_persiste
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["settings.update", "settings.patch"])
 async def test_settings_update_persists_target_switch_with_validated_options(
     tmp_path: Path,
+    method: str,
 ) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.storage = StorageManager(tmp_path)
@@ -360,9 +362,19 @@ async def test_settings_update_persists_target_switch_with_validated_options(
     result = await dispatch_rpc(
         state,
         {
-            "method": "settings.update",
+            "method": method,
             "params": {
                 "model_tasks": {TASK_TEXT_TO_SPEECH: {"target": "openai/tts-default::api-key"}}
+            }
+            if method == "settings.update"
+            else {
+                "operations": [
+                    {
+                        "op": "set",
+                        "path": 'model_tasks["text_to_speech"].target',
+                        "value": "openai/tts-default::api-key",
+                    }
+                ]
             },
         },
     )
@@ -371,6 +383,55 @@ async def test_settings_update_persists_target_switch_with_validated_options(
     binding = state.runtime.storage.load_model_task_settings()[TASK_TEXT_TO_SPEECH]
     assert binding == {"target": "openai/tts-default::api-key", "options": {}}
     state.runtime.model_tasks.validate_binding(TASK_TEXT_TO_SPEECH, binding)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["settings.update", "settings.patch"])
+@pytest.mark.parametrize("options", [{"retired_option": True}, {}])
+async def test_unchanged_task_binding_does_not_block_other_settings(
+    tmp_path: Path, method: str, options: dict[str, Any]
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage = StorageManager(tmp_path)
+    _add_tts_model(state)
+    binding = {"target": "openai/retired-tts::api-key", "options": options}
+    state.runtime.storage.update_model_task_settings({TASK_TEXT_TO_SPEECH: binding})
+    previous = state.runtime.storage.load_model_task_settings()
+    params = (
+        {"model_tasks": {TASK_TEXT_TO_SPEECH: binding}, "server": {"keep_awake": True}}
+        if method == "settings.update"
+        else {
+            "operations": [
+                {"op": "set", "path": 'model_tasks["text_to_speech"]', "value": binding},
+                {"op": "set", "path": "server.keep_awake", "value": True},
+            ]
+        }
+    )
+
+    result = await dispatch_rpc(state, {"method": method, "params": params})
+
+    assert result["ok"] is True, result
+    assert state.runtime.storage.load_model_task_settings() == previous
+    assert state.runtime.storage.load_settings()["keep_awake"] is True
+
+
+@pytest.mark.asyncio
+async def test_settings_patch_can_remove_incomplete_task_binding(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage = StorageManager(tmp_path)
+    state.runtime.storage.save_settings({"model_tasks": {TASK_TEXT_TO_SPEECH: {}}})
+    _add_tts_model(state)
+
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.patch",
+            "params": {"operations": [{"op": "unset", "path": 'model_tasks["text_to_speech"]'}]},
+        },
+    )
+
+    assert result["ok"] is True, result
+    assert state.runtime.storage.load_model_task_settings() == {}
 
 
 @pytest.mark.asyncio
