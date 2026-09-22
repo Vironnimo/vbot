@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from core.sessions import sqlite_runtime
+from core.sessions.errors import SessionStoreUnavailableError
 from core.sessions.sqlite_runtime import (
     READ_CONNECTION_LIMIT,
     SQLiteRuntime,
@@ -35,6 +36,32 @@ def test_open_failure_unregisters_the_connection(tmp_path: Path, monkeypatch) ->
         runtime.open_writer(create=True, database_id="a" * 32)
 
     assert runtime.live_connection_count() == 0
+    assert tracked_connection_count(tmp_path / "sessions.db") == 0
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (sqlite3.SQLITE_FULL, "database or disk is full"),
+        (sqlite3.SQLITE_NOMEM, "out of memory"),
+        (sqlite3.SQLITE_INTERRUPT, "interrupted"),
+        (sqlite3.SQLITE_IOERR | (13 << 8), "injected extended access error"),
+    ],
+)
+def test_open_operational_error_never_reports_corruption(
+    tmp_path: Path, monkeypatch, code: int, message: str
+) -> None:
+    runtime = SQLiteRuntime(tmp_path / "sessions.db")
+    failure = sqlite3.OperationalError(message)
+    failure.sqlite_errorcode = code
+
+    def fail(*_args, **_kwargs):
+        raise failure
+
+    monkeypatch.setattr(sqlite_runtime, "apply_wal_with_fallback", fail)
+    with pytest.raises(SessionStoreUnavailableError) as raised:
+        runtime.open_writer(create=True, database_id="a" * 32)
+    assert raised.value.__cause__ is failure
     assert tracked_connection_count(tmp_path / "sessions.db") == 0
 
 
