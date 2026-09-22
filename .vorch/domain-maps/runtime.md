@@ -30,7 +30,7 @@ Extension-owned temporary execution groups receive `streaming_chat_loop` through
 ## Shutdown
 
 - `stop()` stops producers (Channels/Cron/Bootstrap), usage collector, Process/Terminal managers (killing every tracked process and Terminal tree), the temp-file sweeper, clears service references, closes logging. Safe pre-start.
-- `aclose()` is the async variant accessors in event loops should prefer: producers stop first, then Trigger completion delivery, Reflection, titles, and ChatRunManager close - rejecting new work, cancelling queued work, waiting active Runs plus cancellation cleanup - before Decisions, Speech, Provider usage, Process/Terminal managers, temporary files, and canonical Sessions close. No Runtime-owned background task may outlive its services.
+- `aclose()` is the async variant accessors in event loops should prefer: concurrent callers share one cleanup task, and caller cancellation propagates only after cleanup settles. It closes Extension mutation admission, drains admitted reload/startup/disable work, and shuts down the final registry before withdrawing readiness and stopping producers, then Trigger completion delivery, Reflection, titles, and ChatRunManager close - rejecting new work, cancelling queued work, waiting active Runs plus cancellation cleanup - before Decisions, Speech, Provider usage, Process/Terminal managers, temporary files, and canonical Sessions close. No Runtime-owned background task may outlive its services.
 
 Terminal tree termination failures remain visible to the shutdown caller after Runtime closes Keep Awake, temporary files, canonical Sessions, and logging and clears service references.
 

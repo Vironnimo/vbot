@@ -6,6 +6,7 @@ all core services and manages the application lifecycle.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import suppress
@@ -129,6 +130,7 @@ class Runtime:
         self._extension_change_publisher: Callable[[str, str, Sequence[str], int], None] | None = (
             None
         )
+        self._close_task: asyncio.Task[None] | None = None
         self._clear_service_references()
 
     def _clear_service_references(self) -> None:
@@ -191,6 +193,10 @@ class Runtime:
 
     def start(self) -> None:
         """Start the dependency-ordered service graph, cleaning up a failed bootstrap."""
+        if self._close_task is not None and not self._close_task.done():
+            raise RuntimeError("Runtime is closing")
+        if not self._started:
+            self._close_task = None
         bootstrap(self)
 
     async def fire_extension_startup(self) -> None:
@@ -200,9 +206,8 @@ class Runtime:
         run on the live serving loop (they may schedule background tasks there).
         No-op before ``start()`` / after shutdown.
         """
-        if self._extensions is not None:
-            self._extensions.bind_host(self._extension_host())
-            await self._extensions.fire_startup()
+        if self._extension_runtime is not None:
+            await self._extension_runtime.startup()
 
     def _host_operations(self) -> ExtensionHostFactory:
         self._ensure_started()
@@ -385,11 +390,33 @@ class Runtime:
             raise terminal_error
 
     async def aclose(self) -> None:
-        """Gracefully shut down the runtime and await async service cleanup."""
+        """Finish shared service cleanup before propagating caller cancellation."""
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(self._aclose())
+        task = self._close_task
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as cancellation:
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            with suppress(BaseException):
+                task.result()
+            raise cancellation
+
+    async def _aclose(self) -> None:
         self._log_shutdown()
-        self._started = False
-        if self._extensions is not None:
+        # An admitted reload still needs the live Runtime refresh callbacks.
+        # Drain it and close Extension admission before withdrawing readiness.
+        if self._extension_runtime is not None:
+            await self._extension_runtime.aclose()
+        elif self._extensions is not None:
             await self._extensions.fire_shutdown()
+        self._started = False
 
         if self._channel_service is not None:
             await self._channel_service.aclose()
