@@ -5,7 +5,7 @@ import shlex
 
 import pytest
 
-from cli import _output, main, rpc_client
+from cli import _commands, _output, main, rpc_client
 from cli._parser_common import AREA_HELP, COMMAND_PATHS
 from cli._progress import ProgressPrinter, current_progress
 from cli.formatting import output_mode, record_fields
@@ -118,7 +118,9 @@ def test_all_management_areas_report_outcomes_without_changing_payload(
     )
     payload = '{"content": "warning: user text is data", "id": "exact-id"}'
     result = CommandResult(ok, payload, instance, attention=attention)
-    monkeypatch.setattr(main, f"dispatch_{area.replace('-', '_')}_command", lambda *a, **kw: result)
+    monkeypatch.setattr(
+        _commands, f"dispatch_{area.replace('-', '_')}_command", lambda *a, **kw: result
+    )
     code = main.run([area, *tokens], resolve=lambda **kw: instance)
     out, err = capsys.readouterr()
     assert code == (0 if ok else 1)

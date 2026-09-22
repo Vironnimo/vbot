@@ -1,5 +1,7 @@
 """Desktop wakeword detection and voice pipeline."""
 
+from typing import TYPE_CHECKING, Any
+
 from desktop.wakeword.bridge import DesktopBridge
 from desktop.wakeword.engine import (
     MockWakewordEngine,
@@ -10,7 +12,18 @@ from desktop.wakeword.engine import (
     WakewordModelDescriptor,
     WakewordModelError,
 )
-from desktop.wakeword.worker import MockWakewordWorker, WakewordWorker, list_microphones
+
+if TYPE_CHECKING:
+    from desktop.wakeword.worker import MockWakewordWorker, WakewordWorker, list_microphones
+
+
+def __getattr__(name: str) -> Any:
+    if name not in {"MockWakewordWorker", "WakewordWorker", "list_microphones"}:
+        raise AttributeError(name)
+    from desktop.wakeword import worker
+
+    return getattr(worker, name)
+
 
 __all__ = [
     "DesktopBridge",
