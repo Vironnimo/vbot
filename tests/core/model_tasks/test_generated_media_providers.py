@@ -206,6 +206,25 @@ async def test_music_client_concatenates_streamed_base64_audio() -> None:
     assert request["stream"] is True
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [{"message": "generation failed", "code": 502}, "failed"])
+@respx.mock
+async def test_music_client_rejects_error_after_partial_audio(error: object) -> None:
+    stream = (
+        _sse({"choices": [{"delta": {"audio": {"data": "YWJj"}}}]})
+        + _sse({"error": error})
+        + "data: [DONE]\n\n"
+    )
+    route = respx.post("https://openrouter.ai/api/v1/chat/completions").respond(
+        200, text=stream, headers={"content-type": "text/event-stream"}
+    )
+
+    with pytest.raises(ProviderError):
+        await _openrouter_music_client().generate("Dreamy synthwave", options={})
+
+    assert route.call_count == 1
+
+
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 

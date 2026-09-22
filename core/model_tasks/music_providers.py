@@ -18,7 +18,7 @@ from core.providers._http_shared import (
     parse_sse_json_data,
     wrap_network_error,
 )
-from core.providers.errors import NetworkError, ProviderError
+from core.providers.errors import NetworkError, ProviderError, classify_in_band_provider_error
 from core.providers.task_client import (
     ProviderTaskClient,
     classify_task_response,
@@ -153,6 +153,9 @@ def _collect_music_delta(
 ) -> None:
     if not isinstance(chunk, Mapping):
         return
+    error = chunk.get("error")
+    if error is not None:
+        raise classify_in_band_provider_error(error)
     choices = chunk.get("choices")
     if not isinstance(choices, list):
         return
