@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from core.models.discovery import ModelDiscoveryError
+from core.providers.providers import ProviderRegistry
 from server.rpc import (
     model_methods,
 )
@@ -25,6 +26,34 @@ from tests.server.rpc_test_support import (
     openrouter_provider_with_secondary_connection,
 )
 from tests.server.rpc_test_support import _no_models_dev_fetch as _no_models_dev_fetch
+
+
+@pytest.mark.asyncio
+async def test_zen_refresh_updates_both_public_connections_without_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(model_methods, "refresh_models", fake_refresh_models)
+    FAKE_REFRESH_MODEL_CALLS.clear()
+    FAKE_REFRESH_MODEL_KWARGS.clear()
+    state = make_state(tmp_path, StubAdapter())
+    provider = ProviderRegistry.load(Path(__file__).resolve().parents[2] / "resources").get(
+        "opencode-zen"
+    )
+    state.runtime.providers.add(provider)
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "model.refresh_db",
+            "params": {"provider_id": "opencode-zen"},
+        },
+    )
+    assert response["ok"] is True
+    assert FAKE_REFRESH_MODEL_CALLS == ["", ""]
+    assert {call["credential_connection"].id for call in FAKE_REFRESH_MODEL_KWARGS} == {
+        "api-key",
+        "account",
+    }
 
 
 @pytest.mark.asyncio

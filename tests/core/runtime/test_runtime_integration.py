@@ -754,7 +754,7 @@ def test_provider_credential_reload_reaches_existing_chat_and_agent_resolvers(
     config: Config,
 ) -> None:
     """A post-start API key enables bare-model resolution without a restart or pin."""
-    monkeypatch.delenv("OPENCODE_GO_API_KEY", raising=False)
+    monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
     runtime = Runtime(config)
     runtime.start()
     try:
@@ -766,7 +766,7 @@ def test_provider_credential_reload_reaches_existing_chat_and_agent_resolvers(
         with pytest.raises(ChatError):
             _resolve_agent_connection(runtime.chat_loop._dependencies, agent)
 
-        runtime.storage.set_data_dir_credential("OPENCODE_GO_API_KEY", "test-secret")
+        runtime.storage.set_data_dir_credential("OPENCODE_API_KEY", "test-secret")
         runtime.reload_environment_credentials()
 
         assert runtime.provider_credentials is injected_resolver

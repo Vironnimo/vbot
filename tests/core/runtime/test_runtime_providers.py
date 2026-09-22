@@ -193,10 +193,8 @@ def test_runtime_loads_opencode_zen_current_catalog_and_connection_allowlist(
 ) -> None:
     models = runtime.models.list_for_provider("opencode-zen")
     gemini = runtime.models.get("opencode-zen", "gemini-3.5-flash")
-    expiring = runtime.models.get("opencode-zen", "claude-opus-4-1")
-    free = runtime.models.get("opencode-zen", "big-pickle")
 
-    assert len(models) == 53
+    assert len(models) == 56
     assert gemini.connections == ("api-key", "account")
     assert gemini.context_window == 1_048_576
     assert gemini.max_output_tokens == 65_536
@@ -208,10 +206,13 @@ def test_runtime_loads_opencode_zen_current_catalog_and_connection_allowlist(
         "pdf",
     )
     assert gemini.metadata["opencode_zen"]["protocol"] == "gemini_generate_content"
-    assert expiring.metadata["opencode_zen"]["deprecates_at"] == "2026-08-05"
-    assert free.metadata["opencode_zen"]["privacy"] == "free_model_data_collection"
     assert {model.model_id for model in models}.isdisjoint(
         {
+            "big-pickle",
+            "mimo-v2.6-flash-free",
+            "claude-opus-4-1",
+            "minimax-m2.5",
+            "kimi-k2.5",
             "gpt-5.2-codex",
             "gpt-5.1-codex",
             "gpt-5.1-codex-max",

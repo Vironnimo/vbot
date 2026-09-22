@@ -11,6 +11,10 @@ OpenAI-compatible gateway with per-Model protocol/request profiles across **thre
 - Alternate runtime endpoint for selected models: `POST /messages` through an internal `AnthropicCompatibleAdapter`
 - Alternate runtime endpoint for selected models: `POST /responses` through the shared stateless Responses machinery (`core/providers/github_copilot_responses.py`, same shape the OpenRouter adapter uses for its GPT-5.6 ids)
 
+## Shared OpenCode credentials
+
+Go uses `OPENCODE_API_KEY`, including named Account suffixes, in common with Zen. Key changes through either Provider affect both; enablement and billing endpoints remain independent. Go uses subscription allowance and may use Zen credits only when the user enabled OpenCode's upstream "Use balance" option. Enrollment, the explicit old-key converter, and the OpenCode-only free-tier restriction are documented in `opencode-zen.md` -> Go credentials and free-tier access.
+
 ## Runtime Behavior
 
 - OpenAI-routed Assistant responses normalize readable Reasoning from the profiled inbound field and replay it as `reasoning_content`. The response carrier and historical carrier are independent: Kimi K3, Kimi K2.6, Hy3, and Hy4 currently respond with `reasoning` plus `reasoning_details`, but OpenCode's own compatible client sends readable history as `reasoning_content` and does not replay `reasoning_details`. `OpenCodeGoAdapter.reasoning_replay_fidelity()` therefore declares `readable_only` for the Chat route.
