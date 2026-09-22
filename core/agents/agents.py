@@ -719,7 +719,11 @@ class AgentStore:
         ]
 
     def delete(self, agent_id: str) -> Path:
-        """Archive the agent directory, then remove the active copy.
+        """Archive the Agent's files and live Sessions as one compensated operation.
+
+        Files move first; if Session archiving fails, restore them and any prior
+        archive. Product-level reference and Run admission guards belong to the
+        caller.
 
         A default workspace lives inside the agent directory, so it travels into
         the archive with the first move; the ``exists`` check below is then False

@@ -358,12 +358,14 @@ class ProjectStore:
         return updated
 
     def delete(self, project_id: str) -> Path:
-        """Archive the project anchor subtree and remove the active copy.
+        """Archive the Project Anchor and its live Sessions, preserving the repo.
 
         Mirrors :meth:`core.agents.AgentStore.delete`: move the active directory
         under ``<data_dir>/archive/projects/<project-id>/``, replacing an
         existing archive for the same id. The repo (cwd) is never touched —
-        removing a project is not deleting a repo. Returns the archive path.
+        removing a project is not deleting a repo. If Session archiving fails,
+        restore the active anchor and any prior archive. Product-level reference
+        and Run admission guards belong to the caller. Returns the archive path.
         """
         project_dir = self._project_dir(project_id)
         if not project_dir.exists():

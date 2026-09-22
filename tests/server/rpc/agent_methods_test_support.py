@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
 
@@ -166,6 +167,15 @@ class _FakeSessions:
         self.saved_metadata[(address.agent_id, address.session_id, address.project_id)] = dict(
             metadata
         )
+
+    def mutate_metadata_with_previous(
+        self, address: Any, mutation: Callable[[dict[str, Any]], None]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        previous = dict(self.get_metadata(address))
+        updated = dict(previous)
+        mutation(updated)
+        self.set_metadata(address, updated)
+        return previous, updated
 
     def set_title(self, address: Any, title: str) -> str | None:
         self.renamed.append((address.agent_id, address.session_id, title, address.project_id))
