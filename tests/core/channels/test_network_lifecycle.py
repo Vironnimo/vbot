@@ -329,3 +329,75 @@ async def test_whatsapp_drain_failure_retrieves_pending_disconnect_error(tmp_pat
     finally:
         loop.set_exception_handler(previous_handler)
         await adapter.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["enable_channel", "disable_channel", "restart_channel"])
+@pytest.mark.parametrize("operation", ["setup", "pair"])
+async def test_whatsapp_lifecycle_mutations_cannot_interrupt_owned_operation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str, operation: str
+) -> None:
+    service = make_service(tmp_path)
+    service.create_channel(
+        ChannelConfig(id="wa", platform="whatsapp", agent_id="assistant", enabled=False)
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+    start_adapter = Mock()
+    monkeypatch.setattr(service, "start_channel", start_adapter)
+    pairing: asyncio.Task[Any] | None = None
+
+    async def install(_: Path) -> None:
+        started.set()
+        await release.wait()
+
+    async def status(_: str) -> dict[str, Any]:
+        started.set()
+        await release.wait()
+        return {"installed": True, "state": "disconnected"}
+
+    try:
+        if operation == "setup":
+            monkeypatch.setattr("core.channels._whatsapp_setup.install_bridge", install)
+            await service.setup_whatsapp("wa")
+        else:
+            monkeypatch.setattr(service, "whatsapp_status", status)
+            pairing = asyncio.create_task(service.pair_whatsapp("wa"))
+        await asyncio.wait_for(started.wait(), timeout=2)
+        with pytest.raises(ChannelError):
+            getattr(service, action)("wa")
+        assert not service.list_channels()[0].enabled
+        start_adapter.assert_not_called()
+        release.set()
+        if pairing is not None:
+            await pairing
+            assert service.list_channels()[0].enabled
+            start_adapter.assert_called_once()
+    finally:
+        release.set()
+        if pairing is not None:
+            await asyncio.gather(pairing, return_exceptions=True)
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_setup_rejects_enabled_channel_awaiting_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = make_service(tmp_path)
+    service.create_channel(
+        ChannelConfig(id="wa", platform="whatsapp", agent_id="assistant", enabled=False)
+    )
+    monkeypatch.setattr(service, "start_channel", Mock())
+    service.enable_channel("wa")
+    service._mark_channel_failed("wa", "waiting for recovery")
+    install = AsyncMock()
+    monkeypatch.setattr("core.channels._whatsapp_setup.install_bridge", install)
+    try:
+        assert not service._is_running("wa")
+        with pytest.raises(ChannelError):
+            await service.setup_whatsapp("wa")
+        assert "wa" not in service._whatsapp_setup_tasks
+        install.assert_not_awaited()
+    finally:
+        await service.aclose()
