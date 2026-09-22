@@ -689,6 +689,50 @@ async def test_manual_reset_during_review_preserves_activity_after_reset() -> No
     assert _counter_generation(sessions) == 1
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_name", "counter"),
+    [
+        ("memory", "turns_since_memory_review"),
+        ("skill_manage", "iterations_since_skill_review"),
+    ],
+)
+async def test_tool_reset_during_review_preserves_activity_after_reset(
+    tool_name: str, counter: str
+) -> None:
+    service, sessions, loop = _make_service(memory_turn_interval=1, skill_model_step_interval=1)
+    loop.wait_gate = asyncio.Event()
+    service.notify_run_end(
+        cast("Any", _FakeRun(iteration_count=1)),
+        _identity_agent(),
+        internal=False,
+        outcome="success",
+    )
+    await loop.run_started.wait()
+
+    service.notify_run_end(
+        cast("Any", _FakeRun(tool_call_names={tool_name})),
+        _identity_agent(),
+        internal=False,
+        outcome="failed",
+    )
+    await asyncio.sleep(0)
+    assert _counters(sessions)[counter] == 0
+    service.notify_run_end(
+        cast("Any", _FakeRun(iteration_count=1)),
+        _identity_agent(),
+        internal=False,
+        outcome="success",
+    )
+    await asyncio.sleep(0)
+    assert _counters(sessions)[counter] == 1
+
+    loop.wait_gate.set()
+    await _drain(service)
+
+    assert _counters(sessions)[counter] == 1
+
+
 # --- run_review orchestration --------------------------------------------------
 
 
