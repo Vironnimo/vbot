@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import heapq
 import re
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any, cast
 
 from core.chat.content_blocks import FileBlock, FileMentionBlock, MediaBlock, TextBlock
+from core.chat.messages import ChatMessage
 from core.recall.recall import (
     JsonObject,
     RecallMatchMode,
@@ -118,48 +121,41 @@ class CanonicalSessionRecallBackend:
                 "stale_cursor", "Session search source changed; repeat the search."
             )
 
-        ranked: list[tuple[datetime, str, int, RecallSearchHit]] = []
-        remaining = self._search_scan_limit
+        candidates = self._search_candidates(request, summaries)
         scan_complete = True
-        for summary in summaries:
-            session_id = str(summary["id"])
-            messages = self.sessions.get(_session_address(request, session_id)).load_active()
-            selected_messages = messages
-            if remaining is not None:
-                if len(messages) > remaining:
-                    selected_messages = messages[:remaining]
-                    scan_complete = False
-                remaining -= len(selected_messages)
-            for message_index, message in enumerate(selected_messages):
-                if not message_matches_search_request(message, request):
-                    continue
-                text = message_search_text(message)
-                if not text_matches_search_request(text, request):
-                    continue
-                match_start, match_end = first_match_span(text, request.query, request.match_mode)
-                timestamp = parse_persisted_timestamp(message.timestamp) or datetime.min.replace(
-                    tzinfo=UTC
+        if self._search_scan_limit is not None:
+            # Budget eligible Messages globally by canonical time, before matching
+            # text. Session list order and ineligible rows must not consume it.
+            selected = heapq.nlargest(
+                self._search_scan_limit + 1, candidates, key=lambda item: item[:3]
+            )
+            scan_complete = len(selected) <= self._search_scan_limit
+            candidates = iter(selected[: self._search_scan_limit])
+
+        ranked: list[tuple[datetime, str, int, RecallSearchHit]] = []
+        for timestamp, session_id, message_index, message in candidates:
+            text = message_search_text(message)
+            if not text_matches_search_request(text, request):
+                continue
+            match_start, match_end = first_match_span(text, request.query, request.match_mode)
+            ranked.append(
+                (
+                    timestamp,
+                    session_id,
+                    message_index,
+                    RecallSearchHit(
+                        result_type="message",
+                        session_id=session_id,
+                        message_id=str(message.id),
+                        role=str(message.role),
+                        timestamp=str(message.timestamp),
+                        text=text,
+                        score=0.0,
+                        match_start=match_start,
+                        match_end=match_end,
+                    ),
                 )
-                ranked.append(
-                    (
-                        timestamp,
-                        session_id,
-                        message_index,
-                        RecallSearchHit(
-                            result_type="message",
-                            session_id=session_id,
-                            message_id=str(message.id),
-                            role=str(message.role),
-                            timestamp=str(message.timestamp),
-                            text=text,
-                            score=0.0,
-                            match_start=match_start,
-                            match_end=match_end,
-                        ),
-                    )
-                )
-            if not scan_complete:
-                break
+            )
         ranked.sort(
             key=lambda item: (item[0], item[1], item[2]),
             reverse=request.order == "newest",
@@ -176,6 +172,21 @@ class CanonicalSessionRecallBackend:
             degraded=not scan_complete,
             degradation_reason=(CANONICAL_FALLBACK_PARTIAL_REASON if not scan_complete else None),
         )
+
+    def _search_candidates(
+        self, request: RecallSearchRequest, summaries: list[JsonObject]
+    ) -> Iterator[tuple[datetime, str, int, ChatMessage]]:
+        for summary in summaries:
+            session_id = str(summary["id"])
+            messages = self.sessions.get(_session_address(request, session_id)).load_active()
+            for message_index, message in enumerate(messages):
+                if message_matches_search_request(message, request):
+                    yield (
+                        timestamp_sort_key(message.timestamp),
+                        session_id,
+                        message_index,
+                        message,
+                    )
 
     def _search_candidate_summaries(self, request: RecallSearchRequest) -> list[JsonObject]:
         summaries = cast(
