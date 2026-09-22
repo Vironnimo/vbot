@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterator
+from datetime import timedelta
 from importlib import import_module
 from typing import Any
 
@@ -159,11 +160,18 @@ def _classify_telegram_error(
 ) -> ChannelError:
     """Translate one PTB TelegramError into a retry-classified ChannelError."""
     channel_error = ChannelError(f"Telegram request failed (channel={channel_id}): {error}")
+    # PTB's permanent BadRequest also inherits NetworkError. Reject it before
+    # classifying actual transport failures, or invalid requests retry unchanged.
+    bad_request = getattr(telegram_error_module, "BadRequest", None)
+    if bad_request is not None and isinstance(error, bad_request):
+        return channel_error
     network_error = getattr(telegram_error_module, "NetworkError", None)
     if network_error is not None and isinstance(error, network_error):
         # Covers TimedOut as well - both are transient transport faults.
         channel_error.retryable = True
     retry_after = getattr(error, "retry_after", None)
+    if isinstance(retry_after, timedelta):
+        retry_after = retry_after.total_seconds()
     if isinstance(retry_after, (int, float)) and not isinstance(retry_after, bool):
         channel_error.retryable = True
         channel_error.retry_after = float(retry_after)

@@ -589,3 +589,102 @@ def test_restart_delay_remains_bounded_after_many_failures(tmp_path):
     service = make_service(tmp_path)
     assert service._restart_delay_seconds(1025) <= 30
     assert service._restart_delay_seconds(1000000) <= 30
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_initial_construction", [False, True])
+async def test_construction_failure_does_not_end_automatic_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_initial_construction: bool,
+) -> None:
+    config = make_config(enabled=True)
+    ChannelStorage(tmp_path).save(config)
+    service = make_service(tmp_path)
+    recovered = BlockingAdapter()
+    attempts = 0
+    delays: list[float] = []
+    original_delay = service._restart_delay_seconds
+
+    def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1 and not fail_initial_construction:
+            return FailingAdapter(fail_on_start=True)
+        if attempts <= 3:
+            raise ChannelConfigError("credential temporarily unavailable")
+        return recovered
+
+    def immediate_delay(attempt: int) -> float:
+        delays.append(original_delay(attempt))
+        return 0.0
+
+    monkeypatch.setattr(service, "_create_adapter", create_adapter)
+    monkeypatch.setattr(service, "_restart_delay_seconds", immediate_delay)
+    service.start()
+    try:
+        await asyncio.wait_for(recovered.started.wait(), timeout=1)
+        assert attempts == 4
+        assert delays == [1.0, 2.0, 4.0]
+        assert service.is_running(config.id)
+        assert not service.is_failed(config.id)
+    finally:
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_queued_construction_failure_recovers_after_old_adapter_stops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(enabled=True)
+    ChannelStorage(tmp_path).save(config)
+    service = make_service(tmp_path)
+    old = BlockingAdapter()
+    recovered = BlockingAdapter()
+    attempts = 0
+
+    def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return old
+        if attempts == 2:
+            raise ChannelConfigError("credential temporarily unavailable")
+        return recovered
+
+    monkeypatch.setattr(service, "_create_adapter", create_adapter)
+    monkeypatch.setattr(service, "_preflight_adapter_start", lambda _config: None)
+    monkeypatch.setattr(service, "_restart_delay_seconds", lambda _attempt: 0.0)
+    service.start()
+    try:
+        await old.started.wait()
+        service.restart_channel(config.id)
+        await asyncio.wait_for(recovered.started.wait(), timeout=1)
+        assert old.stopped.is_set()
+        assert attempts == 3
+    finally:
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_disabling_channel_cancels_construction_failure_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(enabled=True)
+    ChannelStorage(tmp_path).save(config)
+    service = make_service(tmp_path)
+
+    def fail_construction(_config: ChannelConfig) -> ChannelAdapter:
+        raise ChannelConfigError("credential temporarily unavailable")
+
+    monkeypatch.setattr(service, "_create_adapter", fail_construction)
+    service.start()
+    try:
+        retry = service._adapter_restart_tasks[config.id]
+        service.disable_channel(config.id)
+        await asyncio.gather(retry, return_exceptions=True)
+        assert not service._adapter_restart_tasks
+        assert not service.is_running(config.id)
+        assert not service.is_failed(config.id)
+    finally:
+        await service.aclose()

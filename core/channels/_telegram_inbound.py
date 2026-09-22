@@ -34,8 +34,8 @@ class TelegramInboundBuffer:
     def __init__(
         self,
         channel_id: str,
-        text_handler: Callable[..., Awaitable[None]],
-        media_handler: Callable[..., Awaitable[None]],
+        text_handler: Callable[..., Awaitable[object]],
+        media_handler: Callable[..., Awaitable[object]],
     ) -> None:
         self._channel_id = channel_id
         self._text_handler = text_handler
@@ -46,6 +46,9 @@ class TelegramInboundBuffer:
         self._album_tasks: dict[str, asyncio.Task[None]] = {}
         self._pending_forward_comments: dict[str, _PendingForwardComment] = {}
         self._forward_comment_tasks: dict[str, asyncio.Task[None]] = {}
+        # Timer slots may be reused once dispatch begins; retain ownership until
+        # dispatch completes so shutdown also drains work beyond the settle window.
+        self._tasks: set[asyncio.Task[None]] = set()
 
     def _buffer_album_message(
         self,
@@ -86,10 +89,13 @@ class TelegramInboundBuffer:
             name=f"telegram:{self._channel_id}:album:{album_id}",
         )
         self._album_tasks[album_id] = task
+        self._tasks.add(task)
         task.add_done_callback(partial(self._on_album_task_done, album_id))
 
     async def _flush_album(self, album_id: str) -> None:
         await asyncio.sleep(_ALBUM_FLUSH_SECONDS)
+        if self._album_tasks.get(album_id) is asyncio.current_task():
+            self._album_tasks.pop(album_id, None)
 
         messages = self._album_buffers.pop(album_id, [])
         conversation = self._album_conversations.pop(album_id, None)
@@ -104,6 +110,7 @@ class TelegramInboundBuffer:
         )
 
     def _on_album_task_done(self, album_id: str, task: asyncio.Task[None]) -> None:
+        self._tasks.discard(task)
         if self._album_tasks.get(album_id) is task:
             self._album_tasks.pop(album_id, None)
 
@@ -150,6 +157,7 @@ class TelegramInboundBuffer:
             name=f"telegram:{self._channel_id}:forward-comment:{conversation.chat_id}",
         )
         self._forward_comment_tasks[conversation.chat_id] = task
+        self._tasks.add(task)
         task.add_done_callback(partial(self._on_forward_comment_task_done, conversation.chat_id))
 
     async def _take_forward_comment_for_media(
@@ -201,6 +209,7 @@ class TelegramInboundBuffer:
             task.cancel()
 
     def _on_forward_comment_task_done(self, chat_id: str, task: asyncio.Task[None]) -> None:
+        self._tasks.discard(task)
         if self._forward_comment_tasks.get(chat_id) is task:
             self._forward_comment_tasks.pop(chat_id, None)
 
@@ -217,17 +226,15 @@ class TelegramInboundBuffer:
         )
 
     async def stop(self) -> None:
-        album_tasks = list(self._album_tasks.values())
-        forward_comment_tasks = list(self._forward_comment_tasks.values())
+        background_tasks = list(self._tasks)
         self._album_tasks.clear()
         self._album_buffers.clear()
         self._album_conversations.clear()
         self._album_companion_texts.clear()
         self._forward_comment_tasks.clear()
         self._pending_forward_comments.clear()
-        for task in (*album_tasks, *forward_comment_tasks):
+        for task in background_tasks:
             task.cancel()
 
-        background_tasks = [*album_tasks, *forward_comment_tasks]
         if background_tasks:
             await asyncio.gather(*background_tasks, return_exceptions=True)

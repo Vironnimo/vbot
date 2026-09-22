@@ -242,11 +242,13 @@ async def test_send_wraps_telegram_error_as_channel_error(
         allowed_chat_ids=[12345],
     )
     bot.send_message = AsyncMock(side_effect=BadRequest("Message caption is too long"))
+    monkeypatch.setattr("core.utils.retry.compute_retry_delay", lambda *a, **kw: (0, False))
 
     with pytest.raises(ChannelError) as excinfo:
         await adapter.send("hi", "12345")
 
     assert isinstance(excinfo.value.__cause__, BadRequest)
+    bot.send_message.assert_awaited_once()
     await adapter.stop()
 
 
@@ -278,12 +280,16 @@ async def test_text_send_exhausts_network_retries_before_returning_error(
     await adapter.stop()
 
 
+@pytest.mark.parametrize("timedelta_mode", [False, True])
 @pytest.mark.asyncio
 async def test_text_send_exhausts_rate_limit_retries_with_retry_hint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    timedelta_mode: bool,
 ) -> None:
     from telegram.error import RetryAfter
+
+    monkeypatch.setenv("PTB_TIMEDELTA", "1" if timedelta_mode else "0")
 
     delays = []
 

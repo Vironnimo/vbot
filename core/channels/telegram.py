@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
+import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from core.attachments import AttachmentStore
 from core.channels.adapter import (
+    TELEGRAM_UPDATE_OFFSET_TTL_SECONDS,
     ChannelAccessRegistry,
     ChannelAdapter,
     ConversationFacts,
@@ -30,6 +32,7 @@ from core.extensions import (
     InteractionResponder,
 )
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool
 
 from ._telegram_api import (
     _load_telegram_ext,
@@ -59,6 +62,7 @@ if TYPE_CHECKING:
     from core.sessions import ChatSessionManager
 
 _LOGGER = get_logger("channels.telegram")
+_POLLING_IO_POOL = BoundedWorkerPool(name="telegram-polling-io", max_workers=2)
 
 _UNSUPPORTED_MESSAGE_TYPE_REPLY = "Sorry, this message type isn't supported yet."
 # Telegram's first-contact ritual: every user's first DM to a bot is the /start command.
@@ -117,6 +121,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         # None keeps dedup in-memory only (tests).
         self._update_offset_store = update_offset_store
         self._last_update_id = -1
+        self._last_update_claimed_at = time.monotonic()
         self._offset_save_tasks: set[asyncio.Task[None]] = set()
         self._engine = ChannelConversationEngine(
             config,
@@ -165,6 +170,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         bot_user = await application.bot.get_me()
         self._set_bot_identity(bot_user)
         self._last_update_id = self._load_update_offset()
+        self._last_update_claimed_at = time.monotonic()
         await application.bot.delete_webhook(drop_pending_updates=False)
         await application.start()
 
@@ -245,21 +251,22 @@ class TelegramChannelAdapter(ChannelAdapter):
     async def stop(self) -> None:
         """Stop polling, cancel engine workers and album tasks, and release resources."""
         self._stop_event.set()
-        await self._stop_workers()
-        # A graceful stop must not lose a watermark save: the next start would
-        # otherwise replay already-processed updates as duplicate Runs.
-        await self._await_offset_saves()
-
         application = self._application
-        self._application = None
-        if application is None:
-            return
-
-        updater = application.updater
-        if updater is not None:
-            await self._run_lifecycle_step(updater.stop, "updater.stop")
-        await self._run_lifecycle_step(application.stop, "application.stop")
-        await self._run_lifecycle_step(application.shutdown, "application.shutdown")
+        if application is not None:
+            updater = application.updater
+            if updater is not None:
+                await self._run_lifecycle_step(updater.stop, "updater.stop")
+            # PTB drains pending updates here. Keep the bot available for their
+            # acknowledgements, then stop the workers those updates could create.
+            await self._run_lifecycle_step(application.stop, "application.stop")
+        await self._stop_workers()
+        # Include saves scheduled by the final drained handlers.
+        try:
+            await self._await_offset_saves()
+        finally:
+            self._application = None
+            if application is not None:
+                await self._run_lifecycle_step(application.shutdown, "application.shutdown")
 
     async def send(
         self,
@@ -308,6 +315,9 @@ class TelegramChannelAdapter(ChannelAdapter):
         update_id = getattr(update, "update_id", None)
         if not isinstance(update_id, int) or isinstance(update_id, bool):
             return True
+        now = time.monotonic()
+        if now - self._last_update_claimed_at >= TELEGRAM_UPDATE_OFFSET_TTL_SECONDS:
+            self._last_update_id = -1
         if update_id <= self._last_update_id:
             _LOGGER.debug(
                 "Skipping re-delivered Telegram update (channel=%s update_id=%s)",
@@ -316,6 +326,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             )
             return False
         self._last_update_id = update_id
+        self._last_update_claimed_at = now
         self._schedule_offset_save(update_id)
         return True
 
@@ -324,7 +335,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         if store is None:
             return
         task = asyncio.create_task(
-            asyncio.to_thread(store.save_update_offset, self._config.id, update_id)
+            _POLLING_IO_POOL.run(store.save_update_offset, self._config.id, update_id)
         )
         self._offset_save_tasks.add(task)
         task.add_done_callback(self._on_offset_saved)
@@ -342,9 +353,20 @@ class TelegramChannelAdapter(ChannelAdapter):
             )
 
     async def _await_offset_saves(self) -> None:
-        """Give pending watermark saves a bounded window during shutdown."""
-        if self._offset_save_tasks:
-            await asyncio.wait(list(self._offset_save_tasks), timeout=2)
+        """Drain watermark saves before a replacement adapter can load its offset."""
+        if not self._offset_save_tasks:
+            return
+        saves = asyncio.gather(*self._offset_save_tasks, return_exceptions=True)
+        cancellation: asyncio.CancelledError | None = None
+        while not saves.done():
+            try:
+                await asyncio.shield(saves)
+            except asyncio.CancelledError as error:
+                # Shutdown cancellation must not cancel queued saves or detach a
+                # disk mutation that could race the replacement adapter's load.
+                cancellation = error
+        if cancellation is not None:
+            raise cancellation
 
     async def _handle_inbound_message(
         self,

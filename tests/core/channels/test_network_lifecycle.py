@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -14,7 +16,7 @@ import pytest
 
 from core.channels.config import ChannelConfig, ChannelError
 from tests.core.channels.channels_helpers import make_service
-from tests.core.channels.test_network_channels import make_adapter
+from tests.core.channels.test_network_channels import event, make_adapter
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
@@ -211,3 +213,191 @@ async def test_pairing_preparation_prevents_deletion_until_cancelled(
         await service.aclose()
     service.delete_channel("wa")
     assert service.list_channels() == []
+
+
+@pytest.mark.asyncio
+async def test_cancelled_ingress_drains_receipt_write_before_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.channels import _network_adapter
+
+    adapter = make_adapter(tmp_path, "slack")
+    adapter._engine.handle_inbound_text = AsyncMock()
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    original_write = _network_adapter.atomic_write_text
+
+    def blocked_write(*args: Any) -> None:
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5)
+        original_write(*args)
+
+    monkeypatch.setattr(_network_adapter, "atomic_write_text", blocked_write)
+    receiving = asyncio.create_task(adapter.handle_event(event("slack")))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        receiving.cancel()
+        done, _ = await asyncio.wait((receiving,), timeout=0.02)
+        assert not done
+        receiving.cancel()
+        done, _ = await asyncio.wait((receiving,), timeout=0.02)
+        assert not done
+    finally:
+        release.set()
+        await asyncio.gather(receiving, return_exceptions=True)
+        await adapter.stop()
+    assert receiving.cancelled()
+    restarted = make_adapter(tmp_path, "slack")
+    restarted._engine.handle_inbound_text = AsyncMock()
+    try:
+        await restarted.load_seen()
+        await restarted.handle_event(event("slack"))
+        restarted._engine.handle_inbound_text.assert_not_awaited()
+    finally:
+        await restarted.stop()
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_logout_fails_pending_calls_without_leaving_pairing_idle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = make_adapter(tmp_path, "whatsapp")
+    reader = asyncio.StreamReader()
+    written = asyncio.Event()
+    process = SimpleNamespace(
+        stdout=reader,
+        stdin=SimpleNamespace(write=lambda _: written.set(), drain=AsyncMock(), close=Mock()),
+        returncode=None,
+        wait=AsyncMock(return_value=0),
+    )
+    monkeypatch.setattr("core.channels.whatsapp.bridge_ready", lambda _: True)
+    monkeypatch.setattr("core.channels.whatsapp.node_executable", lambda: "node")
+    monkeypatch.setattr(
+        "core.channels.whatsapp.asyncio.create_subprocess_exec", AsyncMock(return_value=process)
+    )
+    listener = asyncio.create_task(adapter.start())
+    sending: asyncio.Task[Any] | None = None
+    try:
+        async with asyncio.timeout(2):
+            while adapter._process is None:
+                await asyncio.sleep(0)
+            sending = asyncio.create_task(adapter.call_bridge({"action": "send"}))
+            await written.wait()
+            reader.feed_data(b'{"event":"closed","reason":"logged_out"}\n')
+            done, _ = await asyncio.wait((sending,), timeout=0.1)
+            assert sending in done
+            with pytest.raises(ChannelError) as error:
+                await sending
+            assert not error.value.retryable
+            assert adapter._pending == {}
+            assert adapter.pairing_status()["state"] == "logged_out"
+            assert not listener.done()
+    finally:
+        listener.cancel()
+        if sending is not None:
+            sending.cancel()
+        await asyncio.gather(
+            listener, *([sending] if sending is not None else []), return_exceptions=True
+        )
+        await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_drain_failure_retrieves_pending_disconnect_error(tmp_path: Path) -> None:
+    adapter = make_adapter(tmp_path, "whatsapp")
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    unhandled: list[dict[str, Any]] = []
+    loop.set_exception_handler(lambda _, context: unhandled.append(context))
+
+    async def drain() -> None:
+        adapter._fail_pending_calls()
+        raise BrokenPipeError
+
+    adapter._process = SimpleNamespace(
+        stdin=SimpleNamespace(write=Mock(), drain=drain, close=Mock()),
+        returncode=None,
+        wait=AsyncMock(return_value=0),
+    )
+    try:
+        with pytest.raises(ChannelError):
+            await adapter.call_bridge({"action": "send"})
+        gc.collect()
+        assert adapter._pending == {}
+        assert unhandled == []
+    finally:
+        loop.set_exception_handler(previous_handler)
+        await adapter.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["enable_channel", "disable_channel", "restart_channel"])
+@pytest.mark.parametrize("operation", ["setup", "pair"])
+async def test_whatsapp_lifecycle_mutations_cannot_interrupt_owned_operation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str, operation: str
+) -> None:
+    service = make_service(tmp_path)
+    service.create_channel(
+        ChannelConfig(id="wa", platform="whatsapp", agent_id="assistant", enabled=False)
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+    start_adapter = Mock()
+    monkeypatch.setattr(service, "start_channel", start_adapter)
+    pairing: asyncio.Task[Any] | None = None
+
+    async def install(_: Path) -> None:
+        started.set()
+        await release.wait()
+
+    async def status(_: str) -> dict[str, Any]:
+        started.set()
+        await release.wait()
+        return {"installed": True, "state": "disconnected"}
+
+    try:
+        if operation == "setup":
+            monkeypatch.setattr("core.channels._whatsapp_setup.install_bridge", install)
+            await service.setup_whatsapp("wa")
+        else:
+            monkeypatch.setattr(service, "whatsapp_status", status)
+            pairing = asyncio.create_task(service.pair_whatsapp("wa"))
+        await asyncio.wait_for(started.wait(), timeout=2)
+        with pytest.raises(ChannelError):
+            getattr(service, action)("wa")
+        assert not service.list_channels()[0].enabled
+        start_adapter.assert_not_called()
+        release.set()
+        if pairing is not None:
+            await pairing
+            assert service.list_channels()[0].enabled
+            start_adapter.assert_called_once()
+    finally:
+        release.set()
+        if pairing is not None:
+            await asyncio.gather(pairing, return_exceptions=True)
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_setup_rejects_enabled_channel_awaiting_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = make_service(tmp_path)
+    service.create_channel(
+        ChannelConfig(id="wa", platform="whatsapp", agent_id="assistant", enabled=False)
+    )
+    monkeypatch.setattr(service, "start_channel", Mock())
+    service.enable_channel("wa")
+    service._mark_channel_failed("wa", "waiting for recovery")
+    install = AsyncMock()
+    monkeypatch.setattr("core.channels._whatsapp_setup.install_bridge", install)
+    try:
+        assert not service._is_running("wa")
+        with pytest.raises(ChannelError):
+            await service.setup_whatsapp("wa")
+        assert "wa" not in service._whatsapp_setup_tasks
+        install.assert_not_awaited()
+    finally:
+        await service.aclose()
