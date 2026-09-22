@@ -1,4 +1,4 @@
-import { formatAgentAddress } from '$lib/agentAddress.js';
+import { formatAgentAddress, parseAgentAddress } from '$lib/agentAddress.js';
 import {
   sessionDisplayName,
   sessionParentReference,
@@ -193,6 +193,19 @@ export function createChatViewNavigation(context) {
     applySessionNavigation(navigation);
   });
 
+  // A Session deleted from the other Chat area of the workspace: release this
+  // area's pointer to it too, without a history entry or composer focus.
+  let handledSiblingDeletionId = 0;
+  $effect(() => {
+    const deletion = context.siblingSessionDeletion;
+    const requestId = deletion?.requestId ?? 0;
+    if (!requestId || requestId === handledSiblingDeletionId) {
+      return;
+    }
+    handledSiblingDeletionId = requestId;
+    void handleSessionDeleted(deletion, { fromSibling: true });
+  });
+
   const handleSelectAgent = async (agentId, { focusComposer = true } = {}) => {
     // Choosing an identity agent always returns the chat to the identity bar,
     // tearing down any active project-agent selection (the upper bar wins for
@@ -372,11 +385,18 @@ export function createChatViewNavigation(context) {
       return;
     }
 
-    // The drawer lists the displayed agent's sessions. Picking one of the
-    // active agent's own sessions is a same-agent past-session view (or a
-    // return to its current session); picking while a cross-agent override is
-    // displayed keeps that agent's framing. The address form serves both
-    // worlds — a project agent's sessions go through `agent@projekt`.
+    setViewedSession(agentAddress, normalizedSessionId, isSubAgentSession);
+    reportSessionNavigation();
+    await context.loadHistoryForSession(agentAddress, normalizedSessionId);
+    context.layout.requestComposerFocus();
+  };
+
+  // The drawer lists the displayed agent's sessions. Picking one of the
+  // active agent's own sessions is a same-agent past-session view (or a
+  // return to its current session); picking while a cross-agent override is
+  // displayed keeps that agent's framing. The address form serves both
+  // worlds — a project agent's sessions go through `agent@projekt`.
+  const setViewedSession = (agentAddress, sessionId, isSubAgentSession) => {
     const isOwnAgent = agentAddress === context.target.activeOwnAgentAddress();
     const ownCurrentSessionId = isOwnAgent
       ? context.target.projectAgentActive
@@ -390,34 +410,84 @@ export function createChatViewNavigation(context) {
     // reserved for actual sub-agent sessions.
     viewingSubAgentSession = isSubAgentSession === true;
     viewingSessionId =
-      isOwnAgent && normalizedSessionId === ownCurrentSessionId
-        ? ''
-        : normalizedSessionId;
-    reportSessionNavigation();
-    await context.loadHistoryForSession(agentAddress, normalizedSessionId);
-    context.layout.requestComposerFocus();
+      isOwnAgent && sessionId === ownCurrentSessionId ? '' : sessionId;
   };
 
-  // A session was deleted from the drawer. If this window was viewing it (the
-  // current session, or an explicit override on it), navigate to the landing the
-  // server chose (#2: most-recently-active remaining, else a fresh session);
-  // otherwise stay put and let the list refresh. The server re-aims the identity
-  // current pointer and emits resource_changed(agents), so the current marking
-  // converges across windows and the override below reconciles to it.
-  const handleSessionDeleted = async ({
-    deletedSessionId,
-    nextSessionId,
-    agentAddress,
-  } = {}) => {
+  // A session was deleted from the drawer (or from the other Chat area). The
+  // area first releases its own pointer to it: this area keeps its Session
+  // selection across roster refreshes (`preserveSessionSelection`), so an
+  // identity Agent's current pointer would otherwise keep naming the archived
+  // Session, and a Project Agent's locally held Session would reopen it on the
+  // next agent selection. The server re-aimed the identity pointer to the
+  // landing it returned (#2: most-recently-active remaining, else a fresh
+  // session). If this area was viewing the deleted Session (current or
+  // override), it then navigates to that landing; otherwise it stays put and
+  // lets the list refresh.
+  const handleSessionDeleted = async (
+    { deletedSessionId, nextSessionId, agentAddress } = {},
+    { fromSibling = false } = {},
+  ) => {
     const removedId = String(deletedSessionId ?? '').trim();
     const landingId = String(nextSessionId ?? '').trim();
-    if (!removedId) {
+    const ownerAddress =
+      String(agentAddress ?? '').trim() ||
+      context.target.activeAddressing().agentAddress;
+    if (!removedId || !ownerAddress) {
       return;
     }
-    const agent = context.target.activeAgent;
-    const viewedSessionId = viewingSessionId || agent?.current_session_id || '';
-    if (viewedSessionId === removedId && landingId) {
-      await handleSessionSelected(landingId, agentAddress);
+    const viewedSessionId =
+      viewingSessionId || context.target.activeAgent?.current_session_id || '';
+    releaseDeletedSession(ownerAddress, removedId, landingId);
+    if (!fromSibling) {
+      context.onSessionDeleted?.({
+        deletedSessionId: removedId,
+        nextSessionId: landingId,
+        agentAddress: ownerAddress,
+      });
+    }
+    if (viewedSessionId !== removedId || !landingId) {
+      return;
+    }
+    if (fromSibling) {
+      // Another area's action: follow it without a browser-history entry or
+      // stealing composer focus.
+      setViewedSession(ownerAddress, landingId, false);
+      await context.loadHistoryForSession(ownerAddress, landingId);
+      return;
+    }
+    await handleSessionSelected(landingId, ownerAddress);
+  };
+
+  const releaseDeletedSession = (agentAddress, removedId, landingId) => {
+    const projectSessions = context.target.projectAgentSessions;
+    if (projectSessions[agentAddress] === removedId) {
+      const next = { ...projectSessions };
+      if (landingId) {
+        next[agentAddress] = landingId;
+      } else {
+        delete next[agentAddress];
+      }
+      context.target.projectAgentSessions = next;
+    }
+    const { agentId, projectId } = parseAgentAddress(agentAddress);
+    if (projectId || !landingId) {
+      return;
+    }
+    const agents = context.chatState.agents;
+    if (
+      agents.some(
+        (agent) =>
+          agent.id === agentId && agent.current_session_id === removedId,
+      )
+    ) {
+      setAgents(
+        context.chatState,
+        agents.map((agent) =>
+          agent.id === agentId
+            ? { ...agent, current_session_id: landingId }
+            : agent,
+        ),
+      );
     }
   };
 

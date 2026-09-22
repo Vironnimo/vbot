@@ -84,7 +84,11 @@ vi.mock('../../lib/chatRunStream.js', async () => {
       testRunStreamRefs.push(stream);
       return {
         ...stream,
-        applyConnectionSnapshot: applyConnectionSnapshotMock,
+        // The spy runs with the real stream as `this`, so a test can opt into
+        // the real projection with `mockImplementation(function (s) {
+        // return this.applyConnectionSnapshot(s); })`.
+        applyConnectionSnapshot: (snapshot) =>
+          applyConnectionSnapshotMock.call(stream, snapshot),
         closeSubscriptionFor: (sessionKey) => {
           closeSubscriptionForMock(sessionKey);
           return stream.closeSubscriptionFor(sessionKey);

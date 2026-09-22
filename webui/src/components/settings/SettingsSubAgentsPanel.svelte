@@ -30,13 +30,7 @@
   );
   let saving = $state(false);
 
-  let saveDisabled = $derived(
-    saving ||
-      subAgentSettingsMatch(
-        subAgentSettings,
-        normalizeSubAgentSettings(settings),
-      ),
-  );
+  let saveDisabled = $derived(saving || !subAgentDraftHasChanges());
   const autosaveContext = useAutosaveContext();
   const subAgentsAutosave = createDebouncedAutosave({
     getSnapshot: () => ({ ...subAgentSettings }),
@@ -78,13 +72,14 @@
     );
   }
 
+  // Dirty state, scheduling and saving all compare the normalized draft (the
+  // payload that would be sent) with the persisted values, so an incomplete
+  // field that normalizes to the stored value is not a pending change.
   function subAgentDraftHasChanges() {
-    const persisted = normalizeSubAgentSettings(settings);
-    return [
-      'max_subagent_depth',
-      'max_subagents_per_turn',
-      'subagent_timeout_minutes',
-    ].some((key) => String(subAgentSettings[key]) !== String(persisted[key]));
+    return !subAgentSettingsMatch(
+      subAgentSettings,
+      normalizeSubAgentSettings(settings),
+    );
   }
 
   function handleSubAgentSettingChange(key, event) {
@@ -126,6 +121,11 @@
       buildPayload: () => buildSubAgentSettingsPayload(subAgentSettings),
       successKey: 'settings.subagents.saveSuccess',
       successFallback: 'Sub-agent settings updated.',
+      // Show the saved values (e.g. the default a cleared field saved) unless
+      // the user kept editing while the request was in flight.
+      getDraftSnapshot: () => subAgentSettings,
+      applyResult: (next) =>
+        (subAgentSettings = normalizeSubAgentSettings(next)),
     });
   }
 </script>

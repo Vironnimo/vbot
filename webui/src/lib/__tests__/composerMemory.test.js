@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   clearDraft,
@@ -196,5 +196,111 @@ describe('composerMemory attachments', () => {
         },
       ],
     });
+  });
+});
+
+describe('composerMemory across browser tabs', () => {
+  const DRAFTS = 'vbot.composer.drafts.v1';
+  const HISTORY = 'vbot.composer.history.v1';
+
+  // Each module instance stands for one tab sharing the origin's storage.
+  async function openTab() {
+    vi.resetModules();
+    return import('../composerMemory.js');
+  }
+
+  function storedDrafts() {
+    return JSON.parse(localStorage.getItem(DRAFTS));
+  }
+
+  function announceStorageWrite(key) {
+    window.dispatchEvent(
+      new StorageEvent('storage', {
+        key,
+        newValue: localStorage.getItem(key),
+        storageArea: localStorage,
+      }),
+    );
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it("keeps the other tab's drafts and history when persisting", async () => {
+    const tabA = await openTab();
+    const tabB = await openTab();
+
+    tabA.setDraft('alpha::s1', 'long draft typed in tab A');
+    tabA.pushHistory('alpha', 'message sent from tab A');
+    tabA.flushComposerMemory();
+    tabB.setDraft('alpha::s2', 'x');
+    tabB.pushHistory('alpha', 'message sent from tab B');
+    tabB.flushComposerMemory();
+
+    expect(storedDrafts()).toEqual({
+      'alpha::s1': 'long draft typed in tab A',
+      'alpha::s2': 'x',
+    });
+    expect(JSON.parse(localStorage.getItem(HISTORY))).toEqual({
+      alpha: ['message sent from tab B', 'message sent from tab A'],
+    });
+  });
+
+  it('does not resurrect a draft another tab already sent', async () => {
+    localStorage.setItem(DRAFTS, JSON.stringify({ 'alpha::s1': 'sent text' }));
+    const tabA = await openTab();
+    const tabB = await openTab();
+
+    tabA.clearDraft('alpha::s1');
+    tabA.flushComposerMemory();
+    tabB.setDraft('alpha::s2', 'unrelated');
+    tabB.flushComposerMemory();
+
+    expect(storedDrafts()).toEqual({ 'alpha::s2': 'unrelated' });
+  });
+
+  it("adopts another tab's writes while keeping unsaved local edits", async () => {
+    const tabB = await openTab();
+    tabB.setDraft('alpha::local', 'still typing here');
+    tabB.pushHistory('alpha', 'local send');
+
+    localStorage.setItem(
+      DRAFTS,
+      JSON.stringify({ 'alpha::s1': 'from tab A', 'alpha::local': 'older' }),
+    );
+    localStorage.setItem(HISTORY, JSON.stringify({ alpha: ['remote send'] }));
+    announceStorageWrite(DRAFTS);
+    announceStorageWrite(HISTORY);
+
+    expect(tabB.getDraft('alpha::s1')).toBe('from tab A');
+    expect(tabB.getDraft('alpha::local')).toBe('still typing here');
+    expect(tabB.getHistory('alpha')).toEqual(['local send', 'remote send']);
+
+    localStorage.setItem(DRAFTS, JSON.stringify({}));
+    announceStorageWrite(DRAFTS);
+
+    expect(tabB.getDraft('alpha::s1')).toBe('');
+    expect(tabB.getDraft('alpha::local')).toBe('still typing here');
+  });
+
+  it('keeps the merged store bounded to the newest sessions', async () => {
+    const seeded = Object.fromEntries(
+      Array.from({ length: 80 }, (_, index) => [`alpha::s${index}`, 'draft']),
+    );
+    localStorage.setItem(DRAFTS, JSON.stringify(seeded));
+    const tab = await openTab();
+
+    tab.setDraft('alpha::newest', 'fresh');
+    tab.flushComposerMemory();
+
+    const stored = storedDrafts();
+    expect(Object.keys(stored)).toHaveLength(80);
+    expect(stored['alpha::s0']).toBeUndefined();
+    expect(stored['alpha::newest']).toBe('fresh');
   });
 });

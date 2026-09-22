@@ -162,13 +162,17 @@ export function appendCompressedStreamingRunEvent(sessionState, event) {
     return;
   }
 
+  const placement = streamingDeltaPlacement(sessionState, event);
+  if (placement.discarded) {
+    return;
+  }
   const lastEvent = sessionState.streamingRunEvents.at(-1);
   if (
     canMergeCompressedStreamingEvent(
       lastEvent,
       event,
       payloadKey,
-      sessionState.streamingPhase,
+      placement.phase,
     )
   ) {
     lastEvent.payload[payloadKey] =
@@ -190,7 +194,7 @@ export function appendCompressedStreamingRunEvent(sessionState, event) {
       payload: {
         ...event.payload,
       },
-      _streamingPhase: sessionState.streamingPhase,
+      _streamingPhase: placement.phase,
       _streamChunkCount: 1,
       _streamLatestSequence: streamEventLatestSequence(event),
     },
@@ -214,11 +218,15 @@ function appendCompressedToolCallDeltaEvent(sessionState, event) {
     return;
   }
 
+  const placement = streamingDeltaPlacement(sessionState, event);
+  if (placement.discarded) {
+    return;
+  }
   const existingEvent = sessionState.streamingRunEvents.find(
     (candidate) =>
       candidate.type === event.type &&
       candidate.run_id === event.run_id &&
-      candidate._streamingPhase === sessionState.streamingPhase &&
+      candidate._streamingPhase === placement.phase &&
       (candidate.payload?.tool_call_id ?? candidate.payload?.id) === toolCallId,
   );
   if (existingEvent) {
@@ -243,7 +251,7 @@ function appendCompressedToolCallDeltaEvent(sessionState, event) {
       name_delta: nameDelta,
       arguments_delta: argumentsDelta,
     },
-    _streamingPhase: sessionState.streamingPhase,
+    _streamingPhase: placement.phase,
     _streamChunkCount: 1,
     _streamLatestSequence: streamEventLatestSequence(event),
   };
@@ -366,17 +374,77 @@ function firstSeenSequence(existingSequence, candidateSequence) {
 }
 
 // Streaming deltas are grouped into phases so text that streams after a tool
-// call does not merge with text from before it. `tool_call_started` and
-// `tool_call_result` mark phase boundaries; the compressed `streamingRunEvents`
-// tag each retained delta with the current phase.
+// call does not merge with text from before it. `tool_call_started`,
+// `tool_call_result` and `stream_attempt_restarted` mark phase boundaries;
+// `streamingPhase` counts the boundaries applied so far and the compressed
+// `streamingRunEvents` tag each retained delta with its phase.
+const PHASE_BOUNDARY_TYPES = new Set([
+  'tool_call_started',
+  'tool_call_result',
+  RUN_EVENT_STREAM_ATTEMPT_RESTARTED,
+]);
+
 export function advanceStreamingPhase(sessionState, event) {
-  if (
-    event.type === 'tool_call_started' ||
-    event.type === 'tool_call_result' ||
-    event.type === RUN_EVENT_STREAM_ATTEMPT_RESTARTED
-  ) {
+  if (PHASE_BOUNDARY_TYPES.has(event.type)) {
     sessionState.streamingPhase += 1;
   }
+}
+
+// A delta's phase follows its sequence position, not its arrival order. Deltas
+// normally arrive in order, so this is the running counter. After returning to
+// a running Session, however, stable boundaries mirrored over the WebSocket
+// while it was hidden are already applied when the SSE replay delivers the
+// earlier deltas; each applied boundary after the delta's sequence moves it
+// one phase back, so replayed text neither merges with later text nor takes
+// its place. A delta whose next applied boundary is a stream restart belongs
+// to the discarded attempt.
+function streamingDeltaPlacement(sessionState, event) {
+  const later = appliedBoundariesAfter(sessionState, event);
+  return {
+    phase: Math.max(0, sessionState.streamingPhase - later.length),
+    discarded: later[0]?.type === RUN_EVENT_STREAM_ATTEMPT_RESTARTED,
+  };
+}
+
+function appliedBoundariesAfter(sessionState, event) {
+  if (!Number.isFinite(event?.sequence)) {
+    return [];
+  }
+  const boundaries = phaseBoundariesByRun(sessionState.runEvents ?? []).get(
+    event.run_id,
+  );
+  if (!boundaries || boundaries.at(-1).sequence < event.sequence) {
+    return [];
+  }
+  return boundaries.filter((boundary) => boundary.sequence > event.sequence);
+}
+
+// Stable events replace the `runEvents` array while deltas do not, so the
+// sorted per-Run boundary index is rebuilt at most once per stable event.
+const phaseBoundaryIndex = new WeakMap();
+
+function phaseBoundariesByRun(runEvents) {
+  let byRun = phaseBoundaryIndex.get(runEvents);
+  if (byRun) {
+    return byRun;
+  }
+  byRun = new Map();
+  for (const event of runEvents) {
+    if (
+      !PHASE_BOUNDARY_TYPES.has(event?.type) ||
+      !Number.isFinite(event.sequence)
+    ) {
+      continue;
+    }
+    const boundaries = byRun.get(event.run_id) ?? [];
+    boundaries.push({ type: event.type, sequence: event.sequence });
+    byRun.set(event.run_id, boundaries);
+  }
+  for (const boundaries of byRun.values()) {
+    boundaries.sort((left, right) => left.sequence - right.sequence);
+  }
+  phaseBoundaryIndex.set(runEvents, byRun);
+  return byRun;
 }
 
 export function discardStreamingAttempt(sessionState, runId) {

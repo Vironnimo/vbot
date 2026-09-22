@@ -18,6 +18,7 @@
     extractMentionTokens,
     matchMentionCandidates,
   } from '$lib/fileMentions.js';
+  import { isImeComposing } from '$lib/keyboard.js';
   import { formatTokenUsageTooltip } from '$lib/tokenUsageTooltip.js';
   import { createComposerMedia } from './composer/media.svelte.js';
   import { createComposerPicker } from './composer/picker.svelte.js';
@@ -504,6 +505,11 @@
   // these pick the popup that is currently open.
 
   const handleKeydown = (event) => {
+    // An active IME composition owns Enter, arrows and Escape (candidate
+    // navigation/confirmation); none of them may submit, recall or close.
+    if (isImeComposing(event)) {
+      return;
+    }
     const autocompleteOpen =
       picker.showSkillAutocomplete ||
       picker.showFileAutocomplete ||
@@ -569,12 +575,17 @@
       return;
     }
 
-    if (
-      autocompleteOpen &&
-      picker.activeAutocompleteElement()?.selectActive()
-    ) {
-      event.preventDefault();
-      return;
+    if (autocompleteOpen) {
+      if (picker.activeAutocompleteElement()?.selectActive()) {
+        event.preventDefault();
+        return;
+      }
+      // A picker still loading its catalog has no row to choose yet; Enter
+      // waits for it instead of sending the partial @/model token as text.
+      if (picker.activeAutocompleteLoading()) {
+        event.preventDefault();
+        return;
+      }
     }
 
     event.preventDefault();

@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy, untrack } from 'svelte';
   import { t } from '../../../../webui/src/lib/i18n.js';
+  import { isImeComposing } from '../../../../webui/src/lib/keyboard.js';
   import { createDebouncedAutosave } from '../../../../webui/src/lib/autosave.js';
   import Button from '../../../../webui/src/components/ui/Button.svelte';
   import Banner from '../../../../webui/src/components/ui/Banner.svelte';
@@ -329,7 +330,7 @@
             <TextField
               id="wiki-search"
               onkeydown={(event) => {
-                if (event.key === 'Enter') {
+                if (event.key === 'Enter' && !isImeComposing(event)) {
                   event.preventDefault();
                   void refresh();
                 }

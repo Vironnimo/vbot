@@ -416,6 +416,115 @@ describe('ChatView', () => {
     expect(document.body.textContent).toContain('Connect a provider to start');
   });
 
+  it('releases a deleted Project Agent Session so reopening the Agent lands elsewhere', async () => {
+    showProjectMock.mockResolvedValue({
+      project: { project_id: 'vbot', default_agent: 'builder' },
+      scan: {
+        team: [{ agent_id: 'builder', display_name: 'Builder', model: 'm' }],
+        report: { clean: true, findings: [] },
+      },
+    });
+    const newest = {
+      id: 'builder-session',
+      title: 'Newest builder topic',
+      created_at: '2026-06-05T00:00:00+00:00',
+      last_active_at: '2026-06-10T00:00:00+00:00',
+    };
+    const older = {
+      id: 'builder-old',
+      title: 'Older builder topic',
+      created_at: '2026-06-01T00:00:00+00:00',
+      last_active_at: '2026-06-02T00:00:00+00:00',
+    };
+    let deleted = false;
+    listSessionsMock.mockImplementation(async () => ({
+      sessions: deleted ? [older] : [newest, older],
+    }));
+    const baseRpc = createChatRpcMock({
+      sessionMessages: {
+        'builder-session': [
+          { id: 'newest-reply', role: 'assistant', content: 'Newest reply' },
+        ],
+        'builder-old': [
+          { id: 'older-reply', role: 'assistant', content: 'Older reply' },
+        ],
+      },
+    });
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'session.delete') {
+        deleted = true;
+        return { ...params, next_session_id: 'builder-old' };
+      }
+      if (
+        deleted &&
+        method === 'chat.history' &&
+        params.session_id === 'builder-session'
+      ) {
+        throw new Error('Session not found: builder-session');
+      }
+      return baseRpc(method, params);
+    });
+    const historyReads = (sessionId) =>
+      rpcMock.mock.calls.filter(
+        ([method, params]) =>
+          method === 'chat.history' && params.session_id === sessionId,
+      ).length;
+
+    chatViewTest.mount({
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+        selectedProjectId: 'vbot',
+      },
+    });
+    await waitForCondition(
+      () => document.body.textContent.includes('Newest reply'),
+      100,
+    );
+
+    findButtonByText('Sessions')?.click();
+    await waitForCondition(
+      () => document.querySelectorAll('.session-row').length === 2,
+      100,
+    );
+    Array.from(document.querySelectorAll('.session-row'))
+      .find((row) => row.textContent.includes('Newest builder topic'))
+      .querySelector('.session-row__menu-trigger')
+      .click();
+    flushSync();
+    document.querySelector('.session-row__menu-item--danger').click();
+    flushSync();
+    findButtonByText('Delete')?.click();
+    await waitForCondition(
+      () => document.body.textContent.includes('Older reply'),
+      100,
+    );
+    const deletedReads = historyReads('builder-session');
+
+    // Leave for the Identity Agent, then reopen the Project Agent.
+    document.querySelector('.chat-header .agent-tab').click();
+    await waitForCondition(
+      () =>
+        document
+          .querySelector('.chat-header .agent-tab.active')
+          ?.textContent?.includes('Alpha'),
+      100,
+    );
+    const landingReads = historyReads('builder-old');
+    document.querySelector('.chat-view__project-team .agent-tab').click();
+    await waitForCondition(
+      () =>
+        historyReads('builder-old') > landingReads ||
+        historyReads('builder-session') > deletedReads,
+      100,
+    );
+
+    expect(historyReads('builder-session')).toBe(deletedReads);
+    expect(document.body.textContent).toContain('Older reply');
+  });
+
   it('returns from a sub-agent session to its parent session (item 4)', async () => {
     listSessionsMock.mockImplementation(async (_agentId, query = {}) => {
       if (query.requiredSession?.sessionId === 'session-parent') {

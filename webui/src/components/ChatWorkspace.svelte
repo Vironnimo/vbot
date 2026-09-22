@@ -44,6 +44,18 @@
   let secondProjectAgent = $state(null);
   let secondNavigation = $state(null);
   let navigationSequence = 0;
+  // A Session deleted in one Chat area is forwarded to the other so it also
+  // releases its retained pointer to that Session.
+  let siblingDeletions = $state([null, null]);
+  let deletionSequence = 0;
+
+  function forwardSessionDeletion(fromIndex, deletion) {
+    deletionSequence += 1;
+    siblingDeletions[1 - fromIndex] = {
+      ...deletion,
+      requestId: deletionSequence,
+    };
+  }
   let ratio = $state(50);
   let width = $state(0);
   let dragging = $state(false);
@@ -582,6 +594,9 @@
               interactive={focusedPane === index}
               composerAvailable={!sameSession || editorPane === index}
               preserveSessionSelection
+              siblingSessionDeletion={siblingDeletions[index]}
+              onSessionDeleted={(deletion) =>
+                forwardSessionDeletion(index, deletion)}
               initialSessionFilters={firstSessionFilters}
               onSessionFiltersChange={(filters) => {
                 firstSessionFilters = filters;
@@ -599,6 +614,9 @@
               interactive={focusedPane === index}
               composerAvailable={!sameSession || editorPane === index}
               preserveSessionSelection
+              siblingSessionDeletion={siblingDeletions[index]}
+              onSessionDeleted={(deletion) =>
+                forwardSessionDeletion(index, deletion)}
               initialSessionFilters={secondSessionFilters ??
                 firstSessionFilters}
               onSessionFiltersChange={(filters) =>
