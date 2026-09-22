@@ -262,6 +262,9 @@ class ContinuationTracker:
                 ],
             )
         )
+        # Every persisted Assistant closes its slot. A later continuation or
+        # replayed attempt can neither overwrite nor discard this durable work.
+        self._step += 1
 
     async def record_tool_starts(self, tool_calls: list[Any]) -> None:
         await self._flush_boundary(
@@ -293,7 +296,6 @@ class ContinuationTracker:
                 )
             )
         await self._flush_boundary(*records)
-        self._step += 1
 
     def mark_interruption_cause(self, cause: ContinuationCause) -> None:
         self.interruption_cause = cause
