@@ -25,7 +25,8 @@ from core.skills import SkillAuthoringError, SkillRegistry, SkillWriteResult
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_SKILLS
-from server.rpc._mutations import serialized_mutation
+from server.rpc._mutations import MutationHandler, serialized_mutation
+from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.event_bridge import publish_resource_changed
@@ -202,9 +203,7 @@ async def install_skill_upload(
     async def install(state: Any, params: JsonObject) -> JsonObject:
         return await _skill_install(state, params, archive=data)
 
-    return await serialized_mutation(install, lock_attribute="_skill_mutation_lock")(
-        state, {**params, "source": filename}
-    )
+    return await _serialized_skill_mutation(install)(state, {**params, "source": filename})
 
 
 async def _skill_update(state: Any, params: JsonObject) -> JsonObject:
@@ -344,24 +343,37 @@ def _share_skill_policy(state: Any, params: JsonObject) -> JsonObject:
     return {"agent_id": agent_id, "name": name, "shared": shared, "receivers": receivers}
 
 
+def _serialized_skill_mutation(
+    handler: MutationHandler, *, references_agents: bool = False
+) -> MutationHandler:
+    mutate = serialized_mutation(handler, lock_attribute="_skill_mutation_lock")
+
+    async def run(state: Any, params: JsonObject) -> JsonObject:
+        scope = params.get("scope")
+        if references_agents or (isinstance(scope, str) and scope.startswith(_AGENT_SCOPE_PREFIX)):
+            # Admission must precede scope validation and remain held through
+            # publication, including settlement after caller cancellation.
+            async with _agent_reference_lock(state):
+                return await mutate(state, params)
+        return await mutate(state, params)
+
+    return run
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the skill mutation RPC handlers."""
     return {
         "skill.read": _skill_read,
-        "skill.create": serialized_mutation(_skill_create, lock_attribute="_skill_mutation_lock"),
-        "skill.install": serialized_mutation(_skill_install, lock_attribute="_skill_mutation_lock"),
-        "skill.update": serialized_mutation(_skill_update, lock_attribute="_skill_mutation_lock"),
-        "skill.delete": serialized_mutation(_skill_delete, lock_attribute="_skill_mutation_lock"),
-        "skill.write_file": serialized_mutation(
-            _skill_write_file, lock_attribute="_skill_mutation_lock"
-        ),
-        "skill.remove_file": serialized_mutation(
-            _skill_remove_file, lock_attribute="_skill_mutation_lock"
-        ),
+        "skill.create": _serialized_skill_mutation(_skill_create),
+        "skill.install": _serialized_skill_mutation(_skill_install),
+        "skill.update": _serialized_skill_mutation(_skill_update),
+        "skill.delete": _serialized_skill_mutation(_skill_delete),
+        "skill.write_file": _serialized_skill_mutation(_skill_write_file),
+        "skill.remove_file": _serialized_skill_mutation(_skill_remove_file),
         "skill.inventory": _skill_inventory,
         "skill.inspect": _skill_inspect,
         "skill.set_disabled": serialized_mutation(
             _skill_set_disabled, lock_attribute="_skill_mutation_lock"
         ),
-        "skill.share": serialized_mutation(_skill_share, lock_attribute="_skill_mutation_lock"),
+        "skill.share": _serialized_skill_mutation(_skill_share, references_agents=True),
     }

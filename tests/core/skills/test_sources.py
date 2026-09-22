@@ -232,3 +232,26 @@ def test_source_path_constraint_is_not_discarded(tmp_path):
             path="skills/other",
         )
     assert not (tmp_path / "skills").exists()
+
+
+@respx.mock
+def test_github_blob_requires_the_exact_skill_document_basename(tmp_path):
+    respx.get("https://api.github.com/repos/owner/repo/commits/main").respond(json={"sha": SHA})
+    respx.get(f"https://codeload.github.com/owner/repo/zip/{SHA}").respond(content=bundle("demo"))
+    target = tmp_path / "skills"
+    with pytest.raises(SkillAuthoringError):
+        SkillAuthoringService().install(
+            target, "https://github.com/owner/repo/blob/main/skills/demoSKILL.md"
+        )
+    assert not target.exists()
+
+
+@respx.mock
+def test_oversized_content_length_is_a_controlled_source_error(tmp_path):
+    respx.get("https://downloads.example/package").respond(
+        content=bundle("demo"), headers={"Content-Length": "9" * 5000}
+    )
+    target = tmp_path / "skills"
+    with pytest.raises(SkillAuthoringError):
+        SkillAuthoringService().install(target, "https://downloads.example/package")
+    assert not target.exists()

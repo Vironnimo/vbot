@@ -6,8 +6,8 @@ import builtins
 import json
 import shutil
 import tempfile
-from collections.abc import Callable, Mapping
-from contextlib import suppress
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager, suppress
 from copy import deepcopy
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -155,6 +155,17 @@ class AgentStore:
         # Hold this across each complete read-modify-write, including Session
         # repair and roster revisions, rather than just the final file replace.
         self._write_lock = RLock()
+
+    @contextmanager
+    def lifecycle_guard(self) -> Iterator[None]:
+        """Keep an Agent-owned filesystem mutation together with its scope lookup.
+
+        Other domain owners use this guard across lookup, writes and invalidation
+        so rename/archive cannot detach an already-resolved private home. Callers
+        must run blocking guarded work in a worker without callbacks to the loop.
+        """
+        with self._write_lock:
+            yield
 
     def close(self) -> None:
         with self._write_lock:

@@ -18,7 +18,7 @@ from typing import Any, Literal
 import yaml
 
 from core.skills._installation import SkillInstallResult, install_package
-from core.skills._packages import MAX_DOWNLOAD_BYTES, PackageError
+from core.skills._packages import MAX_DOWNLOAD_BYTES, PackageError, is_redirect
 from core.skills.requirements import (
     REQUIREMENTS_METADATA_KEY,
     RequirementParseError,
@@ -293,6 +293,7 @@ class SkillAuthoringService:
         _validate_skill_name(skill_name)
         root = self._resolve(target_root)
         self._reject_protected(root)
+        _reject_redirect(root / skill_name)
         skill_dir = self._resolve(root / skill_name)
         if skill_dir.parent != root:
             raise SkillAuthoringError(f"Illegal skill name escapes target root: {skill_name!r}")
@@ -302,18 +303,22 @@ class SkillAuthoringService:
         skill_dir = self._skill_dir(target_root, skill_name)
         if not skill_dir.is_dir():
             raise SkillAuthoringError(f"Skill '{skill_name}' not found.")
+        _reject_redirect(skill_dir / SKILL_FILENAME)
+        if not (skill_dir / SKILL_FILENAME).is_file():
+            raise SkillAuthoringError(f"Skill '{skill_name}' has no {SKILL_FILENAME}.")
         return skill_dir
 
     def _existing_skill_file(self, target_root: Path, skill_name: str) -> Path:
-        skill_file = self._existing_skill_dir(target_root, skill_name) / SKILL_FILENAME
-        if not skill_file.is_file():
-            raise SkillAuthoringError(f"Skill '{skill_name}' has no {SKILL_FILENAME}.")
-        return skill_file
+        return self._existing_skill_dir(target_root, skill_name) / SKILL_FILENAME
 
     def _resource_path(self, skill_dir: Path, relative_path: str) -> Path:
         normalized = _normalized_support_path(relative_path)
         skill_dir_resolved = self._resolve(skill_dir)
-        candidate = self._resolve(skill_dir_resolved.joinpath(*PurePosixPath(normalized).parts))
+        candidate = skill_dir_resolved
+        for part in PurePosixPath(normalized).parts:
+            candidate /= part
+            _reject_redirect(candidate)
+        candidate = self._resolve(candidate)
         if candidate == skill_dir_resolved or not _is_within(
             candidate,
             skill_dir_resolved,
@@ -375,6 +380,15 @@ class SkillAuthoringService:
 
         stamped = _with_provenance(fields, author=author, source=source)
         return _assemble_document(stamped, body), result
+
+
+def _reject_redirect(path: Path) -> None:
+    try:
+        redirect = is_redirect(path)
+    except FileNotFoundError:
+        return
+    if redirect:
+        raise SkillAuthoringError("Refusing to write through a symlink or junction Skill path.")
 
 
 def normalize_skill_file_path(relative_path: str) -> str:
