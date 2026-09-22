@@ -19,10 +19,7 @@ from core.utils.atomic import atomic_write_text
 CREDENTIAL_MUTATION_CONTENTION_SECONDS = 0.1
 
 
-THREAD_START_TIMEOUT_SECONDS = 1.0
-
-
-THREAD_RESULT_TIMEOUT_SECONDS = 2.0
+THREAD_START_TIMEOUT_SECONDS = 10.0
 
 
 def run_overlapping_credential_mutations(
@@ -69,8 +66,10 @@ def run_overlapping_credential_mutations(
         first_future = executor.submit(first_mutation)
         assert first_write_started.wait(THREAD_START_TIMEOUT_SECONDS)
         second_future = executor.submit(run_second_mutation)
-        first_future.result(timeout=THREAD_RESULT_TIMEOUT_SECONDS)
-        second_future.result(timeout=THREAD_RESULT_TIMEOUT_SECONDS)
+        # Check serialization, not disk latency under the parallel suite's load.
+        # The suite-wide pytest timeout still bounds a deadlock.
+        first_future.result()
+        second_future.result()
 
 
 class ConfigWithDataDir:
