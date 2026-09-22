@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Protocol
 
 from core.channels.adapter import (
     ConversationFacts,
@@ -19,9 +19,6 @@ from core.chat.content_blocks import ContentBlock
 from core.runs import (
     WaitingWorkAdmission,
 )
-
-if TYPE_CHECKING:
-    pass
 
 
 class ConversationTransport(Protocol):
@@ -78,6 +75,7 @@ class _QueuedInboundMessage:
     # attachment after response gating and waiting-work admission.
     raw_message: Any | None = None
     admission: WaitingWorkAdmission | None = None
+    observed_context: tuple[_QueuedObservedMessage, ...] = ()
 
 
 @dataclass(slots=True, frozen=True)
@@ -97,6 +95,7 @@ class _QueuedInboundMedia:
     # transport messages. Adapters may reunite that comment with the media before queueing.
     companion_text: str | None = None
     admission: WaitingWorkAdmission | None = None
+    observed_context: tuple[_QueuedObservedMessage, ...] = ()
 
 
 @dataclass(slots=True, frozen=True)

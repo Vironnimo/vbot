@@ -228,7 +228,7 @@ async def test_inbound_dispatch_failure_logged_in_vbot_logger(
         allowed_chat_ids=[100],
     )
 
-    async def boom(*_args: Any, **_kwargs: Any) -> None:
+    async def boom(*_args: Any, **_kwargs: Any) -> bool:
         raise RuntimeError("dispatch exploded")
 
     adapter._engine.handle_inbound_text = boom  # type: ignore[method-assign]
@@ -255,7 +255,7 @@ async def test_inbound_dispatch_propagates_cancellation(tmp_path: Path) -> None:
         allowed_chat_ids=[100],
     )
 
-    async def cancel(*_args: Any, **_kwargs: Any) -> None:
+    async def cancel(*_args: Any, **_kwargs: Any) -> bool:
         raise asyncio.CancelledError
 
     adapter._engine.handle_inbound_text = cancel  # type: ignore[method-assign]

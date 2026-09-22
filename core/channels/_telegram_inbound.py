@@ -34,8 +34,8 @@ class TelegramInboundBuffer:
     def __init__(
         self,
         channel_id: str,
-        text_handler: Callable[..., Awaitable[None]],
-        media_handler: Callable[..., Awaitable[None]],
+        text_handler: Callable[..., Awaitable[object]],
+        media_handler: Callable[..., Awaitable[object]],
     ) -> None:
         self._channel_id = channel_id
         self._text_handler = text_handler
