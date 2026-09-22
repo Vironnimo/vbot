@@ -507,6 +507,24 @@ def test_model_task_empty_target_removes_binding(tmp_path: Path) -> None:
     assert "model_tasks" not in storage.load_settings()
 
 
+@pytest.mark.parametrize("change_target", [False, True])
+def test_model_task_target_update_resets_only_changed_target_options(
+    tmp_path: Path, change_target: bool
+) -> None:
+    storage = StorageManager(tmp_path)
+    original = "openai/first::api-key"
+    options = {"voice": "custom-voice"}
+    storage.update_model_task_settings({"text_to_speech": {"target": original, "options": options}})
+    target = "openai/second::api-key" if change_target else original
+
+    storage.update_settings_sections({"model_tasks": {"text_to_speech": {"target": target}}})
+
+    assert storage.load_model_task_settings()["text_to_speech"] == {
+        "target": target,
+        "options": {} if change_target else options,
+    }
+
+
 def test_load_recall_settings_defaults_invalid_section(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
     storage.ensure_directories()
