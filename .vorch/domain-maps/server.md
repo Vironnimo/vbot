@@ -10,6 +10,8 @@ FastAPI transport and public protocol edge around the core vBot kernel.
 
 RPC bodies group by owning surface under `server/rpc/*_methods.py`; envelope dispatch, validation, payload sanitation, expected-error mapping, and event bridging live in focused support modules. The registered method tables are the source of truth for names/parameters/return shapes - do not mirror the method catalog here.
 
+`rpc/_mutations.py` owns cancellation-safe mutation sequencing: Settings and Skill handlers each use a state-local lock that spans persistence, live refresh and publication. Cancelling a waiting caller starts no mutation; cancelling an admitted caller waits for its sequence to settle before releasing the lock.
+
 ## Transport contracts
 
 - Unexpected dispatch failures are logged with traceback and rethrown internally; the HTTP edge returns status 500 with the normal error envelope, code `internal_error`, and a generic message that withholds exception details (`tests/server/test_app_http.py`).

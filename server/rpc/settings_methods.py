@@ -29,6 +29,7 @@ from core.settings import (
 from core.settings.settings import available_timezone_names, effective_timezone_name
 from core.utils.logging import get_logger
 from server.events import RESOURCE_KIND_COMMANDS
+from server.rpc._mutations import serialized_mutation
 from server.rpc.connection_methods import custom_provider_items
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -371,9 +372,7 @@ async def _apply_public_settings_delta(
         )
 
     if skill_directories_changed and not extension_layer_reloaded:
-        reload_skills = getattr(runtime, "reload_skills", None)
-        if callable(reload_skills):
-            reload_skills()
+        await runtime.reload_skills_async()
 
     recall_changed = "recall" in forced or previous.get("recall") != current.get("recall")
     if recall_changed and not extension_layer_reloaded:
@@ -818,6 +817,10 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "settings.values": _get_public_settings,
         "settings.catalog": _settings_catalog,
         "settings.get_path": _get_setting_path,
-        "settings.patch": _patch_setting_paths,
-        "settings.update": _update_settings,
+        "settings.patch": serialized_mutation(
+            _patch_setting_paths, lock_attribute="_settings_mutation_lock"
+        ),
+        "settings.update": serialized_mutation(
+            _update_settings, lock_attribute="_settings_mutation_lock"
+        ),
     }
