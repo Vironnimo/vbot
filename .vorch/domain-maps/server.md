@@ -12,6 +12,8 @@ RPC bodies group by owning surface under `server/rpc/*_methods.py`; envelope dis
 
 `rpc/_mutations.py` owns cancellation-safe mutation sequencing: Settings and Skill handlers each use a state-local lock that spans persistence, live refresh and publication. Cancelling a waiting caller starts no mutation; cancelling an admitted caller waits for its sequence to settle before releasing the lock.
 
+Failures while settling a cancelled mutation remain observable: expected RPC errors log only their code, while unexpected errors retain their traceback. Request parameters are never added to these logs.
+
 ## Transport contracts
 
 - Unexpected dispatch failures are logged with traceback and rethrown internally; the HTTP edge returns status 500 with the normal error envelope, code `internal_error`, and a generic message that withholds exception details (`tests/server/test_app_http.py`).

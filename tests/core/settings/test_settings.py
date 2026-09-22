@@ -151,6 +151,45 @@ def test_parse_settings_update_omits_absent_chat_width() -> None:
     assert parsed == {"appearance": {"language": "en"}}
 
 
+@pytest.mark.parametrize("field", ["chat_width", "chat_working_mode"])
+@pytest.mark.parametrize("value", [[], {}])
+def test_appearance_rejects_container_values(field: str, value: object) -> None:
+    from core.settings.normalizers import normalize_appearance_settings
+
+    appearance = {"language": "en", field: value}
+    with pytest.raises(SettingsValidationError):
+        parse_settings_update({"appearance": appearance})
+    assert normalize_appearance_settings(appearance)[field] == (
+        "comfortable" if field == "chat_width" else "normal"
+    )
+
+
+@pytest.mark.parametrize("threshold", [10**400, -(10**400), float("nan")])
+def test_compaction_rejects_unusable_numeric_thresholds(threshold: int | float) -> None:
+    from core.settings.normalizers import normalize_compaction_settings
+    from core.utils.errors import StorageError
+
+    compaction = {
+        "enabled": True,
+        "trigger": {"type": "context_ratio", "threshold": threshold},
+        "strategy": {"type": "continuation"},
+    }
+    with pytest.raises(SettingsValidationError):
+        parse_settings_update({"compaction": compaction})
+    with pytest.raises(StorageError):
+        normalize_compaction_settings(compaction)
+
+
+def test_temperature_rejects_integer_larger_than_float_range() -> None:
+    from core.settings.agent_defaults import normalize_agent_default_value
+    from core.utils.errors import StorageError
+
+    with pytest.raises(SettingsValidationError):
+        parse_settings_update({"defaults": {"agent": {"temperature": 10**400}}})
+    with pytest.raises(StorageError):
+        normalize_agent_default_value("temperature", 10**400)
+
+
 def test_parse_settings_update_normalizes_openrouter_routing() -> None:
     parsed = parse_settings_update(
         {

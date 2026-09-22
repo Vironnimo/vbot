@@ -382,7 +382,7 @@ def test_apply_extension_disabled_change_falls_recall_back_to_default(
         runtime.stop()
 
 
-def test_apply_extension_disabled_change_ignores_active_builtin_backend(
+def test_apply_extension_disabled_change_updates_catalog_without_replacing_active_backend(
     tmp_path: Path,
 ) -> None:
     # Disabling an extension that declares a recall backend which is NOT the
@@ -395,10 +395,12 @@ def test_apply_extension_disabled_change_ignores_active_builtin_backend(
     runtime = Runtime(config)
     runtime.start()
     try:
-        active_before = runtime.recall_backend.__class__.__name__
+        active_before = runtime.recall_backend
+        assert "ext_recall" in runtime.available_recall_backends()
 
         asyncio.run(runtime.apply_extension_disabled_change({"capabilities_ext"}))
 
-        assert runtime.recall_backend.__class__.__name__ == active_before
+        assert runtime.recall_backend is active_before
+        assert "ext_recall" not in runtime.available_recall_backends()
     finally:
         runtime.stop()

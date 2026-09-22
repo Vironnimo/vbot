@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from core.model_tasks import SUPPORTED_TASK_TYPES
+from core.model_tasks import SUPPORTED_TASK_TYPES, task_model_targets_equal
 from core.settings import (
     SettingsValidationError,
 )
@@ -366,7 +366,9 @@ def apply_model_task_settings(
             continue
 
         options = (
-            current_binding.get("options", {}) if target == current_binding.get("target") else {}
+            current_binding.get("options", {})
+            if task_model_targets_equal(target, current_binding.get("target"))
+            else {}
         )
         if "options" in raw_binding:
             options = normalize_json_object(

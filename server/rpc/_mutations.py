@@ -7,8 +7,13 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import Any
 
+from core.utils.logging import get_logger
+from server.rpc.errors import RpcError
+
 JsonObject = dict[str, Any]
 MutationHandler = Callable[[Any, JsonObject], Awaitable[JsonObject]]
+
+_LOGGER = get_logger("server.rpc.mutations")
 
 
 def serialized_mutation(handler: MutationHandler, *, lock_attribute: str) -> MutationHandler:
@@ -22,15 +27,30 @@ def serialized_mutation(handler: MutationHandler, *, lock_attribute: str) -> Mut
         async with lock:
             task = asyncio.ensure_future(handler(state, params))
             try:
-                return await asyncio.shield(task)
+                # Waiting never cancels the admitted task. Unlike a cancelled
+                # shield, it also leaves failure reporting to this RPC owner.
+                await asyncio.wait({task})
+                return task.result()
             except asyncio.CancelledError:
                 # Keep the lock until refresh/publication catch up with any write,
                 # including when the caller requests cancellation more than once.
                 while not task.done():
-                    with suppress(asyncio.CancelledError, Exception):
-                        await asyncio.shield(task)
+                    with suppress(asyncio.CancelledError):
+                        await asyncio.wait({task})
                 if not task.cancelled():
-                    task.exception()
+                    error = task.exception()
+                    if isinstance(error, RpcError):
+                        _LOGGER.warning(
+                            "Cancelled RPC mutation rejected (handler=%s code=%s)",
+                            handler.__name__,
+                            error.code,
+                        )
+                    elif error is not None:
+                        _LOGGER.error(
+                            "Cancelled RPC mutation failed (handler=%s)",
+                            handler.__name__,
+                            exc_info=(type(error), error, error.__traceback__),
+                        )
                 raise
 
     return run
