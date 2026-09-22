@@ -861,7 +861,9 @@ async def test_delivery_mode_after_wake(lifecycle, tmp_path, mode):
         "board.post",
         {"swarm_id": started["swarm_id"], "text": "first-wake-sentinel", "request_id": "post-1"},
     )
-    await asyncio.wait_for(adapter.started.wait(), timeout=5)
+    # Wake admission and receipt delivery perform durable writes under parallel load.
+    # This scenario checks delivery policy, not a five-second storage deadline.
+    await asyncio.wait_for(adapter.started.wait(), timeout=15)
     assert "first-wake-sentinel" in str(adapter.requests[1]["messages"])
     await lifecycle.service.operation(
         "board.post",

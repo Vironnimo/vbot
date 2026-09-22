@@ -48,7 +48,7 @@ Chains: identity agents keep model -> global -> empty. Config agents resolve ove
 
 - Agent IDs: filesystem-safe slugs, letter/digit start, letters/digits/hyphen/underscore, max 64 chars. A store-local reentrant lock serializes complete lifecycle read-modify-write operations, current-Session repairs, and roster revisions across worker threads. Writes use temp-file atomic replace; relative persisted Workspaces resolve only against the active data directory, never cwd.
 - The only seeded template is `SOUL.md`; USER.md/MEMORY.md belong to the memory system and create lazily on first write - a memory-off agent has neither, and deletion does not resurrect them.
-- `scripts/converters/agent_tool_access.py` converts the retired root allowed_tools shape; the loader contains none.
+- `scripts/converters/agent_tool_access.py` converts the retired root allowed_tools shape; the loader contains none. Its explicit retired-Tool removal filters allow, deny, and grant lists while preserving unrelated opt-ins.
 - Mutable-field validation lives server/core-side: effort vocabulary `null|""|none|minimal|low|medium|high|xhigh|max` (null inherits, "" = provider default), temperature null or 0.0-2.0 (0.0 real), strict policy shape, shell-portable env names. Enabling custom prompts seeds the agent prompt directory once; re-enabling preserves existing files.
 - Run-local model fallback never mutates persisted model/fallback fields. The `::connection[:account]` suffix stores the provider-local slug, reconstructed to full runtime form at resolution; Account semantics in `providers/connections.md`.
 
