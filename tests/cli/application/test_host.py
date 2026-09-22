@@ -11,7 +11,7 @@ from typing import Any, cast
 
 import pytest
 
-from cli.application import host
+from cli.application import desktop, host
 from cli.application.state import ApplicationError, Installation
 
 
@@ -189,7 +189,7 @@ def test_open_desktop_uses_the_versioned_desktop_host_and_shape_target(
         launches.append((args, kwargs))
 
     monkeypatch.setattr(host.subprocess, "Popen", launch)
-    monkeypatch.setattr(host, "subprocess_creation_flags", lambda **_kwargs: 7)
+    monkeypatch.setattr(desktop, "subprocess_creation_flags", lambda **_kwargs: 7)
     facade.open_desktop()
 
     arguments, options = launches[0]
