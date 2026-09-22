@@ -111,6 +111,11 @@ class DeviceFlowEngine:
         self._token_store = token_store
         self._active_flows: dict[tuple[str, str, str], asyncio.Task[None]] = {}
         self._poll_tasks: set[asyncio.Task[None]] = set()
+        self._active_authorizations: dict[
+            tuple[str, str, str], asyncio.Task[DeviceFlowSession]
+        ] = {}
+        self._authorization_tasks: set[asyncio.Task[DeviceFlowSession]] = set()
+        self._closed = False
         self._minimax_code_verifiers: dict[tuple[str, str, str, str], str] = {}
 
     async def connect(
@@ -124,16 +129,36 @@ class DeviceFlowEngine:
     ) -> DeviceFlowSession:
         """Authorize and own polling before returning the user-facing session.
 
-        A replacement cancels the previous poll for this exact Account. Cancelled
+        A replacement cancels previous authorization/polling for this Account. Cancelled
         tasks remain owned until settled, so shutdown also drains replacements.
         """
-        session = await self._request_device_session(
-            provider_id, local_connection_id, oauth_config, account_id=account_id
-        )
+        if self._closed:
+            raise RuntimeError("Device Flow engine is closed")
         flow_key = (provider_id, local_connection_id, account_id)
-        previous = self._active_flows.get(flow_key)
-        if previous is not None:
-            previous.cancel()
+        self.cancel_flow(provider_id, local_connection_id, account_id)
+        authorization = asyncio.create_task(
+            self._request_device_session(
+                provider_id, local_connection_id, oauth_config, account_id=account_id
+            )
+        )
+        self._active_authorizations[flow_key] = authorization
+        self._authorization_tasks.add(authorization)
+        try:
+            session = await authorization
+            if self._closed or self._active_authorizations.get(flow_key) is not authorization:
+                self._minimax_code_verifiers.pop((*flow_key, session.user_code), None)
+                raise asyncio.CancelledError
+        except BaseException:
+            # Cancellation may arrive after the child stored a verifier but
+            # before this await delivered its session. Retire only this Account's
+            # still-current authorization, never a replacement flow's verifier.
+            if self._active_authorizations.get(flow_key) is authorization:
+                self._drop_minimax_verifiers(*flow_key)
+            raise
+        finally:
+            self._authorization_tasks.discard(authorization)
+            if self._active_authorizations.get(flow_key) is authorization:
+                self._active_authorizations.pop(flow_key, None)
         task = asyncio.create_task(
             self._poll_for_token(
                 provider_id,
@@ -175,9 +200,11 @@ class DeviceFlowEngine:
         local_connection_id: str,
         account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> bool:
-        """Whether this exact Account has an accepted, unfinished poll."""
-        task = self._active_flows.get((provider_id, local_connection_id, account_id))
-        return task is not None and not task.done()
+        """Whether this Account has pending authorization or unfinished polling."""
+        key = (provider_id, local_connection_id, account_id)
+        task = self._active_flows.get(key)
+        authorization = self._active_authorizations.get(key)
+        return (task is not None and not task.done()) or authorization is not None
 
     async def _request_device_session(
         self,
@@ -293,16 +320,23 @@ class DeviceFlowEngine:
         local_connection_id: str,
         account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> None:
-        """Cancel any in-flight polling task for the provider connection account."""
+        """Cancel authorization and polling for the provider connection account."""
 
+        authorization = self._active_authorizations.pop(
+            (provider_id, local_connection_id, account_id), None
+        )
+        if authorization is not None and not authorization.done():
+            authorization.cancel()
         task = self._active_flows.pop((provider_id, local_connection_id, account_id), None)
         if task is not None and not task.done():
             task.cancel()
         self._drop_minimax_verifiers(provider_id, local_connection_id, account_id)
 
     async def aclose(self) -> None:
-        """Cancel and await all active Device Flow polling tasks."""
-        tasks = list(self._poll_tasks)
+        """Close the engine and drain authorization and polling tasks."""
+        self._closed = True
+        tasks = [*self._poll_tasks, *self._authorization_tasks]
+        self._active_authorizations.clear()
         self._active_flows.clear()
         for task in tasks:
             if not task.done():

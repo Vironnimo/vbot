@@ -413,9 +413,9 @@ class Run:
         for observer in self._completion_observers:
             try:
                 await observer(status)
-            except Exception as exc:
+            except (Exception, asyncio.CancelledError) as exc:
                 # A notification cannot undo a committed execution result.
-                errors.append(str(exc))
+                errors.append(str(exc) or type(exc).__name__)
                 _LOGGER.exception("Run completion observer failed: %s", self.id)
         return errors
 

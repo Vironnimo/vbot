@@ -44,11 +44,12 @@ The repository at `cwd` remains outside the anchor and is never mutated. Changin
 
 `core/projects/store.py` owns persistence:
 
-- Creation rejects duplicate Project ids and duplicate normalized cwd identity keys, builds the Project through the Projects-owned validator, writes `project.json` atomically, and seeds the anchor instructions.
+- A store-local reentrant lock serializes complete lifecycle and override read-modify-write operations, including duplicate-cwd checks, across Command and RPC workers.
+- Creation rejects duplicate Project ids and duplicate normalized cwd identity keys, builds the Project through the Projects-owned validator, and writes `project.json` atomically. It seeds `AGENTS.md` in the auto-load list without creating repository instructions; a failed write removes the newly created anchor so creation can be retried.
 - Updates preserve `project_id` and `created_at`, reject a cwd already owned by another Project, rebuild the complete value, and write atomically.
 - Listing is deterministic and skips corrupt Project files with a warning instead of failing the entire collection. `exists(project_id)` is validity-aware and returns false for an unreadable or invalid config rather than reporting directory presence as a usable Project.
 - `set_override()` and `clear_override()` atomically rewrite one supported field. Clearing the last field removes the Agent's override object; clearing an absent value is a no-op.
-- Store deletion archives the Project Anchor and atomically archives its live SQLite Sessions rather than deleting repository content. If either side fails, it restores the active anchor and any previous archive. It is a persistence primitive, not the complete user-facing removal workflow.
+- Store deletion archives the Project Anchor and atomically archives its live SQLite Sessions rather than deleting repository content. If either side fails, it restores the active anchor and any previous archive; if compensation also fails, the staged previous archive remains on disk and its recovery path is reported. It is a persistence primitive, not the complete user-facing removal workflow.
 
 `normalize_cwd()` resolves an absolute real path, strips trailing separators, and preserves case. `cwd_identity_key()` additionally case-folds on Windows and is the duplicate-detection key. The Store intentionally permits a cwd that does not currently exist; the `project.add` RPC is the boundary that requires an existing directory.
 

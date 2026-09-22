@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -46,6 +49,80 @@ def test_create_writes_anchor_layout(data_dir: Path, repo: Path) -> None:
     assert project.cwd == str(Path(os.path.realpath(repo)))
 
 
+def test_failed_create_removes_anchor_so_retry_succeeds(
+    data_dir: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = ProjectStore(data_dir)
+    original = store._write_project
+
+    def fail_write(_project):
+        raise OSError("config unavailable")
+
+    monkeypatch.setattr(store, "_write_project", fail_write)
+    with pytest.raises(OSError, match="config unavailable"):
+        store.create("vbot", "vBot", repo)
+
+    assert not (data_dir / "projects" / "vbot").exists()
+    monkeypatch.setattr(store, "_write_project", original)
+    assert store.create("vbot", "vBot", repo).project_id == "vbot"
+
+
+@pytest.mark.parametrize("claim_cwd", [False, True])
+def test_concurrent_project_mutations_preserve_config_and_unique_cwd(
+    data_dir: Path, repo: Path, monkeypatch: pytest.MonkeyPatch, claim_cwd: bool
+) -> None:
+    store = ProjectStore(data_dir)
+    if not claim_cwd:
+        store.create("vbot", "Original", repo)
+    first_write = Event()
+    release_first = Event()
+    second_started = Event()
+    second_write = Event()
+    original = store._write_project
+
+    def write(project):
+        if not first_write.is_set():
+            first_write.set()
+            assert release_first.wait(5)
+        else:
+            second_write.set()
+        original(project)
+
+    def second():
+        second_started.set()
+        if claim_cwd:
+            return store.create("duplicate", "Duplicate", repo)
+        return store.set_override("vbot", "coder", "model", "other/model")
+
+    monkeypatch.setattr(store, "_write_project", write)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = (
+            executor.submit(store.create, "vbot", "Changed", repo)
+            if claim_cwd
+            else executor.submit(store.update, "vbot", display_name="Changed")
+        )
+        try:
+            assert first_write.wait(5)
+            following = executor.submit(second)
+            assert second_started.wait(5)
+            second_write.wait(0.2)
+        finally:
+            release_first.set()
+        first.result(timeout=5)
+        if claim_cwd:
+            with pytest.raises(ProjectAlreadyExistsError):
+                following.result(timeout=5)
+        else:
+            following.result(timeout=5)
+
+    persisted = store.get("vbot")
+    assert persisted.display_name == "Changed"
+    if claim_cwd:
+        assert [project.project_id for project in store.list()] == ["vbot"]
+    else:
+        assert persisted.overrides == {"coder": {"model": "other/model"}}
+
+
 def test_create_persists_validatable_config(data_dir: Path, repo: Path) -> None:
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo, default_agent="orchestrator", auto_load=["AGENTS.md"])
@@ -54,6 +131,40 @@ def test_create_persists_validatable_config(data_dir: Path, repo: Path) -> None:
     assert payload["project_id"] == "vbot"
     assert payload["default_agent"] == "orchestrator"
     assert payload["auto_load"] == ["AGENTS.md"]
+
+
+@pytest.mark.parametrize("failed_restore", ["active", "previous"])
+def test_delete_keeps_previous_archive_when_compensation_fails(
+    data_dir: Path, repo: Path, monkeypatch: pytest.MonkeyPatch, failed_restore: str
+) -> None:
+    store = ProjectStore(data_dir)
+    try:
+        store.create("vbot", "First", repo)
+        archive = store.delete("vbot")
+        (archive / "keep.txt").write_text("previous", encoding="utf-8")
+        store.create("vbot", "Second", repo)
+        original_move = shutil.move
+
+        def fail_archive(_project_id):
+            raise RuntimeError("database unavailable")
+
+        def move(source, destination):
+            if (
+                failed_restore == "active" and Path(destination) == data_dir / "projects" / "vbot"
+            ) or (failed_restore == "previous" and Path(source).name == "previous"):
+                raise OSError("rollback unavailable")
+            return original_move(source, destination)
+
+        monkeypatch.setattr(store._session_manager(), "archive_project_sessions", fail_archive)
+        monkeypatch.setattr(shutil, "move", move)
+        with pytest.raises((OSError, ProjectError)):
+            store.delete("vbot")
+
+        retained = list(archive.parent.glob(".vbot-archive-*/previous/keep.txt"))
+        assert len(retained) == 1
+        assert retained[0].read_text(encoding="utf-8") == "previous"
+    finally:
+        store.close()
 
 
 def test_create_seeds_agents_file_into_empty_auto_load(data_dir: Path, repo: Path) -> None:

@@ -259,9 +259,12 @@ export function createChatViewNavigation(context) {
   // browser-history restore. Restores re-enter past overrides (or return to
   // the current session) without creating new history entries.
   const applySessionNavigation = async (navigation) => {
+    const isCurrent = () => context.pendingSessionNavigation === navigation;
     const selectionChanged = await applyNavigationSelection(
       navigation.selection,
+      isCurrent,
     );
+    if (!isCurrent()) return;
 
     if (navigation.returnToCurrent) {
       const hadOverride = sessionOverrideActive;
@@ -304,7 +307,7 @@ export function createChatViewNavigation(context) {
   // (`lastSharedSelectedAgentId`/`lastLoadedProjectId`) so the round-trip
   // cannot re-run the restore as a fresh user action. Returns whether the
   // active chat target changed (the caller then reloads the current view).
-  const applyNavigationSelection = async (selection) => {
+  const applyNavigationSelection = async (selection, isCurrent) => {
     if (!selection) {
       return false;
     }
@@ -345,6 +348,7 @@ export function createChatViewNavigation(context) {
         await context.target.loadProjectTeamForMove(projectId);
       }
     }
+    if (!isCurrent()) return false;
     if (projectId && projectAgentId !== context.target.selectedProjectAgentId) {
       context.target.selectedProjectAgentId = projectAgentId;
       context.onProjectAgentSelected?.(projectAgentId);

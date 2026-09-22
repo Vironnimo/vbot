@@ -101,6 +101,8 @@ export function createChatController({
   let handledQueueInvalidation = null;
   let activityRefreshVersion = 0;
   let commandsLoadVersion = 0;
+  let agentsLoadVersion = 0;
+  let initialHistoryPending = false;
   const historyLoadVersions = new Map();
   const reflectionLoadVersions = new Map();
   const queueSyncVersions = new Map();
@@ -127,12 +129,17 @@ export function createChatController({
       : String(error ?? '');
   }
 
+  function invalidateQueueSync(sessionState) {
+    const version = (queueSyncVersions.get(sessionState.key) ?? 0) + 1;
+    queueSyncVersions.set(sessionState.key, version);
+    return version;
+  }
+
   async function syncSessionQueue(sessionState) {
     if (!sessionState?.agentId || !sessionState?.sessionId) {
       return;
     }
-    const requestVersion = (queueSyncVersions.get(sessionState.key) ?? 0) + 1;
-    queueSyncVersions.set(sessionState.key, requestVersion);
+    const requestVersion = invalidateQueueSync(sessionState);
     const isLatestRequest = () =>
       queueSyncVersions.get(sessionState.key) === requestVersion;
     try {
@@ -156,15 +163,18 @@ export function createChatController({
     // `silent` skips the loadingAgents flag so a background refresh (triggered
     // by resource_changed(kind="agents")) does not tear down the entire chat
     // view via the {#if loadingAgents} conditional, and skips the initial
-    // history load that belongs to the mount path. Only the initial mount load
-    // shows the loading state and loads the current session's history.
+    // history load that belongs to the mount path. A newer silent refresh
+    // inherits that initial load if the mount request is still in flight.
+    const requestVersion = ++agentsLoadVersion;
     if (!silent) {
       chatState.loadingAgents = true;
+      initialHistoryPending = true;
     }
     chatState.agentsError = null;
     let selectedAgentId;
     try {
       const result = await operations.listAgents();
+      if (requestVersion !== agentsLoadVersion) return false;
       const preferred = chatState.selectedAgentId || preferredAgentId;
       if (preferred) {
         selectAgent(chatState, preferred);
@@ -177,14 +187,17 @@ export function createChatController({
         onAgentSelected(selectedAgentId);
       }
     } catch (error) {
+      if (requestVersion !== agentsLoadVersion) return false;
       chatState.agentsError = errorMessage(error);
       return false;
     } finally {
-      if (!silent) {
+      if (requestVersion === agentsLoadVersion) {
         chatState.loadingAgents = false;
       }
     }
-    if (selectedAgentId && !silent && shouldLoadCurrentHistory()) {
+    const loadInitialHistory = initialHistoryPending;
+    initialHistoryPending = false;
+    if (selectedAgentId && loadInitialHistory && shouldLoadCurrentHistory()) {
       await loadCurrentHistory();
     }
     return true;
@@ -513,6 +526,7 @@ export function createChatController({
         };
       }
       if (run?.queued === true) {
+        invalidateQueueSync(sessionState);
         addServerQueuedMessage(sessionState, run.item);
         return { kind: 'queued' };
       }
@@ -526,9 +540,11 @@ export function createChatController({
         return { kind: 'started', runId: run.run_id ?? '' };
       }
       startRun(sessionState, run);
-      runStream.subscribeToRun(sessionState, run.sse_url, {
-        afterSequence: 0,
-      });
+      if (isDisplayedSession(sessionState.agentId, sessionState.sessionId)) {
+        runStream.subscribeToRun(sessionState, run.sse_url, {
+          afterSequence: 0,
+        });
+      }
       return { kind: 'started', runId: run.run_id ?? '' };
     } catch (error) {
       sessionState.actionError = `${translate('chat.sendError', 'Message could not be sent.')} ${errorMessage(error)}`;
@@ -541,6 +557,7 @@ export function createChatController({
       return { kind: 'ignored' };
     }
     sessionState.actionError = '';
+    const previousRunId = sessionState.currentRun?.runId;
     try {
       const run = await operations.editChatMessage({
         agent_id: sessionState.agentId,
@@ -548,11 +565,25 @@ export function createChatController({
         message_id: messageId,
         content,
       });
+      const currentRunId = sessionState.currentRun?.runId;
+      if (
+        currentRunId &&
+        currentRunId !== run.run_id &&
+        currentRunId !== previousRunId
+      ) {
+        // The edited Run can finish and admit its successor before this RPC
+        // returns. Reconcile the new lineage without truncating that Run's
+        // live events or replacing its subscription with the predecessor.
+        await reconcileRunSession(sessionState, currentRunId);
+        return { kind: 'started', runId: run.run_id ?? '' };
+      }
       truncateSessionForEdit(sessionState, messageId, run.run_id);
       startRun(sessionState, run);
-      runStream.subscribeToRun(sessionState, run.sse_url, {
-        afterSequence: 0,
-      });
+      if (isDisplayedSession(sessionState.agentId, sessionState.sessionId)) {
+        runStream.subscribeToRun(sessionState, run.sse_url, {
+          afterSequence: 0,
+        });
+      }
       return { kind: 'started', runId: run.run_id ?? '' };
     } catch (error) {
       sessionState.actionError = `${translate('chat.editError', 'Message could not be edited.')} ${errorMessage(error)}`;
@@ -663,6 +694,7 @@ export function createChatController({
         sessionState.sessionId,
         queuedMessageId,
       );
+      invalidateQueueSync(sessionState);
       removeQueuedMessage(sessionState, queuedMessageId);
     } catch (error) {
       sessionState.actionError = `${translate('queue.removeError', 'Queued message could not be removed.')} ${errorMessage(error)}`;
@@ -690,6 +722,7 @@ export function createChatController({
         newContent,
         { fileMentions: normalizedFileMentions },
       );
+      invalidateQueueSync(sessionState);
       updateQueuedMessageContent(sessionState, queuedMessageId, newContent, {
         editable: normalizedFileMentions.length === 0,
       });
@@ -800,10 +833,7 @@ export function createChatController({
             (item) => item?.id && !serverItemIds.has(item.id),
           ).length;
         }
-        queueSyncVersions.set(
-          sessionState.key,
-          (queueSyncVersions.get(sessionState.key) ?? 0) + 1,
-        );
+        invalidateQueueSync(sessionState);
         syncQueueFromServer(sessionState, serverItems);
       }
       if (discardedCount > 0) {
@@ -932,6 +962,9 @@ export function createChatController({
   }
 
   function destroy() {
+    agentsLoadVersion += 1;
+    initialHistoryPending = false;
+    chatState.loadingAgents = false;
     runStream.closeSubscriptions();
     historyLoadVersions.clear();
     queueSyncVersions.clear();

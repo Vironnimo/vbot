@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -55,76 +56,124 @@ class ExtensionRuntime:
         self._logger = logger
         self._make_host = make_host
         self._mutation_lock = asyncio.Lock()
+        self._closing = False
 
     async def reload(self) -> None:
         """Rebuild the layer from current disk and Settings, restart-equivalently."""
         async with self._mutation_lock:
-            settings = self._storage.load_settings()
-            extension_dirs = self._extra_directories(settings)
-            disabled, config = self._load_options(settings)
-            dispatcher = self._get_command_dispatcher()
+            if self._closing:
+                raise RuntimeError("Extension runtime is closing")
+            await self._finish_mutation(self._reload())
 
-            old_registry = self._get_registry()
-            if old_registry is not None:
-                await old_registry.quiesce_all()
-                old_registry.remove_applied_tools(self._tools)
-                if dispatcher is not None:
-                    old_registry.remove_applied_commands(dispatcher)
-                await old_registry.fire_shutdown()
+    async def _reload(self) -> None:
+        settings = self._storage.load_settings()
+        extension_dirs = self._extra_directories(settings)
+        disabled, config = self._load_options(settings)
+        dispatcher = self._get_command_dispatcher()
 
-            purge_extension_modules()
-            new_registry = await ExtensionRegistry.aload(
-                self._storage.data_dir / "extensions",
-                extra_dirs=extension_dirs,
-                disabled=disabled,
-                config=config,
-                bundled_dir=self._resources_path / "extensions",
-                config_provider=self._live_config,
-                credential_resolver=self._resolve_credential,
-            )
-            failed_count = len(new_registry.diagnostics())
-            if failed_count > 0:
-                self._logger.warning(
-                    "Reloaded extensions with %s failed extensions; "
-                    "see vbot.extensions errors for details",
-                    failed_count,
-                )
-
-            self._set_registry(new_registry)
-            new_registry.apply_tools(self._tools)
+        old_registry = self._get_registry()
+        if old_registry is not None:
+            await old_registry.quiesce_all()
+            old_registry.remove_applied_tools(self._tools)
             if dispatcher is not None:
-                new_registry.apply_commands(dispatcher)
-            self._reload_recall()
-            self._refresh_prompts()
-            self._reload_skills()
-            if self._make_host is not None:
-                new_registry.bind_host(self._make_host())
-            await new_registry.fire_startup()
+                old_registry.remove_applied_commands(dispatcher)
+            await old_registry.fire_shutdown()
 
-            records = new_registry.records()
-            self._logger.info(
-                "Extension layer reloaded: %s loaded, %s failed, %s disabled, %s overridden",
-                sum(1 for record in records if record.status == "loaded"),
-                sum(1 for record in records if record.status == "failed"),
-                sum(1 for record in records if record.status == "disabled"),
-                sum(1 for record in records if record.status == "overridden"),
+        purge_extension_modules()
+        new_registry = await ExtensionRegistry.aload(
+            self._storage.data_dir / "extensions",
+            extra_dirs=extension_dirs,
+            disabled=disabled,
+            config=config,
+            bundled_dir=self._resources_path / "extensions",
+            config_provider=self._live_config,
+            credential_resolver=self._resolve_credential,
+        )
+        failed_count = len(new_registry.diagnostics())
+        if failed_count > 0:
+            self._logger.warning(
+                "Reloaded extensions with %s failed extensions; "
+                "see vbot.extensions errors for details",
+                failed_count,
             )
+
+        self._set_registry(new_registry)
+        new_registry.apply_tools(self._tools)
+        if dispatcher is not None:
+            new_registry.apply_commands(dispatcher)
+        self._reload_recall()
+        self._refresh_prompts()
+        self._reload_skills()
+        if self._make_host is not None:
+            new_registry.bind_host(self._make_host())
+        await new_registry.fire_startup()
+
+        records = new_registry.records()
+        self._logger.info(
+            "Extension layer reloaded: %s loaded, %s failed, %s disabled, %s overridden",
+            sum(1 for record in records if record.status == "loaded"),
+            sum(1 for record in records if record.status == "failed"),
+            sum(1 for record in records if record.status == "disabled"),
+            sum(1 for record in records if record.status == "overridden"),
+        )
 
     async def apply_disabled_change(self, newly_disabled: set[str]) -> None:
         """Deactivate newly disabled Extensions and rebuild their live projections."""
         if not newly_disabled:
             return
         async with self._mutation_lock:
-            registry = self._get_registry()
-            if registry is None:
+            if self._closing:
+                raise RuntimeError("Extension runtime is closing")
+            await self._finish_mutation(self._apply_disabled_change(newly_disabled))
+
+    async def _apply_disabled_change(self, newly_disabled: set[str]) -> None:
+        registry = self._get_registry()
+        if registry is None:
+            return
+        removed_backends = self._recall_backend_names(registry, newly_disabled)
+        dispatcher = self._get_command_dispatcher()
+        for name in newly_disabled:
+            await registry.deactivate(name, self._tools, dispatcher)
+        self._refresh_prompts()
+        self._reload_skills()
+        self._recover_recall(removed_backends)
+
+    async def startup(self) -> None:
+        """Keep initial startup ordered with reload, disable, and shutdown."""
+        async with self._mutation_lock:
+            if self._closing:
                 return
-            removed_backends = self._recall_backend_names(registry, newly_disabled)
-            dispatcher = self._get_command_dispatcher()
-            for name in newly_disabled:
-                await registry.deactivate(name, self._tools, dispatcher)
-            self._refresh_prompts()
-            self._reload_skills()
-            self._recover_recall(removed_backends)
+            registry = self._get_registry()
+            if registry is not None:
+                if self._make_host is not None:
+                    registry.bind_host(self._make_host())
+                await self._finish_mutation(registry.fire_startup())
+
+    async def aclose(self) -> None:
+        """Reject new mutations and drain the admitted one before shutdown."""
+        self._closing = True
+        async with self._mutation_lock:
+            registry = self._get_registry()
+            if registry is not None:
+                await self._finish_mutation(registry.fire_shutdown())
+
+    @staticmethod
+    async def _finish_mutation(operation: Coroutine[Any, Any, None]) -> None:
+        """Keep the mutation lock until an admitted operation has settled."""
+        task = asyncio.create_task(operation)
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as cancellation:
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            with suppress(BaseException):
+                task.result()
+            raise cancellation
 
     @staticmethod
     def _recall_backend_names(

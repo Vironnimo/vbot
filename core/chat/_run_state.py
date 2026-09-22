@@ -456,107 +456,112 @@ async def create_run_execution_context(
     _ensure_provider_exists(dependencies.providers, provider_id)
     _model_provider_id, model_id = _split_agent_model(agent.model)
     target = requests._create_model_target(provider_id, connection_id, model_id)
-    run.add_cancel_callback(lambda: _close_adapter(target.adapter))
-    run.add_cancel_callback(lambda: dependencies.process_manager.cancel_scope_async(run.id))
-    if temporary_source is not None:
-        temporary_cwd = getattr(agent, "cwd", None)
-        if not isinstance(temporary_cwd, Path):
-            raise ChatError(
-                "This Session has an invalid configuration. "
-                "Ask the user to check it through its Extension."
+    try:
+        run.add_cancel_callback(lambda: _close_adapter(target.adapter))
+        run.add_cancel_callback(lambda: dependencies.process_manager.cancel_scope_async(run.id))
+        if temporary_source is not None:
+            temporary_cwd = getattr(agent, "cwd", None)
+            if not isinstance(temporary_cwd, Path):
+                raise ChatError(
+                    "This Session has an invalid configuration. "
+                    "Ask the user to check it through its Extension."
+                )
+            project_cwd = temporary_cwd
+        else:
+            project_cwd = requests.resolve_project_cwd(working_project_id)
+        prompt_project = resolve_prompt_project(dependencies.projects, working_project_id)
+        project_prompt_context = (
+            ProjectPromptContext.from_project(
+                prompt_project.project_id,
+                prompt_project.display_name,
+                prompt_project.cwd,
+                prompt_project.auto_load,
             )
-        project_cwd = temporary_cwd
-    else:
-        project_cwd = requests.resolve_project_cwd(working_project_id)
-    prompt_project = resolve_prompt_project(dependencies.projects, working_project_id)
-    project_prompt_context = (
-        ProjectPromptContext.from_project(
-            prompt_project.project_id,
-            prompt_project.display_name,
-            prompt_project.cwd,
-            prompt_project.auto_load,
+            if prompt_project is not None
+            else None
         )
-        if prompt_project is not None
-        else None
-    )
-    working_project_context = await _CHAT_TRANSFORM_WORKERS.run(
-        pinned_working_project_context,
-        dependencies,
-        run.agent_id,
-        run.session_id,
-        prompt_project,
-        project_prompt_context,
-        project_id,
-    )
-    if temporary_source is None:
-        soul_context = await _CHAT_TRANSFORM_WORKERS.run(
-            pinned_soul_context,
+        working_project_context = await _CHAT_TRANSFORM_WORKERS.run(
+            pinned_working_project_context,
+            dependencies,
+            run.agent_id,
+            run.session_id,
+            prompt_project,
+            project_prompt_context,
+            project_id,
+        )
+        if temporary_source is None:
+            soul_context = await _CHAT_TRANSFORM_WORKERS.run(
+                pinned_soul_context,
+                dependencies,
+                run.agent_id,
+                run.session_id,
+                agent,
+                project_id,
+            )
+            memory_files_context = await _CHAT_TRANSFORM_WORKERS.run(
+                pinned_memory_files,
+                dependencies,
+                run.agent_id,
+                run.session_id,
+                agent,
+                project_id,
+            )
+            skill_project_id, identity_agent_id = resolve_skill_scope(
+                project_id, prompt_project, run.agent_id
+            )
+        else:
+            soul_context = memory_files_context = None
+            # A temporary participant has no identity-owned Skills, but an
+            # explicitly selected Project still supplies its shared Skill pool.
+            skill_project_id = working_project_id
+            identity_agent_id = None
+        skill_registry = await _CHAT_TRANSFORM_WORKERS.run(
+            dependencies.resolve_skills,
+            skill_project_id,
+            identity_agent_id,
+        )
+        skill_catalog = await _CHAT_TRANSFORM_WORKERS.run(
+            pinned_skill_catalog,
             dependencies,
             run.agent_id,
             run.session_id,
             agent,
+            skill_registry,
             project_id,
         )
-        memory_files_context = await _CHAT_TRANSFORM_WORKERS.run(
-            pinned_memory_files,
-            dependencies,
-            run.agent_id,
-            run.session_id,
-            agent,
-            project_id,
+        prompt_cache_affinity_id = await _CHAT_TRANSFORM_WORKERS.run(
+            dependencies.sessions.prompt_cache_affinity_id,
+            SessionAddress(project_id=project_id, agent_id=run.agent_id, session_id=run.session_id),
         )
-        skill_project_id, identity_agent_id = resolve_skill_scope(
-            project_id, prompt_project, run.agent_id
+        session.activated_skill_contents(session_snapshot.active_messages)
+        context = _RunExecutionContext(
+            run=run,
+            request=request,
+            session=session,
+            agent=agent,
+            agent_body=runtime_agent_body(agent),
+            primary_target=target,
+            project_id=project_id,
+            project_cwd=project_cwd,
+            project_prompt_context=project_prompt_context,
+            working_project_context=working_project_context,
+            soul_context=soul_context,
+            memory_files_context=memory_files_context,
+            skill_project_id=skill_project_id,
+            skill_registry=skill_registry,
+            skill_catalog=skill_catalog,
+            prompt_cache_affinity_id=prompt_cache_affinity_id,
+            prior_continuation=prior_continuation,
+            continuation_tracker=continuation_tracker,
+            continuation_reminder=continuation_reminder,
+            session_snapshot=session_snapshot,
         )
-    else:
-        soul_context = memory_files_context = None
-        # A temporary participant has no identity-owned Skills, but an
-        # explicitly selected Project still supplies its shared Skill pool.
-        skill_project_id = working_project_id
-        identity_agent_id = None
-    skill_registry = await _CHAT_TRANSFORM_WORKERS.run(
-        dependencies.resolve_skills,
-        skill_project_id,
-        identity_agent_id,
-    )
-    skill_catalog = await _CHAT_TRANSFORM_WORKERS.run(
-        pinned_skill_catalog,
-        dependencies,
-        run.agent_id,
-        run.session_id,
-        agent,
-        skill_registry,
-        project_id,
-    )
-    prompt_cache_affinity_id = await _CHAT_TRANSFORM_WORKERS.run(
-        dependencies.sessions.prompt_cache_affinity_id,
-        SessionAddress(project_id=project_id, agent_id=run.agent_id, session_id=run.session_id),
-    )
-    session.activated_skill_contents(session_snapshot.active_messages)
-    context = _RunExecutionContext(
-        run=run,
-        request=request,
-        session=session,
-        agent=agent,
-        agent_body=runtime_agent_body(agent),
-        primary_target=target,
-        project_id=project_id,
-        project_cwd=project_cwd,
-        project_prompt_context=project_prompt_context,
-        working_project_context=working_project_context,
-        soul_context=soul_context,
-        memory_files_context=memory_files_context,
-        skill_project_id=skill_project_id,
-        skill_registry=skill_registry,
-        skill_catalog=skill_catalog,
-        prompt_cache_affinity_id=prompt_cache_affinity_id,
-        prior_continuation=prior_continuation,
-        continuation_tracker=continuation_tracker,
-        continuation_reminder=continuation_reminder,
-        session_snapshot=session_snapshot,
-    )
-    if project_id is None and temporary_source is None:
-        loaded_project_id = latest_project_tool_context_id(session_snapshot.active_messages)
-        if loaded_project_id is not None:
-            await requests._apply_project_skill_context(context, loaded_project_id)
-    return context
+        if project_id is None and temporary_source is None:
+            loaded_project_id = latest_project_tool_context_id(session_snapshot.active_messages)
+            if loaded_project_id is not None:
+                await requests._apply_project_skill_context(context, loaded_project_id)
+        return context
+    except BaseException:
+        # Execution takes ownership only once the complete context is returned.
+        await _close_adapter(target.adapter)
+        raise

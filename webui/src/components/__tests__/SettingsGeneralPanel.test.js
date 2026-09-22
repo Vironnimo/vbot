@@ -260,4 +260,38 @@ describe('SettingsGeneralPanel', () => {
         .getAttribute('aria-checked'),
     ).toBe('true');
   });
+
+  it('saves a previously saved choice again after an external settings change', async () => {
+    listClientsMock.mockResolvedValue({ clients: [] });
+    updateSettingsMock.mockResolvedValue({ general: { keep_awake: true } });
+    const props = reactiveProps({
+      settings: { general: { keep_awake: false } },
+      onCommit: (settings) => {
+        props.settings = settings;
+      },
+    });
+    mountedComponent = mount(SettingsGeneralPanel, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+    await flushAsync();
+    document.body.querySelector('[role="switch"]').click();
+    await flushAsync();
+    await flushAsync();
+    expect(updateSettingsMock).toHaveBeenCalledOnce();
+
+    props.settings = { general: { keep_awake: false } };
+    flushSync();
+    expect(
+      document.body
+        .querySelector('[role="switch"]')
+        .getAttribute('aria-checked'),
+    ).toBe('false');
+    document.body.querySelector('[role="switch"]').click();
+    await flushAsync();
+
+    expect(updateSettingsMock).toHaveBeenCalledTimes(2);
+    expect(props.settings.general.keep_awake).toBe(true);
+  });
 });

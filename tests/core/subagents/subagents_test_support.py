@@ -263,9 +263,7 @@ class FakeChildLoop:
         return _execute
 
 
-def make_runtime(
-    tmp_path: Path, manager: FakeRunManager, *, agent_ids: set[str] | None = None
-) -> Any:
+def make_runtime(tmp_path: Path, manager: Any, *, agent_ids: set[str] | None = None) -> Any:
     child_loop = FakeChildLoop(None)
     agents = FakeAgents(agent_ids)
     return SimpleNamespace(

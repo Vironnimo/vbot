@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -21,10 +23,78 @@ from tests.core.providers.token_getter_helpers import (
     CONNECTION_ID,
     PROVIDER_ID,
     TOKEN_EXCHANGE_URL,
+    _minimax_oauth_config,
 )
 from tests.core.providers.token_getter_helpers import (
     oauth_config as oauth_config,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exchange", [False, True])
+@pytest.mark.parametrize("replacement", ["disconnect", "reconnect"])
+async def test_refresh_does_not_overwrite_concurrent_account_change(
+    tmp_path: Path, oauth_config: OAuthConfig, exchange: bool, replacement: str
+) -> None:
+    store = TokenStore(tmp_path)
+    original = OAuthToken(
+        access_token="expired",
+        refresh_token="refresh",
+        expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        extra={"github_oauth_token": "github"} if exchange else {},
+    )
+    store.save(PROVIDER_ID, CONNECTION_ID, original, account_id="work")
+    getter = OAuthTokenGetter(store, PROVIDER_ID, CONNECTION_ID, oauth_config, account_id="work")
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def refresh(*args: object) -> dict[str, object]:
+        started.set()
+        await release.wait()
+        return {"access_token": "stale-result", "token": "stale-result", "expires_in": 900}
+
+    method = "_exchange_token" if exchange else "_post_refresh_token"
+    with patch.object(getter, method, side_effect=refresh):
+        pending = asyncio.create_task(getter())
+        await asyncio.wait_for(started.wait(), timeout=1)
+        current = OAuthToken("new-login") if replacement == "reconnect" else None
+        if current is None:
+            store.delete(PROVIDER_ID, CONNECTION_ID, account_id="work")
+        else:
+            store.save(PROVIDER_ID, CONNECTION_ID, current, account_id="work")
+        release.set()
+        if current is None:
+            with pytest.raises(ProviderAuthError):
+                await pending
+        else:
+            assert await pending == "new-login"
+    assert store.load(PROVIDER_ID, CONNECTION_ID, account_id="work") == current
+
+
+@pytest.mark.asyncio
+async def test_failed_rotating_refresh_does_not_delete_reconnected_account(tmp_path: Path) -> None:
+    store = TokenStore(tmp_path)
+    store.save(
+        "minimax",
+        "subscription",
+        OAuthToken("expired", "refresh", datetime.now(UTC) - timedelta(minutes=1)),
+    )
+    getter = OAuthTokenGetter(store, "minimax", "subscription", _minimax_oauth_config())
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def refresh(*args: object) -> dict[str, object]:
+        started.set()
+        await release.wait()
+        raise ProviderAuthError("Refresh rejected")
+
+    with patch.object(getter, "_post_refresh_token", side_effect=refresh):
+        pending = asyncio.create_task(getter())
+        await asyncio.wait_for(started.wait(), timeout=1)
+        current = OAuthToken("new-login", "new-refresh")
+        store.save("minimax", "subscription", current)
+        release.set()
+        with pytest.raises(ProviderAuthError):
+            await pending
+    assert store.load("minimax", "subscription") == current
 
 
 class StubAsyncClient:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import UTC, datetime
 
 import core.channels._conversation_content as content_module
@@ -34,6 +35,159 @@ from .engine_test_support import (
     make_new_only_dispatcher,
     pytest,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["claim", "pointer", "lookup_failure"])
+async def test_aborted_bound_tap_restores_unadmitted_state(tmp_path, monkeypatch, stage):
+    storage = ChannelStorage(tmp_path)
+    engine, sessions, trigger, _transport = make_engine(
+        tmp_path, run_button_binding_registry=storage
+    )
+    sessions.create("assistant", session_id=SESSION_ID)
+    sessions.create("assistant", session_id="origin")
+    address = SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    previous = {"active_session_id": "prior", "other": "keep"}
+    sessions.set_metadata(address, previous)
+    binding = RunButtonBinding(
+        id="cancelled-binding",
+        platform_target="12345",
+        thread_id=None,
+        origin_session_id="origin",
+        original_button_data=("run:done",),
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    storage.save_run_button_binding("tg-assistant", binding)
+    data = bound_run_callback_data(binding.id, 0)
+    event = InteractionEvent(
+        platform="telegram",
+        channel_id="tg-assistant",
+        chat_id="12345",
+        user_id="50",
+        message_id="777",
+        data=data,
+        buttons=((InteractionButton(label="Done", data=data),),),
+    )
+    entered, release = threading.Event(), threading.Event()
+    owner, name = {
+        "claim": (storage, "claim_run_button_binding"),
+        "pointer": (engine._routing, "_point_conversation_at_session"),
+        "lookup_failure": (sessions, "exists"),
+    }[stage]
+    original = getattr(owner, name)
+
+    def delayed(*args, **kwargs):
+        result = original(*args, **kwargs)
+        entered.set()
+        assert release.wait(5)
+        if stage == "lookup_failure":
+            raise OSError("Session lookup failed")
+        return result
+
+    monkeypatch.setattr(owner, name, delayed)
+    pending = asyncio.create_task(engine.trigger_interaction_reply(make_conversation(), event))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        if stage != "lookup_failure":
+            pending.cancel()
+        release.set()
+        with pytest.raises(OSError if stage == "lookup_failure" else asyncio.CancelledError):
+            await pending
+        assert sessions.get_metadata(address) == previous
+        monkeypatch.setattr(owner, name, original)
+        claim = storage.claim_run_button_binding(
+            "tg-assistant", binding.id, platform_target="12345", thread_id=None
+        )
+        assert claim.status == "claimed"
+        trigger.assert_not_awaited()
+    finally:
+        release.set()
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_waiter", [False, True])
+async def test_aborted_tap_cannot_undo_later_admission_to_same_origin(
+    tmp_path, monkeypatch, cancel_waiter
+):
+    storage = ChannelStorage(tmp_path)
+    trigger = AsyncMock(return_value=make_completed_run(output_text="done", session_id="origin"))
+    engine, sessions, _, _ = make_engine(
+        tmp_path, run_button_binding_registry=storage, trigger_run=trigger
+    )
+    sessions.create("assistant", session_id=SESSION_ID)
+    sessions.create("assistant", session_id="origin")
+    address = SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+    sessions.set_metadata(address, {"active_session_id": "prior"})
+    events = []
+    for name in ("first", "second"):
+        binding = RunButtonBinding(
+            id=name,
+            platform_target="12345",
+            thread_id=None,
+            origin_session_id="origin",
+            original_button_data=("run:done",),
+            created_at=datetime.now(UTC).isoformat(),
+        )
+        storage.save_run_button_binding("tg-assistant", binding)
+        data = bound_run_callback_data(name, 0)
+        events.append(
+            InteractionEvent(
+                platform="telegram",
+                channel_id="tg-assistant",
+                chat_id="12345",
+                user_id="50",
+                message_id="777",
+                data=data,
+                buttons=((InteractionButton(label="Done", data=data),),),
+            )
+        )
+    entered, release = threading.Event(), threading.Event()
+    original = engine._routing._point_conversation_at_session
+    calls = 0
+
+    def delayed(*args):
+        nonlocal calls
+        calls += 1
+        first = calls == 1
+        result = original(*args)
+        if first:
+            entered.set()
+            assert release.wait(5)
+        return result
+
+    monkeypatch.setattr(engine._routing, "_point_conversation_at_session", delayed)
+    first = asyncio.create_task(engine.trigger_interaction_reply(make_conversation(), events[0]))
+    pending = [first]
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        first.cancel()
+        if cancel_waiter:
+            waiter = asyncio.create_task(
+                engine.trigger_interaction_reply(make_conversation(), events[1])
+            )
+            pending.append(waiter)
+            await asyncio.sleep(0)
+            waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
+        second = asyncio.create_task(
+            engine.trigger_interaction_reply(make_conversation(), events[1])
+        )
+        pending.append(second)
+        completed, _ = await asyncio.wait({second}, timeout=0.05)
+        assert not completed
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        assert await second == "enqueued"
+        assert sessions.get_metadata(address)["active_session_id"] == "origin"
+        await drain(engine, "12345")
+        assert trigger.await_count == 1
+    finally:
+        release.set()
+        await asyncio.gather(*pending, return_exceptions=True)
+        await engine.stop()
 
 
 @pytest.mark.asyncio
@@ -537,8 +691,11 @@ async def test_new_detaches_telegram_after_bound_tap(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("concurrent", [None, "metadata", "navigation"])
 async def test_busy_bound_tap_restores_binding_and_previous_conversation_pointer(
     tmp_path: Path,
+    monkeypatch,
+    concurrent,
 ) -> None:
     storage = ChannelStorage(tmp_path)
     waiting_work = ChatRunManager(waiting_work_limit=1)
@@ -579,6 +736,25 @@ async def test_busy_bound_tap_restores_binding_and_previous_conversation_pointer
         buttons=((InteractionButton(label="Fertig", data=internal_data),),),
     )
 
+    expected_metadata = dict(previous_metadata)
+    if concurrent is not None:
+        original_enqueue = engine._enqueue_chat_work
+        changes = (
+            {"new_metadata": "preserved"}
+            if concurrent == "metadata"
+            else {routing_module.ACTIVE_SESSION_METADATA_KEY: "newer-session"}
+        )
+        expected_metadata.update(changes)
+
+        def enqueue(*args):
+            sessions.mutate_metadata(
+                SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID),
+                lambda metadata: metadata.update(changes),
+            )
+            return original_enqueue(*args)
+
+        monkeypatch.setattr(engine, "_enqueue_chat_work", enqueue)
+
     outcome = await engine.trigger_interaction_reply(make_conversation(), event)
 
     assert outcome == "busy"
@@ -586,7 +762,7 @@ async def test_busy_bound_tap_restores_binding_and_previous_conversation_pointer
         sessions.get_metadata(
             SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
         )
-        == previous_metadata
+        == expected_metadata
     )
     retry_claim = storage.claim_run_button_binding(
         "tg-assistant",

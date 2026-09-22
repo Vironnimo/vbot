@@ -163,8 +163,8 @@ describe('extension page client', () => {
     await expect(pending).rejects.toThrow('reloaded');
 
     dispatchFrom(target, {
-      type: 'vbot.extension.result',
       ...oldCall,
+      type: 'vbot.extension.result',
       result: { stale: true },
     });
     const current = client.operation('read', {});
