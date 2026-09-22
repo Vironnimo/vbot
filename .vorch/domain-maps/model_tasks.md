@@ -21,7 +21,7 @@ Supported task types (`constants.SUPPORTED_TASK_TYPES`): `speech_to_text`, `text
 
 Bindings persist under `model_tasks` keyed by task type: non-empty `target` + options object. Public updates are sparse (options-only updates keep the existing target; empty target removes; Storage drops the section when empty); validation runs on each changed complete resulting binding before persistence; unchanged bindings are no-ops even if live catalog changes have made their options stale, and a changed target starts options at `{}` rather than inheriting incompatible ones. Storage's section merge follows the same target-change rule, so `settings.update` persists the binding that Task Model validation checked.
 
-Provider target IDs use `<provider>/<model>::<connection-local-id>[:<account-id>]` (parser accepts a provider-prefixed connection suffix, persisted form uses the local connection id; a trailing account pins credential selection while listing stays connection-level). Local IDs are `local/<id>` without `/` or `::`; descriptors reject unknown task types.
+Provider target IDs use `<provider>/<model>::<connection-local-id>[:<account-id>]` (parser also accepts a provider-prefixed connection suffix; a trailing account pins credential selection while listing stays connection-level). Catalog IDs use the local connection id; persistence preserves accepted spelling. `task_model_targets_equal` compares parsed identity for Task Model, section and path updates, so an equivalent Connection spelling preserves options and unchanged stale bindings remain no-ops. Local IDs are `local/<id>` without `/` or `::`; descriptors reject unknown task types.
 
 ## Contracts
 

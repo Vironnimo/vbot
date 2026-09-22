@@ -9,7 +9,7 @@ from copy import deepcopy
 from difflib import get_close_matches
 from typing import Any
 
-from core.model_tasks import SUPPORTED_TASK_TYPES
+from core.model_tasks import SUPPORTED_TASK_TYPES, task_model_targets_equal
 from core.settings._path_definitions import (
     _DEFINITIONS,
     DEFAULT_ATTACHMENT_MAX_SIZE_BYTES,
@@ -403,10 +403,7 @@ def _prepare_structured_patch(
             binding = _lookup(candidate, path[:-1], None)
             if isinstance(binding, dict):
                 previous_target = binding.get("target")
-                if (
-                    not isinstance(previous_target, str)
-                    or previous_target.strip() != operation.value.strip()
-                ):
+                if not task_model_targets_equal(previous_target, operation.value):
                     binding.pop("options", None)
 
     compaction = candidate.get("compaction")
