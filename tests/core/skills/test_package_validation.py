@@ -2,6 +2,7 @@
 
 import io
 import os
+import tarfile
 import zipfile
 
 import pytest
@@ -38,4 +39,20 @@ def test_archive_reserved_device_alias_fails_before_target_creation(tmp_path):
     target = tmp_path / "installed"
     with pytest.raises(SkillAuthoringError):
         SkillAuthoringService().install(target, "demo.skill", archive=stream.getvalue())
+    assert not target.exists()
+
+
+def test_tar_non_utf8_filename_is_rejected_as_a_package_error(tmp_path):
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w") as archive:
+        for name, content in {
+            "SKILL.md": b"---\nname: demo\ndescription: Fixture.\n---\nBody\n",
+            "assets/invalid-\udcff.bin": b"payload",
+        }.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+    target = tmp_path / "installed"
+    with pytest.raises(SkillAuthoringError):
+        SkillAuthoringService().install(target, "demo.tar", archive=stream.getvalue())
     assert not target.exists()

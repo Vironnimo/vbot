@@ -55,7 +55,10 @@ def package_path(value: str) -> str:
         if (
             part in {"", ".", ".."}
             or part.endswith((".", " "))
-            or any(ord(char) < 32 or char in '<>:"|?*' for char in part)
+            or any(
+                ord(char) < 32 or 0xD800 <= ord(char) <= 0xDFFF or char in '<>:"|?*'
+                for char in part
+            )
             or part.split(".", 1)[0].rstrip(" ").casefold() in _DEVICES
         ):
             raise PackageError(f"Invalid package path: {value!r}")
