@@ -575,12 +575,17 @@
       return;
     }
 
-    if (
-      autocompleteOpen &&
-      picker.activeAutocompleteElement()?.selectActive()
-    ) {
-      event.preventDefault();
-      return;
+    if (autocompleteOpen) {
+      if (picker.activeAutocompleteElement()?.selectActive()) {
+        event.preventDefault();
+        return;
+      }
+      // A picker still loading its catalog has no row to choose yet; Enter
+      // waits for it instead of sending the partial @/model token as text.
+      if (picker.activeAutocompleteLoading()) {
+        event.preventDefault();
+        return;
+      }
     }
 
     event.preventDefault();

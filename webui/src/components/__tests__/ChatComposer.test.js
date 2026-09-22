@@ -5,6 +5,7 @@ import {
   mount,
   ChatComposer,
   typeInComposer,
+  pressKey,
   skillFixtures,
   composerInput,
   autocompleteOptions,
@@ -651,6 +652,72 @@ describe('ChatComposer', () => {
       expect(onSendMessage).toHaveBeenCalledWith('にほんご');
     },
   );
+
+  it('keeps Enter from sending while the @ picker is still loading', async () => {
+    const onSendMessage = vi.fn().mockResolvedValue(true);
+    let resolveFiles;
+    const onListFiles = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveFiles = resolve;
+        }),
+    );
+    suite.mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onSendMessage, onListFiles },
+    });
+    flushSync();
+
+    const input = composerInput();
+    typeInComposer(input, 'look at @src/ap');
+    const waiting = pressKey(input, 'Enter');
+    await flushComposerAsyncWork();
+
+    expect(waiting.defaultPrevented).toBe(true);
+    expect(onSendMessage).not.toHaveBeenCalled();
+    expect(input.value).toBe('look at @src/ap');
+
+    resolveFiles({ files: ['src/app.js'], truncated: false });
+    await flushComposerAsyncWork();
+    pressKey(input, 'Enter');
+    await flushComposerAsyncWork();
+
+    expect(onSendMessage).not.toHaveBeenCalled();
+    expect(input.value).toBe('look at @src/app.js ');
+  });
+
+  it('keeps Enter from sending while the /model catalog is still loading', async () => {
+    const onSendMessage = vi.fn().mockResolvedValue(true);
+    let resolveCatalog;
+    const onLoadModelCatalog = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveCatalog = resolve;
+        }),
+    );
+    suite.mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onSendMessage, onLoadModelCatalog },
+    });
+    flushSync();
+
+    const input = composerInput();
+    typeInComposer(input, '/model ');
+    pressKey(input, 'Enter');
+    await flushComposerAsyncWork();
+
+    expect(onSendMessage).not.toHaveBeenCalled();
+    expect(input.value).toBe('/model ');
+
+    resolveCatalog(modelCatalogFixture());
+    await flushComposerAsyncWork();
+    pressKey(input, 'Enter');
+    await flushComposerAsyncWork();
+
+    expect(onSendMessage).toHaveBeenCalledWith(
+      '/model openai/gpt-5.2::api-key',
+    );
+  });
 
   it('lets Enter select the active model option', async () => {
     const onSendMessage = vi.fn().mockResolvedValue(true);
