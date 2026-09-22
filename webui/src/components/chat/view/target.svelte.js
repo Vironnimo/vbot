@@ -40,6 +40,7 @@ export function createChatViewTarget(context) {
 
   // Guards repeated project-show side effects for the same chosen project.
   let lastLoadedProjectId = '';
+  let projectTeamLoadVersion = 0;
 
   // Set true after the first project effect run. That first run is the reload
   // restore — it honors the remembered project agent (`sharedSelectedProjectAgentId`);
@@ -389,6 +390,7 @@ export function createChatViewTarget(context) {
 
   // Tear the second bar down: back to the identity-only chat (Personal).
   const clearProjectContext = () => {
+    projectTeamLoadVersion += 1;
     projectTeam = [];
     projectReport = null;
     projectScanError = '';
@@ -413,13 +415,17 @@ export function createChatViewTarget(context) {
     projectId,
     { restoreAgentId = null, keepOverride = false } = {},
   ) => {
+    const requestVersion = ++projectTeamLoadVersion;
+    const isCurrent = () =>
+      requestVersion === projectTeamLoadVersion &&
+      context.selectedProjectId === projectId;
     loadingProjectTeam = true;
     projectScanError = '';
     selectedProjectAgentId = '';
     try {
       const result = await context.chatController.loadProject(projectId);
       // A newer selection may have superseded this one mid-flight.
-      if (context.selectedProjectId !== projectId) {
+      if (!isCurrent()) {
         return;
       }
       projectTeam = normalizeProjectTeam(result?.scan);
@@ -445,14 +451,14 @@ export function createChatViewTarget(context) {
         await openProjectAgent(target.agent_id, { keepOverride });
       }
     } catch (error) {
-      if (context.selectedProjectId !== projectId) {
+      if (!isCurrent()) {
         return;
       }
       projectTeam = [];
       projectReport = null;
       projectScanError = `${t('chat.project.loadError', 'The project team could not be loaded.')} ${error.message}`;
     } finally {
-      if (context.selectedProjectId === projectId) {
+      if (isCurrent()) {
         loadingProjectTeam = false;
       }
     }
@@ -587,18 +593,24 @@ export function createChatViewTarget(context) {
   // Load just the team + report for a move target (no agent auto-selection —
   // the move picks the agent itself). Errors surface as the scan error notice.
   const loadProjectTeamForMove = async (projectId) => {
+    const requestVersion = ++projectTeamLoadVersion;
+    const isCurrent = () =>
+      requestVersion === projectTeamLoadVersion &&
+      lastLoadedProjectId === projectId;
     loadingProjectTeam = true;
     projectScanError = '';
     try {
       const result = await context.chatController.loadProject(projectId);
+      if (!isCurrent()) return;
       projectTeam = normalizeProjectTeam(result?.scan);
       projectReport = normalizeScanReport(result?.scan?.report);
     } catch (error) {
+      if (!isCurrent()) return;
       projectTeam = [];
       projectReport = null;
       projectScanError = `${t('chat.project.loadError', 'The project team could not be loaded.')} ${error.message}`;
     } finally {
-      loadingProjectTeam = false;
+      if (isCurrent()) loadingProjectTeam = false;
     }
   };
   return {

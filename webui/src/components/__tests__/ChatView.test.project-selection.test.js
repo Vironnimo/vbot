@@ -22,6 +22,132 @@ import {
 describe('ChatView', () => {
   const chatViewTest = setupChatViewTestSuite();
 
+  it.each([
+    ['response', false],
+    ['error', false],
+    ['response', true],
+    ['error', true],
+  ])(
+    'keeps the newest Project history navigation after an older team %s (revisit=%s)',
+    async (outcome, revisit) => {
+      let resolveOld;
+      let rejectOld;
+      const oldTeam = new Promise((resolve, reject) => {
+        resolveOld = resolve;
+        rejectOld = reject;
+      });
+      const team = (projectId, agentId, name) => ({
+        project: { project_id: projectId, default_agent: agentId },
+        scan: {
+          team: [{ agent_id: agentId, display_name: name, model: 'm' }],
+          report: { clean: true, findings: [] },
+        },
+      });
+      showProjectMock
+        .mockReturnValueOnce(oldTeam)
+        .mockImplementation((id) =>
+          Promise.resolve(team(id, 'new-agent', 'New team')),
+        );
+      rpcMock.mockImplementation(
+        createChatRpcMock({
+          sessionMessages: {
+            'old-session': [
+              {
+                id: 'old-message',
+                role: 'assistant',
+                content: 'Obsolete project transcript',
+              },
+            ],
+            'new-session': [
+              {
+                id: 'new-message',
+                role: 'assistant',
+                content: 'Current project transcript',
+              },
+            ],
+          },
+        }),
+      );
+      const { createChatViewParentHarness } =
+        await import('./chatViewParentHarness.svelte.js');
+      const parent = createChatViewParentHarness();
+      chatViewTest.mount({
+        target: document.body,
+        props: {
+          sharedAgents: [createAgent()],
+          sharedSelectedAgentId: 'alpha',
+          projects: [
+            { project_id: 'old-project', display_name: 'Old project' },
+            { project_id: 'new-project', display_name: 'New project' },
+          ],
+          get selectedProjectId() {
+            return parent.selectedProjectId;
+          },
+          get sharedSelectedProjectAgentId() {
+            return parent.selectedProjectAgentId;
+          },
+          get pendingSessionNavigation() {
+            return parent.pendingSessionNavigation;
+          },
+          onProjectSelected: (id) => parent.setSelectedProjectId(id),
+          onProjectAgentSelected: (id) => parent.setSelectedProjectAgentId(id),
+        },
+      });
+      flushSync();
+      await waitForCondition(
+        () => document.body.textContent.includes('Hello'),
+        100,
+      );
+      const navigate = (projectId, agentId, sessionId, requestId) => {
+        parent.setPendingSessionNavigation({
+          agentId: `${agentId}@${projectId}`,
+          sessionId,
+          requestId,
+          selection: { agentId: 'alpha', projectId, projectAgentId: agentId },
+        });
+        flushSync();
+      };
+      navigate('old-project', 'old-agent', 'old-session', 1);
+      await waitForCondition(
+        () => showProjectMock.mock.calls.some(([id]) => id === 'old-project'),
+        100,
+      );
+      navigate('new-project', 'new-agent', 'new-session', 2);
+      await waitForCondition(
+        () => document.body.textContent.includes('Current project transcript'),
+        100,
+      );
+      if (revisit) {
+        navigate('old-project', 'new-agent', 'new-session', 3);
+        await waitForCondition(
+          () =>
+            showProjectMock.mock.calls.length === 3 &&
+            parent.selectedProjectAgentId === 'new-agent',
+          100,
+        );
+      }
+      if (outcome === 'error') rejectOld(new Error('obsolete project failure'));
+      else resolveOld(team('old-project', 'old-agent', 'Old team'));
+      await oldTeam.catch(() => {});
+      await Promise.resolve();
+      await Promise.resolve();
+      flushSync();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      flushSync();
+      expect(parent.selectedProjectAgentId).toBe('new-agent');
+      expect(document.body.textContent).toContain('Current project transcript');
+      expect(document.body.textContent).toContain('New team');
+      expect(document.body.textContent).not.toContain('Old team');
+      expect(document.body.textContent).not.toContain(
+        'obsolete project failure',
+      );
+      expect(rpcMock).not.toHaveBeenCalledWith(
+        'chat.history',
+        expect.objectContaining({ session_id: 'old-session' }),
+      );
+    },
+  );
+
   it('shows each agent effective provider/model in the activity hover', async () => {
     rpcMock.mockImplementation(createChatRpcMock());
     showProjectMock.mockResolvedValue({
