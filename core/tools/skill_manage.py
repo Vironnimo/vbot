@@ -25,6 +25,7 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayPart,
     ToolRegistry,
+    offload_tool_handler,
     tool_failure,
     tool_success,
 )
@@ -319,12 +320,14 @@ def register_skill_manage_tool(
         SKILL_MANAGE_TOOL_NAME,
         SKILL_MANAGE_TOOL_DESCRIPTION,
         SKILL_MANAGE_TOOL_PARAMETERS,
-        make_skill_manage_handler(
-            authoring,
-            resolve_agent_skills_dir,
-            invalidate_agent_skills,
-            resolve_shared_skills_dir,
-            resolve_external_skill_scope,
+        offload_tool_handler(
+            make_skill_manage_handler(
+                authoring,
+                resolve_agent_skills_dir,
+                invalidate_agent_skills,
+                resolve_shared_skills_dir,
+                resolve_external_skill_scope,
+            ),
         ),
         family="skills",
         constraints=("identity_agent",),

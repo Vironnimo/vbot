@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -98,6 +99,62 @@ def _context(agent_id: str, root: Path) -> ToolContext:
         data_root=root,
         cwd=root,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_admitted_write_runs_off_loop_and_settles_before_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel: bool
+) -> None:
+    service = SkillAuthoringService()
+    registry = ToolRegistry()
+    entered = asyncio.Event()
+    release = threading.Event()
+    invalidated: list[str | None] = []
+    loop = asyncio.get_running_loop()
+    loop_thread = threading.get_ident()
+    create = service.create
+
+    def blocked_create(*args: Any, **kwargs: Any) -> Any:
+        loop.call_soon_threadsafe(entered.set)
+        assert threading.get_ident() != loop_thread
+        assert release.wait(5)
+        return create(*args, **kwargs)
+
+    monkeypatch.setattr(service, "create", blocked_create)
+    register_skill_manage_tool(registry, service, lambda _: tmp_path, invalidated.append)
+    task = asyncio.create_task(
+        registry.dispatch(
+            _context("main", tmp_path),
+            {"action": "create", "name": "demo", "content": _skill_md()},
+            [SKILL_MANAGE_TOOL_NAME],
+        )
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        assert not task.done()
+        assert not (tmp_path / "demo").exists()
+        assert invalidated == []
+        if cancel:
+            task.cancel()
+            await asyncio.sleep(0)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+        release.set()
+        if cancel:
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            assert (await task)["ok"] is True
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert SkillRegistry.load(tmp_path).get("demo") is not None
+    assert invalidated == ["main"]
 
 
 def test_provider_schema_is_flat_and_hermes_shaped(tmp_path: Path) -> None:
