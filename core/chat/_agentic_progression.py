@@ -915,17 +915,24 @@ class AgenticProgression:
                 tools = compacted_state.tools
 
         if self._compaction_service is not None:
-            await self._compaction_runs.maybe_auto_compact_state(
-                context,
-                target,
-                usage=assistant_message.usage,
-                continuation_request_messages=[
-                    *messages_for_request,
-                    assistant_request_message,
-                ],
-                context_usage=assistant_context_usage,
-                continue_same_run=False,
-            )
+            try:
+                await self._compaction_runs.maybe_auto_compact_state(
+                    context,
+                    target,
+                    usage=assistant_message.usage,
+                    continuation_request_messages=[
+                        *messages_for_request,
+                        assistant_request_message,
+                    ],
+                    context_usage=assistant_context_usage,
+                    continue_same_run=False,
+                )
+            except asyncio.CancelledError:
+                if not run.cancel_requested:
+                    raise
+                # Stop ends only this optional post-answer Compaction. The final
+                # answer is already durable and remains the Run result; the Run
+                # manager sees ``cancel_requested`` and marks the Run cancelled.
         return assistant_message
 
 
