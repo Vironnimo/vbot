@@ -8,7 +8,7 @@ Provider-neutral text embedding execution for the configured `text_embedding` ta
 
 ## Terms
 
-Domain-specific vocabulary for embedding execution. The user-facing Semantic Recall term lives in `.vorch/GLOSSARY.md`.
+Domain-specific vocabulary for embedding execution. The user-facing Semantic Recall term lives in `recall.md`.
 
 ### Embedding Model
 **Definition:** A specialized model that converts text into numerical vectors (embeddings) for semantic comparison. In vBot, this is a configurable `text_embedding` task-model binding used by the recall `vector` backend to find meaning-related past sessions (e.g. "car" and "vehicle" are nearby in embedding space).
@@ -30,8 +30,8 @@ Recall pins `EmbeddingSpaceIdentity.fingerprint` together with provider, model, 
 `ProviderEmbeddingClient` subclasses `core.providers.task_client.ProviderTaskClient`, the shared plumbing it has in common with `core/model_tasks/image_providers.py` and `core/model_tasks/speech_providers.py` (constructor tuple, `from_runtime` factory, auth headers, POST/classify/parse cycle, retry policy - see `providers.md`). This module owns only the embeddings payload shape and response parsing:
 
 - POSTs `/api/v1/embeddings` with authored `model`, `input` (array of strings), `encoding_format="float"`, and optional positive-integer `dimensions`. For the verified OpenRouter target only, Recall purpose maps to provider-owned `input_type="search_query"` or `input_type="search_document"`; other providers omit this field and remain symmetric. `extra_options` may add non-empty Provider-specific fields but cannot override `model`, `input`, `encoding_format`, `dimensions`, or `input_type`.
-- Normalizes response `data[]` entries to ordered vectors. A complete integer `index` set must map every input exactly once; when every entry omits `index`, wire order is preserved. Mixed, duplicate, missing, or out-of-range mappings are rejected.
-- Every vector must be non-empty, finite, numeric, and the same dimension; malformed shapes are rejected before they reach Recall.
+- Normalizes response `data[]` entries to ordered vectors. A complete integer `index` set must map every input exactly once; when every entry omits `index`, wire order is preserved. Explicit null indices are invalid, not omitted. Mixed, duplicate, missing, or out-of-range mappings are rejected.
+- Every vector must be non-empty, finite, numeric, and the same dimension; malformed shapes and values outside floating-point range are rejected as Provider errors before they reach Recall. Unrepresentable optional cost telemetry is instead discarded without invalidating usable vectors.
 - A present response `model` must be a non-empty string and becomes the actual model identity; omission falls back to the configured model. `usage.prompt_tokens`/`input_tokens`, `usage.total_tokens`, and optional non-negative finite `usage.cost` normalize into `EmbeddingUsage`. Report counters distinguish a real zero from missing or malformed telemetry, which never invalidates otherwise valid vectors.
 - The embedding **dimension** is observed from `len(data[0].embedding)` in the API response - it is never trusted from the model catalog (catalogs lack dimension data). The dimension is returned in `EmbeddingResult.dimension` for the recall store to pin.
 
