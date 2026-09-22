@@ -41,7 +41,11 @@ Windows PATH refresh expands registry values marked `REG_EXPAND_SZ` before combi
   share one in-flight probe task, and cancelling one waiter does not cancel
   that shared initialization. On Windows the probe overlays the live PATH from
   the registry (`HKLM` + `HKCU`), because a headless process never receives the
-  `WM_SETTINGCHANGE` broadcast that follows a PATH edit. When the cache is
+  `WM_SETTINGCHANGE` broadcast that follows a PATH edit. The Windows probe
+  transfers Base64 of UTF-8, NUL-separated `NAME=VALUE` pairs so non-ASCII and
+  multi-line values survive the console code page; the POSIX `env -0` probe
+  decodes like `os.environ` (`os.fsdecode`). Malformed probe output keeps the
+  process environment (`test_bash_environment.py`). When the cache is
   stale the next call re-probes directly. A shell-binary `FileNotFoundError`
   also self-heals: the handler logs, resets the cache, re-probes, and retries
   the spawn once before failing.
