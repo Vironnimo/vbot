@@ -101,6 +101,8 @@ export function createChatController({
   let handledQueueInvalidation = null;
   let activityRefreshVersion = 0;
   let commandsLoadVersion = 0;
+  let agentsLoadVersion = 0;
+  let initialHistoryPending = false;
   const historyLoadVersions = new Map();
   const reflectionLoadVersions = new Map();
   const queueSyncVersions = new Map();
@@ -161,15 +163,18 @@ export function createChatController({
     // `silent` skips the loadingAgents flag so a background refresh (triggered
     // by resource_changed(kind="agents")) does not tear down the entire chat
     // view via the {#if loadingAgents} conditional, and skips the initial
-    // history load that belongs to the mount path. Only the initial mount load
-    // shows the loading state and loads the current session's history.
+    // history load that belongs to the mount path. A newer silent refresh
+    // inherits that initial load if the mount request is still in flight.
+    const requestVersion = ++agentsLoadVersion;
     if (!silent) {
       chatState.loadingAgents = true;
+      initialHistoryPending = true;
     }
     chatState.agentsError = null;
     let selectedAgentId;
     try {
       const result = await operations.listAgents();
+      if (requestVersion !== agentsLoadVersion) return false;
       const preferred = chatState.selectedAgentId || preferredAgentId;
       if (preferred) {
         selectAgent(chatState, preferred);
@@ -182,14 +187,17 @@ export function createChatController({
         onAgentSelected(selectedAgentId);
       }
     } catch (error) {
+      if (requestVersion !== agentsLoadVersion) return false;
       chatState.agentsError = errorMessage(error);
       return false;
     } finally {
-      if (!silent) {
+      if (requestVersion === agentsLoadVersion) {
         chatState.loadingAgents = false;
       }
     }
-    if (selectedAgentId && !silent && shouldLoadCurrentHistory()) {
+    const loadInitialHistory = initialHistoryPending;
+    initialHistoryPending = false;
+    if (selectedAgentId && loadInitialHistory && shouldLoadCurrentHistory()) {
       await loadCurrentHistory();
     }
     return true;
@@ -950,6 +958,9 @@ export function createChatController({
   }
 
   function destroy() {
+    agentsLoadVersion += 1;
+    initialHistoryPending = false;
+    chatState.loadingAgents = false;
     runStream.closeSubscriptions();
     historyLoadVersions.clear();
     queueSyncVersions.clear();

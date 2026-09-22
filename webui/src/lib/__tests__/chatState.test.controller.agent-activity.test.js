@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ensureSessionState } from '../chatState.js';
-import { setup } from './chatState.controller.support.js';
+import { setup, deferred } from './chatState.controller.support.js';
 
 describe('chat controller', () => {
   it('loads the roster, current history, Run truth, and Queue as one lifecycle', async () => {
@@ -94,6 +94,60 @@ describe('chat controller', () => {
     expect(chatState.loadingAgents).toBe(false);
     expect(chatState.agents).toHaveLength(1);
     expect(loadChatHistory).not.toHaveBeenCalled();
+  });
+
+  it.each(['response', 'error'])(
+    'ignores a stale roster %s after a newer refresh loads the current Session',
+    async (outcome) => {
+      const old = deferred();
+      const loadChatHistory = vi.fn().mockResolvedValue({ messages: [] });
+      const { chatState, controller } = setup({
+        isDisplayedSession: () => true,
+        operationOverrides: {
+          listAgents: vi
+            .fn()
+            .mockReturnValueOnce(old.promise)
+            .mockResolvedValueOnce({
+              agents: [
+                { id: 'alpha', name: 'Renamed', current_session_id: 'new' },
+              ],
+            }),
+          loadChatHistory,
+        },
+      });
+      const initial = controller.loadAgents();
+      await controller.loadAgents({ silent: true });
+      expect(chatState.loadingAgents).toBe(false);
+      expect(loadChatHistory).toHaveBeenCalledWith(
+        expect.objectContaining({ session_id: 'new' }),
+      );
+      if (outcome === 'error') old.reject(new Error('outdated failure'));
+      else
+        old.resolve({
+          agents: [{ id: 'alpha', name: 'Old', current_session_id: 'old' }],
+        });
+      await initial;
+      expect(chatState.agents).toMatchObject([
+        { name: 'Renamed', current_session_id: 'new' },
+      ]);
+      expect(chatState.agentsError).toBeNull();
+      expect(loadChatHistory).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('retires a roster request when its Chat controller is destroyed', async () => {
+    const response = deferred();
+    const { chatState, controller } = setup({
+      operationOverrides: { listAgents: vi.fn(() => response.promise) },
+    });
+    const pending = controller.loadAgents();
+    controller.destroy();
+    response.resolve({
+      agents: [{ id: 'obsolete', current_session_id: 'old' }],
+    });
+    await expect(pending).resolves.toBe(false);
+    expect(chatState.agents).toEqual([]);
+    expect(chatState.loadingAgents).toBe(false);
   });
 
   it('normalizes command suggestions inside the controller', async () => {
