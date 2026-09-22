@@ -25,6 +25,7 @@ from core.model_tasks._option_types import (
     PROVIDER_DEFAULT_CHOICE_LABEL,
     TaskModelOptionChoice,
     TaskModelOptionField,
+    _task_options,
 )
 from core.model_tasks.constants import (
     TASK_IMAGE_GENERATION,
@@ -45,7 +46,7 @@ def _image_generation_fields(
     image execution path get no fields — the UI must not invent inputs.
     """
 
-    image_options = _image_task_options(model)
+    image_options = _task_options(model, TASK_IMAGE_GENERATION)
     parameters = image_options.get("parameters")
     fields: list[TaskModelOptionField] = []
     if isinstance(parameters, Mapping) and parameters:
@@ -59,13 +60,6 @@ def _image_generation_fields(
     if isinstance(passthrough, Mapping) and passthrough:
         fields.append(_provider_options_field(passthrough))
     return tuple(fields)
-
-
-def _image_task_options(model: Model | None) -> Mapping[str, Any]:
-    if model is None:
-        return {}
-    image_options = model.capabilities.task_options.get(TASK_IMAGE_GENERATION)
-    return image_options if isinstance(image_options, Mapping) else {}
 
 
 def _fields_from_image_parameters(
