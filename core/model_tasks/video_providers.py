@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import time
 from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import quote
@@ -55,28 +54,29 @@ class ProviderVideoClient(ProviderTaskClient):
             parse=_parse_created_video_response,
             retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
         )
-        deadline = time.monotonic() + poll_timeout
         status_payload = created
-        while status_payload.get("status") != "completed":
-            status = status_payload.get("status")
-            if status in _TERMINAL_FAILURE_STATUSES:
-                raise ProviderError(
-                    f"OpenRouter video generation failed: {_video_error_message(status_payload)}",
-                    retryable=False,
-                )
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise ProviderError(
-                    f"OpenRouter video generation timed out after {int(poll_timeout)} seconds.",
-                    retryable=False,
-                )
-            await asyncio.sleep(min(poll_interval, remaining))
-            safe_job_id = quote(job_id, safe="")
-            status_payload = await self.get_and_parse(
-                f"/videos/{safe_job_id}",
-                timeout=VIDEO_REQUEST_TIMEOUT_SECONDS,
-                parse=_parse_video_response,
-            )
+        try:
+            async with asyncio.timeout(poll_timeout):
+                while status_payload.get("status") != "completed":
+                    status = status_payload.get("status")
+                    if status in _TERMINAL_FAILURE_STATUSES:
+                        raise ProviderError(
+                            "OpenRouter video generation failed: "
+                            f"{_video_error_message(status_payload)}",
+                            retryable=False,
+                        )
+                    await asyncio.sleep(poll_interval)
+                    safe_job_id = quote(job_id, safe="")
+                    status_payload = await self.get_and_parse(
+                        f"/videos/{safe_job_id}",
+                        timeout=VIDEO_REQUEST_TIMEOUT_SECONDS,
+                        parse=_parse_video_response,
+                    )
+        except TimeoutError as exc:
+            raise ProviderError(
+                f"OpenRouter video generation timed out after {int(poll_timeout)} seconds.",
+                retryable=False,
+            ) from exc
 
         safe_job_id = quote(job_id, safe="")
         content, media_type = await self.get_and_parse(

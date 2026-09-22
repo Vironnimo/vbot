@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -107,6 +109,46 @@ async def test_video_create_without_usable_job_id_preserves_unknown_outcome(job_
     assert caught.value.operation_key
     assert caught.value.retryable is False
     assert create.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_video_poll_deadline_includes_poll_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _openrouter_video_client()
+    monkeypatch.setattr(
+        client, "post_and_parse", AsyncMock(return_value=("job-1", {"status": "pending"}))
+    )
+    poll = AsyncMock(return_value={"status": "completed"})
+    monkeypatch.setattr(client, "get_and_parse", poll)
+
+    with pytest.raises(ProviderError) as caught:
+        await client.generate("A river", options={}, poll_timeout=0.01, poll_interval=1)
+
+    assert caught.value.retryable is False
+    poll.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_video_poll_deadline_cancels_stalled_poll(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _openrouter_video_client()
+    monkeypatch.setattr(
+        client, "post_and_parse", AsyncMock(return_value=("job-1", {"status": "pending"}))
+    )
+    closed = asyncio.Event()
+
+    async def stalled_poll(*args: object, **kwargs: object) -> None:
+        try:
+            await asyncio.Future()
+        finally:
+            closed.set()
+
+    monkeypatch.setattr(client, "get_and_parse", stalled_poll)
+    with pytest.raises(ProviderError):
+        await asyncio.wait_for(
+            client.generate("A river", options={}, poll_timeout=0.01, poll_interval=0),
+            timeout=1,
+        )
+
+    assert closed.is_set()
 
 
 def test_music_payload_uses_audio_modalities_and_reference_images() -> None:
