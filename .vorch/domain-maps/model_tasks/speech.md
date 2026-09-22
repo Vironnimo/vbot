@@ -89,7 +89,9 @@ STT and TTS use managed data-directory environments and child processes; the imm
 runtime is not changed. Managed verification and execution workers use `-I -B`:
 isolated mode alone ignores `PYTHONDONTWRITEBYTECODE` and would allow STT imports
 to create bytecode inside the release. Managed STT installs both the declared core dependencies and the
-local-speech extra because its worker imports vBot source. The source-install STT path
+local-speech extra because its worker imports vBot source. Its startup imports only
+the local speech implementation through the lazy Task Model package facade, so
+unrelated task dependencies do not become STT requirements. The source-install STT path
 retains its legacy server-interpreter pip recipe. Fixed recipes preserve compatible Torch
 or install the selected CUDA/CPU build and verify
 imports plus NVIDIA execution in a fresh process. Status is process-local and survives browser
@@ -116,7 +118,7 @@ is included in progress snapshots.
 
 Coverage: `tests/core/model_tasks/test_speech_local.py` tests custom engine
 substitution, cache/lifecycle, cancellation, decode/resampling/chunk coverage,
-failures, request progress, fixed setup commands/retry/cancellation and native
+failures, isolated managed-worker startup, request progress, fixed setup commands/retry/cancellation and native
 adapter calls without downloading weights. `test_speech.py`
 covers service error translation and Provider routing; Runtime registration and
 cleanup are covered by `tests/core/runtime/test_runtime.py`.

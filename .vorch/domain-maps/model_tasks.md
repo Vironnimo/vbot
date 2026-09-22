@@ -11,6 +11,8 @@ The single deep task module: bindings from specialized task types to concrete pr
 
 `options.py` owns option validation and task dispatch. Its internal `_option_types.py` holds field records and shared constructors; `_image_options.py` and `_media_options.py` build image and speech/video/music fields from existing Model facts. Public option imports and schema behavior remain unchanged.
 
+The package `__init__.py` resolves public exports on demand. The standalone managed STT worker imports `speech_local.py` without loading unrelated task implementations and their dependencies. Settings modules import Task Model constants from `constants.py` at module load; `paths.py` resolves target equality when preparing a patch, after package initialization.
+
 Execution details live in child maps (`model_tasks/speech.md`, `image.md`, `embeddings.md`, `video.md`, `music.md`); the shared wire base class is `ProviderTaskClient` in `core/providers/task_client.py` (see `providers.md`). Runtime wires `TaskModelService` after providers/models/credentials/storage, then constructs the per-task execution services. Provider-backed target visibility delegates to `ModelRegistry.query()` plus usable credentials; local targets bypass catalogs/credentials but must register explicitly with `LocalTaskTargetRegistry`.
 
 ## Data Model

@@ -6,6 +6,7 @@ import asyncio
 import io
 import json
 import os
+import subprocess
 import sys
 import threading
 import wave
@@ -659,6 +660,27 @@ def test_managed_stt_worker_returns_typed_result_and_forwards_progress(
     assert popen.call_args.args[0][:3] == [str(setup.python), "-I", "-B"]
     request = json.loads(process.stdin.getvalue())
     assert request["options"] == {"language": "en"}
+
+
+def test_managed_stt_worker_starts_without_unrelated_image_dependencies(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[3]
+    worker = root / "core" / "model_tasks" / "speech_worker.py"
+    startup = (
+        "import runpy, sys\n"
+        "sys.modules['pillow_heif'] = None\n"
+        "sys.argv = sys.argv[1:]\n"
+        "runpy.run_path(sys.argv[0], run_name='__main__')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-B", "-c", startup, str(worker), "--stt", "nemotron3.5-asr", str(root)],
+        input="",
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_packaged_detection_requires_release_and_shipped_app_source(
