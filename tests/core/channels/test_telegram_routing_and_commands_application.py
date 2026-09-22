@@ -12,9 +12,37 @@ import pytest
 import core.channels.telegram as telegram_module
 from tests.core.channels.telegram_test_support import (
     make_adapter,
+    make_update,
 )
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
+
+
+@pytest.mark.asyncio
+async def test_stop_drains_updates_before_stopping_workers(tmp_path, monkeypatch):
+    adapter, _, _, bot = make_adapter(tmp_path, monkeypatch, allowed_chat_ids=[12345])
+    application = adapter._application
+    admitted = []
+
+    async def drain_pending_updates():
+        await adapter._handle_inbound_message(
+            make_update(chat_id=12345, user_id=50, text="last question", message_id=1),
+            None,
+        )
+        admitted.append(adapter._inbound._forward_comment_tasks["12345"])
+        # PTB drains pending handlers in Application.stop, while the bot must
+        # still be available for acknowledgements and immediate command replies.
+        assert adapter._require_bot() is bot
+
+    application.stop.side_effect = drain_pending_updates
+    try:
+        await adapter.stop()
+        assert len(admitted) == 1
+        assert admitted[0].done()
+        assert not adapter._inbound._pending_forward_comments
+        assert not adapter._engine._chat_workers
+    finally:
+        await adapter._stop_workers()
 
 
 @pytest.mark.asyncio

@@ -245,21 +245,20 @@ class TelegramChannelAdapter(ChannelAdapter):
     async def stop(self) -> None:
         """Stop polling, cancel engine workers and album tasks, and release resources."""
         self._stop_event.set()
-        await self._stop_workers()
-        # A graceful stop must not lose a watermark save: the next start would
-        # otherwise replay already-processed updates as duplicate Runs.
-        await self._await_offset_saves()
-
         application = self._application
+        if application is not None:
+            updater = application.updater
+            if updater is not None:
+                await self._run_lifecycle_step(updater.stop, "updater.stop")
+            # PTB drains pending updates here. Keep the bot available for their
+            # acknowledgements, then stop the workers those updates could create.
+            await self._run_lifecycle_step(application.stop, "application.stop")
+        await self._stop_workers()
+        # Include saves scheduled by the final drained handlers.
+        await self._await_offset_saves()
         self._application = None
-        if application is None:
-            return
-
-        updater = application.updater
-        if updater is not None:
-            await self._run_lifecycle_step(updater.stop, "updater.stop")
-        await self._run_lifecycle_step(application.stop, "application.stop")
-        await self._run_lifecycle_step(application.shutdown, "application.shutdown")
+        if application is not None:
+            await self._run_lifecycle_step(application.shutdown, "application.shutdown")
 
     async def send(
         self,
