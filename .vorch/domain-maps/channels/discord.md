@@ -30,6 +30,7 @@ Shutdown closes inbound admission and cancels/drains Gateway message callbacks b
 ## Outbound
 
 - Discord message content is split at 2000 characters. Files are sent in batches of at most 10; text chunks and file batches share sends by index, so the caption appears only on the first send.
+- Transient send failures retry only the current payload through shared bounded backoff; upload handles are recreated on each attempt. Exhaustion is non-retryable to the engine so it cannot resend earlier acknowledged chunks. Transient target lookup failures remain retryable before any payload has been sent.
 - Group replies reference only the first outbound chunk using a partial-message reference with `fail_if_not_exists=False` and do not mention the replied-to author. Proactive `channel_send` output has no reply reference.
 - `activity_indicator` uses `channel.typing()` for the Run/compaction scope. Indicator failures are cosmetic and do not fail the Run.
 - Target ids resolve from the client cache first, then `fetch_channel()`. `ensure_outbound_session()` is synchronous and therefore uses a target already seen, cached, or resolved by the preceding send.

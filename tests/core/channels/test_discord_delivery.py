@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -21,6 +23,7 @@ from core.channels.discord import (
 from core.chat.content_blocks import MediaBlock, TextBlock
 from core.extensions import InteractionButton
 from core.sessions import SessionAddress
+from core.utils.retry import retry_async
 from tests.core.channels.discord_helpers import (
     FakeAttachment,
     FakeChannel,
@@ -304,3 +307,98 @@ def test_rate_limit_classification_carries_retry_hint(
 
     assert classified.retryable is True
     assert classified.retry_after == 3.0
+
+
+def _fast_payload_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def retry_payload(
+        function: Callable[..., Awaitable[Any]], *args: Any, **kwargs: Any
+    ) -> Any:
+        return await retry_async(function, *args, max_retries=2, initial_delay=0, **kwargs)
+
+    monkeypatch.setattr(discord_module, "retry_async", retry_payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exhaust_retries", [False, True])
+async def test_reply_retries_only_failed_chunk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exhaust_retries: bool
+) -> None:
+    _fast_payload_retries(monkeypatch)
+    channel = FakeChannel(100, guild=SimpleNamespace(id=1))
+    adapter, _sessions, _trigger, _client = make_adapter(tmp_path, target=channel)
+    attempts: list[dict[str, Any]] = []
+    first_chunk = "x" * DISCORD_MESSAGE_LIMIT
+
+    async def send(**payload: Any) -> None:
+        attempts.append(payload)
+        if payload["content"] == "tail" and (exhaust_retries or len(attempts) == 2):
+            raise TimeoutError("second chunk unavailable")
+        channel.sent.append(payload)
+
+    monkeypatch.setattr(channel, "send", send)
+    try:
+        if exhaust_retries:
+            with pytest.raises(ChannelError) as failure:
+                # Model the engine's outer retry: it must never replay acknowledged chunks.
+                await retry_async(
+                    adapter.send_text,
+                    "100",
+                    first_chunk + "tail",
+                    max_retries=1,
+                    initial_delay=0,
+                )
+            assert failure.value.retryable is False
+            assert [entry["content"] for entry in attempts] == [first_chunk, "tail", "tail", "tail"]
+            assert [entry["content"] for entry in channel.sent] == [first_chunk]
+        else:
+            await adapter.send_text("100", first_chunk + "tail", reply_to_message_id="200")
+            assert [entry["content"] for entry in attempts] == [first_chunk, "tail", "tail"]
+            assert [entry["content"] for entry in channel.sent] == [first_chunk, "tail"]
+            assert "reference" in attempts[0]
+            assert all("reference" not in entry for entry in attempts[1:])
+    finally:
+        await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_file_retry_recreates_consumed_sdk_file_handles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fast_payload_retries(monkeypatch)
+    channel = FakeChannel(100, guild=SimpleNamespace(id=1))
+    adapter, _sessions, _trigger, _client = make_adapter(tmp_path, target=channel)
+    uploads: list[Any] = []
+
+    async def send(**payload: Any) -> None:
+        uploaded = payload["files"][0]
+        uploads.append(uploaded)
+        assert uploaded.fp.read() == b"file bytes"
+        # discord.py consumes the stream and closes its SDK wrapper on either outcome.
+        uploaded.close()
+        if len(uploads) == 1:
+            raise TimeoutError("upload unavailable")
+
+    monkeypatch.setattr(channel, "send", send)
+    try:
+        await adapter.send(
+            "caption", "100", files=[FileData("file.txt", "text/plain", b"file bytes")]
+        )
+        assert len(uploads) == 2
+        assert uploads[0] is not uploads[1]
+        assert all(uploaded.fp.closed for uploaded in uploads)
+    finally:
+        await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_uncached_target_lookup_can_retry_transient_failure(tmp_path: Path) -> None:
+    channel = FakeChannel(100, guild=None, recipient_id=50)
+    adapter, _sessions, _trigger, client = make_adapter(tmp_path, target=channel)
+    client._channels.clear()
+    client.fetch_channel = AsyncMock(side_effect=[TimeoutError("lookup unavailable"), channel])
+    try:
+        await retry_async(adapter.send_text, "100", "hello", max_retries=1, initial_delay=0)
+        assert client.fetch_channel.await_count == 2
+        assert [entry["content"] for entry in channel.sent] == ["hello"]
+    finally:
+        await adapter.stop()
