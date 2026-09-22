@@ -21,6 +21,28 @@ def service(tmp_path: Path) -> CalendarService:
     return CalendarService(tmp_path, tz="Europe/Berlin")
 
 
+@pytest.mark.parametrize("start", ["2026-09-03", "2026-09-03T09:00:00"])
+def test_occurrence_limit_applies_to_each_event(service, start):
+    events = [
+        service.create_event(title=title, start=start, rrule={"freq": "daily"})
+        for title in ("First", "Second")
+    ]
+    occurrences = service.occurrences_in_window(
+        datetime(2026, 9, 3, tzinfo=UTC), datetime(2026, 9, 10, tzinfo=UTC), max_per_event=2
+    )
+    assert len(occurrences) == 4
+    for event in events:
+        assert sum(item.event_id == event.id for item in occurrences) == 2
+
+
+@pytest.mark.parametrize("limit", [0, -1, True, 1.5])
+def test_invalid_occurrence_limit_is_rejected(service, limit):
+    with pytest.raises(CalendarValidationError):
+        service.occurrences_in_window(
+            datetime(2026, 9, 3, tzinfo=UTC), datetime(2026, 9, 10, tzinfo=UTC), max_per_event=limit
+        )
+
+
 class TestCreateEvent:
     def test_conflicting_recurrence_limits_cannot_mutate_store(self, service):
         event = service.create_event(title="Existing", start="2026-09-03")

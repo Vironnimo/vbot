@@ -275,6 +275,12 @@ class CalendarService:
         max_per_event: int = MAX_OCCURRENCES_PER_EVENT,
     ) -> list[EventOccurrence]:
         """Expand all events into occurrences overlapping the half-open window."""
+        if (
+            isinstance(max_per_event, bool)
+            or not isinstance(max_per_event, int)
+            or max_per_event < 1
+        ):
+            raise CalendarValidationError("max_per_event must be a positive integer")
         self._ensure_events_loaded(allow_degraded=True)
         window_start = _as_utc(window_start_utc)
         window_end = _as_utc(window_end_utc)
@@ -400,7 +406,7 @@ class CalendarService:
                     occurrence_start=start_date.isoformat(),
                     occurrence_end=None,
                 )
-                for start_date, end_date in pairs
+                for start_date, end_date in pairs[:max_per_event]
             ]
         spans = self._timed_occurrence_spans(event, window_start, window_end)
         zone = _resolve_zone(event.tz_name) if event.tz_name else system_tz
@@ -418,7 +424,7 @@ class CalendarService:
                 occurrence_start=_local_naive_iso(start_utc, zone),
                 occurrence_end=_local_naive_iso(end_utc, zone),
             )
-            for start_utc, end_utc in spans
+            for start_utc, end_utc in spans[:max_per_event]
         ]
 
     def _timed_occurrence_spans(
