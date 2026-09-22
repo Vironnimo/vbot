@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -115,6 +116,23 @@ def persisted_roles(messages: list[ChatMessage]) -> list[str]:
 
 def persisted_dict_roles(messages: list[JsonObject]) -> list[str]:
     return [str(message["role"]) for message in messages if message.get("role") != "run_summary"]
+
+
+def quoted_json_objects(text: str) -> list[JsonObject]:
+    """Decode every complete top-level JSON object quoted inside rendered text."""
+    decoder = json.JSONDecoder()
+    objects: list[JsonObject] = []
+    index = text.find("{")
+    while index != -1:
+        try:
+            value, end = decoder.raw_decode(text, index)
+        except json.JSONDecodeError:
+            index = text.find("{", index + 1)
+            continue
+        if isinstance(value, dict):
+            objects.append(value)
+        index = text.find("{", end)
+    return objects
 
 
 @dataclass(frozen=True)

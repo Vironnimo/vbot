@@ -296,7 +296,7 @@ def _portable_assistant_reasoning_note(
     has_readable_answer = isinstance(message.content, str) and bool(message.content.strip())
     if has_readable_answer and not message.tool_calls:
         return None
-    quoted = _quote_external_text("readable_reasoning", reasoning)
+    quoted = _quote_external_json({"readable_reasoning": reasoning})
     return ChatMessage.note(
         f"{PORTABLE_REASONING_NOTE_HEADER}\n{quoted}",
         timestamp=datetime.fromisoformat(message.timestamp),
@@ -652,17 +652,19 @@ def _untrusted_channel_messages_request(notes: list[ChatMessage]) -> JsonObject:
         note.validate()
         content = note.content if isinstance(note.content, str) else ""
         quoted = content.removeprefix(CHANNEL_MESSAGE_NOTE_PREFIX)
-        lines.append(_quote_external_text("quoted_group_message", quoted))
+        lines.append(_quote_external_json({"quoted_group_message": quoted}))
     return {"role": "user", "content": "\n".join(lines)}
 
 
-def _quote_external_text(field: str, text: str) -> str:
-    """JSON-quote external text for kernel-authored request context.
+def _quote_external_json(value: JsonObject) -> str:
+    """JSON-quote external data for kernel-authored request context.
 
     Angle brackets are escaped too, so the quoted text can neither close nor
-    impersonate a System Reminder or another context marker.
+    impersonate a System Reminder or another context marker. Every Chat-owned
+    reminder or quote that carries user, Model, Provider, or channel text uses
+    this one encoding.
     """
-    serialized = json.dumps({field: text}, ensure_ascii=False)
+    serialized = json.dumps(value, ensure_ascii=False)
     return serialized.replace("<", "\\u003c").replace(">", "\\u003e")
 
 
@@ -674,7 +676,7 @@ def _system_reminder_block(message: ChatMessage) -> str:
         content = reply_surface.reminder_text()
     if message.role == "error" and isinstance(content, str):
         # Model-visible error text can carry raw Provider payloads.
-        content = _quote_external_text("run_error", content)
+        content = _quote_external_json({"run_error": content})
     if isinstance(content, str):
         for prefix in (
             SKILL_AVAILABLE_NOTE_PREFIX,
