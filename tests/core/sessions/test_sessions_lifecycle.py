@@ -37,6 +37,55 @@ def test_move_updates_the_composite_address_without_losing_history(manager) -> N
     assert moved.load() == [message]
 
 
+@pytest.mark.parametrize("restoring", [False, True])
+def test_identity_reference_changes_roll_back_together(manager, monkeypatch, restoring) -> None:
+    from core.sessions import _store_values
+
+    children = [manager.create("child", session_id=f"child-{index}") for index in range(2)]
+    for child in children:
+        manager.set_metadata(
+            child.address,
+            {"subagent_parent": {"agent_id": "old", "project_id": None, "session_id": "parent"}},
+        )
+    updates = manager.retarget_identity_agent_references("old", "new") if restoring else ()
+    before = [manager.get_metadata(child.address) for child in children]
+    original = _store_values._session_metadata_storage
+    calls = 0
+
+    def fail_second_write(metadata):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected metadata write failure")
+        return original(metadata)
+
+    monkeypatch.setattr(_store_values, "_session_metadata_storage", fail_second_write)
+    with pytest.raises(OSError):
+        if restoring:
+            manager.restore_identity_agent_references(updates)
+        else:
+            manager.retarget_identity_agent_references("old", "new")
+
+    assert [manager.get_metadata(child.address) for child in children] == before
+
+
+def test_identity_reference_retarget_skips_unrelated_sessions(manager) -> None:
+    changed = manager.create("child", session_id="changed")
+    unrelated = manager.create("child", session_id="unrelated")
+    qualified = manager.create("child", session_id="qualified")
+    manager.set_metadata(changed.address, {"subagent_parent": {"agent_id": "old"}})
+    manager.set_metadata(
+        qualified.address, {"subagent_parent": {"agent_id": "old", "project_id": "project"}}
+    )
+    before = [manager._store.state(session.address) for session in (unrelated, qualified)]
+
+    updates = manager.retarget_identity_agent_references("old", "new")
+
+    assert [update.address for update in updates] == [changed.address]
+    assert manager.get_metadata(changed.address)["subagent_parent"]["agent_id"] == "new"
+    assert [manager._store.state(session.address) for session in (unrelated, qualified)] == before
+
+
 def test_move_reads_and_transforms_metadata_inside_its_writer_transaction(
     manager, monkeypatch
 ) -> None:
