@@ -141,7 +141,7 @@ def _read_settings_unlocked(resolved_path: Path) -> dict[str, Any]:
                 time.sleep(_IO_RETRY_BASE_DELAY_SECONDS * (attempt + 1))
                 continue
             return {}
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return {}
         else:
             break
@@ -412,9 +412,8 @@ def _normalize_model_sensitivities(value: Any) -> dict[str, float]:
             or not isinstance(sensitivity, (int, float))
         ):
             continue
-        numeric = float(sensitivity)
-        if _MIN_WAKEWORD_SENSITIVITY <= numeric <= _MAX_WAKEWORD_SENSITIVITY:
-            normalized[model_id.strip()] = numeric
+        if _MIN_WAKEWORD_SENSITIVITY <= sensitivity <= _MAX_WAKEWORD_SENSITIVITY:
+            normalized[model_id.strip()] = float(sensitivity)
     return normalized
 
 
@@ -438,7 +437,9 @@ def _normalize_server_profiles(value: Any) -> dict[str, dict[str, Any]]:
             and (not isinstance(target_agent_id, str) or not target_agent_id.strip())
         ):
             continue
-        if "session_behavior" in profile and session_behavior not in {"active", "new"}:
+        if "session_behavior" in profile and (
+            not isinstance(session_behavior, str) or session_behavior not in {"active", "new"}
+        ):
             continue
         normalized_profile: dict[str, Any] = {}
         if "target_agent_id" in profile:
