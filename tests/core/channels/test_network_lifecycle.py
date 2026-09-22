@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -14,7 +15,7 @@ import pytest
 
 from core.channels.config import ChannelConfig, ChannelError
 from tests.core.channels.channels_helpers import make_service
-from tests.core.channels.test_network_channels import make_adapter
+from tests.core.channels.test_network_channels import event, make_adapter
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
@@ -211,3 +212,46 @@ async def test_pairing_preparation_prevents_deletion_until_cancelled(
         await service.aclose()
     service.delete_channel("wa")
     assert service.list_channels() == []
+
+
+@pytest.mark.asyncio
+async def test_cancelled_ingress_drains_receipt_write_before_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.channels import _network_adapter
+
+    adapter = make_adapter(tmp_path, "slack")
+    adapter._engine.handle_inbound_text = AsyncMock()
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    original_write = _network_adapter.atomic_write_text
+
+    def blocked_write(*args: Any) -> None:
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5)
+        original_write(*args)
+
+    monkeypatch.setattr(_network_adapter, "atomic_write_text", blocked_write)
+    receiving = asyncio.create_task(adapter.handle_event(event("slack")))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        receiving.cancel()
+        done, _ = await asyncio.wait((receiving,), timeout=0.02)
+        assert not done
+        receiving.cancel()
+        done, _ = await asyncio.wait((receiving,), timeout=0.02)
+        assert not done
+    finally:
+        release.set()
+        await asyncio.gather(receiving, return_exceptions=True)
+        await adapter.stop()
+    assert receiving.cancelled()
+    restarted = make_adapter(tmp_path, "slack")
+    restarted._engine.handle_inbound_text = AsyncMock()
+    try:
+        await restarted.load_seen()
+        await restarted.handle_event(event("slack"))
+        restarted._engine.handle_inbound_text.assert_not_awaited()
+    finally:
+        await restarted.stop()

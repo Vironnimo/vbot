@@ -11,7 +11,6 @@ import contextlib
 import json
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -35,12 +34,13 @@ from core.channels.engine import ChannelConversationEngine
 from core.chat.content_blocks import ContentBlock, TextBlock
 from core.utils.atomic import atomic_write_text
 from core.utils.retry import retry_async
+from core.utils.workers import BoundedWorkerPool
 
-_IO_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="channel-network-io")
+_IO_POOL = BoundedWorkerPool(name="channel-network-io", max_workers=4)
 
 
 async def channel_io(function: Callable[..., Any], *args: Any) -> Any:
-    return await asyncio.get_running_loop().run_in_executor(_IO_POOL, function, *args)
+    return await _IO_POOL.run(function, *args)
 
 
 class NetworkChannelAdapter(ChannelAdapter):
