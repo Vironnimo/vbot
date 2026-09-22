@@ -16,6 +16,10 @@ The App shell retains the selected Settings page and scroll offset while another
 
 `settingsView.js` owns normalization and payload builders shared by the panels. Each panel loads and submits through `api.js`, keeps editable values local until save, and adopts server responses after mutation. Decimal settings remain strings during editing and are normalized only when building the payload.
 
+`appearancePrefs.svelte.js` owns applying canonical appearance snapshots (language, Chat width, and Work details) for both App setup and SettingsView loads/commits. The Appearance panel submits its draft and forwards the response; it never publishes draft values into global preferences after an awaited save. A newer draft remains editable, and a failed follow-up save leaves the last confirmed appearance active (`SettingsView.test.appearance.test.js`).
+
+Provider operations and Model/Provider invalidations call `SettingsView.refreshProviderSettings` through `onRefreshProviderSettings`. This refresh replaces only the `providers` and `local_models` projections, preserving mounted editors, unrelated baselines, drafts, and in-flight saves. Provider projection commits use the separate `onCommitProviderSettings` boundary; unrelated Settings commits preserve the current Provider projection before publishing to App. Initial Settings loading owns the blocking loading/error surface; refresh failures report through the caller and retain the current editors. Newer refreshes and teardown invalidate older replies; a Provider-owned commit restarts a pending refresh so a Model-refresh result cannot discard another Provider invalidation (`SettingsView.test.provider-refresh.test.js`).
+
 Before adding or changing panel fields or saving behavior, read `webui/autosave.md` for the shared integration and input-continuity contract. Settings panels keep domain-specific normalization and payloads here; save timing, serialization, and transition flushing use that common mechanism.
 
 Cross-cutting value coercion for JSON-derived data lives in `webui/src/lib/values.js` (`isPlainObject` strict `[object Object]`, `asText`, `asOptionalText`).

@@ -524,9 +524,9 @@ async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
     A general capability: the fork is a normal, visible session that records its
     provenance (``fork_source``). Channel- and sub-agent bindings are always
     stripped so the copy is unbound; a cross-agent fork additionally drops the
-    pinned skill catalog so the target re-pins its own. The strip policy lives in
-    the server (``SESSION_FORK_*`` constants) so the sessions domain imports no
-    chat/channel constant.
+    pinned skill catalog so the target re-pins its own. Sessions owns the shared
+    ``SESSION_FORK_*`` metadata policy; the RPC selects the cross-Agent policy
+    when the destination changes.
     """
     supported_fields = {"agent_id", "session_id", "target_agent_id"}
     _reject_unsupported(params, supported_fields, "session.fork")
@@ -626,36 +626,29 @@ async def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject
             "get",
             _session_address(agent_id, session_id),
         )
-        metadata = dict(
-            await _session_io(
-                state.runtime.chat_sessions,
-                "get_metadata_async",
-                "get_metadata",
-                _session_address(agent_id, session_id),
+
+        def link_channel(metadata: JsonObject) -> None:
+            metadata.update(
+                {
+                    "source_channel_id": channel_id,
+                    "platform": channel_config.platform,
+                    "platform_conv_id": platform_conv_id,
+                    "last_reply_target": {
+                        "channel_id": channel_id,
+                        "platform_target": platform_conv_id,
+                    },
+                }
             )
+
+        previous, _updated = await _SESSION_RPC_WORKERS.run(
+            state.runtime.chat_sessions.mutate_metadata_with_previous,
+            _session_address(agent_id, session_id),
+            link_channel,
         )
         previous_link = (
-            metadata.get("source_channel_id"),
-            metadata.get("platform"),
-            metadata.get("platform_conv_id"),
-        )
-        metadata.update(
-            {
-                "source_channel_id": channel_id,
-                "platform": channel_config.platform,
-                "platform_conv_id": platform_conv_id,
-                "last_reply_target": {
-                    "channel_id": channel_id,
-                    "platform_target": platform_conv_id,
-                },
-            }
-        )
-        await _session_io(
-            state.runtime.chat_sessions,
-            "set_metadata_async",
-            "set_metadata",
-            _session_address(agent_id, session_id),
-            metadata,
+            previous.get("source_channel_id"),
+            previous.get("platform"),
+            previous.get("platform_conv_id"),
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -717,24 +710,6 @@ async def _set_session_compaction_policy(state: Any, params: JsonObject) -> Json
             "get",
             _session_address(agent_id, session_id, project_id),
         )
-        metadata = await _session_io(
-            state.runtime.chat_sessions,
-            "get_metadata_async",
-            "get_metadata",
-            _session_address(agent_id, session_id, project_id),
-        )
-        previous_override = metadata.get(COMPACTION_POLICY_META_KEY)
-        if normalized is None:
-            metadata.pop(COMPACTION_POLICY_META_KEY, None)
-        else:
-            metadata[COMPACTION_POLICY_META_KEY] = normalized
-        await _session_io(
-            state.runtime.chat_sessions,
-            "set_metadata_async",
-            "set_metadata",
-            _session_address(agent_id, session_id, project_id),
-            metadata,
-        )
         agent = await _SESSION_RPC_WORKERS.run(
             state.runtime.agent_resolver.resolve_agent,
             project_id,
@@ -747,6 +722,19 @@ async def _set_session_compaction_policy(state: Any, params: JsonObject) -> Json
             else await _SESSION_RPC_WORKERS.run(state.runtime.storage.load_compaction_settings)
         )
         effective = normalized or inherited
+
+        def set_policy(metadata: JsonObject) -> None:
+            if normalized is None:
+                metadata.pop(COMPACTION_POLICY_META_KEY, None)
+            else:
+                metadata[COMPACTION_POLICY_META_KEY] = normalized
+
+        previous, _updated = await _SESSION_RPC_WORKERS.run(
+            state.runtime.chat_sessions.mutate_metadata_with_previous,
+            _session_address(agent_id, session_id, project_id),
+            set_policy,
+        )
+        previous_override = previous.get(COMPACTION_POLICY_META_KEY)
     except StorageError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except Exception as exc:

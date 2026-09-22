@@ -74,6 +74,61 @@ def test_trace_count_logger_name() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["settings.patch", "settings.update"])
+async def test_settings_change_accepts_raw_null_extension_disabled_set(
+    tmp_path: Path, method: str
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage = StorageManager(tmp_path / "settings-data")
+    state.runtime.storage.save_settings({"extensions": {"disabled": None}})
+    params = (
+        {"operations": [{"op": "set", "path": "server.keep_awake", "value": False}]}
+        if method == "settings.patch"
+        else {"server": {"keep_awake": False}}
+    )
+
+    response = await dispatch_rpc(state, {"method": method, "params": params})
+
+    assert response["ok"] is True, response
+    assert state.runtime.storage.load_settings()["keep_awake"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["settings.patch", "settings.update"])
+async def test_disabling_extension_does_not_skip_simultaneous_recall_change(
+    tmp_path: Path, method: str
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage.save_settings(
+        {"extensions": {"disabled": []}, "recall": {"backend": "vector"}}
+    )
+    observed_backends: list[str] = []
+    state.runtime.reload_recall_backend = lambda: observed_backends.append(
+        state.runtime.storage.load_recall_settings()["backend"]
+    )
+    params = (
+        {
+            "operations": [
+                {"op": "set", "path": "extensions.disabled", "value": ["example"]},
+                {"op": "set", "path": "recall.backend", "value": "sqlite_fts"},
+            ]
+        }
+        if method == "settings.patch"
+        else {
+            "extensions": {"disabled": ["example"]},
+            "recall": {"backend": "sqlite_fts"},
+        }
+    )
+
+    response = await dispatch_rpc(state, {"method": method, "params": params})
+
+    assert response["ok"] is True, response
+    assert state.runtime.extension_disabled_changes == [{"example"}]
+    assert state.runtime.extension_reload_count == 0
+    assert observed_backends == ["sqlite_fts"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "operation",
     [

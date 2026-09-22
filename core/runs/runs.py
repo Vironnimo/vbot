@@ -146,11 +146,16 @@ class RunPersistence(Protocol):
 
 
 class ChatRunManager:
-    """Coordinates active chat runs across sessions."""
+    """Coordinate Runs with optional persistence supplied at construction.
+
+    Runtime supplies its Session manager. Omitting persistence creates an
+    in-memory manager; constructing Chat consumers never changes that choice.
+    """
 
     def __init__(
         self,
         *,
+        persistence: RunPersistence | None = None,
         completed_run_retention_limit: int = DEFAULT_COMPLETED_RUN_RETENTION_LIMIT,
         run_event_retention_limit: int = DEFAULT_RUN_EVENT_RETENTION_LIMIT,
         waiting_work_limit: int = DEFAULT_WAITING_WORK_LIMIT,
@@ -175,15 +180,10 @@ class ChatRunManager:
         self._run_event_retention_limit = run_event_retention_limit
         self._waiting_work_limit = waiting_work_limit
         self._closed = False
-        self._persistence: RunPersistence | None = None
+        self._persistence = persistence
         self._admission_validator = admission_validator
         self._maintenance_operation_id: str | None = None
         self._maintenance_origin: tuple[SessionAddress, str] | None = None
-
-    def bind_persistence(self, persistence: RunPersistence) -> None:
-        if self._persistence is not None and self._persistence is not persistence:
-            raise ValueError("Run persistence is already configured")
-        self._persistence = persistence
 
     async def maintenance_begin(
         self,

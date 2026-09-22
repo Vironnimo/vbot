@@ -89,7 +89,7 @@ export function createLocalProviderModels(context) {
         local_models: { context_windows: { [model.id]: value } },
       });
       context.onError('');
-      await context.onReloadSettings();
+      await context.onRefreshProviderSettings();
       await loadLocalModels();
       localContextDrafts = {};
     } catch (error) {

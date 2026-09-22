@@ -57,8 +57,10 @@ def test_translate_to_vitest_targets_resolves_named_mirror_test():
     targets, notes = module.translate_to_vitest_targets(["src/components/SettingsView.svelte"])
 
     assert targets == [
+        "src/components/__tests__/SettingsView.test.appearance.test.js",
         "src/components/__tests__/SettingsView.test.behavior.test.js",
         "src/components/__tests__/SettingsView.test.channels.test.js",
+        "src/components/__tests__/SettingsView.test.provider-refresh.test.js",
         "src/components/__tests__/SettingsView.test.providers.test.js",
         "src/components/__tests__/SettingsView.test.specialized-models.test.js",
         "src/components/__tests__/SettingsView.test.subagents-and-voice.test.js",

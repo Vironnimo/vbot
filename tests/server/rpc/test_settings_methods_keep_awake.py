@@ -45,7 +45,7 @@ async def test_unchanged_keep_awake_value_skips_the_live_seam(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_runtime_without_the_seam_still_saves(tmp_path: Path) -> None:
+async def test_explicit_disabled_keep_awake_value_is_saved(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
 
     result = await dispatch_rpc(

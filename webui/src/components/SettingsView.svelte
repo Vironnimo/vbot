@@ -22,7 +22,8 @@
   import EmptyState from './ui/EmptyState.svelte';
   import { getSettings } from '$lib/api.js';
   import { setApplicationTimeZone } from '$lib/dateTimePrefs.svelte.js';
-  import { init, t } from '$lib/i18n.js';
+  import { applyAppearanceSettings } from '$lib/appearancePrefs.svelte.js';
+  import { t } from '$lib/i18n.js';
   import { useAutosaveContext } from '$lib/autosave.js';
   import { SETTINGS_LAYOUT_CLASS } from '$lib/settingsView.js';
 
@@ -189,6 +190,8 @@
   let settings = $state(null);
   let loading = $state(true);
   let loadError = $state('');
+  let providerRefreshGeneration = 0;
+  let providerRefreshPending = false;
   let providersPanel = $state(null);
   let scrollContainer = $state(null);
   let documentRoot = $state(null);
@@ -207,6 +210,8 @@
   onMount(() => {
     loadSettings();
     return () => {
+      providerRefreshGeneration += 1;
+      providerRefreshPending = false;
       if (restoreFrame !== null) cancelAnimationFrame(restoreFrame);
     };
   });
@@ -412,14 +417,63 @@
     settings = nextSettings;
     setApplicationTimeZone(nextSettings?.general?.timezone);
 
-    const language = nextSettings?.appearance?.language ?? 'en';
-    init(language);
+    applyAppearanceSettings(nextSettings?.appearance);
   }
 
   function commitSettings(nextSettings) {
-    settings = nextSettings;
-    setApplicationTimeZone(nextSettings?.general?.timezone);
-    onSettingsCommit(nextSettings);
+    // Each other Settings editor saves its own section. Its full response may
+    // predate a Provider refresh, whose projection has an independent owner.
+    applySettings({
+      ...nextSettings,
+      providers: settings.providers,
+      local_models: settings.local_models,
+    });
+    onSettingsCommit(settings);
+  }
+
+  function commitProviderSettings(nextSettings) {
+    const refreshAfterCommit = providerRefreshPending;
+    providerRefreshGeneration += 1;
+    settings = {
+      ...settings,
+      providers: nextSettings.providers,
+      local_models: nextSettings.local_models,
+    };
+    onSettingsCommit(settings);
+    if (refreshAfterCommit) {
+      // A Model-refresh result may predate another Provider change. Re-read
+      // after its commit rather than losing the pending invalidation.
+      void refreshProviderSettings().catch(reportProviderRefreshError);
+    }
+  }
+
+  function reportProviderRefreshError(error) {
+    reportSettingsError(
+      `${t('settings.loadError', 'Settings could not be loaded.')} ${error.message}`,
+    );
+  }
+
+  async function refreshProviderSettings() {
+    const generation = ++providerRefreshGeneration;
+    providerRefreshPending = true;
+    try {
+      const nextSettings = await getSettings();
+      if (generation !== providerRefreshGeneration) return;
+      // Provider invalidations also refresh local Model context limits. Other
+      // editors retain their own baseline and pending draft; a Provider refresh
+      // must neither remount them nor turn remote values into local edits.
+      settings = {
+        ...settings,
+        providers: nextSettings.providers,
+        local_models: nextSettings.local_models,
+      };
+      onSettingsCommit(settings);
+    } catch (error) {
+      if (generation === providerRefreshGeneration) throw error;
+    } finally {
+      if (generation === providerRefreshGeneration)
+        providerRefreshPending = false;
+    }
   }
 
   async function loadSettings() {
@@ -455,10 +509,10 @@
       {providerAuthEvent}
       {connectProvider}
       {disconnectProvider}
-      onCommit={commitSettings}
+      onCommitProviderSettings={commitProviderSettings}
       {onToast}
       onError={(message) => reportSettingsError(message)}
-      onReloadSettings={loadSettings}
+      onRefreshProviderSettings={refreshProviderSettings}
       {modelsRefreshToken}
     />
   {:else if panelId === 'channels'}

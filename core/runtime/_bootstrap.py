@@ -404,7 +404,8 @@ def bootstrap(runtime: Runtime) -> None:
         )
         runtime._chat_sessions.recover_interrupted_runs()
         runtime._chat_run_manager = ChatRunManager(
-            admission_validator=runtime._validate_temporary_admission
+            persistence=runtime._chat_sessions,
+            admission_validator=runtime._validate_temporary_admission,
         )
         runtime.chat_runs = runtime._chat_run_manager
         if runtime._attachment_store is None:
