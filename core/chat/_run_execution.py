@@ -671,87 +671,94 @@ class RunExecution:
                 )
                 continue
 
-            def _close_candidate_adapter(
-                _adapter: Any = candidate_target.adapter,
-            ) -> Any:
-                return _close_adapter(_adapter)
-
-            run.add_cancel_callback(_close_candidate_adapter)
-            _LOGGER.info(
-                "Model fallback activated (run=%s from=%s to=%s)",
-                run.id,
-                from_binding,
-                binding,
-            )
-            run.emit(
-                MODEL_FALLBACK_ACTIVATED_EVENT,
-                {"from_model": from_binding, "to_model": binding},
-            )
-            await session.add_note_async(
-                f"Model {from_binding} unavailable. Switched to {binding} for this run."
-            )
-            if isinstance(last_failure, RunInterruptedError) and last_failure.result is not None:
-                await session.add_note_async(OUTPUT_INTEGRITY_RECOVERY_NOTE)
-            await context.session_snapshot.refresh(session)
-            live_messages = context.request_state.messages if context.request_state else []
-            context.request_state = await self._requests.build_request_state(
-                agent,
-                session,
-                inputs=RequestBuildInputs.from_context(
-                    context, candidate_target
-                ).with_session_messages(context.session_snapshot.active_messages),
-            )
-            context.request_state.messages[:] = await _CHAT_TRANSFORM_WORKERS.run(
-                _restore_in_run_tool_result_content,
-                context.request_state.messages,
-                live_messages,
-                input_modalities=candidate_target.input_modalities,
-                wire_media_types=candidate_target.wire_media_types,
-                image_budget=context.image_budget,
-            )
-            if context.continuation_reminder is not None:
-                assert context.prior_continuation is not None
-                context.continuation_reminder = render_continuation_reminder(
-                    context.prior_continuation,
-                    context_window=self._requests.resolve_context_window(agent, candidate_target),
-                )
-                context.request_state = _RequestState(
-                    inject_continuation_reminder(
-                        context.request_state.messages,
-                        context.continuation_reminder,
-                    ),
-                    context.request_state.tools,
-                    context.request_state.allowed_tool_names,
-                    context.request_state.session_tool_grants,
-                    context.request_state.tool_contracts,
-                )
-            # Rebuilding applies the fallback route's media and Tool
-            # capabilities. The persisted previous tool cycle may still carry
-            # Provider-specific reasoning, which must never cross the Provider
-            # boundary.
-            _strip_assistant_reasoning_fields(context.request_state.messages)
-            if self._compaction_service is not None:
-                context.request_state = await self._compaction_runs.maybe_auto_compact_state(
-                    context,
-                    candidate_target,
-                    usage=None,
-                    allow_continuation=True,
-                )
             try:
-                completed = await self._progression._send_until_final(context, candidate_target)
-                return completed, last_failure
-            except (ProviderError, RunInterruptedError) as candidate_failure:
-                if not should_advance_model_fallback_chain(candidate_failure):
-                    if isinstance(candidate_failure, RunInterruptedError):
+
+                def _close_candidate_adapter(
+                    _adapter: Any = candidate_target.adapter,
+                ) -> Any:
+                    return _close_adapter(_adapter)
+
+                run.add_cancel_callback(_close_candidate_adapter)
+                _LOGGER.info(
+                    "Model fallback activated (run=%s from=%s to=%s)",
+                    run.id,
+                    from_binding,
+                    binding,
+                )
+                run.emit(
+                    MODEL_FALLBACK_ACTIVATED_EVENT,
+                    {"from_model": from_binding, "to_model": binding},
+                )
+                await session.add_note_async(
+                    f"Model {from_binding} unavailable. Switched to {binding} for this run."
+                )
+                if (
+                    isinstance(last_failure, RunInterruptedError)
+                    and last_failure.result is not None
+                ):
+                    await session.add_note_async(OUTPUT_INTEGRITY_RECOVERY_NOTE)
+                await context.session_snapshot.refresh(session)
+                live_messages = context.request_state.messages if context.request_state else []
+                context.request_state = await self._requests.build_request_state(
+                    agent,
+                    session,
+                    inputs=RequestBuildInputs.from_context(
+                        context, candidate_target
+                    ).with_session_messages(context.session_snapshot.active_messages),
+                )
+                context.request_state.messages[:] = await _CHAT_TRANSFORM_WORKERS.run(
+                    _restore_in_run_tool_result_content,
+                    context.request_state.messages,
+                    live_messages,
+                    input_modalities=candidate_target.input_modalities,
+                    wire_media_types=candidate_target.wire_media_types,
+                    image_budget=context.image_budget,
+                )
+                if context.continuation_reminder is not None:
+                    assert context.prior_continuation is not None
+                    context.continuation_reminder = render_continuation_reminder(
+                        context.prior_continuation,
+                        context_window=self._requests.resolve_context_window(
+                            agent, candidate_target
+                        ),
+                    )
+                    context.request_state = _RequestState(
+                        inject_continuation_reminder(
+                            context.request_state.messages,
+                            context.continuation_reminder,
+                        ),
+                        context.request_state.tools,
+                        context.request_state.allowed_tool_names,
+                        context.request_state.session_tool_grants,
+                        context.request_state.tool_contracts,
+                    )
+                # Rebuilding applies the fallback route's media and Tool
+                # capabilities. The persisted previous tool cycle may still carry
+                # Provider-specific reasoning, which must never cross the Provider
+                # boundary.
+                _strip_assistant_reasoning_fields(context.request_state.messages)
+                if self._compaction_service is not None:
+                    context.request_state = await self._compaction_runs.maybe_auto_compact_state(
+                        context,
+                        candidate_target,
+                        usage=None,
+                        allow_continuation=True,
+                    )
+                try:
+                    completed = await self._progression._send_until_final(context, candidate_target)
+                    return completed, last_failure
+                except (ProviderError, RunInterruptedError) as candidate_failure:
+                    if not should_advance_model_fallback_chain(candidate_failure):
+                        if isinstance(candidate_failure, RunInterruptedError):
+                            raise
+                        await _persist_run_error(run, session, candidate_failure)
                         raise
+                    last_failure = candidate_failure
+                    from_binding = binding
+                    continue
+                except (ChatError, ConfigError, VBotError) as candidate_failure:
                     await _persist_run_error(run, session, candidate_failure)
                     raise
-                last_failure = candidate_failure
-                from_binding = binding
-                continue
-            except (ChatError, ConfigError, VBotError) as candidate_failure:
-                await _persist_run_error(run, session, candidate_failure)
-                raise
             finally:
                 await _close_adapter(candidate_target.adapter)
         return None, last_failure
