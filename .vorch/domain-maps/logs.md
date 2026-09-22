@@ -19,6 +19,7 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
   - `raw: string` - the source line(s) verbatim (continuation rows joined with `\n`), so an accessor can copy an entry exactly as written to the file; `message`/`level` are derived/normalized, `raw` is not
 - Live stream entry event: `{ type: "append" | "reset", file: string, entries: ParsedLogEntry[] }`
 - Live stream catalog event: `{ type: "catalog", file: string, files: string[], default_file: string | null }`
+- Server transport keepalive: `{ type: "heartbeat", timestamp: string }` after 25 seconds without a delivered frame. It has no file, cursor, entries, or sequence and must not change the log projection; it is not a `LogViewer.subscribe()` data event.
 
 ## Interfaces
 

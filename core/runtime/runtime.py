@@ -744,6 +744,7 @@ class Runtime:
         data_dir_credentials = self.storage.load_environment()
         self._fallback_environment = dict(data_dir_credentials)
         self.provider_credentials.reload_fallback_credentials(data_dir_credentials)
+        self._skill_operations().reload_environment(data_dir_credentials)
 
     def reload_custom_providers(self) -> None:
         """Reload Settings-owned Provider and Model overlays in place."""

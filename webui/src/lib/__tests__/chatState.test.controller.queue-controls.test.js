@@ -291,7 +291,49 @@ describe('chat controller', () => {
         status: 'cancelled',
       }),
     ]);
-    expect(chatState.cancellingRun).toBe(false);
+    expect(sessionState.cancellingRunIds).toEqual([]);
+  });
+
+  it('keeps pending cancellation on its exact Session and Run across navigation and successors', async () => {
+    const first = deferred();
+    const second = deferred();
+    const successor = deferred();
+    const cancelRun = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockReturnValueOnce(successor.promise);
+    const { chatState, controller } = setup({
+      operationOverrides: { cancelRun },
+    });
+    const a = ensureSessionState(chatState, 'alpha', 'one');
+    const b = ensureSessionState(chatState, 'beta', 'two');
+    a.currentRun = { runId: 'a', status: 'running' };
+    b.currentRun = { runId: 'b', status: 'running' };
+    const cancellingA = controller.cancelActiveRun(a);
+    await controller.cancelActiveRun(a);
+    expect(cancelRun).toHaveBeenCalledTimes(1);
+    expect(a.cancellingRunIds).toEqual(['a']);
+    expect(b.cancellingRunIds).toEqual([]);
+    const cancellingB = controller.cancelActiveRun(b);
+    a.currentRun = { runId: 'a-next', status: 'running' };
+    expect(a.cancellingRunIds).not.toContain('a-next');
+    const cancellingNext = controller.cancelActiveRun(a);
+    first.reject(new Error('old cancellation failed'));
+    await cancellingA;
+    expect(a.actionError).toBe('');
+    expect(a.cancellingRunIds).toEqual(['a-next']);
+    expect(b.cancellingRunIds).toEqual(['b']);
+    second.reject(new Error('cancel b failed'));
+    successor.reject(new Error('cancel successor failed'));
+    await Promise.all([cancellingB, cancellingNext]);
+    expect(a.cancellingRunIds).toEqual([]);
+    expect(b.cancellingRunIds).toEqual([]);
+    expect(cancelRun.mock.calls.map(([id]) => id)).toEqual([
+      'a',
+      'b',
+      'a-next',
+    ]);
   });
 
   it('cancels a background Process and settles its status projection', async () => {

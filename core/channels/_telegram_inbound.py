@@ -117,9 +117,8 @@ class TelegramInboundBuffer:
         # Losing an entire inbound album is not "expected"; carry the traceback so the
         # dropped media is diagnosable beyond str(error).
         _LOGGER.warning(
-            "Telegram album flush failed (channel=%s album=%s): %s",
+            "Telegram album flush failed (channel=%s): %s",
             self._channel_id,
-            album_id,
             error,
             exc_info=(type(error), error, error.__traceback__),
         )
@@ -211,9 +210,8 @@ class TelegramInboundBuffer:
         if error is None:
             return
         _LOGGER.warning(
-            "Telegram forward-comment flush failed (channel=%s target=%s): %s",
+            "Telegram forward-comment flush failed (channel=%s): %s",
             self._channel_id,
-            chat_id,
             error,
             exc_info=(type(error), error, error.__traceback__),
         )

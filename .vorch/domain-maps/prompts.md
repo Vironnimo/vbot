@@ -21,7 +21,7 @@ Domain-specific vocabulary for System Prompt assembly. These are all prompt-doma
 **Not:** Definitions or text - the layout owns order + enabled only.
 
 ### Block Owner (three-gate filter)
-**Definition:** A block renders only when all three gates hold: user-enabled (layout on) + owner-active + non-empty after expansion. The **owner** - `always` / `identity` / `memory` / `tool:<name>` / `channel` / `extension:<name>` - is gate 2: `identity` requires an Identity/Memory Workspace, `channel` drops entirely without an enabled Channel config for that Agent, `memory` renders whenever `memory_prompt_mode` is on regardless of Tool permission.
+**Definition:** A block renders only when all three gates hold: user-enabled (layout on) + owner-active + non-empty after expansion. The **owner** - `always` / `identity` / `memory` / `tool:<name>` / `channel` / `extension:<name>` - is gate 2: `identity` requires an Identity/Memory Workspace, `channel` drops entirely without an enabled Channel config for that Agent, `memory` requires an Identity/Memory Workspace and renders whenever `memory_prompt_mode` is on regardless of Tool permission.
 **Not:** The Source prefix - owner is the activation condition, source is provenance; both may read `tool:`/`extension:` but are distinct fields.
 
 ### Source prefix
