@@ -6,6 +6,8 @@ import pytest
 
 from core.providers.github_copilot_policy import RESPONSES_ENDPOINT
 from core.providers.github_copilot_responses import (
+    ResponsesStreamState,
+    iter_responses_sse_deltas_with_state,
     normalize_responses_response,
 )
 from tests.core.providers.github_copilot_responses_helpers import (
@@ -798,3 +800,52 @@ def test_empty_completion_replays_accumulated_function_arguments():
         -1
     ]
     assert metadata["response_output"][0]["arguments"] == '{"path":"x"}'
+
+
+@pytest.mark.parametrize(
+    "fragments",
+    [
+        ['{"value":', '{"value":', "1}}"],
+        ['{"value":', '{"value":1}}'],
+    ],
+)
+@pytest.mark.parametrize("terminal_snapshot", [False, True])
+def test_argument_deltas_preserve_repeated_or_prefix_overlapping_fragments(
+    fragments: list[str], terminal_snapshot: bool
+) -> None:
+    item = {
+        "type": "function_call",
+        "id": "fc_1",
+        "call_id": "call_1",
+        "name": "write",
+        "arguments": "",
+    }
+    lines = [_sse("response.output_item.added", {"output_index": 0, "item": item})]
+    lines.extend(
+        _sse("response.function_call_arguments.delta", {"item_id": "fc_1", "delta": part})
+        for part in fragments
+    )
+    arguments = "".join(fragments)
+    lines.append(
+        _sse(
+            "response.completed",
+            {
+                "response": {
+                    "status": "completed",
+                    "output": [{**item, "arguments": arguments}] if terminal_snapshot else [],
+                }
+            },
+        )
+    )
+    state = ResponsesStreamState()
+    deltas = list(iter_responses_sse_deltas_with_state(lines, state))
+
+    assert (
+        "".join(delta["arguments_delta"] for delta in deltas if delta["type"] == "tool_call_delta")
+        == arguments
+    )
+    result = state.normalized_response()
+    assert result["tool_calls"] == [
+        {"id": "call_1", "name": "write", "arguments": {"value": {"value": 1}}}
+    ]
+    assert result["reasoning_meta"]["response_output"][0]["arguments"] == arguments

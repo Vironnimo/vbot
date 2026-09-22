@@ -114,16 +114,17 @@ class AnthropicMessagesStreamDecoder:
             block_state["id"] = tool_call_id
             block_state["name"] = name if isinstance(name, str) else ""
             self.content_blocks_by_index[index] = block_state
-            if block_state["name"]:
-                return [
-                    {
-                        "type": "tool_call_delta",
-                        "id": tool_call_id,
-                        "name_delta": block_state["name"],
-                        "arguments_delta": "",
-                    }
-                ]
-            return []
+            # An empty/malformed name is still an addressable Tool attempt.
+            # Register its identity even if no argument fragments follow, so
+            # canonical finalization can reject it without losing its Result.
+            return [
+                {
+                    "type": "tool_call_delta",
+                    "id": tool_call_id,
+                    "name_delta": block_state["name"],
+                    "arguments_delta": "",
+                }
+            ]
 
         reasoning_block = self._reasoning_block_normalizer(content_block)
         if reasoning_block:
@@ -194,15 +195,17 @@ class AnthropicMessagesStreamDecoder:
             output_tokens = usage.get("output_tokens")
             terminal_input_usage = _extract_anthropic_stream_input_usage(usage)
             input_usage = terminal_input_usage or self.usage_from_start
+            normalized_usage: dict[str, Any] = {"type": "usage"}
+            if input_usage is not None:
+                normalized_usage.update(input_usage)
             if (
                 isinstance(output_tokens, int)
                 and not isinstance(output_tokens, bool)
                 and output_tokens >= 0
                 and (input_usage is not None or self._emit_usage_without_start)
             ):
-                normalized_usage = {"type": "usage", "output_tokens": output_tokens}
-                if input_usage is not None:
-                    normalized_usage.update(input_usage)
+                normalized_usage["output_tokens"] = output_tokens
+            if "input_tokens" in normalized_usage or "output_tokens" in normalized_usage:
                 apply_anthropic_reasoning_usage(normalized_usage, usage)
                 normalized_deltas.append(normalized_usage)
         return normalized_deltas
@@ -275,6 +278,8 @@ class AnthropicMessagesStreamDecoder:
         *,
         has_tool_calls: bool,
     ) -> TerminalOutcome:
+        if not isinstance(stop_reason, str):
+            return TERMINAL_OUTCOME_UNKNOWN
         if stop_reason in ANTHROPIC_TOOL_STOP_REASONS:
             return TERMINAL_OUTCOME_TOOL_CALLS
         if stop_reason in ANTHROPIC_STOP_REASONS:

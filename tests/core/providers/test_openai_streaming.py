@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator, AsyncIterator
+from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -93,3 +96,33 @@ async def test_codex_stream_rebuilds_headers_per_connect_attempt() -> None:
     assert route.call_count == 2
     assert route.calls[0].request.headers.get("chatgpt-account-id") == "acct-stale"
     assert route.calls[1].request.headers.get("chatgpt-account-id") == "acct-fresh"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conversation_id", [None, "agent:session"])
+async def test_closing_partial_codex_sse_stream_closes_response(
+    conversation_id: str | None,
+) -> None:
+    async def lines() -> AsyncIterator[str]:
+        yield 'data: {"type":"response.output_text.delta","delta":"partial"}'
+        yield ""
+
+    response = SimpleNamespace(aiter_lines=lines, aclose=AsyncMock())
+    adapter = OpenAIAdapter(
+        _subscription_config(),
+        _jwt_with_account("acct_openai"),
+        connection_mode=CODEX_RESPONSES_MODE,
+        codex_websocket_connect=AsyncMock(side_effect=OSError("connection unavailable")),
+    )
+    stream = cast(
+        AsyncGenerator[dict[str, Any], None],
+        adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.6-terra", conversation_id=conversation_id),
+    )
+    try:
+        with patch.object(adapter, "_connect_stream", AsyncMock(return_value=response)):
+            assert await anext(stream) == {"type": "content_delta", "text": "partial"}
+            await stream.aclose()
+            response.aclose.assert_awaited_once()
+    finally:
+        await stream.aclose()
+        await adapter.aclose()

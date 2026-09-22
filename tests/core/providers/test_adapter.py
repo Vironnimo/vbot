@@ -6,8 +6,9 @@ forbidden, concrete subclasses must implement both ``send()`` and
 raw provider SSE chunks.
 """
 
+import sys
 from collections.abc import AsyncIterator
-from typing import get_type_hints
+from typing import Any, get_type_hints
 
 import pytest
 
@@ -338,6 +339,37 @@ def test_normalize_tool_call_candidates_does_not_recover_ambiguous_suffix() -> N
     )
 
     assert len(candidates) == 1
+    assert candidates[0]["arguments"] == {}
+    assert candidates[0]["rejection"]["code"] == "malformed_tool_arguments"
+
+
+@pytest.mark.parametrize("kind", ["deep_text", "deep_object", "large_integer"])
+def test_tool_argument_decoder_limits_preserve_a_correlated_rejection(kind: str) -> None:
+    arguments: str | dict[str, Any]
+    if kind == "large_integer":
+        digit_limit = sys.get_int_max_str_digits()
+        if not digit_limit:
+            pytest.skip("Interpreter integer string limit is disabled")
+        arguments = '{"value":' + "1" * (digit_limit + 1) + "}"
+    elif kind == "deep_text":
+        arguments = '{"value":' + "[" * 20000 + "0" + "]" * 20000 + "}"
+    else:
+        nested: dict[str, Any] = {}
+        arguments = nested
+        for _ in range(20000):
+            child: dict[str, Any] = {}
+            nested["value"] = child
+            nested = child
+
+    candidates = normalize_tool_call_candidates(
+        tool_call_id="call_unreadable",
+        name="inspect",
+        arguments=arguments,
+        fallback_id="tool_call_0",
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0]["id"] == "call_unreadable"
     assert candidates[0]["arguments"] == {}
     assert candidates[0]["rejection"]["code"] == "malformed_tool_arguments"
 
