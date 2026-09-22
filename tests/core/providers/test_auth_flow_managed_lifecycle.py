@@ -16,6 +16,78 @@ from tests.core.providers.auth_flow_helpers import (
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["cancel", "close", "replace"])
+async def test_managed_flow_owns_pending_authorization(tmp_path: Path, stop: str) -> None:
+    engine = DeviceFlowEngine(TokenStore(tmp_path))
+    session = DeviceFlowSession("device", "user", "https://example.test", 900, 5)
+    started, release = asyncio.Event(), asyncio.Event()
+    calls = 0
+
+    async def authorize(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            await release.wait()
+        return session
+
+    with (
+        patch.object(engine, "_request_device_session", side_effect=authorize),
+        patch.object(engine, "_poll_until_complete", AsyncMock()) as poll,
+    ):
+        pending = asyncio.create_task(
+            engine.connect("provider", "oauth", _oauth_config(), AsyncMock())
+        )
+        await asyncio.wait_for(started.wait(), timeout=1)
+        try:
+            assert engine.is_flow_active("provider", "oauth")
+            if stop == "cancel":
+                engine.cancel_flow("provider", "oauth")
+            elif stop == "close":
+                await engine.aclose()
+            else:
+                await engine.connect("provider", "oauth", _oauth_config(), AsyncMock())
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(pending, timeout=1)
+            if stop != "replace":
+                poll.assert_not_awaited()
+                assert not engine.is_flow_active("provider", "oauth")
+        finally:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+            await engine.aclose()
+
+
+@pytest.mark.asyncio
+async def test_closed_engine_rejects_new_authorization(tmp_path: Path) -> None:
+    engine = DeviceFlowEngine(TokenStore(tmp_path))
+    await engine.aclose()
+    with patch.object(engine, "_request_device_session", AsyncMock()) as authorize:
+        with pytest.raises(RuntimeError, match="closed"):
+            await engine.connect("provider", "oauth", _oauth_config(), AsyncMock())
+        authorize.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_disconnect_after_authorization_completion_cannot_start_poll(tmp_path: Path) -> None:
+    engine = DeviceFlowEngine(TokenStore(tmp_path))
+
+    async def authorize(*args, **kwargs):
+        # The response is ready, but connect's continuation has not run yet.
+        asyncio.get_running_loop().call_soon(engine.cancel_flow, "provider", "oauth")
+        return DeviceFlowSession("device", "user", "https://example.test", 900, 5)
+
+    with (
+        patch.object(engine, "_request_device_session", side_effect=authorize),
+        patch.object(engine, "_poll_until_complete", AsyncMock()) as poll,
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await engine.connect("provider", "oauth", _oauth_config(), AsyncMock())
+        await engine.aclose()
+        poll.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stop", ["cancel", "close"])
 async def test_managed_flow_can_stop_before_polling_starts(tmp_path: Path, stop: str) -> None:
     engine = DeviceFlowEngine(TokenStore(tmp_path))
