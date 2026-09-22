@@ -184,6 +184,7 @@ def _remove_policy_tools(policy: ToolAccess, retired_tools: frozenset[str]) -> T
         mode=policy.mode,
         allowed=tuple(name for name in policy.allowed if name not in retired_tools),
         denied=tuple(name for name in policy.denied if name not in retired_tools),
+        granted=tuple(name for name in policy.granted if name not in retired_tools),
     )
 
 
@@ -227,7 +228,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="append",
         default=[],
         metavar="NAME",
-        help="Remove one retired Tool name from explicit allow and deny lists",
+        help="Remove one retired Tool name from explicit allow, deny, and grant lists",
     )
     return parser.parse_args(argv)
 
