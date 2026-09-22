@@ -85,6 +85,7 @@ Channel updates persist validated configuration before stopping the existing ada
 
 - Only Assistant text from a completed Run or preserved partial text from an interrupted Run reaches the platform; Tool Results, Reasoning, and intermediate events stay in canonical Session history/SSE.
 - Adapter failures restart with exponential backoff (`1s`, `2s`, `4s`, capped at `30s`). After 3 fast retries the channel is marked failed in runtime-local health state, but recovery continues indefinitely at the capped interval while enabled - a channel is the operator's lifeline, so transient blips must self-heal. An adapter up >= 5 minutes counts as healthy: its next crash resets counters. `is_failed()` never reports failure while the task runs. `channel.json` remains configuration truth.
+- Adapter construction failures at service startup, automatic retry, or deferred restart after shutdown enter the same recovery cycle. A failed constructor must not strand an enabled Channel; explicit stop/disable cancels recovery and stale callbacks cannot revive it.
 - Create/update preflight adapter construction where possible and roll back persisted config if starting the enabled adapter fails.
 - `channel_send` reports success only after `ChannelService.send()` and the adapter send complete - not fire-and-forget.
 - Prompt rendering lists enabled persisted Channels regardless of adapter liveness; exactly one `allowed_chat_ids` value acts as default target. Sending through an unavailable Channel returns an ordinary Tool failure instead of changing the prompt prefix.
