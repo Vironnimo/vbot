@@ -359,6 +359,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime.invalidate_agent_skills,
             runtime._resolve_shared_skills_dir,
             runtime._resolve_external_skill_scope,
+            lifecycle_guard=runtime._agents.lifecycle_guard,
         )
         register_history_tool(runtime._tools, runtime._chat_sessions)
         runtime._projects = ProjectStore(runtime._storage.data_dir, sessions=runtime._chat_sessions)
