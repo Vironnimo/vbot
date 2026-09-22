@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -113,8 +114,9 @@ async def test_closing_partial_codex_sse_stream_closes_response(
         connection_mode=CODEX_RESPONSES_MODE,
         codex_websocket_connect=AsyncMock(side_effect=OSError("connection unavailable")),
     )
-    stream = adapter.stream(
-        SAMPLE_MESSAGES, model_id="gpt-5.6-terra", conversation_id=conversation_id
+    stream = cast(
+        AsyncGenerator[dict[str, Any], None],
+        adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.6-terra", conversation_id=conversation_id),
     )
     try:
         with patch.object(adapter, "_connect_stream", AsyncMock(return_value=response)):
