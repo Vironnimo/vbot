@@ -261,6 +261,24 @@ def test_failed_move_keeps_source(tmp_path, monkeypatch):
     assert not (tmp_path / "new.txt").exists()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows read-only attribute")
+def test_update_of_read_only_file_fails_clearly_without_retry_or_leftovers(tmp_path):
+    path = tmp_path / "read-only.txt"
+    path.write_bytes(b"a\nb\n")
+    path.chmod(stat.S_IREAD)
+    try:
+        result = apply(tmp_path, update("@@\n-a\n+A", "read-only.txt"))
+
+        assert result["error"]["code"] == "file_write_error"
+        assert "read-only" in result["error"]["message"]
+        assert "retryable" not in result["error"]
+        assert "attempts_made" not in result["error"]
+        assert path.read_bytes() == b"a\nb\n"
+        assert [entry.name for entry in tmp_path.iterdir()] == ["read-only.txt"]
+    finally:
+        path.chmod(stat.S_IREAD | stat.S_IWRITE)
+
+
 def test_external_change_during_planning_is_detected(tmp_path, monkeypatch):
     from core.tools import apply_patch as module
 
