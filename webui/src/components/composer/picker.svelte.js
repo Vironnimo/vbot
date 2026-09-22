@@ -126,6 +126,10 @@ export function createComposerPicker(context) {
         ? modelAutocompleteElement
         : autocompleteElement;
 
+  const activeAutocompleteLoading = () =>
+    (showFileAutocomplete && fileListLoading) ||
+    (showModelAutocomplete && modelCatalogLoading);
+
   const activeMatchCount = () => {
     if (triggerContext?.marker === '@') {
       return matchingFiles.length;
@@ -578,6 +582,9 @@ export function createComposerPicker(context) {
     },
     get activeAutocompleteElement() {
       return activeAutocompleteElement;
+    },
+    get activeAutocompleteLoading() {
+      return activeAutocompleteLoading;
     },
     get activeMatchCount() {
       return activeMatchCount;
