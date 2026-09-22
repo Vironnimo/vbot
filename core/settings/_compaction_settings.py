@@ -98,10 +98,9 @@ def _normalize_compaction_threshold(value: Any) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise StorageError("Compaction setting threshold must be a number")
 
-    normalized_value = float(value)
-    if normalized_value <= 0 or normalized_value > 1:
+    if not 0 < value <= 1:
         raise StorageError("Compaction setting threshold must be in (0, 1]")
-    return normalized_value
+    return float(value)
 
 
 def _normalize_compaction_positive_integer(value: Any, field: str, default: int) -> int:

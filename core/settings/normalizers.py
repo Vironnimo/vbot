@@ -188,14 +188,14 @@ def _normalize_appearance_chat_width(section: Mapping[str, Any]) -> str:
     # missing or invalid value normalizes to the comfortable default rather than
     # raising. Public updates are still rejected by the settings parser.
     value = section.get("chat_width")
-    if value not in SUPPORTED_APPEARANCE_CHAT_WIDTHS:
+    if not isinstance(value, str) or value not in SUPPORTED_APPEARANCE_CHAT_WIDTHS:
         return DEFAULT_APPEARANCE_CHAT_WIDTH
     return cast(str, value)
 
 
 def _normalize_appearance_chat_working_mode(section: Mapping[str, Any]) -> str:
     value = section.get("chat_working_mode")
-    if value not in SUPPORTED_APPEARANCE_CHAT_WORKING_MODES:
+    if not isinstance(value, str) or value not in SUPPORTED_APPEARANCE_CHAT_WORKING_MODES:
         return DEFAULT_APPEARANCE_CHAT_WORKING_MODE
     return cast(str, value)
 
