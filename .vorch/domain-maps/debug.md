@@ -10,6 +10,8 @@ Traces are local-only JSON files under `<data_dir>/artifacts/debug/traces/` plus
 
 ## Trace contract (hard)
 
+Trace files and the index use atomic replacement; store mutations serialize across adapter instances in the process. Index publication precedes pruning, so a failed index write preserves previously listed traces and removes the new unindexed capture. Each save also removes orphan captures and trace temporary files left by interrupted writes before adding another capture. Clear removes the owned trace tree, including nested leftovers, without following directory links.
+
 ```jsonc
 {
   "trace_id": "uuid4-hex",

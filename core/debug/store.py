@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from core.storage.layout import DataDirectoryLayout
+from core.utils.atomic import atomic_write_text
 from core.utils.logging import get_logger
 
 _logger = get_logger("debug")
@@ -21,6 +24,10 @@ _logger = get_logger("debug")
 _TRACES_DIR_NAME = "traces"
 _INDEX_FILE_NAME = "index.json"
 _TRACE_ID_PATTERN = re.compile(r"^[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$")
+# Adapters have separate stores pointing at the same files. Hold the lock across
+# publication and cleanup so another capture cannot mistake an in-flight file
+# for an orphan. This also serializes operator clears with capture finalization.
+_STORE_LOCK = RLock()
 
 
 class InvalidTraceIdError(ValueError):
@@ -90,10 +97,7 @@ class DebugTraceStore:
                 nested ``request`` / ``response`` objects for the index entry.
         """
         trace_path = self._trace_path(trace_id)
-        self._ensure_directories()
-        with open(trace_path, "w", encoding="utf-8") as file:
-            json.dump(trace_data, file, ensure_ascii=False, indent=2)
-
+        trace_json = json.dumps(trace_data, ensure_ascii=False, indent=2)
         request = trace_data.get("request") or {}
         response = trace_data.get("response") or {}
         entry = _TraceIndexEntry(
@@ -108,10 +112,25 @@ class DebugTraceStore:
             duration_ms=trace_data.get("duration_ms"),
         )
 
-        entries = self._read_index()
-        entries.append(asdict(entry))
-        entries = self._prune_oldest(entries)
-        self._write_index(entries)
+        with _STORE_LOCK:
+            self._ensure_directories()
+            previous = self._read_index()
+            self._remove_unindexed_files(previous)
+            entries = [item for item in previous if item.get("trace_id") != trace_id]
+            entries.append(asdict(entry))
+            entries = self._prune_oldest(entries)
+            try:
+                atomic_write_text(trace_path, trace_json)
+                self._write_index(entries)
+            except OSError:
+                # Re-read publication state: a directory fsync can fail after
+                # replacement already committed the new index.
+                try:
+                    self._remove_unindexed_files(self._read_index())
+                except OSError:
+                    _logger.warning("Failed to remove unindexed debug traces", exc_info=True)
+                raise
+            self._remove_unindexed_files(entries)
 
     def get_traces(self) -> list[dict[str, Any]]:
         """Return trace metadata from the index, newest first.
@@ -153,12 +172,16 @@ class DebugTraceStore:
 
     def clear_all(self) -> None:
         """Delete all trace files and the metadata index."""
-        if self._traces_dir.exists():
-            for trace_file in self._traces_dir.iterdir():
-                trace_file.unlink(missing_ok=True)
-            self._traces_dir.rmdir()
-        if self._index_path.exists():
-            self._index_path.unlink()
+        with _STORE_LOCK:
+            if self._traces_dir.is_symlink():
+                self._traces_dir.unlink()
+            elif hasattr(self._traces_dir, "is_junction") and self._traces_dir.is_junction():
+                self._traces_dir.rmdir()
+            elif self._traces_dir.exists():
+                if self._traces_dir.resolve().parent != self._debug_dir.resolve():
+                    raise ValueError("Trace directory must stay inside the debug directory")
+                shutil.rmtree(self._traces_dir)
+            self._index_path.unlink(missing_ok=True)
         _logger.info("Cleared all debug traces and index")
 
     # ------------------------------------------------------------------
@@ -188,20 +211,23 @@ class DebugTraceStore:
         if not isinstance(data, list):
             _logger.warning("Debug trace index has unexpected format; treating as empty")
             return []
-        return data
+        return [
+            entry
+            for entry in data
+            if isinstance(entry, dict)
+            and isinstance(entry.get("trace_id"), str)
+            and _TRACE_ID_PATTERN.fullmatch(entry["trace_id"]) is not None
+        ]
 
     def _write_index(self, entries: list[dict[str, Any]]) -> None:
         """Write the index entries to disk."""
         self._ensure_directories()
-        with open(self._index_path, "w", encoding="utf-8") as file:
-            json.dump(entries, file, ensure_ascii=False, indent=2)
+        atomic_write_text(self._index_path, json.dumps(entries, ensure_ascii=False, indent=2))
 
     def _prune_oldest(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Remove oldest entries until count is within the configured limit.
 
-        Entries are sorted by ``timestamp`` ascending; the oldest are
-        removed from the list and their trace files deleted.  Returns the
-        trimmed list.
+        Files are removed only after the replacement index is published.
         """
         if self._trace_limit <= 0:
             return entries
@@ -209,16 +235,21 @@ class DebugTraceStore:
             return entries
 
         entries.sort(key=lambda entry: entry.get("timestamp", ""))
-        while len(entries) > self._trace_limit:
-            removed = entries.pop(0)
-            removed_id = removed.get("trace_id", "")
-            if removed_id:
-                self._delete_trace_file(removed_id)
-                _logger.debug("Pruned oldest debug trace: %s", removed_id)
+        return entries[-self._trace_limit :]
 
-        return entries
-
-    def _delete_trace_file(self, trace_id: str) -> None:
-        """Delete a single trace file, silently ignoring a missing file."""
-        trace_path = self._trace_path(trace_id)
-        trace_path.unlink(missing_ok=True)
+    def _remove_unindexed_files(self, entries: list[dict[str, Any]]) -> None:
+        """Remove orphan/pruned captures and interrupted atomic-write remnants."""
+        retained = {f"{entry['trace_id']}.json" for entry in entries}
+        for path in self._traces_dir.iterdir():
+            is_trace = path.suffix == ".json" and _TRACE_ID_PATTERN.fullmatch(path.stem)
+            parts = path.name.split(".")
+            is_temporary = (
+                len(parts) == 5
+                and parts[0] == ""
+                and parts[2] == "json"
+                and parts[4] == "tmp"
+                and _TRACE_ID_PATTERN.fullmatch(parts[1])
+                and _TRACE_ID_PATTERN.fullmatch(parts[3])
+            )
+            if (is_trace and path.name not in retained) or is_temporary:
+                path.unlink(missing_ok=True)
