@@ -673,4 +673,143 @@ describe('ChatTimeline', () => {
     expect(reasoningBody.textContent).not.toContain('<!--');
     expect(reasoningBody.innerHTML).not.toContain('&lt;!--');
   });
+  it('preserves streamed summary sections through batching and stable output', async () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'summary-stream',
+    );
+    const sections = [
+      '**Inspecting evidence**\n\nRead the available sources.',
+      '**Comparing options**\n\nWeigh the two approaches.',
+    ];
+    let sequence = 0;
+    const emit = (type, payload) =>
+      appendRunEvent(sessionState, {
+        type,
+        payload,
+        run_id: 'summary-run',
+        sequence: ++sequence,
+      });
+    emit('run_started', {});
+    for (const [summary_index, section] of sections.entries()) {
+      for (const summary_text of [section.slice(0, 10), section.slice(10)]) {
+        emit('reasoning_delta', {
+          reasoning_delta:
+            (summary_index > 0 && summary_text === section.slice(0, 10)
+              ? '\n\n'
+              : '') + summary_text,
+          summary_index,
+          summary_text,
+        });
+      }
+    }
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: { sessionState, agentName: 'Alpha' },
+    });
+    flushSync();
+    expect(
+      document.querySelectorAll('.reasoning-summary__section'),
+    ).toHaveLength(2);
+    expect(
+      document.querySelector('.reasoning-summary__title').textContent,
+    ).toBe('Comparing options');
+    expect(
+      document.querySelector('.reasoning-summary__count').textContent,
+    ).toBe('2 sections');
+    expect(document.querySelector('.reasoning-duration')).toBeNull();
+
+    const message = {
+      id: 'summary-message',
+      role: 'assistant',
+      reasoning: sections.join('\n\n'),
+      reasoning_summary: sections,
+      content: 'I will check the relevant Tool next.',
+      phase: 'commentary',
+    };
+    emit('reasoning', { message });
+    emit('assistant_output', { message });
+    // Remount as a reconnect would, using the stable Run projection.
+    await unmount(mountedComponent);
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: { sessionState, agentName: 'Alpha' },
+    });
+    flushSync();
+    expect(document.querySelectorAll('.reasoning-summary')).toHaveLength(1);
+    expect(
+      document.querySelectorAll('.reasoning-summary__section'),
+    ).toHaveLength(2);
+    expect(
+      document.querySelector('.assistant-run .msg-markdown').textContent,
+    ).toContain('I will check');
+  });
+
+  it.each([null, 'Final answer.'])(
+    'renders saved summary sections with content %s',
+    (content) => {
+      const sessionState = ensureSessionState(
+        createChatState(),
+        'alpha',
+        'summary-history',
+      );
+      const sections = [
+        '**Comparing options**\n\nA readable summary.',
+        'A section without a heading.',
+      ];
+      sessionState.messages = [
+        {
+          id: 'summary-history-message',
+          role: 'assistant',
+          content,
+          reasoning: sections.join('\n\n'),
+          reasoning_summary: sections,
+          timestamp: '2026-09-22T12:00:00Z',
+        },
+      ];
+      mountedComponent = mount(ChatTimeline, {
+        target: document.body,
+        props: { sessionState, agentName: 'Alpha' },
+      });
+      flushSync();
+      expect(
+        document.querySelectorAll('.reasoning-summary__section'),
+      ).toHaveLength(2);
+      expect(document.querySelector('.reasoning-summary__title')).toBeNull();
+      expect(document.querySelector('summary').getAttribute('aria-label')).toBe(
+        'Reasoning summary',
+      );
+      expect(document.querySelector('details').open).toBe(false);
+      expect(
+        document.querySelector('.reasoning-summary__section').textContent,
+      ).toContain('A readable summary.');
+    },
+  );
+  it('keeps additional raw reasoning visible for compatible Provider mixtures', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'mixed-reasoning',
+    );
+    sessionState.messages = [
+      {
+        id: 'mixed',
+        role: 'assistant',
+        content: 'Answer',
+        reasoning: '**Summary**\n\nReadable summary. Additional raw reasoning.',
+        reasoning_summary: ['**Summary**\n\nReadable summary.'],
+        timestamp: '2026-09-22T12:00:00Z',
+      },
+    ];
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: { sessionState, agentName: 'Alpha' },
+    });
+    flushSync();
+    expect(document.querySelector('.reasoning-summary')).toBeNull();
+    expect(document.querySelector('.reasoning-body').textContent).toContain(
+      'Additional raw reasoning.',
+    );
+  });
 });

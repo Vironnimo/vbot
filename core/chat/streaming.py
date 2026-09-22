@@ -324,7 +324,15 @@ def _merge_adjacent_visible_deltas(
     if existing.event_type == ASSISTANT_OUTPUT_DELTA_EVENT:
         return _merge_text_visible_delta(existing, incoming, "content_delta")
     if existing.event_type == REASONING_DELTA_EVENT:
-        return _merge_text_visible_delta(existing, incoming, "reasoning_delta")
+        if existing.payload.get("summary_index") != incoming.payload.get("summary_index"):
+            return None
+        merged = _merge_text_visible_delta(existing, incoming, "reasoning_delta")
+        if "summary_index" in existing.payload:
+            merged.payload["summary_index"] = existing.payload["summary_index"]
+            merged.payload["summary_text"] = (
+                existing.payload["summary_text"] + incoming.payload["summary_text"]
+            )
+        return merged
     if existing.event_type != TOOL_CALL_DELTA_EVENT:
         return None
 
@@ -364,6 +372,7 @@ class StreamingAssistantFields:
     finish_reason: TerminalOutcome | None
     usage: JsonObject | None = None
     reasoning_timing: JsonObject | None = None
+    reasoning_summary: list[str] | None = None
 
     def to_response_dict(self) -> JsonObject:
         """Return fields in the same shape as adapter response normalization."""
@@ -373,6 +382,8 @@ class StreamingAssistantFields:
             "reasoning_meta": self.reasoning_meta,
             "tool_calls": self.tool_calls,
         }
+        if self.reasoning_summary is not None:
+            result["reasoning_summary"] = self.reasoning_summary
         if self.finish_reason is not None:
             result["terminal_outcome"] = self.finish_reason
         if self.usage is not None:
@@ -421,6 +432,7 @@ class StreamingAccumulator:
     def __init__(self) -> None:
         self._content_parts: list[str] = []
         self._reasoning_parts: list[str] = []
+        self._reasoning_summary: list[str] = []
         self._last_text_delta_type: str | None = None
         self._reasoning_meta: JsonObject | None = None
         self._reasoning_started_perf: float | None = None
@@ -521,6 +533,7 @@ class StreamingAccumulator:
             finish_reason=self._finish_reason,
             usage=dict(self._usage) if self._usage is not None else None,
             reasoning_timing=self.reasoning_timing,
+            reasoning_summary=list(self._reasoning_summary) or None,
         )
 
     def finalize_partial_fields(self) -> StreamingAssistantFields:
@@ -539,6 +552,7 @@ class StreamingAccumulator:
             finish_reason=None,
             usage=dict(self._usage) if self._usage is not None else None,
             reasoning_timing=self.reasoning_timing,
+            reasoning_summary=list(self._reasoning_summary) or None,
         )
 
     def _add_content_delta(self, delta: JsonObject) -> StreamingVisibleDelta | None:
@@ -559,10 +573,17 @@ class StreamingAccumulator:
         self._last_text_delta_type = "reasoning_delta"
         self._record_reasoning_activity()
         self._reasoning_parts.append(text)
-        return StreamingVisibleDelta(
-            event_type=REASONING_DELTA_EVENT,
-            payload={"reasoning_delta": text},
-        )
+        payload: JsonObject = {"reasoning_delta": text}
+        index = delta.get("summary_index")
+        summary_text = delta.get("summary_text")
+        if isinstance(index, int) and not isinstance(index, bool) and isinstance(summary_text, str):
+            if index < 0 or index > len(self._reasoning_summary):
+                raise StreamingDeltaError("reasoning summary sections must arrive in order")
+            if index == len(self._reasoning_summary):
+                self._reasoning_summary.append("")
+            self._reasoning_summary[index] += summary_text
+            payload.update(summary_index=index, summary_text=summary_text)
+        return StreamingVisibleDelta(event_type=REASONING_DELTA_EVENT, payload=payload)
 
     def _record_reasoning_activity(self) -> None:
         now_perf = time.monotonic()

@@ -5,7 +5,7 @@
   import Button from '../ui/Button.svelte';
   import CopyButton from '../ui/CopyButton.svelte';
   import { t } from '$lib/i18n.js';
-  import { reasoningMarkdownSource } from '$lib/markdown.js';
+  import ChatReasoning from './ChatReasoning.svelte';
   import {
     INTENTIONAL_HOVER_SHOW_DELAY_MS,
     floatingHoverCard,
@@ -301,42 +301,6 @@
   </div>
 {/snippet}
 
-{#snippet reasoningSummary(
-  isStreaming = false,
-  isOpen = false,
-  durationLabel = '',
-)}
-  <summary class="reasoning-header">
-    <svg class="reasoning-icon" viewBox="0 0 16 16" aria-hidden="true">
-      <path
-        d="M8 2a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5A4 4 0 0 0 12 6a4 4 0 0 0-4-4z"
-      />
-      <path d="M6 13h4" />
-    </svg>
-    <span
-      >{isStreaming
-        ? t('chat.reasoning.active', 'thinking...')
-        : t('chat.reasoning.done', 'thought')}</span
-    >
-    {#if durationLabel}
-      <span class="reasoning-duration">{durationLabel}</span>
-    {/if}
-    {#if isStreaming}
-      <span class="streaming-caret" aria-hidden="true"></span>
-    {/if}
-    <svg
-      class="r-chevron"
-      viewBox="0 0 16 16"
-      width="10"
-      height="10"
-      style:transform={isOpen ? 'rotate(180deg)' : 'none'}
-      aria-hidden="true"
-    >
-      <path d="M4 6l4 4 4-4" />
-    </svg>
-  </summary>
-{/snippet}
-
 {#snippet toolPrimaryLine(primary)}
   <span class="te-arg te-primary">
     <span class="te-primary-values">
@@ -405,34 +369,14 @@
     {#snippet runChild(child)}
       {#if child.type === 'reasoning'}
         {@const working = isRunChildWorking(item, child)}
-        <details
-          class="reasoning-block"
+        <ChatReasoning
+          source={child.content ?? ''}
+          summary={child.reasoningSummary}
+          {working}
           open={isReasoningOpen(child.id)}
-          ontoggle={(event) =>
-            onReasoningOpenChange(child.id, event.currentTarget.open)}
-        >
-          {@render reasoningSummary(
-            working,
-            isReasoningOpen(child.id),
-            reasoningDurationLabel(child, nowMs),
-          )}
-          <div class="reasoning-body">
-            <div class="reasoning-body__actions">
-              <CopyButton
-                text={reasoningMarkdownSource(child.content ?? '')}
-                class="chat-copy-action reasoning-copy"
-                label={t('chat.copyReasoning', 'Copy thinking')}
-                copiedLabel={t('chat.reasoningCopied', 'Thinking copied')}
-              />
-            </div>
-            <MarkdownContent
-              source={child.content ?? ''}
-              streaming={working}
-              reasoning
-              class="reasoning-markdown"
-            />
-          </div>
-        </details>
+          durationLabel={reasoningDurationLabel(child, nowMs)}
+          onOpenChange={(open) => onReasoningOpenChange(child.id, open)}
+        />
       {:else if child.type === 'tool_call'}
         {#if isSubAgentSpawnTool(child)}
           {@const dotStatus = subAgentDotStatus(child, subAgentStatuses)}

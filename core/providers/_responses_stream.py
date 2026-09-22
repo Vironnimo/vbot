@@ -59,6 +59,7 @@ class ResponsesStreamState:
     emitted_tool_arguments: dict[str, str] = field(default_factory=dict)
     emitted_output_text: str = ""
     emitted_reasoning_text: str = ""
+    summary_sections: dict[tuple[int, int], str] = field(default_factory=dict)
     reasoning_meta: dict[str, Any] | None = None
     output_items_by_index: dict[int, dict[str, Any]] = field(default_factory=dict)
     usage: dict[str, int] | None = None
@@ -91,6 +92,8 @@ class ResponsesStreamState:
             "tool_calls": tool_calls or None,
         }
         phase = _assistant_phase_from_output(_response_output_from_meta(self.reasoning_meta))
+        if self.summary_sections:
+            result["reasoning_summary"] = list(self.summary_sections.values())
         if phase is not None:
             result["phase"] = phase
         if self.usage is not None:
@@ -134,7 +137,19 @@ def normalize_responses_stream_event(
     if event_type == "response.output_text.delta":
         return _output_text_delta(event_data, state)
     if event_type in REASONING_SUMMARY_DELTA_EVENTS:
+        if "summary_text" in event_type:
+            return _summary_delta(event_data, state)
         return _reasoning_delta(event_data, state)
+    if event_type == "response.reasoning_summary_text.done":
+        return _summary_delta(event_data, state, snapshot=True)
+    if event_type in {
+        "response.reasoning_summary_part.added",
+        "response.reasoning_summary_part.done",
+    }:
+        part = event_data.get("part")
+        if isinstance(part, Mapping):
+            return _summary_delta({**event_data, "text": part.get("text")}, state, snapshot=True)
+        return []
     if event_type == "response.function_call_arguments.delta":
         return _function_arguments_delta(event_data, state)
     if event_type in {"response.output_item.added", "response.output_item.done"}:
@@ -222,6 +237,78 @@ def _reasoning_delta(
     return deltas
 
 
+def _summary_output_index(event_data: Mapping[str, Any], state: ResponsesStreamState) -> int:
+    index = event_data.get("output_index")
+    if isinstance(index, int) and not isinstance(index, bool) and index >= 0:
+        return index
+    item = event_data.get("item")
+    item_id = event_data.get("item_id") or (item.get("id") if isinstance(item, Mapping) else None)
+    if item_id:
+        for index, retained in state.output_items_by_index.items():
+            if retained.get("id") == item_id:
+                return index
+    return 0
+
+
+def _summary_delta(
+    event_data: Mapping[str, Any],
+    state: ResponsesStreamState,
+    *,
+    snapshot: bool = False,
+) -> list[dict[str, Any]]:
+    text = event_data.get("text" if snapshot else "delta")
+    if not isinstance(text, str) or not text:
+        return []
+    output_index = _summary_output_index(event_data, state)
+    summary_index = event_data.get("summary_index", 0)
+    if not isinstance(summary_index, int) or isinstance(summary_index, bool) or summary_index < 0:
+        return []
+    key = (output_index, summary_index)
+    previous = state.summary_sections.get(key, "")
+    if snapshot:
+        if text == previous:
+            return []
+        if not text.startswith(previous):
+            return []
+        text = text[len(previous) :]
+    separator = "\n\n" if not previous and state.emitted_reasoning_text else ""
+    state.summary_sections[key] = previous + text
+    state.emitted_reasoning_text += separator + text
+    return [
+        {
+            "type": "reasoning_delta",
+            "text": separator + text,
+            "summary_index": list(state.summary_sections).index(key),
+            "summary_text": text,
+        }
+    ]
+
+
+def _item_summary_deltas(
+    item: Mapping[str, Any],
+    output_index: int,
+    state: ResponsesStreamState,
+) -> list[dict[str, Any]]:
+    summary = item.get("summary")
+    if item.get("type") != "reasoning" or not isinstance(summary, list):
+        return []
+    deltas: list[dict[str, Any]] = []
+    for summary_index, part in enumerate(summary):
+        if isinstance(part, Mapping) and part.get("type") in {"summary_text", "text"}:
+            deltas.extend(
+                _summary_delta(
+                    {
+                        "output_index": output_index,
+                        "summary_index": summary_index,
+                        "text": part.get("text"),
+                    },
+                    state,
+                    snapshot=True,
+                )
+            )
+    return deltas
+
+
 def _function_arguments_delta(
     event_data: Mapping[str, Any],
     state: ResponsesStreamState,
@@ -260,7 +347,9 @@ def _output_item_event_deltas(
         return []
     _record_stream_output_item(event_data, item, state)
     if item.get("type") == "reasoning":
-        reasoning_deltas: list[dict[str, Any]] = []
+        reasoning_deltas = _item_summary_deltas(
+            item, _summary_output_index(event_data, state), state
+        )
         reasoning = _joined_or_none(_extract_reasoning_parts([item]))
         reasoning_delta = _reasoning_backfill_delta(reasoning, state)
         if reasoning_delta is not None:
@@ -341,15 +430,17 @@ def _completed_event_deltas(
             output_index: dict(item) for output_index, item in enumerate(completed_output_items)
         }
     output_items = completed_output_items or _ordered_stream_output_items(state)
+    for summary_output_index, summary_item in sorted(state.output_items_by_index.items()):
+        deltas.extend(_item_summary_deltas(summary_item, summary_output_index, state))
+    reasoning = _joined_or_none(_extract_reasoning_parts(output_items))
+    reasoning_backfill = _reasoning_backfill_delta(reasoning, state)
+    if reasoning_backfill is not None:
+        deltas.append({"type": "reasoning_delta", "text": reasoning_backfill})
     content = _joined_or_none(_extract_output_text_parts(output_items))
     content_backfill = _text_backfill_delta(content, state.emitted_output_text)
     if content_backfill is not None:
         state.emitted_output_text += content_backfill
         deltas.append({"type": "content_delta", "text": content_backfill})
-    reasoning = _joined_or_none(_extract_reasoning_parts(output_items))
-    reasoning_backfill = _reasoning_backfill_delta(reasoning, state)
-    if reasoning_backfill is not None:
-        deltas.append({"type": "reasoning_delta", "text": reasoning_backfill})
     reasoning_meta = _extract_reasoning_meta(response, output_items)
     if reasoning_meta is not None:
         _record_reasoning_meta(reasoning_meta, state)

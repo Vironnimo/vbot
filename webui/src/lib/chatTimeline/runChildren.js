@@ -70,6 +70,7 @@ export function appendTextSection(
     streaming,
   });
   if (existingItem) {
+    updateReasoningSummary(existingItem, event, message, streaming);
     existingItem.content = streaming
       ? `${existingItem.content}${content}`
       : content;
@@ -93,7 +94,7 @@ export function appendTextSection(
     return;
   }
 
-  assistantRun.items.push({
+  const newItem = {
     id: `${type}-${assistantRun.id}-${sequence}`,
     type,
     content,
@@ -105,8 +106,26 @@ export function appendTextSection(
     interrupted,
     events: event ? [event] : [],
     messages: message ? [message] : [],
-  });
+  };
+  updateReasoningSummary(newItem, event, message, streaming);
+  assistantRun.items.push(newItem);
   syncAssistantRunCollections(assistantRun);
+}
+
+function updateReasoningSummary(item, event, message, streaming) {
+  if (item.type !== 'reasoning') return;
+  if (!streaming) {
+    const summary = (message ?? event?.payload?.message)?.reasoning_summary;
+    item.reasoningSummary = Array.isArray(summary) ? [...summary] : null;
+    return;
+  }
+  const index = event?.payload?.summary_index;
+  const text = event?.payload?.summary_text;
+  if (!Number.isInteger(index) || index < 0 || typeof text !== 'string') return;
+  const sections = item.reasoningSummary ?? [];
+  if (index > sections.length) return;
+  sections[index] = `${sections[index] ?? ''}${text}`;
+  item.reasoningSummary = sections;
 }
 
 function mergeableTextSection(

@@ -120,6 +120,7 @@ The ChatGPT Codex backend routes its prompt cache by **per-request transport hea
 
 ## Response And Catalog Normalization
 
+- Shared Responses normalization projects `reasoning.summary` into ordered `reasoning_summary` text sections. Stream identity is `(output_index, summary_index)`; summary delta/done, part added/done, item snapshots, and terminal snapshots backfill without duplicating sections. Canonical `reasoning_delta` additionally carries a sequential `summary_index` plus `summary_text`; flat `text` inserts paragraph separators between sections. Opaque output items remain unchanged. Official reasoning/event docs and local normalization/persistence tests cover this presentation contract (`test_responses_summary.py`, 2026-09-22); this change has no new live OpenAI compatibility claim.
 - Text becomes `content` or `content_delta`; provider reasoning text fields such as `reasoning_content`/`thinking` become visible `reasoning`/`reasoning_delta`.
 - Malformed Tool Call argument JSON produces a canonical rejected Call instead of fake empty arguments; valid sibling Calls are preserved. The shared canonical normalization contract applies to both Responses and Chat Completions.
 - Generic `/models` entries may expose modalities, supported parameters, context windows, and output limits through raw fields, `architecture`, or `top_provider`. Normalize discoverable facts into `Model.capabilities` and `Model.metadata`; do not treat sparse catalogs as negative evidence for every missing capability.
