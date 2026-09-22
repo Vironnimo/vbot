@@ -3,6 +3,7 @@
 
   import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
+  import { isImeComposing } from '$lib/keyboard.js';
 
   const SEARCH_HEADER_HEIGHT = 44;
   const noop = () => {};
@@ -200,6 +201,9 @@
   }
 
   async function handleSearchKeyDown(event) {
+    if (isImeComposing(event)) {
+      return;
+    }
     if (event.key === 'Escape') {
       event.preventDefault();
       close();

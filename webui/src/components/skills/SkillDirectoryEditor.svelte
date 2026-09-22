@@ -13,6 +13,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
+  import { isImeComposing } from '$lib/keyboard.js';
   import {
     createSkillDirectoriesUpdatePayload,
     getDefaultSkillDirectoryValue,
@@ -99,7 +100,7 @@
   }
 
   function handleSkillDirectoryKeydown(event) {
-    if (event.key !== 'Enter') {
+    if (event.key !== 'Enter' || isImeComposing(event)) {
       return;
     }
 

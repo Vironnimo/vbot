@@ -5,6 +5,7 @@ import {
   deleteSession,
 } from '$lib/api.js';
 import { t } from '$lib/i18n.js';
+import { isImeComposing } from '$lib/keyboard.js';
 import { normalizeCompactionPolicy } from '$lib/compactionPolicy.js';
 import { sessionDisplayName } from '$lib/sessionListView.js';
 
@@ -198,6 +199,9 @@ export function createSessionActions(context) {
   };
 
   const handleRenameKeydown = (event) => {
+    if (isImeComposing(event)) {
+      return;
+    }
     if (event.key === 'Enter') {
       event.preventDefault();
       submitRename();
