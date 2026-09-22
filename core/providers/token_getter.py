@@ -483,11 +483,11 @@ def _parse_exchange_expiry(value: object, now: datetime) -> datetime:
             return fallback
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    except (OverflowError, ValueError):
         return fallback
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
 
 
 def _parse_oauth_expiry(data: dict[str, object], now: datetime) -> datetime:
@@ -495,20 +495,20 @@ def _parse_oauth_expiry(data: dict[str, object], now: datetime) -> datetime:
     if isinstance(expires_at, str) and expires_at:
         try:
             parsed = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-        except ValueError:
-            parsed = None
-        if parsed is not None:
             if parsed.tzinfo is None:
                 return parsed.replace(tzinfo=UTC)
             return parsed.astimezone(UTC)
+        except (OverflowError, ValueError):
+            pass
 
     expires_in = data.get("expires_in")
     if isinstance(expires_in, bool):
         expires_in = None
-    if isinstance(expires_in, int):
-        return now + timedelta(seconds=expires_in)
-    if isinstance(expires_in, str) and expires_in.isdecimal():
-        return now + timedelta(seconds=int(expires_in))
+    if isinstance(expires_in, int) or (isinstance(expires_in, str) and expires_in.isdecimal()):
+        try:
+            return now + timedelta(seconds=int(expires_in))
+        except (OverflowError, ValueError):
+            pass
     return now + timedelta(minutes=TOKEN_EXCHANGE_FALLBACK_MINUTES)
 
 

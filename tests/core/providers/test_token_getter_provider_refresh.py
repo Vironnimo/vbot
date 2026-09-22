@@ -191,8 +191,20 @@ async def test_nous_retryable_refresh_failure_is_not_replayed(tmp_path: Path) ->
 
 @respx.mock
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "expiry_fields",
+    [
+        {"expires_in": 900},
+        {"expires_in": 10**100},
+        {"expires_in": str(10**100)},
+        {"expires_in": "9" * 5000},
+        {"expires_at": "0001-01-01T00:00:00+14:00"},
+    ],
+    ids=["valid", "large-integer", "large-string", "integer-limit", "utc-underflow"],
+)
 async def test_opencode_refresh_posts_json_and_persists_rotated_refresh_token(
     tmp_path: Path,
+    expiry_fields: dict[str, object],
 ) -> None:
     token_store = TokenStore(tmp_path)
     token_store.save(
@@ -210,7 +222,7 @@ async def test_opencode_refresh_posts_json_and_persists_rotated_refresh_token(
             json={
                 "access_token": "fresh-access",
                 "refresh_token": "rotated-refresh",
-                "expires_in": 900,
+                **expiry_fields,
             },
         )
     )
@@ -230,6 +242,8 @@ async def test_opencode_refresh_posts_json_and_persists_rotated_refresh_token(
     stored = token_store.load("opencode-zen", "account")
     assert stored is not None
     assert stored.refresh_token == "rotated-refresh"
+    assert stored.expires_at is not None
+    assert stored.expires_at > datetime.now(UTC)
 
 
 @respx.mock
