@@ -9,6 +9,7 @@ import pytest
 from core.model_tasks import (
     EmbeddingError,
     EmbeddingResult,
+    EmbeddingSpaceIdentity,
 )
 from core.recall.vector import _EMBED_BATCH_SIZE
 from core.sessions import ChatSessionManager
@@ -35,8 +36,8 @@ class _OverflowThenOkEmbeddings:
         self.model_id = "stub-embed"
         self.embed_calls: list[list[str]] = []
 
-    def resolve_model_id(self) -> tuple[str, str]:
-        return (self.provider_id, self.model_id)
+    def resolve_space(self) -> EmbeddingSpaceIdentity:
+        return EmbeddingSpaceIdentity(self.provider_id, self.model_id, "")
 
     async def embed(
         self,
@@ -66,8 +67,8 @@ class _AuthErrorEmbeddings:
     def __init__(self) -> None:
         self.embed_calls = 0
 
-    def resolve_model_id(self) -> tuple[str, str]:
-        return ("openrouter", "stub-embed")
+    def resolve_space(self) -> EmbeddingSpaceIdentity:
+        return EmbeddingSpaceIdentity("openrouter", "stub-embed", "")
 
     async def embed(
         self,

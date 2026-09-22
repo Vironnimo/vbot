@@ -270,3 +270,39 @@ async def test_tts_synthesize_merges_extra_options() -> None:
     assert payload["sample_rate"] == 44100
     assert payload["voice"] == "alloy"
     assert "extra_options" not in payload
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_multipart_transcription_rejects_extra_file_before_send() -> None:
+    client = ProviderSpeechClient(
+        provider=ProviderConfig(
+            id="openai",
+            name="OpenAI",
+            adapter="openai",
+            base_url="https://api.openai.com/v1",
+            connections=[],
+        ),
+        connection=ConnectionConfig(
+            id="key",
+            type="api_key",
+            label="Key",
+            auth=AuthConfig(header="Authorization", prefix="Bearer "),
+        ),
+        credential="test-key",
+        model_id="whisper-1",
+    )
+    route = respx.post("https://api.openai.com/v1/audio/transcriptions").respond(
+        200, json={"text": "hello"}
+    )
+
+    with pytest.raises(ProviderError) as caught:
+        await client.transcribe(
+            b"recording",
+            filename="recording.wav",
+            media_type="audio/wav",
+            options={"extra_options": {"file": "replacement"}},
+        )
+
+    assert caught.value.retryable is False
+    assert not route.called

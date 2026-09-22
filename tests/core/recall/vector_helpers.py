@@ -60,10 +60,6 @@ class _StubEmbeddings:
         self.embed_purposes: list[str | None] = []
         self.resolve_calls = 0
 
-    def resolve_model_id(self) -> tuple[str, str]:
-        self.resolve_calls += 1
-        return (self.provider_id, self.model_id)
-
     def resolve_space(self) -> EmbeddingSpaceIdentity:
         self.resolve_calls += 1
         return EmbeddingSpaceIdentity(

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from typing import Any
 
@@ -12,14 +14,18 @@ import respx
 
 import core.providers.opencode_zen as zen_module
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers._opencode_zen_gemini import _normalize_gemini_stream_chunk
 from core.providers.errors import (
     CatalogEntrySkipped,
+    NetworkError,
     ProviderAuthError,
     ProviderError,
     ProviderRateLimitError,
+    ProviderTimeoutError,
 )
 from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.utils.retry import caller_owns_retries
 
 BASE_URL = "https://opencode.ai/zen/v1"
 RESPONSES_URL = f"{BASE_URL}/responses"
@@ -90,6 +96,39 @@ def test_public_package_exports_opencode_zen_adapter() -> None:
     from core.providers import OpenCodeZenAdapter as PublicOpenCodeZenAdapter
 
     assert PublicOpenCodeZenAdapter is OpenCodeZenAdapter
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (httpx.ReadError, NetworkError),
+        (httpx.ReadTimeout, ProviderTimeoutError),
+        (asyncio.CancelledError, asyncio.CancelledError),
+    ],
+)
+async def test_gemini_rejected_stream_closes_when_error_body_read_fails(
+    adapter: OpenCodeZenAdapter,
+    failure: type[BaseException],
+    expected: type[BaseException],
+) -> None:
+    class BrokenBody(httpx.AsyncByteStream):
+        closed = False
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield b"partial error"
+            raise failure("body interrupted")
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    body = BrokenBody()
+    route = respx.post(GEMINI_STREAM_URL).mock(return_value=httpx.Response(503, stream=body))
+    with caller_owns_retries(), pytest.raises(expected):
+        _ = [delta async for delta in adapter.stream([], model_id="gemini-3.5-flash")]
+    assert body.closed
+    assert route.call_count == 1
 
 
 @respx.mock
@@ -376,6 +415,89 @@ def test_gemini_response_normalizes_signature_tools_cache_usage_and_outcome(
         "reasoning_tokens": 12,
         "cache_read_tokens": 20,
     }
+
+
+@pytest.mark.parametrize(
+    ("raw_usage", "expected"),
+    [
+        ({}, None),
+        ({"promptTokenCount": 12}, {"input_tokens": 12}),
+        ({"candidatesTokenCount": 7}, {"output_tokens": 7}),
+        (
+            {"promptTokenCount": True, "candidatesTokenCount": 7},
+            {"output_tokens": 7},
+        ),
+        (
+            {"promptTokenCount": 12, "candidatesTokenCount": -1},
+            {"input_tokens": 12},
+        ),
+        ({"promptTokenCount": "12", "candidatesTokenCount": None}, None),
+        (
+            {"candidatesTokenCount": 7, "thoughtsTokenCount": 3},
+            {"output_tokens": 10, "reasoning_tokens": 3},
+        ),
+        ({"thoughtsTokenCount": 3, "cachedContentTokenCount": 4}, None),
+        (
+            {
+                "promptTokenCount": 0,
+                "candidatesTokenCount": 0,
+                "thoughtsTokenCount": 0,
+                "cachedContentTokenCount": 0,
+            },
+            {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "reasoning_tokens": 0,
+                "cache_read_tokens": 0,
+            },
+        ),
+        (
+            {"promptTokenCount": 12, "candidatesTokenCount": 7, "thoughtsTokenCount": False},
+            {"input_tokens": 12, "output_tokens": 7},
+        ),
+    ],
+)
+def test_gemini_usage_preserves_only_reported_valid_counters(
+    adapter: OpenCodeZenAdapter,
+    raw_usage: dict[str, Any],
+    expected: dict[str, int] | None,
+) -> None:
+    chunk = {"candidates": [{"finishReason": "STOP"}], "usageMetadata": raw_usage}
+    normalized = adapter.normalize_response(chunk, model_id="gemini-3.5-flash")
+    assert normalized.get("usage") == expected
+    deltas, _, _ = _normalize_gemini_stream_chunk(chunk, [], has_tool_calls=False)
+    assert [delta for delta in deltas if delta["type"] == "usage"] == (
+        [{"type": "usage", **expected}] if expected is not None else []
+    )
+
+
+@pytest.mark.parametrize("finish_reason", [[], {}, ["STOP"], {"reason": "STOP"}])
+def test_gemini_malformed_finish_keeps_tool_attempt_and_unknown_outcome(
+    adapter: OpenCodeZenAdapter, finish_reason: Any
+) -> None:
+    from core.chat.streaming import StreamingAccumulator
+
+    chunk = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [{"functionCall": {"id": "call_1", "name": "read", "args": {}}}]
+                },
+                "finishReason": finish_reason,
+            }
+        ]
+    }
+    normalized = adapter.normalize_response(chunk, model_id="gemini-3.5-flash")
+    assert normalized["terminal_outcome"] == "unknown"
+    assert normalized["tool_calls"] == [{"id": "call_1", "name": "read", "arguments": {}}]
+    deltas, _, finished = _normalize_gemini_stream_chunk(chunk, [], has_tool_calls=False)
+    accumulator = StreamingAccumulator()
+    for delta in deltas:
+        accumulator.add_delta(delta)
+    fields = accumulator.finalize_assistant_fields()
+    assert finished
+    assert fields.finish_reason == "unknown"
+    assert fields.tool_calls == normalized["tool_calls"]
 
 
 def test_gemini_response_preserves_malformed_tool_call_as_rejection(
