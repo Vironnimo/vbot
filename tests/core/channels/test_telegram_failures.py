@@ -87,6 +87,47 @@ async def test_offset_saves_cannot_regress_when_threads_finish_out_of_order(tmp_
     assert ChannelStorage(tmp_path).load_update_offset("tg-assistant") == 8
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_stop", [False, True])
+async def test_stop_drains_slow_offset_save_before_restart(tmp_path, monkeypatch, cancel_stop):
+    import threading
+
+    from core.channels import ChannelStorage
+
+    storage = ChannelStorage(tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def save(channel_id, update_id):
+        entered.set()
+        assert release.wait(timeout=15)
+        storage.save_update_offset(channel_id, update_id)
+
+    adapter, _, _, _ = make_adapter(
+        tmp_path,
+        monkeypatch,
+        update_offset_store=SimpleNamespace(save_update_offset=save),
+    )
+    application = adapter._application
+    adapter._claim_update(SimpleNamespace(update_id=7))
+    assert await asyncio.to_thread(entered.wait, 5)
+    stop = asyncio.create_task(adapter.stop())
+    try:
+        await asyncio.sleep(0)
+        if cancel_stop:
+            stop.cancel()
+            await asyncio.sleep(0)
+            stop.cancel()
+        done, _ = await asyncio.wait({stop}, timeout=0.05 if cancel_stop else 2.1)
+        assert not done
+    finally:
+        release.set()
+        await asyncio.gather(stop, return_exceptions=True)
+        await adapter._await_offset_saves()
+    assert storage.load_update_offset("tg-assistant") == 7
+    application.shutdown.assert_awaited_once()
+
+
 @pytest.mark.parametrize("age_hours", [24, 47, 48, 168])
 def test_polling_watermark_expires_before_telegram_randomizes_ids(tmp_path, age_hours):
     from core.channels import ChannelStorage
