@@ -13,6 +13,8 @@ from core.model_tasks.constants import (
 )
 from core.model_tasks.local_targets import (
     DEFAULT_LOCAL_TASK_TARGET_REGISTRY,
+    LocalTaskTargetDescriptor,
+    LocalTaskTargetError,
     LocalTaskTargetRegistry,
 )
 from core.model_tasks.options import (
@@ -334,7 +336,7 @@ class TaskModelService:
     def _validate_target(self, task_type: str, target: str) -> None:
         target_ref = parse_task_model_target_id(target)
         if target_ref.kind == "local":
-            descriptor = self._local_targets.get(target_ref.local_id)
+            descriptor = self._resolve_local_target(target_ref.local_id)
             if task_type not in descriptor.task_types:
                 raise TaskModelValidationError(
                     f"Local target {target!r} does not support {task_type}"
@@ -447,7 +449,7 @@ class TaskModelService:
         normalized_task_type = validate_task_type(task_type)
         target_ref = parse_task_model_target_id(target)
         if target_ref.kind == "local":
-            descriptor = self._local_targets.get(target_ref.local_id)
+            descriptor = self._resolve_local_target(target_ref.local_id)
             return TaskModelOptionSchema(
                 task_type=normalized_task_type,
                 target=target_ref.target,
@@ -475,6 +477,12 @@ class TaskModelService:
         if target_ref.kind == "local":
             return None
         return self._resolve_model(target_ref.provider_id, target_ref.model_id)
+
+    def _resolve_local_target(self, local_id: str) -> LocalTaskTargetDescriptor:
+        try:
+            return self._local_targets.get(local_id)
+        except LocalTaskTargetError as error:
+            raise TaskModelValidationError(str(error)) from error
 
     def _resolve_model(self, provider_id: str, model_id: str) -> Any | None:
         """Return the registry's ``Model`` for *(provider_id, model_id)*, or ``None``.
