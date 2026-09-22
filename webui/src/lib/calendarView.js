@@ -30,10 +30,6 @@ export function todayKey(timeZone = 'UTC') {
   return dayKeyInZone(new Date().toISOString(), timeZone);
 }
 
-export function isDayKey(value) {
-  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
-}
-
 export function addDaysToKey(key, days) {
   const [year, month, day] = key.split('-').map(Number);
   const next = new Date(
@@ -153,17 +149,6 @@ export function formatTimeInZone(
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(instantIso));
-}
-
-export function formatOccurrenceTime(
-  occurrence,
-  timeZone,
-  locale = activeLocaleTag(),
-) {
-  if (occurrence.all_day) {
-    return null;
-  }
-  return formatTimeInZone(occurrence.start_utc, timeZone, locale);
 }
 
 // ---------------------------------------------------------------------------
