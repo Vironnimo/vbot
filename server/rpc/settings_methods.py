@@ -150,8 +150,7 @@ async def _patch_setting_paths(state: Any, params: JsonObject) -> JsonObject:
 
     try:
         previous, saved, changed_paths = storage.update_settings(mutate)
-        commands_changed = await _apply_public_settings_delta(
-            state.runtime,
+        commands_changed = await state.runtime.apply_settings_change(
             previous,
             saved,
         )
@@ -207,10 +206,6 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
     newly_disabled: set[str] = set()
     if "extensions" in settings_update:
         _validate_extension_configs(state.runtime, settings_update["extensions"])
-        # Enabling routes through the full extension reload (it reads the freshly
-        # persisted state, so it also applies any name disabled in the same save);
-        # a disable-only change takes the surgical live-disable path. Config-value
-        # changes are read live via ExtensionAPI.get_config() and touch neither set.
         previous = storage.load_extensions_settings()
         old_disabled = set(previous.get("disabled", []))
         new_disabled = set(settings_update["extensions"].get("disabled", []))
@@ -220,11 +215,10 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
     try:
         storage.update_settings_sections(settings_update)
         saved_settings = storage.load_settings()
-        commands_changed = await _apply_public_settings_delta(
-            state.runtime,
+        commands_changed = await state.runtime.apply_settings_change(
             previous_settings,
             saved_settings,
-            force_roots=set(settings_update),
+            refresh_sections=settings_update,
         )
         response = _settings_response(state)
     except Exception as exc:
@@ -250,33 +244,6 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
     if commands_changed:
         publish_resource_changed(state, RESOURCE_KIND_COMMANDS)
     return response
-
-
-async def _apply_extension_delta(
-    runtime: Any, newly_enabled: set[str], newly_disabled: set[str]
-) -> bool:
-    """Apply the extensions disabled-set delta live after the write is persisted.
-
-    Enabling any name rebuilds the whole extension layer (``reload_extensions``),
-    which reads the freshly persisted state and therefore also applies any names
-    disabled in the same save — so a mixed save reloads and does nothing else. A
-    disable-only save takes the surgical live-disable path, leaving other
-    extensions untouched; a config-value-only change does neither (live reads
-    cover it). The defensive ``getattr``/``callable`` guards keep the handler
-    working against runtime test stubs that omit these seams.
-    """
-    if newly_enabled:
-        reload_extensions = getattr(runtime, "reload_extensions", None)
-        if callable(reload_extensions):
-            await reload_extensions()
-            return True
-        return False
-    if newly_disabled:
-        apply_disabled = getattr(runtime, "apply_extension_disabled_change", None)
-        if callable(apply_disabled):
-            await apply_disabled(newly_disabled)
-            return True
-    return False
 
 
 def _validate_public_settings_candidate(
@@ -338,69 +305,6 @@ def _validate_changed_provider_connections(
             raise SettingsPathError(
                 f"unknown Provider Connection {connection_key!r}; available: {available}"
             )
-
-
-async def _apply_public_settings_delta(
-    runtime: Any,
-    previous: JsonObject,
-    current: JsonObject,
-    *,
-    force_roots: set[str] | None = None,
-) -> bool:
-    """Apply the live lifecycle effects owned by changed Settings roots."""
-
-    forced = force_roots or set()
-    extension_directories_changed = previous.get("extension_directories") != current.get(
-        "extension_directories"
-    )
-    extensions_changed = previous.get("extensions") != current.get("extensions")
-    skill_directories_changed = "skills" in forced or previous.get(
-        "skill_directories"
-    ) != current.get("skill_directories")
-
-    extension_layer_reloaded = False
-    if extension_directories_changed:
-        reload_extensions = getattr(runtime, "reload_extensions", None)
-        if callable(reload_extensions):
-            await reload_extensions()
-            extension_layer_reloaded = True
-    elif extensions_changed:
-        old_disabled = _normalized_disabled(previous)
-        new_disabled = _normalized_disabled(current)
-        extension_layer_reloaded = await _apply_extension_delta(
-            runtime, old_disabled - new_disabled, new_disabled - old_disabled
-        )
-
-    if skill_directories_changed and not extension_layer_reloaded:
-        await runtime.reload_skills_async()
-
-    recall_changed = "recall" in forced or previous.get("recall") != current.get("recall")
-    if recall_changed and not extension_layer_reloaded:
-        reload_recall_backend = getattr(runtime, "reload_recall_backend", None)
-        if callable(reload_recall_backend):
-            reload_recall_backend()
-
-    keep_awake_changed = previous.get("keep_awake") != current.get("keep_awake")
-    if keep_awake_changed:
-        reload_keep_awake = getattr(runtime, "reload_keep_awake", None)
-        if callable(reload_keep_awake):
-            reload_keep_awake()
-    timezone_changed = previous.get("timezone") != current.get("timezone")
-    if timezone_changed:
-        reload_timezone = getattr(runtime, "reload_timezone", None)
-        if callable(reload_timezone):
-            reload_timezone()
-    return extension_layer_reloaded
-
-
-def _normalized_disabled(settings: JsonObject) -> set[str]:
-    extensions = settings.get("extensions")
-    if not isinstance(extensions, dict):
-        return set()
-    disabled = extensions.get("disabled")
-    if not isinstance(disabled, list):
-        return set()
-    return {name for name in disabled if isinstance(name, str)}
 
 
 def _apply_runtime_values(state: Any, values: JsonObject) -> None:

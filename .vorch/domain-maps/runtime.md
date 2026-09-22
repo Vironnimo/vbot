@@ -2,7 +2,7 @@
 
 Bootstrap entry point. Wires services and manages start/stop lifecycle.
 
-`runtime.py::Runtime` owns readiness, service references, shutdown, and the stable public access/reload surface. `_bootstrap.py` assembles its dependency-ordered service graph; `_configuration.py` interprets bootstrap paths and live Settings callbacks. These are internal files of the same Runtime owner, not additional service layers.
+`runtime.py::Runtime` owns readiness, service references, shutdown, and the stable public access/reload surface. `_bootstrap.py` assembles its dependency-ordered service graph; `_configuration.py` interprets bootstrap paths; `_settings.py` coordinates live Settings effects. These are internal files of the same Runtime owner, not additional service layers.
 
 Blocking in-process work crosses named `BoundedWorkerPool` boundaries from `core/utils/workers.py`: each pool owns a dedicated executor, admits at most its worker count per Event Loop, and defers cancellation until an already-started mutation settles; continuous Terminal I/O stays on its own executor so it cannot consume parser/prompt/Session/Tool capacity.
 
@@ -55,6 +55,7 @@ All service properties raise `RuntimeError` outside a started runtime, **except 
 
 Reload methods refresh already-wired consumers without restart. Provider/Model registry identities stay stable; Skill, Extension, and Recall registries can be replaced through the live callbacks and installation paths below:
 
+- `apply_settings_change(previous, current, refresh_sections=...)` applies all live effects after one validated Settings write and returns whether the Command catalog changed. Callers keep the mutation serialized through this await. The private `_settings.py` owns reload dependencies: full Extension rebuild covers Recall/Prompts/Skills, surgical disable covers Prompts/Skills and removed-backend recovery but must not suppress an independently changed Recall selection. Explicit Skills/Recall section saves retain their refresh semantics even when values are unchanged. Tests: `test_runtime_settings.py` and Settings RPC tests.
 - `reload_custom_providers()` - Settings-owned Providers + manual Models into existing registries.
 - `maybe_refresh_local_catalogs(force=False)` - staged copy refresh for auto-refresh Connections, published atomically after validation; failures never raise and leave the last database untouched.
 - `reload_skills_async()` scans through the named Runtime worker pool and installs the replacement on the Event Loop; async callers use it instead of the synchronous variant.

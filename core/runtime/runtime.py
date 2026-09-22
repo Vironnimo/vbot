@@ -7,7 +7,7 @@ all core services and manages the application lifecycle.
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
@@ -62,6 +62,7 @@ from core.runtime._extension_host import ExtensionHostFactory
 from core.runtime._prompt_blocks import refresh_prompt_blocks
 from core.runtime._recall import RecallIntegration
 from core.runtime._service_access import _StartedService
+from core.runtime._settings import apply_settings_change
 from core.runtime._workers import _RUNTIME_WORKERS
 from core.runtime.interfaces import (
     ConfigProtocol,
@@ -631,6 +632,25 @@ class Runtime:
         """Re-register channel_send based on persisted enabled Channel configs."""
         self._ensure_started()
         self._sync_channel_tool_registration()
+
+    async def apply_settings_change(
+        self,
+        previous: Mapping[str, Any],
+        current: Mapping[str, Any],
+        *,
+        refresh_sections: Collection[str] = (),
+    ) -> bool:
+        """Apply all live effects of a successfully persisted Settings change.
+
+        Call after validation and the atomic write, with its before/after raw
+        Settings snapshots. Keep the mutation serialized through this await.
+        Explicit section saves may request a Skills/Recall refresh even when
+        their values are unchanged. Return whether the Command catalog changed.
+        """
+        self._ensure_started()
+        return await apply_settings_change(
+            self, previous, current, refresh_sections=refresh_sections
+        )
 
     def reload_keep_awake(self) -> None:
         """Apply the persisted ``keep_awake`` setting to the running process."""
