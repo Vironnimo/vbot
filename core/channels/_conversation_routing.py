@@ -296,7 +296,20 @@ class ChannelSessionRouting:
         self,
         conversation: ConversationFacts,
         metadata: dict[str, Any],
+        *,
+        expected_session_id: str,
     ) -> None:
-        """Restore the anchor when a bound tap could not enter the Queue."""
+        """Undo only this tap's pointer, preserving later navigation and metadata."""
         anchor = self._derive_session_id(conversation)
-        self._chat_sessions.set_metadata(_session_address(self._config.agent_id, anchor), metadata)
+
+        def restore(current: dict[str, Any]) -> None:
+            if current.get(ACTIVE_SESSION_METADATA_KEY) != expected_session_id:
+                return
+            if ACTIVE_SESSION_METADATA_KEY in metadata:
+                current[ACTIVE_SESSION_METADATA_KEY] = metadata[ACTIVE_SESSION_METADATA_KEY]
+            else:
+                current.pop(ACTIVE_SESSION_METADATA_KEY, None)
+
+        self._chat_sessions.mutate_metadata(
+            _session_address(self._config.agent_id, anchor), restore
+        )
