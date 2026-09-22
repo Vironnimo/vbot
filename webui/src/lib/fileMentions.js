@@ -3,18 +3,34 @@
 // the mentions it receives into durable message snapshots; this module only
 // decides what to show and which tokens count as mentions.
 
-// Characters that may appear in an @-mention token (path segments, dots,
-// separators). The char before the `@` must NOT match this set (or be another
-// `@`), so `user@example.com` never reads as a mention of `example.com`.
-const MENTION_TOKEN_PATTERN = /[A-Za-z0-9_./\\-]/;
-const MENTION_EXTRACT_PATTERN = /(^|[^A-Za-z0-9_./\\@-])@([A-Za-z0-9_./\\-]+)/g;
+// Mention grammar. A bare token is `@` followed by letters, digits and path
+// punctuation in any script (`@docs/Übersicht.md`). Every other path (spaces,
+// symbols, quotes, `@`) uses the quoted form `@"notes/meeting notes.md"`, where
+// `\"` and `\\` escape a quote and a backslash. The char before the `@` must
+// NOT be a bare token char (or another `@`), so `user@example.com` never reads
+// as a mention of `example.com`. `formatMentionToken` writes the form the
+// extractor reads back, so every listed path round-trips.
+const BARE_TOKEN_CHARS = String.raw`\p{L}\p{M}\p{N}_./\\-`;
+const MENTION_TOKEN_PATTERN = new RegExp(`[${BARE_TOKEN_CHARS}]`, 'u');
+const BARE_PATH_PATTERN = new RegExp(`^[${BARE_TOKEN_CHARS}]+$`, 'u');
+const MENTION_EXTRACT_PATTERN = new RegExp(
+  String.raw`(^|[^@${BARE_TOKEN_CHARS}])@(?:"((?:[^"\\]|\\[\s\S])+)"|([${BARE_TOKEN_CHARS}]+))`,
+  'gu',
+);
+const QUOTED_ESCAPE_PATTERN = /\\(["\\])/g;
 
-// Trailing sentence punctuation is not part of a path: "see @foo.py." mentions
-// foo.py. Trimming is retried against the file list, so a file literally named
-// "foo.py." (matched exactly first) still wins.
+// Trailing sentence punctuation is not part of a bare path: "see @foo.py."
+// mentions foo.py. Trimming is retried against the file list, so a file
+// literally named "foo.py." (matched exactly first) still wins.
 const TRAILING_PUNCTUATION_PATTERN = /[.,;:!?)]+$/;
 
 export const isMentionTokenChar = (char) => MENTION_TOKEN_PATTERN.test(char);
+
+// The text the picker inserts for a listed path (without the trailing space).
+export const formatMentionToken = (path) =>
+  BARE_PATH_PATTERN.test(path)
+    ? `@${path}`
+    : `@"${path.replace(/["\\]/g, '\\$&')}"`;
 
 // All boundary-anchored @-tokens in a message, in order, deduplicated.
 export const extractMentionTokens = (text) => {
@@ -23,7 +39,10 @@ export const extractMentionTokens = (text) => {
   }
   const tokens = [];
   for (const match of text.matchAll(MENTION_EXTRACT_PATTERN)) {
-    const token = match[2];
+    const token =
+      match[2] !== undefined
+        ? match[2].replace(QUOTED_ESCAPE_PATTERN, '$1')
+        : match[3];
     if (token && !tokens.includes(token)) {
       tokens.push(token);
     }
@@ -31,20 +50,19 @@ export const extractMentionTokens = (text) => {
   return tokens;
 };
 
-// Which extracted tokens are actual files: exact path match first, then with
-// trailing sentence punctuation trimmed. Everything else (pasted code
-// decorators, handles) is silently not a mention.
+// Which extracted tokens are actual files: the exact path first, then with
+// typed backslash separators normalized, then with trailing sentence
+// punctuation trimmed. Everything else (pasted code decorators, handles) is
+// silently not a mention.
 export const matchMentionCandidates = (tokens, files) => {
   const fileSet = new Set(Array.isArray(files) ? files : []);
   const mentions = [];
   for (const token of tokens) {
     const normalized = token.replaceAll('\\', '/');
     const trimmed = normalized.replace(TRAILING_PUNCTUATION_PATTERN, '');
-    const match = fileSet.has(normalized)
-      ? normalized
-      : fileSet.has(trimmed)
-        ? trimmed
-        : null;
+    const match = [token, normalized, trimmed].find((candidate) =>
+      fileSet.has(candidate),
+    );
     if (match && !mentions.includes(match)) {
       mentions.push(match);
     }

@@ -1,6 +1,7 @@
 <script>
   import { toolDetailImages } from '$lib/chatToolDetails.js';
   import { t } from '$lib/i18n.js';
+  import { formatMentionToken } from '$lib/fileMentions.js';
   import { isImeComposing } from '$lib/keyboard.js';
   import {
     INTENTIONAL_HOVER_SHOW_DELAY_MS,
@@ -130,7 +131,7 @@
           return [block.text];
         }
         if (isFileMentionContentBlock(block)) {
-          return [`@${block.path}`];
+          return [formatMentionToken(block.path)];
         }
         return [];
       })

@@ -209,6 +209,40 @@ describe('ChatComposer', () => {
     expect(input.value).toBe('look at @src/session_search.py ');
   });
 
+  it('sends a picked path with spaces or symbols as a file mention', async () => {
+    const onSendMessage = vi.fn().mockResolvedValue(true);
+    const onListFiles = vi.fn().mockResolvedValue({
+      files: ['notes/meeting notes.md', 'docs/Übersicht.md'],
+      truncated: false,
+    });
+    suite.mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onSendMessage, onListFiles },
+    });
+    flushSync();
+
+    const input = composerInput();
+    for (const query of ['meeting', 'Übers']) {
+      typeInComposer(input, `${input.value}@${query}`);
+      await flushComposerAsyncWork();
+      document.body
+        .querySelector('.file-autocomplete__option')
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await flushComposerAsyncWork();
+    }
+
+    expect(input.value).toBe('@"notes/meeting notes.md" @docs/Übersicht.md ');
+
+    submitComposer();
+    await flushComposerAsyncWork();
+    await flushComposerAsyncWork();
+
+    expect(onSendMessage).toHaveBeenCalledWith(
+      '@"notes/meeting notes.md" @docs/Übersicht.md ',
+      { fileMentions: ['notes/meeting notes.md', 'docs/Übersicht.md'] },
+    );
+  });
+
   it('does not open the file picker inside an email address', async () => {
     const onListFiles = vi.fn().mockResolvedValue({ files: ['a.txt'] });
     suite.mountedComponent = mount(ChatComposer, {

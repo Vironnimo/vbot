@@ -1,4 +1,8 @@
-import { fuzzyFilterFiles, isMentionTokenChar } from '$lib/fileMentions.js';
+import {
+  formatMentionToken,
+  fuzzyFilterFiles,
+  isMentionTokenChar,
+} from '$lib/fileMentions.js';
 import { t } from '$lib/i18n.js';
 import {
   buildModelSelectOptions,
@@ -393,7 +397,8 @@ export function createComposerPicker(context) {
     const prefix = context.content.slice(0, triggerContext.start);
     const suffix = context.content.slice(triggerContext.end);
     // The trailing space ends the mention token, so typing continues normally.
-    const insertedToken = `@${file} `;
+    // Paths outside the bare token grammar are inserted in quoted form.
+    const insertedToken = `${formatMentionToken(file)} `;
     const nextCursorPosition = prefix.length + insertedToken.length;
     context.content = `${prefix}${insertedToken}${suffix}`;
     context.noteContentEdited();
