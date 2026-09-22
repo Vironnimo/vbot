@@ -301,7 +301,14 @@ def _merge_two(low: Mapping[str, Any], high: Mapping[str, Any]) -> dict[str, Any
             # One-level-deep capabilities merge: each sub-field (vision, tools,
             # reasoning, modality lists, …) is replaced wholesale by the higher
             # layer, but sub-fields the higher layer omits are inherited.
-            result[key] = {**result[key], **{k: _plain(v) for k, v in value.items()}}
+            result[key] = {
+                **result[key],
+                **{
+                    k: _plain(v)
+                    for k, v in value.items()
+                    if v is not None or result[key].get(k) is None
+                },
+            }
         else:
             result[key] = _plain(value)
     return result
