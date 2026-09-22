@@ -26,7 +26,9 @@ from core.settings import (
     parse_settings_update,
     setting_details,
 )
+from core.settings.normalizers import normalize_model_task_settings
 from core.settings.settings import available_timezone_names, effective_timezone_name
+from core.utils.errors import StorageError
 from core.utils.logging import get_logger
 from server.events import RESOURCE_KIND_COMMANDS
 from server.rpc._mutations import serialized_mutation
@@ -143,7 +145,7 @@ async def _patch_setting_paths(state: Any, params: JsonObject) -> JsonObject:
     def mutate(raw_settings: JsonObject) -> tuple[JsonObject, JsonObject, tuple[str, ...]]:
         previous = deepcopy(raw_settings)
         candidate, changed_paths = apply_settings_patch(raw_settings, operations)
-        _validate_public_settings_candidate(state.runtime, candidate, operations)
+        _validate_public_settings_candidate(state.runtime, previous, candidate, operations)
         raw_settings.clear()
         raw_settings.update(candidate)
         return previous, candidate, changed_paths
@@ -248,6 +250,7 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
 
 def _validate_public_settings_candidate(
     runtime: Any,
+    previous: JsonObject,
     candidate: JsonObject,
     operations: list[SettingsPatchOperation],
 ) -> None:
@@ -279,9 +282,18 @@ def _validate_public_settings_candidate(
         if operation.resolved.path.values[:1] == ("model_tasks",)
         and len(operation.resolved.path.values) > 1
     }
+    previous_tasks = {}
+    if changed_tasks:
+        # Invalid old bindings must not prevent a patch from repairing/removing them.
+        with suppress(StorageError):
+            previous_tasks = normalize_model_task_settings(previous.get("model_tasks"))
     for task_type in changed_tasks:
         binding = effective["model_tasks"].get(task_type)
-        if isinstance(binding, dict) and binding.get("target"):
+        if (
+            isinstance(binding, dict)
+            and binding.get("target")
+            and binding != previous_tasks.get(task_type)
+        ):
             runtime.model_tasks.validate_binding(task_type, binding)
     _validate_changed_provider_connections(runtime, operations)
 

@@ -114,6 +114,87 @@ def test_patch_rejects_overlapping_paths() -> None:
         )
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("option_operation", ["set", "unset"])
+def test_unsetting_task_target_rejects_overlapping_option_changes(
+    reverse: bool, option_operation: str
+) -> None:
+    operations = [
+        {"op": "unset", "path": 'model_tasks["text_to_speech"].target'},
+        {
+            "op": option_operation,
+            "path": 'model_tasks["text_to_speech"].options["voice"]',
+            **({"value": "echo"} if option_operation == "set" else {}),
+        },
+    ]
+    if reverse:
+        operations.reverse()
+
+    with pytest.raises(SettingsPathError):
+        parse_patch_operations(operations)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("explicit_option", [False, True])
+def test_task_target_patch_resets_old_options_before_explicit_changes(
+    reverse: bool, explicit_option: bool
+) -> None:
+    original = {
+        "model_tasks": {
+            "text_to_speech": {
+                "target": "local/previous",
+                "options": {"old_option": True},
+            }
+        }
+    }
+    operations = [
+        {
+            "op": "set",
+            "path": 'model_tasks["text_to_speech"].target',
+            "value": "local/replacement",
+        }
+    ]
+    if explicit_option:
+        operations.append(
+            {
+                "op": "set",
+                "path": 'model_tasks["text_to_speech"].options["voice"]',
+                "value": "echo",
+            }
+        )
+    if reverse:
+        operations.reverse()
+
+    updated, _changed = apply_settings_patch(original, parse_patch_operations(operations))
+
+    assert build_effective_settings(updated)["model_tasks"]["text_to_speech"] == {
+        "target": "local/replacement",
+        "options": {"voice": "echo"} if explicit_option else {},
+    }
+    assert original["model_tasks"]["text_to_speech"]["options"] == {"old_option": True}
+
+
+def test_same_task_target_patch_preserves_options() -> None:
+    original = {
+        "model_tasks": {"text_to_speech": {"target": "local/current", "options": {"voice": "echo"}}}
+    }
+    updated, changed = apply_settings_patch(
+        original,
+        parse_patch_operations(
+            [
+                {
+                    "op": "set",
+                    "path": 'model_tasks["text_to_speech"].target',
+                    "value": "local/current",
+                }
+            ]
+        ),
+    )
+
+    assert updated == original
+    assert changed == ()
+
+
 def test_unset_removes_override_and_restores_default() -> None:
     original = {"web_search": {"provider": "searxng"}}
     operations = parse_patch_operations([{"op": "unset", "path": "web_search.provider"}])

@@ -392,6 +392,23 @@ def _prepare_structured_patch(
 ) -> None:
     """Seed discriminator-owned objects before applying independent leaf edits."""
 
+    for operation in operations:
+        path = operation.resolved.path.values
+        if (
+            operation.operation == "set"
+            and len(path) == 3
+            and path[0] == "model_tasks"
+            and path[2] == "target"
+        ):
+            binding = _lookup(candidate, path[:-1], None)
+            if isinstance(binding, dict):
+                previous_target = binding.get("target")
+                if (
+                    not isinstance(previous_target, str)
+                    or previous_target.strip() != operation.value.strip()
+                ):
+                    binding.pop("options", None)
+
     compaction = candidate.get("compaction")
     if not isinstance(compaction, dict):
         return
@@ -520,7 +537,18 @@ def _validate_value(definition: SettingDefinition, value: Any, path: str) -> Non
 
 
 def _reject_overlapping_operations(operations: list[SettingsPatchOperation]) -> None:
-    paths = [operation.resolved.path.values for operation in operations]
+    paths = []
+    for operation in operations:
+        path = operation.resolved.path.values
+        # Removing a Task Model target removes its entire binding.
+        if (
+            operation.operation == "unset"
+            and len(path) == 3
+            and path[0] == "model_tasks"
+            and path[2] == "target"
+        ):
+            path = path[:-1]
+        paths.append(path)
     for index, path in enumerate(paths):
         for other in paths[index + 1 :]:
             shared = min(len(path), len(other))
