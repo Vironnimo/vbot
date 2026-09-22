@@ -153,7 +153,7 @@ class ProviderImageClient(ProviderTaskClient):
             options,
             input_images=input_images,
         )
-        requested_output_format = options.get("output_format")
+        requested_output_format = payload.get("output_format")
 
         _LOGGER.debug(
             "Image generation request: url=%s%s model=%s",
@@ -183,7 +183,7 @@ class ProviderImageClient(ProviderTaskClient):
     ) -> ImageGenerationResult:
         form = _build_openai_image_edit_form(self._model_id, prompt, options)
         files = _openai_image_edit_files(input_images)
-        requested_output_format = options.get("output_format")
+        requested_output_format = form.get("output_format")
 
         _LOGGER.debug(
             "Image edit request: url=%s%s model=%s inputs=%d",
@@ -213,7 +213,7 @@ class ProviderImageClient(ProviderTaskClient):
         options: JsonObject,
     ) -> ImageGenerationResult:
         payload = _build_openai_image_payload(self._model_id, prompt, options)
-        requested_output_format = options.get("output_format")
+        requested_output_format = payload.get("output_format")
 
         _LOGGER.debug(
             "Image generation request: url=%s%s model=%s",

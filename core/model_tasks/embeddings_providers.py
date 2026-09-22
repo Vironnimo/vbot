@@ -218,7 +218,7 @@ def _parse_embeddings_response(
                 "Embeddings response data entry is missing an embedding",
                 retryable=True,
             )
-        if index is not None and (not isinstance(index, int) or isinstance(index, bool)):
+        if "index" in entry and (not isinstance(index, int) or isinstance(index, bool)):
             raise ProviderError(
                 "Embeddings response data index must be an integer",
                 retryable=False,
@@ -317,7 +317,7 @@ def _non_negative_number(value: Any) -> float | None:
         return None
     try:
         normalized = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if not math.isfinite(normalized) or normalized < 0:
         return None
@@ -376,7 +376,10 @@ def _coerce_vector(raw: list[Any]) -> list[float]:
                 retryable=False,
             )
         if isinstance(value, (int, float)):
-            normalized = float(value)
+            try:
+                normalized = float(value)
+            except OverflowError:
+                normalized = math.inf
             if not math.isfinite(normalized):
                 raise ProviderError(
                     "Embeddings response embedding contains a non-finite value",

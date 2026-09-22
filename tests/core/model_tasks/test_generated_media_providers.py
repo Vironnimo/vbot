@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 import respx
 
 from core.model_tasks.image_types import ImageInput
-from core.model_tasks.music_providers import ProviderMusicClient, _music_payload
+from core.model_tasks.music_providers import (
+    MUSIC_REQUEST_TIMEOUT_SECONDS,
+    ProviderMusicClient,
+    _music_payload,
+)
 from core.model_tasks.video_providers import ProviderVideoClient, _video_payload
-from core.providers.errors import ProviderError
+from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 
@@ -93,6 +99,97 @@ async def test_video_client_submits_polls_and_downloads_same_origin_content() ->
     assert result.job_id == "job-1"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("job_id", [None, "", 123, []])
+@respx.mock
+async def test_video_create_without_usable_job_id_preserves_unknown_outcome(job_id: object) -> None:
+    create = respx.post("https://openrouter.ai/api/v1/videos").respond(
+        202, json={"id": job_id, "status": "pending"}
+    )
+
+    with pytest.raises(ProviderOutcomeUnknownError) as caught:
+        await _openrouter_video_client().generate("A river at dawn", options={})
+
+    assert caught.value.operation_key
+    assert caught.value.retryable is False
+    assert create.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [[], {}, 123, True])
+@respx.mock
+async def test_video_create_with_malformed_status_preserves_unknown_outcome(status: object) -> None:
+    create = respx.post("https://openrouter.ai/api/v1/videos").respond(
+        202, json={"id": "job-1", "status": status}
+    )
+
+    with pytest.raises(ProviderOutcomeUnknownError) as caught:
+        await _openrouter_video_client().generate("A river at dawn", options={})
+
+    assert caught.value.operation_key
+    assert caught.value.retryable is False
+    assert create.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [[], {}, 123, True])
+@respx.mock
+async def test_video_poll_with_malformed_status_fails_without_resubmission(status: object) -> None:
+    create = respx.post("https://openrouter.ai/api/v1/videos").respond(
+        202, json={"id": "job-1", "status": "pending"}
+    )
+    poll = respx.get("https://openrouter.ai/api/v1/videos/job-1").respond(
+        200, json={"id": "job-1", "status": status}
+    )
+
+    with pytest.raises(ProviderError) as caught:
+        await _openrouter_video_client().generate("A river at dawn", options={}, poll_interval=0)
+
+    assert not isinstance(caught.value, ProviderOutcomeUnknownError)
+    assert caught.value.retryable is False
+    assert create.call_count == poll.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_video_poll_deadline_includes_poll_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _openrouter_video_client()
+    monkeypatch.setattr(
+        client, "post_and_parse", AsyncMock(return_value=("job-1", {"status": "pending"}))
+    )
+    poll = AsyncMock(return_value={"status": "completed"})
+    monkeypatch.setattr(client, "get_and_parse", poll)
+
+    with pytest.raises(ProviderError) as caught:
+        await client.generate("A river", options={}, poll_timeout=0.01, poll_interval=1)
+
+    assert caught.value.retryable is False
+    poll.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_video_poll_deadline_cancels_stalled_poll(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _openrouter_video_client()
+    monkeypatch.setattr(
+        client, "post_and_parse", AsyncMock(return_value=("job-1", {"status": "pending"}))
+    )
+    closed = asyncio.Event()
+
+    async def stalled_poll(*args: object, **kwargs: object) -> None:
+        try:
+            await asyncio.Future()
+        finally:
+            closed.set()
+
+    monkeypatch.setattr(client, "get_and_parse", stalled_poll)
+    with pytest.raises(ProviderError):
+        await asyncio.wait_for(
+            client.generate("A river", options={}, poll_timeout=0.01, poll_interval=0),
+            timeout=1,
+        )
+
+    assert closed.is_set()
+
+
 def test_music_payload_uses_audio_modalities_and_reference_images() -> None:
     payload = _music_payload(
         "google/lyria-3-pro-preview",
@@ -146,6 +243,39 @@ async def test_music_client_concatenates_streamed_base64_audio() -> None:
     request = json.loads(route.calls[0].request.content)
     assert request["model"] == "google/lyria-3-pro-preview"
     assert request["stream"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [{"message": "generation failed", "code": 502}, "failed"])
+@respx.mock
+async def test_music_client_rejects_error_after_partial_audio(error: object) -> None:
+    stream = (
+        _sse({"choices": [{"delta": {"audio": {"data": "YWJj"}}}]})
+        + _sse({"error": error})
+        + "data: [DONE]\n\n"
+    )
+    route = respx.post("https://openrouter.ai/api/v1/chat/completions").respond(
+        200, text=stream, headers={"content-type": "text/event-stream"}
+    )
+
+    with pytest.raises(ProviderError):
+        await _openrouter_music_client().generate("Dreamy synthwave", options={})
+
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_music_stream_retains_task_read_timeout() -> None:
+    route = respx.post("https://openrouter.ai/api/v1/chat/completions").respond(
+        200,
+        text=_sse({"choices": [{"delta": {"audio": {"data": "YWJj"}}}]}) + "data: [DONE]\n\n",
+        headers={"content-type": "text/event-stream"},
+    )
+
+    await _openrouter_music_client().generate("Dreamy synthwave", options={})
+
+    assert route.calls[0].request.extensions["timeout"]["read"] == MUSIC_REQUEST_TIMEOUT_SECONDS
 
 
 def _sse(payload: dict) -> str:
