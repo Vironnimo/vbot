@@ -38,6 +38,9 @@ def normalize_responses_response(response: Mapping[str, Any]) -> dict[str, Any]:
         "tool_calls": _extract_function_calls(output_items),
     }
     phase = _assistant_phase_from_output(output_items)
+    summary = _extract_reasoning_summary(output_items)
+    if summary:
+        normalized["reasoning_summary"] = summary
     if phase is not None:
         normalized["phase"] = phase
     usage = _extract_responses_usage(response.get("usage"))
@@ -63,7 +66,11 @@ def _extract_reasoning_parts(output_items: list[Mapping[str, Any]]) -> list[str]
     for item in output_items:
         if item.get("type") != "reasoning":
             continue
-        parts.extend(_content_text_parts(item.get("summary"), {"summary_text", "text"}))
+        for summary_text in _content_text_parts(item.get("summary"), {"summary_text", "text"}):
+            if summary_text:
+                if parts:
+                    parts.append("\n\n")
+                parts.append(summary_text)
         parts.extend(
             _content_text_parts(
                 item.get("content"),
@@ -74,6 +81,17 @@ def _extract_reasoning_parts(output_items: list[Mapping[str, Any]]) -> list[str]
         if isinstance(text, str):
             parts.append(text)
     return parts
+
+
+def _extract_reasoning_summary(output_items: list[Mapping[str, Any]]) -> list[str]:
+    """Project only human-readable summary sections, never opaque replay state."""
+    return [
+        text
+        for item in output_items
+        if item.get("type") == "reasoning"
+        for text in _content_text_parts(item.get("summary"), {"summary_text", "text"})
+        if text
+    ]
 
 
 def _content_text_parts(content: Any, allowed_types: set[str]) -> list[str]:

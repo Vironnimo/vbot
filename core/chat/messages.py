@@ -327,6 +327,7 @@ class ChatMessage:
     reasoning_meta: JsonObject | None = None
     reasoning_scope: str | None = None
     reasoning_timing: JsonObject | None = None
+    reasoning_summary: list[str] | None = None
     phase: str | None = None
     usage: JsonObject | None = None
     timing: JsonObject | None = None
@@ -415,6 +416,7 @@ class ChatMessage:
         reasoning_meta: JsonObject | None = None,
         reasoning_scope: str | None = None,
         reasoning_timing: JsonObject | None = None,
+        reasoning_summary: list[str] | None = None,
         phase: str | None = None,
         usage: JsonObject | None = None,
         tool_calls: list[ToolCall] | None = None,
@@ -441,6 +443,7 @@ class ChatMessage:
             content=content,
             reasoning=reasoning,
             reasoning_meta=dict(reasoning_meta) if reasoning_meta is not None else None,
+            reasoning_summary=list(reasoning_summary) if reasoning_summary is not None else None,
             reasoning_scope=reasoning_scope,
             reasoning_timing=(dict(reasoning_timing) if reasoning_timing is not None else None),
             phase=phase,
@@ -655,6 +658,7 @@ class ChatMessage:
         _add_if_not_none(message, "reasoning_meta", self.reasoning_meta)
         _add_if_not_none(message, "reasoning_scope", self.reasoning_scope)
         _add_if_not_none(message, "reasoning_timing", self.reasoning_timing)
+        _add_if_not_none(message, "reasoning_summary", self.reasoning_summary)
         _add_if_not_none(message, "phase", self.phase)
         _add_if_not_none(message, "usage", self.usage)
         _add_if_not_none(message, "timing", self.timing)
@@ -746,6 +750,7 @@ class ChatMessage:
             model=_message_validation._optional_string(data, "model"),
             reasoning=_message_validation._optional_string(data, "reasoning"),
             reasoning_meta=dict(reasoning_meta) if reasoning_meta is not None else None,
+            reasoning_summary=data.get("reasoning_summary"),
             reasoning_scope=_message_validation._optional_string(data, "reasoning_scope"),
             reasoning_timing=(dict(reasoning_timing) if reasoning_timing is not None else None),
             phase=_message_validation._optional_string(data, "phase"),
