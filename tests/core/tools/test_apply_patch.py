@@ -93,6 +93,30 @@ def test_repeated_blocks_require_context_and_never_select_first(tmp_path):
     assert path.read_bytes() == before.replace(b"two\nvalue", b"two\nchanged")
 
 
+@pytest.mark.parametrize(
+    ("before", "hunk"),
+    [
+        (b"x\n}\n}\n}\ny\n", "@@\n }\n+INSERTED\n }"),
+        (b"a {\n}\n}\nb {\n  c {\n    }\n}\n}\n", "@@\n }\n+INSERTED\n }"),
+        (
+            b"def a():\n    return 1\n    return 1\n\ndef b():\n"
+            b"    if x:\n        return 1\n    return 1\n    return 1\n",
+            "@@\n-    return 1\n     return 1",
+        ),
+        # A multi-line context anchor can overlap its own other occurrence too.
+        (b"x\n}\n}\n}\ny\n", "@@\n }\n }\n@@\n+INSERTED"),
+    ],
+)
+def test_overlapping_occurrences_are_ambiguous_not_first_match(tmp_path, before, hunk):
+    path = tmp_path / "file.txt"
+    path.write_bytes(before)
+
+    result = apply(tmp_path, update(hunk))
+
+    assert result["error"]["code"] in {"ambiguous_match", "ambiguous_context"}
+    assert path.read_bytes() == before
+
+
 def test_whole_lines_do_not_match_substrings(tmp_path):
     path = tmp_path / "file.txt"
     path.write_bytes(b"foobar\nfoo\n")

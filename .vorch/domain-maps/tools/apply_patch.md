@@ -98,6 +98,10 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   require whole-line matches, permit precise-only retry checks, and constrain
   EOF. The matcher retains its default substring mode for direct callers. Precise matches win;
   ambiguity at a winning strategy never falls through to a looser strategy.
+  Ambiguity counts every occurrence, including overlapping ones (repeated
+  closing-brace lines) and ones following a filtered partial occurrence, for
+  hunks and `@@` anchors alike; `replace_all` still replaces leftmost
+  non-overlapping spans.
 - Newline/Unicode/typography/whitespace/indentation differences are supported
   for every hunk line. The bounded block-anchor and context-similarity
   strategies may absorb differences only in context lines: each removed (`-`)
