@@ -49,6 +49,32 @@ def test_bundled_coding_agents_loads_with_reachable_references() -> None:
     assert registry.availability_for("coding-agents", ["coding-agents"]).state == "available"
 
 
+@pytest.mark.parametrize(
+    "requirements",
+    ["{42: value}", "{42: value, unknown: value}", "{all: [{42: value, unknown: value}]}"],
+)
+def test_non_string_requirement_keys_isolate_invalid_package(
+    tmp_path: Path, requirements: str
+) -> None:
+    skills_dir = tmp_path / "skills"
+    write_skill(
+        skills_dir,
+        "broken",
+        "---\nname: broken\ndescription: Broken requirements.\n"
+        f"metadata:\n  vbot:\n    requirements: {requirements}\n---\n",
+    )
+    write_skill(skills_dir, "healthy", "---\nname: healthy\ndescription: Healthy.\n---\n")
+
+    registry = SkillRegistry.load(skills_dir)
+
+    assert [skill.name for skill in registry.list_all()] == ["healthy"]
+    invalid = registry.invalid_diagnostics()
+    assert len(invalid) == 1
+    assert invalid[0].name == "broken"
+    assert not invalid[0].loadable
+    assert invalid[0].warnings
+
+
 class TestSkillMetadata:
     def test_fields(self) -> None:
         path = Path("/skills/coder/SKILL.md")
