@@ -11,6 +11,8 @@ OpenAI-compatible Provider with OpenRouter-specific reasoning, per-Model Chat Co
 - Catalog endpoint: `GET /models`
 - Routing catalogs: `GET /providers` for base Provider slugs and `GET /models/{author}/{slug}/endpoints` for one Model's exact endpoint tags, exposed to Settings through `provider.routing_options`
 
+The 2026-09-22 refresh adds `openai/gpt-6-sol` and `openai/gpt-6-luna` plus OpenRouter's Pro and batch variants. The base ids are selectable through the existing Chat Completions route. Synthetic live calls through the actual Adapter returned one Tool Call for each base id both at Provider-default reasoning and with explicit `none`; this does not establish the same result for Pro or batch variants.
+
 ## Usage cost normalization (2026-09-20)
 
 OpenRouter `usage.cost` becomes canonical `reported_cost_usd` on both Chat Completions and Responses, streaming and non-streaming. Only finite non-negative numeric values are accepted; explicit zero is preserved. `cost_details.upstream_inference_cost` is not the amount charged to the OpenRouter account and is never substituted. Optional `prompt_tokens_details.cache_write_tokens` / `input_tokens_details.cache_write_tokens` is retained separately from cache reads. No request or routing policy changed.

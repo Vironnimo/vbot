@@ -21,6 +21,8 @@ _KNOWN_PROTOCOLS = frozenset(
 _RESPONSES_MODELS = frozenset(
     {
         "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
         "grok-4.7",
         "grok-4.6",
         "muse-spark-1.3",
@@ -52,6 +54,7 @@ _RESPONSES_MODELS = frozenset(
 
 _MESSAGES_MODELS = frozenset(
     {
+        "claude-opus-5-5",
         "claude-fable-5-1",
         "qwen3.8-flash",
         "claude-fable-5",
