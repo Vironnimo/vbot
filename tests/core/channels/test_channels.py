@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -235,6 +236,112 @@ async def test_channel_service_discards_run_binding_when_send_fails(
     service.stop()
     await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
     await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_run_button_preparation_discards_unsent_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(enabled=True)
+    ChannelStorage(tmp_path).save(config)
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("assistant", session_id="origin-session")
+    service = make_service(tmp_path, chat_sessions=sessions)
+    adapter = BlockingAdapter()
+    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
+    service.start_channel(config.id)
+    await adapter.started.wait()
+    saved = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    original_save = service._storage.save_run_button_binding
+
+    def blocked_save(channel_id, binding):
+        original_save(channel_id, binding)
+        loop.call_soon_threadsafe(saved.set)
+        assert release.wait(timeout=5)
+
+    monkeypatch.setattr(service._storage, "save_run_button_binding", blocked_save)
+    sending = asyncio.create_task(
+        service.send(
+            config.id,
+            "Shopping",
+            "12345",
+            buttons=[[InteractionButton(label="Done", data="run:done")]],
+            run_origin=RouteFacts(agent_id="assistant", session_id="origin-session"),
+        )
+    )
+    try:
+        await asyncio.wait_for(saved.wait(), timeout=2)
+        sending.cancel()
+        await asyncio.sleep(0)
+        sending.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await sending
+        payload = json.loads(
+            (tmp_path / "channels" / config.id / "run-button-bindings.json").read_text()
+        )
+        assert payload["bindings"] == {}
+        assert adapter.sent_messages == []
+    finally:
+        release.set()
+        await asyncio.gather(sending, return_exceptions=True)
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_repeated_cancellation_waits_for_unsent_binding_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(enabled=True)
+    ChannelStorage(tmp_path).save(config)
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("assistant", session_id="origin-session")
+    service = make_service(tmp_path, chat_sessions=sessions)
+    adapter = BlockingAdapter()
+    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
+    monkeypatch.setattr(adapter, "send", AsyncMock(side_effect=ChannelError("wire failed")))
+    service.start_channel(config.id)
+    await adapter.started.wait()
+    cleaning = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    original_discard = service._storage.discard_run_button_binding
+
+    def blocked_discard(channel_id, binding_id):
+        loop.call_soon_threadsafe(cleaning.set)
+        assert release.wait(timeout=5)
+        original_discard(channel_id, binding_id)
+
+    monkeypatch.setattr(service._storage, "discard_run_button_binding", blocked_discard)
+    sending = asyncio.create_task(
+        service.send(
+            config.id,
+            "Shopping",
+            "12345",
+            buttons=[[InteractionButton(label="Done", data="run:done")]],
+            run_origin=RouteFacts(agent_id="assistant", session_id="origin-session"),
+        )
+    )
+    try:
+        await asyncio.wait_for(cleaning.wait(), timeout=2)
+        sending.cancel()
+        await asyncio.sleep(0)
+        sending.cancel()
+        await asyncio.sleep(0)
+        assert not sending.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await sending
+        payload = json.loads(
+            (tmp_path / "channels" / config.id / "run-button-bindings.json").read_text()
+        )
+        assert payload["bindings"] == {}
+    finally:
+        release.set()
+        await asyncio.gather(sending, return_exceptions=True)
+        await service.aclose()
 
 
 @pytest.mark.asyncio
