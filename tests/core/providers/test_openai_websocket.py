@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 from collections import deque
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import respx
@@ -211,8 +212,9 @@ async def test_closing_partial_codex_stream_releases_socket_before_returning() -
         connection_mode=CODEX_RESPONSES_MODE,
         codex_websocket_connect=_FakeCodexWebSocketConnector([websocket]),
     )
-    stream = adapter.stream(
-        SAMPLE_MESSAGES, model_id="gpt-5.6-terra", conversation_id="agent:session"
+    stream = cast(
+        AsyncGenerator[dict[str, Any], None],
+        adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.6-terra", conversation_id="agent:session"),
     )
     try:
         assert await anext(stream) == {"type": "content_delta", "text": "partial"}

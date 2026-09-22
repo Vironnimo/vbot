@@ -7,7 +7,7 @@ connection with ``mode: codex_responses``)."""
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, cast
 
@@ -476,7 +476,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         *,
         model_id: str,
         **kwargs: Any,
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    ) -> AsyncIterator[dict[str, Any]]:
         """Stream a request as normalized vBot deltas.
 
         Routes to the Codex Responses endpoint when ``connection_mode`` is
