@@ -107,6 +107,25 @@ describe('Modal', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it('leaves Escape consumed by a nested control to that control', () => {
+    const onClose = vi.fn();
+    render({ onClose });
+    const body = document.body.querySelector('.modal-body');
+    body.addEventListener('keydown', (event) => event.preventDefault(), {
+      once: true,
+    });
+    const escape = () =>
+      new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      });
+    body.dispatchEvent(escape());
+    expect(onClose).not.toHaveBeenCalled();
+    body.dispatchEvent(escape());
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('blocks every close path while closeDisabled', () => {
     const onClose = vi.fn();
     render({ onClose, closeDisabled: true });
