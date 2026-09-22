@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -155,6 +156,37 @@ async def test_windows_shell_eof_and_command_pipelines(manager, tmp_path, comman
     assert result["ok"] is True
     assert result["data"]["exit_code"] == 0
     assert result["data"]["output"].strip().replace("\r\n", "\n") == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell console code page")
+@pytest.mark.parametrize(
+    "command, expected",
+    [
+        ("Write-Output 'Jürgen €'", "Jürgen €"),
+        ("Get-ChildItem -Name", "Übersicht €.txt"),
+        ("cmd /c echo ä€", "ä€"),
+        ("$line = cmd /c echo ö; Write-Output $line", "ö"),
+        ("[Console]::Error.WriteLine('fäil')", "fäil"),
+        (
+            "using namespace System.Text\n[StringBuilder]::new('ß').ToString()",
+            "ß",
+        ),
+    ],
+)
+async def test_windows_shell_output_keeps_non_ascii_text(
+    manager, tmp_path, monkeypatch, command, expected
+):
+    monkeypatch.setattr(bash_environment, "_cached_shell_env", dict(os.environ))
+    (tmp_path / "Übersicht €.txt").write_text("x", encoding="utf-8")
+
+    result = await asyncio.wait_for(
+        bash_handler(make_context(tmp_path), {"command": command}, manager), 30
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["exit_code"] == 0
+    assert result["data"]["output"].strip() == expected
 
 
 @pytest.mark.asyncio

@@ -39,7 +39,7 @@ def test_shell_detection_uses_native_shell(monkeypatch: pytest.MonkeyPatch) -> N
         "pwsh",
         "-NonInteractive",
         "-Command",
-        "Write-Output hello",
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\nWrite-Output hello",
     ]
 
     monkeypatch.setattr(bash_module.sys, "platform", "linux")
