@@ -906,3 +906,91 @@ async def test_gemini_stream_idless_calls_survive_chat_accumulation(
     assert fields.finish_reason == "tool_calls"
     assert fields.usage == {"input_tokens": 100000, "output_tokens": 10, "cache_read_tokens": 95000}
     assert fields.reasoning_meta == {"gemini_parts": parts}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_gemini_stream_prompt_block_matches_completed_response(
+    adapter: OpenCodeZenAdapter,
+) -> None:
+    chunk = {
+        "promptFeedback": {"blockReason": "SAFETY"},
+        "usageMetadata": {"promptTokenCount": 12},
+    }
+    respx.post(GEMINI_STREAM_URL).mock(
+        return_value=httpx.Response(200, text=f"data: {json.dumps(chunk)}\n\n")
+    )
+    normalized = adapter.normalize_response(chunk, model_id="gemini-3.5-flash")
+    deltas = [delta async for delta in adapter.stream([], model_id="gemini-3.5-flash")]
+    assert normalized["terminal_outcome"] == "content_filtered"
+    assert [delta for delta in deltas if delta["type"] == "finish"] == [
+        {"type": "finish", "reason": normalized["terminal_outcome"]}
+    ]
+    assert {"type": "usage", "input_tokens": 12} in deltas
+
+
+@pytest.mark.parametrize("arguments", ['{"path":"a"}', "{}{}", "", "not-json"])
+def test_gemini_stream_encoded_tool_arguments_match_completed_response(
+    adapter: OpenCodeZenAdapter, arguments: str
+) -> None:
+    from core.chat.streaming import StreamingAccumulator
+
+    chunk = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "functionCall": {
+                                "id": "call_1",
+                                "name": "read",
+                                "args": arguments,
+                            }
+                        }
+                    ]
+                },
+                "finishReason": "STOP",
+            }
+        ],
+    }
+    normalized = adapter.normalize_response(chunk, model_id="gemini-3.5-flash")
+    deltas, _, _ = _normalize_gemini_stream_chunk(chunk, [], has_tool_calls=False)
+    accumulator = StreamingAccumulator()
+    for delta in deltas:
+        accumulator.add_delta(delta)
+    fields = accumulator.finalize_assistant_fields()
+    calls = fields.tool_calls
+    assert calls is not None
+    assert calls[0]["id"] == "call_1"
+    assert len({call["id"] for call in calls}) == len(calls)
+    assert [{key: value for key, value in call.items() if key != "id"} for call in calls] == [
+        {key: value for key, value in call.items() if key != "id"}
+        for call in normalized["tool_calls"]
+    ]
+    assert fields.finish_reason == normalized["terminal_outcome"]
+    assert fields.reasoning_meta == normalized["reasoning_meta"]
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", ["failed-after-stop", {"message": "failed-after-stop"}])
+async def test_gemini_stream_error_after_stop_cannot_become_success(
+    adapter: OpenCodeZenAdapter, error: Any
+) -> None:
+    chunks = [
+        {"candidates": [{"content": {"parts": [{"text": "partial"}]}, "finishReason": "STOP"}]},
+        {"error": error},
+    ]
+    route = respx.post(GEMINI_STREAM_URL).mock(
+        return_value=httpx.Response(
+            200, text="".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
+        )
+    )
+    received = []
+    with pytest.raises(ProviderError) as exc_info:
+        async for delta in adapter.stream([], model_id="gemini-3.5-flash"):
+            received.append(delta)
+    assert {"type": "finish", "reason": "stop"} in received
+    assert not exc_info.value.retryable
+    assert "failed-after-stop" in str(exc_info.value)
+    assert route.call_count == 1
