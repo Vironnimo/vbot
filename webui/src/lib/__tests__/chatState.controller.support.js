@@ -21,6 +21,8 @@ function setup({
     items: [{ id: 'queued-one', content: 'Next', editable: true }],
   });
   const onRestartQueueDiscarded = vi.fn();
+  const onAgentsChanged = vi.fn();
+  const onAgentSelected = vi.fn();
   const controller = createChatController({
     chatState,
     runStream,
@@ -33,12 +35,16 @@ function setup({
     isDisplayedSession,
     shouldLoadCurrentHistory,
     onRestartQueueDiscarded,
+    onAgentsChanged,
+    onAgentSelected,
   });
   return {
     chatState,
     controller,
     listQueue,
     onRestartQueueDiscarded,
+    onAgentsChanged,
+    onAgentSelected,
     runStream,
   };
 }

@@ -1,14 +1,18 @@
 """Tests for the shared-Skill layer in Runtime agent-aware registries."""
 
+import inspect
 import logging
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from core.runtime.runtime import Runtime
 from core.skills.skills import SKILL_ORIGIN_AGENT
 from core.utils.config import Config
+from server.rpc.agent_methods import _delete_agent
+from server.rpc.skill_methods import method_handlers
 
 
 @pytest.fixture
@@ -31,6 +35,51 @@ def _write_agent_skill(data_dir: Path, agent_id: str, name: str, description: st
 
 def _names(registry) -> set[str]:
     return {skill.name for skill in registry.list_all()}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["update", "delete", "create", "delete_owner"])
+async def test_owner_skill_mutation_refreshes_shared_receivers_in_every_project(
+    config: Config, tmp_path: Path, operation: str
+) -> None:
+    runtime = Runtime(config, safe_startup_mode="test")
+    runtime.start()
+    try:
+        runtime.agents.create("receiver", "Receiver")
+        runtime.agents.create("unrelated", "Unrelated")
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        project = runtime.projects.create("p", "P", repo)
+        if operation != "create":
+            _write_agent_skill(config.data_dir, "main", "deploy", "Before mutation")
+        runtime.skill_policy.set_shared("main", "deploy", shared=True, receivers=["receiver"])
+        scopes = [None, project.project_id]
+        before = {scope: runtime.skills_for(scope, "receiver") for scope in scopes}
+        unrelated = runtime.skills_for(project.project_id, "unrelated")
+        params = {"scope": "agent:main", "name": "deploy"}
+        if operation != "delete":
+            params["content"] = (
+                "---\nname: deploy\ndescription: After mutation\n---\n\nNew instructions.\n"
+            )
+
+        state = SimpleNamespace(runtime=runtime, chat_runs=runtime.chat_runs)
+        if operation == "delete_owner":
+            await _delete_agent(state, {"id": "main"})
+        else:
+            result = method_handlers()[f"skill.{operation}"](state, params)
+            assert inspect.isawaitable(result)
+            await result
+
+        for scope in scopes:
+            current = runtime.skills_for(scope, "receiver")
+            assert current is not before[scope]
+            if operation in {"delete", "delete_owner"}:
+                assert "deploy" not in _names(current)
+            else:
+                assert current.get("deploy").description == "After mutation"
+        assert runtime.skills_for(project.project_id, "unrelated") is unrelated
+    finally:
+        await runtime.aclose()
 
 
 def test_shared_skill_reaches_receiver_as_own_layer(config: Config, tmp_path: Path) -> None:

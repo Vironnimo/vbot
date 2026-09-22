@@ -56,6 +56,37 @@ def _write_project_skill(repo: Path, name: str, description: str) -> None:
     )
 
 
+@pytest.mark.parametrize("field", ["skills_project_disabled", "skills_global_enabled"])
+def test_project_settings_refresh_rooted_identity_skill_permissions(tmp_path: Path, field: str):
+    runtime = _build_started_runtime(tmp_path)
+    try:
+        repo = _make_repo(tmp_path, "repo")
+        _write_project_skill(repo, "project-playbook", "Project instructions")
+        global_root = runtime.global_skills_dir / "global-playbook"
+        global_root.mkdir(parents=True)
+        (global_root / "SKILL.md").write_text(
+            "---\nname: global-playbook\ndescription: Global instructions\n---\nBody.\n",
+            encoding="utf-8",
+        )
+        runtime.reload_skills()
+        project = runtime.projects.create("p", "P", repo)
+        before = runtime.skills_for(project.project_id, "main")
+        assert {skill.name for skill in before.filter_allowed([])} == {"project-playbook"}
+
+        selected_name = (
+            "project-playbook" if field == "skills_project_disabled" else "global-playbook"
+        )
+        _set_project(SimpleNamespace(runtime=runtime), {"project_id": "p", field: [selected_name]})
+
+        current = runtime.skills_for(project.project_id, "main")
+        expected = (
+            set() if field == "skills_project_disabled" else {"project-playbook", "global-playbook"}
+        )
+        assert {skill.name for skill in current.filter_allowed([])} == expected
+    finally:
+        runtime.stop()
+
+
 # ---------------------------------------------------------------------------
 # add: create + scan preview.
 # ---------------------------------------------------------------------------

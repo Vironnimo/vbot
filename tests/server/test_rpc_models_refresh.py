@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from shutil import copy2
 from types import SimpleNamespace
@@ -384,3 +385,74 @@ async def test_model_refresh_db_empty_params_reloads_runtime_registry_after_glob
     # holder captured stays, now carrying the refreshed catalog.
     assert state.runtime.models is previous_models
     assert state.runtime.models.get("openrouter", "fresh-model").name == "Fresh Model"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("second_refresh", ["manual", "automatic"])
+async def test_manual_and_local_refreshes_preserve_each_others_complete_snapshots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, second_refresh: str
+) -> None:
+    import core.models.discovery as discovery
+
+    resources_dir = tmp_path / "resources"
+    providers_dir = resources_dir / "providers"
+    providers_dir.mkdir(parents=True)
+    for provider_id in ("openrouter", "ollama"):
+        copy2(
+            Path(__file__).resolve().parents[2] / f"resources/providers/{provider_id}.json",
+            providers_dir / f"{provider_id}.json",
+        )
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    write_bootstrap_marker(data_dir)
+    monkeypatch.setenv("RESOURCES_PATH", str(resources_dir))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    started: list[str] = []
+
+    async def refresh(provider, credential, target_resources, **kwargs):
+        started.append(provider.id)
+        if provider.id == "openrouter":
+            first_started.set()
+            await release_first.wait()
+        return await fake_refresh_models(provider, credential, target_resources, **kwargs)
+
+    monkeypatch.setattr(model_methods, "refresh_models", refresh)
+    monkeypatch.setattr(discovery, "refresh_models", refresh)
+    runtime = Runtime(Config(data_dir=data_dir), safe_startup_mode="test")
+    runtime.start()
+    runtime.storage.set_provider_connection_enabled("ollama:local", True)
+    state = SimpleNamespace(runtime=runtime, event_bus=ServerEventBus())
+    tasks: list[asyncio.Task] = []
+    try:
+        first = asyncio.create_task(
+            dispatch_rpc(
+                state, {"method": "model.refresh_db", "params": {"provider_id": "openrouter"}}
+            )
+        )
+        tasks.append(first)
+        await asyncio.wait_for(first_started.wait(), timeout=5)
+        second = asyncio.create_task(
+            runtime.maybe_refresh_local_catalogs(force=True)
+            if second_refresh == "automatic"
+            else dispatch_rpc(
+                state, {"method": "model.refresh_db", "params": {"provider_id": "ollama"}}
+            )
+        )
+        tasks.append(second)
+        await asyncio.sleep(0)
+        assert started == ["openrouter"]
+        release_first.set()
+        results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=10)
+        assert results[0]["ok"], results[0]
+        if second_refresh == "manual":
+            assert results[1]["ok"], results[1]
+        assert started == ["openrouter", "ollama"]
+        for provider_id in ("openrouter", "ollama"):
+            assert (runtime.storage.layout.models / f"{provider_id}.json").is_file()
+            assert runtime.models.get(provider_id, "fresh-model").name == "Fresh Model"
+    finally:
+        release_first.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await runtime.aclose()

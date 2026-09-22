@@ -63,6 +63,8 @@ export function createAppSelection(context) {
   };
 
   let agents = $state([]);
+  let agentsLoadRequestId = 0;
+  let agentsSnapshotVersion = 0;
 
   let selectedAgentId = $state(readStoredSelectedAgentId());
 
@@ -210,6 +212,9 @@ export function createAppSelection(context) {
   });
 
   const syncAgents = (nextAgents = []) => {
+    // A published roster (including a child view's mutation result) replaces
+    // the baseline of any older read still in flight from this owner.
+    agentsSnapshotVersion += 1;
     agents = Array.isArray(nextAgents) ? nextAgents : [];
     if (
       selectedAgentId &&
@@ -249,14 +254,27 @@ export function createAppSelection(context) {
   // Agents and Chat surfaces reload exactly as they did for the old agent.*
   // events.
   const reloadAgentsFromServer = async () => {
-    try {
-      const result = await listAgents();
-      refreshAgents(result.agents);
-    } catch (error) {
-      console.warn('Agent list refresh failed:', error);
+    const requestId = ++agentsLoadRequestId;
+    while (requestId === agentsLoadRequestId) {
+      const snapshotVersion = agentsSnapshotVersion;
+      try {
+        const result = await listAgents();
+        if (requestId !== agentsLoadRequestId) return;
+        // A child published while we were reading. Read again so the pending
+        // invalidation still reaches every surface with a canonical roster.
+        if (snapshotVersion !== agentsSnapshotVersion) continue;
+        refreshAgents(result.agents);
+        return;
+      } catch (error) {
+        if (requestId !== agentsLoadRequestId) return;
+        if (snapshotVersion !== agentsSnapshotVersion) continue;
+        console.warn('Agent list refresh failed:', error);
+        return;
+      }
     }
   };
   function destroy() {
+    agentsLoadRequestId += 1;
     projectsLoadRequestId += 1;
   }
 

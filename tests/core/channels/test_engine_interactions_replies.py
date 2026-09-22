@@ -691,10 +691,12 @@ async def test_new_detaches_telegram_after_bound_tap(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("prior_pointer", [None, "prior-session"])
 @pytest.mark.parametrize("concurrent", [None, "metadata", "navigation"])
 async def test_busy_bound_tap_restores_binding_and_previous_conversation_pointer(
     tmp_path: Path,
     monkeypatch,
+    prior_pointer: str | None,
     concurrent,
 ) -> None:
     storage = ChannelStorage(tmp_path)
@@ -708,10 +710,9 @@ async def test_busy_bound_tap_restores_binding_and_previous_conversation_pointer
     sessions.create("assistant", session_id=SESSION_ID)
     sessions.create("assistant", session_id="prior-session")
     sessions.create("assistant", session_id="origin-session")
-    previous_metadata = {
-        "existing": "preserved",
-        routing_module.ACTIVE_SESSION_METADATA_KEY: "prior-session",
-    }
+    previous_metadata = {"existing": "preserved"}
+    if prior_pointer is not None:
+        previous_metadata[routing_module.ACTIVE_SESSION_METADATA_KEY] = prior_pointer
     sessions.set_metadata(
         SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID),
         previous_metadata,

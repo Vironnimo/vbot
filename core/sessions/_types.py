@@ -72,7 +72,8 @@ class SessionAddress:
 @dataclass(frozen=True)
 class SessionIdentityReferenceUpdate:
     address: SessionAddress
-    previous_metadata: JsonObject
+    previous_parent: JsonObject
+    updated_parent: JsonObject
 
 
 @dataclass(frozen=True)

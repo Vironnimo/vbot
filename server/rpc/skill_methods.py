@@ -182,11 +182,7 @@ async def _skill_install(
     except (SkillAuthoringError, OSError) as error:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
     if result.operation in {"installed", "replaced", "unchanged"}:
-        # Replacing a shared owner's package must refresh its receivers as well.
-        if scope == _GLOBAL_SCOPE:
-            await state.runtime.reload_skills_async()
-        else:
-            state.runtime.invalidate_agent_skills(None)
+        await _invalidate_scope(state, scope)
         if result.operation != "unchanged":
             _LOGGER.info(
                 "Skill installed (skill=%s scope=%s operation=%s)",

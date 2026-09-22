@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Callable, Collection, Mapping, Sequence
-from contextlib import suppress
+from contextlib import AbstractAsyncContextManager, suppress
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -1050,6 +1050,10 @@ class Runtime:
             model_id,
             effort,
         )
+
+    def model_database_refresh(self) -> AbstractAsyncContextManager[None]:
+        """Coordinate manual and automatic Model DB refresh transactions."""
+        return self._provider_operations().model_database_refresh()
 
     async def maybe_refresh_local_catalogs(self, *, force: bool = False) -> None:
         """Refresh enabled local Provider catalogs without disrupting live registries."""

@@ -537,16 +537,20 @@ class SkillRuntime:
         self._drop_agent_skills(lambda key: key[0] == project_id)
 
     def invalidate_agent_skills(self, agent_id: str | None = None) -> None:
-        """Drop the cached agent skills for one agent, or for all when ``None``.
+        """Drop a Skill owner's and its receivers' caches, or all when ``None``.
 
-        Called after an agent's private skill home changes (a skill write) so the
-        next run rebuilds that agent's registry against the new pool. Drops only
-        that agent's cached registries across every project context it ran in.
+        Private-home writes also change the shared layer of every receiver. Keep
+        that dependency here so Tool and Accessor writers only identify the owner,
+        including when creating or deleting a package named by an existing share.
+        All Project contexts of each affected Identity Agent must rebuild.
         """
         if agent_id is None:
             self._agent_skills.clear()
             return
-        self._drop_agent_skills(lambda key: key[1] == agent_id)
+        affected = {agent_id}
+        for receivers in self._policy.load().shared.get(agent_id, {}).values():
+            affected.update(receivers)
+        self._drop_agent_skills(lambda key: key[1] in affected)
 
     def _drop_agent_skills(self, predicate: Callable[[tuple[str | None, str]], bool]) -> None:
         for key in [key for key in self._agent_skills if predicate(key)]:

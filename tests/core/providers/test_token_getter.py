@@ -553,3 +553,63 @@ async def test_oauth_token_getter_concurrent_refresh_uses_single_http_call(
 
     assert tokens == ["fresh-copilot-token", "fresh-copilot-token"]
     assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replacement", ["disconnect", "reconnect"])
+@pytest.mark.parametrize("refresh_kind", ["exchange", "oauth_success", "oauth_rejected"])
+async def test_delayed_refresh_cannot_revive_or_remove_replaced_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    oauth_config: OAuthConfig,
+    replacement: str,
+    refresh_kind: str,
+) -> None:
+    store = TokenStore(tmp_path)
+    original = OAuthToken(
+        access_token="expired-test-token",
+        refresh_token="test-refresh",
+        expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        extra={"github_oauth_token": "test-github-token"} if refresh_kind == "exchange" else {},
+    )
+    store.save("test", "oauth", original, account_id="work")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def refresh(*_args: object) -> dict[str, Any]:
+        entered.set()
+        await release.wait()
+        if refresh_kind == "oauth_rejected":
+            raise ProviderAuthError("test refresh rejected")
+        return {
+            "access_token": "retired-refresh-result",
+            "token": "retired-refresh-result",
+            "refresh_token": "retired-refresh-rotation",
+            "status": "success",
+            "expired_in": 3600,
+            "expires_at": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+        }
+
+    config = oauth_config if refresh_kind == "exchange" else _minimax_oauth_config()
+    async with OAuthTokenGetter(store, "test", "oauth", config, account_id="work") as getter:
+        monkeypatch.setattr(getter, "_exchange_token", refresh)
+        monkeypatch.setattr(getter, "_post_refresh_token", refresh)
+        task = asyncio.create_task(getter())
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            latest = None if replacement == "disconnect" else OAuthToken("new-login-token")
+            if latest is None:
+                store.delete("test", "oauth", account_id="work")
+            else:
+                store.save("test", "oauth", latest, account_id="work")
+            release.set()
+            if latest is not None and refresh_kind != "oauth_rejected":
+                assert await task == latest.access_token
+            else:
+                with pytest.raises(ProviderAuthError):
+                    await task
+            assert store.load("test", "oauth", account_id="work") == latest
+            assert store.load("test", "oauth") is None
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)

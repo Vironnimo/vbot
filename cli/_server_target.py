@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import socket
 from dataclasses import dataclass
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Literal
 
@@ -177,6 +178,8 @@ WILDCARD_HOSTS = {"", "*", "0.0.0.0", "::"}
 def find_listening_process(instance: ServerInstance) -> psutil.Process | None:
     """Find the local process listening on the resolved TCP host and port."""
 
+    if not is_local_target(instance):
+        return None
     for process in psutil.process_iter():
         try:
             connections = process.net_connections(kind="tcp")
@@ -188,6 +191,43 @@ def find_listening_process(instance: ServerInstance) -> psutil.Process | None:
             if _connection_matches_instance(connection, instance):
                 return process
     return None
+
+
+def is_local_target(instance: ServerInstance) -> bool:
+    """Require local addresses before treating a target as a local process owner.
+
+    A wildcard socket only covers this machine, not every same-family address.
+    Reject mixed local/remote DNS answers too: the health request could reach
+    any returned address, so it cannot identify a local process reliably.
+    """
+
+    host = instance.host.removeprefix("[").removesuffix("]")
+    if host in WILDCARD_HOSTS:
+        return True
+    addresses = set()
+    for value in _host_addresses(host):
+        try:
+            addresses.add(ip_address(value.partition("%")[0]))
+        except ValueError:
+            continue
+    if not addresses:
+        return False
+    if all(address.is_loopback for address in addresses):
+        return True
+    try:
+        interfaces = psutil.net_if_addrs()
+    except (psutil.Error, OSError):
+        return False
+    local_addresses = set()
+    for entries in interfaces.values():
+        for entry in entries:
+            if entry.family not in {socket.AF_INET, socket.AF_INET6}:
+                continue
+            try:
+                local_addresses.add(ip_address(entry.address.partition("%")[0]))
+            except ValueError:
+                continue
+    return all(address.is_loopback or address in local_addresses for address in addresses)
 
 
 def _connection_matches_instance(connection: object, instance: ServerInstance) -> bool:
