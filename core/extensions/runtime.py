@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -34,7 +34,7 @@ class ExtensionRuntime:
         resolve_credential: Callable[[str], str],
         reload_recall: Callable[[], None],
         refresh_prompts: Callable[[], None],
-        reload_skills: Callable[[], None],
+        reload_skills: Callable[[], Awaitable[None]],
         recover_recall: Callable[[set[str]], None],
         logger: Any,
         make_host: Callable[[], ExtensionHost] | None = None,
@@ -103,7 +103,7 @@ class ExtensionRuntime:
             new_registry.apply_commands(dispatcher)
         self._reload_recall()
         self._refresh_prompts()
-        self._reload_skills()
+        await self._reload_skills()
         if self._make_host is not None:
             new_registry.bind_host(self._make_host())
         await new_registry.fire_startup()
@@ -135,7 +135,7 @@ class ExtensionRuntime:
         for name in newly_disabled:
             await registry.deactivate(name, self._tools, dispatcher)
         self._refresh_prompts()
-        self._reload_skills()
+        await self._reload_skills()
         self._recover_recall(removed_backends)
 
     async def startup(self) -> None:
