@@ -257,6 +257,7 @@ _MESSAGE_RECORD_COLUMNS = """
     m.*,
     a.reasoning,
     a.reasoning_meta_json,
+    a.reasoning_summary_json,
     a.reasoning_scope,
     a.reasoning_started_at,
     a.reasoning_completed_at,

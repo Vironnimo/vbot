@@ -227,6 +227,7 @@ CREATE INDEX messages_by_session_role_sequence
 CREATE TABLE assistant_messages (
   message_key INTEGER PRIMARY KEY,
   reasoning TEXT,
+  reasoning_summary_json TEXT CHECK (reasoning_summary_json IS NULL OR (json_valid(reasoning_summary_json) AND json_type(reasoning_summary_json) = 'array')),
   reasoning_meta_json TEXT CHECK (reasoning_meta_json IS NULL OR (json_valid(reasoning_meta_json) AND json_type(reasoning_meta_json) = 'object')),
   reasoning_scope TEXT,
   reasoning_started_at TEXT,

@@ -234,6 +234,7 @@ def _message_to_request_dict(
     data.pop("tool_display", None)
     # Reasoning duration is presentation metadata, never a wire field.
     data.pop("reasoning_timing", None)
+    data.pop("reasoning_summary", None)
     # Sender attribution exists only in the provider request: persisted content stays
     # clean and the tag cannot be spoofed by typing a look-alike prefix in message text.
     data.pop("sender", None)
@@ -358,6 +359,7 @@ def _assistant_continuation_dict(
     data.pop("timing", None)
     data.pop("tool_display", None)
     data.pop("reasoning_timing", None)
+    data.pop("reasoning_summary", None)
     data.pop("interrupted", None)
     data.pop("interruption_cause", None)
     data.pop("output_files", None)
@@ -779,6 +781,12 @@ def _assistant_message_from_response(
         content=_sanitize_unpaired_surrogates(content) if content else content,
         reasoning=_sanitize_unpaired_surrogates(reasoning) if reasoning else reasoning,
         reasoning_meta=reasoning_meta,
+        reasoning_summary=(
+            [_sanitize_unpaired_surrogates(part) for part in response["reasoning_summary"]]
+            if isinstance(response.get("reasoning_summary"), list)
+            and all(isinstance(part, str) for part in response["reasoning_summary"])
+            else None
+        ),
         reasoning_scope=(
             reasoning_scope if reasoning is not None or reasoning_meta is not None else None
         ),

@@ -232,7 +232,12 @@ async def test_stream_responses_does_not_duplicate_reasoning_from_completed_even
         chunks.append(chunk)
 
     assert chunks == [
-        {"type": "reasoning_delta", "text": "Need docs lookup."},
+        {
+            "type": "reasoning_delta",
+            "text": "Need docs lookup.",
+            "summary_index": 0,
+            "summary_text": "Need docs lookup.",
+        },
         {
             "type": "reasoning_meta",
             "reasoning_meta": {
@@ -338,6 +343,7 @@ async def test_send_routes_gpt_5_4_responses_with_nested_tool_name_and_visible_r
         "role": "assistant",
         "content": None,
         "reasoning": "Need docs lookup.",
+        "reasoning_summary": ["Need docs lookup."],
         "reasoning_meta": {
             "response_id": "resp-1",
             "response_output": [
@@ -448,6 +454,7 @@ async def test_send_routes_gpt_5_4_family_responses_with_nested_tool_name(
         "role": "assistant",
         "content": None,
         "reasoning": "Need docs lookup.",
+        "reasoning_summary": ["Need docs lookup."],
         "reasoning_meta": {
             "response_id": "resp-1",
             "response_output": [
@@ -697,7 +704,12 @@ async def test_stream_gpt_5_4_family_responses_surfaces_nested_tool_name(
             "name_delta": "search",
             "arguments_delta": "",
         },
-        {"type": "reasoning_delta", "text": "Need docs lookup."},
+        {
+            "type": "reasoning_delta",
+            "text": "Need docs lookup.",
+            "summary_index": 0,
+            "summary_text": "Need docs lookup.",
+        },
         {
             "type": "reasoning_meta",
             "reasoning_meta": {

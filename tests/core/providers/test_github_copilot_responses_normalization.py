@@ -47,6 +47,7 @@ def test_normalize_response_extracts_text_tool_calls_usage_and_reasoning_meta() 
         "role": "assistant",
         "content": "Done.",
         "reasoning": "Considered evidence.",
+        "reasoning_summary": ["Considered evidence."],
         "reasoning_meta": {
             "response_id": "resp_1",
             "response_output": response["output"],
@@ -225,6 +226,7 @@ def test_normalize_response_extracts_nested_function_call_name_and_visible_reaso
         "role": "assistant",
         "content": "Calling tool.",
         "reasoning": "Need docs lookup.",
+        "reasoning_summary": ["Need docs lookup."],
         "reasoning_meta": {
             "response_id": "resp_1",
             "response_output": response["output"],

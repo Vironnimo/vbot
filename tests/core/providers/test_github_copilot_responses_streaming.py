@@ -53,7 +53,12 @@ def test_stream_normalizes_text_reasoning_tool_usage_and_finish() -> None:
 
     assert list(_iter_deltas(lines)) == [
         {"type": "content_delta", "text": "Hel"},
-        {"type": "reasoning_delta", "text": "Thinking"},
+        {
+            "type": "reasoning_delta",
+            "text": "Thinking",
+            "summary_index": 0,
+            "summary_text": "Thinking",
+        },
         {
             "type": "tool_call_delta",
             "id": "call_1",
@@ -420,7 +425,12 @@ def test_stream_emits_visible_reasoning_from_completed_response_output() -> None
     ]
 
     assert list(_iter_deltas(lines)) == [
-        {"type": "reasoning_delta", "text": "Need docs lookup."},
+        {
+            "type": "reasoning_delta",
+            "text": "Need docs lookup.",
+            "summary_index": 0,
+            "summary_text": "Need docs lookup.",
+        },
         {
             "type": "reasoning_meta",
             "reasoning_meta": {
@@ -457,7 +467,12 @@ def test_stream_emits_visible_reasoning_from_reasoning_output_item() -> None:
     ]
 
     assert list(_iter_deltas(lines)) == [
-        {"type": "reasoning_delta", "text": "Need docs lookup."},
+        {
+            "type": "reasoning_delta",
+            "text": "Need docs lookup.",
+            "summary_index": 0,
+            "summary_text": "Need docs lookup.",
+        },
         {
             "type": "reasoning_meta",
             "reasoning_meta": {"reasoning_items": [reasoning_item]},
@@ -621,7 +636,12 @@ def test_responses_policy_variants_cover_same_nested_tool_name_and_visible_reaso
             "name_delta": "search",
             "arguments_delta": "",
         },
-        {"type": "reasoning_delta", "text": "Need docs lookup."},
+        {
+            "type": "reasoning_delta",
+            "text": "Need docs lookup.",
+            "summary_index": 0,
+            "summary_text": "Need docs lookup.",
+        },
         {
             "type": "reasoning_meta",
             "reasoning_meta": {
@@ -657,7 +677,12 @@ def test_stream_does_not_duplicate_reasoning_when_completed_repeats_streamed_tex
     ]
 
     assert list(_iter_deltas(lines)) == [
-        {"type": "reasoning_delta", "text": "Need docs lookup."},
+        {
+            "type": "reasoning_delta",
+            "text": "Need docs lookup.",
+            "summary_index": 0,
+            "summary_text": "Need docs lookup.",
+        },
         {
             "type": "reasoning_meta",
             "reasoning_meta": {
@@ -694,7 +719,12 @@ def test_stream_backfills_only_missing_reasoning_suffix_from_completed_response(
     ]
 
     assert list(_iter_deltas(lines)) == [
-        {"type": "reasoning_delta", "text": "Need docs"},
+        {
+            "type": "reasoning_delta",
+            "text": "Need docs",
+            "summary_index": 0,
+            "summary_text": "Need docs",
+        },
         {"type": "reasoning_delta", "text": " lookup."},
         {
             "type": "reasoning_meta",
