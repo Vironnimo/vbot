@@ -409,24 +409,17 @@ def _extract_anthropic_tool_calls(content_blocks: Any) -> list[dict[str, Any]] |
 
 
 def _extract_anthropic_usage(response: dict[str, Any]) -> dict[str, Any] | None:
-    """Extract token usage from an Anthropic Messages response.
-
-    Returns ``{"input_tokens": N, "output_tokens": N}`` when usage data
-    is available, defaulting ``output_tokens`` to ``0`` when only
-    ``input_tokens`` is provided.  Returns ``None`` when usage data is
-    absent or incomplete.
-    """
+    """Preserve each usable Messages counter without inventing missing values."""
     usage = response.get("usage")
     if not isinstance(usage, dict):
         return None
-    input_tokens = usage.get("input_tokens")
-    if input_tokens is None:
+    normalized: dict[str, Any] = {}
+    for key in ("input_tokens", "output_tokens"):
+        count = usage.get(key)
+        if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+            normalized[key] = count
+    if not normalized:
         return None
-    output_tokens = usage.get("output_tokens")
-    normalized: dict[str, Any] = {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens if output_tokens is not None else 0,
-    }
     apply_anthropic_cache_usage(normalized, usage)
     apply_anthropic_reasoning_usage(normalized, usage)
     return normalized
@@ -466,11 +459,13 @@ def apply_anthropic_cache_usage(normalized: dict[str, Any], usage: dict[str, Any
     """
     cache_read = usage.get("cache_read_input_tokens")
     cache_write = usage.get("cache_creation_input_tokens")
-    input_tokens = normalized["input_tokens"]
-    if isinstance(cache_read, int) and isinstance(input_tokens, int):
+    input_tokens = normalized.get("input_tokens")
+    if not isinstance(input_tokens, int) or isinstance(input_tokens, bool) or input_tokens < 0:
+        return
+    if isinstance(cache_read, int) and not isinstance(cache_read, bool) and cache_read >= 0:
         normalized["cache_read_tokens"] = cache_read
         input_tokens += cache_read
-    if isinstance(cache_write, int) and isinstance(input_tokens, int):
+    if isinstance(cache_write, int) and not isinstance(cache_write, bool) and cache_write >= 0:
         normalized["cache_write_tokens"] = cache_write
         input_tokens += cache_write
     normalized["input_tokens"] = input_tokens

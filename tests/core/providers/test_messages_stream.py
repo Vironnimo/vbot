@@ -44,3 +44,11 @@ def test_empty_tool_start_with_invalid_name_survives_for_rejection(name: object)
     assert [call["id"] for call in result.tool_calls] == ["invalid_call", "valid_call"]
     assert result.tool_calls[0]["rejection"]["code"] == "malformed_tool_call"
     assert "rejection" not in result.tool_calls[1]
+
+
+@pytest.mark.parametrize("stop_reason", [{}, [], True, 42])
+def test_malformed_stop_reason_fails_closed(stop_reason: Any) -> None:
+    decoder = AnthropicMessagesStreamDecoder()
+    assert decoder.normalize({"type": "message_delta", "delta": {"stop_reason": stop_reason}}) == [
+        {"type": "finish", "reason": "unknown"}
+    ]
