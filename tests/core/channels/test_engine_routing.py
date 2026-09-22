@@ -139,7 +139,7 @@ async def test_ensure_channel_session_reuses_session_without_writing_notes(
 
 
 @pytest.mark.asyncio
-async def test_inbound_message_logs_routed_line(
+async def test_inbound_message_does_not_log_routine_routing(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -150,14 +150,7 @@ async def test_inbound_message_logs_routed_line(
         await engine.handle_inbound_text(make_conversation(), "hello")
         await drain(engine, 12345)
 
-    routed_line = next(
-        record.getMessage()
-        for record in caplog.records
-        if record.getMessage().startswith("Channel message routed")
-    )
-    assert "target=12345" in routed_line
-    assert f"session={SESSION_ID}" in routed_line
-    assert "internal" not in routed_line
+    assert not [record for record in caplog.records if record.name == "vbot.channels.engine"]
     await engine.stop()
 
 

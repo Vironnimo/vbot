@@ -24,6 +24,58 @@ from tests.core.runtime.runtime_test_support import (
 RELOADED_SKILL_NAME = "runtime-reloaded-skill"
 
 
+def test_credential_reload_updates_existing_skill_registries(config, tmp_path, monkeypatch):
+    key = "VBOT_SKILL_RELOAD_TEST"
+    monkeypatch.delenv(key, raising=False)
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        project = runtime.projects.create("p", "P", repo)
+        homes = [
+            runtime.global_skills_dir,
+            runtime.agent_skills_dir("main"),
+            repo / ".opencode" / "skills",
+        ]
+        for home, name in zip(homes, ["global-env", "private-env", "project-env"], strict=True):
+            package = home / name
+            package.mkdir(parents=True)
+            (package / "SKILL.md").write_text(
+                f"---\nname: {name}\ndescription: Requires a credential.\n"
+                f"metadata:\n  vbot:\n    requirements:\n      env: {key}\n---\nBody\n",
+                encoding="utf-8",
+            )
+        runtime.reload_skills()
+        scopes = [
+            (None, None),
+            (None, "main"),
+            (project.project_id, None),
+            (project.project_id, "main"),
+        ]
+        registries = [runtime.skills_for(*scope) for scope in scopes]
+
+        def assert_availability(expected):
+            for scope, registry in zip(scopes, registries, strict=True):
+                assert runtime.skills_for(*scope) is registry
+                for skill in registry.list_all():
+                    if skill.name.endswith("-env"):
+                        assert registry.availability_for(skill.name, ["*"]).state == expected
+
+        assert_availability("unavailable")
+        runtime.storage.set_data_dir_credential(key, "test-value")
+        runtime.reload_environment_credentials()
+        assert_availability("available")
+        runtime.storage.remove_data_dir_credential(key)
+        runtime.reload_environment_credentials()
+        assert_availability("unavailable")
+        monkeypatch.setenv(key, "process-value")
+        runtime.reload_environment_credentials()
+        assert_availability("available")
+    finally:
+        runtime.stop()
+
+
 def test_install_private_global_and_replace_shared_skill_refresh_live_visibility(config, tmp_path):
     runtime = Runtime(config)
     runtime.start()

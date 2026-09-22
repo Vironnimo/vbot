@@ -908,7 +908,9 @@
               <ChatComposer
                 disabled={composerDisabled}
                 isRunning={isRunActive(target.activeSessionState)}
-                cancelling={chatState.cancellingRun}
+                cancelling={target.activeSessionState?.cancellingRunIds?.includes(
+                  target.activeSessionState?.currentRun?.runId,
+                ) ?? false}
                 draftKey={composerDraftKey}
                 historyKey={composerHistoryKey}
                 focusRequest={layout.composerFocusRequest}

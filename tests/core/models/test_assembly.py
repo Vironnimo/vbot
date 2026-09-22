@@ -151,6 +151,32 @@ class TestMergeLayers:
             "json_mode": True,
         }
 
+    def test_null_capabilities_inherit_without_erasing_false_or_empty_values(self):
+        lower = {
+            "capabilities": {
+                "reasoning": {"supported": True},
+                "vision": False,
+                "tools": True,
+                "input_modalities": ["text"],
+                "supported_voices": [],
+            }
+        }
+        merged = merge_layers(
+            [
+                lower,
+                {
+                    "capabilities": {
+                        "reasoning": None,
+                        "vision": None,
+                        "tools": False,
+                        "input_modalities": None,
+                        "supported_voices": None,
+                    }
+                },
+            ]
+        )
+        assert merged["capabilities"] == {**lower["capabilities"], "tools": False}
+
     def test_reasoning_object_replaced_wholesale_not_deep_merged(self):
         """A nested ``reasoning`` object is replaced wholesale by the higher
         layer — never key-by-key deep-merged."""

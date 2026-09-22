@@ -535,18 +535,18 @@ def render_continuation_reminder(
     fixed = (
         f"Original request(s):\n{requests or '[not recorded]'}\n\n"
         f"Operations:\n{operations}{warning}\n\n"
-        "[Continuation checkpoint truncated to fit the active model context. "
-        "The durable journal retains the full readable Thinking.]\n"
     )
-    remaining = max(0, budget - len(header) - len(fixed) - len("</continuation-checkpoint>"))
+    label = "Latest readable Thinking / working plan:\n"
+    footer = (
+        "\n[Continuation checkpoint truncated to fit the active model context. "
+        "The durable journal retains the full readable Thinking.]\n"
+        "</continuation-checkpoint>"
+    )
+    available = max(0, budget - len(header) - len(label) - len(footer))
+    fixed = fixed[:available]
+    remaining = available - len(fixed)
     latest_reasoning = state.reasoning[-remaining:] if remaining else ""
-    return (
-        header
-        + fixed
-        + "Latest readable Thinking / working plan:\n"
-        + latest_reasoning
-        + "\n</continuation-checkpoint>"
-    )[:budget]
+    return header + fixed + label + latest_reasoning + footer
 
 
 def continuation_prompt_budget(context_window: int | None) -> int:

@@ -144,7 +144,7 @@ async def test_trigger_run_exception_does_not_leak_internal_error_text(
     assert len(log_records) == 1
     assert log_records[0].exc_info is not None
     assert "tg-assistant" in log_records[0].message
-    assert "ch-tg-assistant-12345" in log_records[0].message
+    assert "12345" not in log_records[0].message
     await adapter.stop()
 
 
@@ -185,7 +185,7 @@ async def test_compact_command_exception_is_logged_with_context(
     assert len(log_records) == 1
     assert log_records[0].exc_info is not None
     assert "command=compact" in log_records[0].message
-    assert "ch-tg-assistant-12345" in log_records[0].message
+    assert "12345" not in log_records[0].message
     await adapter.stop()
 
 

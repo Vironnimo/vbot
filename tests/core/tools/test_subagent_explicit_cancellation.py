@@ -231,3 +231,38 @@ async def test_cancel_requires_public_id(
 
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_arguments"
+
+
+@pytest.mark.parametrize("same_work", [True, False])
+async def test_cancel_resolves_admitted_child_before_completion_watcher(
+    tmp_path: Path, same_work: bool
+) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+    parent_key = (context.agent_id, context.session_id, context.run_id)
+    tracker.register_queued(parent_key, "worker", "child", "queue-one", work_id="sub-one")
+    run = Run(
+        run_id="started-child",
+        agent_id="worker",
+        session_id="child",
+        work_id="sub-one" if same_work else "different-work",
+    )
+    manager.runs[run.id] = run
+    manager.busy_sessions[("worker", "child")] = run
+
+    result = await _handle_subagent(
+        context,
+        {"action": "cancel", "id": "sub-one"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is same_work
+    assert run.cancel_requested is same_work
+    if same_work:
+        assert result["data"]["status"] == "cancelled"
+    else:
+        assert result["error"]["code"] == "subagent_not_running"
+        run.mark_cancelled()

@@ -1,6 +1,8 @@
 <script>
   import { onDestroy, onMount } from 'svelte';
   import { SvelteMap } from 'svelte/reactivity';
+  import { t } from '$lib/i18n.js';
+  import { createExtensionRunStream } from '$lib/extensionRunStream.js';
   import Banner from './ui/Banner.svelte';
   import { useAutosaveContext } from '$lib/autosave.js';
   import {
@@ -342,7 +344,27 @@
         if (frameContext !== context) return;
         const url = opened?.stream?.url;
         if (typeof url === 'string' && url.startsWith('/api/extension-runs/')) {
-          const subscription = subscribeRunEvents(url, {
+          const subscription = createExtensionRunStream({
+            opened,
+            afterSequence: data.params.after_sequence ?? 0,
+            subscribeRunEvents,
+            openRun: (afterSequence) =>
+              openExtensionPageRun(
+                context.descriptor.owner,
+                {
+                  id: context.descriptor.page,
+                  epoch: context.descriptor.epoch,
+                },
+                data.params.group_id,
+                data.params.run_id,
+                afterSequence,
+              ),
+            onResync: () =>
+              post(context, {
+                ...contextPayload(context),
+                type: 'vbot.extension.invalidate',
+                reason: 'run_stream_recovered',
+              }),
             onEvent: ({ type, data: payload }) => {
               const event = { ...payload, type };
               if (
@@ -474,7 +496,7 @@
     onload={onFrameLoad}
   ></iframe>
 {:else}
-  <Banner variant="error">This Extension page is unavailable.</Banner>
+  <Banner variant="error">{t('extensions.pageUnavailable')}</Banner>
 {/if}
 
 <style>

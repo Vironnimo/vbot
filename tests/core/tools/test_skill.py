@@ -37,7 +37,6 @@ def test_skill_tool_describes_activation_and_file_path_contract() -> None:
     assert set(properties) == {"name", "file_path"}
     assert properties["name"]["type"] == "string"
     assert properties["name"]["minLength"] == 1
-    assert properties["name"]["pattern"] == r"^\S+$"
     assert properties["file_path"]["type"] == "string"
     assert SKILL_TOOL_PARAMETERS["required"] == []
     assert "additionalProperties" not in SKILL_TOOL_PARAMETERS
@@ -756,3 +755,36 @@ def test_extended_package_reads_keep_containment_and_internal_file_boundary(tmp_
         async_dispatch(tools, _context(tmp_path), {"name": "debugging", "file_path": relative})
     )
     assert result["ok"] is False
+
+
+@pytest.mark.parametrize("name", ["Daily Review", "my.skill", "ümlaut", "long-" * 20])
+def test_loaded_nontriggerable_name_is_addressable_through_dispatch(
+    tmp_path: Path, name: str
+) -> None:
+    package = tmp_path / "skills" / "package"
+    package.mkdir(parents=True)
+    (package / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: A test Skill.\n---\nUse the sentinel procedure.",
+        encoding="utf-8",
+    )
+    (package / "reference.txt").write_text("Reference sentinel", encoding="utf-8")
+    registry = SkillRegistry.load(package.parent)
+    tools = ToolRegistry()
+    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
+    context = _context(tmp_path)
+
+    activated = asyncio.run(async_dispatch(tools, context, {"name": name}))
+    reference = asyncio.run(
+        async_dispatch(tools, context, {"name": name, "file_path": "reference.txt"})
+    )
+    denied = asyncio.run(
+        async_dispatch(tools, _context(tmp_path, allowed_skills=[]), {"name": name})
+    )
+
+    assert activated["ok"] is True
+    assert isinstance(activated["data"], dict)
+    assert isinstance(reference["data"], dict)
+    assert activated["data"]["name"] == name
+    assert activated["data"]["content"] == "Use the sentinel procedure."
+    assert reference["data"]["content"] == "Reference sentinel"
+    assert denied["ok"] is False
