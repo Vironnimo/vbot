@@ -1,7 +1,8 @@
 """Shared blob + JSON-sidecar artifact persistence for task execution services.
 
-Speech and image execution use the sidecar-backed :class:`TaskArtifactStore`.
-Video and Music use :func:`write_generated_media_artifact` for caller-owned
+Speech execution uses the sidecar-backed :class:`TaskArtifactStore`; image
+execution owns its separate caller-directory writer. Video and Music use
+:func:`write_generated_media_artifact` for caller-owned
 exclusive files without a central sidecar. Both paths use compact typed ids
 and preserve each task's own error type.
 """
@@ -34,8 +35,8 @@ class StoredArtifact:
 class TaskArtifactStore:
     """Blob + sidecar artifact storage for one task's artifact directory.
 
-        *kind* names the task in error messages (``"speech"`` / ``"image"``);
-        *error* is the task's configuration-error class used for every expected
+    *kind* names the task in error messages (currently ``"speech"``);
+    *error* is the task's configuration-error class used for every expected
     failure so callers keep their domain error contract.
     """
 
@@ -101,28 +102,52 @@ class TaskArtifactStore:
         if not is_safe_id(artifact_id):
             raise self._error(f"Invalid {self._kind} artifact id")
         metadata_path = self._artifact_dir / f"{artifact_id}.json"
-        if not metadata_path.is_file():
+        if not metadata_path.is_file() or metadata_path.is_symlink():
             raise self._error(f"{label} artifact not found")
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise self._error(f"{label} artifact metadata is unreadable") from exc
 
+        if not isinstance(metadata, dict) or metadata.get("id") != artifact_id:
+            raise self._error(f"{label} artifact metadata is invalid")
         filename = metadata.get("filename")
         media_type = metadata.get("media_type")
         size_bytes = metadata.get("size_bytes")
-        if not isinstance(filename, str) or not isinstance(media_type, str):
+        prefix = f"{artifact_id}."
+        if (
+            not isinstance(filename, str)
+            or not filename.startswith(prefix)
+            or not is_safe_id(filename[len(prefix) :])
+            or filename == metadata_path.name
+            or not isinstance(media_type, str)
+            or not media_type.strip()
+        ):
             raise self._error(f"{label} artifact metadata is invalid")
         file_path = self._artifact_dir / filename
-        if not file_path.is_file():
-            raise self._error(f"{label} artifact file not found")
+        try:
+            if (
+                file_path.is_symlink()
+                or file_path.resolve().parent != self._artifact_dir.resolve()
+                or not file_path.is_file()
+            ):
+                raise self._error(f"{label} artifact file not found")
+            actual_size = file_path.stat().st_size
+        except OSError as exc:
+            raise self._error(f"{label} artifact file is unreadable") from exc
         return StoredArtifact(
             id=artifact_id,
             filename=filename,
             media_type=media_type,
-            size_bytes=size_bytes if isinstance(size_bytes, int) else file_path.stat().st_size,
+            size_bytes=(
+                size_bytes
+                if isinstance(size_bytes, int)
+                and not isinstance(size_bytes, bool)
+                and size_bytes >= 0
+                else actual_size
+            ),
             file_path=file_path,
-            metadata=metadata if isinstance(metadata, dict) else {},
+            metadata=metadata,
         )
 
 
