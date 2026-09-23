@@ -250,13 +250,6 @@
   width: 100%;
 }
 
-.projects-view .projects-view__eyebrow {
-  margin: 0 0 6px;
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  font-weight: 600;
-}
-
 /* ── Auto-load / whitelist file lists ─────────────────────────────────────── */
 
 .projects-view .projects-file-list {

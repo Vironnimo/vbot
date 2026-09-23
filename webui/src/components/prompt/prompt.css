@@ -347,7 +347,6 @@
   white-space: nowrap;
 }
 @media (max-width: 640px) {
-  .sp-view .sp-eyebrow,
   .sp-view .sp-subtitle {
     display: none;
   }

@@ -1,38 +1,3 @@
-.s-skill-directory-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.s-skill-directory-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface-2);
-  color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
-  line-height: 1.4;
-}
-
-.s-skill-directory-item span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.s-skill-directory-add {
-  display: flex;
-  gap: 10px;
-}
-
-.s-directory-remove {
-  flex-shrink: 0;
-}
-
 .s-debug-warning {
   display: flex;
   align-items: flex-start;
