@@ -354,7 +354,7 @@
 
 .session-row__menu-item--danger:hover,
 .session-row__menu-item--danger:focus-visible {
-  background: rgba(252, 129, 129, 0.14);
+  background: color-mix(in srgb, var(--red) 14%, transparent);
 }
 
 .session-row__edit {

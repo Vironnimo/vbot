@@ -1,14 +1,26 @@
+/* Small group headings inside panes and panels: readable Sans, set apart by
+   weight and tone rather than by uppercase monospace. */
 .section-label,
-.secondary-pane__title,
 .detail-group-title,
 .tl-section-label {
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  font-weight: 500;
-  letter-spacing: 0.07em;
-  line-height: 1;
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: var(--fs-label-sm);
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+/* The Secondary pane's own title names the list it heads. */
+.secondary-pane__title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-hi);
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-md);
+  font-weight: 600;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Shared Secondary bar contract. Settings defines the visual reference; the
@@ -26,14 +38,16 @@
   background: var(--secondary-surface);
 }
 
+/* One header geometry for every Secondary pane: title at the start, a compact
+   icon action (usually "+") at the end. */
 .secondary-pane__header {
   display: flex;
+  min-height: 52px;
   flex-shrink: 0;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 12px 14px 10px;
-  border-bottom: 1px solid var(--border);
+  padding: 10px 10px 10px 16px;
 }
 
 .secondary-pane__scroll {
@@ -69,21 +83,21 @@
 }
 
 .secondary-list__item:focus-visible {
-  box-shadow: inset 0 0 0 1px var(--accent-40);
+  box-shadow: inset 0 0 0 2px var(--accent-60);
   outline: none;
 }
 
 .secondary-list__item.active {
   border-left-color: var(--accent);
-  background: var(--accent-dim);
+  background: var(--surface-3);
 }
 
 /* View chrome: the shared vertical rhythm above each view's feature content.
    Views retain their own data layout; these classes own only the frame,
    identity header, and local navigation/control surface. */
 .view-frame {
-  gap: var(--space-md);
-  padding: 24px 28px 28px;
+  gap: var(--space-lg);
+  padding: 28px 32px 32px;
 }
 
 .view-header {
@@ -99,21 +113,12 @@
   min-width: 0;
 }
 
-.view-header__eyebrow {
-  margin: 0 0 6px;
-  color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
-  font-weight: 500;
-  letter-spacing: 0.08em;
-  line-height: 1;
-  text-transform: uppercase;
-}
-
+/* The one page-header pattern: title plus an optional one-line description,
+   no eyebrow above it. */
 .view-header__title {
   margin: 0;
   color: var(--text-hi);
-  font-size: var(--fs-heading-lg);
+  font-size: var(--fs-display);
   font-weight: 600;
   letter-spacing: -0.02em;
   line-height: 1.2;
@@ -122,8 +127,8 @@
 .view-header__subtitle {
   max-width: 720px;
   margin: 6px 0 0;
-  color: var(--text-med);
-  font-size: var(--fs-body-sm);
+  color: var(--text-lo);
+  font-size: var(--fs-body-md);
   line-height: 1.5;
 }
 
@@ -140,10 +145,6 @@
 .view-toolbar {
   min-width: 0;
   flex-shrink: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface);
 }
 
 .view-toolbar--split {
@@ -164,8 +165,8 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 0 10px 0 4px;
   overflow: hidden;
+  border-bottom: 1px solid var(--border);
 }
 
 .view-toolbar--tabs .view-toolbar__tabs {
@@ -175,23 +176,19 @@
 }
 
 .view-toolbar--tabs .view-toolbar__actions {
-  padding: 7px 2px;
+  padding: 6px 0;
 }
 
 .view-toolbar__label {
-  color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
   font-weight: 500;
-  letter-spacing: 0.08em;
-  line-height: 1;
-  text-transform: uppercase;
+  line-height: 1.2;
 }
 
 .view-toolbar__meta {
-  color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-sm);
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
 }
 
 .modal-footer {
@@ -248,7 +245,7 @@
   height: 36px;
   align-items: center;
   justify-content: center;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-md);
   color: var(--text-hi);
   font-size: 24px;
   line-height: 1;
@@ -278,12 +275,12 @@
   max-width: 340px;
   align-items: flex-start;
   gap: 10px;
-  padding: 11px 14px;
+  padding: 12px 14px;
   border: 1px solid var(--border-2);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   animation: toast-in 200ms ease;
-  background: var(--surface);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  background: var(--surface-2);
+  box-shadow: var(--floating-elevation);
   pointer-events: all;
 }
 
@@ -300,19 +297,19 @@
 }
 
 .toast.success {
-  border-left: 2px solid var(--green);
+  border-left: 3px solid var(--green);
 }
 
 .toast.error {
-  border-left: 2px solid var(--red);
+  border-left: 3px solid var(--red);
 }
 
 .toast.warn {
-  border-left: 2px solid var(--amber);
+  border-left: 3px solid var(--amber);
 }
 
 .toast.info {
-  border-left: 2px solid var(--accent);
+  border-left: 3px solid var(--accent);
 }
 
 .toast-body {
@@ -322,15 +319,15 @@
 
 .toast-title {
   color: var(--text-hi);
-  font-size: 12.5px;
+  font-size: var(--fs-body-sm);
   font-weight: 600;
 }
 
 .toast-msg {
   margin-top: 2px;
   color: var(--text-med);
-  font-size: 12px;
-  line-height: 1.4;
+  font-size: var(--fs-body-sm);
+  line-height: 1.45;
 }
 
 .toast-close {

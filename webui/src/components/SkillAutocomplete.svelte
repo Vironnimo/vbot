@@ -171,7 +171,7 @@
     max-height: min(320px, 45vh);
     margin-inline: auto;
     overflow-y: auto;
-    border: 1px solid var(--accent-30);
+    border: 1px solid var(--border-2);
     border-radius: var(--r-md);
     background: var(--surface-2);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
@@ -182,12 +182,9 @@
     border-bottom: 1px solid var(--border);
     color: var(--text-lo);
     background: var(--surface);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 500;
+    font-size: var(--fs-label-sm);
+    font-weight: 600;
     line-height: 1;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
   }
 
   .skill-autocomplete__option {
@@ -216,15 +213,15 @@
     background: var(--surface-3);
   }
 
-  .skill-autocomplete__option.active .skill-autocomplete__name {
-    color: var(--accent);
+  .skill-autocomplete__option.active {
+    box-shadow: inset 2px 0 0 var(--accent);
   }
 
   .skill-autocomplete__name {
     overflow: hidden;
     color: var(--text-hi);
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--fs-mono-xs);
     line-height: 1.4;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -234,7 +231,7 @@
     overflow: hidden;
     color: inherit;
     font-family: var(--font-ui);
-    font-size: 12.5px;
+    font-size: var(--fs-body-sm);
     line-height: 1.4;
     text-overflow: ellipsis;
     white-space: nowrap;

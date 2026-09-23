@@ -92,7 +92,7 @@ const ANY_ELEMENT = '[a-z][\\w-]*';
 describe('UI primitive guard', () => {
   it('paints the app background before the Svelte bundle loads', () => {
     expect(INDEX_HTML).toMatch(
-      /html,\s*body\s*\{\s*background:\s*#221a12;\s*\}/,
+      /html,\s*body\s*\{\s*background:\s*#15130f;\s*\}/,
     );
   });
 

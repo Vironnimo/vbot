@@ -67,21 +67,18 @@
   .tool-readiness__badge {
     display: inline-block;
     padding: 1px 7px;
-    border: 1px solid rgba(245, 158, 11, 0.22);
-    border-radius: 3px;
-    color: var(--amber, #f59e0b);
-    background: rgba(245, 158, 11, 0.12);
-    font-family: var(--font-mono);
-    font-size: 10px;
+    border: 1px solid color-mix(in srgb, var(--amber) 22%, transparent);
+    border-radius: var(--r-sm);
+    color: var(--amber);
+    background: var(--amber-dim);
+    font-size: var(--fs-label-sm);
     font-weight: 500;
-    letter-spacing: 0.04em;
     line-height: 1.6;
   }
 
   .tool-readiness__hint {
     color: var(--text-med);
-    font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--fs-label-sm);
     line-height: 1.4;
   }
 </style>

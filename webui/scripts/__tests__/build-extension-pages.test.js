@@ -64,9 +64,9 @@ describe('build-extension-pages', () => {
       readFileSync(resolve(swarmBuild, 'fonts/OFL.txt'), 'utf8'),
     ).toContain('SIL OPEN FONT LICENSE');
     const fonts = [
-      ...css.matchAll(/url\((?:["']?)([^)"']+\.ttf)(?:["']?)\)/g),
+      ...css.matchAll(/url\((?:["']?)([^)"']+\.woff2)(?:["']?)\)/g),
     ].map((match) => match[1]);
-    expect(fonts).toHaveLength(6);
+    expect(fonts).toHaveLength(3);
     for (const font of fonts)
       expect(existsSync(resolve(swarmBuild, 'assets', font))).toBe(true);
   }, 30_000);

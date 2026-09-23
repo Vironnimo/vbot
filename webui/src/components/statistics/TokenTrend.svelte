@@ -1,6 +1,7 @@
 <script>
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
+  import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import GranularityToggle from './GranularityToggle.svelte';
   import {
@@ -15,6 +16,7 @@
     formatPercent,
     formatTokens,
     timelineTicks,
+    tokenSplit,
     tokenTimeline,
   } from '$lib/statisticsView.js';
   let { report, granularity = $bindable(), reportRange } = $props();
@@ -28,10 +30,22 @@
     ),
   );
   const usageChart = $derived(tokenTimeline(usageDaily));
+  // All-time reports chart only a recent window; when every recorded token is
+  // older than that window, say so and offer the widest period instead of
+  // claiming that nothing was ever recorded.
+  const hasOlderUsage = $derived(
+    usageChart.scaleMax === 0 && tokenSplit(report.usage.totals).total > 0,
+  );
   function tokenTooltip(point) {
     return `${activityPeriodLabel(point.date, granularity, locale, true)} · ${t('statistics.legend.measured', 'Measured tokens')}: ${formatTokens(point.measured, locale)} · ${t('statistics.legend.estimated', 'Estimated tokens')}: ${formatTokens(point.estimated, locale)}`;
   }
 </script>
+
+{#snippet showMonths()}
+  <Button variant="secondary" onClick={() => (granularity = 'month')}
+    >{t('statistics.usage.showMonths', 'Show by month')}</Button
+  >
+{/snippet}
 
 <div class="stats-block">
   <div class="stats-block__head">
@@ -45,7 +59,15 @@
   </div>
   {#if usageChart.scaleMax === 0}<EmptyState
       density="compact"
-      description={t('statistics.empty', 'No activity recorded yet.')}
+      description={hasOlderUsage
+        ? t(
+            'statistics.usage.emptyWindow',
+            'No token usage in this period. Earlier activity lies outside the chart.',
+          )
+        : t('statistics.empty', 'No activity recorded yet.')}
+      actions={hasOlderUsage && granularity !== 'month'
+        ? showMonths
+        : undefined}
     />
   {:else}
     <div

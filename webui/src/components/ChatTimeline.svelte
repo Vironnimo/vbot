@@ -434,7 +434,7 @@
             title={t('chat.historyEmptyTitle', 'No messages yet')}
             description={t(
               'chat.historyEmpty',
-              'No messages yet. Send the first message to this agent.',
+              'Send the first message to this agent.',
             )}
           >
             {#snippet icon()}

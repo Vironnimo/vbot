@@ -29,6 +29,7 @@ export default Object.freeze({
   'app.title': 'vBot',
   'navigation.primary': 'Primary navigation',
   'navigation.sections': 'Sections',
+  'navigation.more': 'More',
   'navigation.chat': 'Chat',
   'navigation.agents': 'Agents',
   'navigation.terminals': 'Terminals',

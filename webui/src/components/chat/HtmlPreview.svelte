@@ -288,7 +288,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font: 12px var(--font-mono);
+    font: var(--fs-mono-xs) var(--font-mono);
     color: var(--text-hi);
   }
   .html-preview__live {
@@ -296,7 +296,7 @@
     align-items: center;
     gap: 6px;
     color: var(--text-med);
-    font-size: 12px;
+    font-size: var(--fs-label-sm);
   }
   .html-preview__dot {
     width: 6px;
@@ -309,7 +309,8 @@
   }
   .html-preview__count {
     color: var(--text-lo);
-    font: 11px var(--font-mono);
+    font-size: var(--fs-label-sm);
+    font-variant-numeric: tabular-nums;
   }
   :global(.html-preview__feedback) {
     margin: 10px;

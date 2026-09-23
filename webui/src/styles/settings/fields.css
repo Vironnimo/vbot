@@ -44,14 +44,14 @@
 
 .s-row-label {
   color: var(--text-hi);
-  font-size: 14px;
+  font-size: var(--fs-body-md);
   font-weight: 500;
 }
 
 .s-row-desc {
   margin-top: 2px;
   color: var(--text-lo);
-  font-size: 12px;
+  font-size: var(--fs-label-sm);
   line-height: 1.4;
 }
 
@@ -65,18 +65,20 @@
   border-radius: var(--r-md);
   color: var(--text-hi);
   background: var(--surface-2);
-  font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--fs-body-md);
   line-height: 1.5;
 }
 
 /* Read-only value: structural border + flat background so it cannot be
-   mistaken for an editable input. */
+   mistaken for an editable input. It presents host addresses and directory
+   paths, so it keeps the code face. */
 .s-value-box {
   overflow: hidden;
   border-color: var(--border);
   color: var(--text-med);
   background: transparent;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -100,5 +102,5 @@
 .s-row-desc code {
   color: var(--text-med);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-mono-xs);
 }

@@ -7,7 +7,6 @@ describe('i18n t()', () => {
     const requiredKeys = [
       'navigation.logs',
       'logs.title',
-      'logs.eyebrow',
       'logs.subtitle',
       'logs.file',
       'logs.emptyOption',
@@ -68,7 +67,6 @@ describe('i18n t()', () => {
 
   it('contains Debug i18n copy with a meaningful empty heading and matching interpolation tokens', () => {
     const requiredKeys = [
-      'debug.eyebrow',
       'debug.title',
       'debug.subtitle',
       'debug.statusCount',
@@ -147,7 +145,6 @@ describe('i18n t()', () => {
   it('contains Statistics tab copy for navigation, sub-views, and metrics', () => {
     const requiredKeys = [
       'navigation.statistics',
-      'statistics.eyebrow',
       'statistics.title',
       'statistics.subtitle',
       'statistics.loading',
@@ -334,7 +331,6 @@ describe('i18n t()', () => {
   it('contains Projects tab copy for navigation, add, list, manage, report, and re-point', () => {
     const requiredKeys = [
       'navigation.projects',
-      'projects.eyebrow',
       'projects.title',
       'projects.subtitle',
       'projects.loading',

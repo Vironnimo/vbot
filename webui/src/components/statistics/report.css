@@ -105,8 +105,8 @@
 }
 .stats-view .stats-grid--hero .stats-card__value {
   font-size: var(--fs-display);
-  font-weight: 500;
-  letter-spacing: -0.03em;
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
 .stats-view .stats-card__detail {
   color: var(--text-med);
@@ -132,8 +132,8 @@
 .stats-view .stats-card__value {
   overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
-  font-family: var(--font-mono);
   font-size: var(--fs-heading-md);
+  font-weight: 600;
   color: var(--text-hi);
 }
 .stats-view .stats-columns {
@@ -162,9 +162,8 @@
 }
 .stats-view .stats-block__heading p {
   margin: 0;
-  color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
 }
 .stats-view .stats-block__title,
 .stats-view .stats-section-title {
@@ -184,15 +183,13 @@
 .stats-view .stats-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: var(--fs-mono-body);
+  font-size: var(--fs-body-sm);
 }
 .stats-view .stats-table th {
   text-align: left;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--text-med);
+  font-size: var(--fs-label-sm);
+  font-weight: 500;
+  color: var(--text-lo);
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
 }
@@ -227,7 +224,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 .stats-view .stats-tokens__est {
   color: var(--amber);
@@ -249,10 +246,8 @@
   flex-shrink: 0;
 }
 /* Only Skills with recorded opportunities but no matching activation are
-     candidates. A fresh Skill with no offer data stays neutral. */
-.stats-view .stats-skill-row--candidate td {
-  background: rgba(245, 158, 11, 0.06);
-}
+     candidates, marked by a thin amber left marker rather than a row tint.
+     A fresh Skill with no offer data stays neutral. */
 .stats-view .stats-skill-row--candidate td:first-child {
   box-shadow: inset 2px 0 0 var(--amber);
 }
@@ -284,7 +279,7 @@
   grid-template-columns: minmax(60px, 120px) 1fr auto auto;
   align-items: center;
   gap: 8px;
-  font-size: var(--fs-mono-body);
+  font-size: var(--fs-body-sm);
 }
 .stats-view .stats-bars__label {
   color: var(--text-med);
@@ -304,12 +299,12 @@
   background: var(--blue);
 }
 .stats-view .stats-bars__value {
-  font-family: var(--font-mono);
   color: var(--text-hi);
+  font-variant-numeric: tabular-nums;
 }
 .stats-view .stats-bars__share {
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
   color: var(--text-lo);
 }
 .stats-view .stats-health__head {
@@ -323,8 +318,8 @@
 }
 .stats-view .stats-health__total {
   color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
 }
 .stats-view .stats-health__hero {
   display: flex;
@@ -334,10 +329,10 @@
 }
 .stats-view .stats-health__hero strong {
   color: var(--text-hi);
-  font-family: var(--font-mono);
   font-size: var(--fs-display);
-  font-weight: 500;
-  letter-spacing: -0.03em;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
 }
 .stats-view .stats-health__hero span {
   color: var(--text-med);
@@ -410,15 +405,15 @@
 .stats-view .stats-health__outcomes strong {
   grid-column: 2;
   color: var(--text-hi);
-  font-family: var(--font-mono);
   font-size: var(--fs-heading-md);
-  font-weight: 500;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 .stats-view .stats-health__share {
   grid-column: 3;
   color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-sm);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
 }
 .stats-view .stats-health__note {
   margin: 14px 0 0;
@@ -436,14 +431,13 @@
 .stats-view .stats-facts div {
   display: flex;
   justify-content: space-between;
-  font-size: var(--fs-mono-body);
+  font-size: var(--fs-body-sm);
 }
 .stats-view .stats-facts dt {
   color: var(--text-med);
 }
 .stats-view .stats-facts dd {
   margin: 0;
-  font-family: var(--font-mono);
   color: var(--text-hi);
 }
 .stats-view .stats-activity-summary {
@@ -463,26 +457,25 @@
 }
 .stats-view .stats-activity-summary dt {
   margin-bottom: 6px;
-  color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-weight: 500;
 }
 .stats-view .stats-activity-summary dd {
   margin: 0;
   overflow: hidden;
   color: var(--text-hi);
-  font-family: var(--font-mono);
   font-size: var(--fs-heading-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .stats-view .stats-activity-summary dd span {
   margin-left: 6px;
   color: var(--text-med);
-  font-family: var(--font-sans);
   font-size: var(--fs-body-sm);
+  font-weight: 400;
 }
 .stats-view .stats-activity {
   display: grid;
@@ -496,9 +489,9 @@
   flex-direction: column;
   justify-content: space-between;
   align-items: flex-end;
-  color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
 }
 .stats-view .stats-activity__plot {
   position: relative;
@@ -561,9 +554,9 @@
   grid-column: 2;
   display: flex;
   justify-content: space-between;
-  color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
 }
 .stats-view .stats-activity__legend {
   display: flex;
@@ -577,7 +570,7 @@
   margin-top: 8px;
 }
 .stats-view .stats-legend {
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
   color: var(--text-med);
   display: inline-flex;
   align-items: center;
@@ -622,10 +615,17 @@
   background: transparent;
   border: none;
   color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-body-sm);
+  font-weight: 500;
   padding: 4px 10px;
   cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+.stats-view .stats-toggle__option:hover {
+  color: var(--text-hi);
+  background: var(--surface-2);
 }
 .stats-view .stats-toggle__option:disabled {
   cursor: wait;
@@ -639,9 +639,10 @@
 .stats-view .stats-token-chart__estimated {
   background: var(--amber);
 }
-.stats-view .stats-toggle__option--active {
-  background: var(--accent-dim);
-  color: var(--accent);
+.stats-view .stats-toggle__option--active,
+.stats-view .stats-toggle__option--active:hover {
+  background: var(--surface-3);
+  color: var(--text-hi);
 }
 .stats-view .stats-hours {
   display: flex;
@@ -657,12 +658,12 @@
 }
 .stats-view .stats-hours__bar {
   width: 100%;
-  background: var(--accent);
+  background: var(--blue);
   border-radius: var(--r-sm) var(--r-sm) 0 0;
   min-height: 1px;
 }
 .stats-view .stats-block--narrow .stats-table {
-  font-size: var(--fs-mono-sm);
+  font-size: var(--fs-label-sm);
 }
 @media (max-width: 960px) {
   .stats-view .stats-dashboard,
@@ -768,7 +769,6 @@
 .stats-view .stats-facts dd {
   margin: 0;
   font-variant-numeric: tabular-nums;
-  font-family: var(--font-mono);
 }
 .stats-view .stats-call-list {
   margin-top: var(--space-md);
@@ -803,7 +803,8 @@
 }
 .stats-view .stats-call > summary strong {
   text-align: end;
-  font-family: var(--font-mono);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 .stats-view .stats-call__source,
 .stats-view .stats-call__time {

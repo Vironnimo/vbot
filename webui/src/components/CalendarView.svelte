@@ -163,9 +163,9 @@
 
 <div class="view-frame calendar-view">
   <header class="view-header">
-    <div class="view-header-text">
-      <h1 class="view-header-title">{t('calendar.title', 'Calendar')}</h1>
-      <p class="view-header-subtitle">
+    <div class="view-header__intro">
+      <h1 class="view-header__title">{t('calendar.title', 'Calendar')}</h1>
+      <p class="view-header__subtitle">
         {t(
           'calendar.subtitle',
           'Your appointments and the agent schedule in one view.',
@@ -180,6 +180,7 @@
           variant="secondary"
           icon
           onClick={() => controller.navigate(-1)}
+          ariaLabel={t('calendar.prev', 'Previous period')}
           tooltip={t('calendar.prev', 'Previous period')}
         >
           ‹
@@ -191,6 +192,7 @@
           variant="secondary"
           icon
           onClick={() => controller.navigate(1)}
+          ariaLabel={t('calendar.next', 'Next period')}
           tooltip={t('calendar.next', 'Next period')}
         >
           ›

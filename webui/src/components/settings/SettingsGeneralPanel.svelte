@@ -6,6 +6,7 @@
   } from '$lib/autosave.js';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import SaveButton from '../ui/SaveButton.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
@@ -349,7 +350,9 @@
 {/if}
 
 <div class="s-footer">
-  <Button variant="tertiary" onClick={manualSave}
-    >{t('common.save', 'Save')}</Button
-  >
+  <SaveButton
+    class="s-save-button s-save-button--inline"
+    pending={autosave.participant.hasPending()}
+    onClick={manualSave}
+  />
 </div>

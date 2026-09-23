@@ -46,10 +46,8 @@
 
   .settings-mobile-section-label {
     color: var(--text-med);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+    font-size: var(--fs-label-sm);
+    font-weight: 600;
   }
 
   .settings-mobile-section-dropdown {

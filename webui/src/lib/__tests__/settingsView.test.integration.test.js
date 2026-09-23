@@ -659,7 +659,8 @@ describe('SettingsView', () => {
 
     openSection('General', 'appearance');
 
-    const saveButton = getButton('Save');
+    // A clean form shows the saved state on the same manual Save control.
+    const saveButton = getButton('Saved');
     const languageTrigger = document.body.querySelector(
       '#settings-appearance-language',
     );

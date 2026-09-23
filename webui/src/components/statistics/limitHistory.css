@@ -25,12 +25,9 @@
 
 .limit-history__eyebrow {
   margin: 0 0 var(--space-xs);
-  color: var(--accent);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
-  font-weight: 500;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-weight: 600;
 }
 
 .limit-history h3,
@@ -41,10 +38,12 @@
 
 .limit-history h3 {
   font-size: var(--fs-heading-md);
+  font-weight: 600;
 }
 
 .limit-history h4 {
   font-size: var(--fs-heading-sm);
+  font-weight: 600;
 }
 
 .limit-history__head p:last-child,
@@ -77,15 +76,20 @@
   border-radius: var(--r-sm);
   color: var(--text-med);
   background: transparent;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-body-sm);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
   cursor: pointer;
 }
 
-.limit-history__range button:hover,
+.limit-history__range button:hover {
+  color: var(--text-hi);
+  background: var(--surface-2);
+}
+
 .limit-history__range button.active {
-  color: var(--accent);
-  background: var(--accent-10);
+  color: var(--text-hi);
+  background: var(--surface-3);
 }
 
 .limit-history__range button:focus-visible,
@@ -97,8 +101,8 @@
 .limit-history__last,
 .limit-history__loading {
   color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-sm);
+  font-size: var(--fs-body-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .limit-history__summary,
@@ -127,20 +131,18 @@
 
 .limit-history__summary dt,
 .limit-activity__summary dt {
-  color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-weight: 500;
 }
 
 .limit-history__summary dd,
 .limit-activity__summary dd {
   margin: 0;
   color: var(--text-hi);
-  font-family: var(--font-mono);
   font-size: var(--fs-heading-sm);
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .limit-history__traces {
@@ -154,16 +156,7 @@
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
-  background:
-    linear-gradient(180deg, var(--accent-06), transparent 38%), var(--surface);
-}
-
-.limit-trace::before {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 2px;
-  background: var(--accent);
-  content: '';
+  background: var(--surface);
 }
 
 .limit-trace header,
@@ -174,8 +167,8 @@
 .limit-trace footer {
   padding-top: 0;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .limit-trace__provider,
@@ -190,8 +183,7 @@
 .limit-trace__window {
   margin-top: 2px;
   color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
 }
 
 .limit-trace__meta {
@@ -201,9 +193,10 @@
 }
 
 .limit-trace__meta strong {
-  color: var(--accent);
-  font-family: var(--font-mono);
+  color: var(--text-hi);
   font-size: var(--fs-heading-md);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .limit-trace__plot {
@@ -227,7 +220,7 @@
 
 .limit-trace__line {
   fill: none;
-  stroke: var(--accent);
+  stroke: var(--blue);
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 2;
@@ -236,7 +229,7 @@
 
 .limit-trace__point {
   fill: var(--surface);
-  stroke: var(--accent);
+  stroke: var(--blue);
   stroke-width: 2;
   vector-effect: non-scaling-stroke;
 }
@@ -245,8 +238,8 @@
   position: absolute;
   right: 0;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .limit-trace__axis--top {
@@ -302,8 +295,15 @@
 }
 
 .limit-intervals__list button.active {
-  border-color: var(--accent-30);
-  background: var(--accent-08);
+  border-color: transparent;
+  background: var(--surface-3);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.limit-intervals__list button.active:focus-visible {
+  box-shadow:
+    inset 2px 0 0 var(--accent),
+    var(--focus-ring);
 }
 
 .limit-intervals__identity strong,
@@ -316,8 +316,8 @@
 .limit-intervals__outcome time {
   margin-top: 3px;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .limit-intervals__outcome {
@@ -370,8 +370,8 @@
   justify-content: flex-start;
   flex-wrap: wrap;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .limit-run__models {

@@ -47,7 +47,7 @@
 }
 .onboarding-overview h2 {
   margin: 0;
-  font-size: 22px;
+  font-size: var(--fs-display);
   line-height: 1.2;
   font-weight: 600;
   letter-spacing: -0.025em;
@@ -114,7 +114,7 @@
   min-width: 0;
   padding: 24px;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--r-lg);
   background: var(--surface);
   display: flex;
   flex-direction: column;
@@ -127,7 +127,7 @@
 }
 .onboarding-step-title {
   margin: 0;
-  font-size: 24px;
+  font-size: var(--fs-display);
   line-height: 1.25;
   font-weight: 500;
   letter-spacing: -0.025em;
@@ -209,12 +209,12 @@
   border-top: 1px solid var(--border);
   border-radius: 0;
   justify-content: center;
-  color: var(--accent);
+  color: var(--text-med);
   background: var(--surface-2);
 }
 .onboarding-catalog .onboarding-provider-expand:hover {
-  background: var(--accent-08);
-  color: var(--accent);
+  background: var(--surface-3);
+  color: var(--text-hi);
 }
 .onboarding-catalog .onboarding-provider-expand:focus-visible {
   outline-offset: -4px;
@@ -227,7 +227,7 @@
   min-height: 66px;
   padding: 12px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--r-md);
   background: transparent;
   color: var(--text-hi);
   text-align: left;
@@ -323,7 +323,7 @@
 .onboarding-connected-summary li {
   padding: 3px 9px;
   border: 1px solid var(--border-2);
-  border-radius: 5px;
+  border-radius: var(--r-md);
   font-size: var(--fs-body-sm);
 }
 .onboarding-footnote {
@@ -389,10 +389,12 @@
 .onboarding-free-filter {
   font-size: var(--fs-label-sm);
 }
-.onboarding-free-filter[aria-pressed='true'] {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--accent-08);
+/* Pressed filter: the neutral "on" treatment, not the selection accent. */
+.onboarding-free-filter[aria-pressed='true'],
+.onboarding-free-filter[aria-pressed='true']:hover {
+  color: var(--text-hi);
+  border-color: var(--text-lo);
+  background: var(--surface-3);
 }
 .onboarding-panel .s-dropdown-trigger {
   min-height: 46px;
@@ -413,9 +415,10 @@
   font-size: var(--fs-body-lg);
   color: var(--text-hi);
 }
+/* Model id · connection: the Model id makes this a code value. */
 .onboarding-model-menu .searchable-dropdown__option-meta {
   color: var(--onboarding-muted);
-  font-size: var(--fs-label-sm);
+  font-size: var(--fs-mono-sm);
   font-family: var(--font-mono);
   max-width: 100%;
   overflow: hidden;
@@ -440,21 +443,23 @@
   color: var(--onboarding-muted);
   font-size: var(--fs-body-md);
 }
+/* Confirmation of the chosen Model: a neutral card with a success check,
+   matching the connected-Provider summary. */
 .onboarding-selection {
   display: flex;
   align-items: flex-start;
   gap: 10px;
   padding: 16px;
   border-radius: var(--r-lg);
-  background: var(--accent-06);
-  border: 1px solid var(--accent-22);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
   margin-top: 8px;
   overflow-wrap: anywhere;
 }
 .onboarding-selection-icon {
   display: flex;
   padding-top: 2px;
-  color: var(--accent);
+  color: var(--green);
 }
 .onboarding-selection strong {
   font-weight: 500;
@@ -561,7 +566,7 @@
     gap: 6px;
   }
   .onboarding-overview h2 {
-    font-size: 20px;
+    font-size: var(--fs-heading-lg);
   }
   .onboarding-brand img {
     width: 32px;
@@ -570,10 +575,9 @@
   .onboarding-panel {
     padding: 18px;
     gap: 18px;
-    border-radius: 10px;
   }
   .onboarding-step-title {
-    font-size: 22px;
+    font-size: var(--fs-heading-lg);
   }
   .onboarding-progress {
     gap: 12px;

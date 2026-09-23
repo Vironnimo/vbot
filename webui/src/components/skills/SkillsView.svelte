@@ -517,7 +517,7 @@
     {#if scope !== 'directories'}
       <div class="skills-toolbar" class:skills-mobile-hidden={selected}>
         <Button
-          variant="primary"
+          variant="secondary"
           icon
           ariaLabel={t('skills.addSkills')}
           tooltip={t('skills.addSkills')}

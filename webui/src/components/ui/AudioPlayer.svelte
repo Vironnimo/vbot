@@ -366,13 +366,9 @@
     justify-content: space-between;
     gap: var(--space-xs);
     color: var(--text-med);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
+    font-size: var(--fs-label-sm);
     font-variant-numeric: tabular-nums;
     line-height: 1.4;
-  }
-  .audio-player__time [role='status'] {
-    font-family: var(--font-ui);
   }
   .audio-player__options,
   .audio-player__volume {
@@ -398,7 +394,8 @@
     padding: 4px 8px;
     background: transparent;
     border-color: transparent;
-    font-size: var(--fs-mono-sm);
+    font-size: var(--fs-label-sm);
+    font-variant-numeric: tabular-nums;
   }
   .audio-player__options :global(.audio-player__speed .dropdown-trigger:hover) {
     background: var(--surface-3);
@@ -414,9 +411,11 @@
     border-radius: var(--r-sm);
     background: transparent;
     cursor: pointer;
+    /* Position and volume are values, not selections: the filled part uses
+       the neutral "on" tone like the shared toggle track. */
     --track-fill: linear-gradient(
       to right,
-      var(--accent) var(--range-progress),
+      var(--text-med) var(--range-progress),
       var(--border-2) var(--range-progress)
     );
   }
@@ -437,14 +436,14 @@
     margin-top: -3.5px;
     border: 0;
     border-radius: 50%;
-    background: var(--accent);
+    background: var(--text-hi);
   }
   .audio-player__range::-moz-range-thumb {
     width: 10px;
     height: 10px;
     border: 0;
     border-radius: 50%;
-    background: var(--accent);
+    background: var(--text-hi);
   }
   .audio-player__range:focus-visible {
     outline: 1px solid var(--accent);

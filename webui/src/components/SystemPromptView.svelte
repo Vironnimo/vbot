@@ -155,9 +155,6 @@
     <div class="sp-top view-frame">
       <header class="sp-header view-header">
         <div class="view-header__intro">
-          <p class="sp-eyebrow view-header__eyebrow">
-            {t('systemPrompt.eyebrow', 'Agent context')}
-          </p>
           <h2 id="sp-title" class="sp-title view-header__title">
             {t('systemPrompt.title', 'System Prompt')}
           </h2>

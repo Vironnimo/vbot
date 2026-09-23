@@ -7,6 +7,7 @@
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import SaveButton from '../ui/SaveButton.svelte';
   import FormField from '../ui/FormField.svelte';
   import TextArea from '../ui/TextArea.svelte';
   import TextField from '../ui/TextField.svelte';
@@ -792,11 +793,10 @@
 </div>
 
 <div class="s-footer">
-  <Button
-    variant="tertiary"
+  <SaveButton
     class="s-save-button s-save-button--inline"
+    saving={taskModelSaving}
+    pending={taskModelsAutosave.participant.hasPending()}
     onClick={handleManualTaskModelSave}
-  >
-    {taskModelSaving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
-  </Button>
+  />
 </div>

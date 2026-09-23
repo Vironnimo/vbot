@@ -626,7 +626,15 @@
   {:else}
     {#each displayedProviders as provider (provider.id)}
       <div class="s-provider-card">
-        <div class="s-provider-head">
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions (Pointer shortcut for the row; the Details disclosure button is the keyboard control.) -->
+        <div
+          class="s-provider-head s-provider-head--toggle"
+          onclick={(event) => {
+            if (!event.target.closest('button, a, input, select, textarea')) {
+              toggleProviderDetails(provider);
+            }
+          }}
+        >
           <div class="s-row-info">
             <div class="s-row-label">
               {providerDisplayName(provider)}
@@ -653,7 +661,9 @@
               aria-expanded={expandedProviders.has(provider.id)}
               onClick={() => toggleProviderDetails(provider)}
             >
-              ▸
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
+                ><path d="m6 3.5 4.5 4.5L6 12.5" /></svg
+              >
             </Button>
           </div>
         </div>

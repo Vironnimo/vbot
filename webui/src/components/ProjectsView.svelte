@@ -194,14 +194,16 @@
         </span>
         <div class="pane-header-actions">
           <Button
-            variant="primary"
+            variant="tertiary"
+            icon
+            ariaLabel={t('projects.add.title', 'Add project')}
+            tooltip={t('projects.add.title', 'Add project')}
             data-testid="project-add-open"
             onClick={openAdd}
           >
-            <svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true">
-              <path d="M7 1v12M1 7h12" />
+            <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
+              <path d="M7 1.5v11M1.5 7h11" />
             </svg>
-            {t('common.add', 'Add')}
           </Button>
         </div>
       </div>

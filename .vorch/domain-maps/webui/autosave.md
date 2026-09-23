@@ -6,7 +6,7 @@ Read before adding or changing editable configuration, an existing-record editor
 
 - Use the shared autosave mechanism for editable settings and existing configuration records. Extend the existing editor/controller for payload validation and reconciliation; timing, serialization, pending-state tracking, and transition flushing belong to `webui/src/lib/autosave.js`.
 - Creation, credentials, destructive actions, and operational commands retain their explicit submission semantics. A text field alone does not imply autosave: sending a Chat message or starting a Run is an action, not configuration persistence.
-- Keep a small tertiary manual Save action after the fields, right-aligned inside the content scrollport. It uses the same tracked save operation and gives reassurance when already saved; it does not require a sticky or permanently reserved footer.
+- Keep a small tertiary manual Save action after the fields, right-aligned inside the content scrollport. It uses the same tracked save operation and gives reassurance when already saved; it does not require a sticky or permanently reserved footer. `components/ui/SaveButton.svelte` presents that action with its state - Save while `participant.hasPending()`, Saving... during a write, a quiet Saved with a check once persisted - and stays clickable in every state; the Settings panels use it.
 
 ## Integrating an editor
 

@@ -62,8 +62,8 @@
 }
 
 .btn-secondary.chat-view__session-toggle:hover:not(:disabled) {
-  background: var(--accent-08);
-  color: var(--accent);
+  background: var(--surface-3);
+  color: var(--text-hi);
 }
 
 .btn-secondary.btn-icon.chat-view__new-session-fab,
@@ -79,8 +79,8 @@
 
 .btn-secondary.btn-icon.chat-view__new-session-fab:hover:not(:disabled),
 .btn-secondary.btn-icon.chat-view__workspace-action:hover:not(:disabled) {
-  background: var(--accent-08);
-  color: var(--accent);
+  background: var(--surface-3);
+  color: var(--text-hi);
 }
 
 .chat-view__new-session-fab svg {
@@ -174,7 +174,7 @@
   align-items: center;
   padding: 0 4px;
   color: var(--red);
-  font-size: 12px;
+  font-size: var(--fs-label-sm);
 }
 
 /* The project team tabs mirror the identity bar's agent tabs (which are
@@ -191,7 +191,7 @@
   color: var(--text-lo);
   background: transparent;
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: var(--fs-label-md);
   font-weight: 500;
   white-space: nowrap;
   transition:
@@ -220,7 +220,7 @@
   align-items: center;
   padding: 0 4px;
   color: var(--text-lo);
-  font-size: 12px;
+  font-size: var(--fs-label-sm);
 }
 
 /* Center inner content on the same axis as the capped message column.
@@ -265,7 +265,7 @@
   margin: 0;
   color: var(--text-med);
   font-family: var(--font-ui);
-  font-size: 12.5px;
+  font-size: var(--fs-body-sm);
   line-height: 1.4;
   white-space: pre-wrap;
 }

@@ -253,9 +253,12 @@
     font: 600 var(--fs-label-md) var(--font-ui);
   }
   .tool-catalog-count {
-    color: var(--text-med);
-    font: var(--fs-mono-xs) var(--font-mono);
+    color: var(--text-lo);
+    font: var(--fs-label-sm) var(--font-ui);
+    font-variant-numeric: tabular-nums;
   }
+  /* Family and Tool switches follow the shared toggle: off is a dark track
+     with a muted knob, on is a light track with a dark knob. */
   .tool-access-family-toggle {
     position: relative;
     margin-left: auto;
@@ -274,20 +277,21 @@
     width: 10px;
     height: 10px;
     border-radius: 50%;
-    background: var(--text-med);
+    background: var(--text-lo);
   }
   .tool-access-family-toggle.is-on {
-    background: var(--accent-dim);
-    border-color: var(--accent-40);
+    background: var(--text-hi);
+    border-color: var(--text-hi);
   }
   .tool-access-family-toggle.is-on span {
     left: 16px;
-    background: var(--accent);
+    background: var(--bg);
   }
+  /* Partly on: a centered square knob on the off track. */
   .tool-access-family-toggle.is-mixed span {
     left: 10px;
     border-radius: 2px;
-    background: var(--amber);
+    background: var(--text-hi);
   }
   .tool-catalog-rows {
     display: grid;
@@ -306,12 +310,13 @@
     min-height: 28px;
     padding: 2px 44px 2px 0;
     border: 0;
-    border-radius: 3px;
+    border-radius: var(--r-sm);
     background: transparent;
     color: var(--text-hi);
     cursor: pointer;
     text-align: left;
-    font: 12px var(--font-mono);
+    /* Tool names are identifiers. */
+    font: var(--fs-mono-xs) var(--font-mono);
   }
   .tool-access-chip span {
     overflow-wrap: anywhere;
@@ -333,26 +338,31 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: var(--text-med);
+    background: var(--text-lo);
   }
   .tool-access-chip.is-on::before {
-    background: var(--accent-dim);
-    border-color: var(--accent-40);
+    background: var(--text-hi);
+    border-color: var(--text-hi);
   }
   .tool-access-chip.is-on::after {
     right: 4px;
-    background: var(--accent);
+    background: var(--bg);
   }
   .tool-access-chip.is-automatic::before {
     border-style: dashed;
+  }
+  /* Keep the dashed automatic marker visible on the light on-track. */
+  .tool-access-chip.is-automatic.is-on::before {
+    background: var(--text-med);
+    border-color: var(--text-hi);
   }
   .tool-access-chip:focus-visible,
   .tool-access-family-toggle:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
   }
-  .tool-access-chip:hover:not(:disabled) {
-    color: var(--accent);
+  .tool-access-chip:not(.is-on):hover:not(:disabled)::before {
+    border-color: var(--text-faint);
   }
   .tool-access-chip:disabled,
   .tool-access-family-toggle:disabled {
@@ -364,8 +374,8 @@
     flex-wrap: wrap;
     gap: 4px 12px;
     margin-top: 3px;
-    color: var(--text-med);
-    font-size: var(--fs-mono-xs);
+    color: var(--text-lo);
+    font-size: var(--fs-label-sm);
   }
   .tool-catalog-unavailable {
     color: var(--amber);
@@ -385,7 +395,7 @@
     color: var(--text-med);
     font-size: var(--fs-body-sm);
     line-height: 1.5;
-    box-shadow: var(--shadow-lg);
+    box-shadow: var(--floating-elevation);
   }
   .tool-access-tip:global([data-floating-open='true']) {
     opacity: 1;
