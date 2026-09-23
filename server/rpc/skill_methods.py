@@ -21,14 +21,14 @@ from pathlib import Path
 from typing import Any, cast
 
 from core.settings import is_valid_agent_id
-from core.skills import SkillAuthoringError, SkillRegistry, SkillWriteResult
+from core.skills import SkillAuthoringError, SkillPolicyError, SkillRegistry, SkillWriteResult
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_SKILLS
 from server.rpc._mutations import MutationHandler, serialized_mutation
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
-from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.validation import _optional_string, _required_string
 
@@ -280,7 +280,14 @@ async def _skill_set_disabled(state: Any, params: JsonObject) -> JsonObject:
     inventory = await _SKILL_READ_WORKERS.run(state.runtime.skill_inventory)
     if not any(entry["name"] == name for entry in inventory["skills"]):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, f"unknown skill: {name!r}")
-    await _SKILL_READ_WORKERS.run(state.runtime.skill_policy.set_disabled, name, disabled=disabled)
+    try:
+        await _SKILL_READ_WORKERS.run(
+            state.runtime.skill_policy.set_disabled, name, disabled=disabled
+        )
+    except SkillPolicyError as exc:
+        # An unreadable or invalid policy document is refused rather than
+        # overwritten; report it as an expected domain failure.
+        raise RpcError(RPC_ERROR_DOMAIN, str(exc)) from exc
     await state.runtime.reload_skills_async()
     publish_resource_changed(state, RESOURCE_KIND_SKILLS)
     return {"name": name, "disabled": disabled}
@@ -339,7 +346,10 @@ def _share_skill_policy(state: Any, params: JsonObject) -> JsonObject:
                 RPC_ERROR_INVALID_REQUEST,
                 "at least one receiver agent is required to share a skill",
             )
-    state.runtime.skill_policy.set_shared(agent_id, name, shared=shared, receivers=receivers)
+    try:
+        state.runtime.skill_policy.set_shared(agent_id, name, shared=shared, receivers=receivers)
+    except SkillPolicyError as exc:
+        raise RpcError(RPC_ERROR_DOMAIN, str(exc)) from exc
     return {"agent_id": agent_id, "name": name, "shared": shared, "receivers": receivers}
 
 

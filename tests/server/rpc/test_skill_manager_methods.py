@@ -8,7 +8,8 @@ from typing import Any
 
 import pytest
 
-from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
+from core.skills import SkillPolicyError
+from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.skill_methods import (
     _skill_inspect,
     _skill_inventory,
@@ -33,6 +34,7 @@ class _ManagerRuntime:
         self.policy_calls: list[tuple[str, tuple[Any, ...]]] = []
         self.agents = SimpleNamespace(exists=lambda agent_id: agent_id in ("builder", "reviewer"))
         self.published: list[str] = []
+        self.policy_error: SkillPolicyError | None = None
         self.skill_policy = SimpleNamespace(
             set_disabled=self.set_disabled,
             set_shared=self.set_shared,
@@ -48,11 +50,15 @@ class _ManagerRuntime:
         self.invalidated.append(agent_id)
 
     def set_disabled(self, name: str, *, disabled: bool) -> None:
+        if self.policy_error is not None:
+            raise self.policy_error
         self.policy_calls.append(("set_disabled", (name, disabled)))
 
     def set_shared(
         self, agent_id: str, name: str, *, shared: bool, receivers: list[str] | None = None
     ) -> None:
+        if self.policy_error is not None:
+            raise self.policy_error
         self.policy_calls.append(("set_shared", (agent_id, name, shared, receivers or [])))
 
     def agent_owns_private_skill(self, agent_id: str, name: str) -> bool:
@@ -114,6 +120,19 @@ class TestSetDisabled:
         assert state.runtime.reload_calls == 0
 
     @pytest.mark.asyncio
+    async def test_invalid_policy_document_is_domain_error(self, tmp_path: Path) -> None:
+        state = _state(tmp_path)
+        state.runtime.inventory["skills"] = [{"name": "deploy"}]
+        state.runtime.policy_error = SkillPolicyError("Cannot update invalid skill policy")
+
+        with pytest.raises(RpcError) as excinfo:
+            await _skill_set_disabled(state, {"name": "deploy", "disabled": True})
+
+        assert excinfo.value.code == RPC_ERROR_DOMAIN
+        assert state.runtime.reload_calls == 0
+        assert state.runtime.published == []
+
+    @pytest.mark.asyncio
     async def test_non_boolean_disabled_is_invalid_request(self, tmp_path: Path) -> None:
         state = _state(tmp_path)
         state.runtime.inventory["skills"] = [{"name": "deploy"}]
@@ -123,6 +142,26 @@ class TestSetDisabled:
 
 
 class TestShare:
+    @pytest.mark.asyncio
+    async def test_invalid_policy_document_is_domain_error(self, tmp_path: Path) -> None:
+        state = _state(tmp_path)
+        state.runtime.policy_error = SkillPolicyError("Cannot update invalid skill policy")
+
+        with pytest.raises(RpcError) as excinfo:
+            await _skill_share(
+                state,
+                {
+                    "agent_id": "builder",
+                    "name": "deploy",
+                    "shared": True,
+                    "receivers": ["reviewer"],
+                },
+            )
+
+        assert excinfo.value.code == RPC_ERROR_DOMAIN
+        assert state.runtime.invalidated == []
+        assert state.runtime.published == []
+
     @pytest.mark.asyncio
     async def test_valid_owner_and_skill_persists_invalidates_and_publishes(
         self, tmp_path: Path
