@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import {
-  getAgentTab,
+  getAgentPicker,
   sendChatMessage,
   startIsolatedChat,
 } from "./chat-run-support.js";
@@ -30,7 +30,7 @@ test("agent moves a Session while handoff starts a fresh cross-Agent Session", a
       chat,
       "/agent e2e-command-agent Continue after moving this Session",
     );
-    await expect(getAgentTab(chat, "E2E Command Agent")).toBeVisible();
+    await expect(getAgentPicker(chat)).toContainText("E2E Command Agent");
     await expect(
       chat
         .getByRole("article")
@@ -44,7 +44,7 @@ test("agent moves a Session while handoff starts a fresh cross-Agent Session", a
       chat,
       "/handoff agent:main Preserve the deterministic E2E handoff brief",
     );
-    await expect(getAgentTab(chat, "Main")).toBeVisible();
+    await expect(getAgentPicker(chat)).toContainText("Main");
     await expect(
       chat
         .getByRole("article")

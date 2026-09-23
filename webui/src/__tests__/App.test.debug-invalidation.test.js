@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount } from 'svelte';
 
 import {
-  activeAgentTab,
   App,
   cleanupAppHarness,
   createChatRpcMock,
@@ -19,6 +18,7 @@ import {
   subscribeServerEventsMock,
   waitForAssertion,
   waitForCondition,
+  selectedPersonalAgentName,
 } from './App.support.js';
 
 vi.mock('svelte', async () => {
@@ -328,7 +328,7 @@ describe('App', () => {
     flushSync();
 
     await waitForAssertion(() => {
-      expect(activeAgentTab()?.textContent).toContain('Alpha');
+      expect(selectedPersonalAgentName()).toBe('Alpha');
     });
 
     const agentListCallsBefore = rpcMock.mock.calls.filter(

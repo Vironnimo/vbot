@@ -11,6 +11,28 @@ const OFFSET = 4;
 const MIN_HEIGHT = 96;
 const MAX_HEIGHT = 240;
 const FLIP_THRESHOLD = 200;
+const STATUS_DOTS = new Set(['idle', 'running', 'unread']);
+
+/**
+ * Optional per-option decorations shared by both Dropdown variants:
+ * `statusDot` ('idle' | 'running' | 'unread') renders the app's status dot
+ * before the label (also on the trigger for the selected option), `badge` a
+ * compact count pill after it, and `ariaLabel` replaces the option's
+ * accessible name when the visible label alone omits that status.
+ */
+export function optionDecorations(option) {
+  const statusDot = option?.statusDot;
+  const badge = option?.badge;
+  const ariaLabel = option?.ariaLabel;
+  return {
+    statusDot: STATUS_DOTS.has(statusDot) ? statusDot : '',
+    badge:
+      typeof badge === 'number' || (typeof badge === 'string' && badge)
+        ? String(badge)
+        : '',
+    ariaLabel: typeof ariaLabel === 'string' ? ariaLabel : '',
+  };
+}
 
 /**
  * Svelte action: relocate `node` to a portal target (defaults to document.body)
@@ -45,7 +67,8 @@ export function portal(node, target = document.body) {
  * Flips above the trigger when there is little room below, and clamps within
  * the viewport. `reservedHeight` accounts for non-scrolling chrome (e.g. a
  * search header) when sizing the scroll area. Callers may supply a wider
- * `panelWidth` and align its end edge to a compact trigger.
+ * `panelWidth` (or a `minWidth` floor for the trigger width) and align its end
+ * edge to a compact trigger.
  *
  * @returns {{ placement: 'top' | 'bottom', left: number, width: number,
  *             verticalRule: string, optionsMaxHeight: number }}
@@ -56,12 +79,16 @@ export function computePanelPosition(
     reservedHeight = 0,
     contentHeight = null,
     panelWidth = null,
+    minWidth = 0,
     horizontalAlign = 'start',
   } = {},
 ) {
   const rect = triggerElement.getBoundingClientRect();
   const viewportWidth = Math.max(0, window.innerWidth - EDGE_PADDING * 2);
-  const width = Math.min(panelWidth ?? rect.width, viewportWidth);
+  const width = Math.min(
+    Math.max(panelWidth ?? rect.width, minWidth),
+    viewportWidth,
+  );
 
   const availableBelow =
     window.innerHeight - rect.bottom - OFFSET - EDGE_PADDING;

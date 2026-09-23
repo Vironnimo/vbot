@@ -8,8 +8,6 @@ import {
   createAgentsRpcMock,
 } from '../components/__tests__/AgentsView.support.js';
 import {
-  activeAgentTab,
-  agentTabByName,
   App,
   cleanupAppHarness,
   createChatRpcMock,
@@ -27,6 +25,8 @@ import {
   viewSessionButton,
   waitForAssertion,
   waitForCondition,
+  selectPersonalAgent,
+  selectedPersonalAgentName,
 } from './App.support.js';
 
 vi.mock('svelte', async () => {
@@ -168,12 +168,7 @@ describe('App', () => {
     mountedComponent = mount(App, { target: document.body });
     flushSync();
 
-    await waitForAssertion(() => {
-      expect(agentTabByName('Beta')).toBeTruthy();
-    });
-
-    agentTabByName('Beta')?.click();
-    flushSync();
+    await selectPersonalAgent('Beta');
 
     await waitForAssertion(() => {
       expect(localStorage.getItem('vbot.selectedAgentId')).toBe('beta');
@@ -187,7 +182,7 @@ describe('App', () => {
     flushSync();
 
     await waitForAssertion(() => {
-      expect(activeAgentTab()?.textContent).toContain('Beta');
+      expect(selectedPersonalAgentName()).toBe('Beta');
       expect(rpcMock).toHaveBeenCalledWith('chat.history', {
         agent_id: 'beta',
         session_id: 'session-beta',
@@ -772,10 +767,9 @@ describe('App', () => {
     });
 
     // Switch to Beta — override clears, a new entry with selection beta lands.
-    agentTabByName('Beta')?.click();
-    flushSync();
+    await selectPersonalAgent('Beta');
     await waitForAssertion(() => {
-      expect(activeAgentTab()?.textContent).toContain('Beta');
+      expect(selectedPersonalAgentName()).toBe('Beta');
       expect(document.body.textContent).not.toContain('Sub-agent response');
     });
 
@@ -786,7 +780,7 @@ describe('App', () => {
     // on Beta while Alpha's child session was displayed).
     await waitForAssertion(() => {
       expect(document.body.textContent).toContain('Sub-agent response');
-      expect(activeAgentTab()?.textContent).toContain('Alpha');
+      expect(selectedPersonalAgentName()).toBe('Alpha');
     });
   });
 

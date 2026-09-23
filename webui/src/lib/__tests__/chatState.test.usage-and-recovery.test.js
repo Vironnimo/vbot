@@ -9,6 +9,7 @@ import {
   AGENT_ACTIVITY_RUNNING,
   AGENT_ACTIVITY_UNREAD,
   agentActivityStatus,
+  agentUnreadResults,
   applySessionCompletionActivity,
   appendRunEvent,
   createChatState,
@@ -118,6 +119,37 @@ describe('chat state helpers', () => {
     expect(agentActivityStatus(chatState, 'alpha', displayed.key)).toBe(
       AGENT_ACTIVITY_UNREAD,
     );
+  });
+
+  it('counts an Agent unread results with the newest result time, excluding the displayed Session', () => {
+    const chatState = createChatState();
+    const displayed = ensureSessionState(chatState, 'alpha', 'session-shown');
+    const older = ensureSessionState(chatState, 'alpha', 'session-older');
+    const newer = ensureSessionState(chatState, 'alpha', 'session-newer');
+    const withoutRun = ensureSessionState(chatState, 'alpha', 'session-norun');
+    const otherAgent = ensureSessionState(chatState, 'beta', 'session-beta');
+    for (const [sessionState, runId, at] of [
+      [displayed, 'run-shown', '2026-07-20T10:09:00+00:00'],
+      [older, 'run-old', '2026-07-20T10:00:00+00:00'],
+      [newer, 'run-new', '2026-07-20T10:05:00+00:00'],
+      [otherAgent, 'run-beta', '2026-07-20T10:07:00+00:00'],
+    ]) {
+      sessionState.hasUnreadCompletion = true;
+      sessionState.unreadRunId = runId;
+      sessionState.unreadRunAt = at;
+    }
+    // Navigation cannot land on an unread flag without its Run id.
+    withoutRun.hasUnreadCompletion = true;
+
+    expect(agentUnreadResults(chatState, 'alpha', displayed.key)).toEqual({
+      count: 2,
+      latestAt: Date.parse('2026-07-20T10:05:00+00:00'),
+    });
+    expect(agentUnreadResults(chatState, 'alpha').count).toBe(3);
+    expect(agentUnreadResults(chatState, 'gamma')).toEqual({
+      count: 0,
+      latestAt: 0,
+    });
   });
 
   it.each([

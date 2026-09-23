@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { computePanelPosition } from '../dropdownPanel.js';
+import { computePanelPosition, optionDecorations } from '../dropdownPanel.js';
 
 // OFFSET (4) + EDGE_PADDING (8) is the gap the helper subtracts on each side.
 const GAP = 12;
@@ -85,5 +85,39 @@ describe('computePanelPosition', () => {
 
     expect(result.width).toBe(160);
     expect(result.left).toBe(164);
+  });
+
+  it('widens a panel under a narrow trigger to its minimum width', () => {
+    const narrow = triggerAt({ top: 100, bottom: 130, width: 150 });
+    const wide = triggerAt({ top: 100, bottom: 130, width: 300 });
+
+    expect(computePanelPosition(narrow, { minWidth: 240 }).width).toBe(240);
+    expect(computePanelPosition(wide, { minWidth: 240 }).width).toBe(300);
+    window.innerWidth = 200;
+    expect(computePanelPosition(narrow, { minWidth: 240 }).width).toBe(184);
+  });
+});
+
+describe('optionDecorations', () => {
+  it('accepts known status dots, count badges and accessible names only', () => {
+    expect(
+      optionDecorations({
+        statusDot: 'unread',
+        badge: 3,
+        ariaLabel: 'Gamma: 3 unread results',
+      }),
+    ).toEqual({
+      statusDot: 'unread',
+      badge: '3',
+      ariaLabel: 'Gamma: 3 unread results',
+    });
+    expect(
+      optionDecorations({ statusDot: 'blinking', badge: '', ariaLabel: 7 }),
+    ).toEqual({ statusDot: '', badge: '', ariaLabel: '' });
+    expect(optionDecorations(null)).toEqual({
+      statusDot: '',
+      badge: '',
+      ariaLabel: '',
+    });
   });
 });

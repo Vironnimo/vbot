@@ -247,19 +247,46 @@ export function agentActivityStatus(state, agentId, displayedSessionKey = '') {
 }
 
 export function newestUnreadSessionForAgent(state, agentId) {
-  const unreadSessions = Object.values(state?.sessions ?? {}).filter(
+  const unreadSessions = unreadResultSessions(state, agentId);
+  unreadSessions.sort(
+    (left, right) =>
+      unreadResultTimestamp(right) - unreadResultTimestamp(left) ||
+      left.sessionId.localeCompare(right.sessionId),
+  );
+  return unreadSessions[0] ?? null;
+}
+
+// Counts an Agent's Sessions holding an unread result (the Sessions Agent
+// navigation can land on) and the time of the newest one, in epoch
+// milliseconds (0 when unknown). The displayed Session is excluded, like in
+// agentActivityStatus, because its result is being read.
+export function agentUnreadResults(state, agentId, displayedSessionKey = '') {
+  const sessions = unreadResultSessions(state, agentId).filter(
+    (sessionState) => sessionState.key !== displayedSessionKey,
+  );
+  return {
+    count: sessions.length,
+    latestAt: sessions.reduce(
+      (latest, sessionState) =>
+        Math.max(latest, unreadResultTimestamp(sessionState)),
+      0,
+    ),
+  };
+}
+
+function unreadResultSessions(state, agentId) {
+  return Object.values(state?.sessions ?? {}).filter(
     (sessionState) =>
       sessionState.agentId === agentId &&
       sessionState.hasUnreadCompletion &&
       sessionState.unreadRunId,
   );
-  unreadSessions.sort(
-    (left, right) =>
-      activityTimestamp(right.unreadRunAt || right.lastActiveAt) -
-        activityTimestamp(left.unreadRunAt || left.lastActiveAt) ||
-      left.sessionId.localeCompare(right.sessionId),
+}
+
+function unreadResultTimestamp(sessionState) {
+  return activityTimestamp(
+    sessionState.unreadRunAt || sessionState.lastActiveAt,
   );
-  return unreadSessions[0] ?? null;
 }
 
 export function sessionHasTerminalRun(sessionState, runId) {
