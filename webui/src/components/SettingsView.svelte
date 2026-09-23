@@ -690,9 +690,6 @@
       {:else}
         {#if searchActive}
           <header class="settings-page-heading">
-            <div class="settings-page-eyebrow">
-              {t('settings.title', 'Settings')}
-            </div>
             <h2>{t('settings.search.results', 'Search results')}</h2>
             <p role="status">
               {t('settings.search.resultCount', 'Matching topics: {count}', {

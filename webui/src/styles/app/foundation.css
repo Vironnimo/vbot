@@ -56,13 +56,13 @@
   --prompt-content-surface: var(--surface);
   --preview-surface: var(--surface);
   --terminal-surface: #0e0d0b;
-  /* Text levels. Every level meets WCAG AA (4.5:1) on bg, surface, and
-     surface-2; use them for all readable text. `--text-faint` is below AA and
+  /* Text levels. Every level meets WCAG AA (4.5:1) on bg and every surface
+     step, including surface-3 hover/selection; use them for all readable text. `--text-faint` is below AA and
      only for decoration, disabled glyphs, and separators, never for text a
      user must read. */
   --text-hi: #f1ede6;
   --text-med: #b3aa9e;
-  --text-lo: #948a7e;
+  --text-lo: #9d9387;
   --text-faint: #6b635a;
   --accent: #e8870a;
   /* Text and icons placed on a solid accent fill. */
@@ -83,9 +83,12 @@
   --accent-60: color-mix(in srgb, var(--accent) 60%, transparent);
   --accent-pale: var(--accent-12);
   --accent-dim: var(--accent-08);
-  /* The one focus treatment for inputs and interactive controls: a clearly
-     visible ring separated from the control by a background-colored gap. */
-  --focus-ring: 0 0 0 1px var(--bg), 0 0 0 3px var(--accent-60);
+  /* Keyboard focus for controls: a solid accent ring (>= 5:1 on every
+     surface) separated from the control by a background-colored gap. Text
+     entry fields also match focus on click, so they signal focus with an
+     accent border plus the softer field halo instead. */
+  --focus-ring: 0 0 0 1px var(--bg), 0 0 0 3px var(--accent);
+  --field-focus-ring: 0 0 0 3px var(--accent-16);
   --floating-elevation:
     0 0 0 1px rgba(0, 0, 0, 0.2), 0 12px 32px rgba(0, 0, 0, 0.45);
   /* Status colors. Amber (running/warning) is deliberately yellower than the
@@ -126,8 +129,8 @@
   --sidebar-width: 210px;
   --sidebar-collapsed-width: 64px;
   --sidebar-toggle-size: 30px;
-  --sidebar-toggle-height: var(--space-lg);
-  --sidebar-toggle-inset: var(--space-md);
+  /* Phone bottom tab bar: 52px items + 8px padding + 1px top border. */
+  --mobile-tabbar-height: 61px;
   --sidebar-nav-group-gap: var(--space-md);
   --sidebar-nav-group-separator-width: 24px;
   --sidebar-nav-group-separator-opacity: 0.45;
@@ -233,25 +236,6 @@ svg {
 ::selection {
   color: var(--text-hi);
   background: color-mix(in srgb, var(--accent) 32%, transparent);
-}
-
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  border: 2px solid transparent;
-  border-radius: 999px;
-  background: var(--border-2) padding-box;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--text-faint) padding-box;
 }
 
 * {

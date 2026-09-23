@@ -263,7 +263,7 @@
   outline: none;
 }
 .skills-detail:focus-visible {
-  box-shadow: inset 2px 0 var(--accent-40);
+  box-shadow: inset 2px 0 var(--accent);
 }
 .skills-detail-top {
   min-height: 44px;

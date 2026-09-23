@@ -112,12 +112,12 @@
 
   function eyebrowText() {
     if (marker === '$') {
-      return t('skillAutocomplete.eyebrow.skills', 'skills');
+      return t('skillAutocomplete.eyebrow.skills', 'Skills');
     }
 
     return t(
       'skillAutocomplete.eyebrow.commandsAndSkills',
-      'commands & skills',
+      'Commands & skills',
     );
   }
 </script>

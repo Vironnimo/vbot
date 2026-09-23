@@ -157,7 +157,7 @@
   <SaveButton
     class="s-save-button s-save-button--inline"
     {saving}
-    pending={recallAutosave.participant.hasPending()}
+    pending={recallAutosave.participant.hasChanges()}
     onClick={handleManualRecallSettingsSave}
   />
 </div>

@@ -149,6 +149,9 @@ export function createAutosaveParticipant({
 
   return {
     flush,
+    // Reactive when the caller's `hasChanges` reads reactive draft state;
+    // in-flight writes are not tracked here (see hasPending).
+    hasChanges,
     hasPending: () => activeSave !== null || hasChanges(),
     runSave,
   };

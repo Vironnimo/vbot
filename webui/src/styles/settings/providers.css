@@ -64,10 +64,6 @@
   cursor: pointer;
 }
 
-.s-provider-head--toggle:hover .s-row-label {
-  color: var(--text-hi);
-}
-
 .s-provider-head--toggle:hover .s-disclosure-btn.btn-tertiary.btn-icon {
   border-color: var(--text-faint);
   color: var(--text-hi);
@@ -258,7 +254,7 @@
 
 .s-local-context-input:focus-visible {
   border-color: var(--accent);
-  box-shadow: var(--focus-ring);
+  box-shadow: var(--field-focus-ring);
   outline: none;
 }
 

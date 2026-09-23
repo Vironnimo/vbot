@@ -90,7 +90,7 @@
     aria-label={t('fileAutocomplete.label', 'File suggestions')}
   >
     <div class="file-autocomplete__eyebrow">
-      {t('fileAutocomplete.eyebrow', 'files')}
+      {t('fileAutocomplete.eyebrow', 'Files')}
       {#if truncated}
         <span class="file-autocomplete__truncated">
           {t('fileAutocomplete.truncated', 'list truncated — keep typing')}

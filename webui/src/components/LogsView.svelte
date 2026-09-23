@@ -666,8 +666,8 @@
   }
 
   .logs-view__input:focus-visible {
-    border-color: var(--accent-40);
-    box-shadow: var(--focus-ring);
+    border-color: var(--accent);
+    box-shadow: var(--field-focus-ring);
     outline: none;
   }
 

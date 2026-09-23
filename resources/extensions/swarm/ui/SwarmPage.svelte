@@ -718,6 +718,7 @@
             >
               <TextField
                 id="swarm-start-directory"
+                code
                 value={model.runDirectory}
                 disabled={!model.selectedProfile ||
                   model.directoryLoading ||

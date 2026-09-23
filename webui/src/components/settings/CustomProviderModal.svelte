@@ -388,6 +388,7 @@
       >
         <TextField
           id="custom-provider-base-url"
+          code
           value={baseUrl}
           placeholder={t(
             'settings.providers.custom.baseUrlPlaceholder',

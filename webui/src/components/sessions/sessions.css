@@ -379,7 +379,7 @@
 .session-row__edit-input:focus-visible {
   outline: none;
   border-color: var(--accent);
-  box-shadow: var(--focus-ring);
+  box-shadow: var(--field-focus-ring);
 }
 
 .session-row__edit-error {

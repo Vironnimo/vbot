@@ -259,8 +259,8 @@
   }
 
   .access-chips__search:focus-within {
-    border-color: var(--accent-40);
-    box-shadow: var(--focus-ring);
+    border-color: var(--accent);
+    box-shadow: var(--field-focus-ring);
   }
 
   .access-chips__search-input {

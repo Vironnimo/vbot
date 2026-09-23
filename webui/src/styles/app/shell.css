@@ -71,15 +71,6 @@
   display: none;
 }
 
-.app-shell__eyebrow,
-.placeholder-view__status {
-  margin: 0 0 3px;
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  font-weight: 500;
-  line-height: 1.2;
-}
-
 .app-shell__brand h1,
 .logo-text {
   margin: 0;
