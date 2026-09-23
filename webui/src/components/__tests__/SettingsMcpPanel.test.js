@@ -18,7 +18,7 @@ it('limits MCP typography to its panel and portaled dialogs', () => {
     const rules = [...style.sheet.cssRules].filter(
       (rule) => rule.selectorText && rule.style.getPropertyValue('font-size'),
     );
-    for (const tag of ['p', 'h3', 'h4']) {
+    for (const tag of ['p', 'h3', 'h4', 'summary']) {
       const chatText = document.createElement(tag);
       expect(rules.some((rule) => chatText.matches(rule.selectorText))).toBe(
         false,
@@ -33,6 +33,18 @@ it('limits MCP typography to its panel and portaled dialogs', () => {
         );
       }
     }
+    // Layout rules for the MCP dialogs must not reach other dialogs either.
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    const body = document.createElement('div');
+    body.className = 'modal-body';
+    modal.appendChild(body);
+    const layoutRules = [...style.sheet.cssRules].filter(
+      (rule) => rule.selectorText,
+    );
+    expect(layoutRules.some((rule) => body.matches(rule.selectorText))).toBe(
+      false,
+    );
   } finally {
     style.remove();
   }
