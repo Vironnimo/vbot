@@ -59,7 +59,17 @@
 
 .input-area .context-ring__fill {
   color: var(--text-med);
-  transition: stroke-dashoffset 300ms ease;
+  transition:
+    stroke-dashoffset 300ms ease,
+    color 300ms ease;
+}
+
+.input-area .context-ring--high .context-ring__fill {
+  color: var(--amber);
+}
+
+.input-area .context-ring--critical .context-ring__fill {
+  color: var(--red);
 }
 
 /* The ring's hover card on the shared floating card (styles/app/hints.css);
@@ -113,13 +123,98 @@
   background: var(--text-med);
 }
 
-.context-card__details {
-  margin-top: 10px;
-  color: var(--text-med);
+.context-card--high .context-card__meter-fill {
+  background: var(--amber);
+}
+
+.context-card--critical .context-card__meter-fill {
+  background: var(--red);
+}
+
+.context-card__level {
+  margin: 8px 0 0;
   font-size: var(--fs-label-sm);
+  font-weight: 500;
+}
+
+.context-card--high .context-card__level {
+  color: var(--amber);
+}
+
+.context-card--critical .context-card__level {
+  color: var(--red);
+}
+
+/* Breakdown: labelled figures in a right-aligned tabular column; indented
+   sub-rows are shares of the row above, never additions. */
+.context-card__section {
+  margin-top: 12px;
+}
+
+.context-card__section + .context-card__section {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.context-card__section-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 4px;
+  color: var(--text-hi);
+  font-size: var(--fs-label-sm);
+  font-weight: 600;
+}
+
+.context-card__section-meta {
+  color: var(--text-lo);
+  font-weight: 400;
   font-variant-numeric: tabular-nums;
+}
+
+.context-card__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+}
+
+.context-card__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: var(--fs-label-sm);
   line-height: 1.5;
-  white-space: pre-wrap;
+}
+
+.context-card__row dt {
+  min-width: 0;
+  color: var(--text-med);
+}
+
+.context-card__row dd {
+  margin: 0;
+  color: var(--text-hi);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.context-card__row--sub dt {
+  padding-left: 12px;
+  color: var(--text-lo);
+}
+
+.context-card__row--sub dd {
+  color: var(--text-med);
+}
+
+.context-card__note {
+  margin: 4px 0 0;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  line-height: 1.4;
 }
 
 .context-card__footer {

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { init } from '../i18n.js';
 import {
-  formatContextUsageCard,
+  contextUsageCardModel,
   formatTokenUsageTooltip,
 } from '../tokenUsageTooltip.js';
 
@@ -228,41 +228,104 @@ describe('formatTokenUsageTooltip', () => {
   });
 });
 
-describe('formatContextUsageCard', () => {
+describe('contextUsageCardModel', () => {
   beforeEach(() => {
     init('en');
   });
 
-  it('splits the headline from the breakdown of the tooltip text', () => {
+  it('returns the headline and labelled rows with shares as sub-rows', () => {
     const contextUsage = {
       tokens: 155489,
       estimated: true,
       provider_input_tokens: 154731,
       provider_output_tokens: 243,
     };
-    const usage = { input_tokens: 1000, output_tokens: 50 };
+    const usage = {
+      input_tokens: 1000,
+      output_tokens: 50,
+      cache_read_tokens: 800,
+      reasoning_tokens: 20,
+    };
+    const sessionUsage = {
+      measured_turns: 3,
+      input_tokens: 3000,
+      output_tokens: 150,
+      cache_read_tokens: 2400,
+      cache_turns: 3,
+    };
 
-    const card = formatContextUsageCard(contextUsage, usage, null, 262144);
+    const card = contextUsageCardModel(
+      contextUsage,
+      usage,
+      sessionUsage,
+      262144,
+    );
 
     expect(card.summary).toBe('~155,489 / 262,144');
-    expect(card.details).toBe(
-      [
-        '(in 154,731, out 243)',
-        '',
-        'Last turn',
-        'Input: 1,000 tok',
-        'Output: 50 tok',
-      ].join('\n'),
-    );
-    expect([card.summary, card.details].join('\n')).toBe(
-      formatTokenUsageTooltip(contextUsage, usage, null, 262144),
-    );
+    expect(
+      card.sections.map(({ id, title, meta, rows }) => ({
+        id,
+        title,
+        meta,
+        rows: rows.map(
+          (row) => `${row.sub ? '· ' : ''}${row.label}: ${row.value}`,
+        ),
+      })),
+    ).toEqual([
+      {
+        id: 'context',
+        title: '',
+        meta: '',
+        rows: ['Provider input: 154,731', 'Provider output: 243'],
+      },
+      {
+        id: 'last-turn',
+        title: 'Last turn',
+        meta: '',
+        rows: [
+          'Input: 1,000',
+          '· Read from cache: 800 (80%)',
+          '· Uncached: 200',
+          'Output: 50',
+          '· Reasoning: 20',
+        ],
+      },
+      {
+        id: 'session',
+        title: 'Session',
+        meta: '3 measured turns',
+        rows: [
+          'Input: 3,000',
+          '· Read from cache: 2,400 (80%)',
+          'Output: 150',
+          'Avg cache read per turn: 800',
+        ],
+      },
+    ]);
   });
 
-  it('has no headline without a context measurement', () => {
-    expect(formatContextUsageCard(null, null, null, 262144)).toEqual({
+  it('keeps estimation notes with their section', () => {
+    const card = contextUsageCardModel(
+      null,
+      { input_tokens: 10, output_tokens: 2, estimated: true },
+      null,
+      262144,
+    );
+
+    expect(card.sections).toHaveLength(1);
+    expect(card.sections[0].rows.map((row) => row.value)).toEqual([
+      '~10',
+      '~2',
+    ]);
+    expect(card.sections[0].notes).toEqual([
+      'Estimated (provider sent no usage data)',
+    ]);
+  });
+
+  it('has no headline or sections without any measurement', () => {
+    expect(contextUsageCardModel(null, null, null, 262144)).toEqual({
       summary: null,
-      details: '',
+      sections: [],
     });
   });
 });

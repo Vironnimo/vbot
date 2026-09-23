@@ -19,7 +19,7 @@
     matchMentionCandidates,
   } from '$lib/fileMentions.js';
   import { isImeComposing } from '$lib/keyboard.js';
-  import { formatContextUsageCard } from '$lib/tokenUsageTooltip.js';
+  import { contextUsageCardModel } from '$lib/tokenUsageTooltip.js';
   import { createComposerMedia } from './composer/media.svelte.js';
   import { createComposerPicker } from './composer/picker.svelte.js';
   import './composer/composer.css';
@@ -127,7 +127,19 @@
       : CONTEXT_RING_CIRCUMFERENCE * (1 - contextFillRatio),
   );
   let contextCard = $derived(
-    formatContextUsageCard(contextUsage, usage, sessionUsage, contextWindow),
+    contextUsageCardModel(contextUsage, usage, sessionUsage, contextWindow),
+  );
+  // Fill level of the ring and meter. Automatic Compaction defaults to 80% of
+  // the context window, so the ring turns amber shortly before it and red when
+  // the window is nearly exhausted.
+  const CONTEXT_LEVEL_HIGH = 0.7;
+  const CONTEXT_LEVEL_CRITICAL = 0.9;
+  let contextLevel = $derived(
+    contextFillRatio === null || contextFillRatio < CONTEXT_LEVEL_HIGH
+      ? 'normal'
+      : contextFillRatio < CONTEXT_LEVEL_CRITICAL
+        ? 'high'
+        : 'critical',
   );
   let contextPercentLabel = $derived.by(() => {
     if (contextFillRatio === null) {
@@ -824,7 +836,7 @@
       )}
       rows="1"></textarea>
     {#if contextFillRatio !== null}
-      <span class="context-ring">
+      <span class="context-ring context-ring--{contextLevel}">
         <button
           type="button"
           class="context-ring-trigger"
@@ -856,7 +868,7 @@
           </svg>
         </button>
         <div
-          class="floating-card context-card"
+          class="floating-card context-card context-card--{contextLevel}"
           use:floatingHoverCard={{ openOnPress: true }}
         >
           <div class="context-card__header">
@@ -876,9 +888,42 @@
               style:width={`${Math.round(contextFillRatio * 1000) / 10}%`}
             ></span>
           </span>
-          {#if contextCard.details}
-            <div class="context-card__details">{contextCard.details}</div>
+          {#if contextLevel !== 'normal'}
+            <p class="context-card__level">
+              {contextLevel === 'critical'
+                ? t('chat.contextCard.atLimit', 'Context almost full')
+                : t(
+                    'chat.contextCard.nearLimit',
+                    'Approaching automatic Compaction',
+                  )}
+            </p>
           {/if}
+          {#each contextCard.sections as section (section.id)}
+            <section class="context-card__section">
+              {#if section.title}
+                <h3 class="context-card__section-title">
+                  <span>{section.title}</span>
+                  {#if section.meta}<span class="context-card__section-meta"
+                      >{section.meta}</span
+                    >{/if}
+                </h3>
+              {/if}
+              <dl class="context-card__rows">
+                {#each section.rows as row, index (index)}
+                  <div
+                    class="context-card__row"
+                    class:context-card__row--sub={row.sub}
+                  >
+                    <dt>{row.label}</dt>
+                    <dd>{row.value}</dd>
+                  </div>
+                {/each}
+              </dl>
+              {#each section.notes as note (note)}
+                <p class="context-card__note">{note}</p>
+              {/each}
+            </section>
+          {/each}
           {#if onForceCompaction}
             <div class="context-card__footer">
               <Button
