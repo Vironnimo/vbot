@@ -457,10 +457,10 @@ export async function hoveredContextRingTooltip(expectedText) {
   vi.useFakeTimers();
   const anchor = document.body.querySelector('.context-ring');
   anchor.dispatchEvent(new Event('pointerenter'));
-  await vi.advanceTimersByTimeAsync(200);
+  await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
   flushSync();
   const tooltip = document.getElementById('app-tooltip');
-  expect(tooltip.classList.contains('app-tooltip--visible')).toBe(true);
+  expect(tooltip.dataset.floatingOpen).toBe('true');
   const text = tooltip.textContent;
   expect(text).toBe(expectedText);
   anchor.dispatchEvent(new Event('pointerleave'));

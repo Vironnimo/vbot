@@ -933,25 +933,24 @@
               type="button"
               class="attachment-thumb-trigger"
               aria-label={t('chat.attachment.preview', 'Preview attachment')}
-              use:tooltip={t('chat.attachment.preview', 'Preview attachment')}
             >
               <img
                 src={attachment.preview_url}
                 alt={attachment.filename}
                 class="attachment-thumb"
               />
+              <span
+                class="floating-card attachment-hover-preview"
+                aria-hidden="true"
+                use:floatingHoverCard={{ accessible: false }}
+              >
+                <img
+                  src={attachment.preview_url}
+                  alt=""
+                  class="attachment-hover-image"
+                />
+              </span>
             </button>
-            <div
-              class="attachment-hover-preview"
-              aria-hidden="true"
-              use:floatingHoverCard={{ accessible: false }}
-            >
-              <img
-                src={attachment.preview_url}
-                alt=""
-                class="attachment-hover-image"
-              />
-            </div>
           {:else}
             <span class="attachment-file-icon" aria-hidden="true">
               <svg viewBox="0 0 16 16">

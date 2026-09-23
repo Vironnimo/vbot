@@ -483,11 +483,9 @@ describe('AppShell wakeword mic indicator', () => {
       .dispatchEvent(new MouseEvent('pointerenter', { bubbles: false }));
 
     await vi.waitFor(() =>
-      expect(
-        document
-          .querySelector('#app-tooltip')
-          .classList.contains('app-tooltip--visible'),
-      ).toBe(true),
+      expect(document.querySelector('#app-tooltip')?.dataset.floatingOpen).toBe(
+        'true',
+      ),
     );
     expect(document.querySelector('#app-tooltip').textContent).toBe(
       'Listening for wakeword',
@@ -551,11 +549,9 @@ describe('AppShell sidebar status icons', () => {
       .dispatchEvent(new MouseEvent('pointerenter', { bubbles: false }));
 
     await vi.waitFor(() =>
-      expect(
-        document
-          .querySelector('#app-tooltip')
-          .classList.contains('app-tooltip--visible'),
-      ).toBe(true),
+      expect(document.querySelector('#app-tooltip')?.dataset.floatingOpen).toBe(
+        'true',
+      ),
     );
     expect(document.querySelector('#app-tooltip').textContent).toBe(
       'Connected',

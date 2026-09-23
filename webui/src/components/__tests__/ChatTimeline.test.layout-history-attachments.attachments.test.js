@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   flushSync,
   mount,
@@ -7,6 +7,7 @@ import {
   setupTimelineLayoutSuite,
 } from './ChatTimeline.layout-history-attachments.support.js';
 import { createChatState, ensureSessionState } from '../../lib/chatState.js';
+import { HOVER_CARD_SHOW_DELAY_MS } from '../../lib/tooltip.js';
 
 describe('ChatTimeline', () => {
   const suite = setupTimelineLayoutSuite();
@@ -58,6 +59,57 @@ describe('ChatTimeline', () => {
     expect(imageLink.getAttribute('href')).toBe(
       '/api/attachments/image-attachment-id',
     );
+  });
+
+  it('previews an image on pointer hover while a tap follows the link', () => {
+    vi.useFakeTimers();
+    try {
+      const sessionState = ensureSessionState(
+        createChatState(),
+        'alpha',
+        'session-user-media-preview',
+      );
+      sessionState.messages = [
+        {
+          id: 'user-media-preview',
+          role: 'user',
+          content: [
+            {
+              type: 'media',
+              attachment_id: 'preview-attachment-id',
+              filename: 'diagram.png',
+              media_type: 'image/png',
+              image_reference: 1,
+            },
+          ],
+          timestamp: '2026-05-10T12:00:00Z',
+        },
+      ];
+      suite.mountedComponent = mount(ChatTimeline, {
+        target: document.body,
+        props: { sessionState, agentName: 'Alpha' },
+      });
+      flushSync();
+
+      const link = document.querySelector('.inline-attachment');
+      const preview = document.querySelector('.attachment-hover-preview');
+      expect(preview.parentElement).toBe(document.body);
+      expect(preview.getAttribute('aria-hidden')).toBe('true');
+
+      const tap = new Event('pointerdown', { bubbles: true });
+      Object.defineProperty(tap, 'pointerType', { value: 'touch' });
+      link.dispatchEvent(tap);
+      vi.advanceTimersByTime(HOVER_CARD_SHOW_DELAY_MS);
+      expect(preview.dataset.floatingOpen).toBe('false');
+
+      link.dispatchEvent(new Event('pointerenter'));
+      vi.advanceTimersByTime(HOVER_CARD_SHOW_DELAY_MS);
+      expect(preview.dataset.floatingOpen).toBe('true');
+      expect(preview.getAttribute('aria-hidden')).toBe('true');
+      expect(link.hasAttribute('aria-describedby')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('renders file blocks as attachment links without image previews', () => {

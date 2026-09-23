@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
+import { TOOLTIP_SHOW_DELAY_MS } from '../../lib/tooltip.js';
 import {
   flushSync,
   mount,
@@ -37,17 +38,21 @@ describe('ChatComposer', () => {
         expect(anchor.getAttribute('role')).toBe('img');
         expect(anchor.tabIndex).toBe(0);
         expect(anchor.querySelector('button')).toBeNull();
-        anchor.dispatchEvent(new Event(eventType));
-        await vi.advanceTimersByTimeAsync(200);
+        if (eventType === 'focus') {
+          anchor.focus();
+        } else {
+          anchor.dispatchEvent(new Event(eventType));
+        }
+        await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
         const tooltip = document.querySelector('#app-tooltip');
-        expect(tooltip.classList.contains('app-tooltip--visible')).toBe(true);
+        expect(tooltip.dataset.floatingOpen).toBe('true');
         expect(anchor.getAttribute('aria-describedby')).toBe(tooltip.id);
         expect(tooltip.textContent).toContain('4,000');
         expect(tooltip.querySelector('button')).toBeNull();
         anchor.click();
         expect(document.querySelector('.context-hover-card')).toBeNull();
         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-        expect(tooltip.classList.contains('app-tooltip--visible')).toBe(false);
+        expect(tooltip.dataset.floatingOpen).toBe('false');
       } finally {
         vi.useRealTimers();
       }

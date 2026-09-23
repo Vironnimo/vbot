@@ -3,11 +3,7 @@
   import { t } from '$lib/i18n.js';
   import { formatMentionToken } from '$lib/fileMentions.js';
   import { isImeComposing } from '$lib/keyboard.js';
-  import {
-    INTENTIONAL_HOVER_SHOW_DELAY_MS,
-    floatingHoverCard,
-    tooltip,
-  } from '$lib/tooltip.js';
+  import { floatingHoverCard, tooltip } from '$lib/tooltip.js';
   import { linkifiedTextSegments } from '$lib/markdown.js';
   import {
     attachmentFilename,
@@ -60,6 +56,7 @@
   import ChatCompactionSeparator from './ChatCompactionSeparator.svelte';
   import MarkdownContent from './MarkdownContent.svelte';
   import ChatReasoning from './ChatReasoning.svelte';
+  import ToolPrimaryLine from './ToolPrimaryLine.svelte';
 
   let {
     item,
@@ -240,40 +237,6 @@
   </div>
 {/snippet}
 
-{#snippet toolArgumentLine(primary)}
-  <span class="te-arg te-primary">
-    <span class="te-primary-values">
-      {#each primary as part, index (`${part.kind}:${index}`)}
-        {#if index > 0}<span class="te-primary-separator">·</span>{/if}
-        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-        <span
-          class="te-arg-value te-primary-value te-primary-value--{part.truncate}"
-          tabindex={part.tooltipText ? 0 : undefined}
-          use:tooltip={part.copyable ? '' : part.tooltipText}
-        >
-          {part.text}{#if part.copyable && part.tooltipText}
-            <div
-              class="tool-primary-hover-card"
-              use:floatingHoverCard={{
-                showDelayMs: INTENTIONAL_HOVER_SHOW_DELAY_MS,
-              }}
-            >
-              <span class="tool-primary-hover-card__value">{part.fullText}</span
-              >
-              <CopyButton
-                text={part.fullText}
-                class="tool-primary-hover-card__copy"
-                label={t('chat.copyToolValue', 'Copy full value')}
-                copiedLabel={t('chat.toolValueCopied', 'Full value copied')}
-              />
-            </div>
-          {/if}</span
-        >
-      {/each}
-    </span>
-  </span>
-{/snippet}
-
 {#snippet linkifiedText(text)}
   {#each linkifiedTextSegments(text) as segment, segmentIndex (segmentIndex)}
     {#if segment.href}
@@ -295,12 +258,13 @@
     {@const mediaUrl = attachmentUrlForBlock(block)}
     {#if mediaUrl}
       <div class="attachment-item attachment-item-image inline-attachment-card">
+        <!-- The enlarged preview is a decorative pointer/keyboard aid; a tap
+             follows the link instead of opening it. -->
         <a
           class="inline-attachment"
           href={mediaUrl}
           target="_blank"
           rel="noopener noreferrer"
-          use:tooltip={attachmentFilename(block)}
           aria-label={attachmentPreviewLabel(block)}
         >
           <img
@@ -309,14 +273,14 @@
             alt={attachmentPreviewLabel(block)}
             loading="lazy"
           />
+          <span
+            class="floating-card attachment-hover-preview"
+            aria-hidden="true"
+            use:floatingHoverCard={{ accessible: false, touch: false }}
+          >
+            <img class="attachment-hover-image" src={mediaUrl} alt="" />
+          </span>
         </a>
-        <div
-          class="attachment-hover-preview"
-          aria-hidden="true"
-          use:floatingHoverCard={{ accessible: false }}
-        >
-          <img class="attachment-hover-image" src={mediaUrl} alt="" />
-        </div>
         <div class="attachment-meta">
           <span class="attachment-name" use:tooltip={attachmentFilename(block)}
             >{imageReferenceLabel(block)}</span
@@ -573,7 +537,7 @@
             >
             <span class="te-fn">{toolNameForEvent(item.event)}</span>
             {#if eventPresentation.primary.length > 0}
-              {@render toolArgumentLine(eventPresentation.primary)}
+              <ToolPrimaryLine primary={eventPresentation.primary} />
             {/if}
             {#each eventPresentation.facts as fact, index (`${fact.kind}:${index}`)}
               <span
