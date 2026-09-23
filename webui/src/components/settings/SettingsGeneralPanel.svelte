@@ -62,6 +62,7 @@
       baselineTimezone = nextTimezone;
     });
   });
+  let saving = $state(false);
   async function manualSave() {
     const pending = autosave.participant.hasPending();
     if (await autosave.participant.runSave('manual'))
@@ -82,6 +83,7 @@
         : keepAwakeValue !== (settings?.general?.keep_awake === true),
     save: async () => {
       onError('');
+      saving = true;
       try {
         const server =
           page === 'preferences'
@@ -94,6 +96,8 @@
           `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
         );
         return false;
+      } finally {
+        saving = false;
       }
     },
   });
@@ -352,7 +356,8 @@
 <div class="s-footer">
   <SaveButton
     class="s-save-button s-save-button--inline"
-    pending={autosave.participant.hasPending()}
+    {saving}
+    pending={autosave.participant.hasChanges()}
     onClick={manualSave}
   />
 </div>

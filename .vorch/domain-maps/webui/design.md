@@ -26,11 +26,11 @@ The current palette is a warm, low-chroma graphite with a single orange accent. 
 | Main menu and Secondary panes | `--secondary-surface`, `#1A1814` |
 | Surface steps | `--surface`, `--surface-2`, `--surface-3`: `#1E1B17`, `#26231E`, `#302C26` |
 | Structural and control borders | `--border`, `--border-2`: `#2E2A25`, `#423C35` |
-| Text levels | `--text-hi`, `--text-med`, `--text-lo`: `#F1EDE6`, `#B3AA9E`, `#948A7E` (all WCAG AA on bg/surface/surface-2); `--text-faint` `#6B635A` only for decoration, separators, and disabled glyphs |
+| Text levels | `--text-hi`, `--text-med`, `--text-lo`: `#F1EDE6`, `#B3AA9E`, `#9D9387` (all WCAG AA on bg and every surface step, including `--surface-3`); `--text-faint` `#6B635A` only for decoration, separators, and disabled glyphs |
 | Interaction accent | `--accent`, `#E8870A`, with `color-mix` opacity steps and `--on-accent` for text on a solid accent fill |
-| Status colors | Green for success, amber (`#E5B53E`, deliberately yellower than the accent) for running/warning, red for failure/destructive actions, blue for unread Chat results and neutral data series; each has a `-dim` tint token |
+| Status colors | Green for success, amber (`#E5B53E`, deliberately yellower than the accent) for running/warning/recording, red for failure/destructive actions, blue for info notices/badges/toasts, unread Chat results and neutral data series; each has a `-dim` tint token |
 
-The accent is reserved for the current selection (a 2-3px rail or underline, or the active icon), primary actions, focus, and genuine links. Selected rows and segments use `--surface-3` with `--text-hi`; hover on quiet controls uses a neutral surface. Status tints use tokens or `color-mix`, never raw literals.
+The accent is reserved for the current selection (a 2-3px rail or underline, or the active icon), primary actions, focus, and genuine links. Keyboard focus on controls is a solid accent ring (`--focus-ring`); text-entry fields, which also match focus on click, use an accent border with the softer `--field-focus-ring` halo, and the Chat composer an accent border only. Selected rows and segments use `--surface-3` with `--text-hi`; hover on quiet controls uses a neutral surface. Status tints use tokens or `color-mix`, never raw literals.
 
 Semantic aliases allow controls to be restyled independently: `--field-surface` currently uses `surface-2`; `--composer-surface`, `--prompt-content-surface`, and `--preview-surface` use `surface`; `--prompt-header-surface` uses `surface-2`; `--terminal-surface` is `#0E0D0B`. Changing a semantic role has a narrower effect than changing the underlying shared surface token. Startup background continuity across the HTML entrypoint, CSS, and Desktop is an engineering concern recorded in the parent map.
 

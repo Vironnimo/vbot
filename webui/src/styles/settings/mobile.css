@@ -109,6 +109,12 @@
     width: 100%;
   }
 
+  .s-disclosure-btn.btn-tertiary.btn-icon {
+    width: 40px;
+    height: 40px;
+    min-height: 40px;
+  }
+
   .s-row-actions--channel-header {
     justify-content: flex-start;
   }

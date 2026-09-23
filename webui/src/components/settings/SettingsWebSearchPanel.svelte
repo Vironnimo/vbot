@@ -314,7 +314,7 @@
   <SaveButton
     class="s-save-button s-save-button--inline"
     {saving}
-    pending={webSearchAutosave.participant.hasPending()}
+    pending={webSearchAutosave.participant.hasChanges()}
     onClick={handleManualWebSearchSettingsSave}
   />
 </div>

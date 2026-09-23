@@ -764,6 +764,7 @@
                         {/snippet}
                         <TextField
                           id="cron-job-expression"
+                          code
                           value={editor.formValues.cron_expression}
                           placeholder={t(
                             'cron.form.cronExpressionPlaceholder',

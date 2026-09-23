@@ -4,7 +4,8 @@
   // and the read-only value-box presentation. It uses the callback-prop pattern
   // (`value` in, `onInput(next, event)` out) rather than `bind:` so it follows
   // the same convention as the other primitives. Placeholder/label text arrives
-  // already translated.
+  // already translated. `code` sets the value in the monospace code face for
+  // code-like input: paths, commands, URLs, and expressions.
 
   const noop = () => {};
 
@@ -15,6 +16,7 @@
     variant = 'default',
     readonly = false,
     invalid = false,
+    code = false,
     disabled = false,
     inputmode = undefined,
     placeholder = '',
@@ -30,7 +32,12 @@
 
   let variantClass = $derived(VARIANT_CLASS[variant] ?? 's-input');
   let inputClass = $derived(
-    [variantClass, invalid ? 's-input--invalid' : '', className]
+    [
+      variantClass,
+      invalid ? 's-input--invalid' : '',
+      code ? 's-input--code' : '',
+      className,
+    ]
       .filter(Boolean)
       .join(' '),
   );

@@ -49,11 +49,6 @@
 .settings-page-heading {
   margin: 0 0 28px;
 }
-.settings-page-eyebrow {
-  color: var(--text-med);
-  font-size: var(--fs-body-sm);
-  margin-bottom: 8px;
-}
 .settings-page-heading h2 {
   margin: 0;
   color: var(--text-hi);

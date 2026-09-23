@@ -630,7 +630,10 @@
         <div
           class="s-provider-head s-provider-head--toggle"
           onclick={(event) => {
-            if (!event.target.closest('button, a, input, select, textarea')) {
+            if (
+              !event.target.closest('button, a, input, select, textarea') &&
+              !window.getSelection()?.toString()
+            ) {
               toggleProviderDetails(provider);
             }
           }}

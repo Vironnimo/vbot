@@ -2,7 +2,7 @@
   import { t } from '$lib/i18n.js';
   import Button from './ui/Button.svelte';
   import { tooltip } from '$lib/tooltip.js';
-  import { onMount } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import {
     CONNECTION_STATUS_CONNECTED,
     CONNECTION_STATUS_RECONNECTING,
@@ -50,8 +50,12 @@
     'calendar',
   ]);
 
+  const MOBILE_NAV_MEDIA_QUERY = '(max-width: 640px)';
+
   let sidebarCollapsed = $state(false);
   let mobileNavOpen = $state(false);
+  let navigationElement = $state(null);
+  let moreButton = $state(null);
 
   const activeInMobileSheet = $derived(
     Boolean(activeViewId) && !MOBILE_PRIMARY_VIEW_IDS.has(activeViewId),
@@ -82,13 +86,36 @@
     }
   };
 
+  // The More sheet moves focus to the current destination (or the first one)
+  // when it opens and returns it to More when dismissed from the keyboard.
+  const toggleMobileNav = async () => {
+    mobileNavOpen = !mobileNavOpen;
+    if (!mobileNavOpen) return;
+    await tick();
+    const target =
+      navigationElement?.querySelector(
+        '.app-shell__nav-item[aria-current="page"]',
+      ) ?? navigationElement?.querySelector('.app-shell__nav-item');
+    target?.focus();
+  };
+
   const handleWindowKeydown = (event) => {
-    if (mobileNavOpen && event.key === 'Escape') {
+    // A Desktop context menu sits above everything; let it consume Escape first.
+    if (mobileNavOpen && event.key === 'Escape' && !menu.contextMenu) {
       mobileNavOpen = false;
+      moreButton?.focus();
       return;
     }
     menu.handleWindowKeydown(event);
   };
+
+  // Any navigation - including history and deep links - dismisses the sheet.
+  $effect(() => {
+    void activeViewId;
+    untrack(() => {
+      mobileNavOpen = false;
+    });
+  });
 
   // The sidebar groups navigation by usage cadence. Order and membership come
   // from each item's `section` field (set in App.svelte); a group with no
@@ -286,8 +313,21 @@
       if (menu.contextMenu) menu.closeContextMenu();
     };
     window.addEventListener('scroll', closeOnCapturedScroll, true);
-    return () =>
+
+    // Leaving the phone layout while the sheet is open must not leave hidden
+    // state behind (an inert content area or a swallowed Escape).
+    const mobileQuery =
+      typeof window.matchMedia === 'function'
+        ? window.matchMedia(MOBILE_NAV_MEDIA_QUERY)
+        : null;
+    const closeOutsideMobile = (event) => {
+      if (!event.matches) mobileNavOpen = false;
+    };
+    mobileQuery?.addEventListener?.('change', closeOutsideMobile);
+    return () => {
       window.removeEventListener('scroll', closeOnCapturedScroll, true);
+      mobileQuery?.removeEventListener?.('change', closeOutsideMobile);
+    };
   });
 </script>
 
@@ -350,7 +390,7 @@
     {/if}
 
     <nav
-      id="app-shell-navigation"
+      bind:this={navigationElement}
       class="app-shell__navigation"
       aria-label={t('navigation.sections', 'Sections')}
     >
@@ -443,12 +483,12 @@
         </div>
       {/each}
       <button
+        bind:this={moreButton}
         class:app-shell__nav-more--active={activeInMobileSheet}
         class="app-shell__nav-more"
         type="button"
         aria-expanded={mobileNavOpen}
-        aria-controls="app-shell-navigation"
-        onclick={() => (mobileNavOpen = !mobileNavOpen)}
+        onclick={toggleMobileNav}
       >
         <svg
           class="app-shell__nav-icon"
@@ -514,7 +554,10 @@
     </div>
   </aside>
 
-  <main class="app-shell__content" inert={serverUnavailable ? true : undefined}>
+  <main
+    class="app-shell__content"
+    inert={serverUnavailable || mobileNavOpen ? true : undefined}
+  >
     {@render children?.()}
   </main>
 
@@ -648,8 +691,7 @@
     border: none;
     background: none;
     color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--fs-label-sm);
     text-align: left;
     cursor: pointer;
     transition: color 0.15s;
@@ -685,7 +727,7 @@
 
   .mic-icon--processing {
     animation: mic-spin 1s linear infinite;
-    color: var(--accent);
+    color: var(--amber);
   }
 
   .mic-icon--warning {

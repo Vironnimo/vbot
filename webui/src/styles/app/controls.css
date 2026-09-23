@@ -156,10 +156,12 @@
   background: color-mix(in srgb, var(--red) 7%, transparent);
 }
 
+/* A live capture (recording) uses the running-state color, like the other
+   recording indicators. */
 .btn-icon.btn-icon--active {
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  color: var(--accent);
-  background: var(--accent-10);
+  border-color: color-mix(in srgb, var(--amber) 45%, transparent);
+  color: var(--amber);
+  background: var(--amber-dim);
 }
 
 .btn-secondary:disabled:hover {
@@ -213,11 +215,19 @@
 .agents-view input:focus,
 .agents-view textarea:focus {
   border-color: var(--accent);
-  box-shadow: var(--focus-ring);
+  box-shadow: var(--field-focus-ring);
 }
 
 /* Invalid field: red border wins over the focus glow, matching the previous
    agents-view__invalid treatment. */
+/* Code-like values (paths, commands, URLs, expressions); two classes so it
+   outranks the `.agents-view input` safety net. */
+.s-input.s-input--code,
+.modal-input.s-input--code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-body);
+}
+
 .s-input--invalid {
   border-color: var(--red) !important;
 }
@@ -247,7 +257,7 @@
 
 .text-area:focus-visible {
   border-color: var(--accent);
-  box-shadow: var(--focus-ring);
+  box-shadow: var(--field-focus-ring);
 }
 
 .text-area:disabled {
@@ -268,7 +278,7 @@
 .text-area--inset:focus-visible {
   box-shadow:
     inset 0 0 0 1px var(--accent-40),
-    var(--focus-ring);
+    var(--field-focus-ring);
 }
 
 .text-area--code {
@@ -317,10 +327,10 @@
     box-shadow 150ms ease;
 }
 
-/* The composer holds focus most of the time; a calm border shift marks it
-   without a permanent glowing ring around the main work surface. */
+/* The composer holds focus most of the time: an accent border marks it
+   clearly without a permanent glowing ring around the main work surface. */
 .input-wrap:focus-within {
-  border-color: var(--text-faint);
+  border-color: var(--accent-60);
 }
 
 .msg-input,
@@ -398,8 +408,8 @@ textarea::placeholder {
 }
 
 .chip.info {
-  color: var(--accent);
-  background: var(--accent-dim);
+  color: var(--blue);
+  background: var(--blue-dim);
 }
 
 .chip.error {
@@ -438,9 +448,9 @@ textarea::placeholder {
 }
 
 .badge--info {
-  border-color: var(--accent-30);
-  background: var(--accent-08);
-  color: var(--accent);
+  border-color: color-mix(in srgb, var(--blue) 30%, transparent);
+  background: color-mix(in srgb, var(--blue) 8%, transparent);
+  color: var(--blue);
 }
 
 .badge--success {
@@ -492,8 +502,8 @@ textarea::placeholder {
 }
 
 .banner--info {
-  border-left-color: var(--accent);
-  background: var(--accent-08);
+  border-left-color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 8%, transparent);
 }
 
 .banner--success {
@@ -750,7 +760,7 @@ textarea::placeholder {
 .dropdown-trigger:focus-visible,
 .s-dropdown-trigger:focus-visible,
 .s-dropdown-search input:focus-visible {
-  box-shadow: var(--dropdown-focus-ring);
+  box-shadow: var(--field-focus-ring);
 }
 
 .dropdown-option.selected,
@@ -966,7 +976,7 @@ textarea::placeholder {
 }
 
 .form-field__required {
-  color: var(--accent);
+  color: var(--text-lo);
 }
 
 .form-field__help {

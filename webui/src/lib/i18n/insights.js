@@ -477,7 +477,6 @@ export default Object.freeze({
   'statistics.limits.deleteHistoryTitle': 'Delete limit history?',
   'statistics.limits.estimatedShort': 'Estimated',
   'statistics.limits.estimatedTokens': 'Estimated tokens',
-  'statistics.limits.flightRecorder': 'Subscription flight recorder',
   'statistics.limits.gap': 'Data gap',
   'statistics.limits.historyClearError': 'Limit history could not be deleted.',
   'statistics.limits.historyCleared': '{count} historical snapshots deleted.',

@@ -209,7 +209,7 @@
   <SaveButton
     class="s-save-button s-save-button--inline"
     {saving}
-    pending={subAgentsAutosave.participant.hasPending()}
+    pending={subAgentsAutosave.participant.hasChanges()}
     onClick={handleManualSubAgentSettingsSave}
   />
 </div>

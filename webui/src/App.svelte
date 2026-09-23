@@ -914,7 +914,7 @@
     gap: 14px;
     padding: 8px 20px;
     border-width: 0 0 1px 3px;
-    border-color: var(--border) var(--border) var(--border) var(--accent);
+    border-color: var(--border) var(--border) var(--border) var(--blue);
     border-radius: 0;
     background: var(--surface);
   }

@@ -83,7 +83,7 @@
 }
 
 .secondary-list__item:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--accent-60);
+  box-shadow: inset 0 0 0 2px var(--accent);
   outline: none;
 }
 
@@ -309,7 +309,7 @@
 }
 
 .toast.info {
-  border-left: 3px solid var(--accent);
+  border-left: 3px solid var(--blue);
 }
 
 .toast-body {

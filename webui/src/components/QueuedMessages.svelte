@@ -291,9 +291,9 @@
     resize: vertical;
   }
   .queued-messages__editor:focus {
-    border-color: var(--accent-40);
+    border-color: var(--accent);
     outline: none;
-    box-shadow: var(--focus-ring);
+    box-shadow: var(--field-focus-ring);
   }
   .queued-messages__error {
     margin: 0;

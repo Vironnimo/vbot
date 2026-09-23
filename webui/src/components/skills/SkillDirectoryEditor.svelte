@@ -169,6 +169,7 @@
 
   <div class="skills-directory-add" bind:this={addElement}>
     <TextField
+      code
       value={newSkillDirectory}
       onInput={(next) => (newSkillDirectory = next)}
       placeholder={t('settings.skills.pathPlaceholder', 'C:/path/to/skills')}

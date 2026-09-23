@@ -225,7 +225,7 @@
   }
   .tool-catalog-search input:focus-visible {
     outline: none;
-    box-shadow: var(--focus-ring);
+    box-shadow: var(--field-focus-ring);
   }
   .tool-catalog-summary {
     color: var(--text-med);
