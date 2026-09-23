@@ -1,9 +1,10 @@
-// Composes the context-ring hover text: a compact context summary
+// Composes the context usage text: a compact context summary
 // ("tokens / contextWindow" plus a provider in/out line), a "Last turn"
 // block that splits the input into its cache shares, and a whole-session
-// block with the session cache hit rate. Rendered by the shared quick
-// tooltip (lib/tooltip.js), which keeps line breaks, so structure is
-// expressed with line breaks and middot-indented sub-lines.
+// block with the session cache hit rate. Rendered with preserved line breaks
+// by the Chat context ring's hover card and the shared quick tooltip (Swarm
+// Activity), so structure is expressed with line breaks and middot-indented
+// sub-lines.
 //
 // The cache lines matter for spotting prompt-cache breaks: canonical
 // `input_tokens` already contains the cached tokens, so the sub-lines are
@@ -27,6 +28,35 @@ export function formatTokenUsageTooltip(
   return sections.length > 0
     ? sections.map((section) => section.join('\n')).join('\n\n')
     : undefined;
+}
+
+/**
+ * The same usage text split for the context ring's card: `summary` is the
+ * "tokens / contextWindow" headline (null without a context measurement) and
+ * `details` the remaining lines and sections in the tooltip's line format.
+ */
+export function formatContextUsageCard(
+  contextUsage,
+  usage,
+  sessionUsage,
+  contextWindow,
+) {
+  const numberFormat = new Intl.NumberFormat(activeLocaleTag());
+  const format = (value) => numberFormat.format(value);
+  const [summary = null, ...contextDetails] = contextUsageLines(
+    contextUsage,
+    contextWindow,
+    format,
+  );
+  const sections = [
+    contextDetails,
+    usage ? lastTurnLines(usage, format) : [],
+    sessionUsageLines(sessionUsage, format),
+  ].filter((section) => section.length > 0);
+  return {
+    summary,
+    details: sections.map((section) => section.join('\n')).join('\n\n'),
+  };
 }
 
 function contextUsageLines(contextUsage, contextWindow, format) {

@@ -31,6 +31,7 @@ export {
   removeQueuedMessage,
   isSessionEmpty,
   isRunActive,
+  contextCompactionState,
   resetStaleRun,
 } from './chatState/sessionState.js';
 export {

@@ -622,6 +622,7 @@ function normalizeHoverCardOptions(value) {
   return {
     accessible: value?.accessible !== false,
     touch: value?.touch !== false,
+    openOnPress: value?.openOnPress === true,
     showDelayMs:
       Number.isFinite(showDelayMs) && showDelayMs >= 0
         ? showDelayMs
@@ -642,6 +643,9 @@ function normalizeHoverCardOptions(value) {
  *   with controls get no tooltip role (a tooltip must not be interactive).
  * - `touch: false` ignores taps, so a tap performs the anchor's own action
  *   (an attachment link) instead of opening a preview.
+ * - `openOnPress: true` opens the card at once on a mouse press, for an
+ *   anchor whose only purpose is revealing the card (the context ring);
+ *   otherwise a press belongs to the anchor's own control.
  */
 export function floatingHoverCard(node, options = {}) {
   const anchor = node.parentElement;
@@ -656,6 +660,10 @@ export function floatingHoverCard(node, options = {}) {
   let returnFocusTarget = null;
   let restoringFocus = false;
   let open = false;
+  // Where the pointer rests: focus leaving while the pointer is still on the
+  // anchor or card (e.g. a control disabling itself) must not close it.
+  let anchorHovered = false;
+  let cardHovered = false;
   const managedRole = !node.hasAttribute('role');
   const cardId = node.id || `floating-hover-card-${++hoverCardSequence}`;
   const portalAction = portal(node);
@@ -777,6 +785,7 @@ export function floatingHoverCard(node, options = {}) {
     }
     const focusWasInside = isInside(node, document.activeElement);
     open = false;
+    cardHovered = false;
     if (focusWasInside) {
       focusAnchor();
     }
@@ -813,6 +822,7 @@ export function floatingHoverCard(node, options = {}) {
     if (event.pointerType === 'touch') {
       return;
     }
+    anchorHovered = true;
     cancelScheduledClose();
     if (open) {
       return;
@@ -832,15 +842,34 @@ export function floatingHoverCard(node, options = {}) {
     if (event.pointerType === 'touch') {
       return;
     }
+    anchorHovered = false;
     cancelScheduledShow();
+    schedulePointerClose(event);
+  }
+
+  function onCardPointerEnter(event) {
+    if (event.pointerType !== 'touch') {
+      cardHovered = true;
+    }
+    cancelScheduledClose();
+  }
+
+  function onCardPointerLeave(event) {
+    if (event.pointerType !== 'touch') {
+      cardHovered = false;
+    }
     schedulePointerClose(event);
   }
 
   function onAnchorPointerDown(event) {
     if (event.pointerType !== 'touch') {
       // Pressing the anchor activates its own control; that wins over a
-      // pending hover open.
-      cancelScheduledShow();
+      // pending hover open unless revealing the card is the anchor's purpose.
+      if (currentOptions.openOnPress) {
+        show();
+      } else {
+        cancelScheduledShow();
+      }
       return;
     }
     if (!currentOptions.touch) {
@@ -867,6 +896,8 @@ export function floatingHoverCard(node, options = {}) {
 
   function onFocusOut(event) {
     if (
+      anchorHovered ||
+      cardHovered ||
       isInside(anchor, event.relatedTarget) ||
       isInside(node, event.relatedTarget)
     ) {
@@ -926,8 +957,8 @@ export function floatingHoverCard(node, options = {}) {
   anchor.addEventListener('focusin', onAnchorFocusIn);
   anchor.addEventListener('focusout', onFocusOut);
   anchor.addEventListener('keydown', onAnchorKeydown);
-  node.addEventListener('pointerenter', cancelScheduledClose);
-  node.addEventListener('pointerleave', schedulePointerClose);
+  node.addEventListener('pointerenter', onCardPointerEnter);
+  node.addEventListener('pointerleave', onCardPointerLeave);
   node.addEventListener('focusin', cancelScheduledClose);
   node.addEventListener('focusout', onFocusOut);
   node.addEventListener('keydown', onCardKeydown);
@@ -948,8 +979,8 @@ export function floatingHoverCard(node, options = {}) {
       anchor.removeEventListener('focusin', onAnchorFocusIn);
       anchor.removeEventListener('focusout', onFocusOut);
       anchor.removeEventListener('keydown', onAnchorKeydown);
-      node.removeEventListener('pointerenter', cancelScheduledClose);
-      node.removeEventListener('pointerleave', schedulePointerClose);
+      node.removeEventListener('pointerenter', onCardPointerEnter);
+      node.removeEventListener('pointerleave', onCardPointerLeave);
       node.removeEventListener('focusin', cancelScheduledClose);
       node.removeEventListener('focusout', onFocusOut);
       node.removeEventListener('keydown', onCardKeydown);
