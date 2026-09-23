@@ -267,7 +267,7 @@
   <SaveButton
     class="s-save-button s-save-button--inline"
     {saving}
-    pending={appearanceAutosave.participant.hasPending()}
+    pending={appearanceAutosave.participant.hasChanges()}
     onClick={handleManualSave}
   />
 </div>

@@ -33,7 +33,22 @@
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
   gap: var(--space-md);
-  align-items: start;
+}
+/* Side by side, the token trend shares the row height of the coverage summary:
+   its chart (or empty state) grows into that height instead of leaving a gap
+   below a short card. */
+@media (min-width: 961px) {
+  .stats-view .stats-dashboard .stats-trend {
+    display: flex;
+    flex-direction: column;
+  }
+  .stats-view .stats-dashboard .stats-trend .stats-activity {
+    flex: 1;
+    grid-template-rows: minmax(180px, 1fr) auto;
+  }
+  .stats-view .stats-dashboard .stats-trend .empty-state {
+    flex: 1;
+  }
 }
 .stats-view .stats-inventory {
   display: flex;
@@ -98,16 +113,6 @@
 .stats-view .stats-grid--three {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
-.stats-view .stats-grid--hero .stats-card {
-  padding: var(--space-lg);
-  background: var(--surface);
-  border-radius: var(--r-lg);
-}
-.stats-view .stats-grid--hero .stats-card__value {
-  font-size: var(--fs-display);
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
 .stats-view .stats-card__detail {
   color: var(--text-med);
   font-size: var(--fs-body-sm);
@@ -129,11 +134,14 @@
   font-size: var(--fs-body-sm);
   color: var(--text-med);
 }
+/* Every stat tile shares one size and value scale, whether it leads a tab or
+   sits inside a section. */
 .stats-view .stats-card__value {
   overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
-  font-size: var(--fs-heading-md);
+  font-size: var(--fs-heading-lg);
   font-weight: 600;
+  line-height: 1.3;
   color: var(--text-hi);
 }
 .stats-view .stats-columns {
@@ -687,15 +695,11 @@
     align-items: center;
     justify-content: space-between;
   }
-  .stats-view .stats-grid--three .stats-card__value {
-    font-size: var(--fs-heading-sm);
+  .stats-view .stats-card__value {
+    font-size: var(--fs-heading-md);
   }
-  .stats-view .stats-grid--hero .stats-card,
   .stats-view .stats-block {
     padding: var(--space-md);
-  }
-  .stats-view .stats-grid--hero .stats-card__value {
-    font-size: var(--fs-heading-md);
   }
   .stats-view .stats-scope__range {
     width: 100%;

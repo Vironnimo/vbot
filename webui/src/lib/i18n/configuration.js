@@ -27,7 +27,7 @@ export default Object.freeze({
   'settings.pages.systemDescription':
     'Server information, connections, and diagnostics.',
   'settings.sections.voiceControls': 'Voice controls',
-  'settings.sections.speechModels': 'Speech Models',
+  'settings.sections.speechModels': 'Speech models',
   'settings.sections.recall': 'Conversation search',
   'settings.sections.mediaModels': 'Images, video & music',
   'settings.sections.evaluation': 'Evaluation',
@@ -262,7 +262,7 @@ export default Object.freeze({
   'settings.webFetch.subtitle':
     'Page reading and optional extraction services.',
   'settings.webFetch.saveSuccess': 'Web fetch settings updated.',
-  'settings.webSearch.title': 'Web Search',
+  'settings.webSearch.title': 'Web search',
   'settings.webSearch.subtitle': 'Provider used by the web_search tool.',
   'settings.webSearch.provider': 'Search provider',
   'settings.webSearch.providerDescription':

@@ -56,7 +56,11 @@
       'content content'
       'nav nav';
     grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    /* A fixed bar row: opening the More sheet takes the bar out of flow, and
+       the content must not grow into its space (that would refit Terminals). */
+    grid-template-rows:
+      auto minmax(0, 1fr)
+      calc(var(--mobile-tabbar-height) + env(safe-area-inset-bottom));
   }
 
   .app-shell__sidebar,
@@ -167,7 +171,10 @@
     white-space: nowrap;
   }
 
-  .app-shell__navigation .app-shell__nav-item--mobile-secondary {
+  .app-shell__navigation .app-shell__nav-item--mobile-secondary,
+  .app-shell[data-sidebar-collapsed='true']
+    .app-shell__navigation
+    .app-shell__nav-item--mobile-secondary {
     display: none;
   }
 
@@ -235,6 +242,9 @@
 
   .app-shell[data-mobile-nav-open='true'] .app-shell__nav-group-label,
   .app-shell[data-mobile-nav-open='true']
+    .app-shell__navigation
+    .app-shell__nav-item--mobile-secondary,
+  .app-shell[data-mobile-nav-open='true'][data-sidebar-collapsed='true']
     .app-shell__navigation
     .app-shell__nav-item--mobile-secondary {
     display: flex;

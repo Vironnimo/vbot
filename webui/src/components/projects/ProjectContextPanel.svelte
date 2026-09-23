@@ -214,6 +214,7 @@
           <TextField
             id="project-edit-auto-load"
             class="projects-file-input"
+            code
             value={projectsState.autoLoadDraft}
             placeholder={t(
               'projects.manage.autoLoadPlaceholder',

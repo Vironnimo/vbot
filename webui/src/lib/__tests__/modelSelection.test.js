@@ -112,6 +112,7 @@ describe('buildModelSelectOptions', () => {
       {
         value: 'openai/gpt-5.2::api-key',
         label: 'openai/gpt-5.2',
+        code: true,
         isUnavailable: false,
         suitable: true,
         suitabilityReasons: [],
@@ -134,6 +135,7 @@ describe('buildModelSelectOptions', () => {
       {
         value: 'openai/gpt-5.2::api-key',
         label: 'openai/gpt-5.2',
+        code: true,
         isUnavailable: false,
         suitable: true,
         suitabilityReasons: [],
@@ -156,6 +158,7 @@ describe('buildModelSelectOptions', () => {
       {
         value: 'openai/gpt-5.2::api-key',
         label: 'openai/gpt-5.2 (Default)',
+        code: true,
         isUnavailable: false,
         suitable: true,
         suitabilityReasons: [],
@@ -163,6 +166,7 @@ describe('buildModelSelectOptions', () => {
       {
         value: 'openai/gpt-5.2::api-key:work',
         label: 'openai/gpt-5.2 (work)',
+        code: true,
         isUnavailable: false,
         suitable: true,
         suitabilityReasons: [],
@@ -186,6 +190,7 @@ describe('buildModelSelectOptions', () => {
       {
         value: 'openai/gpt-5.2::api-key',
         label: 'openai/gpt-5.2 (API Key – Default)',
+        code: true,
         isUnavailable: false,
         suitable: true,
         suitabilityReasons: [],
@@ -193,6 +198,7 @@ describe('buildModelSelectOptions', () => {
       {
         value: 'openai/gpt-5.2::api-key:work',
         label: 'openai/gpt-5.2 (API Key – work)',
+        code: true,
         isUnavailable: false,
         suitable: true,
         suitabilityReasons: [],
@@ -200,6 +206,7 @@ describe('buildModelSelectOptions', () => {
       {
         value: 'openai/gpt-5.2::subscription',
         label: 'openai/gpt-5.2 (Subscription)',
+        code: true,
         isUnavailable: false,
         suitable: true,
         suitabilityReasons: [],
@@ -245,6 +252,7 @@ describe('buildModelSelectOptions', () => {
       {
         value: 'openai/gpt-5.4::subscription',
         label: 'openai/gpt-5.4',
+        code: true,
         isUnavailable: false,
         suitable: true,
         suitabilityReasons: [],

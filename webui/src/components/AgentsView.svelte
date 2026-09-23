@@ -564,10 +564,6 @@
           bind:this={sharedContent}
         >
           <header class="agent-shared-header">
-            <div class="settings-page-eyebrow">
-              {t('agents.title', 'Agents')}
-            </div>
-
             <div class="agent-shared-title">
               <h2>{t('agents.shared.title', 'Shared defaults')}</h2>
 

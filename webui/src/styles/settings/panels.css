@@ -93,18 +93,21 @@
   margin-top: 14px;
 }
 
+/* Channel and Extension entries are flat rows divided by hairlines, matching
+   the Provider list on the same page. */
 .s-channel-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-top: 12px;
+  margin-top: 4px;
 }
 
 .s-channel-card {
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface);
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.s-channel-card:last-child {
+  border-bottom: 0;
 }
 
 .s-channel-head {
@@ -232,15 +235,16 @@
 .s-ext-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-top: 12px;
+  margin-top: 4px;
 }
 
 .s-ext-card {
-  padding: var(--space-md);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface);
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.s-ext-card:last-child {
+  border-bottom: 0;
 }
 
 .s-ext-head {
@@ -274,6 +278,16 @@
 }
 
 .s-ext-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+
+.s-ext-capabilities__sep {
+  color: var(--text-faint);
+}
+
+.s-ext-capabilities__value {
   font-family: var(--font-mono);
   font-size: var(--fs-mono-sm);
 }

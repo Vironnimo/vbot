@@ -470,10 +470,15 @@ export function createChatViewTarget(context) {
   }
 
   // Switch the chat to a project team agent. Clears any identity-side session
-  // override and resolves the project agent's session locally (trap 1): the
-  // most recent from `session.list`, else a fresh `session.create`. The session
-  // is held in `projectAgentSessions` keyed by the agent's full address.
-  const openProjectAgent = async (agentId, { keepOverride = false } = {}) => {
+  // override and resolves the project agent's session locally (trap 1): on an
+  // explicit Team-bar click (`preferUnread`) its newest unread session first,
+  // else the already held one, else the most recent from `session.list`, else
+  // a fresh `session.create`. The session is held in `projectAgentSessions`
+  // keyed by the agent's full address.
+  const openProjectAgent = async (
+    agentId,
+    { keepOverride = false, preferUnread = false } = {},
+  ) => {
     const hadOverride = context.navigation.sessionOverrideActive;
     if (!keepOverride) {
       context.navigation.clearSessionOverride();
@@ -490,20 +495,27 @@ export function createChatViewTarget(context) {
       context.selectedProjectId,
       true,
     );
-    await ensureProjectAgentSession(addressing);
+    await ensureProjectAgentSession(addressing, { preferUnread });
   };
 
   // Choose (and if needed create) the local session for a project agent, then
   // load its history. `session.list`/`session.create`/`chat.history` all take
-  // the FULL address (`agent@projekt`) — trap 2.
-  const ensureProjectAgentSession = async (addressing) => {
+  // the FULL address (`agent@projekt`) — trap 2. The chosen session is held in
+  // `projectAgentSessions` before its history loads: a project agent displays
+  // only its held session, so loading any other one (e.g. its newest unread
+  // session) would fetch history the chat never shows and never marks read.
+  // Only an explicit selection prefers the newest unread session; history
+  // restores and Session moves keep the held (or pre-seeded) session.
+  const ensureProjectAgentSession = async (
+    addressing,
+    { preferUnread = false } = {},
+  ) => {
     const { agentAddress } = addressing;
     context.actions.clearSessionActionError();
     try {
-      const newestUnreadSession = newestUnreadSessionForAgent(
-        context.chatState,
-        agentAddress,
-      );
+      const newestUnreadSession = preferUnread
+        ? newestUnreadSessionForAgent(context.chatState, agentAddress)
+        : null;
       let sessionId =
         newestUnreadSession?.sessionId ??
         projectAgentSessions[agentAddress] ??
@@ -533,6 +545,8 @@ export function createChatViewTarget(context) {
         if (!sessionId) {
           return;
         }
+      }
+      if (projectAgentSessions[agentAddress] !== sessionId) {
         projectAgentSessions = {
           ...projectAgentSessions,
           [agentAddress]: sessionId,
@@ -586,7 +600,7 @@ export function createChatViewTarget(context) {
     ) {
       return;
     }
-    await openProjectAgent(agentId);
+    await openProjectAgent(agentId, { preferUnread: true });
     context.layout.requestComposerFocus();
   };
 

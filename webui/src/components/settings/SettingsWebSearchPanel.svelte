@@ -297,6 +297,7 @@
     <div class="s-row-control s-row-control--web-search-url">
       <TextField
         id="settings-web-search-searxng-base-url"
+        code
         type="url"
         value={webSearchSettings.searxng.base_url}
         placeholder={t(
@@ -314,7 +315,7 @@
   <SaveButton
     class="s-save-button s-save-button--inline"
     {saving}
-    pending={webSearchAutosave.participant.hasPending()}
+    pending={webSearchAutosave.participant.hasChanges()}
     onClick={handleManualWebSearchSettingsSave}
   />
 </div>

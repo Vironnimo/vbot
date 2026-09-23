@@ -373,6 +373,114 @@ describe('ChatView', () => {
     expect(selectedBetaTab.querySelector('.tab-indicator--unread')).toBeNull();
   });
 
+  it('opens an Agent unread Session that is not its current Session and marks it read', async () => {
+    const beta = createAgent({
+      id: 'beta',
+      name: 'Beta',
+      current_session_id: 'beta-current',
+    });
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        agents: [createAgent(), beta],
+        sessionMessages: {
+          'beta-current': [
+            {
+              id: 'beta-current-reply',
+              role: 'assistant',
+              content: 'Beta current conversation',
+            },
+          ],
+          'beta-unread': [
+            {
+              id: 'beta-unread-reply',
+              role: 'assistant',
+              content: 'Beta unread result',
+            },
+            {
+              id: 'beta-unread-summary',
+              role: 'run_summary',
+              run_id: 'run-beta-unread',
+              status: 'completed',
+            },
+          ],
+        },
+      }),
+    );
+    listSessionActivityMock.mockImplementation(async (agentIds) => ({
+      agents: agentIds.map((agentId) => ({
+        agent_id: agentId,
+        project_id: null,
+        sessions:
+          agentId === 'beta'
+            ? [
+                {
+                  id: 'beta-current',
+                  latest_completion_run_id: 'run-beta-current',
+                  has_unread_completion: false,
+                },
+                {
+                  id: 'beta-unread',
+                  latest_completion_run_id: 'run-beta-unread',
+                  has_unread_completion: true,
+                  unread_run_id: 'run-beta-unread',
+                  unread_run_status: 'completed',
+                  unread_run_at: '2026-07-20T10:00:00+00:00',
+                },
+              ]
+            : [],
+      })),
+    }));
+
+    chatViewTest.mount({
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent(), beta],
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        Boolean(
+          findButtonByText('Beta')?.querySelector('.tab-indicator--unread'),
+        ),
+      100,
+    );
+    const betaTab = findButtonByText('Beta');
+    await waitForCondition(() => betaTab.disabled === false, 100);
+    betaTab.click();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Beta unread result'),
+      100,
+    );
+    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      agent_id: 'beta',
+      session_id: 'beta-unread',
+      limit: 100,
+    });
+    expect(document.body.textContent).not.toContain(
+      'Beta current conversation',
+    );
+
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'session.mark_read' &&
+            params?.agent_id === 'beta' &&
+            params?.session_id === 'beta-unread' &&
+            params?.run_id === 'run-beta-unread',
+        ),
+      100,
+    );
+    flushSync();
+
+    const selectedBetaTab = findButtonByText('Beta');
+    expect(selectedBetaTab.classList.contains('active')).toBe(true);
+    expect(selectedBetaTab.querySelector('.tab-indicator--unread')).toBeNull();
+  });
+
   it('does not resurrect a read result when retained events replay after remount', async () => {
     const beta = createAgent({
       id: 'beta',

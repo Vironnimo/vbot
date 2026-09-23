@@ -104,7 +104,7 @@
   margin: 8px 0;
   padding: 10px 12px;
   border: 1px solid var(--border-2);
-  border-left: 2px solid var(--accent);
+  border-left: 2px solid var(--blue);
   border-radius: var(--r-md);
   background: var(--surface-2);
 }
@@ -173,7 +173,7 @@
 .working-block__summary:focus-visible {
   border-radius: var(--r-sm);
   outline: none;
-  box-shadow: 0 0 0 3px var(--accent-16);
+  box-shadow: var(--focus-ring);
 }
 
 /* The status label is UI text; the running Tool name beside it stays mono like
@@ -240,7 +240,7 @@
 
 .run-footer__changes:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px var(--accent-16);
+  box-shadow: var(--focus-ring);
 }
 
 .run-footer__sep {

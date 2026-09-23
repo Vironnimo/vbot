@@ -273,7 +273,7 @@ describe('AgentsView', () => {
     temperature.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
     options.open = false;
-    getButton('Save changes').click();
+    getButton('Save').click();
     await waitForCondition(() => document.activeElement === temperature);
     expect(options.open).toBe(true);
     expect(temperature.getAttribute('aria-invalid')).toBe('true');

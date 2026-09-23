@@ -8,6 +8,7 @@
 
 <div class="jev-field">
   <label for={`${id}-exe`}>{label}</label><TextField
+    code
     id={`${id}-exe`}
     value={command.argv[0]}
     placeholder={t('jev.executablePlaceholder', 'Executable, e.g. python')}
@@ -37,6 +38,7 @@
   <label for={`${id}-cwd`}
     >{t('jev.cwd', 'Working directory on the vBot host')}</label
   ><TextField
+    code
     id={`${id}-cwd`}
     value={command.cwd}
     onInput={(value) => onChange({ ...command, cwd: value })}

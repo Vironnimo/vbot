@@ -18,6 +18,7 @@ const SEARCHABLE_ENTRY_FIELDS = [
 export function createLogsViewState() {
   return {
     files: [],
+    defaultFile: '',
     selectedFile: '',
     entries: [],
     levelFilter: ALL_LEVELS_FILTER,
@@ -38,12 +39,13 @@ export function applyLogCatalog(state, result) {
     typeof result?.default_file === 'string' ? result.default_file : '';
 
   state.files = files;
+  state.defaultFile = defaultFile || files[0] || '';
 
   if (state.selectedFile && files.includes(state.selectedFile)) {
     return state.selectedFile;
   }
 
-  state.selectedFile = defaultFile || files[0] || '';
+  state.selectedFile = state.defaultFile;
   return state.selectedFile;
 }
 
@@ -159,6 +161,23 @@ export function visibleLogEntries(state) {
   });
 
   return sortLogEntries(filteredEntries, state?.sortOrder);
+}
+
+// Counts the file, level, and order choices that differ from the default view
+// (catalog default file, all levels, newest first). Search text is excluded:
+// it is a free-text query rather than a choice among options.
+export function changedFilterSelectionCount(state) {
+  let count = 0;
+  if (state?.selectedFile && state.selectedFile !== state.defaultFile) {
+    count += 1;
+  }
+  if (state?.levelFilter && state.levelFilter !== ALL_LEVELS_FILTER) {
+    count += 1;
+  }
+  if (state?.sortOrder && state.sortOrder !== LOGS_SORT_ORDER_NEWEST) {
+    count += 1;
+  }
+  return count;
 }
 
 export function levelOptionValue() {

@@ -69,9 +69,6 @@
   line-height: 1.4;
   text-transform: none;
 }
-:is(.agents-view, .projects-view, .settings-layout) .secondary-pane__title {
-  color: var(--text-med);
-}
 .agents-view .agents-view__model-fields {
   max-width: 640px;
   grid-template-columns: minmax(0, 1fr) minmax(140px, 180px);

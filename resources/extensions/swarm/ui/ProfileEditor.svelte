@@ -1,6 +1,7 @@
 <script>
   import { t } from '../../../../webui/src/lib/i18n.js';
   import Button from '../../../../webui/src/components/ui/Button.svelte';
+  import SaveButton from '../../../../webui/src/components/ui/SaveButton.svelte';
   import TabList from '../../../../webui/src/components/ui/TabList.svelte';
   import Banner from '../../../../webui/src/components/ui/Banner.svelte';
   import FormField from '../../../../webui/src/components/ui/FormField.svelte';
@@ -374,11 +375,11 @@
   aria-label={t('swarm.profile.editorLabel', 'Swarm editor')}
 >
   <header class="editor-head">
-    <div>
-      <h2>
+    <div class="view-header__intro">
+      <h2 class="view-header__title">
         {profile ? savedProfile.name : t('swarm.profile.new', 'New Swarm')}
       </h2>
-      <p>
+      <p class="view-header__subtitle">
         {t(
           'swarm.profile.scopeHelp',
           'A reusable setup. Changes apply to new Runs.',
@@ -963,18 +964,18 @@
     </fieldset>
     <footer class="editor-footer">
       <div>
-        {#if !profile}<Button disabled={busy} onClick={onCancel}
+        {#if profile}
+          <!-- Saved Swarms autosave; the manual action states whether the
+               draft is persisted, like Settings. -->
+          <SaveButton {saving} pending={hasChanges()} onClick={save} />
+        {:else}
+          <Button disabled={busy} onClick={onCancel}
             >{t('common.cancel', 'Cancel')}</Button
-          >{/if}
-        <Button
-          variant={profile ? 'tertiary' : 'primary'}
-          loading={saving}
-          onClick={save}
-        >
-          {profile
-            ? t('common.saveChanges', 'Save changes')
-            : t('swarm.profile.save', 'Save Swarm')}
-        </Button>
+          >
+          <Button variant="primary" loading={saving} onClick={save}>
+            {t('swarm.profile.save', 'Save Swarm')}
+          </Button>
+        {/if}
       </div>
     </footer>
   </div>

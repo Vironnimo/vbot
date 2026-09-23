@@ -214,6 +214,31 @@ describe('SettingsView', () => {
     },
   );
 
+  it('returns the manual save control to Saved after an edit is persisted', async () => {
+    rpcMock.mockImplementation(createSettingsRpcMock());
+
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await openSubAgentsPanel();
+    const depthInput = document.querySelector(
+      'input[aria-label="Max sub-agent depth"]',
+    );
+    const saveControl = depthInput
+      .closest('.settings-editor')
+      .querySelector('.save-button');
+    expect(saveControl.textContent.trim()).toBe('Saved');
+
+    setInputValue('input[aria-label="Max sub-agent depth"]', '6');
+    flushSync();
+    expect(saveControl.textContent.trim()).toBe('Save');
+
+    saveControl.click();
+    flushSync();
+
+    await waitForCondition(() => saveControl.textContent.trim() === 'Saved');
+    expect(getSettingsUpdateCalls()).toHaveLength(1);
+  });
+
   it('reports a successful no-op when manual save is clicked with no changes', async () => {
     const toastMock = vi.fn();
     rpcMock.mockImplementation(createSettingsRpcMock());

@@ -1,14 +1,15 @@
 /* Settings pages group related tasks independently of form ownership. */
 .settings-nav.secondary-pane {
-  padding: 24px 12px 20px;
-  gap: 16px;
+  padding: 0 12px 20px;
+  gap: 12px;
 }
+/* Same height, size and inset as every other secondary-pane header. */
 .settings-nav .settings-nav-title {
-  color: var(--text-hi);
-  font: 600 var(--fs-heading-md) / 1.4 var(--font-ui);
-  letter-spacing: -0.02em;
-  text-transform: none;
-  padding: 0 10px;
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  min-height: 52px;
+  padding: 10px 4px;
 }
 .settings-search {
   margin: 0 2px;
@@ -49,11 +50,6 @@
 .settings-page-heading {
   margin: 0 0 28px;
 }
-.settings-page-eyebrow {
-  color: var(--text-med);
-  font-size: var(--fs-body-sm);
-  margin-bottom: 8px;
-}
 .settings-page-heading h2 {
   margin: 0;
   color: var(--text-hi);
@@ -66,10 +62,10 @@
   outline: none;
 }
 .settings-page-heading p {
-  margin: 8px 0 0;
+  margin: 6px 0 0;
   max-width: 65ch;
-  color: var(--text-med);
-  font-size: var(--fs-body-lg);
+  color: var(--text-lo);
+  font-size: var(--fs-body-md);
   line-height: 1.6;
 }
 .settings-page[hidden],
@@ -106,7 +102,8 @@
   gap: 28px;
   align-items: center;
 }
-.settings-editor-body > .s-row:first-child {
+.settings-editor-body > .s-row:first-child,
+.settings-editor-body > .s-task-model-list:first-child > .s-row:first-child {
   padding-top: 0;
 }
 .settings-editor-body .s-row-info {
@@ -155,7 +152,7 @@
   display: flex;
   flex-direction: column;
 }
-.settings-search-result {
+.settings-search-results .settings-search-result {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -203,13 +200,6 @@
   color: var(--text-med);
   font-size: var(--fs-body-sm);
   cursor: pointer;
-}
-.s-task-model-advanced summary::before {
-  content: '+';
-  width: 12px;
-}
-.s-task-model-advanced[open] summary::before {
-  content: '\2212';
 }
 .s-task-model-advanced summary span {
   color: var(--text-lo);

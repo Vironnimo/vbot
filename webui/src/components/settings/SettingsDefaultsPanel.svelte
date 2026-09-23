@@ -525,7 +525,7 @@
   <SaveButton
     class="s-save-button s-save-button--inline"
     {saving}
-    pending={agentDefaultsAutosave.participant.hasPending()}
+    pending={agentDefaultsAutosave.participant.hasChanges()}
     onClick={handleManualAgentDefaultsSave}
   />
 </div>

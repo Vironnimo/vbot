@@ -48,6 +48,20 @@ export function positionFloating(anchor, element) {
   const width = element.offsetWidth;
   const height = element.offsetHeight;
 
+  // Anchors in a vertical rail (the collapsed sidebar) opt into a side
+  // placement so the tooltip never covers the neighbouring item.
+  if (
+    anchor.dataset?.tooltipPlacement === 'right' &&
+    rect.right + ANCHOR_OFFSET + width <= window.innerWidth - EDGE_PADDING
+  ) {
+    element.style.left = `${rect.right + ANCHOR_OFFSET}px`;
+    element.style.top = `${Math.min(
+      Math.max(EDGE_PADDING, rect.top + rect.height / 2 - height / 2),
+      Math.max(EDGE_PADDING, window.innerHeight - height - EDGE_PADDING),
+    )}px`;
+    return;
+  }
+
   const left = Math.min(
     Math.max(EDGE_PADDING, rect.left + rect.width / 2 - width / 2),
     Math.max(EDGE_PADDING, window.innerWidth - width - EDGE_PADDING),

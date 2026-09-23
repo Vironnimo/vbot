@@ -216,6 +216,9 @@ describe('Skills manager', () => {
     expect(view.querySelector('.skills-content').textContent).toContain(
       'content-private',
     );
+    // The list stays visible beside the detail on desktop, so Back is hidden
+    // until the narrow layout replaces the list with the detail.
+    expect(getComputedStyle(button('Back to list', view)).display).toBe('none');
   });
 
   it('puts global and bundled before shared skills and filters each source', async () => {
@@ -551,6 +554,22 @@ describe('Skills manager', () => {
     const detail = document.querySelector('.skills-detail');
     expect(button('Delete deploy', detail)).toBeTruthy();
     expect(button('Share deploy', detail)).toBeTruthy();
+    const enable = detail.querySelector(
+      '.skills-detail-header [role="switch"]',
+    );
+    expect(enable.getAttribute('aria-label')).toBe(
+      t('skills.enabledNamed', '', { name: 'deploy' }),
+    );
+    expect(enable.closest('label').textContent.trim()).toBe(
+      t('skills.enabled'),
+    );
+    expect(
+      document
+        .querySelector('[data-skill-id="private"]')
+        .closest('.skills-row')
+        .querySelector('[role="switch"]')
+        .closest('label'),
+    ).toBeNull();
     expect(
       detail.querySelector('.skills-detail-scroll .skills-actions'),
     ).toBeNull();

@@ -100,8 +100,8 @@
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   padding: 0;
   border: 1px solid var(--border-2);
   border-radius: 50%;
@@ -109,8 +109,8 @@
   background: transparent;
   cursor: help;
   font-family: var(--font-ui);
-  /* Glyph size for the "?" inside the 15px dot. */
-  font-size: 10px;
+  /* Glyph size for the "?" inside the 16px dot; an icon, not running text. */
+  font-size: 11px;
   font-weight: 600;
   line-height: 1;
   vertical-align: middle;

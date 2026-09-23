@@ -108,6 +108,55 @@ describe('SwarmPage', () => {
     expect(inactive().textContent).toContain('goal-running');
   });
 
+  it('explains empty Run groups under their group headings', async () => {
+    const { bridge, operation } = createBridge();
+    const base = operation.getMockImplementation();
+    let entries = [];
+    operation.mockImplementation((name, args) =>
+      name === 'swarms.list' ? Promise.resolve({ entries }) : base(name, args),
+    );
+    await render(bridge);
+    const group = (label) =>
+      document.querySelector(`nav[aria-label="${label}"]`);
+    const emptyText = (label) =>
+      group(label).querySelector('p')?.textContent.trim();
+    for (const label of ['Active runs', 'Inactive runs']) {
+      const section = group(label).closest('section');
+      expect(
+        document.getElementById(section.getAttribute('aria-labelledby'))
+          .tagName,
+      ).toBe('H3');
+      expect(group(label).querySelectorAll('button')).toHaveLength(0);
+      expect(emptyText(label)).toBeTruthy();
+    }
+    entries = [{ ...swarm, state: 'running' }];
+    bridge.invalidate();
+    await vi.waitFor(() =>
+      expect(group('Active runs').querySelectorAll('button')).toHaveLength(1),
+    );
+    expect(emptyText('Active runs')).toBeUndefined();
+    expect(emptyText('Inactive runs')).toBeTruthy();
+  });
+
+  it('marks New run as the current entry while the goal form is shown', async () => {
+    const { bridge } = createBridge();
+    await render(bridge);
+    expect(button('New run').getAttribute('aria-current')).toBe('page');
+    button('Investigate').click();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.swarm-head')).not.toBeNull(),
+    );
+    expect(button('New run').getAttribute('aria-current')).toBeNull();
+    button('New run').click();
+    await tick();
+    expect(document.querySelector('.swarm-head')).toBeNull();
+    expect(button('New run').getAttribute('aria-current')).toBe('page');
+    button('Research').click();
+    await tick();
+    flushSync();
+    expect(button('New run').getAttribute('aria-current')).toBeNull();
+  });
+
   it('prefills the Run directory, preserves edits during invalidation and submits only the override', async () => {
     const { bridge, operation } = createBridge();
     const base = operation.getMockImplementation();

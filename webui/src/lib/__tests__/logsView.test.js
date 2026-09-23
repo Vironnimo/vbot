@@ -5,6 +5,7 @@ import {
   LOGS_SORT_ORDER_OLDEST,
   LOGS_STREAM_STATUS_IDLE,
   applyLogCatalog,
+  changedFilterSelectionCount,
   createLogsViewState,
   deriveLevelOptions,
   deriveSortOptions,
@@ -25,6 +26,7 @@ describe('logsView helpers', () => {
   it('creates default logs view state', () => {
     expect(createLogsViewState()).toEqual({
       files: [],
+      defaultFile: '',
       selectedFile: '',
       entries: [],
       levelFilter: 'all',
@@ -57,6 +59,38 @@ describe('logsView helpers', () => {
         default_file: '2026-05-11',
       }),
     ).toBe('2026-05-10');
+  });
+
+  it('counts file, level, and order choices that differ from the default view', () => {
+    const state = createLogsViewState();
+    applyLogCatalog(state, {
+      files: ['2026-05-11', '2026-05-10'],
+      default_file: '2026-05-11',
+    });
+    replaceLogEntries(state, {
+      file: '2026-05-11',
+      entries: [entry({ level: 'info' }), entry({ level: 'error' })],
+    });
+    expect(state.defaultFile).toBe('2026-05-11');
+    expect(changedFilterSelectionCount(state)).toBe(0);
+
+    setSearchText(state, 'boot');
+    expect(changedFilterSelectionCount(state)).toBe(0);
+
+    setLevelFilter(state, 'error');
+    setSortOrder(state, LOGS_SORT_ORDER_OLDEST);
+    selectLogFile(state, '2026-05-10');
+    expect(changedFilterSelectionCount(state)).toBe(3);
+
+    // A newer daily file becomes the default; the kept older selection still
+    // counts as changed.
+    applyLogCatalog(state, {
+      files: ['2026-05-12', '2026-05-11', '2026-05-10'],
+      default_file: '2026-05-12',
+    });
+    setLevelFilter(state, 'all');
+    setSortOrder(state, LOGS_SORT_ORDER_NEWEST);
+    expect(changedFilterSelectionCount(state)).toBe(1);
   });
 
   it('replaces entries and merges append and reset stream events', () => {

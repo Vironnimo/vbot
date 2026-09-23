@@ -7,7 +7,7 @@ const sections = [
   { button: "Projects", hash: "#projects", region: "Projects" },
   { button: "Settings", hash: "#settings", region: "Settings" },
   { button: "System Prompt", hash: "#system-prompt", region: "System Prompt" },
-  { button: "Schedules", hash: "#cron", region: "Scheduled Runs" },
+  { button: "Schedules", hash: "#cron", region: "Schedules" },
   { button: "Statistics", hash: "#statistics", region: "Statistics" },
   { button: "Logs", hash: "#logs", region: "Logs" },
 ];
@@ -50,7 +50,7 @@ test("primary navigation opens every available product section", async ({
   await expect(
     page.getByRole("main").getByRole("region", {
       exact: true,
-      name: "Scheduled Runs",
+      name: "Schedules",
     }),
   ).toBeVisible();
 

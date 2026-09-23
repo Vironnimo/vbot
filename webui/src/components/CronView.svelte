@@ -312,14 +312,14 @@
     >
       <div class="pane-header secondary-pane__header">
         <span id="cron-list-title" class="secondary-pane__title">
-          {t('cron.title', 'Scheduled Runs')}
+          {t('cron.title', 'Schedules')}
         </span>
         <div class="pane-header-actions">
           <Button
             variant="tertiary"
             icon
-            ariaLabel={t('cron.detail.createTitle', 'Create Scheduled Run')}
-            tooltip={t('cron.detail.createTitle', 'Create Scheduled Run')}
+            ariaLabel={t('cron.detail.createTitle', 'Create schedule')}
+            tooltip={t('cron.detail.createTitle', 'Create schedule')}
             disabled={!hasAgents}
             onClick={editor.startCreate}
           >
@@ -421,7 +421,7 @@
               disabled={!hasAgents}
               onClick={editor.startCreate}
             >
-              {t('cron.detail.createTitle', 'Create Scheduled Run')}
+              {t('cron.detail.createTitle', 'Create schedule')}
             </Button>
           {/snippet}
         </EmptyState>
@@ -432,11 +432,6 @@
           <form class="cron-detail-scroll" onsubmit={editor.submitForm}>
             <div class="detail-top">
               <div>
-                <div class="detail-eyebrow">
-                  {editor.isCreating
-                    ? t('cron.detail.kind.new', 'New schedule')
-                    : scheduleKindLabel(editor.selectedJob)}
-                </div>
                 <div class="detail-heading">{editor.detailTitle}</div>
                 <div class="detail-sub">
                   {editor.isCreating
@@ -764,6 +759,7 @@
                         {/snippet}
                         <TextField
                           id="cron-job-expression"
+                          code
                           value={editor.formValues.cron_expression}
                           placeholder={t(
                             'cron.form.cronExpressionPlaceholder',

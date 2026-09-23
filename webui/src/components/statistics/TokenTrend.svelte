@@ -47,7 +47,7 @@
   >
 {/snippet}
 
-<div class="stats-block">
+<div class="stats-block stats-trend">
   <div class="stats-block__head">
     <div class="stats-block__heading">
       <h3 class="stats-block__title">

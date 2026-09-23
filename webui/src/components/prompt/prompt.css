@@ -10,9 +10,16 @@
 .sp-view .sp-layout {
   flex-direction: column;
 }
+/* The fixed top keeps the shared view-frame rhythm between the header, the
+   Agent context and the tabs. It reserves the same scrollbar gutter as the
+   scrolling area below so both columns line up at every width. */
 .sp-view .sp-top {
+  display: flex;
+  flex-direction: column;
   flex-shrink: 0;
   padding-bottom: 0;
+  overflow: hidden;
+  scrollbar-gutter: stable;
 }
 .sp-view .sp-top > *,
 .sp-view .sp-scroll > * {
@@ -48,6 +55,18 @@
 .sp-view .sp-context-bar,
 .sp-view .sp-document-toolbar {
   justify-content: space-between;
+}
+/* Refresh stays on the first context line; only the Agent details wrap. */
+.sp-view .sp-context-bar {
+  align-items: flex-start;
+  flex-wrap: nowrap;
+}
+.sp-view .sp-preview-heading-row {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.sp-view .sp-refresh {
+  flex-shrink: 0;
 }
 .sp-view .sp-navigation {
   margin-bottom: 0;
@@ -95,6 +114,12 @@
   line-height: 1.6;
   margin: 0 0 20px;
 }
+/* The document box follows the reading measure instead of insetting the text
+   inside a full-width frame. */
+.sp-view .sp-document-toolbar,
+.sp-view .sp-document {
+  max-width: var(--content-max-narrow);
+}
 .sp-view .sp-document {
   margin-top: 16px;
   background: var(--preview-surface);
@@ -111,8 +136,6 @@
   overflow-wrap: anywhere;
 }
 .sp-view .sp-document .sp-document-content {
-  max-width: 85ch;
-  margin: auto;
   color: var(--text-hi);
   font: var(--fs-body-lg)/1.8 var(--font-ui);
   overflow-wrap: anywhere;

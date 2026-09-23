@@ -115,7 +115,7 @@ export function createCronEditor(context) {
 
   let detailTitle = $derived(
     isCreating
-      ? t('cron.detail.createTitle', 'Create Scheduled Run')
+      ? t('cron.detail.createTitle', 'Create schedule')
       : selectedJob?.name || t('cron.detail.editTitle', 'Edit Scheduled Run'),
   );
 

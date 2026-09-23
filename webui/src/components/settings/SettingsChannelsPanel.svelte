@@ -613,6 +613,7 @@
         >
           <TextField
             id="channel-token-env-input"
+            code
             value={channelFormValues.token_env_var}
             required
             disabled={channelBusy &&
@@ -635,6 +636,7 @@
         >
           <TextField
             id="channel-app-token-env-input"
+            code
             required
             value={channelFormValues.app_token_env_var}
             onInput={(next) => setChannelFormField('app_token_env_var', next)}
@@ -648,6 +650,7 @@
         >
           <TextField
             id="channel-server-url-input"
+            code
             required
             placeholder="https://chat.example.org"
             value={channelFormValues.server_url}
@@ -668,6 +671,7 @@
         {/snippet}
         <TextField
           id="channel-allowed-chat-ids-input"
+          code
           value={channelFormValues.allowed_chat_ids}
           disabled={channelBusy && channelFormMode === CHANNEL_FORM_MODE_CREATE}
           placeholder={t(
