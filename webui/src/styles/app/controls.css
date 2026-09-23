@@ -934,6 +934,13 @@ summary:not([class])::-webkit-details-marker {
   isolation: isolate;
 }
 
+/* A focused listbox signals focus through its active option (via
+   aria-activedescendant), so the list itself carries no outline. */
+.dropdown-primitive__list:focus-visible,
+.searchable-dropdown__options:focus-visible {
+  outline: none;
+}
+
 .searchable-dropdown__search svg {
   width: 12px;
   height: 12px;
