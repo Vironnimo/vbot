@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import {
   describe,
-  activeAgentTab,
   createAgent,
   createChatRpcMock,
   createHistoryMessages,
@@ -11,6 +10,7 @@ import {
   it,
   listSessionsMock,
   rpcMock,
+  selectedPersonalAgentName,
   sendComposerMessage,
   setupChatViewTestSuite,
   subscribeRunEventsMock,
@@ -459,7 +459,7 @@ describe('ChatView', () => {
       () => document.body.textContent.includes('Beta sub-agent response'),
       100,
     );
-    expect(activeAgentTab()?.textContent).toContain('Beta');
+    expect(selectedPersonalAgentName()).toBe('Beta');
 
     const returnButton = Array.from(document.querySelectorAll('button')).find(
       (button) => button.textContent.trim() === 'Return to current session',
@@ -490,7 +490,7 @@ describe('ChatView', () => {
       session_id: 'beta-current-session',
       limit: 100,
     });
-    expect(activeAgentTab()?.textContent).toContain('Alpha');
+    expect(selectedPersonalAgentName()).toBe('Alpha');
   });
 
   it('sends messages from a sub-agent session override', async () => {
@@ -624,7 +624,7 @@ describe('ChatView', () => {
       100,
     );
 
-    expect(activeAgentTab()?.textContent).toContain('Beta');
+    expect(selectedPersonalAgentName()).toBe('Beta');
     expect(subscribeRunEventsMock).toHaveBeenCalledWith(
       '/api/runs/beta-sub-run-continue/events',
       expect.any(Object),

@@ -369,8 +369,50 @@ export function findNewSessionButton() {
   );
 }
 
-export function activeAgentTab() {
-  return document.querySelector('.agent-tab.active');
+// Trigger of the Chat header's personal Agent picker. It shows the selected
+// Agent's name, or the "Select agent" placeholder while a Project Agent is
+// active.
+export function agentPickerTrigger(root = document) {
+  return root.querySelector(
+    '.chat-header__agent-picker button[aria-haspopup="listbox"]',
+  );
+}
+
+// Name of the personal Agent selected in the picker; '' when none is.
+export function selectedPersonalAgentName(root = document) {
+  const trigger = agentPickerTrigger(root);
+  if (
+    !trigger ||
+    trigger.querySelector('[class*="trigger-label--placeholder"]')
+  ) {
+    return '';
+  }
+  return trigger.textContent.trim();
+}
+
+// The activity chip of another personal Agent (running or unread), found by
+// the Agent name that starts its accessible label.
+export function agentChip(name, root = document) {
+  return Array.from(root.querySelectorAll('.agent-chips > button')).find(
+    (chip) => chip.getAttribute('aria-label')?.startsWith(`${name}:`),
+  );
+}
+
+// Selects a personal Agent the way a user does: open the picker, choose the
+// option. The picker's list is portaled to <body>.
+export async function selectAgentFromPicker(name, root = document) {
+  await waitForCondition(
+    () => agentPickerTrigger(root)?.disabled === false,
+    100,
+  );
+  agentPickerTrigger(root).click();
+  const option = () =>
+    Array.from(document.querySelectorAll('[role="option"]')).find((item) =>
+      item.getAttribute('aria-label')?.startsWith(`${name}:`),
+    );
+  await waitForCondition(() => Boolean(option()), 100);
+  option().click();
+  flushSync();
 }
 
 export function setInputValue(input, value) {

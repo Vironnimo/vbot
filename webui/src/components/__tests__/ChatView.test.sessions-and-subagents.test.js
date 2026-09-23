@@ -11,6 +11,7 @@ import {
   it,
   listSessionsMock,
   rpcMock,
+  selectAgentFromPicker,
   sendComposerMessage,
   setInputValue,
   testChatStateRefs,
@@ -408,7 +409,7 @@ describe('ChatView', () => {
       100,
     );
 
-    findButtonByText('Beta').click();
+    await selectAgentFromPicker('Beta');
     await waitForCondition(
       () => document.body.textContent.includes('Beta session reply'),
       100,
