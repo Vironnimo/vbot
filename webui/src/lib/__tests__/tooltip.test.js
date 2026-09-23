@@ -603,6 +603,15 @@ describe('floatingHoverCard action', () => {
     expect(card.dataset.floatingOpen).toBe('true');
   });
 
+  it('opens at once on a press when revealing the card is the anchor purpose', () => {
+    const trigger = button('Context window usage', anchor);
+    action = floatingHoverCard(card, { openOnPress: true });
+
+    trigger.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+
+    expect(card.dataset.floatingOpen).toBe('true');
+  });
+
   it('keeps an interactive card open while the pointer crosses the gap', () => {
     action = floatingHoverCard(card);
     open();
@@ -743,6 +752,23 @@ describe('floatingHoverCard action', () => {
       expect(escape.defaultPrevented).toBe(true);
       expect(card.dataset.floatingOpen).toBe('false');
       expect(document.activeElement).toBe(control);
+    });
+
+    it('stays open while the pointer rests on it and a focused control gives up focus', () => {
+      anchor.dispatchEvent(new Event('pointerenter'));
+      vi.advanceTimersByTime(HOVER_CARD_SHOW_DELAY_MS);
+      anchor.dispatchEvent(new Event('pointerleave'));
+      card.dispatchEvent(new Event('pointerenter'));
+      copy.focus();
+
+      // A control that disables itself after activation drops focus.
+      copy.blur();
+      vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS * 2);
+      expect(card.dataset.floatingOpen).toBe('true');
+
+      card.dispatchEvent(new Event('pointerleave'));
+      vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
+      expect(card.dataset.floatingOpen).toBe('false');
     });
 
     it('stays open while keyboard focus is inside, even when the pointer leaves', () => {

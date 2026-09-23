@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
-import { TOOLTIP_SHOW_DELAY_MS } from '../../lib/tooltip.js';
+import { HOVER_CARD_SHOW_DELAY_MS } from '../../lib/tooltip.js';
 import {
   flushSync,
   mount,
@@ -21,43 +21,127 @@ import {
 describe('ChatComposer', () => {
   const suite = setupChatComposerSuite();
 
-  it.each(['pointerenter', 'focus'])(
-    'shows context usage as a passive tooltip on %s',
-    async (eventType) => {
-      vi.useFakeTimers();
-      try {
-        suite.mountedComponent = mount(ChatComposer, {
-          target: document.body,
-          props: {
-            contextUsage: { tokens: 4000, estimated: true },
-            contextWindow: 10000,
-          },
-        });
-        flushSync();
-        const anchor = document.querySelector('.context-ring');
-        expect(anchor.getAttribute('role')).toBe('img');
-        expect(anchor.tabIndex).toBe(0);
-        expect(anchor.querySelector('button')).toBeNull();
-        if (eventType === 'focus') {
-          anchor.focus();
-        } else {
-          anchor.dispatchEvent(new Event(eventType));
-        }
-        await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
-        const tooltip = document.querySelector('#app-tooltip');
-        expect(tooltip.dataset.floatingOpen).toBe('true');
-        expect(anchor.getAttribute('aria-describedby')).toBe(tooltip.id);
-        expect(tooltip.textContent).toContain('4,000');
-        expect(tooltip.querySelector('button')).toBeNull();
-        anchor.click();
-        expect(document.querySelector('.context-hover-card')).toBeNull();
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-        expect(tooltip.dataset.floatingOpen).toBe('false');
-      } finally {
-        vi.useRealTimers();
-      }
+  function mountContextRing(props = {}) {
+    suite.mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: {
+        contextUsage: { tokens: 4000, estimated: true },
+        contextWindow: 10000,
+        usage: { input_tokens: 3900, output_tokens: 100 },
+        compactionState: 'idle',
+        onForceCompaction: vi.fn(),
+        ...props,
+      },
+    });
+    flushSync();
+    return {
+      anchor: document.querySelector('.context-ring'),
+      trigger: document.querySelector('.context-ring-trigger'),
+      card: document.querySelector('.context-card'),
+    };
+  }
+
+  it('keeps the context card open across pointer travel and invokes compaction', async () => {
+    vi.useFakeTimers();
+    try {
+      const onForceCompaction = vi.fn();
+      const { anchor, card } = mountContextRing({ onForceCompaction });
+      expect(card.parentElement).toBe(document.body);
+
+      anchor.dispatchEvent(new Event('pointerenter'));
+      await vi.advanceTimersByTimeAsync(HOVER_CARD_SHOW_DELAY_MS);
+      expect(card.dataset.floatingOpen).toBe('true');
+      anchor.dispatchEvent(new Event('pointerleave'));
+      card.dispatchEvent(new Event('pointerenter'));
+      await vi.advanceTimersByTimeAsync(500);
+      expect(card.dataset.floatingOpen).toBe('true');
+
+      const action = card.querySelector('.context-card__action');
+      expect(action.textContent.trim()).toBe('Compact now');
+      action.click();
+      expect(onForceCompaction).toHaveBeenCalledTimes(1);
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      expect(card.dataset.floatingOpen).not.toBe('true');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows used context, share, and the usage breakdown', () => {
+    const { trigger, card } = mountContextRing();
+    trigger.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+
+    expect(card.dataset.floatingOpen).toBe('true');
+    expect(card.querySelector('.context-card__title').textContent).toBe(
+      'Context',
+    );
+    expect(card.querySelector('.context-card__usage').textContent).toBe(
+      '~4,000 / 10,000',
+    );
+    expect(card.querySelector('.context-card__percent').textContent).toBe(
+      '40%',
+    );
+    expect(card.querySelector('.context-card__meter-fill').style.width).toBe(
+      '40%',
+    );
+    expect(card.querySelector('.context-card__details').textContent).toContain(
+      'Last turn',
+    );
+  });
+
+  it('reaches the action from the ring by keyboard and returns on Escape', () => {
+    const { trigger, card } = mountContextRing();
+    expect(trigger.tagName).toBe('BUTTON');
+    expect(trigger.getAttribute('aria-label')).toBe('Context window usage');
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }));
+    trigger.focus();
+    expect(card.dataset.floatingOpen).toBe('true');
+    expect(trigger.getAttribute('aria-describedby')).toBe(card.id);
+
+    trigger.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Tab',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    const action = card.querySelector('.context-card__action');
+    expect(document.activeElement).toBe(action);
+
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }),
+    );
+    expect(card.dataset.floatingOpen).toBe('false');
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it.each([
+    ['pending', false, 'Compaction requested…'],
+    ['running', false, 'Compacting…'],
+    ['unavailable', false, 'Compact now'],
+    ['idle', true, 'Compaction requested…'],
+  ])(
+    'disables compaction while %s (submitting: %s)',
+    (compactionState, compactionSubmitting, label) => {
+      const onForceCompaction = vi.fn();
+      const { card } = mountContextRing({
+        compactionState,
+        compactionSubmitting,
+        onForceCompaction,
+      });
+      const button = card.querySelector('.context-card__action');
+      expect(button.textContent.trim()).toBe(label);
+      expect(button.disabled).toBe(true);
+      button.click();
+      expect(onForceCompaction).not.toHaveBeenCalled();
     },
   );
+
+  it('renders the context card without an action when none is wired', () => {
+    const { card } = mountContextRing({ onForceCompaction: null });
+    expect(card.querySelector('.context-card__action')).toBeNull();
+  });
 
   it('offers slash skill autocomplete at the start of the message', async () => {
     suite.mountedComponent = mount(ChatComposer, {

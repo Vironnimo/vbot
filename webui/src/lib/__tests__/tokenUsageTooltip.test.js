@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { init } from '../i18n.js';
-import { formatTokenUsageTooltip } from '../tokenUsageTooltip.js';
+import {
+  formatContextUsageCard,
+  formatTokenUsageTooltip,
+} from '../tokenUsageTooltip.js';
 
 describe('formatTokenUsageTooltip', () => {
   beforeEach(() => {
@@ -222,5 +225,44 @@ describe('formatTokenUsageTooltip', () => {
     );
 
     expect(tooltip.split('\n\n')).toHaveLength(1);
+  });
+});
+
+describe('formatContextUsageCard', () => {
+  beforeEach(() => {
+    init('en');
+  });
+
+  it('splits the headline from the breakdown of the tooltip text', () => {
+    const contextUsage = {
+      tokens: 155489,
+      estimated: true,
+      provider_input_tokens: 154731,
+      provider_output_tokens: 243,
+    };
+    const usage = { input_tokens: 1000, output_tokens: 50 };
+
+    const card = formatContextUsageCard(contextUsage, usage, null, 262144);
+
+    expect(card.summary).toBe('~155,489 / 262,144');
+    expect(card.details).toBe(
+      [
+        '(in 154,731, out 243)',
+        '',
+        'Last turn',
+        'Input: 1,000 tok',
+        'Output: 50 tok',
+      ].join('\n'),
+    );
+    expect([card.summary, card.details].join('\n')).toBe(
+      formatTokenUsageTooltip(contextUsage, usage, null, 262144),
+    );
+  });
+
+  it('has no headline without a context measurement', () => {
+    expect(formatContextUsageCard(null, null, null, 262144)).toEqual({
+      summary: null,
+      details: '',
+    });
   });
 });

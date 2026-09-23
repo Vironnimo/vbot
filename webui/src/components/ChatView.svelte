@@ -1,6 +1,7 @@
 <script>
   import ChatHeader from './chat/ChatHeader.svelte';
   import {
+    contextCompactionState,
     isProjectSelected,
     isRunActive,
     agentActivityStatus,
@@ -959,6 +960,13 @@
                 focusRequest={layout.composerFocusRequest}
                 availableSkills={chatState.availableSkills}
                 contextUsage={target.activeSessionState?.contextUsage}
+                compactionState={composerSendMessage
+                  ? contextCompactionState(target.activeSessionState)
+                  : 'unavailable'}
+                compactionSubmitting={actions.isCompactionSubmitting(
+                  target.activeSessionState,
+                )}
+                onForceCompaction={actions.handleCompactContext}
                 contextWindow={target.activeAgent?.context_window}
                 usage={target.activeSessionState?.usage}
                 sessionUsage={target.activeSessionState?.sessionUsage}
