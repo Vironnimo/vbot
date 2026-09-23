@@ -156,9 +156,13 @@
               {#each group.items as item (item.name)}
                 <div class="access-chip-wrap">
                   {#if item.locked}
+                    <!-- A locked chip is display-only, but keyboard users
+                         still reach its hover card through focus. -->
+                    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
                     <div
                       class="access-chip access-chip--locked"
                       class:is-on={item.allowed}
+                      tabindex={hasTip(item) ? 0 : undefined}
                     >
                       <span class="access-chip__name">{item.name}</span>
                       <span class="access-chip__auto">
@@ -186,8 +190,7 @@
                   {/if}
                   {#if hasTip(item)}
                     <div
-                      class="access-chip__tip"
-                      role="tooltip"
+                      class="floating-card access-chip__tip"
                       use:floatingHoverCard
                     >
                       {#if item.description}
@@ -411,33 +414,9 @@
     line-height: 1.4;
   }
 
-  /* Structured hover cards are fixed and portaled to <body> by
-     `floatingHoverCard`, so no ancestor overflow or stacking context can clip
-     them. */
+  /* Chip details use the shared floating card (styles/app/hints.css). */
   .access-chip__tip {
-    position: fixed;
-    z-index: var(--z-floating);
-    width: max-content;
-    max-width: min(320px, calc(100vw - 16px));
-    max-height: min(340px, 50vh);
-    padding: 9px 11px;
-    overflow: auto;
-    background: var(--surface-3);
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-md);
-    box-shadow: var(--floating-elevation);
-    opacity: 0;
-    visibility: hidden;
-    pointer-events: none;
-    transition:
-      opacity 0.1s,
-      visibility 0.1s;
-  }
-
-  .access-chip__tip:global([data-floating-open='true']) {
-    opacity: 1;
-    visibility: visible;
-    pointer-events: auto;
+    font-size: var(--fs-label-sm);
   }
 
   .access-chip__desc {

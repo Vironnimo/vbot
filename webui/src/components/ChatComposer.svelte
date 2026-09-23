@@ -4,7 +4,7 @@
   import ModelAutocomplete from './ModelAutocomplete.svelte';
   import SkillAutocomplete from './SkillAutocomplete.svelte';
   import Button from './ui/Button.svelte';
-  import { t } from '$lib/i18n.js';
+  import { activeLocaleTag, t } from '$lib/i18n.js';
   import { onDestroy, tick } from 'svelte';
   import {
     clearDraft,
@@ -19,7 +19,7 @@
     matchMentionCandidates,
   } from '$lib/fileMentions.js';
   import { isImeComposing } from '$lib/keyboard.js';
-  import { formatTokenUsageTooltip } from '$lib/tokenUsageTooltip.js';
+  import { contextUsageCardModel } from '$lib/tokenUsageTooltip.js';
   import { createComposerMedia } from './composer/media.svelte.js';
   import { createComposerPicker } from './composer/picker.svelte.js';
   import './composer/composer.css';
@@ -30,6 +30,9 @@
     cancelling = false,
     availableSkills = [],
     contextUsage = null,
+    compactionState = 'unavailable',
+    compactionSubmitting = false,
+    onForceCompaction = null,
     contextWindow = null,
     usage = null,
     sessionUsage = null,
@@ -102,7 +105,8 @@
   let submitInFlight = $state(false);
 
   // Context-window fill ring: a thin SVG progress arc proportional to
-  // tokens / context_window. The same tooltip as the old header badge.
+  // tokens / context_window. Its hover card shows the usage breakdown and the
+  // Compaction action.
   const CONTEXT_RING_RADIUS = 6;
   const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS;
 
@@ -122,9 +126,44 @@
       ? CONTEXT_RING_CIRCUMFERENCE
       : CONTEXT_RING_CIRCUMFERENCE * (1 - contextFillRatio),
   );
-  let contextTooltip = $derived(
-    formatTokenUsageTooltip(contextUsage, usage, sessionUsage, contextWindow) ??
-      undefined,
+  let contextCard = $derived(
+    contextUsageCardModel(contextUsage, usage, sessionUsage, contextWindow),
+  );
+  // Fill level of the ring and meter. Automatic Compaction defaults to 80% of
+  // the context window, so the ring turns amber shortly before it and red when
+  // the window is nearly exhausted.
+  const CONTEXT_LEVEL_HIGH = 0.7;
+  const CONTEXT_LEVEL_CRITICAL = 0.9;
+  let contextLevel = $derived(
+    contextFillRatio === null || contextFillRatio < CONTEXT_LEVEL_HIGH
+      ? 'normal'
+      : contextFillRatio < CONTEXT_LEVEL_CRITICAL
+        ? 'high'
+        : 'critical',
+  );
+  let contextPercentLabel = $derived.by(() => {
+    if (contextFillRatio === null) {
+      return '';
+    }
+    if (contextFillRatio > 0 && contextFillRatio < 0.01) {
+      return t('chat.contextBelowOnePercent', '<1%');
+    }
+    return new Intl.NumberFormat(activeLocaleTag(), {
+      style: 'percent',
+      maximumFractionDigits: 0,
+    }).format(contextFillRatio);
+  });
+  // One action for both paths: an active Run compacts at its next safe step
+  // ("Compaction requested..."), otherwise a manual Compaction Run starts.
+  let compactionLabel = $derived(
+    compactionState === 'running'
+      ? t('chat.compactionRunning', 'Compacting…')
+      : compactionState === 'pending' || compactionSubmitting
+        ? t('chat.compactionPending', 'Compaction requested…')
+        : t('chat.compactNow', 'Compact now'),
+  );
+  let compactionDisabled = $derived(
+    disabled || compactionSubmitting || compactionState !== 'idle',
   );
 
   onDestroy(() => {
@@ -797,38 +836,107 @@
       )}
       rows="1"></textarea>
     {#if contextFillRatio !== null}
-      <!-- svelte-ignore a11y_no_noninteractive_tabindex (keyboard access to the usage tooltip) -->
-      <span
-        class="context-ring"
-        use:tooltip={contextTooltip}
-        tabindex="0"
-        role="img"
-        aria-label={t('chat.contextRingLabel', 'Context window usage')}
-      >
-        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-          <circle
-            class="context-ring__track"
-            cx="8"
-            cy="8"
-            r={CONTEXT_RING_RADIUS}
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2.5"
-          />
-          <circle
-            class="context-ring__fill"
-            cx="8"
-            cy="8"
-            r={CONTEXT_RING_RADIUS}
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2.5"
-            stroke-linecap="round"
-            stroke-dasharray={CONTEXT_RING_CIRCUMFERENCE}
-            stroke-dashoffset={contextRingOffset}
-            transform="rotate(-90 8 8)"
-          />
-        </svg>
+      <span class="context-ring context-ring--{contextLevel}">
+        <button
+          type="button"
+          class="context-ring-trigger"
+          aria-label={t('chat.contextRingLabel', 'Context window usage')}
+        >
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+            <circle
+              class="context-ring__track"
+              cx="8"
+              cy="8"
+              r={CONTEXT_RING_RADIUS}
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+            />
+            <circle
+              class="context-ring__fill"
+              cx="8"
+              cy="8"
+              r={CONTEXT_RING_RADIUS}
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-dasharray={CONTEXT_RING_CIRCUMFERENCE}
+              stroke-dashoffset={contextRingOffset}
+              transform="rotate(-90 8 8)"
+            />
+          </svg>
+        </button>
+        <div
+          class="floating-card context-card context-card--{contextLevel}"
+          use:floatingHoverCard={{ openOnPress: true }}
+        >
+          <div class="context-card__header">
+            <span class="context-card__title"
+              >{t('chat.contextCardTitle', 'Context')}</span
+            >
+            <span class="context-card__figures">
+              {#if contextCard.summary}<span class="context-card__usage"
+                  >{contextCard.summary}</span
+                >{/if}
+              <span class="context-card__percent">{contextPercentLabel}</span>
+            </span>
+          </div>
+          <span class="context-card__meter" aria-hidden="true">
+            <span
+              class="context-card__meter-fill"
+              style:width={`${Math.round(contextFillRatio * 1000) / 10}%`}
+            ></span>
+          </span>
+          {#if contextLevel !== 'normal'}
+            <p class="context-card__level">
+              {contextLevel === 'critical'
+                ? t('chat.contextCard.atLimit', 'Context almost full')
+                : t(
+                    'chat.contextCard.nearLimit',
+                    'Approaching automatic Compaction',
+                  )}
+            </p>
+          {/if}
+          {#each contextCard.sections as section (section.id)}
+            <section class="context-card__section">
+              {#if section.title}
+                <h3 class="context-card__section-title">
+                  <span>{section.title}</span>
+                  {#if section.meta}<span class="context-card__section-meta"
+                      >{section.meta}</span
+                    >{/if}
+                </h3>
+              {/if}
+              <dl class="context-card__rows">
+                {#each section.rows as row, index (index)}
+                  <div
+                    class="context-card__row"
+                    class:context-card__row--sub={row.sub}
+                  >
+                    <dt>{row.label}</dt>
+                    <dd>{row.value}</dd>
+                  </div>
+                {/each}
+              </dl>
+              {#each section.notes as note (note)}
+                <p class="context-card__note">{note}</p>
+              {/each}
+            </section>
+          {/each}
+          {#if onForceCompaction}
+            <div class="context-card__footer">
+              <Button
+                variant="secondary"
+                class="context-card__action"
+                disabled={compactionDisabled}
+                onClick={onForceCompaction}
+              >
+                {compactionLabel}
+              </Button>
+            </div>
+          {/if}
+        </div>
       </span>
     {/if}
     <div class="input-btns">
@@ -933,25 +1041,24 @@
               type="button"
               class="attachment-thumb-trigger"
               aria-label={t('chat.attachment.preview', 'Preview attachment')}
-              use:tooltip={t('chat.attachment.preview', 'Preview attachment')}
             >
               <img
                 src={attachment.preview_url}
                 alt={attachment.filename}
                 class="attachment-thumb"
               />
+              <span
+                class="floating-card attachment-hover-preview"
+                aria-hidden="true"
+                use:floatingHoverCard={{ accessible: false }}
+              >
+                <img
+                  src={attachment.preview_url}
+                  alt=""
+                  class="attachment-hover-image"
+                />
+              </span>
             </button>
-            <div
-              class="attachment-hover-preview"
-              aria-hidden="true"
-              use:floatingHoverCard={{ accessible: false }}
-            >
-              <img
-                src={attachment.preview_url}
-                alt=""
-                class="attachment-hover-image"
-              />
-            </div>
           {:else}
             <span class="attachment-file-icon" aria-hidden="true">
               <svg viewBox="0 0 16 16">

@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync as svelteFlushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
-import { TOOLTIP_SHOW_DELAY_MS } from '../../lib/tooltip.js';
+import {
+  HOVER_CARD_SHOW_DELAY_MS,
+  TOOLTIP_SHOW_DELAY_MS,
+} from '../../lib/tooltip.js';
 import { rpcBackedApiMock } from './apiMock.js';
 
 export const rpcMock = vi.fn();
@@ -446,10 +449,10 @@ export async function waitForCondition(check, attempts = 20) {
   throw new Error('Timed out waiting for condition.');
 }
 
-// Hovers the context ring and polls the shared quick tooltip (#app-tooltip)
-// until it shows `expectedText` — usage data may still be streaming in when
-// the ring first renders, and the tooltip updates in place.
-export async function hoveredContextRingTooltip(expectedText) {
+// Hovers the context ring and reads its hover card: the headline
+// "tokens / context window" and the remaining usage breakdown. Usage data may
+// still be streaming in when the ring first renders; the card updates in place.
+export async function hoveredContextRingCard() {
   await waitForCondition(
     () => document.body.querySelector('.context-ring') !== null,
     100,
@@ -457,14 +460,44 @@ export async function hoveredContextRingTooltip(expectedText) {
   vi.useFakeTimers();
   const anchor = document.body.querySelector('.context-ring');
   anchor.dispatchEvent(new Event('pointerenter'));
-  await vi.advanceTimersByTimeAsync(200);
+  await vi.advanceTimersByTimeAsync(HOVER_CARD_SHOW_DELAY_MS);
   flushSync();
-  const tooltip = document.getElementById('app-tooltip');
-  expect(tooltip.classList.contains('app-tooltip--visible')).toBe(true);
-  const text = tooltip.textContent;
-  expect(text).toBe(expectedText);
+  const card = document.body.querySelector('.context-card');
+  expect(card.dataset.floatingOpen).toBe('true');
+  // Sections as { title, meta, rows }; a sub-row (a share of the row above)
+  // is prefixed with "· ".
+  const content = {
+    summary: card.querySelector('.context-card__usage')?.textContent ?? '',
+    sections: [...card.querySelectorAll('.context-card__section')].map(
+      (section) => ({
+        title:
+          section
+            .querySelector('.context-card__section-title > span')
+            ?.textContent.trim() ?? '',
+        meta:
+          section
+            .querySelector('.context-card__section-meta')
+            ?.textContent.trim() ?? '',
+        rows: [...section.querySelectorAll('.context-card__row')].map(
+          (row) =>
+            `${row.classList.contains('context-card__row--sub') ? '· ' : ''}${row
+              .querySelector('dt')
+              .textContent.trim()}: ${row.querySelector('dd').textContent.trim()}`,
+        ),
+      }),
+    ),
+  };
   anchor.dispatchEvent(new Event('pointerleave'));
-  return text;
+  return content;
+}
+
+// Opens the context card without hover intent (a press on the ring) and
+// returns its Compaction action.
+export function contextCompactionButton() {
+  const trigger = document.body.querySelector('.context-ring-trigger');
+  trigger.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+  flushSync();
+  return document.body.querySelector('.context-card .context-card__action');
 }
 
 export async function hoveredTooltipText(element, expectedText) {

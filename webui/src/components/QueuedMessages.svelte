@@ -134,10 +134,22 @@
             {/if}
           {:else}
             <div class="queued-messages__preview">
-              <button type="button" class="queued-messages__content"
-                >{message.content}</button
+              <!-- The preview opens the editor for editable items; it stays a
+                   focusable control either way so keyboard users reach the
+                   full-text card. -->
+              <button
+                type="button"
+                class="queued-messages__content"
+                class:queued-messages__content--editable={message.editable ===
+                  true && !message.steering}
+                onclick={() => {
+                  if (!message.steering) beginEdit(message);
+                }}>{message.content}</button
               >
-              <div class="queued-messages__full" use:floatingHoverCard>
+              <div
+                class="floating-card queued-messages__full"
+                use:floatingHoverCard
+              >
                 {message.content}
               </div>
             </div>
@@ -233,6 +245,9 @@
     min-width: 0;
     outline-offset: 2px;
   }
+  .queued-messages__content--editable {
+    cursor: text;
+  }
   .queued-messages__content {
     display: block;
     width: 100%;
@@ -247,28 +262,11 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* The full queued text uses the shared floating card
+     (styles/app/hints.css) with a wider reading measure. */
   .queued-messages__full {
-    position: fixed;
-    z-index: var(--z-floating);
-    visibility: hidden;
-    pointer-events: none;
-    box-shadow: var(--dropdown-elevation);
-    max-width: min(560px, calc(100vw - 24px));
-    max-height: min(60vh, 480px);
-    overflow: auto;
+    max-width: min(560px, calc(100vw - 16px));
     white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    padding: 12px;
-    color: var(--text-hi);
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    font-size: var(--fs-body-sm);
-    line-height: 1.5;
-  }
-  .queued-messages__full:global([data-floating-open='true']) {
-    visibility: visible;
-    pointer-events: auto;
   }
   .queued-messages__actions {
     display: flex;

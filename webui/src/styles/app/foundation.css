@@ -89,8 +89,19 @@
      accent border plus the softer field halo instead. */
   --focus-ring: 0 0 0 1px var(--bg), 0 0 0 3px var(--accent);
   --field-focus-ring: 0 0 0 3px var(--accent-16);
+  /* Elevation for layers portaled to <body> (menus, cards, panels, notices).
+     Defined at the root so every body-level layer resolves it; the compact
+     step is for quick tooltip bubbles. */
   --floating-elevation:
     0 0 0 1px rgba(0, 0, 0, 0.2), 0 12px 32px rgba(0, 0, 0, 0.45);
+  --floating-elevation-sm:
+    0 0 0 1px rgba(0, 0, 0, 0.16), 0 4px 14px rgba(0, 0, 0, 0.38);
+  --dropdown-elevation: var(--floating-elevation);
+  --dropdown-elevation-strong: 0 8px 24px rgba(0, 0, 0, 0.5);
+  /* Scrims behind navigation overlays: the phone More sheet dims the content
+     strongly, the tablet menu overlay only lightly. */
+  --scrim: rgba(0, 0, 0, 0.55);
+  --scrim-light: rgba(0, 0, 0, 0.3);
   /* Status colors. Amber (running/warning) is deliberately yellower than the
      orange accent so a warning never reads as a selection or primary action. */
   --green: #5fcf8f;

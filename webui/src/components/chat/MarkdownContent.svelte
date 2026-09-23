@@ -79,7 +79,10 @@
           !/^\/api\/files\/[A-Za-z0-9_.-]+$/.test(url.pathname)
         )
           continue;
-        const path = link.getAttribute('title') || '';
+        // The Markdown title carries the original path. It moves into
+        // `data-file-path` (kept across effect re-runs) so the shared tooltip
+        // replaces the native title bubble for good.
+        const path = link.getAttribute('title') || link.dataset.filePath || '';
         link.dataset.deliveredFile = href;
         link.dataset.fileName = filename;
         link.dataset.filePath = path;
@@ -88,10 +91,8 @@
         const pathHint = path ? tooltip(link, path) : null;
         fileActions.push(() => {
           pathHint?.destroy();
-          if (path) link.setAttribute('title', path);
           delete link.dataset.deliveredFile;
           delete link.dataset.fileName;
-          delete link.dataset.filePath;
           link.removeAttribute('aria-haspopup');
           link.removeAttribute('aria-expanded');
         });

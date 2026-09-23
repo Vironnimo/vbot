@@ -209,7 +209,7 @@
     inset: 0;
     z-index: var(--z-overlay);
     display: block;
-    background: rgba(0, 0, 0, 0.55);
+    background: var(--scrim);
   }
 
   .app-shell[data-mobile-nav-open='true'] .app-shell__navigation {

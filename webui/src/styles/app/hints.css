@@ -1,80 +1,107 @@
-/* Quick tooltip (lib/tooltip.js) — the app-wide `title` replacement. One
-   shared element portaled to <body>; multi-line via pre-line, size-capped so
-   oversized content clips instead of covering the screen. Fades in/out via
-   the --visible class. */
-.app-tooltip {
+/* Floating layers (lib/tooltip.js, ui/InfoHint.svelte). Quick tooltips,
+   hover cards and info popovers are portaled to <body> and share one visual
+   language: `.floating-tooltip` is the compact bubble for short,
+   non-interactive text; `.floating-card` holds richer or interactive
+   content. Consumers add only size/layout modifiers. The open state is
+   `[data-floating-open='true']`: layers enter with a short fade and a small
+   slide away from their anchor (`data-floating-side`), with no motion under
+   prefers-reduced-motion. No arrows; long content scrolls. */
+.floating-tooltip,
+.floating-card {
+  --floating-shift-x: 0px;
+  --floating-shift-y: 3px;
+
   position: fixed;
   z-index: var(--z-floating);
-  max-width: min(1000px, calc(100vw - 24px));
-  max-height: min(1000px, 60vh);
-  padding: 5px 10px;
-  overflow: hidden;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 16px));
+  overflow: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--border-2);
-  border-radius: var(--r-sm);
   color: var(--text-hi);
-  background: var(--surface-3);
-  box-shadow: var(--dropdown-elevation);
   font-family: var(--font-ui);
-  font-size: var(--fs-label-sm);
-  line-height: 1.5;
   overflow-wrap: anywhere;
   pointer-events: none;
-  white-space: pre-line;
-  opacity: 0;
   visibility: hidden;
-  transition:
-    opacity 100ms ease,
-    visibility 100ms ease;
 }
 
-.app-tooltip--visible {
-  opacity: 1;
+.floating-tooltip {
+  max-height: min(320px, 50vh);
+  padding: 6px 9px;
+  border-radius: var(--r-md);
+  background: var(--surface-3);
+  box-shadow: var(--floating-elevation-sm);
+  font-size: var(--fs-label-sm);
+  line-height: 1.45;
+}
+
+.floating-card {
+  max-height: min(440px, 60vh);
+  padding: 12px;
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  box-shadow: var(--floating-elevation);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+}
+
+.floating-tooltip[data-floating-open='true'],
+.floating-card[data-floating-open='true'] {
+  pointer-events: auto;
   visibility: visible;
+  animation: floating-layer-enter 120ms ease-out;
 }
 
-/* Copyable Tool values use the shared rich hover-card layer: the complete
-   plain-text value stays readable while the existing CopyButton remains
-   keyboard- and touch-accessible. */
+.floating-tooltip[data-floating-side='bottom'],
+.floating-card[data-floating-side='bottom'] {
+  --floating-shift-y: -3px;
+}
+
+.floating-tooltip[data-floating-side='right'],
+.floating-card[data-floating-side='right'] {
+  --floating-shift-x: -3px;
+  --floating-shift-y: 0px;
+}
+
+@keyframes floating-layer-enter {
+  from {
+    opacity: 0;
+    transform: translate(var(--floating-shift-x), var(--floating-shift-y));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .floating-tooltip[data-floating-open='true'],
+  .floating-card[data-floating-open='true'] {
+    animation: none;
+  }
+}
+
+/* The shared quick tooltip keeps author line breaks. */
+.app-tooltip {
+  white-space: pre-line;
+}
+
+/* Copyable Tool values: the complete plain-text value stays readable in the
+   compact bubble while the Copy action remains reachable by keyboard and
+   touch. The value scrolls; the action stays in view. */
 .tool-primary-hover-card {
-  position: fixed;
-  z-index: var(--z-floating);
   display: flex;
   align-items: flex-start;
-  width: max-content;
-  max-width: min(460px, calc(100vw - 24px));
-  max-height: min(340px, 50vh);
-  padding: 7px 7px 7px 10px;
-  overflow: hidden;
   gap: 8px;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-sm);
-  color: var(--text-hi);
-  background: var(--surface-3);
-  box-shadow: var(--dropdown-elevation);
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(2px);
-  visibility: hidden;
-  transition:
-    opacity 120ms ease,
-    transform 120ms ease,
-    visibility 120ms ease;
-}
-
-.tool-primary-hover-card[data-floating-open='true'] {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateY(0);
-  visibility: visible;
+  max-width: min(460px, calc(100vw - 16px));
+  padding: 5px 5px 5px 9px;
+  overflow: hidden;
 }
 
 .tool-primary-hover-card__value {
   min-width: 0;
+  max-height: min(300px, 45vh);
+  padding-top: 2px;
   overflow: auto;
   font-family: var(--font-mono);
   font-size: var(--fs-mono-xs);
   line-height: 1.45;
-  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
@@ -94,7 +121,7 @@
 }
 
 /* Info hint (ui/InfoHint.svelte) — the "?" dot plus its explanatory
-   popover, the second tier of the hint system. */
+   popover. */
 .info-hint {
   display: inline-flex;
   flex: 0 0 auto;
@@ -127,21 +154,6 @@
 .info-hint:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
-}
-
-.info-popover {
-  position: fixed;
-  z-index: var(--z-floating);
-  max-width: min(320px, calc(100vw - 24px));
-  padding: 10px 12px;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-md);
-  color: var(--text-med);
-  background: var(--surface-2);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 40%);
-  font-family: var(--font-ui);
-  font-size: var(--fs-body-sm);
-  line-height: 1.5;
 }
 
 .info-popover p {
