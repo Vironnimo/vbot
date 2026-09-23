@@ -23,15 +23,6 @@
     min-height: 40px;
   }
 
-  .settings-search-count {
-    min-height: 0;
-    padding: 0 2px;
-  }
-
-  .settings-search-count:empty {
-    display: none;
-  }
-
   .settings-desktop-index {
     display: none;
   }
@@ -42,16 +33,6 @@
     align-items: center;
     grid-template-columns: auto minmax(0, 1fr);
     gap: 10px;
-  }
-
-  .settings-mobile-section-label {
-    color: var(--text-med);
-    font-size: var(--fs-label-sm);
-    font-weight: 600;
-  }
-
-  .settings-mobile-section-dropdown {
-    min-width: 0;
   }
 
   .s-row {
@@ -114,35 +95,6 @@
     align-items: stretch;
   }
 
-  .s-skill-manager-toolbar,
-  .s-skill-manager-item-head {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .s-skill-manager-toolbar {
-    width: 100%;
-  }
-
-  .s-skill-manager-scope,
-  .s-skill-manager-new-button {
-    width: 100%;
-  }
-
-  .s-skill-manager-actions {
-    width: 100%;
-    margin-top: var(--space-xs);
-  }
-
-  .s-skill-manager-actions .btn-secondary,
-  .s-skill-manager-actions .btn-danger,
-  .s-skill-manager-create-actions .btn-primary,
-  .s-skill-manager-create-actions .btn-secondary {
-    flex: 1;
-  }
-
-  .s-skill-directory-add,
-  .s-skill-directory-item,
   .s-row-control--input-actions,
   .device-flow-code-row {
     align-items: stretch;

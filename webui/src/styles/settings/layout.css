@@ -68,16 +68,6 @@
   outline: none;
 }
 
-/* Reserve the line even while empty so the index does not jump when a query
-   starts producing a match count. */
-.settings-search-count {
-  min-height: 15px;
-  padding: 0 10px 4px;
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  font-variant-numeric: tabular-nums;
-}
-
 .settings-mobile-section-picker {
   display: none;
 }
@@ -90,13 +80,6 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
-}
-
-.settings-nav-group {
-  padding: 14px 10px 5px;
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  font-weight: 600;
 }
 
 /* Index entry: quiet text row with a 2px accent rail as the active marker,
@@ -138,12 +121,6 @@
   background: var(--surface-3);
 }
 
-/* During a search, index entries whose section has no match stay clickable
-   but recede so the hits stand out. */
-.snav-item--dimmed {
-  color: var(--text-lo);
-}
-
 .settings-content {
   display: flex;
   min-width: 0;
@@ -159,17 +136,6 @@
   width: 100%;
   max-width: var(--content-max-narrow);
   margin-inline: auto;
-}
-
-.s-doc-group {
-  padding: 0 2px 12px;
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  font-weight: 600;
-}
-
-.s-doc-group:first-child {
-  padding-top: 0;
 }
 
 .s-section {

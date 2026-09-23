@@ -56,7 +56,6 @@
 }
 
 .s-value-box,
-.s-select,
 .s-input {
   width: 100%;
   min-width: 0;
@@ -83,20 +82,10 @@
   white-space: nowrap;
 }
 
-.s-select {
-  appearance: none;
-  cursor: pointer;
-}
-
 .s-input:focus-visible {
   border-color: var(--accent-40);
   box-shadow: var(--focus-ring);
   outline: none;
-}
-
-.s-select:disabled {
-  cursor: default;
-  opacity: 0.7;
 }
 
 .s-row-desc code {
