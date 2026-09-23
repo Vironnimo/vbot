@@ -42,13 +42,17 @@
   padding: 14px;
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--r-md);
   min-width: 0;
 }
+/* The connection id and its command or URL are code values. */
 .mcp-identity strong,
 .mcp-endpoint {
   font-family: var(--font-mono);
   overflow-wrap: anywhere;
+}
+.mcp-identity strong {
+  font-size: var(--fs-mono-body);
 }
 .mcp-identity {
   flex-wrap: wrap;
@@ -84,7 +88,8 @@
   border-top: 1px solid var(--border);
   padding-top: 14px;
 }
-summary {
+.mcp-panel summary,
+.mcp-modal summary {
   cursor: pointer;
   color: var(--text-med);
   font-size: var(--fs-body-md);
@@ -99,7 +104,8 @@ summary {
 .modal.mcp-modal {
   width: min(720px, calc(100vw - 32px));
 }
-.modal-body {
+.modal.mcp-modal .modal-body,
+.modal.mcp-credentials-modal .modal-body {
   overflow-y: auto;
   min-height: 0;
 }
@@ -121,7 +127,7 @@ summary {
   color: var(--text-hi);
 }
 .mcp-catalog-counts {
-  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 @media (max-width: 640px) {
   .mcp-capability-search {
