@@ -20,6 +20,7 @@ export {
   syncAgentSessionActivity,
   applySessionCompletionActivity,
   agentActivityStatus,
+  agentUnreadResults,
   newestUnreadSessionForAgent,
   sessionHasTerminalRun,
   currentSessionState,

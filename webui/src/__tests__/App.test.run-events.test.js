@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount } from 'svelte';
 
 import {
-  activeAgentTab,
   App,
   cleanupAppHarness,
   createChatRpcMock,
@@ -15,6 +14,7 @@ import {
   subscribeRunEventsMock,
   subscribeServerEventsMock,
   waitForAssertion,
+  selectedPersonalAgentName,
 } from './App.support.js';
 
 vi.mock('svelte', async () => {
@@ -47,7 +47,7 @@ describe('App', () => {
     flushSync();
 
     await waitForAssertion(() => {
-      expect(activeAgentTab()?.textContent).toContain('Alpha');
+      expect(selectedPersonalAgentName()).toBe('Alpha');
     });
 
     const [handlers] = subscribeServerEventsMock.mock.calls[0];
@@ -145,7 +145,7 @@ describe('App', () => {
     flushSync();
 
     await waitForAssertion(() => {
-      expect(activeAgentTab()?.textContent).toContain('Alpha');
+      expect(selectedPersonalAgentName()).toBe('Alpha');
     });
 
     const [handlers] = subscribeServerEventsMock.mock.calls[0];
@@ -212,7 +212,7 @@ describe('App', () => {
     flushSync();
 
     await waitForAssertion(() => {
-      expect(activeAgentTab()?.textContent).toContain('Alpha');
+      expect(selectedPersonalAgentName()).toBe('Alpha');
     });
 
     const [handlers] = subscribeServerEventsMock.mock.calls[0];

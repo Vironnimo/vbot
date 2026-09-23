@@ -177,8 +177,8 @@
   font-size: var(--fs-label-sm);
 }
 
-/* The project team tabs mirror the identity bar's agent tabs (which are
-     scoped to ChatHeader), so the visual styling is restated locally. */
+/* Project team members are underlined tabs with status dots; personal Agents
+     use the Agent picker in ChatHeader instead. */
 .chat-view__project-team .agent-tab {
   display: flex;
   height: 38px;

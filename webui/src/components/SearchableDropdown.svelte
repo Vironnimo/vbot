@@ -1,9 +1,14 @@
 <script>
   import { tick, untrack } from 'svelte';
 
-  import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
+  import {
+    computePanelPosition,
+    optionDecorations,
+    portal,
+  } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
   import { isImeComposing } from '$lib/keyboard.js';
+  import { tooltip } from '$lib/tooltip.js';
 
   const SEARCH_HEADER_HEIGHT = 44;
   const noop = () => {};
@@ -25,6 +30,10 @@
     ariaLabel = '',
     ariaDescribedby = undefined,
     triggerClass = '',
+    // Optional quick tooltip on the trigger (e.g. details of the selection).
+    triggerTooltip = '',
+    // The panel is at least this wide even under a narrower trigger.
+    panelMinWidth = 0,
     panelClass = '',
     // Optional action row pinned under the options (e.g. the model pickers'
     // "show all models" toggle). Clicking it keeps the panel open so the
@@ -75,6 +84,7 @@
           searchText: option,
           disabled: false,
           code: false,
+          ...optionDecorations(null),
         };
       }
 
@@ -89,6 +99,7 @@
         code: option?.code === true,
         secondaryLabel,
         searchText: option?.searchText ?? `${label} ${secondaryLabel}`.trim(),
+        ...optionDecorations(option),
       };
     });
   }
@@ -105,7 +116,8 @@
     );
   }
 
-  async function open({ focus = 'selected' } = {}) {
+  // Also opens the panel from a related control elsewhere (via bind:this).
+  export async function open({ focus = 'selected' } = {}) {
     if (disabled) {
       return;
     }
@@ -247,6 +259,7 @@
     const { placement, left, width, verticalRule, optionsMaxHeight } =
       computePanelPosition(triggerElement, {
         reservedHeight: SEARCH_HEADER_HEIGHT,
+        minWidth: panelMinWidth,
       });
 
     panelPlacement = placement;
@@ -346,9 +359,16 @@
     aria-haspopup="listbox"
     aria-expanded={isOpen}
     aria-controls={isOpen ? listboxId : undefined}
+    use:tooltip={triggerTooltip}
     onclick={toggleOpen}
     onkeydown={handleTriggerKeyDown}
   >
+    {#if selectedOption?.statusDot}
+      <span
+        class="dropdown-status-dot tab-indicator tab-indicator--{selectedOption.statusDot}"
+        aria-hidden="true"
+      ></span>
+    {/if}
     <span
       class="searchable-dropdown__trigger-label"
       class:searchable-dropdown__trigger-label--placeholder={!hasSelection}
@@ -414,10 +434,17 @@
               id={`${listboxId}-option-${filteredOptions.indexOf(option)}`}
               tabindex="-1"
               disabled={option.disabled}
+              aria-label={option.ariaLabel || undefined}
               aria-selected={option.value === value}
               class:active={option.value === activeOptionValue}
               onclick={() => selectOption(option)}
             >
+              {#if option.statusDot}
+                <span
+                  class="dropdown-status-dot tab-indicator tab-indicator--{option.statusDot}"
+                  aria-hidden="true"
+                ></span>
+              {/if}
               <span
                 class="searchable-dropdown__option-label"
                 class:searchable-dropdown__label--code={option.code}
@@ -427,6 +454,9 @@
                 <span class="searchable-dropdown__option-meta">
                   {option.secondaryLabel}
                 </span>
+              {/if}
+              {#if option.badge}
+                <span class="count-badge">{option.badge}</span>
               {/if}
             </button>
           {/each}

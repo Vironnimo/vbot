@@ -4,10 +4,25 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// A Project Team member's tab; its accessible name starts with the Agent name.
 export function getAgentTab(container, agentName) {
   return container.getByRole("button", {
     name: new RegExp(`^${escapeRegExp(agentName)}:`),
   });
+}
+
+// The Chat header's personal Agent picker; its trigger shows the selected
+// Agent's name.
+export function getAgentPicker(chat) {
+  return chat.getByRole("button", { name: /^Select agent/ });
+}
+
+export async function selectPersonalAgent(page, chat, agentName) {
+  await getAgentPicker(chat).click();
+  await page
+    .getByRole("option", { name: new RegExp(`^${escapeRegExp(agentName)}:`) })
+    .click();
+  await expect(getAgentPicker(chat)).toContainText(agentName);
 }
 
 export async function ensureEmptyChat(chat) {
@@ -60,7 +75,7 @@ export async function startIsolatedChat(page, { agentName = "" } = {}) {
 
   const chat = page.getByRole("region", { name: "Chat" });
   if (agentName) {
-    await getAgentTab(chat, agentName).click();
+    await selectPersonalAgent(page, chat, agentName);
   }
   return ensureEmptyChat(chat);
 }

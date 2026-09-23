@@ -4,6 +4,7 @@
     isProjectSelected,
     isRunActive,
     agentActivityStatus,
+    agentUnreadResults,
     createChatController,
     createChatState,
     isSessionEmpty,
@@ -265,14 +266,30 @@
   let activeTimelineItems = $derived(
     visibleTimelineItemsForRender(target.activeSessionState),
   );
-  let identityAgentStatuses = $derived.by(() =>
-    Object.fromEntries(
-      chatState.agents.map((agent) => [
-        agent.id,
-        agentActivityStatus(chatState, agent.id, target.displayedSessionKey()),
-      ]),
-    ),
-  );
+  let identityAgentActivity = $derived.by(() => {
+    const displayedSessionKey = target.displayedSessionKey();
+    return Object.fromEntries(
+      chatState.agents.map((agent) => {
+        const unreadResults = agentUnreadResults(
+          chatState,
+          agent.id,
+          displayedSessionKey,
+        );
+        return [
+          agent.id,
+          {
+            status: agentActivityStatus(
+              chatState,
+              agent.id,
+              displayedSessionKey,
+            ),
+            unreadCount: unreadResults.count,
+            latestUnreadAt: unreadResults.latestAt,
+          },
+        ];
+      }),
+    );
+  });
 
   let sessionDrawerActivity = $derived.by(() =>
     Object.values(chatState.sessions).map((sessionState) => ({
@@ -615,7 +632,7 @@
   <ChatHeader
     titleId={chatTitleId}
     agents={chatState.agents}
-    agentStatuses={identityAgentStatuses}
+    agentActivity={identityAgentActivity}
     selectedAgentId={target.displayedIdentityAgentId}
     loadingAgents={chatState.loadingAgents}
     {projects}

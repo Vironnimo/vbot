@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import {
   describe,
-  activeAgentTab,
   createAgent,
   createChatRpcMock,
   expect,
@@ -11,6 +10,8 @@ import {
   hoveredContextRingTooltip,
   it,
   rpcMock,
+  selectAgentFromPicker,
+  selectedPersonalAgentName,
   sendComposerMessage,
   setInputValue,
   setupChatViewTestSuite,
@@ -424,16 +425,13 @@ describe('ChatView', () => {
     );
 
     sendComposerMessage('/status');
-    findButtonByText('Beta').click();
+    await selectAgentFromPicker('Beta');
     await waitForCondition(
       () => document.body.textContent.includes('Beta reply'),
       100,
     );
-    findButtonByText('Alpha').click();
-    await waitForCondition(
-      () => activeAgentTab()?.textContent?.includes('Alpha'),
-      100,
-    );
+    await selectAgentFromPicker('Alpha');
+    await waitForCondition(() => selectedPersonalAgentName() === 'Alpha', 100);
 
     resolveStatus({
       command_handled: true,
@@ -451,7 +449,7 @@ describe('ChatView', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     flushSync();
 
-    expect(activeAgentTab()?.textContent).toContain('Alpha');
+    expect(selectedPersonalAgentName()).toBe('Alpha');
     expect(document.body.querySelector('.transient-card')).toBeNull();
   });
 
@@ -616,6 +614,6 @@ describe('ChatView', () => {
       limit: 100,
     });
     expect(subscribeRunEventsMock).not.toHaveBeenCalled();
-    expect(activeAgentTab()?.textContent).toContain('Alpha');
+    expect(selectedPersonalAgentName()).toBe('Alpha');
   });
 });

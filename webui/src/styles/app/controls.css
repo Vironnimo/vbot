@@ -750,6 +750,7 @@ textarea::placeholder {
 }
 
 .dropdown-option:hover,
+.dropdown-option.active,
 .s-dropdown-opt:hover,
 .s-dropdown-opt.active {
   color: var(--text-hi);
@@ -891,6 +892,41 @@ summary:not([class])::-webkit-details-marker {
   flex-shrink: 0;
   color: var(--text-lo);
   font-size: var(--fs-label-sm);
+}
+
+/* Optional option decorations: a status dot before the label (also on the
+   trigger for the selected option) and a count pill after it. The label then
+   takes the free space so the pill and chevron stay at the end. */
+.dropdown-status-dot {
+  flex-shrink: 0;
+}
+
+.dropdown-status-dot + .dropdown-primitive__trigger-label,
+.dropdown-status-dot + .searchable-dropdown__trigger-label,
+.dropdown-status-dot + .dropdown-primitive__option-label,
+.dropdown-status-dot + .searchable-dropdown__option-label {
+  flex: 1 1 auto;
+  text-align: left;
+}
+
+/* Compact numeric count pill (for example unread results). Blue like the
+   other info badges, never the accent. */
+.count-badge {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: var(--blue);
+  background: var(--blue-dim);
+  font-family: var(--font-ui);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .dropdown-primitive__list,
