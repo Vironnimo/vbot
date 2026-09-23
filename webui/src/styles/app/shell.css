@@ -15,7 +15,7 @@
   min-width: var(--sidebar-width);
   flex-direction: column;
   border-right: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--secondary-surface);
   transition:
     width 160ms ease,
     min-width 160ms ease;
@@ -26,18 +26,29 @@
   min-width: var(--sidebar-collapsed-width);
 }
 
+/* Brand row with the collapse control inline at its end; the compact rail
+   stacks the two so neither overlaps the other or a divider. */
 .app-shell__sidebar-header {
   position: relative;
   z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: 14px 10px 6px 16px;
+}
+
+.app-shell[data-sidebar-collapsed='true'] .app-shell__sidebar-header {
+  flex-direction: column;
+  padding: 14px var(--space-sm) 6px;
 }
 
 .app-shell__brand,
 .sidebar-logo {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 10px;
-  padding: 20px 18px var(--space-lg);
-  border-bottom: 1px solid var(--border);
 }
 
 .app-shell__brand-mark {
@@ -50,7 +61,6 @@
 
 .app-shell[data-sidebar-collapsed='true'] .app-shell__brand {
   justify-content: center;
-  padding-inline: var(--space-sm);
 }
 
 .app-shell[data-sidebar-collapsed='true'] .app-shell__brand > div,
@@ -65,21 +75,18 @@
 .placeholder-view__status {
   margin: 0 0 3px;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-label-sm);
   font-weight: 500;
-  letter-spacing: 0.07em;
-  line-height: 1;
-  text-transform: uppercase;
+  line-height: 1.2;
 }
 
-.app-shell h1,
+.app-shell__brand h1,
 .logo-text {
   margin: 0;
   color: var(--text-hi);
-  font-size: 16px;
+  font-size: var(--fs-heading-sm);
   font-weight: 600;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
   line-height: 1.2;
 }
 
@@ -89,7 +96,7 @@
   flex: 1;
   flex-direction: column;
   gap: 1px;
-  padding: calc(var(--space-lg) + var(--space-md) - var(--space-xs)) 10px 10px;
+  padding: var(--space-md) 10px 10px;
 }
 
 .app-shell__navigation {
@@ -101,7 +108,7 @@
   flex-shrink: 0;
 }
 
-/* Grouped navigation: expanded sections use their mono-xs labels for
+/* Grouped navigation: expanded sections use small readable labels for
    separation. The compact rail has no labels, so its short, low-contrast
    divider restores the same cadence hierarchy without competing with icons. */
 .app-shell__nav-group {
@@ -111,19 +118,16 @@
 }
 
 .app-shell__nav-group + .app-shell__nav-group {
-  margin-top: 16px;
+  margin-top: 18px;
 }
 
 .app-shell__nav-group-label {
   margin: 0 0 4px;
   padding: 0 10px;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-label-sm);
   font-weight: 500;
-  letter-spacing: 0.07em;
-  line-height: 1;
-  text-transform: uppercase;
+  line-height: 1.2;
 }
 
 .app-shell__nav-item,
@@ -132,13 +136,13 @@
   width: 100%;
   align-items: center;
   gap: 10px;
-  padding: 9px 10px;
+  padding: 7px 10px;
   border: 0;
   border-radius: var(--r-md);
   color: var(--text-med);
   background: transparent;
   font-family: var(--font-ui);
-  font-size: 13.5px;
+  font-size: var(--fs-body-md);
   font-weight: 500;
   text-align: left;
   transition:
@@ -150,22 +154,27 @@
 .app-shell__nav-item:focus-visible,
 .nav-item:hover,
 .nav-item:focus-visible {
-  color: var(--text-med);
+  color: var(--text-hi);
   background: var(--surface-2);
   outline: none;
 }
 
 .app-shell__nav-item:focus-visible,
 .nav-item:focus-visible {
-  box-shadow:
-    inset 0 0 0 1px var(--accent-40),
-    var(--focus-ring);
+  box-shadow: var(--focus-ring);
 }
 
+/* The active destination reads from a raised surface and bright text; only
+   its icon carries the accent. */
 .app-shell__nav-item--active,
 .nav-item.active {
+  color: var(--text-hi);
+  background: var(--surface-3);
+}
+
+.app-shell__nav-item--active .app-shell__nav-icon,
+.nav-item.active svg {
   color: var(--accent);
-  background: var(--accent-pale);
 }
 
 .app-shell[data-sidebar-collapsed='true'] .app-shell__navigation {
@@ -261,24 +270,16 @@
 }
 
 .btn-tertiary.btn-icon.app-shell__sidebar-toggle {
-  position: absolute;
-  top: 100%;
-  right: var(--sidebar-toggle-inset);
-  z-index: 1;
+  flex-shrink: 0;
   width: var(--sidebar-toggle-size);
-  height: var(--sidebar-toggle-height);
+  height: var(--sidebar-toggle-size);
   min-height: 0;
-  transform: translateY(-50%);
-  border-color: var(--border-2);
-  border-radius: var(--r-md);
   color: var(--text-lo);
-  background: var(--surface);
 }
 
 .btn-tertiary.btn-icon.app-shell__sidebar-toggle:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--surface);
+  color: var(--text-hi);
+  background: var(--surface-3);
 }
 
 .app-shell__sidebar-toggle svg {
@@ -317,8 +318,7 @@
 
 .footer-text {
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-label-sm);
 }
 
 .app-shell__content,
@@ -414,12 +414,9 @@
 .server-availability-notice__eyebrow {
   margin: 0 0 var(--space-xs);
   color: var(--red);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
   font-weight: 600;
-  letter-spacing: 0.07em;
   line-height: 1.2;
-  text-transform: uppercase;
 }
 
 .server-availability-notice--restored .server-availability-notice__eyebrow {
@@ -452,8 +449,7 @@
   width: fit-content;
   color: var(--text-med);
   cursor: pointer;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-sm);
+  font-size: var(--fs-body-sm);
 }
 
 .server-availability-notice__details p {
@@ -571,4 +567,11 @@
 
 .view.active {
   display: flex;
+}
+
+/* Phone-only navigation controls (the bottom bar's More sheet); wider layouts
+   show every destination in the sidebar. */
+.app-shell__nav-more,
+.app-shell__nav-backdrop {
+  display: none;
 }

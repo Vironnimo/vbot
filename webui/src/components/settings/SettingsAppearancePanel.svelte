@@ -2,7 +2,7 @@
   import { onDestroy, untrack } from 'svelte';
 
   import Dropdown from '../Dropdown.svelte';
-  import Button from '../ui/Button.svelte';
+  import SaveButton from '../ui/SaveButton.svelte';
   import { updateSettings } from '$lib/api.js';
   import {
     createDebouncedAutosave,
@@ -264,11 +264,10 @@
 </div>
 
 <div class="s-footer">
-  <Button
-    variant="tertiary"
+  <SaveButton
     class="s-save-button s-save-button--inline"
+    {saving}
+    pending={appearanceAutosave.participant.hasPending()}
     onClick={handleManualSave}
-  >
-    {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
-  </Button>
+  />
 </div>

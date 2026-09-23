@@ -309,9 +309,11 @@
     cursor: pointer;
   }
 
+  /* The radio dot is the selection indicator; the selected card only lifts
+     one surface step. */
   .compaction-policy-editor__choice--selected {
-    border-color: var(--accent-40);
-    background: var(--accent-08);
+    border-color: var(--text-faint);
+    background: var(--surface-3);
   }
 
   .compaction-policy-editor__choice:focus-within {

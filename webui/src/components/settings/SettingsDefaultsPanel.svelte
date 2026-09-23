@@ -3,7 +3,7 @@
 
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
-  import Button from '../ui/Button.svelte';
+  import SaveButton from '../ui/SaveButton.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import TextField from '../ui/TextField.svelte';
   import { listConnections, listModels } from '$lib/api.js';
@@ -522,11 +522,10 @@
   </div>
 </div>
 <div class="s-footer">
-  <Button
-    variant="tertiary"
+  <SaveButton
     class="s-save-button s-save-button--inline"
+    {saving}
+    pending={agentDefaultsAutosave.participant.hasPending()}
     onClick={handleManualAgentDefaultsSave}
-  >
-    {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
-  </Button>
+  />
 </div>

@@ -346,7 +346,6 @@ export default Object.freeze({
   'agents.confirmDisableCustomPrompt.body':
     'This agent has customized prompt blocks. They will be kept, but the agent stops using them and follows the Default scope again. Re-enabling brings them back.',
   'agents.confirmDisableCustomPrompt.confirm': 'Disable custom prompt',
-  'projects.eyebrow': 'Project workspaces',
   'projects.title': 'Projects',
   'projects.subtitle':
     'Add a repository as a project to discover its team and chat with project agents. Adding a project also scans its repo for issues.',
@@ -572,7 +571,6 @@ export default Object.freeze({
   'systemPrompt.blockTitle.core:working_project': 'Working Project',
   'systemPrompt.blockTitle.core:agent_body': 'Agent instructions',
   'systemPrompt.blockTitle.memory:guidance': 'Memory',
-  'systemPrompt.eyebrow': 'Agent context',
   'systemPrompt.subtitle':
     'Read the prompt, inspect available Tools, and adjust instructions.',
   'systemPrompt.scope.label': 'Prompt scope',

@@ -697,7 +697,7 @@
     text-transform: none;
     text-decoration: none;
     color: var(--text-med);
-    font-size: var(--fs-label-sm);
+    font-size: var(--fs-body-sm);
     border-radius: var(--r-sm);
   }
   .chat-workspace__menu a:hover,
@@ -735,7 +735,9 @@
     border-radius: 2px;
     background: var(--border-2);
   }
-  .chat-workspace__divider:hover span,
+  .chat-workspace__divider:hover span {
+    background: var(--text-lo);
+  }
   .chat-workspace__divider:focus-visible span,
   .dragging .chat-workspace__divider span {
     background: var(--accent);

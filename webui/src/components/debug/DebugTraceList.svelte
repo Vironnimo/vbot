@@ -202,14 +202,14 @@
     margin-bottom: 3px;
     border-radius: var(--r-md);
     border: 1px solid transparent;
-    border-left: 3px solid transparent;
+    border-left: 2px solid transparent;
   }
   .debug-trace:hover {
-    background: var(--surface);
+    background: var(--surface-2);
   }
-  .debug-trace--selected {
-    background: var(--accent-08);
-    border-color: var(--accent-22);
+  .debug-trace--selected,
+  .debug-trace--selected:hover {
+    background: var(--surface-3);
     border-left-color: var(--accent);
   }
   .debug-trace__row {
@@ -249,7 +249,9 @@
   }
   .trace-status {
     color: var(--text-med);
-    font: var(--fs-mono-sm) var(--font-mono);
+    font-size: var(--fs-label-sm);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
   }
   .trace-status[data-tone='ok'] {
     color: var(--green);

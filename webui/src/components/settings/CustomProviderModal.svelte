@@ -727,7 +727,8 @@
   .custom-provider-form__intro {
     padding: var(--space-md);
     border: 1px solid var(--border);
-    border-left: 3px solid var(--accent);
+    border-left: 3px solid var(--border-2);
+    border-radius: var(--r-md);
     background: var(--surface-2);
   }
 
@@ -735,16 +736,14 @@
   .custom-models__head p {
     margin: var(--space-xs) 0 0;
     color: var(--text-med);
-    font-size: 0.875rem;
+    font-size: var(--fs-body-md);
     line-height: 1.45;
   }
 
   .custom-provider-form__eyebrow {
     color: var(--text-hi);
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    font-size: var(--fs-body-sm);
+    font-weight: 600;
   }
 
   .custom-provider-form__grid {
@@ -771,12 +770,13 @@
 
   .custom-models__head h4 {
     margin: 0;
-    font-size: 0.95rem;
+    font-size: var(--fs-heading-sm);
   }
 
   .custom-models__empty {
     padding: var(--space-lg);
     border: 1px dashed var(--border);
+    border-radius: var(--r-md);
     color: var(--text-med);
     text-align: center;
   }
@@ -786,15 +786,14 @@
     gap: var(--space-md);
     padding: var(--space-md);
     border: 1px solid var(--border);
+    border-radius: var(--r-md);
     background: var(--surface-2);
   }
 
   .custom-model-card__head {
     color: var(--text-hi);
-    font-size: 0.78rem;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+    font-size: var(--fs-body-sm);
+    font-weight: 600;
   }
 
   .custom-model-card__capabilities {
@@ -806,14 +805,15 @@
   .custom-model-capability {
     padding: var(--space-sm);
     border: 1px solid var(--border);
+    border-radius: var(--r-md);
     color: var(--text-med);
-    font-size: 0.8rem;
+    font-size: var(--fs-body-sm);
   }
 
   .custom-provider-form__error {
     margin: 0;
     color: var(--red);
-    font-size: 0.875rem;
+    font-size: var(--fs-body-md);
   }
 
   @media (max-width: 720px) {

@@ -119,11 +119,16 @@
     <span id="agents-list-title" class="secondary-pane__title">
       {t('agents.title', 'Agents')}
     </span>
-    <Button variant="primary" onClick={onCreate}>
-      <svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true">
-        <path d="M7 1v12M1 7h12" />
+    <Button
+      variant="tertiary"
+      icon
+      ariaLabel={t('agents.create', 'Create agent')}
+      tooltip={t('agents.create', 'Create agent')}
+      onClick={onCreate}
+    >
+      <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
+        <path d="M7 1.5v11M1.5 7h11" />
       </svg>
-      {t('common.add', 'Add')}
     </Button>
   </div>
 

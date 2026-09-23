@@ -37,10 +37,11 @@
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text-med);
-  border-radius: 6px;
+  border-radius: var(--r-md);
   cursor: pointer;
 }
 
+/* The remove button carries only the × glyph, so its size stays literal. */
 .settings-view__fallback-remove {
   flex: none;
   width: 28px;
@@ -50,18 +51,19 @@
 }
 
 .settings-view__fallback-remove:hover {
-  color: var(--danger, #c0392b);
-  border-color: var(--danger, #c0392b);
+  color: var(--red);
+  border-color: var(--red);
 }
 
 .settings-view__fallback-add {
   padding: 5px 10px;
-  font-size: 12.5px;
+  font-size: var(--fs-body-sm);
 }
 
 .settings-view__fallback-add:hover {
   color: var(--text-hi);
-  border-color: var(--text-med);
+  border-color: var(--border-2);
+  background: var(--surface-3);
 }
 
 .settings-view__thinking-list {

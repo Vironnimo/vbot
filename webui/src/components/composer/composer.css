@@ -75,7 +75,7 @@
   gap: 8px;
   padding: 6px 12px;
   color: var(--text-med);
-  font-size: 12px;
+  font-size: var(--fs-label-sm);
 }
 
 .input-area .voice-spinner {
@@ -107,7 +107,7 @@
   min-width: 220px;
   max-width: min(340px, 92vw);
   padding: 10px 12px;
-  border: 1px solid rgba(252, 129, 129, 0.35);
+  border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
   border-left: 2px solid var(--red);
   border-radius: var(--r-md);
   background: var(--surface);
@@ -118,16 +118,15 @@
   margin: 0;
   color: var(--text-hi);
   font-family: var(--font-ui);
-  font-size: 12.5px;
+  font-size: var(--fs-body-sm);
   font-weight: 600;
-  letter-spacing: 0.02em;
 }
 
 .input-area .composer-toast-message {
   margin: 2px 0 0;
   color: var(--text-med);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: var(--fs-label-sm);
   line-height: 1.4;
 }
 
@@ -163,9 +162,9 @@
 
 .input-area .attachment-remove:hover,
 .input-area .attachment-remove:focus-visible {
-  border-color: rgba(252, 129, 129, 0.4);
+  border-color: color-mix(in srgb, var(--red) 40%, transparent);
   color: var(--red);
-  background: rgba(252, 129, 129, 0.08);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
   outline: none;
 }
 

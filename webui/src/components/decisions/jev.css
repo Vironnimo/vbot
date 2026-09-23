@@ -9,17 +9,12 @@
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 20px 26px;
+  padding: 28px 26px 20px;
   border-bottom: 1px solid var(--border);
 }
-.jev-header h2 {
-  margin: 0 0 4px;
-  font-size: 24px;
-}
-.jev-header p,
 .jev-help {
   color: var(--text-med);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-body-sm);
   line-height: 1.6;
   margin: 4px 0 12px;
 }
@@ -120,14 +115,15 @@
 .jev-inputs h3,
 .jev-history h3 {
   margin: 22px 0 12px;
-  font-size: var(--fs-lg);
+  font-size: var(--fs-heading-sm);
+  font-weight: 600;
 }
 .jev-field {
   display: flex;
   flex-direction: column;
   gap: 7px;
   margin-bottom: 16px;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-body-sm);
 }
 .jev-row,
 .jev-actions {
@@ -142,7 +138,7 @@
 .jev-question,
 .jev-answer {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-lg);
   padding: 16px;
   margin-bottom: 14px;
   background: var(--surface);
@@ -156,7 +152,8 @@
 }
 .jev-number {
   color: var(--text-med);
-  font-family: var(--font-mono);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 .jev-criterion {
   display: grid;
@@ -178,15 +175,14 @@
 }
 .jev-error {
   color: var(--text-hi);
-  background: var(--surface-2);
+  background: var(--red-dim);
   padding: 12px;
-  border-left: 3px solid var(--accent);
+  border-left: 3px solid var(--red);
   overflow-wrap: anywhere;
 }
-.jev-notice {
-  padding: 12px 26px;
-  background: var(--surface-2);
-  color: var(--text-med);
+.jev-notice.banner {
+  flex-shrink: 0;
+  margin: 16px 26px 0;
 }
 .jev-history-list {
   max-height: 230px;
@@ -203,8 +199,9 @@
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  font-variant-numeric: tabular-nums;
   padding: 12px 0 2px;
 }
 .jev-model {
@@ -216,14 +213,15 @@
   overflow-wrap: anywhere;
 }
 .jev-answer-value {
-  color: var(--accent);
-  font-family: var(--font-mono);
+  color: var(--text-hi);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 .jev-probability {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-body-sm);
   padding-top: 8px;
 }
 .jev-probability > span:first-child {
@@ -233,7 +231,7 @@
   display: block;
   width: 100%;
   height: 9px;
-  accent-color: var(--accent);
+  accent-color: var(--blue);
 }
 .jev-result pre {
   white-space: pre-wrap;
@@ -241,8 +239,10 @@
   padding: 12px;
   max-height: 340px;
   overflow: auto;
+  border-radius: var(--r-md);
   background: var(--surface);
-  font-size: var(--fs-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
 }
 .jev-result summary {
   cursor: pointer;
@@ -267,8 +267,11 @@
     padding: 14px;
     gap: 12px;
   }
-  .jev-header p {
+  .jev-header .view-header__subtitle {
     display: none;
+  }
+  .jev-notice.banner {
+    margin: 12px 14px 0;
   }
   .jev-toolbar {
     flex-wrap: wrap;

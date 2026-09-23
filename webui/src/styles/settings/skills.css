@@ -43,7 +43,7 @@
   display: block;
   color: var(--text-hi);
   font-family: var(--font-mono);
-  font-size: var(--fs-label-md);
+  font-size: var(--fs-mono-sm);
   font-weight: 500;
   line-height: 1.3;
   overflow-wrap: anywhere;

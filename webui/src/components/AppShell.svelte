@@ -39,13 +39,23 @@
     },
   });
 
-  const MOBILE_NAV_MEDIA_QUERY = '(max-width: 640px)';
-
   const SIDEBAR_COLLAPSED_STORAGE_KEY = 'vbot.sidebar.collapsed.v1';
 
-  let navigationElement = $state(null);
+  // Phone layouts show these destinations directly in the bottom bar; every
+  // other destination stays one tap away in the More sheet.
+  const MOBILE_PRIMARY_VIEW_IDS = new Set([
+    'chat',
+    'terminals',
+    'agents',
+    'calendar',
+  ]);
 
   let sidebarCollapsed = $state(false);
+  let mobileNavOpen = $state(false);
+
+  const activeInMobileSheet = $derived(
+    Boolean(activeViewId) && !MOBILE_PRIMARY_VIEW_IDS.has(activeViewId),
+  );
 
   const sidebarToggleLabel = $derived(
     sidebarCollapsed
@@ -66,9 +76,18 @@
   };
 
   const handleSelectView = (viewId) => {
+    mobileNavOpen = false;
     if (onSelectView) {
       onSelectView(viewId);
     }
+  };
+
+  const handleWindowKeydown = (event) => {
+    if (mobileNavOpen && event.key === 'Escape') {
+      mobileNavOpen = false;
+      return;
+    }
+    menu.handleWindowKeydown(event);
   };
 
   // The sidebar groups navigation by usage cadence. Order and membership come
@@ -270,40 +289,12 @@
     return () =>
       window.removeEventListener('scroll', closeOnCapturedScroll, true);
   });
-
-  // A direct mobile deep-link can activate an item outside the initially
-  // visible part of the horizontal navigation. Reveal it after Svelte has
-  // updated aria-current, without moving the page on wider layouts.
-  $effect(() => {
-    void activeViewId;
-    if (!navigationElement) {
-      return undefined;
-    }
-
-    const frame = requestAnimationFrame(() => {
-      if (
-        typeof window.matchMedia !== 'function' ||
-        !window.matchMedia(MOBILE_NAV_MEDIA_QUERY).matches
-      ) {
-        return;
-      }
-
-      const activeItem = navigationElement.querySelector(
-        '[aria-current="page"]',
-      );
-      if (typeof activeItem?.scrollIntoView === 'function') {
-        activeItem.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-      }
-    });
-
-    return () => cancelAnimationFrame(frame);
-  });
 </script>
 
 <svelte:window
   oncontextmenu={menu.handleContextMenu}
   onpointerdown={menu.handleWindowPointerDown}
-  onkeydown={menu.handleWindowKeydown}
+  onkeydown={handleWindowKeydown}
   onresize={() => menu.contextMenu && menu.closeContextMenu()}
   onblur={() => menu.contextMenu && menu.closeContextMenu()}
 />
@@ -312,6 +303,7 @@
   class="app-shell"
   data-server-unavailable={serverUnavailable ? 'true' : undefined}
   data-sidebar-collapsed={sidebarCollapsed ? 'true' : undefined}
+  data-mobile-nav-open={mobileNavOpen ? 'true' : undefined}
 >
   <aside
     class="app-shell__sidebar"
@@ -349,8 +341,16 @@
       </Button>
     </div>
 
+    {#if mobileNavOpen}
+      <div
+        class="app-shell__nav-backdrop"
+        aria-hidden="true"
+        onclick={() => (mobileNavOpen = false)}
+      ></div>
+    {/if}
+
     <nav
-      bind:this={navigationElement}
+      id="app-shell-navigation"
       class="app-shell__navigation"
       aria-label={t('navigation.sections', 'Sections')}
     >
@@ -366,6 +366,9 @@
           {#each group.items as item (item.id)}
             <button
               class:app-shell__nav-item--active={item.id === activeViewId}
+              class:app-shell__nav-item--mobile-secondary={!MOBILE_PRIMARY_VIEW_IDS.has(
+                item.id,
+              )}
               class="app-shell__nav-item"
               type="button"
               aria-current={item.id === activeViewId ? 'page' : undefined}
@@ -396,7 +399,9 @@
                 {:else if item.id === 'projects'}
                   <path d="M2 12.5V4h4l1.5 1.5h6.5v7z" />
                 {:else if item.id === 'jev'}
-                  <path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M8 12l3 3 5-6" />
+                  <path
+                    d="M2 5.5V2h3.5m5 0H14v3.5m0 5V14h-3.5m-5 0H2v-3.5"
+                  /><path d="m5.5 8 1.75 1.75L10.5 6.5" />
                 {:else if item.id === 'calendar'}
                   <rect x="2" y="3" width="12" height="11" rx="1.5" />
                   <path d="M2 6.5h12M5.5 1.5v3m5-3v3" />
@@ -437,6 +442,34 @@
           {/each}
         </div>
       {/each}
+      <button
+        class:app-shell__nav-more--active={activeInMobileSheet}
+        class="app-shell__nav-more"
+        type="button"
+        aria-expanded={mobileNavOpen}
+        aria-controls="app-shell-navigation"
+        onclick={() => (mobileNavOpen = !mobileNavOpen)}
+      >
+        <svg
+          class="app-shell__nav-icon"
+          viewBox="0 0 16 16"
+          aria-hidden="true"
+          style="width: 15px; height: 15px; flex-shrink: 0"
+        >
+          {#if mobileNavOpen}
+            <path d="m4 4 8 8m0-8-8 8" />
+          {:else}
+            <circle cx="3.5" cy="8" r="1" />
+            <circle cx="8" cy="8" r="1" />
+            <circle cx="12.5" cy="8" r="1" />
+          {/if}
+        </svg>
+        <span class="app-shell__nav-label">
+          {mobileNavOpen
+            ? t('common.close', 'Close')
+            : t('navigation.more', 'More')}
+        </span>
+      </button>
     </nav>
 
     <div class="sidebar-footer app-shell__footer">

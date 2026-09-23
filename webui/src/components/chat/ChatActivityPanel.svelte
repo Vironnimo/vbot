@@ -676,8 +676,8 @@
   .chat-activity__stats-empty {
     margin: 0;
     padding: 4px 8px;
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-sm);
+    font-size: var(--fs-body-sm);
+    font-variant-numeric: tabular-nums;
     color: var(--text-med);
   }
   .chat-activity__stats-value {
@@ -714,14 +714,16 @@
     font-weight: 500;
   }
   .chat-activity__count {
-    font-size: var(--fs-mono-xs);
-    font-family: var(--font-mono);
+    color: var(--text-lo);
+    font-size: var(--fs-label-sm);
+    font-variant-numeric: tabular-nums;
     font-weight: 400;
   }
   .chat-activity__running-count {
     margin-left: auto;
     color: var(--amber);
-    font-size: var(--fs-mono-xs);
+    font-size: var(--fs-label-sm);
+    font-variant-numeric: tabular-nums;
     font-weight: 400;
   }
   summary.chat-activity__group-title {
@@ -808,7 +810,13 @@
   .chat-activity__task-time,
   .chat-activity__reflection-elapsed {
     color: var(--text-med);
+    font-variant-numeric: tabular-nums;
     font-weight: 400;
+  }
+  /* The Bash command itself stays mono; its elapsed time is UI metadata. */
+  .chat-activity__task-row--bash .chat-activity__task-time {
+    font-family: var(--font-ui);
+    font-size: var(--fs-label-sm);
   }
   :global(.chat-activity__cancel.btn-danger.btn-icon) {
     width: 24px;

@@ -45,37 +45,66 @@
   gap: 6px;
 }
 
+/* Layer toggles double as the legend: a leading dot in the layer color keys
+   the entries below. An off layer stays readable (muted text, hollow dot)
+   instead of fading the whole chip. */
 .calendar-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
   border-radius: 999px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-2);
   background: var(--surface-2);
   color: var(--text-hi);
   font-size: var(--fs-label-sm);
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
-  transition: opacity 120ms ease;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.calendar-chip::before {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--calendar-layer-color);
+  content: '';
+}
+
+.calendar-chip:hover {
+  color: var(--text-hi);
+  background: var(--surface-3);
 }
 
 .calendar-chip.is-off {
-  opacity: 0.45;
+  color: var(--text-lo);
+  background: transparent;
+}
+
+.calendar-chip.is-off::before {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--calendar-layer-color);
 }
 
 .calendar-chip--local {
-  border-color: var(--accent);
+  --calendar-layer-color: var(--text-med);
 }
 
 .calendar-chip--cron {
-  border-color: var(--blue);
+  --calendar-layer-color: var(--blue);
 }
 
 .calendar-chip-count {
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-sm);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
   color: var(--text-med);
+}
+
+.calendar-chip.is-off .calendar-chip-count {
+  color: var(--text-lo);
 }
 
 .calendar-view-switcher {
@@ -107,10 +136,8 @@
 .calendar-weekday {
   padding: 6px 8px;
   font-size: var(--fs-label-sm);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-med);
+  font-weight: 500;
+  color: var(--text-lo);
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
 }
@@ -134,11 +161,11 @@
   background: var(--secondary-surface);
 }
 
-/* Today is a whole day region, not an active link on the number: the cell
-   surface is tinted and the number stays plain text. Keeping the highlight
-   off the number avoids the "this is a link/button" reading. */
+/* Today: a quietly raised cell plus an accent circle behind the day number.
+   The accent stays on the small current-day marker instead of flooding the
+   whole cell. */
 .calendar-cell.is-today {
-  background: var(--accent-12);
+  background: var(--surface-2);
 }
 
 .calendar-cell-surface {
@@ -157,9 +184,23 @@
 }
 
 .calendar-day-number {
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-sm);
+  display: inline-flex;
+  min-width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
   color: var(--text-med);
+}
+
+.calendar-cell.is-today .calendar-day-number {
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
 }
 
 /* Hover affordance: a "+" appears over the empty cell area to signal that
@@ -209,7 +250,7 @@
   width: 100%;
   padding: 3px 8px;
   border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
+  border-left: 3px solid var(--text-med);
   border-radius: var(--r-sm);
   background: var(--surface-2);
   color: var(--text-hi);
@@ -235,8 +276,8 @@
 
 .calendar-entry-time {
   flex: none;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
   color: var(--text-med);
 }
 
@@ -250,12 +291,12 @@
 .calendar-entry-repeat {
   flex: none;
   color: var(--text-med);
-  font-size: var(--fs-mono-sm);
+  font-size: var(--fs-label-sm);
 }
 
 .calendar-entry-more {
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
   color: var(--text-lo);
   padding-left: 4px;
 }
@@ -285,8 +326,11 @@
   min-width: 0;
 }
 
+/* Today's column: the same raised surface as the month cell, with a thin
+   accent rail on top as the current-day marker. */
 .calendar-column.is-today {
-  border-color: var(--accent);
+  background: var(--surface-2);
+  box-shadow: inset 0 2px 0 var(--accent);
 }
 
 .calendar-column-heading {
@@ -315,6 +359,7 @@
 .calendar-column-add:hover {
   color: var(--text-hi);
   border-color: var(--border-2);
+  background: var(--surface-3);
 }
 
 /* Agenda */
@@ -374,9 +419,10 @@
 
 .calendar-detail-time {
   margin: 0;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-body);
-  color: var(--accent);
+  font-size: var(--fs-body-md);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-hi);
 }
 
 .calendar-detail-line {
@@ -451,10 +497,17 @@
   cursor: pointer;
 }
 
+.calendar-weekday-option:hover:not(.is-active) {
+  color: var(--text-hi);
+  background: var(--surface-3);
+}
+
+/* Selected weekdays follow the shared toggle's on-state: a light fill with
+   dark text, keeping the accent free for selection and primary actions. */
 .calendar-weekday-option.is-active {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-dim);
+  border-color: var(--text-hi);
+  color: var(--bg);
+  background: var(--text-hi);
 }
 
 .calendar-delete-choice {
