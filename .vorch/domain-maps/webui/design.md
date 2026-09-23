@@ -46,7 +46,7 @@ Named spacing anchors are 4/8/14/20/28px; component styles also use intermediate
 
 ### Geometry and responsive behavior
 
-The Main menu is currently 210px wide, with a 64px compact desktop mode. Secondary panes use the shared 216px token. `AppShell.svelte`, `.secondary-pane`, and `.secondary-list*` own the common geometry; feature components own their row contents and responsive alternatives.
+The Main menu is currently 210px wide, with a 64px compact rail: optional on desktop, always used at tablet widths. Secondary panes use the shared 216px token. `AppShell.svelte`, `.secondary-pane`, and `.secondary-list*` own the common geometry; feature components own their row contents and responsive alternatives.
 
 Many editors use centered inner measures: `--content-max-narrow` is 920px and `--content-max-wide` is 1180px. Chat has a user-selectable comfortable/wide/full measure; the first two use 780px and 1100px. These are existing choices, not a ban on full-width work areas: Terminals and wide data surfaces have different needs and layouts.
 
@@ -84,7 +84,7 @@ Current configuration editors commonly combine debounced autosave and an explici
 
 ### Navigation and action placement
 
-The Main menu groups Work, Configure, and Insights under small sentence-case Sans headings; the active item uses a raised surface, bright text, and an accent icon. The compact mode hides text and separates later groups with small hairlines; its toggle sits at the end of the brand row. On mobile a bottom tab bar shows Chat, Terminals, Agents, and Calendar plus More, which opens every destination as a bottom sheet. The optional Live voice control sits above the connection/microphone indicators. `AppShell.svelte`, `LiveVoice.svelte`, and `app.css` own these surfaces; lifecycle details are in `app-shell.md` and `../model_tasks/live.md`.
+The Main menu groups Work, Configure, and Insights under small sentence-case Sans headings; the active item uses a raised surface, bright text, and an accent icon. The compact mode hides text and separates later groups with small hairlines; its toggle sits at the end of the brand row. At tablet widths the rail is always shown and its toggle unfolds the full menu as an elevated overlay above a light scrim, leaving the content size unchanged. On mobile a bottom tab bar shows Chat, Terminals, Agents, and Calendar plus More, which opens every destination as a bottom sheet. The optional Live voice control sits above the connection/microphone indicators. `AppShell.svelte`, `LiveVoice.svelte`, and `app.css` own these surfaces; lifecycle details are in `app-shell.md` and `../model_tasks/live.md`.
 
 Standalone views share one page-header pattern: a display-size title and an optional one-line description, without an eyebrow above it (`.view-frame`, `.view-header__title`, `.view-header__subtitle`). Secondary panes share one header: a 52px row with a 14px `--text-hi` Sans title at the start and a compact icon action (usually a plus with an accessible name and tooltip) at the end; the pane title matches the Main menu label (for example "Schedules"). Settings' index uses the same header row. `.view-toolbar*` groups tabs and filters without a boxed frame. Existing shared action-group styles align controls right, and `.view-toolbar--split` separates groups with space-between. Settings list heads likewise currently place counts and actions at opposite ends. These styles explain the existing appearance; they are not prescriptions for a new or redesigned view.
 
