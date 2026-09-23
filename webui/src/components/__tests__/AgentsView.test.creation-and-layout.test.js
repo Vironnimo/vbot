@@ -23,6 +23,7 @@ import {
   getSimpleTrigger,
   getSimpleList,
   getButton,
+  getButtonByAriaLabel,
   getDialog,
   setTextInputValueWithin,
   setNumberInputValueWithin,
@@ -310,7 +311,7 @@ describe('AgentsView', () => {
 
     await waitForCondition(() => listedAgentIds().includes('alpha'), 100);
 
-    getButton('Add').click();
+    getButtonByAriaLabel('Create agent').click();
     flushSync();
 
     const modal = getDialog('Create agent');
@@ -374,8 +375,8 @@ describe('AgentsView', () => {
 
     await waitForCondition(() => listedAgentIds().includes('alpha'), 100);
 
-    const addButton = Array.from(document.body.querySelectorAll('button')).find(
-      (button) => button.textContent.trim() === 'Add',
+    const addButton = document.body.querySelector(
+      'button[aria-label="Create agent"]',
     );
     expect(addButton).toBeTruthy();
 
@@ -538,8 +539,8 @@ describe('AgentsView', () => {
 
     await waitForCondition(() => listedAgentIds().includes('alpha'), 100);
 
-    const addButton = Array.from(document.body.querySelectorAll('button')).find(
-      (button) => button.textContent.trim() === 'Add',
+    const addButton = document.body.querySelector(
+      'button[aria-label="Create agent"]',
     );
     expect(addButton).toBeTruthy();
 
@@ -751,7 +752,7 @@ describe('AgentsView', () => {
 
     await waitForCondition(() => listedAgentIds().includes('alpha'), 100);
 
-    getButton('Add').click();
+    getButtonByAriaLabel('Create agent').click();
     flushSync();
     await flushAsyncUpdates();
 

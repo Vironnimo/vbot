@@ -473,7 +473,9 @@ describe('ChatView', () => {
     ).map((element) => element.textContent.trim());
     expect(optionNames).toEqual(['debugging', 'ctx7']);
     expect(
-      document.querySelector('.skill-autocomplete__eyebrow').textContent,
+      document
+        .querySelector('.skill-autocomplete__eyebrow')
+        .textContent.toLowerCase(),
     ).toContain('skills');
   });
 });

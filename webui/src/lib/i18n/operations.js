@@ -272,7 +272,8 @@ export default Object.freeze({
   'cron.noAgents': 'Create an agent before adding cron jobs.',
   'cron.loading': 'Loading cron jobs…',
   'cron.emptyTitle': 'No scheduled runs yet',
-  'cron.emptyListSubtitle': 'Use Add to create a recurring or one-time Run.',
+  'cron.emptyDetailTitle': 'Schedule a Run',
+  'cron.selectTitle': 'Select a scheduled Run',
   'cron.emptySubtitle':
     'Create a recurring or one-time Run. Every fire gets a fresh Session unless you choose an existing one.',
   'cron.list.ariaLabel': 'Scheduled Runs',

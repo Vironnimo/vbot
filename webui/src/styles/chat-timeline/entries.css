@@ -31,8 +31,8 @@
 }
 
 .btn-secondary.btn-icon.chat-timeline__jump-latest:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--text-faint);
+  color: var(--text-hi);
   background: var(--surface-3);
 }
 
@@ -93,8 +93,9 @@
 }
 
 /* Transient command card (e.g. /status, /help): a non-persisted snapshot in the
-   chat stream. Bordered and monospace so it reads as a diagnostic card distinct
-   from real chat bubbles; cards stack so successive snapshots can be compared. */
+   chat stream. Bordered, with a Sans label over a monospace output body, so it
+   reads as a diagnostic card distinct from real chat bubbles; cards stack so
+   successive snapshots can be compared. */
 .transient-card {
   display: flex;
   flex-direction: column;
@@ -118,11 +119,8 @@
 
 .transient-card__label {
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  font-weight: 500;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
+  font-size: var(--fs-label-sm);
+  font-weight: 600;
 }
 
 .transient-card__body {
@@ -130,7 +128,7 @@
   overflow-x: auto;
   color: var(--text-med);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-mono-xs);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
@@ -178,15 +176,12 @@
   box-shadow: 0 0 0 3px var(--accent-16);
 }
 
-.working-block__label,
-.working-block__activity {
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
+/* The status label is UI text; the running Tool name beside it stays mono like
+   the Tool-call lines it summarizes. */
 .working-block__label {
   flex: 0 0 auto;
   color: var(--text-med);
+  font-size: var(--fs-label-sm);
   font-weight: 500;
 }
 
@@ -194,6 +189,8 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -225,8 +222,8 @@
   gap: 4px 6px;
   margin-top: 2px;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .run-footer__part {
@@ -247,8 +244,7 @@
 }
 
 .run-footer__sep {
-  color: var(--text-lo);
-  opacity: 0.6;
+  color: var(--text-faint);
 }
 
 .run-footer__part--added {
@@ -262,8 +258,8 @@
 .run-footer__notice {
   margin-top: 2px;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -442,9 +438,8 @@
 .teb-label {
   flex-shrink: 0;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  text-transform: uppercase;
+  font-size: var(--fs-label-sm);
+  font-weight: 500;
 }
 
 .teb-code {
@@ -509,9 +504,8 @@
 
 .teb-section .teb-label {
   color: var(--text-lo);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
   font-weight: 500;
-  letter-spacing: 0.07em;
 }
 
 .teb-section .teb-code {
@@ -637,7 +631,7 @@
 
 .message-edit-hint {
   color: var(--text-lo);
-  font-size: 11px;
+  font-size: var(--fs-label-sm);
   text-align: right;
 }
 
@@ -656,8 +650,8 @@
   align-self: center;
   margin: 8px 28px;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
   text-align: center;
 }
 
@@ -691,7 +685,7 @@
 .subagent-agent {
   color: var(--text-med);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-mono-xs);
 }
 
 .subagent-preview {
@@ -704,7 +698,7 @@
 .subagent-state {
   color: var(--text-lo);
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: var(--fs-mono-xs);
 }
 
 /* Per-row cancel control. The CSS-only fade-in keeps fast tool calls (the
@@ -730,10 +724,6 @@
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 1.5;
-}
-
-.btn-tertiary.btn-icon.subagent-session-action {
-  color: var(--accent);
 }
 
 .btn-danger.btn-icon.row-cancel {

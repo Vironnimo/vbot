@@ -1,6 +1,5 @@
 export default Object.freeze({
   'logs.title': 'Logs',
-  'logs.eyebrow': 'Daily log viewer',
   'logs.subtitle':
     'The application’s technical log, useful when diagnosing problems. Read one daily file at a time with filtering and live updates.',
   'logs.file': 'File',
@@ -84,7 +83,6 @@ export default Object.freeze({
   'debug.newestFirst': 'Newest first',
   'debug.noMatches': 'No traces match these filters.',
   'debug.resetFilters': 'Reset filters',
-  'debug.eyebrow': 'Debug',
   'debug.title': 'Debug',
   'debug.subtitle':
     'Inspect captured provider requests and responses, and probe model endpoints.',
@@ -167,13 +165,15 @@ export default Object.freeze({
   'statistics.tools.rejectionCodes': 'Rejection codes across Tools',
   'statistics.table.scroll': 'Statistics table; scroll for more columns',
   'statistics.ranking.more': '{count} more',
-  'statistics.eyebrow': 'Usage & activity',
   'statistics.title': 'Statistics',
   'statistics.subtitle':
     'Understand token usage, cost, cache efficiency and Compaction across your Sessions.',
   'statistics.loading': 'Loading statistics…',
   'statistics.loadError': 'Statistics could not be loaded.',
   'statistics.empty': 'No activity recorded yet.',
+  'statistics.usage.emptyWindow':
+    'No token usage in this period. Earlier activity lies outside the chart.',
+  'statistics.usage.showMonths': 'Show by month',
   'statistics.none': 'None',
   'statistics.generatedAt': 'Generated {time}',
   'statistics.estimatedBadge': '~ estimated',

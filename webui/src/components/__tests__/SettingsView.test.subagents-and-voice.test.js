@@ -225,7 +225,8 @@ describe('SettingsView', () => {
     flushSync();
     await openSubAgentsPanel();
 
-    getButton('Save').click();
+    // A clean draft already reads as saved; clicking still confirms it.
+    getButton('Saved').click();
     flushSync();
 
     expect(toastMock).toHaveBeenCalledWith(

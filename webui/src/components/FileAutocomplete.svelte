@@ -136,7 +136,7 @@
     max-height: min(320px, 45vh);
     margin-inline: auto;
     overflow-y: auto;
-    border: 1px solid var(--accent-30);
+    border: 1px solid var(--border-2);
     border-radius: var(--r-md);
     background: var(--surface-2);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
@@ -149,24 +149,21 @@
     border-bottom: 1px solid var(--border);
     color: var(--text-lo);
     background: var(--surface);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 500;
+    font-size: var(--fs-label-sm);
+    font-weight: 600;
     line-height: 1;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
   }
 
   .file-autocomplete__truncated {
+    font-weight: 400;
     text-transform: none;
-    letter-spacing: normal;
   }
 
   .file-autocomplete__loading {
     padding: 9px 10px;
     color: var(--text-lo);
     font-family: var(--font-ui);
-    font-size: 12.5px;
+    font-size: var(--fs-body-sm);
     font-style: italic;
   }
 
@@ -180,7 +177,7 @@
     color: var(--text-med);
     background: transparent;
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--fs-mono-xs);
     line-height: 1.4;
     text-align: left;
     text-overflow: ellipsis;
@@ -208,8 +205,8 @@
     color: var(--text-hi);
   }
 
-  .file-autocomplete__option.active .file-autocomplete__filename {
-    color: var(--accent);
+  .file-autocomplete__option.active {
+    box-shadow: inset 2px 0 0 var(--accent);
   }
 
   @media (max-width: 640px) {

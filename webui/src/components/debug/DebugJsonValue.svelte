@@ -76,12 +76,12 @@
   }
   .json-key {
     color: var(--text-hi);
-    font: var(--fs-body-sm) var(--font-mono);
+    font: var(--fs-mono-body) var(--font-mono);
   }
   .json-count {
-    color: var(--accent);
+    color: var(--text-lo);
     margin-left: 8px;
-    font: var(--fs-body-sm) var(--font-mono);
+    font: var(--fs-mono-body) var(--font-mono);
   }
   .json-label {
     margin-left: 12px;
@@ -100,20 +100,26 @@
     margin: 6px 0 2px;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    color: var(--accent);
-    font: var(--fs-body-sm)/1.7 var(--font-mono);
+    color: var(--text-med);
+    font: var(--fs-mono-body)/1.7 var(--font-mono);
   }
   pre.json-string {
     color: var(--text-hi);
     font: var(--fs-body-lg)/1.7 var(--font-ui);
   }
   button {
+    min-height: 32px;
     margin: 12px 0;
-    padding: 7px;
-    background: var(--surface);
-    color: var(--accent);
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
+    padding: 6px 12px;
+    background: var(--surface-2);
+    color: var(--text-hi);
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-md);
+    font-size: var(--fs-body-sm);
+    font-weight: 500;
     cursor: pointer;
+  }
+  button:hover {
+    background: var(--surface-3);
   }
 </style>

@@ -259,7 +259,8 @@
     font: var(--fs-mono-sm)/1.7 var(--font-mono);
   }
   .detail-endpoint > span {
-    color: var(--accent);
+    color: var(--text-hi);
+    font-weight: 600;
     padding-block: 5px;
   }
   .detail-endpoint code {
@@ -292,7 +293,8 @@
   }
   summary > span + span {
     margin-left: 10px;
-    font-family: var(--font-mono);
+    color: var(--text-lo);
+    font-variant-numeric: tabular-nums;
   }
   summary:focus-visible {
     outline: 2px solid var(--accent);
@@ -346,7 +348,7 @@
     line-height: 1.7;
   }
   .detail-placeholder svg {
-    color: var(--accent);
+    color: var(--text-lo);
   }
   @media (max-width: 760px) {
     .detail-back {

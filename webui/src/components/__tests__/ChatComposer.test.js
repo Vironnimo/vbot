@@ -246,7 +246,9 @@ describe('ChatComposer', () => {
 
     expect(autocompleteNames()).toEqual(['debugging']);
     expect(
-      document.body.querySelector('.skill-autocomplete__eyebrow').textContent,
+      document.body
+        .querySelector('.skill-autocomplete__eyebrow')
+        .textContent.toLowerCase(),
     ).toContain('skills');
   });
 

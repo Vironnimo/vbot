@@ -62,7 +62,7 @@
   .project-scan-banner__message {
     min-width: 0;
     color: var(--text-med);
-    font-size: 12px;
+    font-size: var(--fs-label-sm);
     line-height: 1.4;
   }
 

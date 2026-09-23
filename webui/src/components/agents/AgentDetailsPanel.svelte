@@ -153,13 +153,13 @@
         </div>
         <div class="f">
           <div class="f-label">{t('agents.detail.created', 'Created')}</div>
-          <div class="f-value mono agents-view__wrap-value">
+          <div class="f-value agents-view__wrap-value">
             {displayTimestamp(agent?.created_at)}
           </div>
         </div>
         <div class="f">
           <div class="f-label">{t('agents.detail.updated', 'Updated')}</div>
-          <div class="f-value mono agents-view__wrap-value">
+          <div class="f-value agents-view__wrap-value">
             {displayTimestamp(agent?.updated_at)}
           </div>
         </div>

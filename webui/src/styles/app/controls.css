@@ -7,14 +7,16 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
+  min-height: 32px;
   padding: 6px 14px;
-  border: 1px solid var(--accent-22);
+  border: 1px solid var(--accent);
   border-radius: var(--r-md);
-  color: var(--accent);
-  background: var(--accent-10);
+  color: var(--on-accent);
+  background: var(--accent);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: var(--fs-body-sm);
   font-weight: 600;
+  line-height: 1.3;
   transition:
     border-color 120ms ease,
     background 120ms ease,
@@ -22,8 +24,13 @@
 }
 
 .btn-primary:hover {
-  border-color: var(--accent-38);
-  background: var(--accent-18);
+  border-color: color-mix(in srgb, var(--accent) 86%, white);
+  background: color-mix(in srgb, var(--accent) 86%, white);
+}
+
+.btn-primary:disabled:hover {
+  border-color: var(--accent);
+  background: var(--accent);
 }
 
 .btn-primary:focus-visible,
@@ -40,7 +47,7 @@
 .reasoning-header:focus-visible,
 .tool-event-line:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px var(--accent-16);
+  box-shadow: var(--focus-ring);
 }
 
 .btn-secondary,
@@ -49,14 +56,16 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
+  min-height: 32px;
   padding: 6px 13px;
   border: 1px solid var(--border-2);
   border-radius: var(--r-md);
-  color: var(--text-med);
-  background: transparent;
+  color: var(--text-hi);
+  background: var(--surface-2);
   font-family: var(--font-ui);
-  font-size: 12.5px;
+  font-size: var(--fs-body-sm);
   font-weight: 500;
+  line-height: 1.3;
   transition:
     border-color 120ms ease,
     background 120ms ease,
@@ -64,15 +73,15 @@
 }
 
 .btn-secondary:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-dim);
+  border-color: var(--text-faint);
+  color: var(--text-hi);
+  background: var(--surface-3);
 }
 
 .btn-danger:hover {
   border-color: var(--red);
   color: var(--red);
-  background: rgba(252, 129, 129, 0.07);
+  background: color-mix(in srgb, var(--red) 7%, transparent);
 }
 
 .btn-tertiary {
@@ -80,13 +89,13 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-height: 30px;
+  min-height: 32px;
   padding: 5px 10px;
   border: 1px solid transparent;
   border-radius: var(--r-md);
   color: var(--text-med);
   background: transparent;
-  font: 500 var(--fs-body-sm)/1.4 var(--font-ui);
+  font: 500 var(--fs-body-sm)/1.3 var(--font-ui);
   transition:
     border-color 120ms ease,
     background 120ms ease,
@@ -108,8 +117,8 @@
 }
 
 .btn-tertiary.btn-icon {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   padding: 0;
   border-color: transparent;
 }
@@ -128,35 +137,45 @@
   width: 32px;
   height: 32px;
   padding: 0;
-  border-color: rgba(252, 129, 129, 0.22);
+  border-color: color-mix(in srgb, var(--red) 22%, transparent);
   color: var(--red);
-  background: rgba(252, 129, 129, 0.07);
+  background: color-mix(in srgb, var(--red) 7%, transparent);
 }
 
 .btn-danger.btn-icon:hover {
-  border-color: rgba(252, 129, 129, 0.45);
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
   color: var(--red);
-  background: rgba(252, 129, 129, 0.14);
+  background: color-mix(in srgb, var(--red) 14%, transparent);
 }
 
 /* Keep the icon variant red when disabled (cancel in flight) — the shared
    danger disabled:hover reset below would flip it to the neutral ghost. */
 .btn-danger.btn-icon:disabled:hover {
-  border-color: rgba(252, 129, 129, 0.22);
+  border-color: color-mix(in srgb, var(--red) 22%, transparent);
   color: var(--red);
-  background: rgba(252, 129, 129, 0.07);
+  background: color-mix(in srgb, var(--red) 7%, transparent);
 }
 
 .btn-icon.btn-icon--active {
-  border-color: rgba(232, 135, 10, 0.45);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
   color: var(--accent);
   background: var(--accent-10);
 }
 
-.btn-secondary:disabled:hover,
-.btn-danger:disabled:hover,
-.btn-tertiary:disabled:hover {
+.btn-secondary:disabled:hover {
   border-color: var(--border-2);
+  color: var(--text-hi);
+  background: var(--surface-2);
+}
+
+.btn-danger:disabled:hover {
+  border-color: var(--border-2);
+  color: var(--text-hi);
+  background: var(--surface-2);
+}
+
+.btn-tertiary:disabled:hover {
+  border-color: transparent;
   color: var(--text-med);
   background: transparent;
 }
@@ -174,20 +193,26 @@
   border-radius: var(--r-md);
   color: var(--text-hi);
   background: var(--field-surface);
-  font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-md);
+  line-height: 1.4;
   outline: none;
-  padding: 7px 11px;
+  padding: 6px 11px;
   transition:
     border-color 150ms ease,
     box-shadow 150ms ease;
+}
+
+.s-input:hover,
+.modal-input:hover {
+  border-color: var(--text-faint);
 }
 
 .s-input:focus,
 .modal-input:focus,
 .agents-view input:focus,
 .agents-view textarea:focus {
-  border-color: var(--accent-40);
+  border-color: var(--accent);
   box-shadow: var(--focus-ring);
 }
 
@@ -212,8 +237,8 @@
   outline: none;
   color: var(--text-hi);
   background: var(--field-surface);
-  font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-md);
   line-height: 1.5;
   transition:
     border-color 150ms ease,
@@ -221,7 +246,7 @@
 }
 
 .text-area:focus-visible {
-  border-color: var(--accent-40);
+  border-color: var(--accent);
   box-shadow: var(--focus-ring);
 }
 
@@ -236,7 +261,7 @@
   border: 0;
   border-radius: 0;
   background: var(--prompt-content-surface);
-  font-size: 12px;
+  font-size: var(--fs-body-md);
   line-height: 1.6;
 }
 
@@ -248,7 +273,8 @@
 
 .text-area--code {
   min-height: 168px;
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-body);
   line-height: 1.5;
   tab-size: 2;
   overflow-x: auto;
@@ -259,18 +285,17 @@
 
 .text-area--invalid {
   border-color: var(--red) !important;
-  box-shadow: 0 0 0 2px rgba(252, 129, 129, 0.08);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--red) 8%, transparent);
 }
 
 .text-area--invalid:focus-visible {
   border-color: var(--red) !important;
-  box-shadow: 0 0 0 3px rgba(252, 129, 129, 0.16);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 16%, transparent);
 }
 
 .modal-input {
   background: var(--bg);
-  font-size: 13px;
-  padding: 9px 12px;
+  padding: 8px 12px;
 }
 
 .input-area {
@@ -292,9 +317,10 @@
     box-shadow 150ms ease;
 }
 
+/* The composer holds focus most of the time; a calm border shift marks it
+   without a permanent glowing ring around the main work surface. */
 .input-wrap:focus-within {
-  border-color: var(--accent-40);
-  box-shadow: var(--focus-ring);
+  border-color: var(--text-faint);
 }
 
 .msg-input,
@@ -307,7 +333,7 @@
   color: var(--text-hi);
   background: transparent;
   font-family: var(--font-ui);
-  font-size: 14px;
+  font-size: var(--fs-body-lg);
   line-height: 1.5;
   outline: none;
   overflow-y: auto;
@@ -337,12 +363,25 @@ textarea::placeholder {
 .chip {
   display: inline-flex;
   align-items: center;
-  border-radius: 12px;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
+  gap: 6px;
+  border-radius: 999px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-label-sm);
   font-weight: 500;
   line-height: 1;
-  padding: 3px 9px;
+  padding: 4px 9px;
+  white-space: nowrap;
+}
+
+/* A leading dot plus the label carries the status, so the pill stays quiet
+   instead of relying on color alone. */
+.chip::before {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: currentcolor;
+  content: '';
 }
 
 /* Canonical status-chip variants. `StatusChip` (`components/ui/StatusChip.svelte`)
@@ -355,7 +394,7 @@ textarea::placeholder {
 
 .chip.warn {
   color: var(--amber);
-  background: rgba(245, 158, 11, 0.1);
+  background: var(--amber-dim);
 }
 
 .chip.info {
@@ -365,7 +404,7 @@ textarea::placeholder {
 
 .chip.error {
   color: var(--red);
-  background: rgba(252, 129, 129, 0.1);
+  background: var(--red-dim);
 }
 
 .chip.neutral {
@@ -383,11 +422,13 @@ textarea::placeholder {
   gap: 4px;
   border: 1px solid var(--border-2);
   border-radius: 999px;
-  padding: 2px 7px;
+  padding: 3px 8px;
   color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-family: var(--font-ui);
+  font-size: var(--fs-label-sm);
+  font-weight: 500;
   line-height: 1;
+  white-space: nowrap;
 }
 
 .badge--neutral {
@@ -403,20 +444,20 @@ textarea::placeholder {
 }
 
 .badge--success {
-  border-color: rgba(74, 222, 128, 0.28);
-  background: rgba(74, 222, 128, 0.1);
+  border-color: color-mix(in srgb, var(--green) 28%, transparent);
+  background: color-mix(in srgb, var(--green) 10%, transparent);
   color: var(--green);
 }
 
 .badge--warn {
-  border-color: rgba(245, 158, 11, 0.28);
-  background: rgba(245, 158, 11, 0.1);
+  border-color: color-mix(in srgb, var(--amber) 28%, transparent);
+  background: color-mix(in srgb, var(--amber) 10%, transparent);
   color: var(--amber);
 }
 
 .badge--error {
-  border-color: rgba(252, 129, 129, 0.28);
-  background: rgba(252, 129, 129, 0.1);
+  border-color: color-mix(in srgb, var(--red) 28%, transparent);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
   color: var(--red);
 }
 
@@ -432,9 +473,9 @@ textarea::placeholder {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-2);
-  border-left: 2px solid var(--border-2);
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-2);
   border-radius: var(--r-md);
   color: var(--text-med);
   font-family: var(--font-ui);
@@ -457,17 +498,17 @@ textarea::placeholder {
 
 .banner--success {
   border-left-color: var(--green);
-  background: rgba(74, 222, 128, 0.1);
+  background: color-mix(in srgb, var(--green) 10%, transparent);
 }
 
 .banner--warn {
   border-left-color: var(--amber);
-  background: rgba(245, 158, 11, 0.1);
+  background: color-mix(in srgb, var(--amber) 10%, transparent);
 }
 
 .banner--error {
   border-left-color: var(--red);
-  background: rgba(252, 129, 129, 0.1);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
 }
 
 /* Quiet Chat context and Queue surface, with the same text-action footprint. */
@@ -490,7 +531,7 @@ textarea::placeholder {
   flex-shrink: 0;
   min-height: 26px;
   padding: 3px 6px;
-  font-size: var(--fs-mono-sm);
+  font-size: var(--fs-label-sm);
 }
 
 .banner--compact > .btn-tertiary {
@@ -534,12 +575,15 @@ textarea::placeholder {
   border-radius: 9px;
 }
 
+/* On-state is a light track with a dark knob: unmistakable next to the dark
+   off-state, yet calm in long lists where most switches are on. The orange
+   accent stays reserved for selection and primary actions. */
 .toggle.on,
 .tl-toggle.on,
 .toggle[aria-checked='true'],
 .tl-toggle[aria-checked='true'] {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--text-hi);
+  background: var(--text-hi);
 }
 
 .t-knob {
@@ -549,9 +593,23 @@ textarea::placeholder {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #fff;
-  opacity: 0.95;
-  transition: left 200ms ease;
+  background: var(--text-lo);
+  transition:
+    left 200ms ease,
+    background 200ms ease;
+}
+
+.toggle.on .t-knob,
+.tl-toggle.on .t-knob,
+.toggle[aria-checked='true'] .t-knob,
+.tl-toggle[aria-checked='true'] .t-knob {
+  background: var(--bg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-knob {
+    transition: none;
+  }
 }
 
 .toggle.on .t-knob,
@@ -591,11 +649,14 @@ textarea::placeholder {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 7px 11px;
+  padding: 6px 11px;
   border: 1px solid var(--border-2);
   border-radius: var(--r-md);
   color: var(--text-hi);
-  background: var(--surface-2);
+  background: var(--field-surface);
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-md);
+  line-height: 1.4;
   transition: border-color 150ms ease;
   user-select: none;
   white-space: nowrap;
@@ -606,14 +667,9 @@ textarea::placeholder {
   opacity: 0.55;
 }
 
-.dropdown-trigger {
-  font-family: var(--font-ui);
-  font-size: 13px;
-}
-
-.s-dropdown-trigger {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
+.dropdown-trigger:hover:not(:disabled),
+.s-dropdown-trigger:hover:not(:disabled) {
+  border-color: var(--text-faint);
 }
 
 .dropdown.open .dropdown-trigger,
@@ -623,7 +679,7 @@ textarea::placeholder {
 
 .dropdown-chevron {
   flex-shrink: 0;
-  opacity: 0.4;
+  color: var(--text-lo);
   transition: transform 180ms ease;
 }
 
@@ -653,7 +709,7 @@ textarea::placeholder {
 }
 
 .s-dropdown-panel {
-  border: 1px solid var(--accent-30);
+  border: 1px solid var(--border-2);
   box-shadow: var(--dropdown-elevation-strong);
 }
 
@@ -664,10 +720,12 @@ textarea::placeholder {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 8px 12px;
+  padding: 7px 12px;
   border: 0;
-  color: var(--text-med);
+  color: var(--text-hi);
   background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-md);
   text-align: left;
   transition:
     background 100ms ease,
@@ -678,15 +736,6 @@ textarea::placeholder {
 .s-dropdown-opt:disabled {
   cursor: not-allowed;
   opacity: 0.5;
-}
-
-.dropdown-option {
-  font-size: 13px;
-}
-
-.s-dropdown-opt {
-  font-family: var(--font-mono);
-  font-size: 12px;
 }
 
 .dropdown-option:hover,
@@ -723,8 +772,8 @@ textarea::placeholder {
   padding: 0;
   color: var(--text-hi);
   background: transparent;
-  font-family: var(--font-mono);
-  font-size: 12px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-md);
   outline: none;
 }
 
@@ -736,8 +785,7 @@ textarea::placeholder {
 .s-dropdown-empty {
   padding: 10px 12px;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-body-sm);
 }
 
 .s-dropdown-footer {
@@ -747,9 +795,8 @@ textarea::placeholder {
   border: 0;
   border-top: 1px solid var(--border);
   background: transparent;
-  color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
   text-align: left;
   cursor: pointer;
 }
@@ -788,8 +835,7 @@ textarea::placeholder {
 .searchable-dropdown__option-meta {
   flex-shrink: 0;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-label-sm);
 }
 
 .dropdown-primitive__list,
@@ -798,10 +844,10 @@ textarea::placeholder {
 }
 
 .searchable-dropdown__search svg {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   flex-shrink: 0;
-  opacity: 0.4;
+  color: var(--text-lo);
 }
 
 .searchable-dropdown__empty {
@@ -813,12 +859,12 @@ textarea::placeholder {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 500;
+  z-index: var(--z-modal);
   display: none;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(2px);
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(3px);
 }
 
 .modal-overlay.open {
@@ -832,7 +878,9 @@ textarea::placeholder {
   border-radius: var(--r-lg);
   animation: modal-in 180ms ease;
   background: var(--surface);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.25),
+    0 24px 64px rgba(0, 0, 0, 0.55);
 }
 
 @keyframes modal-in {
@@ -862,18 +910,18 @@ textarea::placeholder {
 
 .modal-title {
   color: var(--text-hi);
-  font-size: 15px;
+  font-size: var(--fs-heading-sm);
   font-weight: 600;
   letter-spacing: -0.01em;
 }
 
 .modal-close {
   display: flex;
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   align-items: center;
   justify-content: center;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-md);
   color: var(--text-lo);
   background: transparent;
   transition:
@@ -882,8 +930,8 @@ textarea::placeholder {
 }
 
 .modal-close:hover {
-  color: var(--text-med);
-  background: var(--surface-2);
+  color: var(--text-hi);
+  background: var(--surface-3);
 }
 
 .modal-body {
@@ -910,13 +958,11 @@ textarea::placeholder {
   display: flex;
   align-items: center;
   gap: 5px;
-  color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  color: var(--text-hi);
+  font-family: var(--font-ui);
+  font-size: var(--fs-label-md);
   font-weight: 500;
-  letter-spacing: 0.07em;
-  line-height: 1.2;
-  text-transform: uppercase;
+  line-height: 1.3;
 }
 
 .form-field__required {
@@ -934,16 +980,13 @@ textarea::placeholder {
   align-items: baseline;
   gap: 6px;
   color: var(--red);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-sm);
-  letter-spacing: 0.01em;
-  line-height: 1.35;
+  font-size: var(--fs-body-sm);
+  line-height: 1.4;
 }
 
 .form-field__error::before {
   color: var(--red);
   content: '×';
-  font-family: var(--font-mono);
   font-weight: 600;
 }
 
@@ -953,4 +996,13 @@ textarea::placeholder {
   display: flex;
   gap: 8px;
   align-items: flex-start;
+}
+
+/* Manual Save beside autosaved editors: quiet once everything is persisted. */
+.save-button.btn-tertiary.save-button--saved {
+  color: var(--text-lo);
+}
+
+.save-button.btn-tertiary.save-button--saved:hover {
+  color: var(--text-hi);
 }

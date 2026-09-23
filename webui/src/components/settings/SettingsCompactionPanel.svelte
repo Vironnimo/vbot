@@ -2,7 +2,7 @@
   import { onDestroy, onMount, untrack } from 'svelte';
 
   import CompactionPolicyEditor from '../compaction/CompactionPolicyEditor.svelte';
-  import Button from '../ui/Button.svelte';
+  import SaveButton from '../ui/SaveButton.svelte';
   import { listConnections, listModels } from '$lib/api.js';
   import {
     createDebouncedAutosave,
@@ -164,11 +164,10 @@
 />
 
 <div class="s-footer">
-  <Button
-    variant="tertiary"
+  <SaveButton
     class="s-save-button s-save-button--inline"
+    {saving}
+    pending={compactionAutosave.participant.hasPending()}
     onClick={saveNow}
-  >
-    {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
-  </Button>
+  />
 </div>

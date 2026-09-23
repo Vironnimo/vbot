@@ -11,9 +11,8 @@
   gap: 14px;
   padding: 0 28px 28px;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.06em;
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .date-sep::before,
@@ -25,11 +24,11 @@
 }
 
 /* A session takeover is a deliberate human action (the /agent move), so its
-   divider carries the accent the design reserves for human decisions — set
-   apart from the muted compaction separator while sharing the same divider
-   geometry from `.date-sep`. */
+   divider reads one text level brighter than the muted date and compaction
+   separators while sharing the same divider geometry from `.date-sep`. The
+   accent stays reserved for selection, primary actions, and focus. */
 .takeover-sep {
-  color: var(--accent);
+  color: var(--text-med);
 }
 
 .run-compaction-sep {
@@ -107,10 +106,8 @@
   align-items: center;
   justify-content: space-between;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: var(--fs-label-sm);
+  font-weight: 600;
 }
 
 .compaction-detail__text {
@@ -175,7 +172,7 @@
 
 .msg.error .msg-avatar {
   color: var(--red);
-  background: rgba(252, 129, 129, 0.1);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
 }
 
 .msg-author {
@@ -249,7 +246,7 @@
   border-radius: 0 var(--r-md) var(--r-md) 0;
   color: var(--text-hi);
   background: var(--surface-2);
-  font-size: 14px;
+  font-size: var(--fs-body-lg);
   line-height: 1.55;
 }
 
@@ -257,14 +254,14 @@
 .message-block.assistant {
   padding: 2px 0;
   color: var(--text-hi);
-  font-size: 14px;
+  font-size: var(--fs-body-lg);
   line-height: 1.65;
 }
 
 .msg-markdown {
   padding: 2px 0;
   color: var(--text-hi);
-  font-size: 14px;
+  font-size: var(--fs-body-lg);
   line-height: 1.65;
 }
 
@@ -343,7 +340,7 @@
   padding: 0;
   background: none;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--fs-mono-body);
 }
 
 /* Fenced Markdown code is a bounded technical artifact, so it gets the
@@ -405,7 +402,7 @@
   color: var(--text-med);
   background: none;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-mono-xs);
   font-style: normal;
   line-height: 1.65;
   white-space: pre;
@@ -413,11 +410,11 @@
 
 .msg-markdown code {
   border: 1px solid var(--border-2);
-  border-radius: 3px;
+  border-radius: var(--r-sm);
   padding: 1px 5px;
   background: var(--surface-2);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--fs-mono-body);
 }
 
 .msg-markdown a,
@@ -434,7 +431,7 @@
 .msg-markdown table {
   margin: 0.5em 0;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--fs-body-md);
 }
 
 .msg-markdown th,
@@ -473,12 +470,12 @@
 .msg.error .msg-body-text {
   max-width: min(720px, 100%);
   padding: 10px 14px;
-  border: 1px solid rgba(252, 129, 129, 0.24);
+  border: 1px solid color-mix(in srgb, var(--red) 24%, transparent);
   border-left: 3px solid var(--red);
   border-radius: 0 var(--r-md) var(--r-md) 0;
   color: var(--text-hi);
-  background: rgba(252, 129, 129, 0.07);
-  font-size: 14px;
+  background: color-mix(in srgb, var(--red) 7%, transparent);
+  font-size: var(--fs-body-lg);
   line-height: 1.55;
 }
 
@@ -492,11 +489,8 @@
   align-items: center;
   color: var(--text-lo);
   cursor: pointer;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-label-sm);
   font-weight: 500;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
 }
 
 .error-details-summary:hover {
@@ -512,7 +506,7 @@
   color: var(--text-med);
   background: var(--bg);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-mono-xs);
   line-height: 1.5;
   overflow-x: auto;
   white-space: pre-wrap;
@@ -627,10 +621,11 @@
   }
 }
 
+/* The collapsed Tool-call line is a code-like trace (Tool name, arguments,
+   diff facts, timing), so it stays mono as one unit. */
 .te-fn,
 .te-arg,
 .te-time,
-.teb-label,
 .teb-code {
   font-family: var(--font-mono);
 }
@@ -638,7 +633,7 @@
 .te-fn {
   flex-shrink: 0;
   color: var(--text-med);
-  font-size: 12px;
+  font-size: var(--fs-mono-xs);
   font-weight: 500;
 }
 
@@ -648,7 +643,7 @@
   max-width: min(30rem, max(12rem, calc(100vw - 560px)));
   overflow: hidden;
   color: var(--text-lo);
-  font-size: 12px;
+  font-size: var(--fs-mono-xs);
   white-space: nowrap;
 }
 
@@ -673,7 +668,7 @@
 }
 
 .te-primary-value:focus-visible {
-  border-radius: 2px;
+  border-radius: var(--r-sm);
   outline: 1px solid var(--accent-40);
   outline-offset: 2px;
 }
@@ -696,7 +691,7 @@
   flex-shrink: 0;
   color: var(--text-med);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-mono-xs);
   white-space: nowrap;
 }
 
@@ -723,7 +718,7 @@
   flex-shrink: 0;
   margin-left: 6px;
   color: var(--text-lo);
-  font-size: 10.5px;
+  font-size: var(--fs-mono-xs);
 }
 
 .te-time.error,
@@ -755,14 +750,13 @@
 .teb-label {
   flex-shrink: 0;
   color: var(--text-lo);
-  font-size: 10px;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
+  font-size: var(--fs-label-sm);
+  font-weight: 500;
 }
 
 .teb-code {
   color: var(--text-med);
-  font-size: 11.5px;
+  font-size: var(--fs-mono-xs);
   line-height: 1.5;
 }
 

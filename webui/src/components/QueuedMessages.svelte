@@ -243,7 +243,7 @@
     font-family: inherit;
     overflow: hidden;
     color: var(--text-med);
-    font-size: 12.5px;
+    font-size: var(--fs-body-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -263,7 +263,7 @@
     background: var(--surface-2);
     border: 1px solid var(--border);
     border-radius: var(--r-md);
-    font-size: 13px;
+    font-size: var(--fs-body-sm);
     line-height: 1.5;
   }
   .queued-messages__full:global([data-floating-open='true']) {
@@ -298,6 +298,6 @@
   .queued-messages__error {
     margin: 0;
     color: var(--red);
-    font-size: 12px;
+    font-size: var(--fs-label-sm);
   }
 </style>

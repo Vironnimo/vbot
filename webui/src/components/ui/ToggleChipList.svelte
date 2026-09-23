@@ -1,6 +1,6 @@
 <script>
   // Shared compact allow-list for Project tools and skills. Renders each item as a
-  // toggle chip (the chip itself is the on/off control — accent-filled = allowed)
+  // toggle chip (the chip itself is the on/off control — raised, bright chip = allowed)
   // in a wrapping cloud, with an always-present toolbar: a live search filter, an
   // "on / total" tally, and "all on" / "all off" bulk actions. The item's
   // description (plus any not-ready hint or skill warnings) shows on plain hover.
@@ -254,7 +254,7 @@
     padding: 6px 10px;
     background: var(--surface-2);
     border: 1px solid var(--border-2);
-    border-radius: 6px;
+    border-radius: var(--r-md);
     color: var(--text-lo);
   }
 
@@ -269,8 +269,7 @@
     border: 0;
     background: transparent;
     color: var(--text-hi);
-    font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--fs-body-sm);
     outline: none;
   }
 
@@ -279,9 +278,9 @@
   }
 
   .access-chips__count {
-    color: var(--text-med);
-    font-family: var(--font-mono);
-    font-size: 11px;
+    color: var(--text-lo);
+    font-size: var(--fs-label-sm);
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
 
@@ -296,7 +295,7 @@
     margin: 0;
     padding: 0 16px 10px;
     color: var(--text-lo);
-    font-size: 11.5px;
+    font-size: var(--fs-label-sm);
     line-height: 1.4;
   }
 
@@ -327,17 +326,20 @@
     position: relative;
   }
 
+  /* Chip names are Skill, Tool, or Agent identifiers. Off chips are quiet
+     outlines; on chips take the neutral "on" treatment (bright text on the
+     raised surface) — the orange accent stays reserved for selection. */
   .access-chip {
     display: inline-flex;
     align-items: center;
     gap: 6px;
     padding: 5px 11px;
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: 999px;
     background: transparent;
     color: var(--text-lo);
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--fs-mono-xs);
     cursor: pointer;
     transition:
       background 0.1s,
@@ -350,18 +352,19 @@
   button.access-chip:hover:not(:disabled) {
     border-color: var(--border-2);
     color: var(--text-med);
+    background: var(--surface-2);
   }
 
   .access-chip.is-on {
-    color: var(--accent);
-    background: var(--accent-10);
-    border-color: var(--accent-30);
+    color: var(--text-hi);
+    background: var(--surface-3);
+    border-color: var(--border-2);
   }
 
   button.access-chip.is-on:hover:not(:disabled) {
-    background: var(--accent-16);
-    border-color: rgba(232, 135, 10, 0.42);
-    color: var(--accent);
+    background: var(--surface-3);
+    border-color: var(--text-faint);
+    color: var(--text-hi);
   }
 
   .access-chip:disabled {
@@ -381,10 +384,10 @@
   }
 
   /* Locked chip (e.g. memory): display-only, dashed, with an "auto" tag — never a
-     toggle. It keeps only the faint on-tint (background/border) but stays MUTED
-     (grey text, dim tag), so it reads as display-only, not as an active accent
-     toggle. The two-class selector beats `.access-chip.is-on`, which would
-     otherwise force the accent text color on. */
+     toggle. It keeps the on-surface (background/border) but stays MUTED (grey
+     text, dim tag), so it reads as display-only, not as an active toggle. The
+     two-class selector beats `.access-chip.is-on`, which would otherwise force
+     the bright on-state text color. */
   .access-chip--locked {
     cursor: default;
     border-style: dashed;
@@ -395,17 +398,16 @@
   }
 
   .access-chip__auto {
-    font-family: var(--font-mono);
-    font-size: 9.5px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+    font-family: var(--font-ui);
+    font-size: var(--fs-label-sm);
+    font-weight: 500;
     color: var(--text-lo);
   }
 
   .access-chip__locked-note {
     margin: 6px 0 0;
     color: var(--text-med);
-    font-size: 11.5px;
+    font-size: var(--fs-label-sm);
     line-height: 1.4;
   }
 
@@ -422,8 +424,8 @@
     overflow: auto;
     background: var(--surface-3);
     border: 1px solid var(--border-2);
-    border-radius: 6px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    border-radius: var(--r-md);
+    box-shadow: var(--floating-elevation);
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
@@ -441,22 +443,19 @@
   .access-chip__desc {
     margin: 0;
     color: var(--text-hi);
-    font-size: 12px;
+    font-size: var(--fs-label-sm);
     line-height: 1.45;
   }
 
   .access-chip__warnings {
     margin-top: 7px;
     color: var(--amber);
-    font-size: 11.5px;
+    font-size: var(--fs-label-sm);
     line-height: 1.4;
   }
 
   .access-chip__warnings-label {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+    font-weight: 600;
   }
 
   .access-chip__warnings ul {

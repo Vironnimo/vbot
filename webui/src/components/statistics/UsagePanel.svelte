@@ -271,7 +271,7 @@
           <tbody>
             {#each cacheSessions as record (`${record.agent_id}:${record.session_id}`)}
               <tr>
-                <td class="stats-mono">{@render agentName(record.agent_id)}</td>
+                <td>{@render agentName(record.agent_id)}</td>
                 <td class="stats-mono stats-truncate">{record.session_id}</td>
                 <td>{formatInteger(record.cache_turns, locale)}</td>
                 <td>{formatTokens(record.input_tokens, locale)}</td>

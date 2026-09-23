@@ -41,6 +41,8 @@
 }
 .swarm-profile-editor h2 {
   font-size: var(--fs-display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
 .swarm-profile-editor h3 {
   font-size: var(--fs-heading-sm);
@@ -100,14 +102,6 @@
 .swarm-profile-editor .formation-settings .btn-icon {
   justify-self: end;
 }
-.swarm-profile-editor .form-field__label {
-  color: var(--text-hi);
-  font-family: var(--font-ui);
-  font-size: var(--fs-label-md);
-  letter-spacing: normal;
-  text-transform: none;
-  line-height: 1.4;
-}
 .swarm-profile-editor .directory-fields {
   display: grid;
   grid-template-columns: 160px minmax(0, 1fr);
@@ -147,7 +141,7 @@
   background: var(--surface);
   padding: 14px;
   border: 1px solid var(--border-2);
-  border-radius: 6px;
+  border-radius: var(--r-md);
 }
 .swarm-profile-editor .advanced summary {
   cursor: pointer;

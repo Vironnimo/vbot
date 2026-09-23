@@ -8,6 +8,7 @@
     saveDecisionExperiment,
     deleteDecisionExperiment,
   } from '$lib/api.js';
+  import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import TextField from '../ui/TextField.svelte';
   import Modal from '../ui/Modal.svelte';
@@ -117,27 +118,34 @@
 
 <div class="view active jev-view">
   <header class="jev-header">
-    <div>
-      <h2>Jev</h2>
-      {#if !experiment}<p>
+    <div class="view-header__intro">
+      <h2 class="view-header__title">Jev</h2>
+      {#if !experiment}<p class="view-header__subtitle">
           {t(
             'jev.subtitle',
             'Ask focused questions. Inspect decisions. Connect actions.',
           )}
         </p>{/if}
     </div>
-    <Button
-      variant="tertiary"
-      onClick={() => onNavigateToSettingsPanel('decision_model')}
-      >{t('jev.configure', 'Configure model')}</Button
-    >
+    {#if loading || available}<Button
+        variant="tertiary"
+        onClick={() => onNavigateToSettingsPanel('decision_model')}
+        >{t('jev.configure', 'Configure model')}</Button
+      >{/if}
   </header>
-  {#if !loading && !available}<div class="jev-notice">
-      {t(
-        'jev.configureHelp',
-        'Choose a Decision model under Settings → Tools → Evaluation to evaluate questions or start a control. You can prepare experiments now.',
-      )}
-    </div>{/if}
+  {#if !loading && !available}<Banner variant="info" class="jev-notice">
+      <span>
+        {t(
+          'jev.configureHelp',
+          'Choose a Decision model under Settings → Tools → Evaluation to evaluate questions or start a control. You can prepare experiments now.',
+        )}
+      </span>
+      <Button
+        variant="secondary"
+        onClick={() => onNavigateToSettingsPanel('decision_model')}
+        >{t('jev.configure', 'Configure model')}</Button
+      >
+    </Banner>{/if}
   {#if error}<p class="jev-error" role="alert">{error}</p>
     {#if !experiment}<Button onClick={refresh}
         >{t('common.retry', 'Retry')}</Button

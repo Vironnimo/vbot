@@ -202,8 +202,9 @@
     font-weight: 500;
   }
   .body-size {
-    color: var(--text-med);
-    font: var(--fs-mono-xs) var(--font-mono);
+    color: var(--text-lo);
+    font-size: var(--fs-label-sm);
+    font-variant-numeric: tabular-nums;
     margin-right: auto;
   }
   .body-search {
@@ -249,7 +250,7 @@
   pre {
     margin: 0;
     color: var(--text-hi);
-    font: var(--fs-body-sm)/1.75 var(--font-mono);
+    font: var(--fs-mono-body)/1.75 var(--font-mono);
     white-space: pre;
     tab-size: 2;
   }
@@ -258,7 +259,7 @@
     overflow-wrap: anywhere;
   }
   mark {
-    color: var(--bg);
+    color: var(--on-accent);
     background: var(--accent);
     outline: 2px solid var(--accent);
   }

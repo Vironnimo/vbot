@@ -57,21 +57,17 @@
 .projects-view .project-item-name {
   overflow: hidden;
   color: var(--text-hi);
-  font-size: 13px;
+  font-size: var(--fs-body-sm);
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.projects-view .project-item.active .project-item-name {
-  color: var(--accent);
-}
-
 .projects-view .project-item-cwd {
   overflow: hidden;
-  color: var(--text-med);
+  color: var(--text-lo);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-mono-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -80,7 +76,7 @@
   margin: 0;
   padding: 12px 16px;
   color: var(--text-med);
-  font-size: 12.5px;
+  font-size: var(--fs-body-sm);
   line-height: 1.4;
 }
 
@@ -129,17 +125,18 @@
 
 .projects-view .detail-heading {
   color: var(--text-hi);
-  font-size: 22px;
+  font-size: var(--fs-display);
   font-weight: 600;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.02em;
   line-height: 1.2;
 }
 
+/* The Project's working directory path. */
 .projects-view .detail-sub {
   margin-top: 4px;
   color: var(--text-lo);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-mono-sm);
   overflow-wrap: anywhere;
 }
 
@@ -176,7 +173,7 @@
   border-bottom: 1px solid var(--border);
   border-radius: var(--r-lg) var(--r-lg) 0 0;
   color: var(--text-hi);
-  font-size: 13px;
+  font-size: var(--fs-body-sm);
   font-weight: 600;
   background: var(--surface);
 }
@@ -215,34 +212,30 @@
 }
 
 .projects-view .projects-label {
-  color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.05em;
-  line-height: 1;
-  text-transform: uppercase;
+  color: var(--text-hi);
+  font-size: var(--fs-label-md);
+  font-weight: 500;
+  line-height: 1.4;
 }
 
 .projects-view .projects-sublabel {
   margin-top: 4px;
   color: var(--text-lo);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: var(--fs-label-sm);
+  font-weight: 600;
 }
 
 .projects-view .projects-help {
   margin: 0;
   color: var(--text-lo);
-  font-size: 11.5px;
+  font-size: var(--fs-label-sm);
   line-height: 1.4;
 }
 
 .projects-view .projects-inherit-hint {
   margin: 0;
   color: var(--text-med);
-  font-size: 11.5px;
+  font-size: var(--fs-label-sm);
   line-height: 1.4;
 }
 
@@ -250,7 +243,7 @@
 .projects-view .projects-inherit-link {
   align-self: flex-start;
   padding: 2px 8px;
-  font-size: 11px;
+  font-size: var(--fs-label-sm);
 }
 
 .projects-view .projects-dropdown {
@@ -260,11 +253,8 @@
 .projects-view .projects-view__eyebrow {
   margin: 0 0 6px;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  font-weight: 500;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: var(--fs-label-sm);
+  font-weight: 600;
 }
 
 /* ── Auto-load / whitelist file lists ─────────────────────────────────────── */
@@ -286,7 +276,7 @@
   padding: 4px 6px 4px 10px;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--surface);
 }
 
 .projects-view .projects-file-name {
@@ -327,6 +317,7 @@
   white-space: nowrap;
 }
 
+/* The remove button carries only the × glyph, so its size stays literal. */
 .projects-view .projects-file-remove {
   flex-shrink: 0;
   width: 20px;
@@ -342,7 +333,7 @@
 }
 
 .projects-view .projects-file-remove:hover:not(:disabled) {
-  background: rgba(252, 129, 129, 0.12);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
   color: var(--red);
 }
 
@@ -367,7 +358,7 @@
 .projects-view .projects-scan-loading {
   margin: 0;
   color: var(--text-lo);
-  font-size: 12px;
+  font-size: var(--fs-label-sm);
 }
 
 .projects-view .projects-team {
@@ -423,7 +414,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-hi);
-  font-size: 12.5px;
+  font-size: var(--fs-body-sm);
   font-weight: 500;
 }
 
@@ -432,8 +423,7 @@
   max-width: 45%;
   overflow: hidden;
   color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-label-sm);
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -465,16 +455,16 @@
 .projects-view .projects-effective-label {
   min-width: 108px;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  font-size: var(--fs-label-sm);
+  font-weight: 500;
 }
 
+/* One line each for Model, temperature, and Thinking effort: a mix of names
+   and numbers, so the interface face with aligned figures. */
 .projects-view .projects-effective-value {
   color: var(--text-hi);
-  font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-body-sm);
+  font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 
@@ -485,7 +475,7 @@
 
 .projects-view .projects-effective-source {
   color: var(--text-lo);
-  font-size: 11px;
+  font-size: var(--fs-label-sm);
 }
 
 /* Override controls: a labeled block per field with a control + set/clear actions. */
@@ -522,7 +512,7 @@
 .projects-view .projects-override-help {
   margin: 0;
   color: var(--text-lo);
-  font-size: 11px;
+  font-size: var(--fs-label-sm);
   line-height: 1.4;
 }
 
@@ -532,7 +522,7 @@
   padding: 14px;
   border: 1px solid var(--border);
   border-left: 2px solid var(--border-2);
-  border-radius: 10px;
+  border-radius: var(--r-lg);
   background: var(--surface-2);
 }
 
@@ -551,20 +541,22 @@
 .projects-view .projects-source-line {
   margin: 0;
   color: var(--text-med);
-  font-size: 11.5px;
+  font-size: var(--fs-label-sm);
   line-height: 1.4;
 }
 
+/* "Source: <path> (<format>)" — dominated by the file path. */
 .projects-view .projects-source-line {
   color: var(--text-lo);
   font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
   overflow-wrap: anywhere;
 }
 
 .projects-view .projects-tools-follow {
   margin: 2px 0 0;
   color: var(--text-lo);
-  font-size: 11px;
+  font-size: var(--fs-label-sm);
   line-height: 1.4;
 }
 
@@ -579,7 +571,7 @@
 .projects-view .projects-finding-title {
   margin: 0;
   color: var(--text-hi);
-  font-size: 12.5px;
+  font-size: var(--fs-body-sm);
   font-weight: 600;
 }
 
@@ -607,14 +599,15 @@
 
 .projects-view .projects-finding-detail {
   color: var(--text-med);
-  font-size: 12px;
+  font-size: var(--fs-label-sm);
   line-height: 1.4;
 }
 
+/* "Agent <id>" / "Source: <path>" lines. */
 .projects-view .projects-finding-meta {
   color: var(--text-lo);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-mono-xs);
 }
 
 /* ── Modals ───────────────────────────────────────────────────────────────── */
@@ -648,31 +641,34 @@
   text-align: left;
 }
 
-.projects-format-option:hover,
-.projects-format-option:focus-visible {
-  border-color: var(--accent);
-  background: var(--accent-dim);
+.projects-format-option:hover {
+  border-color: var(--text-faint);
+  background: var(--surface-2);
 }
 
-.projects-format-option--selected {
-  border-color: rgba(232, 135, 10, 0.5);
-  background: var(--accent-dim);
+.projects-format-option:focus-visible {
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+/* The accent border is the selection indicator; the card itself lifts to the
+   selected surface and its text stays neutral. */
+.projects-format-option--selected,
+.projects-format-option--selected:hover {
+  border-color: var(--accent);
+  background: var(--surface-3);
 }
 
 .projects-format-option__name {
   color: var(--text-hi);
-  font-size: 13px;
+  font-size: var(--fs-body-sm);
   font-weight: 500;
-}
-
-.projects-format-option--selected .projects-format-option__name {
-  color: var(--accent);
 }
 
 .projects-format-option__detail {
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .projects-claude-md-suggestion {
@@ -680,7 +676,7 @@
   align-items: flex-start;
   gap: 8px;
   color: var(--text-med);
-  font-size: 12px;
+  font-size: var(--fs-label-sm);
   line-height: 1.4;
 }
 

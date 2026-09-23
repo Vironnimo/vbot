@@ -298,8 +298,7 @@
     display: block;
     margin-top: 2px;
     color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
+    font-size: var(--fs-label-sm);
   }
   .stats-limit-card__labels {
     display: flex;
@@ -308,23 +307,21 @@
     gap: var(--space-xs);
   }
   .stats-limit-card__plan {
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+    font-size: var(--fs-label-sm);
+    font-weight: 500;
     color: var(--text-med);
     border: 1px solid var(--border-2);
-    border-radius: 10px;
+    border-radius: 999px;
     padding: 1px 8px;
   }
   .stats-limit-card__credits {
-    color: var(--accent);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
+    color: var(--text-med);
+    font-size: var(--fs-label-sm);
+    font-variant-numeric: tabular-nums;
   }
   .stats-limit-card__unavailable {
     margin: 0;
-    font-size: var(--fs-mono-body);
+    font-size: var(--fs-body-sm);
     color: var(--text-lo);
     font-style: italic;
   }
@@ -346,14 +343,15 @@
     justify-content: space-between;
     align-items: baseline;
     gap: 8px;
-    font-size: var(--fs-mono-body);
+    font-size: var(--fs-body-sm);
   }
   .stats-limit-window__label {
     color: var(--text-med);
   }
   .stats-limit-window__used {
-    font-family: var(--font-mono);
     color: var(--text-hi);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
   }
   .stats-limit-window__track {
     height: 7px;
@@ -364,7 +362,7 @@
   .stats-limit-window__fill {
     display: block;
     height: 100%;
-    background: var(--accent);
+    background: var(--blue);
   }
   .stats-limit-window__fill--warn {
     background: var(--amber);
@@ -373,14 +371,14 @@
     background: var(--red);
   }
   .stats-limit-window__reset {
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
+    font-size: var(--fs-label-sm);
+    font-variant-numeric: tabular-nums;
     color: var(--text-lo);
   }
   .stats-limit-window__units {
     color: var(--text-med);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
+    font-size: var(--fs-label-sm);
+    font-variant-numeric: tabular-nums;
   }
 
   @media (max-width: 640px) {

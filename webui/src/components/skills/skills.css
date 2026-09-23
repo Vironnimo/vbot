@@ -9,10 +9,8 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  font: 600 var(--fs-mono-xs)/1.4 var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--text-hi);
+  font: 600 var(--fs-label-sm)/1.4 var(--font-ui);
+  color: var(--text-lo);
 }
 .skills-nav-label::after {
   content: '';
@@ -51,7 +49,9 @@
   white-space: nowrap;
 }
 .skills-count {
-  font: 400 var(--fs-mono-xs)/1.4 var(--font-mono);
+  color: var(--text-lo);
+  font: 400 var(--fs-label-sm)/1.4 var(--font-ui);
+  font-variant-numeric: tabular-nums;
 }
 .skills-main {
   display: flex;
@@ -154,10 +154,11 @@
   cursor: pointer;
 }
 .skills-row:hover {
-  background: var(--surface);
+  background: var(--surface-2);
 }
-.skills-row--selected {
-  background: var(--accent-06);
+.skills-row--selected,
+.skills-row--selected:hover {
+  background: var(--surface-3);
   border-left-color: var(--accent);
 }
 .skills-row-open:focus-visible {
@@ -213,8 +214,10 @@
   flex: 1;
   min-width: 0;
 }
+/* Skill names are identifiers; the source line below stays in the interface
+   face. */
 .skills-row-name {
-  font: 500 var(--fs-mono-body)/1.5 var(--font-mono);
+  font: 500 var(--fs-mono-sm)/1.5 var(--font-mono);
   color: var(--text-hi);
   overflow-wrap: anywhere;
 }
@@ -475,9 +478,11 @@
   cursor: pointer;
   text-align: left;
 }
+/* The check box carries the accent; the selected card only lifts one
+   surface step. */
 .skills-share-option--selected {
-  background: var(--accent-06);
-  border-color: var(--accent-30);
+  background: var(--surface-3);
+  border-color: var(--border-2);
 }
 .skills-share-option:focus-visible {
   outline: 1px solid var(--accent);

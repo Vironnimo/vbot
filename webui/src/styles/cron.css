@@ -74,15 +74,11 @@
   -webkit-line-clamp: 2;
 }
 
-.cron-view .cron-item.active .cron-item-name {
-  color: var(--accent);
-}
-
 .cron-view .cron-item-next {
   overflow: hidden;
   color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -152,15 +148,20 @@
 .cron-view .detail-eyebrow,
 .cron-view .cron-summary-label,
 .cron-view .cron-execution-grid dt,
-.cron-view .cron-technical-label,
-.cron-view .cron-schedule-type-label {
+.cron-view .cron-technical-label {
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
   font-weight: 500;
-  letter-spacing: 0.07em;
-  line-height: 1;
-  text-transform: uppercase;
+  line-height: 1.2;
+}
+
+/* The schedule-type legend labels a form control, so it matches the shared
+   form-field label rather than the summary labels above. */
+.cron-view .cron-schedule-type-label {
+  color: var(--text-hi);
+  font-size: var(--fs-label-md);
+  font-weight: 500;
+  line-height: 1.3;
 }
 
 .cron-view .detail-eyebrow {
@@ -171,7 +172,7 @@
   color: var(--text-hi);
   font-size: var(--fs-display);
   font-weight: 600;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.02em;
   line-height: 1.2;
 }
 
@@ -194,11 +195,9 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  font-weight: 500;
 }
 
 /* ── Operational summary ───────────────────────────────────────────────── */
@@ -230,9 +229,9 @@
   margin-top: 11px;
   overflow: hidden;
   color: var(--text-hi);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-body);
-  font-weight: 500;
+  font-size: var(--fs-body-md);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -303,10 +302,15 @@
   margin: 6px 0 0;
   overflow: hidden;
   color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-sm);
+  font-size: var(--fs-body-sm);
+  font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.cron-view .cron-execution-grid dd.cron-execution-grid__id {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
 }
 
 /* ── Task / Timing / Session editor ────────────────────────────────────── */
@@ -421,8 +425,8 @@
 }
 
 .cron-view .cron-radio-option input:checked + span {
-  background: var(--accent-pale);
-  color: var(--accent);
+  background: var(--surface-3);
+  color: var(--text-hi);
 }
 
 .cron-view .cron-radio-option input:focus-visible + span {
@@ -439,12 +443,6 @@
 .cron-view .cron-dropdown-list {
   width: 100%;
   min-width: 0;
-}
-
-.cron-view .cron-dropdown .dropdown-primitive__trigger,
-.cron-view .cron-dropdown .dropdown-primitive__option {
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-body);
 }
 
 .cron-view .cron-dropdown-list {
