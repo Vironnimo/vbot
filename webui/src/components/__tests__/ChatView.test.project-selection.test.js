@@ -2,7 +2,7 @@
 
 import {
   describe,
-  activeAgentTab,
+  agentPickerTrigger,
   createAgent,
   createChatRpcMock,
   expect,
@@ -12,6 +12,8 @@ import {
   listQueueMock,
   listSessionsMock,
   rpcMock,
+  selectAgentFromPicker,
+  selectedPersonalAgentName,
   sendComposerMessage,
   setupChatViewTestSuite,
   showProjectMock,
@@ -191,10 +193,21 @@ describe('ChatView', () => {
       100,
     );
 
+    // The project default is active; step up to the identity Agent so the
+    // picker trigger carries its tooltip.
+    await waitForCondition(
+      () =>
+        document.querySelector('.chat-view__project-team .agent-tab.active') !==
+        null,
+      100,
+    );
+    await selectAgentFromPicker('Alpha');
+    await waitForCondition(() => selectedPersonalAgentName() === 'Alpha', 100);
+
     vi.useFakeTimers();
     expect(
       await hoveredTooltipText(
-        document.querySelector('.chat-header .agent-tab'),
+        agentPickerTrigger(),
         'Alpha: Idle\nopenrouter/anthropic/claude-sonnet-4',
       ),
     ).toBe('Alpha: Idle\nopenrouter/anthropic/claude-sonnet-4');
@@ -414,30 +427,19 @@ describe('ChatView', () => {
       100,
     );
 
-    // Selecting the project agent must deselect the identity tab: exactly one
-    // active tab across both bars (regression — the identity tab used to stay
+    // Selecting the project agent must deselect the identity Agent: exactly one
+    // selection across both bars (regression — the identity Agent used to stay
     // highlighted because chatState.selectedAgentId is untouched).
-    let activeTabs = document.querySelectorAll('.agent-tab.active');
+    const activeTabs = document.querySelectorAll('.agent-tab.active');
     expect(activeTabs).toHaveLength(1);
     expect(activeTabs[0].textContent).toContain('Builder');
-    expect(document.querySelector('.chat-header .agent-tab.active')).toBeNull();
+    expect(selectedPersonalAgentName()).toBe('');
 
     // Switching back to the identity agent moves the single selection up to the
-    // header bar (the project team bar stays rendered but with no active tab).
-    document.querySelector('.chat-header .agent-tab').click();
-    await waitForCondition(
-      () =>
-        document
-          .querySelector('.chat-header .agent-tab.active')
-          ?.textContent?.includes('Alpha'),
-      100,
-    );
-    activeTabs = document.querySelectorAll('.agent-tab.active');
-    expect(activeTabs).toHaveLength(1);
-    expect(activeTabs[0].textContent).toContain('Alpha');
-    expect(
-      document.querySelector('.chat-view__project-team .agent-tab.active'),
-    ).toBeNull();
+    // header picker (the project team bar stays rendered but with no active tab).
+    await selectAgentFromPicker('Alpha');
+    await waitForCondition(() => selectedPersonalAgentName() === 'Alpha', 100);
+    expect(document.querySelectorAll('.agent-tab.active')).toHaveLength(0);
   });
 
   it('jumps to the first team member when the project has no default agent', async () => {
@@ -546,10 +548,11 @@ describe('ChatView', () => {
     );
 
     // Restored the remembered agent (Reviewer), NOT the project default
-    // (Builder) — exactly one active tab, in the project bar.
+    // (Builder) — exactly one selection, in the project bar.
     const activeTabs = document.querySelectorAll('.agent-tab.active');
     expect(activeTabs).toHaveLength(1);
     expect(activeTabs[0].textContent).toContain('Reviewer');
+    expect(selectedPersonalAgentName()).toBe('');
     expect(
       document.querySelector('.chat-view__project-team .agent-tab.active')
         ?.textContent,
@@ -598,16 +601,10 @@ describe('ChatView', () => {
     );
 
     // The project team bar renders, but no project agent is opened — the
-    // single active tab is the identity agent in the header bar.
+    // single selection is the identity agent in the header picker.
     expect(document.querySelector('.chat-view__project-team')).toBeTruthy();
-    const activeTabs = document.querySelectorAll('.agent-tab.active');
-    expect(activeTabs).toHaveLength(1);
-    expect(
-      document.querySelector('.chat-header .agent-tab.active')?.textContent,
-    ).toContain('Alpha');
-    expect(
-      document.querySelector('.chat-view__project-team .agent-tab.active'),
-    ).toBeNull();
+    expect(selectedPersonalAgentName()).toBe('Alpha');
+    expect(document.querySelectorAll('.agent-tab.active')).toHaveLength(0);
     // No project agent was opened. Its Sessions may be listed for activity,
     // but project-agent history is not loaded.
     expect(rpcMock).not.toHaveBeenCalledWith(
@@ -809,14 +806,8 @@ describe('ChatView', () => {
     // Stepping back up to the identity agent persists '' (identity active),
     // distinct from null/"nothing remembered" — this is what a reload restores
     // to keep the chat on the identity agent.
-    document.querySelector('.chat-header .agent-tab').click();
-    await waitForCondition(
-      () =>
-        document
-          .querySelector('.chat-header .agent-tab.active')
-          ?.textContent?.includes('Alpha'),
-      100,
-    );
+    await selectAgentFromPicker('Alpha');
+    await waitForCondition(() => selectedPersonalAgentName() === 'Alpha', 100);
     expect(parentHarness.selectedProjectAgentId).toBe('');
   });
 
@@ -849,7 +840,7 @@ describe('ChatView', () => {
     // No project agent selected, no error notice.
     expect(document.querySelector('.chat-view__error')).toBeNull();
     // The identity agent above stays active and chattable.
-    expect(activeAgentTab()?.textContent).toContain('Alpha');
+    expect(selectedPersonalAgentName()).toBe('Alpha');
   });
 
   it('sends a project-agent message and syncs the queue with the full address (trap 2)', async () => {

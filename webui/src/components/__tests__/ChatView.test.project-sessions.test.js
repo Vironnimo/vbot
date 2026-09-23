@@ -12,6 +12,8 @@ import {
   listSessionActivityMock,
   listSessionsMock,
   rpcMock,
+  selectAgentFromPicker,
+  selectedPersonalAgentName,
   sendComposerMessage,
   setupChatViewTestSuite,
   showProjectMock,
@@ -644,14 +646,8 @@ describe('ChatView', () => {
     const deletedReads = historyReads('builder-session');
 
     // Leave for the Identity Agent, then reopen the Project Agent.
-    document.querySelector('.chat-header .agent-tab').click();
-    await waitForCondition(
-      () =>
-        document
-          .querySelector('.chat-header .agent-tab.active')
-          ?.textContent?.includes('Alpha'),
-      100,
-    );
+    await selectAgentFromPicker('Alpha');
+    await waitForCondition(() => selectedPersonalAgentName() === 'Alpha', 100);
     const landingReads = historyReads('builder-old');
     document.querySelector('.chat-view__project-team .agent-tab').click();
     await waitForCondition(
@@ -955,9 +951,7 @@ describe('ChatView', () => {
         Boolean(findButtonByText('Return to parent session')),
       100,
     );
-    expect(
-      document.querySelector('.chat-header .agent-tab.active')?.textContent,
-    ).toContain('Gamma');
+    expect(selectedPersonalAgentName()).toBe('Gamma');
 
     findButtonByText('Return to parent session').click();
     flushSync();
@@ -969,9 +963,7 @@ describe('ChatView', () => {
       100,
     );
     expect(document.body.textContent).toContain('Viewing a sub-agent session');
-    expect(
-      document.querySelector('.chat-header .agent-tab.active')?.textContent,
-    ).toContain('Beta');
+    expect(selectedPersonalAgentName()).toBe('Beta');
 
     findButtonByText('Return to parent session').click();
     flushSync();
@@ -983,9 +975,7 @@ describe('ChatView', () => {
       100,
     );
     expect(findButtonByText('Return to parent session')).toBeFalsy();
-    expect(
-      document.querySelector('.chat-header .agent-tab.active')?.textContent,
-    ).toContain('Alpha');
+    expect(selectedPersonalAgentName()).toBe('Alpha');
   });
 
   it('falls back to return-to-current when the child has no parent metadata (item 4)', async () => {

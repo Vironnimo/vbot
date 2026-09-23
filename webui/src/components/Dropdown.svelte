@@ -1,11 +1,18 @@
 <script>
   import { tick } from 'svelte';
 
-  import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
+  import {
+    computePanelPosition,
+    optionDecorations,
+    portal,
+  } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
 
   const noop = () => {};
   const componentId = $props.id();
+  // Typed characters within this window extend one typeahead search.
+  const TYPEAHEAD_RESET_MS = 500;
 
   let {
     id = '',
@@ -17,6 +24,10 @@
     ariaLabel = '',
     ariaDescribedby = undefined,
     triggerClass = '',
+    // Optional quick tooltip on the trigger (e.g. details of the selection).
+    triggerTooltip = '',
+    // The list is at least this wide even under a narrower trigger.
+    panelMinWidth = 0,
     listClass = '',
     onValueChange = noop,
     onOpenChange = noop,
@@ -30,6 +41,8 @@
   let listPlacement = $state('bottom');
   // null = no active option; '' is a valid option value (e.g. "All").
   let activeOptionValue = $state(null);
+  let typeaheadQuery = '';
+  let typeaheadAt = 0;
 
   let normalizedOptions = $derived(normalizeOptions(options));
   let selectedOption = $derived(
@@ -51,6 +64,7 @@
           value: option,
           label: option,
           disabled: false,
+          ...optionDecorations(null),
         };
       }
 
@@ -59,11 +73,13 @@
         label: option?.label ?? option?.value ?? '',
         disabled: Boolean(option?.disabled),
         secondaryLabel: option?.secondaryLabel ?? '',
+        ...optionDecorations(option),
       };
     });
   }
 
-  async function open({ focus = '' } = {}) {
+  // Also opens the list from a related control elsewhere (via bind:this).
+  export async function open({ focus = '' } = {}) {
     if (disabled) {
       return;
     }
@@ -85,6 +101,7 @@
     listStyle = '';
     listPlacement = 'bottom';
     activeOptionValue = null;
+    typeaheadQuery = '';
     onOpenChange(false);
   }
 
@@ -113,6 +130,7 @@
     const { placement, left, width, verticalRule, optionsMaxHeight } =
       computePanelPosition(triggerElement, {
         contentHeight: listElement.scrollHeight,
+        minWidth: panelMinWidth,
       });
 
     listPlacement = placement;
@@ -177,6 +195,52 @@
     });
   }
 
+  function isTypeaheadKey(event) {
+    if (event.ctrlKey || event.metaKey || event.altKey) {
+      return false;
+    }
+    // A space continues a search in progress; otherwise it selects.
+    return (
+      event.key.length === 1 && (event.key !== ' ' || typeaheadQuery !== '')
+    );
+  }
+
+  // Standard listbox typeahead: move to the next enabled option whose label
+  // starts with the typed characters. Repeating one character cycles through
+  // the options starting with it.
+  function typeaheadMatch(availableOptions, currentIndex, key) {
+    const now = Date.now();
+    typeaheadQuery =
+      now - typeaheadAt > TYPEAHEAD_RESET_MS
+        ? key.toLowerCase()
+        : `${typeaheadQuery}${key.toLowerCase()}`;
+    typeaheadAt = now;
+    const repeatedCharacter = [...typeaheadQuery].every(
+      (character) => character === typeaheadQuery[0],
+    );
+    const query = repeatedCharacter ? typeaheadQuery[0] : typeaheadQuery;
+    const startOffset = repeatedCharacter || currentIndex < 0 ? 1 : 0;
+    for (let step = 0; step < availableOptions.length; step += 1) {
+      const option =
+        availableOptions[
+          (currentIndex + startOffset + step + availableOptions.length) %
+            availableOptions.length
+        ];
+      if (String(option.label).toLowerCase().startsWith(query)) {
+        return option;
+      }
+    }
+    return null;
+  }
+
+  async function setActiveOption(option) {
+    activeOptionValue = option.value;
+    await tick();
+    document
+      .getElementById(activeOptionId)
+      ?.scrollIntoView?.({ block: 'nearest' });
+  }
+
   function handleListKeyDown(event) {
     const availableOptions = enabledOptions();
     const currentIndex = availableOptions.findIndex(
@@ -190,6 +254,14 @@
     }
     if (event.key === 'Tab') {
       close();
+      return;
+    }
+    if (isTypeaheadKey(event)) {
+      event.preventDefault();
+      const match = typeaheadMatch(availableOptions, currentIndex, event.key);
+      if (match) {
+        setActiveOption(match);
+      }
       return;
     }
     if (event.key === 'Enter' || event.key === ' ') {
@@ -208,6 +280,7 @@
       return;
     }
     event.preventDefault();
+    typeaheadQuery = '';
     let nextIndex;
     if (event.key === 'Home') {
       nextIndex = 0;
@@ -220,7 +293,7 @@
       nextIndex =
         (currentIndex - 1 + availableOptions.length) % availableOptions.length;
     }
-    activeOptionValue = availableOptions[nextIndex].value;
+    setActiveOption(availableOptions[nextIndex]);
   }
 
   function handleWindowResize() {
@@ -289,9 +362,16 @@
     aria-haspopup="listbox"
     aria-expanded={isOpen}
     aria-controls={isOpen ? listboxId : undefined}
+    use:tooltip={triggerTooltip}
     onclick={toggleOpen}
     onkeydown={handleTriggerKeyDown}
   >
+    {#if selectedOption?.statusDot}
+      <span
+        class="dropdown-status-dot tab-indicator tab-indicator--{selectedOption.statusDot}"
+        aria-hidden="true"
+      ></span>
+    {/if}
     <span
       class="dropdown-primitive__trigger-label"
       class:dropdown-primitive__trigger-label--placeholder={!hasSelection}
@@ -333,14 +413,24 @@
           role="option"
           tabindex="-1"
           disabled={option.disabled}
+          aria-label={option.ariaLabel || undefined}
           aria-selected={option.value === value}
           onclick={() => selectOption(option)}
         >
+          {#if option.statusDot}
+            <span
+              class="dropdown-status-dot tab-indicator tab-indicator--{option.statusDot}"
+              aria-hidden="true"
+            ></span>
+          {/if}
           <span class="dropdown-primitive__option-label">{option.label}</span>
           {#if option.secondaryLabel}
             <span class="dropdown-primitive__option-meta">
               {option.secondaryLabel}
             </span>
+          {/if}
+          {#if option.badge}
+            <span class="count-badge">{option.badge}</span>
           {/if}
         </button>
       {/each}

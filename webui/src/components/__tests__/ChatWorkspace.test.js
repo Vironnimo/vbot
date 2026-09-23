@@ -9,6 +9,7 @@ import {
   createChatRpcMock,
   createAgent,
   listSessionsMock,
+  selectAgentFromPicker,
   setInputValue,
   flushSync,
   waitForCondition,
@@ -452,26 +453,27 @@ describe('ChatWorkspace', () => {
       },
       ChatWorkspace,
     );
-    const tabLabels = (index) =>
-      Array.from(pane(index).querySelectorAll('.chat-header .agent-tab')).map(
-        (tab) => tab.getAttribute('aria-label'),
+    // Other Agents' activity shows as chips beside each area's Agent picker.
+    const chipLabels = (index) =>
+      Array.from(pane(index).querySelectorAll('.agent-chips > button')).map(
+        (chip) => chip.getAttribute('aria-label'),
       );
-    await waitForCondition(() => tabLabels(0).includes('Beta: Running'), 100);
+    await waitForCondition(() => chipLabels(0).includes('Beta: Running'), 100);
 
     // Beta's Run ends; later traffic pushes its terminal event out of App's
     // bounded window, and Gamma's Run starts outside the retained window.
     props.runServerEvents = [lifecycle('run_completed', 'R1', 'beta', 'b-1')];
     props.activeRuns = [];
-    await waitForCondition(() => !tabLabels(0).includes('Beta: Running'), 100);
+    await waitForCondition(() => !chipLabels(0).includes('Beta: Running'), 100);
     props.runServerEvents = [];
     props.activeRuns = [
       { run_id: 'R2', agent_id: 'gamma', session_id: 'g-1', status: 'running' },
     ];
 
     action(0, 'Split view');
-    await waitForCondition(() => tabLabels(1).includes('Gamma: Running'), 100);
+    await waitForCondition(() => chipLabels(1).includes('Gamma: Running'), 100);
 
-    expect(tabLabels(1)).not.toContain('Beta: Running');
+    expect(chipLabels(1)).not.toContain('Beta: Running');
   });
 
   describe('deleting the displayed current Session', () => {
@@ -617,8 +619,7 @@ describe('ChatWorkspace', () => {
       flushSync();
 
       // Selecting the same Agent returns to its current Session.
-      pane(0).querySelector('.agent-tab').click();
-      flushSync();
+      await selectAgentFromPicker('Alpha', pane(0));
       await settle();
 
       expect(testChatStateRefs[0].agents[0].current_session_id).toBe(
@@ -644,8 +645,7 @@ describe('ChatWorkspace', () => {
       );
       const readsAtDeletion = deletedHistoryReads();
 
-      pane(1).querySelector('.agent-tab').click();
-      flushSync();
+      await selectAgentFromPicker('Alpha', pane(1));
       await settle();
 
       expect(deletedHistoryReads()).toBe(readsAtDeletion);

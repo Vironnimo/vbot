@@ -97,4 +97,38 @@ describe('SearchableDropdown', () => {
     );
     expect(document.activeElement).toBe(trigger);
   });
+
+  it('renders option decorations and opens programmatically', async () => {
+    mountedComponent = mount(SearchableDropdown, {
+      target: document.body,
+      props: {
+        id: 'decorated-searchable-dropdown',
+        value: 'gamma',
+        options: [
+          { value: 'beta', label: 'Beta', statusDot: 'running' },
+          {
+            value: 'gamma',
+            label: 'Gamma',
+            statusDot: 'unread',
+            badge: 3,
+            ariaLabel: 'Gamma: 3 unread results',
+          },
+        ],
+      },
+    });
+    flushSync();
+
+    const trigger = document.querySelector('#decorated-searchable-dropdown');
+    expect(trigger.querySelector('.tab-indicator--unread')).toBeTruthy();
+
+    await mountedComponent.open();
+    flushSync();
+
+    expect(document.activeElement?.getAttribute('role')).toBe('combobox');
+    const gamma = document.querySelector(
+      '[role="option"][aria-label="Gamma: 3 unread results"]',
+    );
+    expect(gamma?.getAttribute('aria-selected')).toBe('true');
+    expect(gamma?.querySelector('.count-badge')?.textContent).toBe('3');
+  });
 });
