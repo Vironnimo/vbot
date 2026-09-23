@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createRawSnippet, flushSync, mount, unmount } from 'svelte';
+import { createRawSnippet, flushSync, mount, tick, unmount } from 'svelte';
 
 import { readStyleSheet } from '../../__tests__/styles.support.js';
 import { init } from '../../lib/i18n.js';
@@ -654,5 +654,244 @@ describe('AppShell mobile More sheet', () => {
 
     expect(onSelectView).toHaveBeenCalledWith('chat');
     expect(shell.dataset.mobileNavOpen).toBeUndefined();
+  });
+});
+
+describe('AppShell tablet navigation', () => {
+  let mountedComponent;
+  let viewport;
+
+  const items = [
+    {
+      id: 'chat',
+      labelKey: 'navigation.chat',
+      labelFallback: 'Chat',
+      section: 'work',
+    },
+    {
+      id: 'settings',
+      labelKey: 'navigation.settings',
+      labelFallback: 'Settings',
+      section: 'configure',
+    },
+  ];
+
+  // A minimal matchMedia stand-in that evaluates the min/max-width queries
+  // AppShell uses and notifies listeners when the simulated width changes.
+  function stubViewport(initialWidth) {
+    let width = initialWidth;
+    const lists = [];
+    const evaluate = (query) =>
+      [...query.matchAll(/\((min|max)-width:\s*(\d+)px\)/g)].every(
+        ([, bound, value]) =>
+          bound === 'min' ? width >= Number(value) : width <= Number(value),
+      );
+    window.matchMedia = vi.fn((query) => {
+      const listeners = new Set();
+      const list = {
+        media: query,
+        get matches() {
+          return evaluate(query);
+        },
+        addEventListener: (_type, listener) => listeners.add(listener),
+        removeEventListener: (_type, listener) => listeners.delete(listener),
+        listeners,
+      };
+      lists.push(list);
+      return list;
+    });
+    return {
+      resize(nextWidth) {
+        const before = new Map(lists.map((list) => [list, list.matches]));
+        width = nextWidth;
+        for (const list of lists) {
+          if (list.matches !== before.get(list)) {
+            for (const listener of list.listeners) {
+              listener({ matches: list.matches, media: list.media });
+            }
+          }
+        }
+        flushSync();
+      },
+      listenerCount: () =>
+        lists.reduce((count, list) => count + list.listeners.size, 0),
+    };
+  }
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    localStorage.clear();
+    init('en');
+    mountedComponent = null;
+  });
+
+  afterEach(async () => {
+    if (mountedComponent) await unmount(mountedComponent);
+    mountedComponent = null;
+    document.body.innerHTML = '';
+    delete window.matchMedia;
+    vi.restoreAllMocks();
+  });
+
+  function mountShell({ width, onSelectView = vi.fn() }) {
+    viewport = stubViewport(width);
+    mountedComponent = mount(AppShell, {
+      target: document.body,
+      props: { items, activeViewId: 'settings', onSelectView },
+    });
+    flushSync();
+    return {
+      shell: document.querySelector('.app-shell'),
+      toggle: document.querySelector('.app-shell__sidebar-toggle'),
+      main: document.querySelector('.app-shell__content'),
+      settingsItem: [...document.querySelectorAll('.app-shell__nav-item')].find(
+        (item) => item.textContent.includes('Settings'),
+      ),
+    };
+  }
+
+  async function settle() {
+    flushSync();
+    await tick();
+    flushSync();
+  }
+
+  it('forces the compact rail at tablet width and ignores the saved preference', () => {
+    localStorage.setItem('vbot.sidebar.collapsed.v1', 'false');
+    const { shell, toggle, settingsItem } = mountShell({ width: 800 });
+
+    expect(shell.dataset.sidebarCollapsed).toBe('true');
+    expect(settingsItem.getAttribute('aria-label')).toBe('Settings');
+    expect(toggle.getAttribute('aria-label')).toBe('Expand sidebar');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.hasAttribute('aria-pressed')).toBe(false);
+    expect(localStorage.getItem('vbot.sidebar.collapsed.v1')).toBe('false');
+  });
+
+  it('opens the full menu as an overlay without changing the saved preference', async () => {
+    localStorage.setItem('vbot.sidebar.collapsed.v1', 'true');
+    const setItem = vi.spyOn(Storage.prototype, 'setItem');
+    const { shell, toggle, main, settingsItem } = mountShell({ width: 800 });
+
+    toggle.click();
+    await settle();
+
+    expect(shell.dataset.tabletMenuOpen).toBe('true');
+    expect(shell.dataset.sidebarCollapsed).toBeUndefined();
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(toggle.getAttribute('aria-label')).toBe('Collapse sidebar');
+    expect(main.inert).toBe(true);
+    expect(document.querySelector('.app-shell__nav-backdrop')).not.toBeNull();
+    expect(document.activeElement).toBe(settingsItem);
+    expect(setItem).not.toHaveBeenCalled();
+    expect(localStorage.getItem('vbot.sidebar.collapsed.v1')).toBe('true');
+
+    toggle.click();
+    await settle();
+    expect(shell.dataset.tabletMenuOpen).toBeUndefined();
+    expect(shell.dataset.sidebarCollapsed).toBe('true');
+    expect(setItem).not.toHaveBeenCalled();
+  });
+
+  it('closes the overlay when a destination is chosen', async () => {
+    const onSelectView = vi.fn();
+    const { shell, toggle, main } = mountShell({ width: 800, onSelectView });
+    toggle.click();
+    await settle();
+
+    [...document.querySelectorAll('.app-shell__nav-item')]
+      .find((item) => item.textContent.includes('Chat'))
+      .click();
+    flushSync();
+
+    expect(onSelectView).toHaveBeenCalledWith('chat');
+    expect(shell.dataset.tabletMenuOpen).toBeUndefined();
+    expect(Boolean(main.inert)).toBe(false);
+  });
+
+  it('closes on Escape and returns focus to the rail toggle', async () => {
+    const { shell, toggle, main } = mountShell({ width: 800 });
+    toggle.click();
+    await settle();
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    flushSync();
+
+    expect(shell.dataset.tabletMenuOpen).toBeUndefined();
+    expect(Boolean(main.inert)).toBe(false);
+    expect(document.activeElement).toBe(toggle);
+  });
+
+  it('leaves an Escape consumed by a floating layer to that layer', async () => {
+    const { shell, toggle } = mountShell({ width: 800 });
+    toggle.click();
+    await settle();
+
+    const consumed = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      cancelable: true,
+    });
+    consumed.preventDefault();
+    window.dispatchEvent(consumed);
+    flushSync();
+
+    expect(shell.dataset.tabletMenuOpen).toBe('true');
+  });
+
+  it('closes on an outside click', async () => {
+    const { shell, toggle } = mountShell({ width: 800 });
+    toggle.click();
+    await settle();
+
+    document.querySelector('.app-shell__nav-backdrop').click();
+    flushSync();
+
+    expect(shell.dataset.tabletMenuOpen).toBeUndefined();
+    expect(document.querySelector('.app-shell__nav-backdrop')).toBeNull();
+  });
+
+  it('closes when the viewport leaves the tablet range and restores the desktop preference', async () => {
+    localStorage.setItem('vbot.sidebar.collapsed.v1', 'false');
+    const { shell, toggle, main } = mountShell({ width: 800 });
+    toggle.click();
+    await settle();
+
+    viewport.resize(1200);
+
+    expect(shell.dataset.tabletMenuOpen).toBeUndefined();
+    expect(shell.dataset.sidebarCollapsed).toBeUndefined();
+    expect(Boolean(main.inert)).toBe(false);
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+    expect(toggle.hasAttribute('aria-expanded')).toBe(false);
+
+    viewport.resize(700);
+    expect(shell.dataset.sidebarCollapsed).toBe('true');
+    expect(shell.dataset.tabletMenuOpen).toBeUndefined();
+  });
+
+  it('keeps the saved compact preference on desktop and toggles it there', () => {
+    localStorage.setItem('vbot.sidebar.collapsed.v1', 'true');
+    const { shell, toggle, main } = mountShell({ width: 1400 });
+
+    expect(shell.dataset.sidebarCollapsed).toBe('true');
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+
+    toggle.click();
+    flushSync();
+
+    expect(shell.dataset.sidebarCollapsed).toBeUndefined();
+    expect(shell.dataset.tabletMenuOpen).toBeUndefined();
+    expect(Boolean(main.inert)).toBe(false);
+    expect(localStorage.getItem('vbot.sidebar.collapsed.v1')).toBe('false');
+  });
+
+  it('removes its viewport listeners on unmount', async () => {
+    mountShell({ width: 800 });
+    expect(viewport.listenerCount()).toBe(2);
+
+    await unmount(mountedComponent);
+    mountedComponent = null;
+
+    expect(viewport.listenerCount()).toBe(0);
   });
 });

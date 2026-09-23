@@ -91,6 +91,10 @@
   --field-focus-ring: 0 0 0 3px var(--accent-16);
   --floating-elevation:
     0 0 0 1px rgba(0, 0, 0, 0.2), 0 12px 32px rgba(0, 0, 0, 0.45);
+  /* Scrims behind navigation overlays: the phone More sheet dims the content
+     strongly, the tablet menu overlay only lightly. */
+  --scrim: rgba(0, 0, 0, 0.55);
+  --scrim-light: rgba(0, 0, 0, 0.3);
   /* Status colors. Amber (running/warning) is deliberately yellower than the
      orange accent so a warning never reads as a selection or primary action. */
   --green: #5fcf8f;

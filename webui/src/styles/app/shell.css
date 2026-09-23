@@ -566,3 +566,56 @@
 .app-shell__nav-backdrop {
   display: none;
 }
+
+/* Tablet (641-960): the Main menu always shows the compact rail, whatever the
+   saved desktop preference. Its toggle opens the full menu as an overlay above
+   the content; the shell reserves the rail's width meanwhile, so the content
+   (and any Terminal fitted to it) never resizes. */
+@media (min-width: 641px) and (max-width: 960px) {
+  .app-shell {
+    position: relative;
+  }
+
+  .app-shell__sidebar {
+    transition: none;
+  }
+
+  .app-shell[data-tablet-menu-open='true'] {
+    padding-left: var(--sidebar-collapsed-width);
+  }
+
+  .app-shell[data-tablet-menu-open='true'] .app-shell__sidebar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: var(--z-modal);
+    box-shadow: var(--floating-elevation);
+    animation: app-shell-menu-reveal 160ms ease-out;
+  }
+
+  .app-shell[data-tablet-menu-open='true'] .app-shell__nav-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: var(--z-overlay);
+    display: block;
+    background: var(--scrim-light);
+  }
+}
+
+/* The overlay unfolds from the rail it replaces. */
+@keyframes app-shell-menu-reveal {
+  from {
+    clip-path: inset(0 calc(100% - var(--sidebar-collapsed-width)) 0 0);
+  }
+
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell[data-tablet-menu-open='true'] .app-shell__sidebar {
+    animation: none;
+  }
+}

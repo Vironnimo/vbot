@@ -51,18 +51,37 @@
   ]);
 
   const MOBILE_NAV_MEDIA_QUERY = '(max-width: 640px)';
+  // Tablet widths keep the Main menu as the compact rail so content keeps its
+  // room; the rail toggle opens the full menu as an overlay instead.
+  const TABLET_NAV_MEDIA_QUERY = '(min-width: 641px) and (max-width: 960px)';
+
+  const viewportQuery = (query) =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia(query)
+      : null;
 
   let sidebarCollapsed = $state(false);
   let mobileNavOpen = $state(false);
+  let tabletLayout = $state(
+    Boolean(viewportQuery(TABLET_NAV_MEDIA_QUERY)?.matches),
+  );
+  let tabletMenuOpen = $state(false);
+  let shellElement = $state(null);
   let navigationElement = $state(null);
   let moreButton = $state(null);
+
+  // The persisted preference applies only from desktop width upward; tablet
+  // widths always show the rail unless its overlay is open.
+  const railCompact = $derived(
+    tabletLayout ? !tabletMenuOpen : sidebarCollapsed,
+  );
 
   const activeInMobileSheet = $derived(
     Boolean(activeViewId) && !MOBILE_PRIMARY_VIEW_IDS.has(activeViewId),
   );
 
   const sidebarToggleLabel = $derived(
-    sidebarCollapsed
+    railCompact
       ? t('navigation.expandSidebar', 'Expand sidebar')
       : t('navigation.collapseSidebar', 'Collapse sidebar'),
   );
@@ -81,9 +100,18 @@
 
   const handleSelectView = (viewId) => {
     mobileNavOpen = false;
+    tabletMenuOpen = false;
     if (onSelectView) {
       onSelectView(viewId);
     }
+  };
+
+  const focusCurrentDestination = () => {
+    const target =
+      navigationElement?.querySelector(
+        '.app-shell__nav-item[aria-current="page"]',
+      ) ?? navigationElement?.querySelector('.app-shell__nav-item');
+    target?.focus();
   };
 
   // The More sheet moves focus to the current destination (or the first one)
@@ -92,28 +120,63 @@
     mobileNavOpen = !mobileNavOpen;
     if (!mobileNavOpen) return;
     await tick();
-    const target =
-      navigationElement?.querySelector(
-        '.app-shell__nav-item[aria-current="page"]',
-      ) ?? navigationElement?.querySelector('.app-shell__nav-item');
-    target?.focus();
+    focusCurrentDestination();
+  };
+
+  const sidebarToggleElement = () =>
+    shellElement?.querySelector('.app-shell__sidebar-toggle') ?? null;
+
+  // The tablet overlay behaves like the More sheet: focus moves into it on
+  // open, and a keyboard dismissal returns it to the rail toggle.
+  const openTabletMenu = async () => {
+    tabletMenuOpen = true;
+    await tick();
+    focusCurrentDestination();
+  };
+
+  const closeTabletMenu = ({ restoreFocus = false } = {}) => {
+    tabletMenuOpen = false;
+    if (restoreFocus) sidebarToggleElement()?.focus();
+  };
+
+  const toggleSidebar = () => {
+    if (!tabletLayout) {
+      setSidebarCollapsed(!sidebarCollapsed);
+    } else if (tabletMenuOpen) {
+      closeTabletMenu();
+    } else {
+      void openTabletMenu();
+    }
   };
 
   const handleWindowKeydown = (event) => {
-    // A Desktop context menu sits above everything; let it consume Escape first.
-    if (mobileNavOpen && event.key === 'Escape' && !menu.contextMenu) {
-      mobileNavOpen = false;
-      moreButton?.focus();
-      return;
+    // A Desktop context menu sits above everything, and a floating layer that
+    // consumed Escape (a pinned hint, a picker) dismisses only itself.
+    if (
+      event.key === 'Escape' &&
+      !menu.contextMenu &&
+      !event.defaultPrevented
+    ) {
+      if (mobileNavOpen) {
+        mobileNavOpen = false;
+        moreButton?.focus();
+        return;
+      }
+      if (tabletMenuOpen) {
+        closeTabletMenu({ restoreFocus: true });
+        return;
+      }
     }
     menu.handleWindowKeydown(event);
   };
 
-  // Any navigation - including history and deep links - dismisses the sheet.
+  // Any navigation - including history and deep links - dismisses the sheet
+  // and the tablet overlay.
   $effect(() => {
     void activeViewId;
     untrack(() => {
       mobileNavOpen = false;
+      tabletMenuOpen = false;
     });
   });
 
@@ -314,21 +377,37 @@
     };
     window.addEventListener('scroll', closeOnCapturedScroll, true);
 
-    // Leaving the phone layout while the sheet is open must not leave hidden
-    // state behind (an inert content area or a swallowed Escape).
-    const mobileQuery =
-      typeof window.matchMedia === 'function'
-        ? window.matchMedia(MOBILE_NAV_MEDIA_QUERY)
-        : null;
-    const closeOutsideMobile = (event) => {
-      if (!event.matches) mobileNavOpen = false;
-    };
-    mobileQuery?.addEventListener?.('change', closeOutsideMobile);
+    // Leaving the phone or tablet layout while its navigation overlay is open
+    // must not leave hidden state behind (an inert content area or a
+    // swallowed Escape).
+    const stopWatchingMobile = watchViewport(
+      MOBILE_NAV_MEDIA_QUERY,
+      (matches) => {
+        if (!matches) mobileNavOpen = false;
+      },
+    );
+    const stopWatchingTablet = watchViewport(
+      TABLET_NAV_MEDIA_QUERY,
+      (matches) => {
+        tabletLayout = matches;
+        if (!matches) tabletMenuOpen = false;
+      },
+    );
     return () => {
       window.removeEventListener('scroll', closeOnCapturedScroll, true);
-      mobileQuery?.removeEventListener?.('change', closeOutsideMobile);
+      stopWatchingMobile();
+      stopWatchingTablet();
     };
   });
+
+  function watchViewport(query, onChange) {
+    const media = viewportQuery(query);
+    if (!media) return () => {};
+    const handleChange = (event) => onChange(event.matches);
+    onChange(media.matches);
+    media.addEventListener?.('change', handleChange);
+    return () => media.removeEventListener?.('change', handleChange);
+  }
 </script>
 
 <svelte:window
@@ -340,11 +419,24 @@
 />
 
 <div
+  bind:this={shellElement}
   class="app-shell"
   data-server-unavailable={serverUnavailable ? 'true' : undefined}
-  data-sidebar-collapsed={sidebarCollapsed ? 'true' : undefined}
+  data-sidebar-collapsed={railCompact ? 'true' : undefined}
   data-mobile-nav-open={mobileNavOpen ? 'true' : undefined}
+  data-tablet-menu-open={tabletMenuOpen ? 'true' : undefined}
 >
+  {#if mobileNavOpen || tabletMenuOpen}
+    <div
+      class="app-shell__nav-backdrop"
+      aria-hidden="true"
+      onclick={() => {
+        mobileNavOpen = false;
+        tabletMenuOpen = false;
+      }}
+    ></div>
+  {/if}
+
   <aside
     class="app-shell__sidebar"
     aria-label={t('navigation.primary', 'Primary navigation')}
@@ -368,11 +460,12 @@
         class="app-shell__sidebar-toggle"
         ariaLabel={sidebarToggleLabel}
         tooltip={sidebarToggleLabel}
-        aria-pressed={sidebarCollapsed}
-        onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+        aria-pressed={tabletLayout ? undefined : sidebarCollapsed}
+        aria-expanded={tabletLayout ? tabletMenuOpen : undefined}
+        onClick={toggleSidebar}
       >
         <svg viewBox="0 0 16 16" aria-hidden="true">
-          {#if sidebarCollapsed}
+          {#if railCompact}
             <path d="m5 3.75 5.5 4.25L5 12.25" />
           {:else}
             <path d="m11 3.75-5.5 4.25 5.5 4.25" />
@@ -380,14 +473,6 @@
         </svg>
       </Button>
     </div>
-
-    {#if mobileNavOpen}
-      <div
-        class="app-shell__nav-backdrop"
-        aria-hidden="true"
-        onclick={() => (mobileNavOpen = false)}
-      ></div>
-    {/if}
 
     <nav
       bind:this={navigationElement}
@@ -412,11 +497,11 @@
               class="app-shell__nav-item"
               type="button"
               aria-current={item.id === activeViewId ? 'page' : undefined}
-              aria-label={sidebarCollapsed
+              aria-label={railCompact
                 ? t(item.labelKey, item.labelFallback)
                 : undefined}
               data-tooltip-placement="right"
-              use:tooltip={sidebarCollapsed
+              use:tooltip={railCompact
                 ? t(item.labelKey, item.labelFallback)
                 : ''}
               onclick={() => handleSelectView(item.id)}
@@ -543,7 +628,7 @@
           viewBox="0 0 16 16"
           aria-hidden="true"
           data-tooltip-placement="right"
-          use:tooltip={sidebarCollapsed ? statusLabel : ''}
+          use:tooltip={railCompact ? statusLabel : ''}
         >
           <path d="M5 1.5v3.5M11 1.5v3.5" />
           <rect x="3.5" y="5" width="9" height="5.5" rx="1.2" />
@@ -558,7 +643,9 @@
 
   <main
     class="app-shell__content"
-    inert={serverUnavailable || mobileNavOpen ? true : undefined}
+    inert={serverUnavailable || mobileNavOpen || tabletMenuOpen
+      ? true
+      : undefined}
   >
     {@render children?.()}
   </main>
