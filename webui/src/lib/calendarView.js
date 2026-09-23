@@ -101,6 +101,36 @@ export function dayHeadingLabel(key, locale = activeLocaleTag()) {
   }).format(dayKeyToUtcDate(key));
 }
 
+// Toolbar heading of the week view: the Monday-to-Sunday range with its year
+// ("Sep 28 – Oct 4, 2026"), so compact column headers stay unambiguous when a
+// week crosses a month or year boundary.
+export function weekRangeLabel(anchorKey, locale = activeLocaleTag()) {
+  const startKey = weekStartKey(anchorKey);
+  const formatter = new Intl.DateTimeFormat(locale, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+  return formatter.formatRange(
+    dayKeyToUtcDate(startKey),
+    dayKeyToUtcDate(addDaysToKey(startKey, 6)),
+  );
+}
+
+// Compact week-column header parts ("Mon" + 21). The full date remains the
+// heading's accessible name and the toolbar carries month and year.
+export function weekColumnLabel(key, locale = activeLocaleTag()) {
+  const date = dayKeyToUtcDate(key);
+  return {
+    weekday: new Intl.DateTimeFormat(locale, {
+      weekday: 'short',
+      timeZone: 'UTC',
+    }).format(date),
+    dayOfMonth: date.getUTCDate(),
+  };
+}
+
 export function weekdayLabels(locale = activeLocaleTag()) {
   const formatter = new Intl.DateTimeFormat(locale, {
     weekday: 'short',

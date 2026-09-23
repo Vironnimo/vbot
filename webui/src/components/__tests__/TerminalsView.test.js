@@ -402,13 +402,26 @@ describe('TerminalsView', () => {
     listTerminalsMock.mockResolvedValue({ groups: [], terminals: [] });
     suite.mountedComponent = mount(TerminalsView, { target: document.body });
     flushSync();
-    await waitFor(() =>
-      document.querySelector('.terminals-view__group-status'),
+    await waitFor(() => listTerminalsMock.mock.calls.length > 0);
+    await waitFor(
+      () =>
+        !document.body.textContent.includes('Loading terminal sessions') &&
+        document.querySelector('.terminals-view__detail > .empty-state'),
     );
 
+    const emptyState = document.querySelector(
+      '.terminals-view__detail > .empty-state',
+    );
     expect(
-      document.querySelector('.terminals-view__detail > .empty-state'),
-    ).toBeTruthy();
+      [...emptyState.querySelectorAll('button')].some(
+        (button) => button.textContent.trim() === 'New terminal',
+      ),
+    ).toBe(true);
+    // The centred empty state is the only absence message: the toolbar keeps
+    // its icon-only add control without repeating it as text.
+    expect(
+      document.querySelector('.terminals-view__toolbar').textContent.trim(),
+    ).toBe('');
     expect(subscribeTerminalEventsMock).not.toHaveBeenCalled();
   });
 

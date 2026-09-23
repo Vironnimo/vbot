@@ -245,11 +245,11 @@ describe('CronView', () => {
     mountView();
 
     await waitForCondition(() => {
-      const button = findButtonByAriaLabel('Create Scheduled Run');
+      const button = findButtonByAriaLabel('Create schedule');
       return Boolean(button && !button.disabled);
     });
 
-    buttonByAriaLabel('Create Scheduled Run').click();
+    buttonByAriaLabel('Create schedule').click();
     flushSync();
 
     await waitForCondition(() => document.getElementById('cron-job-prompt'));
@@ -296,10 +296,10 @@ describe('CronView', () => {
     mountView();
 
     await waitForCondition(() => {
-      const button = findButtonByAriaLabel('Create Scheduled Run');
+      const button = findButtonByAriaLabel('Create schedule');
       return Boolean(button && !button.disabled);
     });
-    buttonByAriaLabel('Create Scheduled Run').click();
+    buttonByAriaLabel('Create schedule').click();
     flushSync();
 
     await waitForCondition(() => document.getElementById('cron-job-prompt'));
@@ -350,10 +350,10 @@ describe('CronView', () => {
     mountView();
 
     await waitForCondition(() => {
-      const button = findButtonByAriaLabel('Create Scheduled Run');
+      const button = findButtonByAriaLabel('Create schedule');
       return Boolean(button && !button.disabled);
     });
-    buttonByAriaLabel('Create Scheduled Run').click();
+    buttonByAriaLabel('Create schedule').click();
     flushSync();
 
     await waitForCondition(() => document.getElementById('cron-job-preset'));

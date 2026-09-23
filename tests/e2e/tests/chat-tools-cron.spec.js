@@ -27,7 +27,7 @@ test("the cron tool creates, pauses, resumes, lists, and deletes a Scheduled Run
   await page.goto("/#cron");
   await expect(
     page
-      .getByRole("region", { name: "Scheduled Runs" })
+      .getByRole("region", { name: "Schedules" })
       .getByText("No scheduled runs yet", { exact: true }),
   ).toBeVisible();
 });

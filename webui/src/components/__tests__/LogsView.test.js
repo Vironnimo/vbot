@@ -52,6 +52,7 @@ describe('LogsView', () => {
     vi.clearAllTimers();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('loads the newest file by default and subscribes to its live stream', async () => {
@@ -87,6 +88,94 @@ describe('LogsView', () => {
     expect(toolbar).toBeTruthy();
     expect(toolbar.querySelector('.logs-view__filters')).toBeTruthy();
     expect(toolbar.querySelector('.logs-view__summary')).toBeTruthy();
+    // Wide layouts show every filter inline, without a disclosure.
+    expect(toolbar.querySelector('.logs-view__filters-toggle')).toBeNull();
+    expect(document.getElementById('logs-filters').hidden).toBe(false);
+  });
+
+  it('keeps search visible and folds the other filters behind a disclosure on phone width', async () => {
+    const mediaQuery = stubMatchMedia(true);
+    listLogsMock.mockResolvedValue({
+      files: ['2026-05-11', '2026-05-10'],
+      default_file: '2026-05-11',
+    });
+    readLogFileMock.mockResolvedValue({
+      file: '2026-05-11',
+      entries: [
+        entry({ timestamp: '2026-05-11 09:00:00', message: 'Ready' }),
+        entry({
+          timestamp: '2026-05-11 09:02:00',
+          level: 'error',
+          message: 'Failed to boot',
+        }),
+      ],
+      cursor: 'cursor-compact',
+    });
+
+    mountedComponent = mount(LogsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() =>
+      document.body.textContent.includes('Failed to boot'),
+    );
+
+    expect(window.matchMedia).toHaveBeenCalledWith('(max-width: 640px)');
+    const toggle = document.querySelector('.logs-view__filters-toggle');
+    const panel = document.getElementById('logs-filters');
+    expect(toggle.textContent.trim()).toBe('Filters');
+    expect(toggle.getAttribute('aria-controls')).toBe('logs-filters');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.getAttribute('aria-label')).toBeNull();
+    expect(panel.hidden).toBe(true);
+
+    // Search stays outside the disclosure and is not counted as a change.
+    const search = inputByLabel('Search');
+    expect(panel.contains(search)).toBe(false);
+    search.value = 'boot';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    expect(logEntryMessages()).toEqual(['Failed to boot']);
+    expect(toggle.querySelector('.logs-view__filters-count')).toBeNull();
+    search.value = '';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
+    toggle.click();
+    flushSync();
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(panel.hidden).toBe(false);
+
+    openSimpleDropdown('logs-level-filter');
+    selectSimpleOption('logs-level-filter', 'ERROR');
+    openSimpleDropdown('logs-sort-order');
+    selectSimpleOption('logs-sort-order', 'Oldest first');
+    expect(logEntryMessages()).toEqual(['Failed to boot']);
+    expect(toggle.getAttribute('aria-label')).toBe('Filters, 2 changed');
+    expect(
+      toggle.querySelector('.logs-view__filters-count').textContent.trim(),
+    ).toBe('2');
+
+    toggle.click();
+    flushSync();
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(panel.hidden).toBe(true);
+    expect(logEntryMessages()).toEqual(['Failed to boot']);
+
+    // Leaving phone width restores the inline toolbar with the same choices.
+    mediaQuery.change(false);
+    flushSync();
+    expect(document.querySelector('.logs-view__filters-toggle')).toBeNull();
+    const inlinePanel = document.getElementById('logs-filters');
+    expect(inlinePanel.hidden).toBe(false);
+    expect(inlinePanel.contains(inputByLabel('Search'))).toBe(true);
+    expect(simpleTriggerLabel('logs-level-filter')).toBe('ERROR');
+    expect(simpleTriggerLabel('logs-sort-order')).toBe('Oldest first');
+
+    await unmount(mountedComponent);
+    mountedComponent = null;
+    expect(mediaQuery.removeEventListener).toHaveBeenCalledWith(
+      'change',
+      expect.any(Function),
+    );
   });
 
   it('offers Retry only when the log catalog fails to load', async () => {
@@ -598,6 +687,27 @@ describe('LogsView', () => {
     );
   });
 });
+
+function stubMatchMedia(initialMatches) {
+  const listeners = new Set();
+  const query = {
+    matches: initialMatches,
+    media: '(max-width: 640px)',
+    addEventListener: vi.fn((type, listener) => listeners.add(listener)),
+    removeEventListener: vi.fn((type, listener) => listeners.delete(listener)),
+    change(matches) {
+      query.matches = matches;
+      for (const listener of listeners) {
+        listener({ matches });
+      }
+    },
+  };
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn(() => query),
+  );
+  return query;
+}
 
 function createStreamConnection(file, handlers) {
   return {

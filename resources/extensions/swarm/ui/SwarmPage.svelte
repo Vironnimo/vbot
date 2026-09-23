@@ -48,6 +48,8 @@
       return model;
     },
   });
+  // The goal form is the page's home: "New run" is its navigation entry.
+  const startVisible = $derived(!model.editor && !model.selectedSwarm);
 </script>
 
 {#snippet participantAvatar(id, name, kind = 'participant')}
@@ -130,6 +132,17 @@
         >{@render actionIcon('plus')}</Button
       >
     </div>
+    <div class="swarm-sidebar-start">
+      <button
+        type="button"
+        class="secondary-list__item swarm-new-run"
+        class:active={startVisible}
+        aria-current={startVisible ? 'page' : undefined}
+        onclick={() => model.newSwarm()}
+        >{@render actionIcon('play')}<span>{t('swarm.newRun', 'New run')}</span
+        ></button
+      >
+    </div>
     <div class="secondary-pane__scroll">
       <nav class="secondary-list" aria-label={t('swarm.profiles', 'Swarms')}>
         {#each model.profiles as profile (profile.id)}
@@ -161,10 +174,10 @@
           >{/if}
       </nav>
       {#each model.runGroups as group (group.id)}
-        <section class="run-group">
-          <div class="secondary-pane__header swarms-head">
-            <span class="secondary-pane__title">{group.label}</span>
-          </div>
+        <section class="run-group" aria-labelledby={`swarm-runs-${group.id}`}>
+          <h3 class="run-group__title" id={`swarm-runs-${group.id}`}>
+            {group.label}
+          </h3>
           <nav class="secondary-list" aria-label={group.label}>
             {#each group.entries as swarm (swarm.id)}
               <button
@@ -181,6 +194,8 @@
                     swarm.id}</span
                 >
               </button>
+            {:else}
+              <p class="run-group__empty">{group.empty}</p>
             {/each}
           </nav>
         </section>
@@ -190,11 +205,6 @@
           onClick={model.loadMoreSwarms}
           >{t('swarm.swarms.more', 'Load more runs')}</Button
         >{/if}
-    </div>
-    <div class="sidebar-footer">
-      <Button variant="secondary" onClick={model.newSwarm}
-        >{@render actionIcon('play')}{t('swarm.newRun', 'New run')}</Button
-      >
     </div>
   </aside>
   <div class="workspace">
@@ -216,24 +226,10 @@
       {/key}
     {:else}
       <section class="content">
-        {#if !model.selectedSwarm}<div class="workspace-toolbar">
-            <span class="eyebrow">{t('swarm.title', 'Swarms')}</span>
-            <Button
-              variant="tertiary"
-              icon
-              ariaLabel={t('common.refresh', 'Refresh')}
-              tooltip={t('common.refresh', 'Refresh')}
-              disabled={model.loading}
-              onClick={() => model.refresh()}
-              >{@render actionIcon('refresh')}</Button
-            >
-          </div>
-        {/if}
-        {#if model.selectedSwarm}<div class="swarm-head">
-            <div class="swarm-heading">
-              <span class="eyebrow">{t('swarm.profile', 'Swarm')}</span>
+        {#if model.selectedSwarm}<header class="swarm-head view-header">
+            <div class="swarm-heading view-header__intro">
               <div class="swarm-heading-title">
-                <h2>
+                <h2 class="view-header__title">
                   {model.selectedSwarm.profile_snapshot?.name ||
                     t('swarm.profile', 'Swarm')}
                 </h2>
@@ -249,7 +245,7 @@
                 </StatusChip>
               </div>
             </div>
-            <div class="actions">
+            <div class="view-header__actions actions">
               {#if canStop(model.selectedSwarm.state)}<Button
                   variant="danger"
                   loading={model.pending === 'stop'}
@@ -301,7 +297,7 @@
                 )}>{@render actionIcon('settings')}</Button
               >
             </div>
-          </div>
+          </header>
           <div class="swarm-tabs">
             <TabList
               items={model.tabs}
@@ -405,9 +401,11 @@
                 class="participant-pane"
                 aria-label={t('swarm.participants', 'Participants')}
               >
-                <p class="eyebrow">
+                <p class="section-label">
                   {t('swarm.participants', 'Participants')}
-                  <span>{model.discussionParticipants.length}</span>
+                  <span class="participant-count"
+                    >{model.discussionParticipants.length}</span
+                  >
                 </p>
                 <div class="participant-row">
                   {#each model.discussionParticipants as participant (participant.id)}
@@ -667,13 +665,30 @@
             </section>
           {/if}
         {:else}<section class="start">
-            <h2>{t('swarm.startTitle', 'Give the group a goal')}</h2>
-            <p>
-              {t(
-                'swarm.startHelp',
-                'The request is pinned on the Board. Participants use the collaboration Tools enabled in this Swarm; if Board access is disabled, they receive the request directly.',
-              )}
-            </p>
+            <header class="view-header">
+              <div class="view-header__intro">
+                <h2 class="view-header__title">
+                  {t('swarm.startTitle', 'Give the group a goal')}
+                </h2>
+                <p class="view-header__subtitle">
+                  {t(
+                    'swarm.startHelp',
+                    'The request is pinned on the Board. Participants use the collaboration Tools enabled in this Swarm; if Board access is disabled, they receive the request directly.',
+                  )}
+                </p>
+              </div>
+              <div class="view-header__actions">
+                <Button
+                  variant="tertiary"
+                  icon
+                  ariaLabel={t('common.refresh', 'Refresh')}
+                  tooltip={t('common.refresh', 'Refresh')}
+                  disabled={model.loading}
+                  onClick={() => model.refresh()}
+                  >{@render actionIcon('refresh')}</Button
+                >
+              </div>
+            </header>
             <div class="start-profile">
               <FormField
                 controlId="swarm-start-profile"

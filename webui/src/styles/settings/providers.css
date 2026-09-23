@@ -46,6 +46,11 @@
     background 120ms ease;
 }
 
+.s-disclosure-spacer {
+  width: 28px;
+  flex-shrink: 0;
+}
+
 .s-disclosure-btn.btn-tertiary.btn-icon:hover {
   border-color: var(--text-faint);
   color: var(--text-hi);
@@ -486,4 +491,8 @@
   color: var(--text-lo);
   font-size: var(--fs-label-sm);
   overflow-wrap: anywhere;
+}
+.provider-pick-item__detail.provider-pick-item__detail--code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
 }

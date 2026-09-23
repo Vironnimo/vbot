@@ -2,7 +2,7 @@ export default Object.freeze({
   'agents.contextMemory': 'Context & Memory',
   'agents.customCompactionHelp':
     'Turn on to customize how this Agent condenses long conversations.',
-  'agents.customCompaction': 'Custom Compaction Policy',
+  'agents.customCompaction': 'Custom compaction policy',
   'toolAccess.selectAll': 'Select all',
   'toolAccess.deselectAll': 'Deselect all',
   'toolAccess.selectionCount': '{enabled} of {total} allowed',
@@ -69,6 +69,7 @@ export default Object.freeze({
   'skills.shareAction': 'Share',
   'skills.shareNamed': 'Share {name}',
   'skills.deleteNamed': 'Delete {name}',
+  'skills.enabled': 'Enabled',
   'skills.enabledNamed': 'Enable {name} across all Agents and sources',
   'skills.library': 'Library',
   'skills.library.all': 'All skills',
@@ -331,8 +332,8 @@ export default Object.freeze({
   // Shared toggle-chip allow-list (tools/skills) — Agent editor + Projects.
   'access.searchPlaceholder': 'Filter…',
   'access.count': '{on} / {total} on',
-  'access.allOn': 'all on',
-  'access.allOff': 'all off',
+  'access.allOn': 'Select all',
+  'access.allOff': 'Deselect all',
   'access.noMatches': 'No matches.',
   'access.toggle': 'Toggle {name}',
   'access.lockedAuto': 'auto',

@@ -363,14 +363,6 @@
   text-align: left;
 }
 
-.agents-view .agents-view__access-chevron {
-  color: var(--text-med);
-}
-
-.agents-view .agents-view__access-chevron.is-open {
-  transform: rotate(90deg);
-}
-
 .agents-view .agents-view__access-group-count {
   color: var(--text-lo);
   font-size: var(--fs-label-sm);
@@ -394,16 +386,6 @@
   font-family: var(--font-ui);
   font-size: var(--fs-label-md);
   text-align: left;
-}
-
-.agents-view .agents-view__memory-chevron {
-  display: inline-block;
-  color: var(--text-lo);
-  transition: transform 160ms ease;
-}
-
-.agents-view .agents-view__memory-chevron--open {
-  transform: rotate(90deg);
 }
 
 .agents-view .agents-view__memory-total {
@@ -819,7 +801,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agents-view .agents-view__memory-chevron,
   .agents-view .agents-view__memory-scope,
   .agents-view .agents-view__memory-scope-copy,
   .agents-view .agents-view__memory-list {

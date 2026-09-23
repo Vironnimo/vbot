@@ -380,10 +380,10 @@
               onClick={() => (projectAgentsOpen = !projectAgentsOpen)}
             >
               <span
-                class="agents-view__access-chevron"
-                class:is-open={projectAgentsOpen}
-                aria-hidden="true">▸</span
-              >
+                class="disclosure-chevron"
+                class:disclosure-chevron--open={projectAgentsOpen}
+                aria-hidden="true"
+              ></span>
               <span>{t('agents.access.projectAgents', 'Project Agents')}</span>
               <span class="agents-view__access-group-count"
                 >({selectedProjectAgentCount}/{projectAgentChipItems.length})</span

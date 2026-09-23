@@ -525,10 +525,6 @@
         <span class="terminals-view__group-status">
           {t('terminals.loading', 'Loading terminal sessions…')}
         </span>
-      {:else if viewState.groups.length === 0}
-        <span class="terminals-view__group-status">
-          {t('terminals.emptyTitle', 'No terminal sessions')}
-        </span>
       {/if}
     </div>
   </header>

@@ -44,6 +44,7 @@
 .dropdown-option:focus-visible,
 .s-dropdown-opt:focus-visible,
 .toast-close:focus-visible,
+.modal-close:focus-visible,
 .reasoning-header:focus-visible,
 .tool-event-line:focus-visible {
   outline: none;
@@ -304,7 +305,7 @@
 }
 
 .modal-input {
-  background: var(--bg);
+  background: var(--field-surface);
   padding: 8px 12px;
 }
 
@@ -839,6 +840,50 @@ textarea::placeholder {
 .dropdown-primitive__trigger-label--placeholder,
 .searchable-dropdown__trigger-label--placeholder {
   color: var(--text-lo);
+}
+
+/* The one disclosure marker: a small chevron that points right when closed
+   and down when open. Plain <summary> elements get it automatically; custom
+   disclosure buttons render <span class="disclosure-chevron">. */
+.disclosure-chevron,
+summary:not([class])::before {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  margin: 0 7px 1px 2px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  color: var(--text-lo);
+  content: '';
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+  vertical-align: middle;
+}
+
+.disclosure-chevron--open,
+details[open] > summary:not([class])::before {
+  transform: rotate(45deg);
+}
+
+summary:not([class]) {
+  list-style: none;
+}
+
+summary:not([class])::-webkit-details-marker {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .disclosure-chevron,
+  summary:not([class])::before {
+    transition: none;
+  }
+}
+
+.searchable-dropdown__label--code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-body);
 }
 
 .dropdown-primitive__option-meta,

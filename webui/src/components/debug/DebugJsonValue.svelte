@@ -14,6 +14,10 @@
         : `{${entries.length}}`
       : '',
   );
+  // Whitespace-free strings are tokens such as Model ids, ids, URLs, paths,
+  // and enum values: code-like, so Mono. Strings with spaces or line breaks
+  // are prose and keep the readable Sans treatment.
+  let codeString = $derived(typeof value === 'string' && !/\s/.test(value));
   let label = $derived(
     entries && !Array.isArray(value)
       ? [value.role, value.type, value.name ?? value.function?.name]
@@ -51,8 +55,9 @@
 {:else}
   <div class="json-leaf">
     <span class="json-key">{name}</span>
-    <pre class:json-string={typeof value === 'string'}>{typeof value ===
-      'string'
+    <pre
+      class:json-string={typeof value === 'string'}
+      class:json-string--code={codeString}>{typeof value === 'string'
         ? value || '""'
         : JSON.stringify(value, null, 2)}</pre>
   </div>
@@ -83,10 +88,12 @@
     margin-left: 8px;
     font: var(--fs-mono-body) var(--font-mono);
   }
+  /* The label repeats verbatim role/type/name values (for example a function
+     name), so it shares the Mono treatment of token values. */
   .json-label {
     margin-left: 12px;
     color: var(--text-med);
-    font-size: var(--fs-body-sm);
+    font: var(--fs-mono-sm) var(--font-mono);
   }
   .json-children {
     margin-left: 10px;
@@ -106,6 +113,9 @@
   pre.json-string {
     color: var(--text-hi);
     font: var(--fs-body-lg)/1.7 var(--font-ui);
+  }
+  pre.json-string--code {
+    font: var(--fs-mono-body)/1.7 var(--font-mono);
   }
   button {
     min-height: 32px;

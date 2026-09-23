@@ -503,7 +503,9 @@
                     {providerName(provider)}
                   </span>
                   {#if provider.base_url}
-                    <span class="provider-pick-item__detail">
+                    <span
+                      class="provider-pick-item__detail provider-pick-item__detail--code"
+                    >
                       {provider.base_url}
                     </span>
                   {/if}

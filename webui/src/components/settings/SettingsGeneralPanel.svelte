@@ -228,6 +228,8 @@
     </div>
   </div>
 
+  {@render saveFooter()}
+
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
@@ -301,6 +303,8 @@
     </div>
   </div>
 
+  {@render saveFooter()}
+
   <div class="s-row s-row--stacked">
     <div class="s-row-info">
       <div class="s-row-label">
@@ -353,11 +357,15 @@
   {/if}
 {/if}
 
-<div class="s-footer">
-  <SaveButton
-    class="s-save-button s-save-button--inline"
-    {saving}
-    pending={autosave.participant.hasChanges()}
-    onClick={manualSave}
-  />
-</div>
+<!-- The manual save covers only the editable rows (time zone or keep-awake),
+     so it sits directly under them instead of after the read-only content. -->
+{#snippet saveFooter()}
+  <div class="s-footer">
+    <SaveButton
+      class="s-save-button s-save-button--inline"
+      {saving}
+      pending={autosave.participant.hasChanges()}
+      onClick={manualSave}
+    />
+  </div>
+{/snippet}

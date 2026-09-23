@@ -26,7 +26,9 @@
           aria-label={t('common.close', 'Close')}
           onclick={() => onDismiss?.(toast.id)}
         >
-          <span aria-hidden="true">×</span>
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"
+            ><path d="m6 6 12 12M18 6 6 18" /></svg
+          >
         </button>
       </article>
     {/each}

@@ -198,6 +198,7 @@ export function buildModelSelectOptions({
       ? {
           value: selectedModel.model,
           label: selectedModel.model,
+          code: true,
           isUnavailable: false,
           ...suitabilityFields(selectedCatalogModel, translate),
         }
@@ -213,6 +214,7 @@ export function buildModelSelectOptions({
         {
           value: model.id,
           label: model.id,
+          code: true,
           isUnavailable: false,
           ...suitabilityFields(model, translate),
         },
@@ -346,6 +348,7 @@ function connectionModelOptions(
       {
         value: modelSelectionValue(model.id, localId),
         label: modelOptionLabel(model, connection, providerConnectionCount),
+        code: true,
         isUnavailable: false,
         ...suitability,
       },
@@ -364,6 +367,7 @@ function connectionModelOptions(
       providerConnectionCount,
       translate,
     ),
+    code: true,
     isUnavailable: false,
     ...suitability,
   }));

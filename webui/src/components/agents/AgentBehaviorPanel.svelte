@@ -453,10 +453,10 @@
           onClick={toggleMemoryPanel}
         >
           <span
-            class:agents-view__memory-chevron--open={memoryPanelOpen}
-            class="agents-view__memory-chevron"
-            aria-hidden="true">▸</span
-          >
+            class:disclosure-chevron--open={memoryPanelOpen}
+            class="disclosure-chevron"
+            aria-hidden="true"
+          ></span>
           <span>
             {memoryPanelOpen
               ? t('agents.memory.hide', 'Hide Memory entries')
@@ -640,7 +640,7 @@
     <div class="agents-view__prompt-toggle-row">
       <div>
         <div class="agents-view__prompt-toggle-label">
-          {t('agents.customCompaction', 'Custom Compaction Policy')}
+          {t('agents.customCompaction', 'Custom compaction policy')}
         </div>
         <div class="agents-view__prompt-toggle-desc">
           {t(

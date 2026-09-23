@@ -65,7 +65,7 @@
     ['preferences', 'settings.preferences.title', 'Region & setup'],
     ['providers', 'settings.providers.title', 'Providers'],
     ['voice_controls', 'settings.sections.voiceControls', 'Voice controls'],
-    ['speech_models', 'settings.sections.speechModels', 'Speech Models'],
+    ['speech_models', 'settings.sections.speechModels', 'Speech models'],
     ['recall', 'settings.sections.recall', 'Conversation search'],
     [
       'embedding_model',
@@ -73,7 +73,7 @@
       'Embedding model',
     ],
     ['reflection', 'settings.reflection.title', 'Reflection'],
-    ['web_search', 'settings.webSearch.title', 'Web Search'],
+    ['web_search', 'settings.webSearch.title', 'Web search'],
     ['web_fetch', 'settings.webFetch.title', 'Web Fetch'],
     ['media_models', 'settings.sections.mediaModels', 'Images, video & music'],
     ['decision_model', 'settings.sections.evaluation', 'Evaluation'],
@@ -632,9 +632,11 @@
       <input
         class="settings-search-input"
         type="search"
+        spellcheck="false"
+        autocomplete="off"
         value={searchQuery}
         oninput={handleSearchInput}
-        placeholder={t('settings.search.placeholder', 'Search settingsâ€¦')}
+        placeholder={t('settings.search.placeholder', 'Search settings…')}
         aria-label={t('settings.search.label', 'Search settings')}
       />
     </div>
@@ -678,7 +680,7 @@
     <div class="s-doc" bind:this={documentRoot}>
       {#if loading}
         <Banner variant="neutral"
-          >{t('settings.loading', 'Loading settingsâ€¦')}</Banner
+          >{t('settings.loading', 'Loading settings…')}</Banner
         >
       {:else if loadError}
         <Banner variant="error"
@@ -715,7 +717,7 @@
                     ? pageForDestination(panelId)?.label()
                     : t(
                         'settings.agentShortcut.search',
-                        'Agents â†’ Shared defaults Â· Model, Thinking, fallbacks and Compaction',
+                        'Agents → Shared defaults · Model, Thinking, fallbacks and Compaction',
                       )}</span
                 >
               </Button>

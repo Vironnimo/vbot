@@ -370,7 +370,6 @@
   color: var(--text-lo);
   font-family: var(--font-mono);
   font-size: var(--fs-mono-xs);
-  letter-spacing: 0.05em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

@@ -26,7 +26,9 @@ describe('StatisticsView', () => {
     expect(document.querySelectorAll('.stats-activity__col')).toHaveLength(30);
     expect(
       [
-        ...document.querySelectorAll('.stats-grid--hero .stats-card__value'),
+        ...document.querySelectorAll(
+          '.stats-panel > .stats-grid .stats-card__value',
+        ),
       ].map((node) => node.textContent),
     ).toEqual(['1,200', '$0.012', '$0.043', '10.0%']);
     expect(cardValue('statistics.compactions.averageAfter')).toBe('40,000');

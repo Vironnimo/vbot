@@ -24,7 +24,8 @@ Swarm Activity uses live `run_active` as authoritative over an older persisted S
   the catalog to resolve a selected Project default, not on display context
   updates. Failed editor loads leave the overview usable (`SwarmPage.test.js`).
 - Profile editing uses the shared Model search/selection and effort helpers,
-  the shared Secondary bar, topic tabs, a bounded scrollport, and a small manual Save action after its fields.
+  the shared Secondary bar, topic tabs, a bounded scrollport, and the shared
+  `SaveButton` after its fields (Save / Saving… / Saved, reflecting unsaved edits).
   Creation saves explicitly; saved profiles autosave and flush before navigation
   through the generic page bridge. Invalidations preserve the mounted draft.
   The System Prompt tab owns editable instructions, explicit block selection,
@@ -264,7 +265,8 @@ The retained Swarm list projects a bounded first-line goal title from the stored
 prompt. The sidebar groups preparing/running/stopping records as Active runs;
 all other states, including idle and needs_attention, appear under Inactive runs.
 This presentation does not close an idle execution group or disable its Board wakes.
-Swarm selection opens the editor; New run returns to the goal form.
+Swarm selection opens the editor; the pinned New run row returns to the goal form
+and is marked current while that form shows.
 The form prefills the directory after Swarm selection and preserves manual edits
 during invalidation. Project defaults resolve through the catalog; unchanged
 defaults retain the explicit Project selection. A changed directory is sent as

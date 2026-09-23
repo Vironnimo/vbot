@@ -6,6 +6,7 @@ import {
   unmount,
   profile,
   button,
+  saveButton,
   createBridge,
   fill,
   choose,
@@ -39,7 +40,7 @@ describe('SwarmPage', () => {
     toggle('Working Project').click();
     toggle('When you resume work').click();
     await tick();
-    button('Save changes').click();
+    saveButton().click();
     await new Promise((resolve) => setTimeout(resolve, 20));
     const saved = operation.mock.calls
       .filter(([name]) => name === 'profiles.save')
@@ -262,7 +263,7 @@ describe('SwarmPage', () => {
     );
     button('Select all').click();
     await tick();
-    button('Save changes').click();
+    saveButton().click();
     await tick();
     await tick();
     const saved = operation.mock.calls
@@ -280,7 +281,7 @@ describe('SwarmPage', () => {
     await tick();
     button('Deselect all').click();
     await tick();
-    button('Save changes').click();
+    saveButton().click();
     await tick();
     await tick();
     expect(
@@ -298,7 +299,7 @@ describe('SwarmPage', () => {
     flushSync();
     await choose('swarm-directory-source', 'Project');
     await choose('swarm-project', 'Project A');
-    button('Save changes').click();
+    saveButton().click();
     await tick();
     await tick();
     expect(
@@ -367,12 +368,39 @@ describe('SwarmPage', () => {
     expect(document.getElementById('swarm-profile-name').value).toBe(
       'Autosaved profile',
     );
-    button('Save changes').click();
+    saveButton().click();
     await vi.advanceTimersByTimeAsync(0);
     expect(
       operation.mock.calls.filter(([name]) => name === 'profiles.save'),
     ).toHaveLength(1);
     expect(bridge.toast).toHaveBeenCalled();
+  });
+
+  it('shows the saved state until the draft changes and after the save completes', async () => {
+    const { bridge, operation } = createBridge();
+    await render(bridge);
+    button('Edit').click();
+    await tick();
+    flushSync();
+    const saves = () =>
+      operation.mock.calls.filter(([name]) => name === 'profiles.save');
+    expect(saveButton().textContent.trim()).toBe('Saved');
+    expect(saveButton().classList).toContain('save-button--saved');
+    fill('swarm-profile-name', 'Renamed profile');
+    await tick();
+    flushSync();
+    expect(saveButton().textContent.trim()).toBe('Save');
+    expect(saveButton().classList).not.toContain('save-button--saved');
+    saveButton().click();
+    await vi.waitFor(() =>
+      expect(saveButton().textContent.trim()).toBe('Saved'),
+    );
+    expect(saves()).toHaveLength(1);
+    expect(saves()[0][1].profile.name).toBe('Renamed profile');
+    fill('swarm-profile-name', 'Research');
+    await tick();
+    flushSync();
+    expect(saveButton().textContent.trim()).toBe('Save');
   });
 
   it('flushes newer edits made during an in-flight save with the returned revision', async () => {
@@ -533,7 +561,7 @@ it('shows and saves each private Swarm Tool independently', async () => {
   await tick();
   document.querySelector('[aria-label="Turn off swarm_board"]').click();
   await tick();
-  button('Save changes').click();
+  saveButton().click();
   await vi.waitFor(() =>
     expect(operation).toHaveBeenCalledWith(
       'profiles.save',

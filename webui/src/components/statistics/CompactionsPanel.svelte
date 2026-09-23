@@ -18,7 +18,7 @@
 </script>
 
 <div class="stats-panel">
-  <div class="stats-grid stats-grid--hero">
+  <div class="stats-grid">
     {@render statCard(
       t('statistics.compactions.averageAfter', 'Average remaining tokens'),
       formatOptionalTokens(context.average_after_tokens, locale),
@@ -162,7 +162,7 @@
   </div>
   <div class="stats-block">
     <h3 class="stats-block__title">
-      {t('statistics.compactions.byStrategy', 'By Strategy')}
+      {t('statistics.compactions.byStrategy', 'By strategy')}
     </h3>
     {#if compactions.by_strategy.length === 0}<EmptyState
         density="compact"
@@ -174,7 +174,7 @@
         class="stats-table-scroll"
         role="region"
         tabindex="0"
-        aria-label={t('statistics.compactions.byStrategy', 'By Strategy')}
+        aria-label={t('statistics.compactions.byStrategy', 'By strategy')}
       >
         <table class="stats-table">
           <thead

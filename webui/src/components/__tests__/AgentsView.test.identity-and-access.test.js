@@ -401,22 +401,22 @@ describe('AgentsView', () => {
   });
 
   it.each([
-    ['identity', 'all off', ['*'], ['builder@vbot', 'builder@demo']],
-    ['project', 'all off', ['*'], ['worker', 'helper']],
+    ['identity', 'Deselect all', ['*'], ['builder@vbot', 'builder@demo']],
+    ['project', 'Deselect all', ['*'], ['worker', 'helper']],
     [
       'identity',
-      'all on',
+      'Select all',
       ['builder@vbot'],
       ['builder@vbot', 'worker', 'helper'],
     ],
     [
       'project',
-      'all on',
+      'Select all',
       ['worker'],
       ['worker', 'builder@vbot', 'builder@demo'],
     ],
-    ['identity', 'all off', ['worker', 'builder@vbot'], ['builder@vbot']],
-    ['project', 'all off', ['worker', 'builder@vbot'], ['worker']],
+    ['identity', 'Deselect all', ['worker', 'builder@vbot'], ['builder@vbot']],
+    ['project', 'Deselect all', ['worker', 'builder@vbot'], ['worker']],
   ])(
     'sets %s Agents %s while preserving the other group (%j)',
     async (group, action, allowed, expected) => {
@@ -519,7 +519,7 @@ describe('AgentsView', () => {
       document.getElementById('agent-project-targets-toggle').textContent,
     ).toContain('(1/3)');
     vi.useFakeTimers();
-    getButtonWithin(identity, 'all off').click();
+    getButtonWithin(identity, 'Deselect all').click();
     flushSync();
     await vi.advanceTimersByTimeAsync(800);
     await flushAsyncUpdates();
@@ -536,14 +536,14 @@ describe('AgentsView', () => {
     const identity = document.querySelector(
       'section[aria-labelledby="agent-identity-targets-label"]',
     );
-    getButtonWithin(identity, 'all on').click();
+    getButtonWithin(identity, 'Select all').click();
     flushSync();
     await vi.advanceTimersByTimeAsync(800);
     expect(getAgentUpdateCalls()).toHaveLength(0);
 
-    getButtonWithin(identity, 'all off').click();
+    getButtonWithin(identity, 'Deselect all').click();
     flushSync();
-    getButtonWithin(identity, 'all on').click();
+    getButtonWithin(identity, 'Select all').click();
     flushSync();
     await vi.advanceTimersByTimeAsync(800);
     await flushAsyncUpdates();

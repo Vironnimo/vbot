@@ -233,6 +233,20 @@ svg {
   stroke-width: 1.5;
 }
 
+/* The browser's search clear control is tinted blue; keep it neutral. */
+input[type='search']::-webkit-search-cancel-button {
+  cursor: pointer;
+  filter: grayscale(1) brightness(1.6);
+}
+
+/* Keyboard-focus fallback for every element without its own focus style
+   (native disclosures, scroll regions, plain buttons). Zero specificity, so
+   any component focus rule still wins. */
+:where(:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 ::selection {
   color: var(--text-hi);
   background: color-mix(in srgb, var(--accent) 32%, transparent);
