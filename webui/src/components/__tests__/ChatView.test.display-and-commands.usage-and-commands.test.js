@@ -7,7 +7,8 @@ import {
   findButtonByText,
   findNewSessionButton,
   flushSync,
-  hoveredContextRingTooltip,
+  contextCompactionButton,
+  hoveredContextRingCard,
   it,
   rpcMock,
   selectAgentFromPicker,
@@ -202,26 +203,32 @@ describe('ChatView', () => {
     chatViewTest.mount({ target: document.body });
     flushSync();
 
-    const expectedTooltip = [
-      '3,978 / 262,144',
-      '',
-      'Last turn',
-      'Input: 3,886 tok',
-      '  · read from cache: 3,000 (77%)',
-      '  · newly written to cache: 200',
-      '  · uncached: 686',
-      'Output: 92 tok',
-      '',
-      'Session (12 fully measured turns)',
-      'Input: 40,000 tok',
-      '  · read from cache: 32,000 (80%)',
-      'Output: 1,500 tok',
-      'Avg cache read per turn: 2,667 tok',
-    ].join('\n');
-
-    expect(await hoveredContextRingTooltip(expectedTooltip)).toBe(
-      expectedTooltip,
-    );
+    expect(await hoveredContextRingCard()).toEqual({
+      summary: '3,978 / 262,144',
+      sections: [
+        {
+          title: 'Last turn',
+          meta: '',
+          rows: [
+            'Input: 3,886',
+            '· Read from cache: 3,000 (77%)',
+            '· Written to cache: 200',
+            '· Uncached: 686',
+            'Output: 92',
+          ],
+        },
+        {
+          title: 'Session',
+          meta: '12 measured turns',
+          rows: [
+            'Input: 40,000',
+            '· Read from cache: 32,000 (80%)',
+            'Output: 1,500',
+            'Avg cache read per turn: 2,667',
+          ],
+        },
+      ],
+    });
   });
 
   it('omits cache lines from the context ring tooltip without cache usage', async () => {
@@ -234,17 +241,136 @@ describe('ChatView', () => {
     chatViewTest.mount({ target: document.body });
     flushSync();
 
-    const expectedTooltip = [
-      '3,978 / 262,144',
-      '',
-      'Last turn',
-      'Input: 3,886 tok',
-      'Output: 92 tok',
-    ].join('\n');
+    expect(await hoveredContextRingCard()).toEqual({
+      summary: '3,978 / 262,144',
+      sections: [
+        { title: 'Last turn', meta: '', rows: ['Input: 3,886', 'Output: 92'] },
+      ],
+    });
+  });
 
-    expect(await hoveredContextRingTooltip(expectedTooltip)).toBe(
-      expectedTooltip,
+  it('starts a manual Compaction Run from the context card while no Run is active', async () => {
+    const streamCalls = [];
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        usage: { input_tokens: 3886, output_tokens: 92 },
+        streamHandler: ({ content }) => {
+          streamCalls.push(content);
+          if (content === '/compact') {
+            return {
+              run_id: 'run-card-compaction',
+              sse_url: '/api/runs/run-card-compaction/events',
+              status: 'running',
+              events: [
+                {
+                  type: 'run_started',
+                  run_id: 'run-card-compaction',
+                  sequence: 1,
+                  payload: { status: 'running' },
+                },
+                {
+                  type: 'compaction_started',
+                  run_id: 'run-card-compaction',
+                  sequence: 2,
+                  payload: {},
+                },
+              ],
+            };
+          }
+          throw new Error(`Unexpected stream content: ${content}`);
+        },
+      }),
     );
+
+    chatViewTest.mount({ target: document.body });
+    flushSync();
+    await waitForCondition(
+      () => document.body.querySelector('.context-ring-trigger') !== null,
+      100,
+    );
+
+    const action = contextCompactionButton();
+    expect(action.textContent.trim()).toBe('Compact now');
+    expect(action.disabled).toBe(false);
+    action.click();
+
+    await waitForCondition(
+      () => action.textContent.trim() === 'Compacting…',
+      100,
+    );
+    expect(streamCalls).toEqual(['/compact']);
+    expect(action.disabled).toBe(true);
+    expect(
+      rpcMock.mock.calls.some(([method]) => method === 'chat.control_run'),
+    ).toBe(false);
+  });
+
+  it('requests Compaction from the active Run through the context card', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        usage: { input_tokens: 3886, output_tokens: 92 },
+        streamResponse: {
+          run_id: 'run-card-control',
+          sse_url: '/api/runs/run-card-control/events',
+          status: 'running',
+          events: [],
+        },
+      }),
+    );
+
+    chatViewTest.mount({ target: document.body });
+    flushSync();
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+    sendComposerMessage('Start a long run');
+    await waitForCondition(
+      () => subscribeRunEventsMock.mock.calls.length === 1,
+      100,
+    );
+    const handlers = subscribeRunEventsMock.mock.calls[0][1];
+    const controls = (compaction, sequence) =>
+      handlers.onEvent({
+        data: {
+          type: 'run_controls_changed',
+          run_id: 'run-card-control',
+          sequence,
+          payload: { compaction, background_tool_call_ids: [] },
+        },
+      });
+
+    controls('unavailable', 1);
+    flushSync();
+    const action = contextCompactionButton();
+    expect(action.disabled).toBe(true);
+
+    controls('idle', 2);
+    flushSync();
+    expect(action.textContent.trim()).toBe('Compact now');
+    expect(action.disabled).toBe(false);
+    action.click();
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(([method]) => method === 'chat.control_run'),
+      100,
+    );
+    expect(rpcMock).toHaveBeenCalledWith('chat.control_run', {
+      agent_id: 'alpha',
+      session_id: 'session-1',
+      run_id: 'run-card-control',
+      action: 'compact',
+    });
+
+    controls('pending', 3);
+    flushSync();
+    expect(action.textContent.trim()).toBe('Compaction requested…');
+    expect(action.disabled).toBe(true);
+
+    controls('running', 4);
+    flushSync();
+    expect(action.textContent.trim()).toBe('Compacting…');
+    expect(action.disabled).toBe(true);
   });
 
   it('does not render a refresh button in the chat header', async () => {

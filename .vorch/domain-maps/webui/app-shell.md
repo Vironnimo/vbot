@@ -13,6 +13,12 @@ Domain controllers still own their data. The app shell may request a refresh or 
 
 AppShell's optional `sidebarFooter` snippet precedes the existing microphone and connection rows. App mounts the Settings-gated Live voice control there; its lifecycle and opt-in contract live in `model_tasks/live.md`.
 
+## Main menu responsiveness
+
+- `AppShell.svelte` watches the phone (`<=640px`) and tablet (`641-960px`) ranges through one `matchMedia` helper whose listeners are removed on unmount. The saved compact preference (`vbot.sidebar.collapsed.v1` in localStorage) applies only from desktop width (`>=961px`); tablet behavior never reads it for layout and never writes it.
+- At tablet width the Main menu always renders the compact rail. Its toggle (`aria-expanded`, not `aria-pressed`) opens the full menu as an overlay (`data-tablet-menu-open`) above a light scrim; the shell reserves the rail width while it is open, so the content - including fitted Terminals - never resizes. Focus moves to the current destination and the content is `inert`.
+- The overlay closes on any navigation (including history and deep links), a backdrop click, the toggle, leaving the tablet range, or an Escape no floating layer consumed (`defaultPrevented`); Escape returns focus to the toggle. The phone More sheet follows the same Escape rule. Coverage: `components/__tests__/AppShell.test.js`.
+
 ## Desktop context menu
 
 - `App.svelte` enables the custom menu only after the live Desktop bridge advertises `contextMenu`; an ordinary browser never has its native `contextmenu` event cancelled.

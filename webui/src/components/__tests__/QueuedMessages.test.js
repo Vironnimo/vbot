@@ -4,6 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
+import {
+  FLOATING_HOVER_CLOSE_DELAY_MS,
+  HOVER_CARD_SHOW_DELAY_MS,
+} from '../../lib/tooltip.js';
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -64,6 +68,43 @@ describe('QueuedMessages', () => {
     await vi.waitFor(() => expect(button('Steer').disabled).toBe(false));
   });
 
+  it('opens the full-text card after hover intent, at once on keyboard focus', () => {
+    vi.useFakeTimers();
+    try {
+      const content = 'First line\nSecond line with more detail';
+      mountedComponent = mount(QueuedMessages, {
+        target: document.body,
+        props: { queuedMessages: [{ id: 'q', content, editable: true }] },
+      });
+      flushSync();
+      const anchor = document.querySelector('.queued-messages__preview');
+      const preview = anchor.querySelector('button');
+      const card = document.querySelector('.queued-messages__full');
+
+      expect(card.parentElement).toBe(document.body);
+      expect(card.classList.contains('floating-card')).toBe(true);
+      anchor.dispatchEvent(new MouseEvent('pointerenter'));
+      vi.advanceTimersByTime(HOVER_CARD_SHOW_DELAY_MS - 1);
+      expect(card.dataset.floatingOpen).toBe('false');
+      vi.advanceTimersByTime(1);
+      expect(card.dataset.floatingOpen).toBe('true');
+      expect(card.getAttribute('role')).toBe('tooltip');
+
+      anchor.dispatchEvent(new MouseEvent('pointerleave'));
+      vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
+      expect(card.dataset.floatingOpen).toBe('false');
+
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }));
+      preview.focus();
+      expect(preview.tabIndex).toBe(0);
+      expect(card.dataset.floatingOpen).toBe('true');
+      expect(preview.getAttribute('aria-describedby')).toBe(card.id);
+      expect(card.textContent).toBe(content);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps a failed Queue edit open with its unsaved content', async () => {
     const onEditQueuedMessage = vi.fn().mockResolvedValue(false);
     mountedComponent = mount(QueuedMessages, {
@@ -98,6 +139,32 @@ describe('QueuedMessages', () => {
       ).toBeTruthy();
     });
     expect(editor.value).toBe('Unsaved change');
+  });
+
+  it('opens the editor when an editable preview is clicked', () => {
+    mountedComponent = mount(QueuedMessages, {
+      target: document.body,
+      props: {
+        queuedMessages: [
+          { id: 'queue-one', content: 'Original', editable: true },
+          { id: 'queue-file', content: '[attachment]', editable: false },
+        ],
+      },
+    });
+    flushSync();
+
+    const previews = document.body.querySelectorAll(
+      '.queued-messages__content',
+    );
+    previews[1].click();
+    flushSync();
+    expect(document.body.querySelector('.queued-messages__editor')).toBeNull();
+
+    previews[0].click();
+    flushSync();
+    expect(document.body.querySelector('.queued-messages__editor').value).toBe(
+      'Original',
+    );
   });
 
   it('does not offer text editing for a Queue item with attachments', () => {

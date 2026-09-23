@@ -430,6 +430,47 @@ export function isRunActive(sessionState) {
   return sessionState?.status === CHAT_STATUS_RUNNING;
 }
 
+const COMPACTION_SETTLED_EVENTS = new Set([
+  'compaction_completed',
+  'compaction_aborted',
+]);
+
+/**
+ * Compaction availability for the context ring's action, from server-owned
+ * state only: `idle` while no Run is active (a manual `/compact` Run can
+ * start), the running Run's advertised `controls.compaction`
+ * (`idle`/`pending`/`running`), `running` while a Run without that control
+ * (a manual `/compact` Run) has an unfinished Compaction, else `unavailable`.
+ */
+export function contextCompactionState(sessionState) {
+  if (!sessionState) {
+    return 'unavailable';
+  }
+  if (!isRunActive(sessionState)) {
+    return 'idle';
+  }
+  const run = sessionState.currentRun;
+  if (!run || run.status !== CHAT_STATUS_RUNNING) {
+    return 'unavailable';
+  }
+  const advertised = run.controls?.compaction;
+  if (['idle', 'pending', 'running'].includes(advertised)) {
+    return advertised;
+  }
+  let compacting = false;
+  for (const event of sessionState.runEvents ?? []) {
+    if (event?.run_id !== run.runId) {
+      continue;
+    }
+    if (event.type === 'compaction_started') {
+      compacting = true;
+    } else if (COMPACTION_SETTLED_EVENTS.has(event.type)) {
+      compacting = false;
+    }
+  }
+  return compacting ? 'running' : 'unavailable';
+}
+
 function runContributesToAgentActivity(sessionState) {
   return sessionState?.currentRun?.contributesToAgentActivity !== false;
 }

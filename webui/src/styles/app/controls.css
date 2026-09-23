@@ -645,8 +645,6 @@ textarea::placeholder {
 
   --dropdown-focus-border: var(--accent-40);
   --dropdown-focus-ring: var(--focus-ring);
-  --dropdown-elevation: var(--floating-elevation);
-  --dropdown-elevation-strong: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 
 .s-dropdown {

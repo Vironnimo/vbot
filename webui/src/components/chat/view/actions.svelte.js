@@ -1,5 +1,6 @@
 import { onDestroy } from 'svelte';
 import {
+  isRunActive,
   visibleTimelineItemsForRender,
   selectAgent,
 } from '../../../lib/chatState.js';
@@ -168,6 +169,40 @@ export function createChatViewActions(context) {
     return outcome.kind !== 'failed' && outcome.kind !== 'ignored';
   };
 
+  // Sessions whose manual `/compact` submission is still being admitted.
+  let compactionSubmissions = $state([]);
+
+  // The context card's Compaction action. An active Run takes the request at
+  // its next safe step; otherwise the server-owned manual `/compact` command
+  // starts its own Run through the ordinary send path (no local state).
+  const handleCompactContext = async () => {
+    const agent = context.target.activeAgent;
+    const sessionState = context.target.activeSessionState;
+    if (!agent || !sessionState) {
+      return;
+    }
+    if (isRunActive(sessionState)) {
+      await context.chatController.controlRun(sessionState, 'compact');
+      return;
+    }
+    const key = sessionState.key ?? '';
+    if (compactionSubmissions.includes(key)) {
+      return;
+    }
+    compactionSubmissions = [...compactionSubmissions, key];
+    try {
+      await sendStream(agent, sessionState, '/compact');
+    } finally {
+      compactionSubmissions = compactionSubmissions.filter(
+        (pendingKey) => pendingKey !== key,
+      );
+    }
+  };
+
+  const isCompactionSubmitting = (sessionState) =>
+    Boolean(sessionState?.pendingRunControls?.compact) ||
+    compactionSubmissions.includes(sessionState?.key ?? '');
+
   const handleEditMessage = async (messageId, content) => {
     const sessionState = context.target.activeSessionState;
     const sourceSessionKey = sessionState?.key ?? '';
@@ -329,6 +364,12 @@ export function createChatViewActions(context) {
     },
     get handleEditMessage() {
       return handleEditMessage;
+    },
+    get handleCompactContext() {
+      return handleCompactContext;
+    },
+    get isCompactionSubmitting() {
+      return isCompactionSubmitting;
     },
     get handleCancelRun() {
       return handleCancelRun;

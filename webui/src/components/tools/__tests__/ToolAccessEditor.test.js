@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../../lib/i18n.js';
+import { HOVER_CARD_SHOW_DELAY_MS } from '../../../lib/tooltip.js';
 
 vi.mock('svelte', async () => {
   return import('../../../../node_modules/svelte/src/index-client.js');
@@ -198,9 +199,12 @@ describe('ToolAccessEditor', () => {
     expect(readTip.textContent).toContain('Read a file from disk.');
     expect(readTip.dataset.floatingOpen).toBe('false');
 
+    vi.useFakeTimers();
     toolChip('read')
       .closest('.tool-access-chip-wrap')
       .dispatchEvent(new Event('pointerenter'));
+    vi.advanceTimersByTime(HOVER_CARD_SHOW_DELAY_MS);
+    vi.useRealTimers();
     expect(readTip.dataset.floatingOpen).toBe('true');
 
     expect(document.body.textContent).toContain('Memory is currently off');

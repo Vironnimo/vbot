@@ -12,6 +12,7 @@ import {
   agentUnreadResults,
   applySessionCompletionActivity,
   appendRunEvent,
+  contextCompactionState,
   createChatState,
   ensureSessionState,
   isRunActive,
@@ -764,5 +765,62 @@ describe('chat state helpers', () => {
     expect(sessionState.runEvents).toEqual([]);
     expect(sessionState.status).toBe(CHAT_STATUS_IDLE);
     expect(sessionState.currentRun).toBeNull();
+  });
+});
+
+describe('contextCompactionState', () => {
+  function sessionWithRun(controls) {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-compaction',
+    );
+    startRun(sessionState, {
+      run_id: 'run-compaction',
+      status: 'running',
+      controls,
+      events: [],
+    });
+    return sessionState;
+  }
+
+  it('offers a manual Compaction Run while no Run is active', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-idle',
+    );
+
+    expect(contextCompactionState(sessionState)).toBe('idle');
+    expect(contextCompactionState(null)).toBe('unavailable');
+  });
+
+  it.each(['idle', 'pending', 'running', 'unavailable'])(
+    'follows the running Run advertised %s control',
+    (compaction) => {
+      expect(contextCompactionState(sessionWithRun({ compaction }))).toBe(
+        compaction,
+      );
+    },
+  );
+
+  it('reports a manual Compaction Run as running until its Compaction settles', () => {
+    const sessionState = sessionWithRun({ compaction: 'unavailable' });
+
+    appendRunEvent(sessionState, {
+      type: 'compaction_started',
+      run_id: 'run-compaction',
+      sequence: 1,
+      payload: {},
+    });
+    expect(contextCompactionState(sessionState)).toBe('running');
+
+    appendRunEvent(sessionState, {
+      type: 'compaction_completed',
+      run_id: 'run-compaction',
+      sequence: 2,
+      payload: {},
+    });
+    expect(contextCompactionState(sessionState)).toBe('unavailable');
   });
 });

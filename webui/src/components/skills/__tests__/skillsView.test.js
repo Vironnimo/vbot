@@ -5,6 +5,10 @@ import { SvelteMap } from 'svelte/reactivity';
 import { fileURLToPath } from 'node:url';
 import { readStyleSheet } from '../../../__tests__/styles.support.js';
 import { init, t } from '../../../lib/i18n.js';
+import {
+  FLOATING_HOVER_CLOSE_DELAY_MS,
+  TOOLTIP_SHOW_DELAY_MS,
+} from '../../../lib/tooltip.js';
 import { rpcBackedApiMock } from '../../__tests__/apiMock.js';
 import {
   filterSkills,
@@ -294,22 +298,24 @@ describe('Skills manager', () => {
       ).toBeTruthy();
     }
     const row = document.querySelector('[data-skill-id="private"]');
+    const visibleTooltip = () =>
+      document.querySelector('#app-tooltip[data-floating-open="true"]');
     row.dispatchEvent(new MouseEvent('pointerenter'));
-    await new Promise((resolve) => setTimeout(resolve, 180));
-    expect(document.querySelector('.app-tooltip--visible').textContent).toBe(
-      'Purpose of deploy',
+    await new Promise((resolve) =>
+      setTimeout(resolve, TOOLTIP_SHOW_DELAY_MS + 30),
     );
+    expect(visibleTooltip().textContent).toBe('Purpose of deploy');
     row.dispatchEvent(new MouseEvent('pointerleave'));
-    expect(document.querySelector('.app-tooltip--visible')).toBeNull();
-    row.focus();
-    await new Promise((resolve) => setTimeout(resolve, 180));
-    expect(document.querySelector('.app-tooltip--visible').textContent).toBe(
-      'Purpose of deploy',
+    await new Promise((resolve) =>
+      setTimeout(resolve, FLOATING_HOVER_CLOSE_DELAY_MS + 30),
     );
+    expect(visibleTooltip()).toBeNull();
+    row.focus();
+    expect(visibleTooltip().textContent).toBe('Purpose of deploy');
     row.dispatchEvent(
       new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
     );
-    expect(document.querySelector('.app-tooltip--visible')).toBeNull();
+    expect(visibleTooltip()).toBeNull();
     for (const name of ['Share deploy', 'Delete deploy']) {
       expect(button(name).textContent.trim()).toBe('');
       expect(button(name).querySelector('svg')).toBeTruthy();

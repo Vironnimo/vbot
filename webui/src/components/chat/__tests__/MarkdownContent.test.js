@@ -159,7 +159,9 @@ describe('MarkdownContent', () => {
       expect(link.getAttribute('aria-describedby')).toBe('app-tooltip');
       await unmount(mountedComponent);
       mountedComponent = null;
-      expect(document.querySelector('.app-tooltip--visible')).toBeNull();
+      expect(
+        document.querySelector('#app-tooltip[data-floating-open="true"]'),
+      ).toBeNull();
     },
   );
 

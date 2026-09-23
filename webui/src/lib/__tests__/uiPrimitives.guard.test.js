@@ -34,6 +34,18 @@ function collectSvelteFiles(directory) {
 }
 
 const SVELTE_FILES = collectSvelteFiles(SRC_DIR);
+// The bundled Swarm Extension UI imports the same tooltip/InfoHint helpers
+// from webui/src, so the native-title guard covers it too.
+const SWARM_UI_DIR = join(
+  SRC_DIR,
+  '..',
+  '..',
+  'resources',
+  'extensions',
+  'swarm',
+  'ui',
+);
+const SWARM_UI_SVELTE_FILES = collectSvelteFiles(SWARM_UI_DIR);
 
 function classTokensInTag(openingTag) {
   const tokens = [];
@@ -446,8 +458,8 @@ describe('UI primitive guard', () => {
   it('bans native title tooltips — use the shared tooltip action or InfoHint', () => {
     // The quick tooltip (`use:tooltip` from lib/tooltip.js, or the Button
     // `tooltip` prop) replaced every native `title` attribute: styled,
-    // multi-line, immediate, and consistent. A raw `title=` on an HTML element
-    // would bring back the unstyled, delayed, touch-less browser tooltip.
+    // multi-line, keyboard-reachable, and consistent. A raw `title=` on an element
+    // would bring back the unstyled, keyboard- and touch-less browser tooltip.
     // Capitalized Svelte components are unaffected — their `title` props are
     // real headings (Modal, ConfirmDialog), not native tooltips.
     // An iframe's title names its browsing context for assistive technology;
@@ -455,7 +467,8 @@ describe('UI primitive guard', () => {
     const NATIVE_TITLE = /<(?!iframe\b)[a-z][\w-]*\b[^>]*\stitle\s*=/g;
     const violations = [];
 
-    for (const filePath of SVELTE_FILES) {
+    expect(SWARM_UI_SVELTE_FILES.length).toBeGreaterThan(0);
+    for (const filePath of [...SVELTE_FILES, ...SWARM_UI_SVELTE_FILES]) {
       const source = readFileSync(filePath, 'utf8');
       for (const match of source.matchAll(NATIVE_TITLE)) {
         const relativePath = relative(SRC_DIR, filePath);
