@@ -84,10 +84,30 @@ describe('ChatComposer', () => {
     expect(card.querySelector('.context-card__meter-fill').style.width).toBe(
       '40%',
     );
-    expect(card.querySelector('.context-card__details').textContent).toContain(
-      'Last turn',
-    );
+    expect(
+      card.querySelector('.context-card__section-title').textContent,
+    ).toContain('Last turn');
+    expect(card.querySelector('.context-card__level')).toBeNull();
   });
+
+  it.each([
+    [6900, 'normal', null],
+    [7000, 'high', 'Approaching automatic Compaction'],
+    [9000, 'critical', 'Context almost full'],
+  ])(
+    'marks %i of 10,000 context tokens as the %s level',
+    (tokens, level, note) => {
+      const { anchor, card } = mountContextRing({
+        contextUsage: { tokens, estimated: false },
+      });
+
+      expect(anchor.classList.contains(`context-ring--${level}`)).toBe(true);
+      expect(card.classList.contains(`context-card--${level}`)).toBe(true);
+      expect(
+        card.querySelector('.context-card__level')?.textContent.trim() ?? null,
+      ).toBe(note);
+    },
+  );
 
   it('reaches the action from the ring by keyboard and returns on Escape', () => {
     const { trigger, card } = mountContextRing();

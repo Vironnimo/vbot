@@ -1,10 +1,10 @@
-// Composes the context usage text: a compact context summary
-// ("tokens / contextWindow" plus a provider in/out line), a "Last turn"
-// block that splits the input into its cache shares, and a whole-session
-// block with the session cache hit rate. Rendered with preserved line breaks
-// by the Chat context ring's hover card and the shared quick tooltip (Swarm
-// Activity), so structure is expressed with line breaks and middot-indented
-// sub-lines.
+// Composes the context usage breakdown: a compact context summary
+// ("tokens / contextWindow" plus provider in/out), a "Last turn" block that
+// splits the input into its cache shares, and a whole-session block with the
+// session cache hit rate. `formatTokenUsageTooltip` renders it as text with
+// line breaks and middot-indented sub-lines (Swarm Activity's quick tooltip);
+// `contextUsageCardModel` returns the same figures as label/value rows for
+// the Chat context ring's card.
 //
 // The cache lines matter for spotting prompt-cache breaks: canonical
 // `input_tokens` already contains the cached tokens, so the sub-lines are
@@ -31,11 +31,14 @@ export function formatTokenUsageTooltip(
 }
 
 /**
- * The same usage text split for the context ring's card: `summary` is the
- * "tokens / contextWindow" headline (null without a context measurement) and
- * `details` the remaining lines and sections in the tooltip's line format.
+ * Structured model for the Chat context ring's card. `summary` is the
+ * "tokens / contextWindow" headline (null without a context measurement);
+ * `sections` hold label/value rows (`sub` rows are shares of the row above,
+ * never additions) plus optional notes, so the card lays figures out in a
+ * right-aligned column instead of preformatted text. It reports the same
+ * figures as `formatTokenUsageTooltip`.
  */
-export function formatContextUsageCard(
+export function contextUsageCardModel(
   contextUsage,
   usage,
   sessionUsage,
@@ -43,19 +46,215 @@ export function formatContextUsageCard(
 ) {
   const numberFormat = new Intl.NumberFormat(activeLocaleTag());
   const format = (value) => numberFormat.format(value);
-  const [summary = null, ...contextDetails] = contextUsageLines(
+  const [summary = null] = contextUsageLines(
     contextUsage,
     contextWindow,
     format,
   );
   const sections = [
-    contextDetails,
-    usage ? lastTurnLines(usage, format) : [],
-    sessionUsageLines(sessionUsage, format),
-  ].filter((section) => section.length > 0);
+    contextCardSection(contextUsage, format),
+    usage ? lastTurnCardSection(usage, format) : null,
+    sessionCardSection(sessionUsage, format),
+  ].filter((section) => section && section.rows.length > 0);
+  return { summary, sections };
+}
+
+function row(label, value, sub = false) {
+  return { label, value, sub };
+}
+
+function contextCardSection(contextUsage, format) {
+  if (finiteOrNull(contextUsage?.tokens) === null) {
+    return null;
+  }
+  const rows = [];
+  const providerInput = finiteOrNull(contextUsage.provider_input_tokens);
+  const providerOutput = finiteOrNull(contextUsage.provider_output_tokens);
+  const estimatedDelta = finiteOrNull(contextUsage.estimated_delta_tokens);
+  if (providerInput !== null) {
+    rows.push(
+      row(
+        t('chat.contextCard.providerInput', 'Provider input'),
+        format(providerInput),
+      ),
+    );
+  }
+  if (providerOutput !== null) {
+    rows.push(
+      row(
+        t('chat.contextCard.providerOutput', 'Provider output'),
+        format(providerOutput),
+      ),
+    );
+  }
+  if (estimatedDelta !== null) {
+    rows.push(
+      row(
+        t('chat.contextCard.requestChanges', 'Estimated request changes'),
+        format(estimatedDelta),
+        true,
+      ),
+    );
+  }
+  return { id: 'context', title: '', meta: '', rows, notes: [] };
+}
+
+function cacheShareValue(cacheRead, input, format) {
+  return input > 0
+    ? `${format(cacheRead)} (${Math.round((cacheRead / input) * 100)}%)`
+    : format(cacheRead);
+}
+
+function lastTurnCardSection(usage, format) {
+  const input = nonNegative(usage.input_tokens);
+  const output = nonNegative(usage.output_tokens);
+  const inputEstimated = usageFieldIsEstimated(usage, 'input_tokens');
+  const outputEstimated = usageFieldIsEstimated(usage, 'output_tokens');
+  const cacheRead = finiteOrNull(usage.cache_read_tokens);
+  const cacheWrite = finiteOrNull(usage.cache_write_tokens);
+  const reasoning = nonNegativeOrNull(usage.reasoning_tokens);
+
+  const rows = [
+    row(
+      t('chat.contextCard.input', 'Input'),
+      `${inputEstimated ? '~' : ''}${format(input)}`,
+    ),
+  ];
+  if (cacheRead !== null) {
+    rows.push(
+      row(
+        t('chat.contextCard.cacheRead', 'Read from cache'),
+        cacheShareValue(cacheRead, input, format),
+        true,
+      ),
+    );
+  }
+  if (cacheWrite !== null) {
+    rows.push(
+      row(
+        t('chat.contextCard.cacheWrite', 'Written to cache'),
+        format(cacheWrite),
+        true,
+      ),
+    );
+  }
+  if (cacheRead !== null || cacheWrite !== null) {
+    rows.push(
+      row(
+        t('chat.contextCard.uncached', 'Uncached'),
+        format(Math.max(0, input - (cacheRead ?? 0) - (cacheWrite ?? 0))),
+        true,
+      ),
+    );
+  }
+  rows.push(
+    row(
+      t('chat.contextCard.output', 'Output'),
+      `${outputEstimated ? '~' : ''}${format(output)}`,
+    ),
+  );
+  if (reasoning !== null) {
+    rows.push(
+      row(
+        t('chat.contextCard.reasoning', 'Reasoning'),
+        format(reasoning),
+        true,
+      ),
+    );
+  }
+  const notes = [];
+  if (inputEstimated && outputEstimated) {
+    notes.push(
+      t(
+        'chat.tokenTooltipEstimated',
+        'Estimated (provider sent no usage data)',
+      ),
+    );
+  } else if (inputEstimated) {
+    notes.push(
+      t(
+        'chat.tokenTooltipInputEstimated',
+        'Input estimated (provider omitted input usage)',
+      ),
+    );
+  } else if (outputEstimated) {
+    notes.push(
+      t(
+        'chat.tokenTooltipOutputEstimated',
+        'Output estimated (provider omitted output usage)',
+      ),
+    );
+  }
   return {
-    summary,
-    details: sections.map((section) => section.join('\n')).join('\n\n'),
+    id: 'last-turn',
+    title: t('chat.tokenTooltipLastTurn', 'Last turn'),
+    meta: '',
+    rows,
+    notes,
+  };
+}
+
+function sessionCardSection(sessionUsage, format) {
+  const measuredTurns = nonNegative(sessionUsage?.measured_turns);
+  const input = nonNegative(sessionUsage?.input_tokens);
+  const output = nonNegative(sessionUsage?.output_tokens);
+  if (measuredTurns <= 0 && input <= 0 && output <= 0) {
+    return null;
+  }
+  const cacheRead = nonNegative(sessionUsage.cache_read_tokens);
+  const cacheTurns = nonNegative(sessionUsage.cache_turns);
+  const estimatedTurns = nonNegative(sessionUsage.estimated_turns);
+  const reasoningTurns = nonNegative(sessionUsage.reasoning_turns);
+  const reasoning = nonNegative(sessionUsage.reasoning_tokens);
+
+  const rows = [row(t('chat.contextCard.input', 'Input'), format(input))];
+  if (cacheTurns > 0) {
+    rows.push(
+      row(
+        t('chat.contextCard.cacheRead', 'Read from cache'),
+        cacheShareValue(cacheRead, input, format),
+        true,
+      ),
+    );
+  }
+  rows.push(row(t('chat.contextCard.output', 'Output'), format(output)));
+  if (reasoningTurns > 0) {
+    rows.push(
+      row(
+        t('chat.contextCard.reasoningTurns', 'Reasoning ({turns} turns)', {
+          turns: format(reasoningTurns),
+        }),
+        format(reasoning),
+        true,
+      ),
+    );
+  }
+  if (cacheTurns > 0) {
+    rows.push(
+      row(
+        t('chat.contextCard.avgCacheRead', 'Avg cache read per turn'),
+        format(Math.round(cacheRead / cacheTurns)),
+      ),
+    );
+  }
+  const notes = [];
+  if (estimatedTurns > 0) {
+    notes.push(
+      t(
+        'chat.tokenTooltipSessionEstimatedTurns',
+        'Turns with estimated token fields: {count}; those fields are excluded',
+        { count: format(estimatedTurns) },
+      ),
+    );
+  }
+  return {
+    id: 'session',
+    title: t('chat.contextCard.session', 'Session'),
+    meta: t('chat.contextCard.measuredTurns', '{turns} measured turns', {
+      turns: format(measuredTurns),
+    }),
+    rows,
+    notes,
   };
 }
 

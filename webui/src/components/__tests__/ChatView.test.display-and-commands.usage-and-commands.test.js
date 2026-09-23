@@ -205,20 +205,29 @@ describe('ChatView', () => {
 
     expect(await hoveredContextRingCard()).toEqual({
       summary: '3,978 / 262,144',
-      details: [
-        'Last turn',
-        'Input: 3,886 tok',
-        '  · read from cache: 3,000 (77%)',
-        '  · newly written to cache: 200',
-        '  · uncached: 686',
-        'Output: 92 tok',
-        '',
-        'Session (12 fully measured turns)',
-        'Input: 40,000 tok',
-        '  · read from cache: 32,000 (80%)',
-        'Output: 1,500 tok',
-        'Avg cache read per turn: 2,667 tok',
-      ].join('\n'),
+      sections: [
+        {
+          title: 'Last turn',
+          meta: '',
+          rows: [
+            'Input: 3,886',
+            '· Read from cache: 3,000 (77%)',
+            '· Written to cache: 200',
+            '· Uncached: 686',
+            'Output: 92',
+          ],
+        },
+        {
+          title: 'Session',
+          meta: '12 measured turns',
+          rows: [
+            'Input: 40,000',
+            '· Read from cache: 32,000 (80%)',
+            'Output: 1,500',
+            'Avg cache read per turn: 2,667',
+          ],
+        },
+      ],
     });
   });
 
@@ -234,7 +243,9 @@ describe('ChatView', () => {
 
     expect(await hoveredContextRingCard()).toEqual({
       summary: '3,978 / 262,144',
-      details: ['Last turn', 'Input: 3,886 tok', 'Output: 92 tok'].join('\n'),
+      sections: [
+        { title: 'Last turn', meta: '', rows: ['Input: 3,886', 'Output: 92'] },
+      ],
     });
   });
 
