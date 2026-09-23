@@ -165,7 +165,7 @@
                     >{/if}
                 </div>
               {/if}
-              <div class="tool-access-tip" role="tooltip" use:floatingHoverCard>
+              <div class="floating-card tool-access-tip" use:floatingHoverCard>
                 <strong>{tool.name}</strong>
                 {#if tool.description}<p>{tool.description}</p>{/if}
                 {#each tool.notes ?? [] as note, index (`${tool.name}-${index}`)}<p
@@ -380,30 +380,20 @@
   .tool-catalog-unavailable {
     color: var(--amber);
   }
+  /* Full Tool details use the shared floating card (styles/app/hints.css);
+     long descriptions get a wider measure. */
   .tool-access-tip {
-    position: fixed;
-    z-index: var(--z-floating);
-    opacity: 0;
-    visibility: hidden;
-    pointer-events: none;
-    width: max-content;
-    max-width: min(420px, calc(100vw - 24px));
-    padding: 14px;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-md);
-    background: var(--surface-2);
+    max-width: min(400px, calc(100vw - 16px));
     color: var(--text-med);
-    font-size: var(--fs-body-sm);
-    line-height: 1.5;
-    box-shadow: var(--floating-elevation);
   }
-  .tool-access-tip:global([data-floating-open='true']) {
-    opacity: 1;
-    visibility: visible;
-    pointer-events: auto;
+  .tool-access-tip strong {
+    color: var(--text-hi);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-sm);
+    font-weight: 600;
   }
   .tool-access-tip p {
-    margin: 6px 0;
+    margin: 6px 0 0;
     white-space: pre-wrap;
   }
   @media (max-width: 640px) {

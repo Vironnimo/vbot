@@ -6,11 +6,8 @@
   import CopyButton from '../ui/CopyButton.svelte';
   import { t } from '$lib/i18n.js';
   import ChatReasoning from './ChatReasoning.svelte';
-  import {
-    INTENTIONAL_HOVER_SHOW_DELAY_MS,
-    floatingHoverCard,
-    tooltip,
-  } from '$lib/tooltip.js';
+  import ToolPrimaryLine from './ToolPrimaryLine.svelte';
+  import { tooltip } from '$lib/tooltip.js';
   import {
     avatarForItem,
     backgroundBashDisplayResult,
@@ -301,42 +298,6 @@
   </div>
 {/snippet}
 
-{#snippet toolPrimaryLine(primary)}
-  <span class="te-arg te-primary">
-    <span class="te-primary-values">
-      {#each primary as part, index (`${part.kind}:${index}`)}
-        {#if index > 0}<span class="te-primary-separator">·</span>{/if}
-        <!-- The truncated value itself must receive focus so the shared
-             tooltip exposes its complete plain-text value to keyboard users. -->
-        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-        <span
-          class="te-arg-value te-primary-value te-primary-value--{part.truncate}"
-          tabindex={part.tooltipText ? 0 : undefined}
-          use:tooltip={part.copyable ? '' : part.tooltipText}
-        >
-          {part.text}{#if part.copyable && part.tooltipText}
-            <div
-              class="tool-primary-hover-card"
-              use:floatingHoverCard={{
-                showDelayMs: INTENTIONAL_HOVER_SHOW_DELAY_MS,
-              }}
-            >
-              <span class="tool-primary-hover-card__value">{part.fullText}</span
-              >
-              <CopyButton
-                text={part.fullText}
-                class="tool-primary-hover-card__copy"
-                label={t('chat.copyToolValue', 'Copy full value')}
-                copiedLabel={t('chat.toolValueCopied', 'Full value copied')}
-              />
-            </div>
-          {/if}</span
-        >
-      {/each}
-    </span>
-  </span>
-{/snippet}
-
 {#snippet toolFacts(facts)}
   {#each facts as fact, index (`${fact.kind}:${index}`)}
     <span
@@ -554,7 +515,7 @@
               >
               <span class="te-fn">{toolNameForRunTool(child)}</span>
               {#if rowPresentation.primary.length > 0}
-                {@render toolPrimaryLine(rowPresentation.primary)}
+                <ToolPrimaryLine primary={rowPresentation.primary} />
               {/if}
               {@render toolFacts(rowPresentation.facts)}
               {#if rowTimeLabel}

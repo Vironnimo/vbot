@@ -1,24 +1,56 @@
+<script module>
+  let infoHintSequence = 0;
+
+  function nextPopoverId() {
+    infoHintSequence += 1;
+    return `info-hint-popover-${infoHintSequence}`;
+  }
+</script>
+
 <script>
-  // The "?" info dot — the explanatory tier of the hint system (quick label
-  // tooltips are `use:tooltip` from lib/tooltip.js). Hover previews the
-  // popover, click/tap pins it (touch has no hover), Escape and outside
-  // clicks dismiss. Callers pass already-translated `text`; blank lines
-  // separate paragraphs.
+  // The "?" info dot - the explanatory tier of the shared floating layers
+  // (quick label tooltips and hover cards are in lib/tooltip.js). Hover
+  // previews the popover after the shared hover intent, keyboard focus
+  // previews it at once, and click/tap pins it until a second click, an
+  // outside press, or Escape. Scrolling repositions it. Callers pass
+  // already-translated `text`; blank lines separate paragraphs.
   import { onDestroy } from 'svelte';
 
   import { portal } from '../../lib/dropdownPanel.js';
   import { t } from '../../lib/i18n.js';
-  import { positionFloating } from '../../lib/tooltip.js';
+  import {
+    FLOATING_HOVER_CLOSE_DELAY_MS,
+    HOVER_CARD_SHOW_DELAY_MS,
+    createFloatingLayer,
+    isKeyboardModality,
+    trackInputModality,
+  } from '../../lib/tooltip.js';
 
   let { text = '', ariaLabel = '', class: className = '' } = $props();
 
-  const CLOSE_GRACE_MS = 150;
+  const popoverId = nextPopoverId();
+  const releaseModality = trackInputModality();
 
   let open = $state(false);
   let pinned = $state(false);
   let dotElement = $state(null);
   let popoverElement = $state(null);
+  let showTimer = null;
   let closeTimer = null;
+
+  // A pinned popover absorbs Escape so an enclosing dialog stays open.
+  const layer = createFloatingLayer({
+    kind: 'popover',
+    anchor: () => dotElement,
+    element: () => popoverElement,
+    onDismiss: close,
+    onEscape: (event) => {
+      if (pinned) {
+        event.preventDefault();
+      }
+      close();
+    },
+  });
 
   let label = $derived(ariaLabel || t('common.moreInfo', 'More information'));
   let paragraphs = $derived(
@@ -27,77 +59,97 @@
       .map((paragraph) => paragraph.trim())
       .filter(Boolean),
   );
+  let visible = $derived(open && paragraphs.length > 0);
 
-  function cancelScheduledClose() {
+  function cancelShow() {
+    if (showTimer !== null) {
+      clearTimeout(showTimer);
+      showTimer = null;
+    }
+  }
+
+  function cancelClose() {
     if (closeTimer !== null) {
       clearTimeout(closeTimer);
       closeTimer = null;
     }
   }
 
-  function openPopover() {
-    cancelScheduledClose();
-    open = true;
-  }
-
   function close() {
-    cancelScheduledClose();
+    cancelShow();
+    cancelClose();
     open = false;
     pinned = false;
   }
 
   function scheduleClose() {
-    if (pinned) {
+    cancelShow();
+    if (pinned || !open) {
       return;
     }
-    cancelScheduledClose();
+    cancelClose();
     closeTimer = setTimeout(() => {
       closeTimer = null;
-      open = false;
-    }, CLOSE_GRACE_MS);
+      if (!pinned) {
+        open = false;
+      }
+    }, FLOATING_HOVER_CLOSE_DELAY_MS);
+  }
+
+  function onDotPointerEnter(event) {
+    if (event.pointerType === 'touch') {
+      return;
+    }
+    cancelClose();
+    if (open) {
+      return;
+    }
+    cancelShow();
+    showTimer = setTimeout(() => {
+      showTimer = null;
+      open = true;
+    }, HOVER_CARD_SHOW_DELAY_MS);
+  }
+
+  function onPointerLeave(event) {
+    if (event.pointerType !== 'touch') {
+      scheduleClose();
+    }
+  }
+
+  function onDotFocus() {
+    if (isKeyboardModality()) {
+      cancelShow();
+      cancelClose();
+      open = true;
+    }
   }
 
   function onDotClick() {
     if (pinned) {
       close();
-    } else {
-      pinned = true;
-      openPopover();
-    }
-  }
-
-  function onWindowKeydown(event) {
-    if (event.key === 'Escape') {
-      close();
-    }
-  }
-
-  function onWindowPointerdown(event) {
-    const target = event.target instanceof Node ? event.target : null;
-    if (
-      target &&
-      (dotElement?.contains(target) || popoverElement?.contains(target))
-    ) {
       return;
     }
-    close();
+    cancelShow();
+    cancelClose();
+    pinned = true;
+    open = true;
   }
 
   $effect(() => {
-    if (open && popoverElement && dotElement) {
-      positionFloating(dotElement, popoverElement);
-      window.addEventListener('keydown', onWindowKeydown, true);
-      window.addEventListener('pointerdown', onWindowPointerdown, true);
-      window.addEventListener('scroll', close, true);
-      return () => {
-        window.removeEventListener('keydown', onWindowKeydown, true);
-        window.removeEventListener('pointerdown', onWindowPointerdown, true);
-        window.removeEventListener('scroll', close, true);
-      };
+    if (!visible || !popoverElement || !dotElement) {
+      return undefined;
     }
+    layer.show({ pinned });
+    return () => layer.hide();
   });
 
-  onDestroy(cancelScheduledClose);
+  onDestroy(() => {
+    cancelShow();
+    cancelClose();
+    layer.hide();
+    releaseModality();
+  });
 </script>
 
 <button
@@ -106,23 +158,24 @@
   class={['info-hint', className].filter(Boolean).join(' ')}
   aria-label={label}
   aria-expanded={open}
-  aria-describedby={open ? 'info-hint-popover' : undefined}
-  onpointerenter={openPopover}
-  onpointerleave={scheduleClose}
-  onfocus={openPopover}
+  aria-describedby={visible ? popoverId : undefined}
+  onpointerenter={onDotPointerEnter}
+  onpointerleave={onPointerLeave}
+  onfocus={onDotFocus}
   onblur={scheduleClose}
   onclick={onDotClick}>?</button
 >
 
-{#if open && paragraphs.length > 0}
+{#if visible}
   <div
     bind:this={popoverElement}
     use:portal
-    class="info-popover"
-    id="info-hint-popover"
+    class="floating-card info-popover"
+    id={popoverId}
     role="tooltip"
-    onpointerenter={cancelScheduledClose}
-    onpointerleave={scheduleClose}
+    data-floating-open="true"
+    onpointerenter={cancelClose}
+    onpointerleave={onPointerLeave}
   >
     {#each paragraphs as paragraph (paragraph)}
       <p>{paragraph}</p>

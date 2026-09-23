@@ -137,7 +137,10 @@
               <button type="button" class="queued-messages__content"
                 >{message.content}</button
               >
-              <div class="queued-messages__full" use:floatingHoverCard>
+              <div
+                class="floating-card queued-messages__full"
+                use:floatingHoverCard
+              >
                 {message.content}
               </div>
             </div>
@@ -247,28 +250,11 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* The full queued text uses the shared floating card
+     (styles/app/hints.css) with a wider reading measure. */
   .queued-messages__full {
-    position: fixed;
-    z-index: var(--z-floating);
-    visibility: hidden;
-    pointer-events: none;
-    box-shadow: var(--dropdown-elevation);
-    max-width: min(560px, calc(100vw - 24px));
-    max-height: min(60vh, 480px);
-    overflow: auto;
+    max-width: min(560px, calc(100vw - 16px));
     white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    padding: 12px;
-    color: var(--text-hi);
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    font-size: var(--fs-body-sm);
-    line-height: 1.5;
-  }
-  .queued-messages__full:global([data-floating-open='true']) {
-    visibility: visible;
-    pointer-events: auto;
   }
   .queued-messages__actions {
     display: flex;
