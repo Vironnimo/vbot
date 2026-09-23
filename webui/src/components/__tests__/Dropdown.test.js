@@ -163,4 +163,128 @@ describe('Dropdown', () => {
       expect.objectContaining({ value: 'c' }),
     );
   });
+
+  it('moves the active option with typeahead and cycles on a repeated letter', async () => {
+    let now = 1_000;
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const onValueChange = vi.fn();
+    mountedComponent = mount(Dropdown, {
+      target: document.body,
+      props: {
+        id: 'typeahead-dropdown',
+        value: 'alpha',
+        options: [
+          { value: 'alpha', label: 'Alpha' },
+          { value: 'beta', label: 'Beta' },
+          { value: 'bravo', label: 'Bravo' },
+          { value: 'charlie', label: 'Charlie' },
+        ],
+        onValueChange,
+      },
+    });
+    flushSync();
+
+    document.querySelector('#typeahead-dropdown').click();
+    await vi.waitFor(() => {
+      expect(document.activeElement?.getAttribute('role')).toBe('listbox');
+    });
+    const listbox = document.activeElement;
+    const activeLabel = () =>
+      listbox.querySelector('[role="option"].active')?.textContent.trim();
+    const type = (key) => {
+      listbox.dispatchEvent(
+        new KeyboardEvent('keydown', { key, bubbles: true }),
+      );
+      flushSync();
+    };
+
+    type('b');
+    expect(activeLabel()).toBe('Beta');
+    now += 100;
+    type('b');
+    expect(activeLabel()).toBe('Bravo');
+    now += 1_000;
+    type('c');
+    expect(activeLabel()).toBe('Charlie');
+    now += 1_000;
+    type('b');
+    now += 100;
+    type('r');
+    expect(activeLabel()).toBe('Bravo');
+
+    type('Enter');
+    expect(onValueChange).toHaveBeenCalledWith(
+      'bravo',
+      expect.objectContaining({ value: 'bravo' }),
+    );
+    dateNow.mockRestore();
+  });
+
+  it('renders status dots, count badges and accessible names from option fields', async () => {
+    mountedComponent = mount(Dropdown, {
+      target: document.body,
+      props: {
+        id: 'decorated-dropdown',
+        value: 'beta',
+        options: [
+          {
+            value: 'beta',
+            label: 'Beta',
+            statusDot: 'running',
+            ariaLabel: 'Beta: Running',
+          },
+          {
+            value: 'gamma',
+            label: 'Gamma',
+            statusDot: 'unread',
+            badge: 2,
+            ariaLabel: 'Gamma: 2 unread results',
+          },
+          { value: 'delta', label: 'Delta', statusDot: 'bogus' },
+        ],
+      },
+    });
+    flushSync();
+
+    const trigger = document.querySelector('#decorated-dropdown');
+    expect(trigger.querySelector('.tab-indicator--running')).toBeTruthy();
+    trigger.click();
+    await vi.waitFor(() => {
+      expect(document.querySelectorAll('[role="option"]')).toHaveLength(3);
+    });
+    const [beta, gamma, delta] = document.querySelectorAll('[role="option"]');
+    expect(beta.getAttribute('aria-label')).toBe('Beta: Running');
+    expect(beta.getAttribute('aria-selected')).toBe('true');
+    expect(gamma.getAttribute('aria-label')).toBe('Gamma: 2 unread results');
+    expect(gamma.querySelector('.tab-indicator--unread')).toBeTruthy();
+    expect(gamma.querySelector('.count-badge')?.textContent).toBe('2');
+    expect(delta.hasAttribute('aria-label')).toBe(false);
+    expect(delta.querySelector('.tab-indicator')).toBeNull();
+    expect(delta.querySelector('.count-badge')).toBeNull();
+  });
+
+  it('opens programmatically from a related control', async () => {
+    mountedComponent = mount(Dropdown, {
+      target: document.body,
+      props: {
+        id: 'programmatic-dropdown',
+        value: 'b',
+        options: ['a', 'b'],
+      },
+    });
+    flushSync();
+
+    await mountedComponent.open();
+    flushSync();
+
+    expect(
+      document
+        .querySelector('#programmatic-dropdown')
+        .getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(document.activeElement?.getAttribute('role')).toBe('listbox');
+    expect(
+      document.activeElement.getAttribute('aria-activedescendant'),
+    ).toContain('-option-1');
+  });
 });

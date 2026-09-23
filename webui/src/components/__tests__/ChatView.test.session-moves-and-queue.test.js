@@ -1,15 +1,15 @@
 // @vitest-environment jsdom
 import {
   describe,
-  activeAgentTab,
   createAgent,
   createChatRpcMock,
   expect,
-  findButtonByText,
   flushSync,
   it,
   listSessionsMock,
   rpcMock,
+  selectAgentFromPicker,
+  selectedPersonalAgentName,
   sendComposerMessage,
   setupChatViewTestSuite,
   showProjectMock,
@@ -118,7 +118,7 @@ describe('ChatView', () => {
       limit: 100,
     });
     expect(subscribeRunEventsMock).not.toHaveBeenCalled();
-    expect(activeAgentTab()?.textContent).toContain('Beta');
+    expect(selectedPersonalAgentName()).toBe('Beta');
   });
 
   // --- /agent move-action routing: all four directions --------------------
@@ -212,7 +212,7 @@ describe('ChatView', () => {
       session_id: 'shared-session',
       limit: 100,
     });
-    expect(activeAgentTab()?.textContent).toContain('Beta');
+    expect(selectedPersonalAgentName()).toBe('Beta');
   });
 
   it('does not apply stale command navigation after the user selects another Agent', async () => {
@@ -272,7 +272,7 @@ describe('ChatView', () => {
     );
 
     sendComposerMessage('/agent beta');
-    findButtonByText('Gamma').click();
+    await selectAgentFromPicker('Gamma');
     await waitForCondition(
       () => document.body.textContent.includes('Gamma reply'),
       100,
@@ -291,7 +291,7 @@ describe('ChatView', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     flushSync();
 
-    expect(activeAgentTab()?.textContent).toContain('Gamma');
+    expect(selectedPersonalAgentName()).toBe('Gamma');
     expect(rpcMock).not.toHaveBeenCalledWith('chat.history', {
       agent_id: 'beta',
       session_id: 'shared-session',
@@ -500,12 +500,8 @@ describe('ChatView', () => {
       session_id: 'builder-session',
       limit: 100,
     });
-    // The identity bar is active again.
-    expect(
-      document
-        .querySelector('.chat-header .agent-tab.active')
-        ?.textContent?.includes('Alpha'),
-    ).toBe(true);
+    // The identity Agent is selected again.
+    expect(selectedPersonalAgentName()).toBe('Alpha');
   });
 
   it('moves a project-agent session to another project agent (project → project)', async () => {
