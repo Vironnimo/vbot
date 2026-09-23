@@ -1,15 +1,17 @@
 // @vitest-environment jsdom
 import {
   describe,
-  activeAgentTab,
+  agentChip,
+  agentPickerTrigger,
   createAgent,
   createChatRpcMock,
   expect,
-  findButtonByText,
   flushSync,
   it,
   listSessionActivityMock,
   rpcMock,
+  selectAgentFromPicker,
+  selectedPersonalAgentName,
   sendComposerMessage,
   setupChatViewTestSuite,
   testChatStateRefs,
@@ -162,21 +164,15 @@ describe('ChatView', () => {
         agent_id: 'beta',
       },
     });
-    await waitForCondition(
-      () => activeAgentTab()?.textContent?.includes('Beta'),
-      100,
-    );
+    await waitForCondition(() => selectedPersonalAgentName() === 'Beta', 100);
 
     expect(onAgentSelected).not.toHaveBeenCalled();
 
     props.active = true;
     flushSync();
-    await waitForCondition(
-      () => activeAgentTab()?.textContent?.includes('Alpha'),
-      100,
-    );
+    await waitForCondition(() => selectedPersonalAgentName() === 'Alpha', 100);
 
-    expect(activeAgentTab()?.textContent).toContain('Alpha');
+    expect(selectedPersonalAgentName()).toBe('Alpha');
     expect(onAgentSelected).toHaveBeenCalledTimes(1);
     expect(onAgentSelected).toHaveBeenCalledWith('alpha');
   });
@@ -280,9 +276,10 @@ describe('ChatView', () => {
     });
     flushSync();
 
-    const betaTab = findButtonByText('Beta');
-    expect(betaTab?.classList.contains('active')).toBe(false);
-    expect(betaTab?.querySelector('.tab-indicator--running')).toBeTruthy();
+    expect(selectedPersonalAgentName()).toBe('Alpha');
+    expect(
+      agentChip('Beta')?.querySelector('.tab-indicator--running'),
+    ).toBeTruthy();
   });
 
   it('keeps an inactive Agent blue until its exact result is opened', async () => {
@@ -335,20 +332,15 @@ describe('ChatView', () => {
     flushSync();
 
     await waitForCondition(
-      () =>
-        Boolean(
-          findButtonByText('Beta')?.querySelector('.tab-indicator--unread'),
-        ),
+      () => Boolean(agentChip('Beta')?.querySelector('.tab-indicator--unread')),
       100,
     );
-    const betaTab = findButtonByText('Beta');
-    await waitForCondition(() => betaTab.disabled === false, 100);
-    betaTab.click();
+    const betaChip = agentChip('Beta');
+    expect(betaChip.getAttribute('aria-label')).toBe('Beta: 1 unread result');
+    await waitForCondition(() => betaChip.disabled === false, 100);
+    betaChip.click();
 
-    await waitForCondition(
-      () => findButtonByText('Beta')?.classList.contains('active') === true,
-      100,
-    );
+    await waitForCondition(() => selectedPersonalAgentName() === 'Beta', 100);
     expect(rpcMock).toHaveBeenCalledWith('chat.history', {
       agent_id: 'beta',
       session_id: 'session-beta',
@@ -368,9 +360,12 @@ describe('ChatView', () => {
     );
     flushSync();
 
-    const selectedBetaTab = findButtonByText('Beta');
-    expect(selectedBetaTab.classList.contains('active')).toBe(true);
-    expect(selectedBetaTab.querySelector('.tab-indicator--unread')).toBeNull();
+    // The selected Agent leaves the chips; its trigger shows no unread result.
+    expect(selectedPersonalAgentName()).toBe('Beta');
+    expect(
+      agentPickerTrigger().querySelector('.tab-indicator--unread'),
+    ).toBeNull();
+    expect(agentChip('Beta')).toBeUndefined();
   });
 
   it('opens an Agent unread Session that is not its current Session and marks it read', async () => {
@@ -440,15 +435,13 @@ describe('ChatView', () => {
     flushSync();
 
     await waitForCondition(
-      () =>
-        Boolean(
-          findButtonByText('Beta')?.querySelector('.tab-indicator--unread'),
-        ),
+      () => Boolean(agentChip('Beta')?.querySelector('.tab-indicator--unread')),
       100,
     );
-    const betaTab = findButtonByText('Beta');
-    await waitForCondition(() => betaTab.disabled === false, 100);
-    betaTab.click();
+    const betaChip = agentChip('Beta');
+    expect(betaChip.getAttribute('aria-label')).toBe('Beta: 1 unread result');
+    await waitForCondition(() => betaChip.disabled === false, 100);
+    betaChip.click();
 
     await waitForCondition(
       () => document.body.textContent.includes('Beta unread result'),
@@ -476,9 +469,12 @@ describe('ChatView', () => {
     );
     flushSync();
 
-    const selectedBetaTab = findButtonByText('Beta');
-    expect(selectedBetaTab.classList.contains('active')).toBe(true);
-    expect(selectedBetaTab.querySelector('.tab-indicator--unread')).toBeNull();
+    // The selected Agent leaves the chips; its trigger shows no unread result.
+    expect(selectedPersonalAgentName()).toBe('Beta');
+    expect(
+      agentPickerTrigger().querySelector('.tab-indicator--unread'),
+    ).toBeNull();
+    expect(agentChip('Beta')).toBeUndefined();
   });
 
   it('does not resurrect a read result when retained events replay after remount', async () => {
@@ -544,9 +540,7 @@ describe('ChatView', () => {
     expect(
       testChatStateRefs[0].sessions['beta::session-beta'].hasUnreadCompletion,
     ).toBe(false);
-    expect(
-      findButtonByText('Beta')?.querySelector('.tab-indicator--unread'),
-    ).toBeNull();
+    expect(agentChip('Beta')).toBeUndefined();
   });
 
   it('clears a delivered child result and lands on the Agent user session', async () => {
@@ -628,25 +622,19 @@ describe('ChatView', () => {
     flushSync();
 
     await waitForCondition(
-      () =>
-        Boolean(
-          findButtonByText('Beta')?.querySelector('.tab-indicator--unread'),
-        ),
+      () => Boolean(agentChip('Beta')?.querySelector('.tab-indicator--unread')),
       100,
     );
 
     childDelivered = true;
     parentHarness.bumpSessionsRefreshToken();
     flushSync();
-    await waitForCondition(
-      () => !findButtonByText('Beta')?.querySelector('.tab-indicator--unread'),
-      100,
-    );
+    await waitForCondition(() => agentChip('Beta') === undefined, 100);
 
-    findButtonByText('Beta').click();
+    await selectAgentFromPicker('Beta');
     await waitForCondition(
       () =>
-        findButtonByText('Beta')?.classList.contains('active') &&
+        selectedPersonalAgentName() === 'Beta' &&
         document.body.textContent.includes('Beta user conversation'),
       100,
     );
@@ -736,8 +724,10 @@ describe('ChatView', () => {
     );
     flushSync();
 
-    const alphaTab = activeAgentTab();
-    expect(alphaTab?.querySelector('.tab-indicator--unread')).toBeNull();
+    expect(selectedPersonalAgentName()).toBe('Alpha');
+    expect(
+      agentPickerTrigger().querySelector('.tab-indicator--unread'),
+    ).toBeNull();
 
     resolveMarkRead();
     await Promise.resolve();
