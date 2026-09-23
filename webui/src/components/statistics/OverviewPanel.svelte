@@ -27,7 +27,7 @@
 </script>
 
 <div class="stats-panel">
-  <div class="stats-grid stats-grid--hero">
+  <div class="stats-grid">
     {@render statCard(
       t('statistics.usage.measuredTokens', 'Measured tokens'),
       formatTokens(tokenSplit(usage).measured, locale),

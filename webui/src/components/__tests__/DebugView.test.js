@@ -145,20 +145,76 @@ describe('DebugView', () => {
     expect(document.querySelector('.detail-header h3').textContent).toBe(
       a.model_id,
     );
-    const status = document.querySelector('.trace-filters select');
-    status.value = 'ok';
-    status.dispatchEvent(new Event('change', { bubbles: true }));
-    flushSync();
+    // Both filters use the shared dropdown, not native selects.
+    expect(document.querySelector('.debug-view select')).toBeNull();
+    expect(
+      document
+        .getElementById('debug-trace-status-filter')
+        .getAttribute('aria-label'),
+    ).toBe('Status filter');
+    expect(
+      document
+        .getElementById('debug-trace-provider-filter')
+        .getAttribute('aria-label'),
+    ).toBe('Provider');
+    expect(dropdownOptionLabels('debug-trace-status-filter')).toEqual([
+      'All statuses',
+      'HTTP 2xx / WS 101',
+      'HTTP 4xx / 5xx',
+      'Other / no status',
+    ]);
+    chooseDropdownOption('debug-trace-status-filter', 'HTTP 2xx / WS 101');
+    expect(dropdownTriggerLabel('debug-trace-status-filter')).toBe(
+      'HTTP 2xx / WS 101',
+    );
     expect(document.querySelectorAll('.debug-trace')).toHaveLength(0);
     document.querySelector('.trace-no-matches button').click();
     flushSync();
     expect(document.querySelectorAll('.debug-trace')).toHaveLength(2);
-    const provider = document.querySelectorAll('.trace-filters select')[1];
-    provider.value = 'anthropic';
-    provider.dispatchEvent(new Event('change', { bubbles: true }));
-    flushSync();
+    expect(dropdownTriggerLabel('debug-trace-status-filter')).toBe(
+      'All statuses',
+    );
+    expect(dropdownOptionLabels('debug-trace-provider-filter')).toEqual([
+      'All Providers',
+      'anthropic',
+      'openai',
+    ]);
+    chooseDropdownOption('debug-trace-provider-filter', 'anthropic');
     expect(document.querySelectorAll('.debug-trace')).toHaveLength(1);
     expect(document.querySelector('.debug-trace').dataset.traceId).toBe('b');
+  });
+
+  it('sets Model and Provider ids in Mono but keeps the Model Probe label in Sans', async () => {
+    const request = traceListEntry({ trace_id: 'model-trace' });
+    const probe = traceListEntry({
+      trace_id: 'probe-trace',
+      model_id: '',
+      type: 'model_probe',
+    });
+    debugTraceListMock.mockResolvedValue({ traces: [request, probe] });
+    debugTraceGetMock.mockResolvedValue({ trace: fullTraceFixture(request) });
+    mountedComponent = mount(DebugView, { target: document.body });
+    await waitForText('gpt-5.2');
+
+    const modelCell = (traceId) =>
+      document.querySelector(
+        `.debug-trace[data-trace-id="${traceId}"] .debug-trace__model`,
+      );
+    expect(
+      modelCell('model-trace').classList.contains('debug-trace__model--id'),
+    ).toBe(true);
+    expect(
+      modelCell('probe-trace').classList.contains('debug-trace__model--id'),
+    ).toBe(false);
+
+    clickTraceRow('model-trace');
+    await waitForCondition(() => document.querySelector('.detail-header h3'));
+    const title = document.querySelector('.detail-header h3');
+    expect(title.textContent).toBe('gpt-5.2');
+    expect(title.classList.contains('detail-title--id')).toBe(true);
+    expect(document.querySelector('.detail-provider').textContent).toBe(
+      'openai',
+    );
   });
 
   it('keeps the latest selection visible when an earlier click resolves after a later click', async () => {
@@ -746,49 +802,40 @@ describe('DebugView', () => {
     mountedComponent = mount(DebugView, { target: document.body });
     flushSync();
 
+    // Settings (and with them the probe Providers) resolve with the trace
+    // list; the empty trace state marks that initial load as complete.
     await waitForCondition(() =>
-      document.querySelector(
-        '.debug-view__probe-select option[value="openai"]',
-      ),
+      document.querySelector('.debug-view .empty-state'),
     );
 
-    const providerSelect = document.querySelectorAll(
-      '.debug-view__probe-select',
-    )[0];
-    providerSelect.value = 'openai';
-    providerSelect.dispatchEvent(new Event('change', { bubbles: true }));
-    flushSync();
-
-    const connectionSelect = document.querySelectorAll(
-      '.debug-view__probe-select',
-    )[1];
-    if (connectionSelect.disabled) {
-      throw new Error(
-        `Connection select still disabled after provider change (value=${providerSelect.value})`,
-      );
-    }
-    const defaultOption = document.querySelector(
-      '.debug-view__probe-select option[value="default"]',
+    const providerTrigger = document.getElementById('debug-probe-provider');
+    const connectionTrigger = document.getElementById('debug-probe-connection');
+    expect(providerTrigger.getAttribute('aria-label')).toBe('Provider');
+    expect(connectionTrigger.getAttribute('aria-label')).toBe('Connection');
+    expect(dropdownTriggerLabel('debug-probe-provider')).toBe(
+      'Select a provider',
     );
-    if (!defaultOption) {
-      throw new Error('Connection option "default" not rendered');
-    }
-    connectionSelect.value = 'default';
-    connectionSelect.dispatchEvent(new Event('change', { bubbles: true }));
-    flushSync();
+    expect(connectionTrigger.disabled).toBe(true);
+
+    chooseDropdownOption('debug-probe-provider', 'OpenAI');
+    expect(dropdownTriggerLabel('debug-probe-provider')).toBe('OpenAI');
+    expect(connectionTrigger.disabled).toBe(false);
+    expect(dropdownTriggerLabel('debug-probe-connection')).toBe(
+      'Select a connection',
+    );
+
+    chooseDropdownOption('debug-probe-connection', 'Default');
+    expect(dropdownTriggerLabel('debug-probe-connection')).toBe('Default');
 
     const probeButton = document.querySelector('.debug-view__probe-btn');
-    if (probeButton?.disabled) {
-      throw new Error(
-        `Probe button still disabled after connection change (value=${connectionSelect.value})`,
-      );
-    }
+    expect(probeButton?.disabled).toBe(false);
     probeButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     flushSync();
 
     await waitForCondition(() =>
       document.querySelector('.debug-view__probe-results'),
     );
+    expect(debugModelProbeMock).toHaveBeenCalledWith('openai', 'default');
     return document.querySelector('.debug-view__probe-result-section pre');
   }
 });
@@ -839,6 +886,50 @@ function fullTraceFixture(listEntry, overrides = {}) {
     },
     ...(overrides.stream ? { stream: overrides.stream } : {}),
   };
+}
+
+function openDropdown(triggerId) {
+  const trigger = document.getElementById(triggerId);
+  if (!trigger) {
+    throw new Error(`Dropdown trigger not found: ${triggerId}`);
+  }
+  if (trigger.getAttribute('aria-expanded') !== 'true') {
+    trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+  }
+  // The list is portaled to <body>; only the open dropdown renders one.
+  return Array.from(
+    document.querySelectorAll('.dropdown-primitive__list .dropdown-option'),
+  );
+}
+
+function dropdownOptionLabels(triggerId) {
+  const labels = openDropdown(triggerId).map((option) =>
+    option.textContent.trim(),
+  );
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+  flushSync();
+  return labels;
+}
+
+function chooseDropdownOption(triggerId, label) {
+  const option = openDropdown(triggerId).find(
+    (item) => item.textContent.trim() === label,
+  );
+  if (!option) {
+    throw new Error(`Option "${label}" not found in ${triggerId}`);
+  }
+  option.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  flushSync();
+}
+
+function dropdownTriggerLabel(triggerId) {
+  return (
+    document
+      .getElementById(triggerId)
+      ?.querySelector('.dropdown-primitive__trigger-label')
+      ?.textContent?.trim() ?? ''
+  );
 }
 
 function clickTraceRow(traceId) {

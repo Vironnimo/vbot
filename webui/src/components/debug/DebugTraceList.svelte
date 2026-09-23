@@ -3,6 +3,7 @@
   import { formatDateTimeInApplicationZone } from '$lib/dateTimePrefs.svelte.js';
   import { filterTraces, traceStatusTone } from '$lib/debugView.js';
   import { tooltip } from '$lib/tooltip.js';
+  import Dropdown from '../Dropdown.svelte';
   import Button from '../ui/Button.svelte';
 
   let { traces = [], selectedTraceId = '', onSelect = () => {} } = $props();
@@ -11,8 +12,20 @@
   let provider = $state('');
   let visible = $derived(filterTraces(traces, query, status, provider));
   let providers = $derived(
-    [...new Set(traces.map((trace) => trace.provider_id))].sort(),
+    [...new Set(traces.map((trace) => trace.provider_id))]
+      .filter((item) => typeof item === 'string' && item)
+      .sort(),
   );
+  let statusOptions = $derived([
+    { value: 'all', label: t('debug.allStatuses', 'All statuses') },
+    { value: 'ok', label: t('debug.statusOk', 'HTTP 2xx / WS 101') },
+    { value: 'error', label: t('debug.statusErrors', 'HTTP 4xx / 5xx') },
+    { value: 'unknown', label: t('debug.statusOther', 'Other / no status') },
+  ]);
+  let providerOptions = $derived([
+    { value: '', label: t('debug.allProviders', 'All Providers') },
+    ...providers.map((item) => ({ value: item, label: item })),
+  ]);
 
   function resetFilters() {
     query = '';
@@ -54,28 +67,22 @@
       )}
     />
     <div class="trace-filter-row">
-      <select
-        bind:value={status}
-        aria-label={t('debug.statusFilter', 'Status filter')}
-      >
-        <option value="all">{t('debug.allStatuses', 'All statuses')}</option>
-        <option value="ok">{t('debug.statusOk', 'HTTP 2xx / WS 101')}</option>
-        <option value="error"
-          >{t('debug.statusErrors', 'HTTP 4xx / 5xx')}</option
-        >
-        <option value="unknown"
-          >{t('debug.statusOther', 'Other / no status')}</option
-        >
-      </select>
-      <select
-        bind:value={provider}
-        aria-label={t('debug.modelProbe.provider', 'Provider')}
-      >
-        <option value="">{t('debug.allProviders', 'All Providers')}</option>
-        {#each providers as item (item)}<option value={item}
-            >{item || '—'}</option
-          >{/each}
-      </select>
+      <Dropdown
+        id="debug-trace-status-filter"
+        value={status}
+        options={statusOptions}
+        ariaLabel={t('debug.statusFilter', 'Status filter')}
+        triggerClass="trace-filter-dropdown"
+        onValueChange={(value) => (status = value)}
+      />
+      <Dropdown
+        id="debug-trace-provider-filter"
+        value={provider}
+        options={providerOptions}
+        ariaLabel={t('debug.modelProbe.provider', 'Provider')}
+        triggerClass="trace-filter-dropdown"
+        onValueChange={(value) => (provider = value)}
+      />
     </div>
     <div class="trace-count" aria-live="polite">
       {t('debug.visibleCount', '{count} of {total} traces', {
@@ -106,6 +113,7 @@
           <span class="trace-topline">
             <span
               class="debug-trace__model"
+              class:debug-trace__model--id={Boolean(trace.model_id)}
               use:tooltip={trace.model_id || trace.type}
               >{trace.model_id || t('debug.modelProbe', 'Model Probe')}</span
             >
@@ -154,31 +162,46 @@
     display: grid;
     gap: 10px;
   }
-  input,
-  select {
+  /* Search matches the shared field and dropdown trigger metrics so the
+     filter block reads as one set of controls. */
+  input {
     width: 100%;
     min-width: 0;
-    padding: 9px 10px;
+    min-height: 34px;
+    padding: 6px 11px;
     border: 1px solid var(--border-2);
     border-radius: var(--r-md);
     color: var(--text-hi);
-    background: var(--surface);
+    background: var(--field-surface);
     font: inherit;
-    font-size: var(--fs-body-sm);
+    font-size: var(--fs-body-md);
+    line-height: 1.4;
+    text-overflow: ellipsis;
   }
   input::placeholder {
     color: var(--text-med);
   }
-  input:focus-visible,
-  select:focus-visible,
+  input:focus-visible {
+    border-color: var(--accent);
+    box-shadow: var(--field-focus-ring);
+    outline: none;
+  }
   button:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: -2px;
   }
+  /* Side by side only when both dropdowns can show their full labels; the
+     shared dropdown list is as wide as its trigger, so the narrow desktop
+     list pane stacks them. */
   .trace-filter-row {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 6px;
+  }
+  .trace-filter-row :global(.trace-filter-dropdown) {
+    display: block;
+    width: 100%;
+    min-width: 0;
   }
   .trace-count,
   .trace-bottom,
@@ -234,6 +257,12 @@
     font-weight: 500;
     font-size: var(--fs-body-lg);
   }
+  /* Model ids and Provider ids/methods are code-like values: Mono. The Model
+     Probe fallback label stays Sans. */
+  .debug-trace__model--id {
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-body);
+  }
   .debug-trace__model,
   .debug-trace__provider {
     min-width: 0;
@@ -242,7 +271,8 @@
     white-space: nowrap;
   }
   .trace-middle {
-    font-size: var(--fs-body-sm);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-sm);
   }
   .trace-bottom {
     font-variant-numeric: tabular-nums;

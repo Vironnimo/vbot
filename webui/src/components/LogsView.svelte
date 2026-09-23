@@ -18,6 +18,7 @@
     LOGS_STREAM_STATUS_IDLE,
     LOGS_STREAM_STATUS_RECONNECTING,
     applyLogCatalog,
+    changedFilterSelectionCount,
     createLogsViewState,
     deriveLevelOptions,
     deriveSortOptions,
@@ -34,9 +35,17 @@
 
   const RECONNECT_INITIAL_DELAY_MS = 1000;
   const RECONNECT_MAX_DELAY_MS = 10000;
+  // On phone widths search stays visible while file, level, and order fold
+  // behind a Filters disclosure, so the first log entries fit the first screen.
+  // The layout switch happens in markup (not only CSS) so the DOM and focus
+  // order follow the visual order in both arrangements.
+  const COMPACT_FILTERS_MEDIA_QUERY = '(max-width: 640px)';
 
   let viewState = $state(createLogsViewState());
   let reconnectAttempt = $state(0);
+  let compactFilters = $state(compactFiltersMediaQuery()?.matches === true);
+  let filtersOpen = $state(false);
+  let changedFilterCount = $derived(changedFilterSelectionCount(viewState));
 
   let filteredEntries = $derived(visibleLogEntries(viewState));
   let levelOptions = $derived(deriveLevelOptions(viewState.entries));
@@ -78,12 +87,27 @@
   onMount(() => {
     loadCatalogAndMaybeFile();
 
+    const compactQuery = compactFiltersMediaQuery();
+    const updateCompactFilters = (event) => {
+      compactFilters = event.matches === true;
+    };
+    compactFilters = compactQuery?.matches === true;
+    compactQuery?.addEventListener?.('change', updateCompactFilters);
+
     return () => {
       destroyed = true;
       clearReconnectTimer();
       closeCurrentStream();
+      compactQuery?.removeEventListener?.('change', updateCompactFilters);
     };
   });
+
+  function compactFiltersMediaQuery() {
+    return typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function'
+      ? window.matchMedia(COMPACT_FILTERS_MEDIA_QUERY)
+      : null;
+  }
 
   async function loadCatalogAndMaybeFile(options = {}) {
     const previousSelection = viewState.selectedFile;
@@ -460,9 +484,63 @@
     </Banner>
   {/if}
 
+  {#snippet searchInput()}
+    <input
+      class="logs-view__input"
+      type="search"
+      value={viewState.searchText}
+      placeholder={t(
+        'logs.searchPlaceholder',
+        'Search timestamp, level, logger, or message…',
+      )}
+      aria-label={t('logs.search', 'Search')}
+      disabled={!hasFiles}
+      oninput={handleSearchInput}
+    />
+  {/snippet}
+
   <div class="logs-view__toolbar view-toolbar view-toolbar--stack">
-    <div class="logs-view__filters">
-      <label class="logs-view__field">
+    {#if compactFilters}
+      <div class="logs-view__compact-bar">
+        {@render searchInput()}
+        <Button
+          variant="secondary"
+          class="logs-view__filters-toggle"
+          aria-expanded={filtersOpen}
+          aria-controls="logs-filters"
+          ariaLabel={changedFilterCount > 0
+            ? t('logs.filtersChanged', 'Filters, {count} changed', {
+                count: changedFilterCount,
+              })
+            : ''}
+          onClick={() => (filtersOpen = !filtersOpen)}
+        >
+          {t('logs.filters', 'Filters')}
+          {#if changedFilterCount > 0}
+            <span class="logs-view__filters-count" aria-hidden="true"
+              >{changedFilterCount}</span
+            >
+          {/if}
+          <svg
+            class="logs-view__filters-chevron"
+            viewBox="0 0 12 12"
+            width="10"
+            height="10"
+            aria-hidden="true"
+          >
+            <path d="M2 4l4 4 4-4" />
+          </svg>
+        </Button>
+      </div>
+    {/if}
+
+    <div
+      id="logs-filters"
+      class="logs-view__filters"
+      class:logs-view__filters--compact={compactFilters}
+      hidden={compactFilters && !filtersOpen}
+    >
+      <label class="logs-view__field logs-view__field--file">
         <span class="logs-view__field-label view-toolbar__label"
           >{t('logs.file', 'File')}</span
         >
@@ -513,30 +591,23 @@
         />
       </label>
 
-      <label class="logs-view__field logs-view__field--search">
-        <span class="logs-view__field-label view-toolbar__label"
-          >{t('logs.search', 'Search')}</span
-        >
-        <input
-          class="logs-view__input"
-          type="search"
-          value={viewState.searchText}
-          placeholder={t(
-            'logs.searchPlaceholder',
-            'Search timestamp, level, logger, or message…',
-          )}
-          aria-label={t('logs.search', 'Search')}
-          disabled={!hasFiles}
-          oninput={handleSearchInput}
-        />
-      </label>
+      {#if !compactFilters}
+        <label class="logs-view__field logs-view__field--search">
+          <span class="logs-view__field-label view-toolbar__label"
+            >{t('logs.search', 'Search')}</span
+          >
+          {@render searchInput()}
+        </label>
+      {/if}
     </div>
 
     <div class="logs-view__summary view-toolbar__meta">
       <span>
-        {t('logs.resultsCount', '{count} visible entries', {
-          count: filteredEntries.length,
-        })}
+        {filteredEntries.length === 1
+          ? t('logs.resultsCountOne', '1 visible entry')
+          : t('logs.resultsCount', '{count} visible entries', {
+              count: filteredEntries.length,
+            })}
       </span>
       {#if viewState.selectedFile}
         <span class="logs-view__summary-file">
@@ -635,6 +706,72 @@
     align-items: end;
   }
 
+  .logs-view__filters[hidden] {
+    display: none;
+  }
+
+  /* Phone layout: search plus the Filters toggle on one row; the disclosed
+     panel puts the file on its own row and level/order side by side. */
+  .logs-view__compact-bar {
+    display: flex;
+    min-width: 0;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .logs-view__compact-bar .logs-view__input {
+    flex: 1;
+    min-height: 40px;
+  }
+
+  .logs-view__compact-bar :global(.logs-view__filters-toggle) {
+    flex-shrink: 0;
+  }
+
+  .logs-view__filters-count {
+    min-width: 18px;
+    padding: 1px 5px;
+    border-radius: 999px;
+    color: var(--text-hi);
+    background: var(--surface-3);
+    font-size: var(--fs-label-sm);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.3;
+    text-align: center;
+  }
+
+  /* The secondary button's hover surface is surface-3; step the count back so
+     it stays distinguishable. */
+  :global(.logs-view__filters-toggle:hover) .logs-view__filters-count {
+    background: var(--surface-2);
+  }
+
+  .logs-view__filters-chevron {
+    flex-shrink: 0;
+    color: var(--text-lo);
+    transition: transform 180ms ease;
+  }
+
+  :global(.logs-view__filters-toggle[aria-expanded='true'])
+    .logs-view__filters-chevron {
+    transform: rotate(180deg);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .logs-view__filters-chevron {
+      transition: none;
+    }
+  }
+
+  .logs-view__filters--compact {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .logs-view__filters--compact .logs-view__field--file {
+    grid-column: 1 / -1;
+  }
+
   .logs-view__field {
     display: flex;
     min-width: 0;
@@ -663,6 +800,7 @@
     background: var(--field-surface);
     font-size: var(--fs-body-md);
     line-height: 1.4;
+    text-overflow: ellipsis;
   }
 
   .logs-view__input:focus-visible {
@@ -838,12 +976,6 @@
     .logs-entry__message {
       white-space: normal;
       text-overflow: clip;
-    }
-  }
-
-  @media (max-width: 640px) {
-    .logs-view__filters {
-      grid-template-columns: minmax(0, 1fr);
     }
   }
 </style>

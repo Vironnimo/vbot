@@ -34,6 +34,29 @@ async function waitForCondition(predicate, attempts = 50) {
   }
 }
 
+function showView(label) {
+  [...document.querySelectorAll('[role="tab"]')]
+    .find((tab) => tab.textContent.trim() === label)
+    .click();
+  flushSync();
+}
+
+// Intl separates date ranges with (thin) spaces; compare plain text.
+function plainText(element) {
+  return element.textContent.replace(/\s+/g, ' ').trim();
+}
+
+function chooseOption(id, label) {
+  document.getElementById(id).click();
+  flushSync();
+  const option = [
+    ...document.querySelectorAll(`#${id}-listbox [role="option"]`),
+  ].find((item) => item.textContent.trim() === label);
+  expect(option).toBeTruthy();
+  option.click();
+  flushSync();
+}
+
 async function mountCalendarView() {
   const component = mount(CalendarView, { target: document.body });
   flushSync();
@@ -120,6 +143,36 @@ describe('CalendarView', () => {
     expect(dateInput).not.toBeNull();
   });
 
+  it('sets recurrence and its end through the shared choice fields', async () => {
+    mountedComponent = await mountCalendarView();
+
+    document.querySelector('.calendar-toolbar-right .btn-primary').click();
+    flushSync();
+
+    // The labels still name the Dropdown triggers.
+    const freqTrigger = document.getElementById('calendar-form-freq');
+    expect(freqTrigger.tagName).toBe('BUTTON');
+    expect(
+      document.querySelector('.calendar-form label[for="calendar-form-freq"]'),
+    ).not.toBeNull();
+    expect(document.querySelector('.calendar-form select')).toBeNull();
+    expect(document.querySelector('.calendar-weekday-picker')).toBeNull();
+
+    chooseOption('calendar-form-freq', 'Weekly');
+    expect(freqTrigger.textContent.trim()).toBe('Weekly');
+    expect(document.querySelector('.calendar-weekday-picker')).not.toBeNull();
+
+    chooseOption('calendar-form-end-mode', 'After');
+    expect(
+      document.querySelector('.calendar-form-ends input[type="number"]'),
+    ).not.toBeNull();
+
+    chooseOption('calendar-form-end-mode', 'On date');
+    expect(
+      document.querySelector('.calendar-form-ends input[type="date"]'),
+    ).not.toBeNull();
+  });
+
   it('opens the create form from clicking an empty cell surface', async () => {
     mountedComponent = await mountCalendarView();
 
@@ -135,6 +188,74 @@ describe('CalendarView', () => {
     mountedComponent = await mountCalendarView();
 
     expect(document.querySelector('.calendar-cell.is-today')).not.toBeNull();
+  });
+
+  describe('on a fixed day', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-09-23T12:00:00Z'));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('heads week columns with compact labels under a week range', async () => {
+      mountedComponent = await mountCalendarView();
+      showView('Week');
+
+      // The toolbar names the week once; columns show only weekday and day
+      // instead of repeating the full date and year seven times.
+      expect(plainText(document.querySelector('.calendar-heading'))).toBe(
+        'Sep 21 – 27, 2026',
+      );
+      const headings = [
+        ...document.querySelectorAll('.calendar-column-heading'),
+      ];
+      expect(headings.map(plainText)).toEqual([
+        'Mon 21',
+        'Tue 22',
+        'Wed 23',
+        'Thu 24',
+        'Fri 25',
+        'Sat 26',
+        'Sun 27',
+      ]);
+      expect(headings[0].getAttribute('aria-label')).toBe(
+        'Monday, September 21, 2026',
+      );
+      const today = document.querySelector('.calendar-column.is-today');
+      expect(plainText(today.querySelector('.calendar-column-heading'))).toBe(
+        'Wed 23',
+      );
+    });
+
+    it('names the shown day once in the day view', async () => {
+      mountedComponent = await mountCalendarView();
+      showView('Day');
+
+      expect(plainText(document.querySelector('.calendar-heading'))).toBe(
+        'Wednesday, September 23, 2026',
+      );
+      expect(document.querySelector('.calendar-column-heading')).toBeNull();
+      expect(
+        document.querySelector('.calendar-column').getAttribute('aria-label'),
+      ).toBe('Wednesday, September 23, 2026');
+    });
+
+    it('marks days of neighbouring months in the month grid', async () => {
+      mountedComponent = await mountCalendarView();
+
+      const outside = [
+        ...document.querySelectorAll('.calendar-cell.is-outside'),
+      ].map((cell) => plainText(cell.querySelector('.calendar-day-number')));
+      // The six-week grid of September 2026 runs from Monday, August 31 to
+      // Sunday, October 11.
+      expect(outside).toEqual([
+        '31',
+        ...Array.from({ length: 11 }, (_, index) => String(index + 1)),
+      ]);
+    });
   });
 
   it('opens the detail modal from an event entry, not the create form', async () => {

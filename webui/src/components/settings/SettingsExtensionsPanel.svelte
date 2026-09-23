@@ -32,7 +32,7 @@
     describeExtensionWaiting,
     extensionStatusChipVariant,
     hasSettingsSchema,
-    summarizeExtensionCapabilities,
+    extensionCapabilityParts,
   } from '$lib/settingsView.js';
 
   const noop = () => {};
@@ -41,6 +41,9 @@
   let { onToast = noop, onError = noop } = $props();
 
   let extensions = $state([]);
+  let anyConfigurable = $derived(
+    extensions.some((extension) => hasSettingsSchema(extension)),
+  );
   let loading = $state(true);
   let loadError = $state('');
   let reloading = $state(false);
@@ -474,10 +477,10 @@
         actionName.length > 0 ||
         savingSecret.length > 0}
       {@const isOverridden = extension.status === 'overridden'}
-      {@const capabilities =
+      {@const capabilityParts =
         extension.name === 'mcp' && extension.status === 'loaded'
-          ? ''
-          : summarizeExtensionCapabilities(extension.capabilities, t)}
+          ? []
+          : extensionCapabilityParts(extension.capabilities, t)}
       {@const waiting = describeExtensionWaiting(extension, t)}
       <div class="s-ext-card">
         <div class="s-ext-head">
@@ -518,8 +521,21 @@
                 {/if}
               </div>
             {/if}
-            {#if capabilities}
-              <div class="s-row-desc s-ext-capabilities">{capabilities}</div>
+            {#if capabilityParts.length > 0}
+              <div class="s-row-desc s-ext-capabilities">
+                {#each capabilityParts as part, index (part.label)}
+                  {#if index > 0}<span
+                      class="s-ext-capabilities__sep"
+                      aria-hidden="true">·</span
+                    >{/if}<span class="s-ext-capabilities__part"
+                    >{part.value
+                      ? `${part.label}: `
+                      : part.label}{#if part.value}<code
+                        class="s-ext-capabilities__value">{part.value}</code
+                      >{/if}</span
+                  >
+                {/each}
+              </div>
             {/if}
             {#each extension.capabilityErrors as capabilityError (capabilityError)}
               <div class="s-row-desc s-ext-warning">
@@ -572,6 +588,10 @@
                     aria-hidden="true"><path d="m6 3.5 4.5 4.5L6 12.5" /></svg
                   >
                 </Button>
+              {:else if anyConfigurable}
+                <!-- Keeps Enable/Disable aligned with rows that have a
+                     configuration disclosure. -->
+                <span class="s-disclosure-spacer" aria-hidden="true"></span>
               {/if}
             </div>
           {/if}

@@ -76,6 +76,12 @@ function button(text) {
   );
 }
 
+// The saved-profile editor's manual Save action (shared SaveButton), whose
+// label follows the draft state: Save, Saving… or Saved.
+function saveButton() {
+  return document.querySelector('.swarm-profile-editor .save-button');
+}
+
 function createBridge(initialProfile = profile) {
   let storedProfile = structuredClone(initialProfile);
   let autosaveParticipant;
@@ -310,6 +316,7 @@ export {
   profile,
   swarm,
   button,
+  saveButton,
   createBridge,
   fill,
   choose,

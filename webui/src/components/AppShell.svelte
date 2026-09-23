@@ -415,6 +415,7 @@
               aria-label={sidebarCollapsed
                 ? t(item.labelKey, item.labelFallback)
                 : undefined}
+              data-tooltip-placement="right"
               use:tooltip={sidebarCollapsed
                 ? t(item.labelKey, item.labelFallback)
                 : ''}
@@ -541,6 +542,7 @@
           class="conn-icon {statusIconClass}"
           viewBox="0 0 16 16"
           aria-hidden="true"
+          data-tooltip-placement="right"
           use:tooltip={sidebarCollapsed ? statusLabel : ''}
         >
           <path d="M5 1.5v3.5M11 1.5v3.5" />

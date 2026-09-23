@@ -297,6 +297,7 @@
     <div class="s-row-control s-row-control--web-search-url">
       <TextField
         id="settings-web-search-searxng-base-url"
+        code
         type="url"
         value={webSearchSettings.searxng.base_url}
         placeholder={t(

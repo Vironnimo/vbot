@@ -2,7 +2,7 @@
   // Shared compact allow-list for Project tools and skills. Renders each item as a
   // toggle chip (the chip itself is the on/off control — raised, bright chip = allowed)
   // in a wrapping cloud, with an always-present toolbar: a live search filter, an
-  // "on / total" tally, and "all on" / "all off" bulk actions. The item's
+  // "on / total" tally, and "Select all" / "Deselect all" bulk actions. The item's
   // description (plus any not-ready hint or skill warnings) shows on plain hover.
   //
   // Used by the Project Tool- and Skill-Whitelist editors and the Agent Skill
@@ -128,10 +128,10 @@
       </span>
       <div class="access-chips__actions">
         <Button variant="tertiary" {disabled} onClick={() => onSetAll(true)}>
-          {t('access.allOn', 'all on')}
+          {t('access.allOn', 'Select all')}
         </Button>
         <Button variant="tertiary" {disabled} onClick={() => onSetAll(false)}>
-          {t('access.allOff', 'all off')}
+          {t('access.allOff', 'Deselect all')}
         </Button>
         {@render headerActions?.()}
       </div>

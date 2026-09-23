@@ -300,7 +300,7 @@
   }
 </script>
 
-{#snippet skillActions(entry)}
+{#snippet skillActions(entry, labelled = false)}
   <div
     class="skills-actions"
     role="group"
@@ -350,14 +350,29 @@
         >
       </Button>
     {/if}
-    <span class="skills-enable" use:tooltip={t('skills.disableHelp')}>
-      <Toggle
-        checked={!entry.disabled}
-        disabled={actions.busy}
-        ariaLabel={t('skills.enabledNamed', '', { name: entry.name })}
-        onChange={() => actions.toggleDisabled(entry)}
-      />
-    </span>
+    {#if labelled}
+      <label
+        class="skills-enable skills-enable--labelled"
+        use:tooltip={t('skills.disableHelp')}
+      >
+        <span>{t('skills.enabled')}</span>
+        <Toggle
+          checked={!entry.disabled}
+          disabled={actions.busy}
+          ariaLabel={t('skills.enabledNamed', '', { name: entry.name })}
+          onChange={() => actions.toggleDisabled(entry)}
+        />
+      </label>
+    {:else}
+      <span class="skills-enable" use:tooltip={t('skills.disableHelp')}>
+        <Toggle
+          checked={!entry.disabled}
+          disabled={actions.busy}
+          ariaLabel={t('skills.enabledNamed', '', { name: entry.name })}
+          onChange={() => actions.toggleDisabled(entry)}
+        />
+      </span>
+    {/if}
   </div>
 {/snippet}
 
@@ -435,14 +450,14 @@
         }}
       />
     </div>
-    <header class="skills-header">
-      <div>
-        <h2 id="skills-title">
+    <header class="view-header skills-header">
+      <div class="view-header__intro">
+        <h2 id="skills-title" class="view-header__title">
           {scope === 'directories'
             ? t('skills.locations')
             : collection?.label || t('skills.title')}
         </h2>
-        <p>
+        <p class="view-header__subtitle">
           {scope === 'directories'
             ? t('skills.locationsSubtitle')
             : scope.startsWith('agent:')
@@ -669,6 +684,7 @@
             <div class="skills-detail-top">
               <Button
                 variant="secondary"
+                class="skills-detail-back"
                 ariaLabel={t('skills.backToList')}
                 onClick={closeDetail}>← {t('skills.backToList')}</Button
               >
@@ -686,7 +702,7 @@
               <p class="skills-detail-source">
                 {skillSourceLabel(selected, t, agents)}
               </p>
-              {@render skillActions(selected)}
+              {@render skillActions(selected, true)}
             </header>
             <div class="skills-detail-scroll">
               <div class="skills-access">

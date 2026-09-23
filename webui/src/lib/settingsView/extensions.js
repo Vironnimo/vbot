@@ -113,7 +113,10 @@ export function extensionStatusChipVariant(status) {
   return 'warn';
 }
 
-export function summarizeExtensionCapabilities(capabilities, translate) {
+// One entry per capability kind: a translated `label` plus the code-like
+// `value` it lists (event names, Tool names, commands), or an empty value for
+// flag-only capabilities such as startup/shutdown.
+export function extensionCapabilityParts(capabilities, translate) {
   const normalized =
     capabilities && Array.isArray(capabilities.hooks)
       ? capabilities
@@ -121,39 +124,54 @@ export function summarizeExtensionCapabilities(capabilities, translate) {
   const parts = [];
 
   if (normalized.hooks.length > 0) {
-    const hookSummary = normalized.hooks
-      .map((hook) => `${hook.event}(${hook.count})`)
-      .join(', ');
-    parts.push(
-      `${translate('settings.extensions.hooks', 'Hooks')}: ${hookSummary}`,
-    );
+    parts.push({
+      label: translate('settings.extensions.hooks', 'Hooks'),
+      value: normalized.hooks
+        .map((hook) => `${hook.event}(${hook.count})`)
+        .join(', '),
+    });
   }
   if (normalized.tools.length > 0) {
-    const toolNames = normalized.tools
-      .map((tool) => (typeof tool === 'string' ? tool : tool.name))
-      .join(', ');
-    parts.push(
-      `${translate('settings.extensions.tools', 'Tools')}: ${toolNames}`,
-    );
+    parts.push({
+      label: translate('settings.extensions.tools', 'Tools'),
+      value: normalized.tools
+        .map((tool) => (typeof tool === 'string' ? tool : tool.name))
+        .join(', '),
+    });
   }
   if (normalized.commands.length > 0) {
-    parts.push(
-      `${translate('settings.extensions.commands', 'Commands')}: ${normalized.commands.map((command) => `/${command.name}`).join(', ')}`,
-    );
+    parts.push({
+      label: translate('settings.extensions.commands', 'Commands'),
+      value: normalized.commands
+        .map((command) => `/${command.name}`)
+        .join(', '),
+    });
   }
   if (normalized.recallBackends.length > 0) {
-    parts.push(
-      `${translate('settings.extensions.recallBackends', 'Recall backends')}: ${normalized.recallBackends.join(', ')}`,
-    );
+    parts.push({
+      label: translate('settings.extensions.recallBackends', 'Recall backends'),
+      value: normalized.recallBackends.join(', '),
+    });
   }
   if (normalized.startup) {
-    parts.push(translate('settings.extensions.startup', 'startup'));
+    parts.push({
+      label: translate('settings.extensions.startup', 'startup'),
+      value: '',
+    });
   }
   if (normalized.shutdown) {
-    parts.push(translate('settings.extensions.shutdown', 'shutdown'));
+    parts.push({
+      label: translate('settings.extensions.shutdown', 'shutdown'),
+      value: '',
+    });
   }
+  return parts;
+}
 
-  return parts.join(' · ');
+export function summarizeExtensionCapabilities(capabilities, translate) {
+  return extensionCapabilityParts(capabilities, translate)
+    .map((part) => (part.value ? `${part.label}: ${part.value}` : part.label))
+    .join(' · ');
 }
 
 /**

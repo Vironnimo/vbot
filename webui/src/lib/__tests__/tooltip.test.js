@@ -259,8 +259,9 @@ describe('positionFloating', () => {
     window.innerWidth = originalWidth;
   });
 
-  function anchorAt({ top, bottom, left = 500, width = 40 }) {
+  function anchorAt({ top, bottom, left = 500, width = 40, placement }) {
     return {
+      dataset: placement ? { tooltipPlacement: placement } : {},
       getBoundingClientRect: () => ({
         top,
         bottom,
@@ -310,6 +311,40 @@ describe('positionFloating', () => {
       element,
     );
     expect(element.style.left).toBe(`${1200 - 200 - 8}px`);
+  });
+
+  it('places a rail anchor tooltip to its right, vertically centered', () => {
+    const element = floatingOfSize(100, 24);
+    positionFloating(
+      anchorAt({
+        top: 300,
+        bottom: 340,
+        left: 12,
+        width: 40,
+        placement: 'right',
+      }),
+      element,
+    );
+
+    // right: 12 + 40 + 6 = 58; centered: 300 + 20 - 12 = 308.
+    expect(element.style.left).toBe('58px');
+    expect(element.style.top).toBe('308px');
+  });
+
+  it('falls back to above when a right placement does not fit', () => {
+    const element = floatingOfSize(100, 24);
+    positionFloating(
+      anchorAt({
+        top: 300,
+        bottom: 320,
+        left: 1150,
+        width: 40,
+        placement: 'right',
+      }),
+      element,
+    );
+
+    expect(element.style.top).toBe('270px');
   });
 });
 

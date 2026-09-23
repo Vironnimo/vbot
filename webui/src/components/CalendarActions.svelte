@@ -7,6 +7,7 @@
   import TextArea from './ui/TextArea.svelte';
   import StatusChip from './ui/StatusChip.svelte';
   import InfoHint from './ui/InfoHint.svelte';
+  import Dropdown from './Dropdown.svelte';
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import {
     addCalendarAction,
@@ -45,6 +46,41 @@
   let eventActions = $derived(
     actions.filter((action) => action.event_id === eventId),
   );
+  // A stored target or Session that is no longer listed stays selectable under
+  // its raw id, so opening an older action never silently changes it.
+  let targetOptions = $derived(
+    editor?.target && !options.some((option) => option.value === editor.target)
+      ? [{ value: editor.target, label: editor.target }, ...options]
+      : options,
+  );
+  let sessionOptions = $derived([
+    {
+      value: '',
+      label: t('calendar.actions.newSession', 'New Session for each execution'),
+    },
+    ...(editor?.session &&
+    !sessions.some((session) => session.id === editor.session)
+      ? [{ value: editor.session, label: editor.session }]
+      : []),
+    ...sessions.map((session) => ({
+      value: session.id,
+      label: session.title || session.auto_title || session.id,
+    })),
+  ]);
+  let directionOptions = $derived([
+    { value: '-', label: t('calendar.actions.before', 'Before') },
+    { value: 'at', label: t('calendar.actions.at', 'At') },
+    { value: '+', label: t('calendar.actions.after', 'After') },
+  ]);
+  let unitOptions = $derived([
+    { value: 'm', label: t('calendar.actions.minutes', 'minutes') },
+    { value: 'h', label: t('calendar.actions.hours', 'hours') },
+    { value: 'd', label: t('calendar.actions.days', 'days') },
+  ]);
+  let anchorOptions = $derived([
+    { value: 'start', label: t('calendar.actions.start', 'Start') },
+    { value: 'end', label: t('calendar.actions.end', 'End') },
+  ]);
 
   const targetCatalog = createAgentTargetCatalogLoader({
     listAgents,
@@ -350,50 +386,33 @@
           label={t('calendar.actions.agent', 'Agent')}
           controlId="calendar-action-target"
         >
-          <select
+          <Dropdown
             id="calendar-action-target"
-            class="s-input"
-            bind:value={editor.target}
-            onchange={() => {
+            value={editor.target}
+            options={targetOptions}
+            placeholder={t('calendar.actions.chooseAgent', 'Choose an agent')}
+            ariaLabel={t('calendar.actions.agent', 'Agent')}
+            disabled={busy}
+            onValueChange={(next) => {
+              if (next === editor.target) return;
+              editor.target = next;
               editor.session = '';
               loadSessions();
             }}
-            disabled={busy}
-          >
-            <option value=""
-              >{t('calendar.actions.chooseAgent', 'Choose an agent')}</option
-            >
-            {#if editor.target && !options.some((option) => option.value === editor.target)}<option
-                value={editor.target}>{editor.target}</option
-              >{/if}
-            {#each options as option (option.value)}<option value={option.value}
-                >{option.label}</option
-              >{/each}
-          </select>
+          />
         </FormField>
         <FormField
           label={t('calendar.actions.session', 'Session')}
           controlId="calendar-action-session"
         >
-          <select
+          <Dropdown
             id="calendar-action-session"
-            class="s-input"
-            bind:value={editor.session}
+            value={editor.session}
+            options={sessionOptions}
+            ariaLabel={t('calendar.actions.session', 'Session')}
             disabled={busy || sessionsLoading}
-          >
-            <option value=""
-              >{t(
-                'calendar.actions.newSession',
-                'New Session for each execution',
-              )}</option
-            >
-            {#if editor.session && !sessions.some((session) => session.id === editor.session)}<option
-                value={editor.session}>{editor.session}</option
-              >{/if}
-            {#each sessions as session (session.id)}<option value={session.id}
-                >{session.title || session.auto_title || session.id}</option
-              >{/each}
-          </select>
+            onValueChange={(next) => (editor.session = next)}
+          />
           {#if sessionCursor}<Button
               variant="secondary"
               disabled={sessionsLoading}
@@ -410,16 +429,14 @@
           label={t('calendar.actions.timing', 'When')}
           controlId="calendar-action-direction"
         >
-          <select
+          <Dropdown
             id="calendar-action-direction"
-            class="s-input"
-            bind:value={editor.direction}
+            value={editor.direction}
+            options={directionOptions}
+            ariaLabel={t('calendar.actions.timing', 'When')}
             disabled={busy}
-          >
-            <option value="-">{t('calendar.actions.before', 'Before')}</option>
-            <option value="at">{t('calendar.actions.at', 'At')}</option>
-            <option value="+">{t('calendar.actions.after', 'After')}</option>
-          </select>
+            onValueChange={(next) => (editor.direction = next)}
+          />
         </FormField>
         {#if editor.direction !== 'at'}
           <FormField
@@ -436,30 +453,27 @@
           <FormField
             label={t('calendar.actions.unit', 'Unit')}
             controlId="calendar-action-unit"
-            ><select
+            ><Dropdown
               id="calendar-action-unit"
-              class="s-input"
-              bind:value={editor.unit}
-              ><option value="m"
-                >{t('calendar.actions.minutes', 'minutes')}</option
-              ><option value="h">{t('calendar.actions.hours', 'hours')}</option
-              ><option value="d">{t('calendar.actions.days', 'days')}</option
-              ></select
-            ></FormField
+              value={editor.unit}
+              options={unitOptions}
+              ariaLabel={t('calendar.actions.unit', 'Unit')}
+              disabled={busy}
+              onValueChange={(next) => (editor.unit = next)}
+            /></FormField
           >
         {/if}
         <FormField
           label={t('calendar.actions.reference', 'Event')}
           controlId="calendar-action-anchor"
-          ><select
+          ><Dropdown
             id="calendar-action-anchor"
-            class="s-input"
-            bind:value={editor.anchor}
-            ><option value="start"
-              >{t('calendar.actions.start', 'Start')}</option
-            ><option value="end">{t('calendar.actions.end', 'End')}</option
-            ></select
-          ></FormField
+            value={editor.anchor}
+            options={anchorOptions}
+            ariaLabel={t('calendar.actions.reference', 'Event')}
+            disabled={busy}
+            onValueChange={(next) => (editor.anchor = next)}
+          /></FormField
         >
       </div>
       <FormField

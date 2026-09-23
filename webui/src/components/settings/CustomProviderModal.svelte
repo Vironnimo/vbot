@@ -416,6 +416,7 @@
         >
           <TextField
             id="custom-provider-models-endpoint"
+            code
             value={modelsEndpoint}
             placeholder={t(
               'settings.providers.custom.modelsEndpointPlaceholder',

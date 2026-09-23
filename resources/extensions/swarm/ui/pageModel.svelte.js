@@ -158,6 +158,7 @@ export function createSwarmPageModel(host) {
     {
       id: 'active',
       label: t('swarm.runs.active', 'Active runs'),
+      empty: t('swarm.runs.noActive', 'No active runs'),
       entries: swarms.filter((swarm) =>
         ['preparing', 'running', 'stopping'].includes(swarm.state),
       ),
@@ -165,6 +166,7 @@ export function createSwarmPageModel(host) {
     {
       id: 'inactive',
       label: t('swarm.runs.inactive', 'Inactive runs'),
+      empty: t('swarm.runs.noInactive', 'No inactive runs'),
       entries: swarms.filter(
         (swarm) => !['preparing', 'running', 'stopping'].includes(swarm.state),
       ),

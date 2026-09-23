@@ -82,6 +82,41 @@ describe('Dropdown', () => {
     expect(list.getAttribute('style') ?? '').toContain('max-height');
   });
 
+  it('treats an empty-string option as a real active option', async () => {
+    mountedComponent = mount(Dropdown, {
+      target: document.body,
+      props: {
+        id: 'empty-value-dropdown',
+        value: '',
+        options: [
+          { value: '', label: 'All' },
+          { value: 'a', label: 'A' },
+        ],
+      },
+    });
+    flushSync();
+
+    const trigger = document.querySelector('#empty-value-dropdown');
+    trigger.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+    await vi.waitFor(() => {
+      expect(document.activeElement?.getAttribute('role')).toBe('listbox');
+    });
+    const listbox = document.activeElement;
+    expect(listbox.getAttribute('aria-activedescendant')).toContain(
+      '-option-0',
+    );
+
+    listbox.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+    flushSync();
+    const options = [...listbox.querySelectorAll('[role="option"]')];
+    expect(options[0].classList.contains('active')).toBe(false);
+    expect(options[1].classList.contains('active')).toBe(true);
+  });
+
   it('opens and traverses enabled options with standard listbox keys', async () => {
     const onValueChange = vi.fn();
     mountedComponent = mount(Dropdown, {

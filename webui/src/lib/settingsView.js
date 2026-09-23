@@ -65,6 +65,7 @@ export {
 export {
   applyExtensionsPanelList,
   extensionStatusChipVariant,
+  extensionCapabilityParts,
   summarizeExtensionCapabilities,
   describeExtensionWaiting,
   buildExtensionsUpdatePayload,

@@ -5,6 +5,7 @@
   import { onDestroy, untrack } from 'svelte';
 
   import Button from '../ui/Button.svelte';
+  import SaveButton from '../ui/SaveButton.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import TextField from '../ui/TextField.svelte';
   import { updateSettings } from '$lib/api.js';
@@ -218,9 +219,11 @@
   </div>
 
   <div class="skills-footer">
-    <Button variant="tertiary" onClick={handleManualSkillDirectoriesSave}>
-      {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
-    </Button>
+    <SaveButton
+      {saving}
+      pending={directoryAutosave.participant.hasChanges()}
+      onClick={handleManualSkillDirectoriesSave}
+    />
   </div>
 </div>
 

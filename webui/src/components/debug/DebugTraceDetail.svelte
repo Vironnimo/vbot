@@ -76,7 +76,9 @@
   {:else if trace}
     <header class="detail-header">
       <div class="detail-heading-row">
-        <h3>{trace.model_id || t('debug.modelProbe', 'Model Probe')}</h3>
+        <h3 class:detail-title--id={Boolean(trace.model_id)}>
+          {trace.model_id || t('debug.modelProbe', 'Model Probe')}
+        </h3>
         <CopyButton
           text={traceJson}
           label={t('debug.copyTrace', 'Copy complete trace')}
@@ -101,8 +103,8 @@
         </Button>
       </div>
       <div class="detail-facts">
-        <span>{trace.provider_id || '—'}</span><time datetime={trace.timestamp}
-          >{timestamp}</time
+        <span class="detail-provider">{trace.provider_id || '—'}</span><time
+          datetime={trace.timestamp}>{timestamp}</time
         >
         <span
           class="detail-status"
@@ -235,6 +237,16 @@
   }
   .detail-heading-row h3 {
     margin-right: auto;
+  }
+  /* Model and Provider ids are code-like values: Mono. The Model Probe
+     fallback title stays Sans. */
+  .detail-title--id {
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-body);
+  }
+  .detail-provider {
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-sm);
   }
   .detail-facts {
     display: flex;

@@ -323,7 +323,6 @@
     margin: 0;
     font-size: var(--fs-body-sm);
     color: var(--text-lo);
-    font-style: italic;
   }
   .stats-limit-windows {
     list-style: none;

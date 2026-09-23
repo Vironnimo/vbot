@@ -14,6 +14,8 @@ import {
   navigateAnchor,
   sortDayEntries,
   todayKey,
+  weekColumnLabel,
+  weekRangeLabel,
   weekStartKey,
   windowForView,
 } from '../calendarView.js';
@@ -73,6 +75,32 @@ describe('day key helpers', () => {
   it('marks today inside the grid', () => {
     const days = monthGridDays(todayKey());
     expect(days.some((day) => day.isToday)).toBe(true);
+  });
+});
+
+describe('week labels', () => {
+  // Intl separates ranges with (thin) spaces around an en dash; normalize
+  // whitespace so the assertions describe the content, not ICU spacing.
+  const plain = (text) => text.replace(/\s+/g, ' ');
+
+  it('labels the whole Monday-to-Sunday range with its year', () => {
+    expect(plain(weekRangeLabel('2026-09-23', 'en'))).toBe('Sep 21 – 27, 2026');
+  });
+
+  it('names both months and years when a week crosses them', () => {
+    expect(plain(weekRangeLabel('2026-10-01', 'en'))).toBe(
+      'Sep 28 – Oct 4, 2026',
+    );
+    expect(plain(weekRangeLabel('2026-12-31', 'en'))).toBe(
+      'Dec 28, 2026 – Jan 3, 2027',
+    );
+  });
+
+  it('builds compact column parts without month or year', () => {
+    expect(weekColumnLabel('2026-09-21', 'en')).toEqual({
+      weekday: 'Mon',
+      dayOfMonth: 21,
+    });
   });
 });
 

@@ -74,6 +74,7 @@
           label: option,
           searchText: option,
           disabled: false,
+          code: false,
         };
       }
 
@@ -84,6 +85,8 @@
         value: option?.value ?? '',
         label,
         disabled: Boolean(option?.disabled),
+        // Code-like values (Model ids) render in the mono face.
+        code: option?.code === true,
         secondaryLabel,
         searchText: option?.searchText ?? `${label} ${secondaryLabel}`.trim(),
       };
@@ -349,6 +352,7 @@
     <span
       class="searchable-dropdown__trigger-label"
       class:searchable-dropdown__trigger-label--placeholder={!hasSelection}
+      class:searchable-dropdown__label--code={selectedOption?.code}
     >
       {triggerLabel}
     </span>
@@ -414,7 +418,9 @@
               class:active={option.value === activeOptionValue}
               onclick={() => selectOption(option)}
             >
-              <span class="searchable-dropdown__option-label"
+              <span
+                class="searchable-dropdown__option-label"
+                class:searchable-dropdown__label--code={option.code}
                 >{option.label}</span
               >
               {#if option.secondaryLabel}

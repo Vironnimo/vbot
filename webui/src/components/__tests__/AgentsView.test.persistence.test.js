@@ -139,7 +139,7 @@ describe('AgentsView', () => {
     });
     expect(toastMock).not.toHaveBeenCalled();
 
-    const saveButton = getButton('Save changes');
+    const saveButton = getButton('Saved');
     expect(saveButton.disabled).toBe(false);
     toastMock.mockClear();
 
