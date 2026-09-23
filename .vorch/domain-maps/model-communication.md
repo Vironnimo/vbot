@@ -36,6 +36,6 @@ Deliberately **not** a reminder channel: Channel-observed group chatter persists
 
 - `<system-reminder>` is a protocol token owned by Chat's request builder. Producers never write the tags themselves.
 - Provider adapters never receive `role: "note"`; embedding happens before wire translation (`providers.md`).
-- Reminders are synthetic user messages: content must be kernel-authored constants, never raw external or user data without its domain's quoting rules.
+- Reminders are synthetic user messages: content must be kernel-authored constants, never raw external or user data without its domain's quoting rules. Chat-rendered reminders quote such text through `core/chat/wire_shaping.py::_quote_external_json` (JSON with escaped angle brackets), including Model-visible Run errors and the interrupted-Run Continuation checkpoint.
 - Notes are invisible in UI and public history - they are not a user-notification mechanism.
 - Extension-owned delivery uses the existing persisted-note or Tool-result channel. Chat commits the complete carrier and canonical receipt atomically before owner acknowledgment; the Extension supplies attributed data, never wrapper tags or Provider roles. Delivery and completion continuations enter only after the preceding whole Tool batch is durable (`chat.md`, `extensions.md`).

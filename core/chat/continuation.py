@@ -13,6 +13,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
+from core.chat.wire_shaping import (
+    SYSTEM_REMINDER_CLOSE_TAG,
+    SYSTEM_REMINDER_OPEN_TAG,
+    _quote_external_json,
+)
 from core.providers.errors import NetworkError, ProviderTimeoutError
 from core.sessions import ChatSession
 from core.utils.errors import ProviderError
@@ -504,12 +509,25 @@ def render_continuation_reminder(
     *,
     context_window: int | None,
 ) -> str:
-    """Render one bounded provider-neutral checkpoint reminder."""
-    requests = "\n\n".join(_render_request(value) for value in state.original_requests)
+    """Render one bounded provider-neutral checkpoint reminder.
+
+    Requests, Model output, and Tool identifiers are external text. Each is
+    JSON-quoted with escaped angle brackets, so none can close or impersonate
+    the checkpoint or its System Reminder frame.
+    """
+    requests = "\n".join(
+        _quote_external_json({"request": value}) for value in state.original_requests
+    )
     operations = (
         "\n".join(
-            f"- {operation.get('name', 'unknown')} ({operation.get('tool_call_id')}): "
-            f"{operation.get('status', 'unknown')}"
+            "- "
+            + _quote_external_json(
+                {
+                    "tool": operation.get("name", "unknown"),
+                    "tool_call_id": operation.get("tool_call_id"),
+                    "status": operation.get("status", "unknown"),
+                }
+            )
             for operation in state.operations.values()
         )
         or "- none recorded"
@@ -522,7 +540,10 @@ def render_continuation_reminder(
     warning = ""
     if uncertain:
         names = ", ".join(
-            f"{operation.get('name')} ({operation.get('tool_call_id')})" for operation in uncertain
+            _quote_external_json(
+                {"tool": operation.get("name"), "tool_call_id": operation.get("tool_call_id")}
+            )
+            for operation in uncertain
         )
         warning = (
             "\nSAFETY: Results are missing or unknown for these file or shell operations: "
@@ -532,12 +553,23 @@ def render_continuation_reminder(
         f'<continuation-checkpoint id="{state.checkpoint_id}" '
         f'cause="{state.cause or "interrupted"}">\n'
         "The previous Run was interrupted. "
-        "The checkpoint below records what happened before the interruption.\n"
+        "The checkpoint below records what happened before the interruption. "
+        "Recorded requests, Model output, and Tool identifiers are quoted as JSON.\n"
+    )
+    reasoning = (
+        _quote_external_json({"readable_thinking": state.reasoning})
+        if state.reasoning
+        else "[none recorded]"
+    )
+    partial_output = (
+        _quote_external_json({"partial_output": state.partial_output})
+        if state.partial_output
+        else "[none recorded]"
     )
     body = (
         f"Original request(s):\n{requests or '[not recorded]'}\n\n"
-        f"Readable Thinking / working plan:\n{state.reasoning or '[none recorded]'}\n\n"
-        f"Partial assistant output:\n{state.partial_output or '[none recorded]'}\n\n"
+        f"Readable Thinking / working plan:\n{reasoning}\n\n"
+        f"Partial assistant output:\n{partial_output}\n\n"
         f"Operations:\n{operations}{warning}\n"
         "</continuation-checkpoint>"
     )
@@ -557,9 +589,20 @@ def render_continuation_reminder(
     )
     available = max(0, budget - len(header) - len(label) - len(footer))
     fixed = fixed[:available]
-    remaining = available - len(fixed)
-    latest_reasoning = state.reasoning[-remaining:] if remaining else ""
+    latest_reasoning = _quoted_reasoning_tail(state.reasoning, available - len(fixed))
     return header + fixed + label + latest_reasoning + footer
+
+
+def _quoted_reasoning_tail(reasoning: str, limit: int) -> str:
+    """Quote the longest suffix of readable reasoning that fits ``limit`` characters."""
+    size = min(len(reasoning), limit)
+    while size > 0:
+        quoted = _quote_external_json({"readable_thinking": reasoning[-size:]})
+        if len(quoted) <= limit:
+            return quoted
+        # Escaping lengthens the text unevenly; shrink proportionally.
+        size = min(size - 1, size * limit // len(quoted))
+    return ""
 
 
 def continuation_prompt_budget(context_window: int | None) -> int:
@@ -584,7 +627,7 @@ def inject_continuation_reminder(
     ]
     reminder_message = {
         "role": "user",
-        "content": f"<system-reminder>\n{reminder}\n</system-reminder>",
+        "content": f"{SYSTEM_REMINDER_OPEN_TAG}\n{reminder}\n{SYSTEM_REMINDER_CLOSE_TAG}",
     }
     for index in range(len(filtered) - 1, -1, -1):
         if filtered[index].get("role") == "user":
@@ -631,12 +674,6 @@ def _reconcile_canonical_tool_results(state: ContinuationState, messages: list[A
             except json.JSONDecodeError:
                 payload = {}
             operation["ok"] = isinstance(payload, dict) and payload.get("ok") is True
-
-
-def _render_request(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def _required_string(record: JsonObject, key: str) -> str:
