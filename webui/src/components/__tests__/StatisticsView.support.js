@@ -551,7 +551,7 @@ async function waitForCondition(predicate, attempts = 50) {
 
 async function waitForOverview() {
   await waitForCondition(() =>
-    document.querySelector('.stats-grid--hero .stats-card__value'),
+    document.querySelector('.stats-panel > .stats-grid .stats-card__value'),
   );
 }
 

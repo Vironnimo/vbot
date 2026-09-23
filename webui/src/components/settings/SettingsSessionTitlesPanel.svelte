@@ -203,7 +203,7 @@
 <div class="s-row">
   <div class="s-row-info">
     <div class="s-row-label">
-      {t('settings.sessionTitles.model', 'Title Model')}
+      {t('settings.sessionTitles.model', 'Title model')}
     </div>
     <div class="s-row-desc">
       {t(
@@ -227,7 +227,7 @@
         'Filter models…',
       )}
       emptyLabel={t('agents.form.modelSearchEmpty', 'No models match')}
-      ariaLabel={t('settings.sessionTitles.model', 'Title Model')}
+      ariaLabel={t('settings.sessionTitles.model', 'Title model')}
       triggerClass="settings-view__dropdown"
       panelClass="settings-view__model-panel"
       footerActionLabel={modelFilterFooter}
@@ -241,7 +241,7 @@
   <SaveButton
     class="s-save-button s-save-button--inline"
     {saving}
-    pending={sessionTitlesAutosave.participant.hasPending()}
+    pending={sessionTitlesAutosave.participant.hasChanges()}
     onClick={saveNow}
   />
 </div>

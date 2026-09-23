@@ -284,9 +284,6 @@
 <section class="limit-history" aria-labelledby="limit-history-title">
   <div class="limit-history__head">
     <div>
-      <p class="limit-history__eyebrow">
-        {t('statistics.limits.flightRecorder', 'Subscription flight recorder')}
-      </p>
       <h3 id="limit-history-title">
         {t('statistics.limits.historyTitle', 'Limit history')}
       </h3>

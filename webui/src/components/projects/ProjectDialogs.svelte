@@ -93,6 +93,7 @@
             <TextField
               id="projects-add-cwd"
               variant="modal"
+              code
               value={projectsState.addForm.cwd}
               placeholder={t(
                 'projects.add.cwdPlaceholder',

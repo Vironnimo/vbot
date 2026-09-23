@@ -24,12 +24,15 @@
   min-width: 0;
 }
 
+/* The toolbar heading is the only place the day view names its date, so a
+   long date wraps beside the navigation on phones instead of being clipped. */
 .calendar-heading {
+  min-width: 0;
   font-size: var(--fs-heading-sm);
   font-weight: 600;
   color: var(--text-hi);
   margin-left: 8px;
-  white-space: nowrap;
+  text-wrap: balance;
 }
 
 .calendar-toolbar-right {
@@ -161,9 +164,9 @@
   background: var(--secondary-surface);
 }
 
-/* Today: a quietly raised cell plus an accent circle behind the day number.
-   The accent stays on the small current-day marker instead of flooding the
-   whole cell. */
+/* Today: a quietly raised cell plus a light circle behind the day number.
+   Today is orientation, not a selection, so the marker stays neutral and the
+   accent remains free for selection, primary actions and focus. */
 .calendar-cell.is-today {
   background: var(--surface-2);
 }
@@ -192,14 +195,23 @@
   font-size: var(--fs-label-sm);
   font-variant-numeric: tabular-nums;
   line-height: 1;
-  color: var(--text-med);
+  color: var(--text-hi);
 }
 
-.calendar-cell.is-today .calendar-day-number {
+/* Days of the neighbouring months: a darker cell and a dimmer (still AA)
+   number, so the current month reads as one block. */
+.calendar-cell.is-outside .calendar-day-number {
+  color: var(--text-lo);
+}
+
+/* Shared current-day marker of the month cell and the week column header,
+   matching the light on-state of the shared toggle and weekday picker. */
+.calendar-cell.is-today .calendar-day-number,
+.calendar-column.is-today .calendar-day-number {
   padding: 0 5px;
   border-radius: 999px;
-  background: var(--accent);
-  color: var(--on-accent);
+  background: var(--text-hi);
+  color: var(--bg);
   font-weight: 600;
 }
 
@@ -326,18 +338,30 @@
   min-width: 0;
 }
 
-/* Today's column: the same raised surface as the month cell, with a thin
-   accent rail on top as the current-day marker. */
+/* Today's column: the same raised surface and day-number circle as the
+   month cell. */
 .calendar-column.is-today {
   background: var(--surface-2);
-  box-shadow: inset 0 2px 0 var(--accent);
 }
 
+/* Compact "Mon 21" header; the toolbar carries the week's range and year. */
 .calendar-column-heading {
-  font-size: var(--fs-label-sm);
-  font-weight: 600;
-  color: var(--text-med);
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 0;
+  white-space: nowrap;
+}
+
+.calendar-column-weekday {
+  font-size: var(--fs-body-sm);
+  font-weight: 500;
+  color: var(--text-med);
+}
+
+.calendar-column-heading .calendar-day-number {
+  font-size: var(--fs-body-sm);
+  font-weight: 600;
 }
 
 .calendar-column-entries {
@@ -388,10 +412,11 @@
 
 .calendar-agenda-today {
   font-size: var(--fs-label-sm);
-  color: var(--accent);
-  border: 1px solid var(--accent);
+  font-weight: 500;
+  color: var(--text-hi);
+  background: var(--surface-3);
   border-radius: 999px;
-  padding: 1px 8px;
+  padding: 2px 8px;
 }
 
 .calendar-agenda-free {
@@ -471,7 +496,7 @@
   gap: 8px;
 }
 
-.calendar-form-ends select {
+.calendar-form-ends .dropdown {
   flex: none;
 }
 
@@ -587,7 +612,32 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
+/* Choice fields fill their grid cell; the shared Dropdown's default minimum
+   width would push the four timing fields past the dialog edge. */
+.calendar-action-editor .dropdown {
+  min-width: 0;
+}
 @media (max-width: 560px) {
+  /* Month cells are ~50px wide on a phone: entries show only their
+     truncated title; time and repeat marker stay in the accessible name. */
+  .calendar-cell-entries {
+    padding-inline: 3px;
+  }
+  .calendar-cell-entries .calendar-entry {
+    gap: 0;
+    padding: 2px 4px;
+    border-left-width: 2px;
+    font-size: var(--fs-label-sm);
+  }
+  .calendar-cell-entries .calendar-entry-time,
+  .calendar-cell-entries .calendar-entry-repeat {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
   .calendar-action-timing {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

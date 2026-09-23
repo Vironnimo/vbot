@@ -11,10 +11,6 @@
     overflow: visible;
   }
 
-  .settings-nav-title {
-    padding: 0 2px 4px;
-  }
-
   .settings-search {
     margin: 0;
   }
@@ -107,6 +103,16 @@
 
   .s-save-button--inline {
     width: 100%;
+  }
+
+  .s-disclosure-btn.btn-tertiary.btn-icon {
+    width: 40px;
+    height: 40px;
+    min-height: 40px;
+  }
+
+  .s-disclosure-spacer {
+    width: 40px;
   }
 
   .s-row-actions--channel-header {

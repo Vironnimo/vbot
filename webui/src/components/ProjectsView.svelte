@@ -1,6 +1,7 @@
 <script>
   import { t } from '$lib/i18n.js';
   import Button from './ui/Button.svelte';
+  import SaveButton from './ui/SaveButton.svelte';
   import Banner from './ui/Banner.svelte';
   import EmptyState from './ui/EmptyState.svelte';
   import {
@@ -363,16 +364,13 @@
               {navigateToExtensions}
             />
             <div class="management-footer">
-              <Button
-                variant="tertiary"
+              <SaveButton
                 type="submit"
                 form="project-settings-form"
                 data-testid={`project-save-${selectedProject.project_id}`}
-              >
-                {projectsState.editSaving
-                  ? t('projects.manage.saving', 'Saving…')
-                  : t('projects.manage.save', 'Save changes')}
-              </Button>
+                saving={projectsState.editSaving}
+                pending={projectAutosave.hasChanges()}
+              />
             </div>
           </div>
         </div>

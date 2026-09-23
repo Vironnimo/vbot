@@ -23,13 +23,6 @@
   align-items: flex-start;
 }
 
-.limit-history__eyebrow {
-  margin: 0 0 var(--space-xs);
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  font-weight: 600;
-}
-
 .limit-history h3,
 .limit-history h4,
 .limit-history p {

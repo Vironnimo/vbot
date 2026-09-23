@@ -181,6 +181,7 @@
   }
   .tool-list :global(.tool-index-item) {
     display: flex;
+    flex-shrink: 0;
     flex-direction: column;
     align-items: flex-start;
     gap: 6px;

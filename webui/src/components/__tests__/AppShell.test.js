@@ -82,7 +82,7 @@ describe('AppShell Desktop context menu', () => {
     ).toBeNull();
   });
 
-  it('keeps the inset toggle free of the shared button minimum height', () => {
+  it('keeps the sidebar toggle free of the shared button minimum height', () => {
     mountShell(false);
     const stylesheet = document.createElement('style');
     stylesheet.textContent = appStyles;
@@ -560,5 +560,99 @@ describe('AppShell sidebar status icons', () => {
     expect(document.querySelector('#app-tooltip').textContent).toBe(
       'Connected',
     );
+  });
+});
+
+describe('AppShell mobile More sheet', () => {
+  let mountedComponent;
+
+  const items = [
+    {
+      id: 'chat',
+      labelKey: 'navigation.chat',
+      labelFallback: 'Chat',
+      section: 'work',
+    },
+    {
+      id: 'settings',
+      labelKey: 'navigation.settings',
+      labelFallback: 'Settings',
+      section: 'configure',
+    },
+  ];
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    localStorage.clear();
+    init('en');
+  });
+
+  afterEach(async () => {
+    if (mountedComponent) await unmount(mountedComponent);
+    mountedComponent = null;
+    document.body.innerHTML = '';
+  });
+
+  function mountShell(onSelectView = vi.fn()) {
+    mountedComponent = mount(AppShell, {
+      target: document.body,
+      props: { items, activeViewId: 'settings', onSelectView },
+    });
+    flushSync();
+    return {
+      shell: document.querySelector('.app-shell'),
+      more: document.querySelector('.app-shell__nav-more'),
+      main: document.querySelector('.app-shell__content'),
+    };
+  }
+
+  it('marks sheet-only destinations and opens the sheet with focus on the current one', async () => {
+    const { shell, more, main } = mountShell();
+    const settingsItem = [
+      ...document.querySelectorAll('.app-shell__nav-item'),
+    ].find((item) => item.textContent.includes('Settings'));
+
+    expect(
+      settingsItem.classList.contains('app-shell__nav-item--mobile-secondary'),
+    ).toBe(true);
+    expect(more.classList.contains('app-shell__nav-more--active')).toBe(true);
+
+    more.click();
+    flushSync();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync();
+
+    expect(shell.dataset.mobileNavOpen).toBe('true');
+    expect(more.getAttribute('aria-expanded')).toBe('true');
+    expect(main.inert).toBe(true);
+    expect(document.activeElement).toBe(settingsItem);
+  });
+
+  it('closes on Escape, restores focus to More and releases the content', () => {
+    const { shell, more, main } = mountShell();
+    more.click();
+    flushSync();
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    flushSync();
+
+    expect(shell.dataset.mobileNavOpen).toBeUndefined();
+    expect(Boolean(main.inert)).toBe(false);
+    expect(document.activeElement).toBe(more);
+  });
+
+  it('closes when a destination is chosen from the sheet', () => {
+    const onSelectView = vi.fn();
+    const { shell, more } = mountShell(onSelectView);
+    more.click();
+    flushSync();
+
+    [...document.querySelectorAll('.app-shell__nav-item')]
+      .find((item) => item.textContent.includes('Chat'))
+      .click();
+    flushSync();
+
+    expect(onSelectView).toHaveBeenCalledWith('chat');
+    expect(shell.dataset.mobileNavOpen).toBeUndefined();
   });
 });

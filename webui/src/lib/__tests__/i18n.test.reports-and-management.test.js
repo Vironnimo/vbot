@@ -22,6 +22,8 @@ describe('i18n t()', () => {
       'logs.level.unknown',
       'logs.search',
       'logs.searchPlaceholder',
+      'logs.filters',
+      'logs.filtersChanged',
       'logs.resultsCount',
       'logs.currentFile',
       'logs.entries',
@@ -52,6 +54,9 @@ describe('i18n t()', () => {
     );
     expect(t('logs.currentFile', undefined, { file: '2026-05-11.log' })).toBe(
       'Current file: 2026-05-11.log',
+    );
+    expect(t('logs.filtersChanged', undefined, { count: 2 })).toBe(
+      'Filters, 2 changed',
     );
     expect(t('logs.level.warn')).toBe('WARN');
     expect(t('logs.level.error')).toBe('ERROR');
@@ -294,7 +299,7 @@ describe('i18n t()', () => {
       'cron.presets.monthlyFirst',
     ]);
     expect(t('cron.list.ariaLabel')).toBe('Scheduled Runs');
-    expect(t('cron.detail.createTitle')).toBe('Create Scheduled Run');
+    expect(t('cron.detail.createTitle')).toBe('Create schedule');
     expect(t('cron.detail.editTitle')).toBe('Edit Scheduled Run');
     expect(t('cron.form.preset')).toBe('Schedule preset');
     expect(t('cron.presets.custom')).toBe('Custom');
@@ -490,8 +495,8 @@ describe('i18n t()', () => {
       '3 / 12 on',
     );
     expect(t('access.toggle', undefined, { name: 'bash' })).toBe('Toggle bash');
-    expect(t('access.allOn')).toBe('all on');
-    expect(t('access.allOff')).toBe('all off');
+    expect(t('access.allOn')).toBe('Select all');
+    expect(t('access.allOff')).toBe('Deselect all');
   });
 
   it('does not expose Components showcase labels in the live catalog', () => {

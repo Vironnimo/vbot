@@ -101,7 +101,7 @@
     aria-label={t('modelAutocomplete.label', 'Model suggestions')}
   >
     <div class="model-autocomplete__eyebrow">
-      {t('modelAutocomplete.eyebrow', 'models')}
+      {t('modelAutocomplete.eyebrow', 'Models')}
     </div>
     {#if loading && matchingOptions.length === 0}
       <div class="model-autocomplete__loading">

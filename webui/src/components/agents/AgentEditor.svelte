@@ -9,6 +9,7 @@
   import { t } from '$lib/i18n.js';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import SaveButton from '../ui/SaveButton.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import Modal from '../ui/Modal.svelte';
   import FormField from '../ui/FormField.svelte';
@@ -639,9 +640,17 @@
       {canDeleteSelectedAgent}
     />
     <div class="agent-detail-footer">
-      <Button variant="tertiary" type="submit" disabled={isSaving}>
-        {isSaving ? t('common.saving', 'Saving…') : submitLabel}
-      </Button>
+      {#if formMode === AGENT_FORM_MODE_EDIT}
+        <SaveButton
+          type="submit"
+          saving={isSaving}
+          pending={!formValuesMatch(formValues, editBaselineValues)}
+        />
+      {:else}
+        <Button variant="tertiary" type="submit" disabled={isSaving}>
+          {isSaving ? t('common.saving', 'Saving…') : submitLabel}
+        </Button>
+      {/if}
     </div>
   </div>
 </form>

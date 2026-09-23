@@ -159,7 +159,6 @@ export default Object.freeze({
   'terminals.sessionCount': '{count} sessions',
   'terminals.loading': 'Loading terminal sessions…',
   'terminals.listError': 'Terminal sessions could not be loaded.',
-  'terminals.emptyTitle': 'No terminal sessions',
   'terminals.emptyDescription':
     'Open a manual terminal here, or monitor Terminal Sessions started by an agent.',
   'terminals.detailEmptyTitle': 'Open a terminal',
@@ -266,7 +265,7 @@ export default Object.freeze({
   'terminals.deleteGroupAction': 'Delete group',
   'terminals.moveGroupHint': 'Drag terminals to reorder them within the group.',
   'cron.eyebrow': 'Scheduled automation',
-  'cron.title': 'Scheduled Runs',
+  'cron.title': 'Schedules',
   'cron.subtitle':
     'Manage recurring and one-time Agent Runs, including completed and missed history.',
   'cron.noAgents': 'Create an agent before adding cron jobs.',
@@ -290,9 +289,8 @@ export default Object.freeze({
   'cron.actions.disableJob': 'Disable job {id}',
   'cron.actions.deleteJob': 'Delete job {id}',
   'cron.actions.enabled': 'Enabled',
-  'cron.detail.createTitle': 'Create Scheduled Run',
+  'cron.detail.createTitle': 'Create schedule',
   'cron.detail.editTitle': 'Edit Scheduled Run',
-  'cron.detail.kind.new': 'New schedule',
   'cron.detail.kind.recurring': 'Recurring schedule',
   'cron.detail.kind.once': 'One-time schedule',
   'cron.detail.createSubtitle':

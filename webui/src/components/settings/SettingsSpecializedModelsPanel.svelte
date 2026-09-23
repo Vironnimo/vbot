@@ -796,7 +796,7 @@
   <SaveButton
     class="s-save-button s-save-button--inline"
     saving={taskModelSaving}
-    pending={taskModelsAutosave.participant.hasPending()}
+    pending={taskModelsAutosave.participant.hasChanges()}
     onClick={handleManualTaskModelSave}
   />
 </div>

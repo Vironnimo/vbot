@@ -9,14 +9,154 @@ import {
   flushSync,
   it,
   listQueueMock,
+  listSessionActivityMock,
   listSessionsMock,
   rpcMock,
+  sendComposerMessage,
   setupChatViewTestSuite,
   showProjectMock,
   subscribeRunEventsMock,
   vi,
   waitForCondition,
 } from './ChatView.support.js';
+
+// A two-member Team (Orchestrator is the project default) whose Session
+// activity is served from `unreadResults` (address -> { sessionId, runId }),
+// so a test can reveal a finished result later and bump the Sessions refresh
+// token. `session.mark_read` acknowledges the result the way the server does.
+async function mountTeamWithUnreadResults(chatViewTest, unreadResults) {
+  showProjectMock.mockResolvedValue({
+    project: { project_id: 'vbot', default_agent: 'orchestrator' },
+    scan: {
+      team: [
+        { agent_id: 'orchestrator', display_name: 'Orchestrator', model: 'm' },
+        { agent_id: 'explorer', display_name: 'Explorer', model: 'm' },
+      ],
+      report: { clean: true, findings: [] },
+    },
+  });
+  const landingSessions = {
+    'orchestrator@vbot': 'orch-session',
+    'explorer@vbot': 'explorer-held',
+  };
+  listSessionsMock.mockImplementation(async (agentAddress) => ({
+    sessions: landingSessions[agentAddress]
+      ? [{ id: landingSessions[agentAddress] }]
+      : [],
+  }));
+  const readRunIds = new Set();
+  const baseRpc = createChatRpcMock({
+    sessionMessages: {
+      'orch-session': [
+        { id: 'orch-reply', role: 'assistant', content: 'Orchestrator chat' },
+      ],
+      'orch-unread': [
+        {
+          id: 'orch-result',
+          role: 'assistant',
+          content: 'Orchestrator unread result',
+        },
+        {
+          id: 'orch-summary',
+          role: 'run_summary',
+          run_id: 'run-orch',
+          status: 'completed',
+        },
+      ],
+      'explorer-held': [
+        {
+          id: 'explorer-reply',
+          role: 'assistant',
+          content: 'Explorer earlier',
+        },
+      ],
+      'explorer-unread': [
+        {
+          id: 'explorer-result',
+          role: 'assistant',
+          content: 'Explorer unread result',
+        },
+        {
+          id: 'explorer-summary',
+          role: 'run_summary',
+          run_id: 'run-explorer',
+          status: 'completed',
+        },
+      ],
+    },
+  });
+  rpcMock.mockImplementation(async (method, params) => {
+    if (method === 'session.mark_read') {
+      readRunIds.add(params.run_id);
+    }
+    return baseRpc(method, params);
+  });
+  listSessionActivityMock.mockImplementation(async (addresses) => ({
+    agents: addresses.map((address) => {
+      const [agentId, projectId] = address.split('@');
+      const result = unreadResults[address];
+      const read = result ? readRunIds.has(result.runId) : false;
+      return {
+        agent_id: agentId,
+        project_id: projectId ?? null,
+        sessions: result
+          ? [
+              {
+                id: result.sessionId,
+                latest_completion_run_id: result.runId,
+                has_unread_completion: !read,
+                unread_run_id: read ? null : result.runId,
+                unread_run_status: read ? null : 'completed',
+                unread_run_at: read ? null : '2026-09-01T10:00:00+00:00',
+              },
+            ]
+          : [],
+      };
+    }),
+  }));
+  const { createChatViewParentHarness } =
+    await import('./chatViewParentHarness.svelte.js');
+  const parentHarness = createChatViewParentHarness();
+
+  chatViewTest.mount({
+    target: document.body,
+    props: {
+      sharedAgents: [createAgent()],
+      sharedSelectedAgentId: 'alpha',
+      projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+      selectedProjectId: 'vbot',
+      get sessionsRefreshToken() {
+        return parentHarness.sessionsRefreshToken;
+      },
+    },
+  });
+  flushSync();
+  await waitForCondition(
+    () => document.body.textContent.includes('Orchestrator chat'),
+    100,
+  );
+  return parentHarness;
+}
+
+function teamTab(name) {
+  return Array.from(
+    document.querySelectorAll('.chat-view__project-team .agent-tab'),
+  ).find((tab) => tab.textContent.includes(name));
+}
+
+function teamTabIsUnread(name) {
+  return Boolean(teamTab(name)?.querySelector('.tab-indicator--unread'));
+}
+
+function markedRead(agentId, sessionId, runId) {
+  return rpcMock.mock.calls.some(
+    ([method, params]) =>
+      method === 'session.mark_read' &&
+      params?.agent_id === agentId &&
+      params?.session_id === sessionId &&
+      params?.run_id === runId,
+  );
+}
 
 describe('ChatView', () => {
   const chatViewTest = setupChatViewTestSuite();
@@ -523,6 +663,107 @@ describe('ChatView', () => {
 
     expect(historyReads('builder-session')).toBe(deletedReads);
     expect(document.body.textContent).toContain('Older reply');
+  });
+
+  it('opens the unread Session of a Team member that holds an older Session and marks it read', async () => {
+    const unreadResults = {};
+    const parentHarness = await mountTeamWithUnreadResults(
+      chatViewTest,
+      unreadResults,
+    );
+
+    // Explorer lands on (and holds) its earlier Session, then the user
+    // returns to the Orchestrator.
+    teamTab('Explorer').click();
+    await waitForCondition(
+      () => document.body.textContent.includes('Explorer earlier'),
+      100,
+    );
+    teamTab('Orchestrator').click();
+    await waitForCondition(
+      () => document.body.textContent.includes('Orchestrator chat'),
+      100,
+    );
+
+    // A result finishes in another Explorer Session.
+    unreadResults['explorer@vbot'] = {
+      sessionId: 'explorer-unread',
+      runId: 'run-explorer',
+    };
+    parentHarness.bumpSessionsRefreshToken();
+    await waitForCondition(() => teamTabIsUnread('Explorer'), 100);
+
+    teamTab('Explorer').click();
+    await waitForCondition(
+      () => document.body.textContent.includes('Explorer unread result'),
+      100,
+    );
+    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      agent_id: 'explorer@vbot',
+      session_id: 'explorer-unread',
+      limit: 100,
+    });
+    expect(document.body.textContent).not.toContain('Explorer earlier');
+    expect(teamTab('Explorer').classList.contains('active')).toBe(true);
+    await waitForCondition(
+      () => markedRead('explorer@vbot', 'explorer-unread', 'run-explorer'),
+      100,
+    );
+
+    // The acknowledged result stays read once another Agent is displayed.
+    teamTab('Orchestrator').click();
+    await waitForCondition(
+      () => document.body.textContent.includes('Orchestrator chat'),
+      100,
+    );
+    expect(teamTabIsUnread('Explorer')).toBe(false);
+  });
+
+  it('opens the unread Session of a never-opened Team member', async () => {
+    await mountTeamWithUnreadResults(chatViewTest, {
+      'explorer@vbot': { sessionId: 'explorer-unread', runId: 'run-explorer' },
+    });
+    await waitForCondition(() => teamTabIsUnread('Explorer'), 100);
+
+    teamTab('Explorer').click();
+    await waitForCondition(
+      () => document.body.textContent.includes('Explorer unread result'),
+      100,
+    );
+    expect(teamTab('Explorer').classList.contains('active')).toBe(true);
+    await waitForCondition(
+      () => markedRead('explorer@vbot', 'explorer-unread', 'run-explorer'),
+      100,
+    );
+    expect(teamTabIsUnread('Explorer')).toBe(false);
+  });
+
+  it('switches the selected Team member to its unread Session when clicked again', async () => {
+    const unreadResults = {};
+    const parentHarness = await mountTeamWithUnreadResults(
+      chatViewTest,
+      unreadResults,
+    );
+
+    // A result finishes in another Session of the displayed Orchestrator.
+    unreadResults['orchestrator@vbot'] = {
+      sessionId: 'orch-unread',
+      runId: 'run-orch',
+    };
+    parentHarness.bumpSessionsRefreshToken();
+    await waitForCondition(() => teamTabIsUnread('Orchestrator'), 100);
+
+    teamTab('Orchestrator').click();
+    await waitForCondition(
+      () => document.body.textContent.includes('Orchestrator unread result'),
+      100,
+    );
+    expect(document.body.textContent).not.toContain('Orchestrator chat');
+    await waitForCondition(
+      () => markedRead('orchestrator@vbot', 'orch-unread', 'run-orch'),
+      100,
+    );
+    expect(teamTabIsUnread('Orchestrator')).toBe(false);
   });
 
   it('returns from a sub-agent session to its parent session (item 4)', async () => {
@@ -1033,5 +1274,112 @@ describe('ChatView', () => {
         (element) => element.textContent.includes('Pick a model'),
       ),
     ).toBe(false);
+  });
+
+  it('lands a Session moved into a Team member on that Session, not its unread one', async () => {
+    showProjectMock.mockResolvedValue({
+      project: { project_id: 'vbot', default_agent: 'builder' },
+      scan: {
+        team: [
+          { agent_id: 'builder', display_name: 'Builder', model: 'm' },
+          { agent_id: 'reviewer', display_name: 'Reviewer', model: 'm' },
+        ],
+        report: { clean: true, findings: [] },
+      },
+    });
+    listSessionsMock.mockResolvedValue({
+      sessions: [{ id: 'builder-session' }],
+    });
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        sessionMessages: {
+          'builder-session': [
+            { id: 'b1', role: 'assistant', content: 'Builder project reply' },
+          ],
+          'reviewer-unread': [
+            { id: 'r1', role: 'assistant', content: 'Reviewer unread result' },
+            {
+              id: 'r2',
+              role: 'run_summary',
+              run_id: 'run-r',
+              status: 'completed',
+            },
+          ],
+        },
+        streamHandler: ({ content }) => {
+          if (content === '/agent reviewer@vbot') {
+            return {
+              command_handled: true,
+              reply: 'Moved to reviewer@vbot.',
+              output: 'action',
+              data: {
+                command: 'agent',
+                session_id: 'builder-session',
+                agent_id: 'reviewer@vbot',
+              },
+            };
+          }
+          throw new Error(`Unexpected stream content: ${content}`);
+        },
+      }),
+    );
+    listSessionActivityMock.mockImplementation(async (ids) => ({
+      agents: ids.map((address) => {
+        const [agentId, projectId] = address.split('@');
+        return {
+          agent_id: agentId,
+          project_id: projectId ?? null,
+          sessions:
+            address === 'reviewer@vbot'
+              ? [
+                  {
+                    id: 'reviewer-unread',
+                    latest_completion_run_id: 'run-r',
+                    has_unread_completion: true,
+                    unread_run_id: 'run-r',
+                    unread_run_status: 'completed',
+                    unread_run_at: '2026-08-05T18:41:24+00:00',
+                  },
+                ]
+              : [],
+        };
+      }),
+    }));
+    chatViewTest.mount({
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+        selectedProjectId: 'vbot',
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.body.textContent.includes('Builder project reply'),
+      100,
+    );
+    await waitForCondition(
+      () =>
+        Boolean(
+          document.querySelector(
+            '.chat-view__project-team .tab-indicator--unread',
+          ),
+        ),
+      100,
+    );
+    rpcMock.mockClear();
+
+    sendComposerMessage('/agent reviewer@vbot');
+
+    const historyCalls = () =>
+      rpcMock.mock.calls
+        .filter(([method]) => method === 'chat.history')
+        .map(([, params]) => `${params.agent_id}::${params.session_id}`);
+    await waitForCondition(
+      () => historyCalls().includes('reviewer@vbot::builder-session'),
+      100,
+    );
+    expect(historyCalls()).not.toContain('reviewer@vbot::reviewer-unread');
   });
 });

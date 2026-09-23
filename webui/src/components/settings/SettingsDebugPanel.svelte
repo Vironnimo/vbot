@@ -241,7 +241,7 @@
   <SaveButton
     class="s-save-button s-save-button--inline"
     {saving}
-    pending={debugAutosave.participant.hasPending()}
+    pending={debugAutosave.participant.hasChanges()}
     onClick={handleManualDebugSettingsSave}
   />
 </div>

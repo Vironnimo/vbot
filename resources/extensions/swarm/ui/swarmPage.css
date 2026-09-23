@@ -44,19 +44,45 @@ body {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .swarms-head {
-  margin-top: 16px;
+/* "New run" opens the goal form, the page's home: a pinned navigation row
+   below the pane header, like the Agents pane's Shared defaults entry. */
+.swarm-page .swarm-sidebar-start {
+  flex-shrink: 0;
+  padding: 0 12px 12px;
+  border-bottom: 1px solid var(--border);
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .sidebar-footer {
-  padding: 12px;
-  border-top: 1px solid var(--border);
+.swarm-page .swarm-new-run {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  color: var(--text-hi);
+  font: 500 var(--fs-label-md) / 1.4 var(--font-ui);
+  cursor: pointer;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .sidebar-footer
-  button {
-  width: 100%;
+.swarm-page .swarm-new-run svg {
+  flex-shrink: 0;
+  color: var(--text-med);
+}
+.swarm-page .swarm-new-run.active svg {
+  color: var(--accent);
+}
+/* Run groups are headed lists inside the pane, not additional pane titles. */
+.swarm-page .run-group__title {
+  margin: 0;
+  padding: 10px 16px 0;
+  color: var(--text-med);
+  font: 600 var(--fs-label-sm) / 1.4 var(--font-ui);
+}
+.swarm-page .run-group > .secondary-list {
+  padding-top: 6px;
+}
+.swarm-page .run-group__empty {
+  margin: 0;
+  padding: 6px 14px;
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+  line-height: 1.4;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .workspace {
@@ -69,31 +95,15 @@ body {
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .workspace
   > .banner {
-  margin: 14px 28px 0;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .workspace-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 20px;
+  margin: 14px 32px 0;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .content {
   flex: 1;
   min-width: 0;
   overflow: auto;
-  padding: 20px 28px;
+  padding: 28px 32px 32px;
 }
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .eyebrow {
-  margin: 0;
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  font-weight: 600;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .swarm-head,
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .section-head {
   display: flex;
@@ -107,22 +117,9 @@ body {
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .swarm-head
-  h2 {
-  font-size: var(--fs-display);
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  margin: 0;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .swarm-head
   > div:first-child {
   min-width: 0;
   flex: 1;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .swarm-head {
-  align-items: center;
-  flex-wrap: wrap;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .swarm-tabs {
@@ -196,21 +193,6 @@ body {
   gap: 20px;
   max-width: 760px;
   margin-inline: auto;
-  padding-block: 20px;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .start
-  h2 {
-  font-size: var(--fs-display);
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  margin: 0;
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .start
-  > p {
-  margin: 0;
-  color: var(--text-med);
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .start
@@ -492,30 +474,39 @@ body {
   color: var(--text-med);
 }
 @media (max-width: 960px) {
-  .swarm-page {
-    flex-direction: column;
-  }
-  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-    .secondary-pane {
-    width: 100%;
-    max-height: 220px;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-  }
-  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-    .secondary-list {
-    padding-block: 6px;
-  }
-  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-    .secondary-list__item {
-    min-width: 160px;
-  }
   :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
     .content {
-    padding: 16px;
+    padding: 22px 20px 28px;
+  }
+  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
+    .workspace
+    > .banner {
+    margin-inline: 20px;
   }
 }
 @media (max-width: 640px) {
+  /* Narrow pages stack the pane above the work area. The pane keeps its
+     natural height until the cap, then its lists scroll inside it; the work
+     area keeps the remaining height and its own scroll. */
+  .swarm-page {
+    flex-direction: column;
+  }
+  .swarm-page > .secondary-pane {
+    width: 100%;
+    min-width: 0;
+    max-height: min(45vh, 400px);
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .swarm-page .swarm-sidebar-start {
+    padding-bottom: 8px;
+  }
+  /* The goal form's only header action is one icon: it stays beside the
+     title instead of taking its own row. */
+  .swarm-page .start > .view-header {
+    flex-direction: row;
+    align-items: flex-start;
+  }
   :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
     .post-options {
     grid-template-columns: 1fr;
@@ -530,18 +521,15 @@ body {
   }
   :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
     .content {
-    padding: 15px;
+    padding: 16px;
   }
   :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-    .swarm-head {
-    display: grid;
+    .workspace
+    > .banner {
+    margin-inline: 16px;
   }
 }
 
-.swarm-page .swarm-heading {
-  display: grid;
-  gap: 5px;
-}
 .swarm-page .swarm-heading-title {
   display: flex;
   align-items: center;
@@ -599,8 +587,10 @@ body {
 .swarm-page .participant-pane {
   gap: 7px;
 }
-.swarm-page .participant-pane .eyebrow span {
+.swarm-page .participant-count {
   margin-left: 5px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
 }
 .swarm-page .participant-row {
   gap: 4px 6px;

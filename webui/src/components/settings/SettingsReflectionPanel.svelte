@@ -267,7 +267,7 @@
   <SaveButton
     class="s-save-button s-save-button--inline"
     {saving}
-    pending={reflectionAutosave.participant.hasPending()}
+    pending={reflectionAutosave.participant.hasChanges()}
     onClick={handleManualReflectionSettingsSave}
   />
 </div>

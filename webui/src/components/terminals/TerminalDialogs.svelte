@@ -336,6 +336,7 @@
                 variant="modal"
                 aria-describedby={field.describedBy}
                 ariaLabel={t('terminals.commandLabel', 'Command line')}
+                code
                 value={startCommand}
                 invalid={field.invalid}
                 disabled={viewState.startingTerminal}
@@ -363,6 +364,7 @@
                 variant="modal"
                 aria-describedby={field.describedBy}
                 ariaLabel={t('terminals.workdirLabel', 'Working directory')}
+                code
                 value={startWorkdir}
                 disabled={viewState.startingTerminal}
                 placeholder={t(

@@ -9,7 +9,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 28px 26px 20px;
+  padding: 28px 32px 20px;
   border-bottom: 1px solid var(--border);
 }
 .jev-help {
@@ -264,11 +264,8 @@
 }
 @media (max-width: 650px) {
   .jev-header {
-    padding: 14px;
+    padding: 16px;
     gap: 12px;
-  }
-  .jev-header .view-header__subtitle {
-    display: none;
   }
   .jev-notice.banner {
     margin: 12px 14px 0;

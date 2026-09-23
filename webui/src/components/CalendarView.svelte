@@ -17,6 +17,8 @@
     monthLabel,
     sortDayEntries,
     todayKey,
+    weekColumnLabel,
+    weekRangeLabel,
     weekStartKey,
     windowForView,
   } from '$lib/calendarView.js';
@@ -28,6 +30,7 @@
   import TextField from './ui/TextField.svelte';
   import Toggle from './ui/Toggle.svelte';
   import TextArea from './ui/TextArea.svelte';
+  import Dropdown from './Dropdown.svelte';
   import CalendarActions from './CalendarActions.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import { onMount } from 'svelte';
@@ -64,6 +67,18 @@
   let heading = $derived(
     monthLabel(anchorDate.getUTCFullYear(), anchorDate.getUTCMonth(), locale),
   );
+  let recurrenceOptions = $derived([
+    { value: 'none', label: t('calendar.form.freqNone', 'Not repeating') },
+    { value: 'daily', label: t('calendar.form.freqDaily', 'Daily') },
+    { value: 'weekly', label: t('calendar.form.freqWeekly', 'Weekly') },
+    { value: 'monthly', label: t('calendar.form.freqMonthly', 'Monthly') },
+    { value: 'yearly', label: t('calendar.form.freqYearly', 'Yearly') },
+  ]);
+  let endModeOptions = $derived([
+    { value: 'never', label: t('calendar.form.endsNever', 'Never') },
+    { value: 'count', label: t('calendar.form.endsCount', 'After') },
+    { value: 'until', label: t('calendar.form.endsUntil', 'On date') },
+  ]);
   let localCount = $derived(viewState.occurrences.length);
   let cronCount = $derived(viewState.cron.length);
 
@@ -200,6 +215,8 @@
         <span class="calendar-heading">
           {#if viewState.view === 'day'}
             {dayHeadingLabel(viewState.anchorKey, locale)}
+          {:else if viewState.view === 'week'}
+            {weekRangeLabel(viewState.anchorKey, locale)}
           {:else if viewState.view === 'agenda'}
             {t('calendar.agendaHeading', 'Next two weeks')}
           {:else}
@@ -355,12 +372,17 @@
     <div class="calendar-columns">
       {#each weekColumns as dayKey (dayKey)}
         {@const entries = dayEntries(dayKey)}
+        {@const columnLabel = weekColumnLabel(dayKey, locale)}
         <section
           class="calendar-column"
           class:is-today={dayKey === currentDayKey}
         >
-          <h2 class="calendar-column-heading">
-            {dayHeadingLabel(dayKey, locale)}
+          <h2
+            class="calendar-column-heading"
+            aria-label={dayHeadingLabel(dayKey, locale)}
+          >
+            <span class="calendar-column-weekday">{columnLabel.weekday}</span>
+            <span class="calendar-day-number">{columnLabel.dayOfMonth}</span>
           </h2>
           <div class="calendar-column-entries">
             {#each entries as entry, index (index)}
@@ -414,10 +436,10 @@
     </div>
   {:else if viewState.view === 'day'}
     <div class="calendar-columns calendar-columns--single">
-      <section class="calendar-column">
-        <h2 class="calendar-column-heading">
-          {dayHeadingLabel(viewState.anchorKey, locale)}
-        </h2>
+      <section
+        class="calendar-column"
+        aria-label={dayHeadingLabel(viewState.anchorKey, locale)}
+      >
         <div class="calendar-column-entries">
           {#each dayEntries(viewState.anchorKey) as entry, index (index)}
             {#if entry.kind === 'cron'}
@@ -638,27 +660,13 @@
             label={t('calendar.form.recurrence', 'Repeats')}
             controlId="calendar-form-freq"
           >
-            <select
+            <Dropdown
               id="calendar-form-freq"
-              class="s-input"
-              bind:value={editor.formValues.freq}
-            >
-              <option value="none"
-                >{t('calendar.form.freqNone', 'Not repeating')}</option
-              >
-              <option value="daily"
-                >{t('calendar.form.freqDaily', 'Daily')}</option
-              >
-              <option value="weekly"
-                >{t('calendar.form.freqWeekly', 'Weekly')}</option
-              >
-              <option value="monthly"
-                >{t('calendar.form.freqMonthly', 'Monthly')}</option
-              >
-              <option value="yearly"
-                >{t('calendar.form.freqYearly', 'Yearly')}</option
-              >
-            </select>
+              value={editor.formValues.freq}
+              options={recurrenceOptions}
+              ariaLabel={t('calendar.form.recurrence', 'Repeats')}
+              onValueChange={(next) => (editor.formValues.freq = next)}
+            />
           </FormField>
           {#if editor.formValues.freq !== 'none'}
             <FormField
@@ -710,21 +718,13 @@
               controlId="calendar-form-end-mode"
             >
               <div class="calendar-form-ends">
-                <select
+                <Dropdown
                   id="calendar-form-end-mode"
-                  class="s-input"
-                  bind:value={editor.formValues.end_mode}
-                >
-                  <option value="never"
-                    >{t('calendar.form.endsNever', 'Never')}</option
-                  >
-                  <option value="count"
-                    >{t('calendar.form.endsCount', 'After')}</option
-                  >
-                  <option value="until"
-                    >{t('calendar.form.endsUntil', 'On date')}</option
-                  >
-                </select>
+                  value={editor.formValues.end_mode}
+                  options={endModeOptions}
+                  ariaLabel={t('calendar.form.ends', 'Ends')}
+                  onValueChange={(next) => (editor.formValues.end_mode = next)}
+                />
                 {#if editor.formValues.end_mode === 'count'}
                   <TextField
                     type="number"

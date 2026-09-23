@@ -115,7 +115,7 @@
           {#snippet children(field)}
             <TextField
               id={field.controlId}
-              class="mono"
+              code
               invalid={field.invalid}
               value={formValues.workspace}
               onInput={(next) => (formValues.workspace = next)}

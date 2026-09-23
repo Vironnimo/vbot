@@ -29,7 +29,7 @@ a.inline-attachment {
 }
 
 a.inline-attachment:focus-visible {
-  outline: 1px solid var(--accent-40);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -169,7 +169,7 @@ a.inline-attachment:focus-visible {
 
 .inline-file-link:focus-visible {
   border-radius: var(--r-sm);
-  outline: 1px solid var(--accent-40);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 

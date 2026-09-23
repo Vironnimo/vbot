@@ -145,7 +145,6 @@
   gap: var(--space-lg);
 }
 
-.cron-view .detail-eyebrow,
 .cron-view .cron-summary-label,
 .cron-view .cron-execution-grid dt,
 .cron-view .cron-technical-label {
@@ -162,10 +161,6 @@
   font-size: var(--fs-label-md);
   font-weight: 500;
   line-height: 1.3;
-}
-
-.cron-view .detail-eyebrow {
-  margin-bottom: 7px;
 }
 
 .cron-view .detail-heading {
@@ -318,7 +313,7 @@
 .cron-view .cron-editor-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(300px, 0.8fr);
-  gap: 16px;
+  gap: 32px;
   align-items: start;
 }
 
@@ -326,40 +321,32 @@
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 14px;
+  gap: 28px;
 }
 
+/* Form groups are flat, like the Agents and Projects editors: a heading and
+   its fields, separated by space instead of a bordered card. */
 .cron-view .cron-card {
   min-width: 0;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  background: var(--surface);
 }
 
 .cron-view .cron-card-header {
-  min-height: 54px;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
+  margin-bottom: 14px;
 }
 
 .cron-view .cron-card-header h2 {
   margin: 0;
   color: var(--text-hi);
-  font-size: var(--fs-heading-sm);
+  font-size: var(--fs-heading-md);
   font-weight: 600;
-  line-height: 1.3;
+  line-height: 1.4;
 }
 
 .cron-view .cron-card-header p {
   margin: 4px 0 0;
-  color: var(--text-med);
+  color: var(--text-lo);
   font-size: var(--fs-body-sm);
   line-height: 1.4;
-}
-
-.cron-view .cron-card-body {
-  padding: 16px;
 }
 
 .cron-view .cron-card-body > .form-field + .form-field,
@@ -383,7 +370,7 @@
 
 .cron-view .cron-radio-group {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 3px;
   padding: 3px;
   border: 1px solid var(--border);
@@ -431,7 +418,6 @@
 
 .cron-view .cron-radio-option input:focus-visible + span {
   box-shadow: var(--focus-ring);
-  outline: 1px solid var(--accent);
 }
 
 .cron-view .cron-radio-option input:disabled + span {

@@ -1,4 +1,5 @@
 <script>
+  import Dropdown from '../Dropdown.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import { debugModelProbe } from '$lib/api.js';
@@ -15,6 +16,12 @@
 
   let { viewState = $bindable() } = $props();
 
+  let providerOptions = $derived(
+    (viewState.modelProbeProviders ?? []).map((provider) => ({
+      value: provider.id,
+      label: provider.name,
+    })),
+  );
   let connectionOptions = $derived(modelProbeConnectionOptions(viewState));
   let canProbe = $derived(modelProbeCanProbe(viewState));
 
@@ -71,38 +78,35 @@
       <span class="debug-view__probe-label">
         {t('debug.modelProbe.provider', 'Provider')}
       </span>
-      <select
-        class="debug-view__probe-select"
+      <Dropdown
+        id="debug-probe-provider"
         value={viewState.modelProbeProvider}
-        onchange={(event) => handleProviderChange(event.currentTarget.value)}
+        options={providerOptions}
+        placeholder={t('debug.modelProbe.selectProvider', 'Select a provider')}
+        ariaLabel={t('debug.modelProbe.provider', 'Provider')}
         disabled={viewState.modelProbeLoading}
-      >
-        <option value="">
-          {t('debug.modelProbe.selectProvider', 'Select a provider')}
-        </option>
-        {#each viewState.modelProbeProviders as provider (provider.id)}
-          <option value={provider.id}>{provider.name}</option>
-        {/each}
-      </select>
+        triggerClass="debug-view__probe-dropdown"
+        onValueChange={handleProviderChange}
+      />
     </label>
 
     <label class="debug-view__probe-field">
       <span class="debug-view__probe-label">
         {t('debug.modelProbe.connection', 'Connection')}
       </span>
-      <select
-        class="debug-view__probe-select"
+      <Dropdown
+        id="debug-probe-connection"
         value={viewState.modelProbeConnection}
-        onchange={(event) => handleConnectionChange(event.currentTarget.value)}
+        options={connectionOptions}
+        placeholder={t(
+          'debug.modelProbe.selectConnection',
+          'Select a connection',
+        )}
+        ariaLabel={t('debug.modelProbe.connection', 'Connection')}
         disabled={!viewState.modelProbeProvider || viewState.modelProbeLoading}
-      >
-        <option value="">
-          {t('debug.modelProbe.selectConnection', 'Select a connection')}
-        </option>
-        {#each connectionOptions as option (option.value)}
-          <option value={option.value}>{option.label}</option>
-        {/each}
-      </select>
+        triggerClass="debug-view__probe-dropdown"
+        onValueChange={handleConnectionChange}
+      />
     </label>
 
     <Button
@@ -200,32 +204,9 @@
     font-weight: 500;
   }
 
-  .debug-view__probe-select {
+  .debug-view__probe-field :global(.debug-view__probe-dropdown) {
+    display: block;
     width: 200px;
-    min-height: 34px;
-    padding: 6px 28px 6px 11px;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-md);
-    color: var(--text-hi);
-    background-color: var(--field-surface);
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23948a7e'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 10px center;
-    font-size: var(--fs-body-md);
-    line-height: 1.4;
-    cursor: pointer;
-    appearance: none;
-  }
-
-  .debug-view__probe-select:focus-visible {
-    border-color: var(--accent-40);
-    box-shadow: var(--focus-ring);
-    outline: none;
-  }
-
-  .debug-view__probe-select:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
   }
 
   :global(.debug-view__probe-btn) {
@@ -304,7 +285,7 @@
       flex-direction: column;
     }
 
-    .debug-view__probe-select {
+    .debug-view__probe-field :global(.debug-view__probe-dropdown) {
       width: 100%;
     }
   }

@@ -5,9 +5,9 @@ test("a Scheduled Run persists through update, pause, and deletion", async ({
 }) => {
   await page.goto("/#cron");
 
-  const cron = page.getByRole("region", { name: "Scheduled Runs" });
+  const cron = page.getByRole("region", { name: "Schedules" });
   const cronListPane = cron.getByRole("complementary", {
-    name: "Scheduled Runs",
+    name: "Schedules",
   });
   await expect(
     cron.getByText("No scheduled runs yet", { exact: true }),
@@ -15,7 +15,7 @@ test("a Scheduled Run persists through update, pause, and deletion", async ({
   await cronListPane.getByRole("button", { exact: true, name: "Add" }).click();
 
   await expect(
-    cron.getByText("Create Scheduled Run", { exact: true }),
+    cron.getByText("Create schedule", { exact: true }),
   ).toBeVisible();
   await cron
     .getByRole("textbox", { exact: true, name: "Name" })

@@ -54,6 +54,23 @@ describe('DebugBody', () => {
     expect(document.querySelector('.body-content pre').textContent).toBe(raw);
   });
 
+  it('reads token values such as Model ids as code and multi-word strings as prose', () => {
+    render(
+      '{"model":"gpt-5.6-luna","url":"https://example.test/v1","instructions":"Answer briefly.\\nThen stop.","empty":""}',
+    );
+    const leaf = (name) =>
+      Array.from(document.querySelectorAll('.json-leaf')).find(
+        (item) => item.querySelector('.json-key').textContent === name,
+      );
+    const isCode = (name) =>
+      leaf(name).querySelector('pre').classList.contains('json-string--code');
+    expect(leaf('model').querySelector('pre').textContent).toBe('gpt-5.6-luna');
+    expect(isCode('model')).toBe(true);
+    expect(isCode('url')).toBe(true);
+    expect(isCode('empty')).toBe(true);
+    expect(isCode('instructions')).toBe(false);
+  });
+
   it('finds and navigates exact matches without removing any captured content', () => {
     const raw =
       'event: delta\r\ndata: {"text":"needle"}\r\n\r\ndata: needle\n\ndata: [DONE]\n\n';

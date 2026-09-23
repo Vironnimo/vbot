@@ -28,7 +28,8 @@
   let isOpen = $state(false);
   let listStyle = $state('');
   let listPlacement = $state('bottom');
-  let activeOptionValue = $state('');
+  // null = no active option; '' is a valid option value (e.g. "All").
+  let activeOptionValue = $state(null);
 
   let normalizedOptions = $derived(normalizeOptions(options));
   let selectedOption = $derived(
@@ -38,7 +39,7 @@
   let hasSelection = $derived(Boolean(selectedOption));
   let listboxId = $derived(id ? `${id}-listbox` : `${componentId}-listbox`);
   let activeOptionId = $derived(
-    activeOptionValue
+    activeOptionValue !== null
       ? `${listboxId}-option-${normalizedOptions.findIndex((option) => option.value === activeOptionValue)}`
       : undefined,
   );
@@ -83,7 +84,7 @@
     isOpen = false;
     listStyle = '';
     listPlacement = 'bottom';
-    activeOptionValue = '';
+    activeOptionValue = null;
     onOpenChange(false);
   }
 
@@ -152,7 +153,7 @@
   function setInitialActiveOption(target) {
     const availableOptions = enabledOptions();
     if (availableOptions.length === 0) {
-      activeOptionValue = '';
+      activeOptionValue = null;
       return;
     }
     if (target === 'last') {

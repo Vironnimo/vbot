@@ -388,6 +388,7 @@
       >
         <TextField
           id="custom-provider-base-url"
+          code
           value={baseUrl}
           placeholder={t(
             'settings.providers.custom.baseUrlPlaceholder',
@@ -415,6 +416,7 @@
         >
           <TextField
             id="custom-provider-models-endpoint"
+            code
             value={modelsEndpoint}
             placeholder={t(
               'settings.providers.custom.modelsEndpointPlaceholder',
