@@ -141,6 +141,32 @@ describe('QueuedMessages', () => {
     expect(editor.value).toBe('Unsaved change');
   });
 
+  it('opens the editor when an editable preview is clicked', () => {
+    mountedComponent = mount(QueuedMessages, {
+      target: document.body,
+      props: {
+        queuedMessages: [
+          { id: 'queue-one', content: 'Original', editable: true },
+          { id: 'queue-file', content: '[attachment]', editable: false },
+        ],
+      },
+    });
+    flushSync();
+
+    const previews = document.body.querySelectorAll(
+      '.queued-messages__content',
+    );
+    previews[1].click();
+    flushSync();
+    expect(document.body.querySelector('.queued-messages__editor')).toBeNull();
+
+    previews[0].click();
+    flushSync();
+    expect(document.body.querySelector('.queued-messages__editor').value).toBe(
+      'Original',
+    );
+  });
+
   it('does not offer text editing for a Queue item with attachments', () => {
     mountedComponent = mount(QueuedMessages, {
       target: document.body,
