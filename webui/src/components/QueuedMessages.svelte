@@ -134,8 +134,17 @@
             {/if}
           {:else}
             <div class="queued-messages__preview">
-              <button type="button" class="queued-messages__content"
-                >{message.content}</button
+              <!-- The preview opens the editor for editable items; it stays a
+                   focusable control either way so keyboard users reach the
+                   full-text card. -->
+              <button
+                type="button"
+                class="queued-messages__content"
+                class:queued-messages__content--editable={message.editable ===
+                  true && !message.steering}
+                onclick={() => {
+                  if (!message.steering) beginEdit(message);
+                }}>{message.content}</button
               >
               <div
                 class="floating-card queued-messages__full"
@@ -235,6 +244,9 @@
     flex: 1;
     min-width: 0;
     outline-offset: 2px;
+  }
+  .queued-messages__content--editable {
+    cursor: text;
   }
   .queued-messages__content {
     display: block;
