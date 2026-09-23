@@ -1,49 +1,25 @@
-/* IBM Plex fonts are bundled locally; their license ships in fonts/OFL.txt. */
+/* Geist Sans and Geist Mono are bundled locally as variable fonts; their
+   license ships in fonts/OFL.txt. */
 @font-face {
-  font-family: 'IBM Plex Mono';
+  font-family: 'Geist';
   font-style: normal;
-  font-weight: 400;
+  font-weight: 100 900;
   font-display: swap;
-  src: url(../fonts/ibm-plex-mono-normal-400.ttf) format('truetype');
+  src: url(../fonts/geist-sans-variable.woff2) format('woff2');
 }
 @font-face {
-  font-family: 'IBM Plex Mono';
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url(../fonts/ibm-plex-mono-normal-500.ttf) format('truetype');
-}
-@font-face {
-  font-family: 'IBM Plex Sans';
+  font-family: 'Geist';
   font-style: italic;
-  font-weight: 400;
-  font-stretch: normal;
+  font-weight: 100 900;
   font-display: swap;
-  src: url(../fonts/ibm-plex-sans-italic-400.ttf) format('truetype');
+  src: url(../fonts/geist-sans-italic-variable.woff2) format('woff2');
 }
 @font-face {
-  font-family: 'IBM Plex Sans';
+  font-family: 'Geist Mono';
   font-style: normal;
-  font-weight: 400;
-  font-stretch: normal;
+  font-weight: 100 900;
   font-display: swap;
-  src: url(../fonts/ibm-plex-sans-normal-400.ttf) format('truetype');
-}
-@font-face {
-  font-family: 'IBM Plex Sans';
-  font-style: normal;
-  font-weight: 500;
-  font-stretch: normal;
-  font-display: swap;
-  src: url(../fonts/ibm-plex-sans-normal-500.ttf) format('truetype');
-}
-@font-face {
-  font-family: 'IBM Plex Sans';
-  font-style: normal;
-  font-weight: 600;
-  font-stretch: normal;
-  font-display: swap;
-  src: url(../fonts/ibm-plex-sans-normal-600.ttf) format('truetype');
+  src: url(../fonts/geist-mono-variable.woff2) format('woff2');
 }
 
 *,
@@ -55,19 +31,23 @@
 }
 
 :root {
-  color: #eee7dc;
-  background: #221a12;
-  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  color: #f1ede6;
+  background: #15130f;
+  font-family: 'Geist', system-ui, sans-serif;
   font-synthesis: none;
+  font-optical-sizing: auto;
   text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 
-  --bg: #221a12;
-  --secondary-surface: #271e15;
-  --surface: #2b2217;
-  --surface-2: #33291d;
-  --surface-3: #3d3124;
-  --border: #4a3928;
-  --border-2: #5d4a35;
+  /* Warm graphite foundation: low-chroma surfaces with clearly separated
+     steps, so hierarchy reads from tone instead of from border lines. */
+  --bg: #15130f;
+  --secondary-surface: #1a1814;
+  --surface: #1e1b17;
+  --surface-2: #26231e;
+  --surface-3: #302c26;
+  --border: #2e2a25;
+  --border-2: #423c35;
   /* Semantic surface roles keep controls with different meanings independently
      themeable even when two roles currently resolve to the same palette step. */
   --field-surface: var(--surface-2);
@@ -76,50 +56,65 @@
   --prompt-content-surface: var(--surface);
   --preview-surface: var(--surface);
   --terminal-surface: #0e0d0b;
-  --text-hi: #eee7dc;
-  --text-med: #9a8c7e;
-  --text-lo: #5e4c38;
+  /* Text levels. Every level meets WCAG AA (4.5:1) on bg, surface, and
+     surface-2; use them for all readable text. `--text-faint` is below AA and
+     only for decoration, disabled glyphs, and separators, never for text a
+     user must read. */
+  --text-hi: #f1ede6;
+  --text-med: #b3aa9e;
+  --text-lo: #948a7e;
+  --text-faint: #6b635a;
   --accent: #e8870a;
+  /* Text and icons placed on a solid accent fill. */
+  --on-accent: #17110a;
   /* Accent tint ramp — the sanctioned opacities of the accent hue. Use these
-     instead of hand-written rgba(232, 135, 10, …); if a step is missing,
-     extend the ramp here rather than inlining a literal. */
-  --accent-06: rgba(232, 135, 10, 0.06);
-  --accent-08: rgba(232, 135, 10, 0.08);
-  --accent-10: rgba(232, 135, 10, 0.1);
-  --accent-12: rgba(232, 135, 10, 0.12);
-  --accent-16: rgba(232, 135, 10, 0.16);
-  --accent-18: rgba(232, 135, 10, 0.18);
-  --accent-22: rgba(232, 135, 10, 0.22);
-  --accent-30: rgba(232, 135, 10, 0.3);
-  --accent-38: rgba(232, 135, 10, 0.38);
-  --accent-40: rgba(232, 135, 10, 0.4);
+     instead of hand-written color literals; if a step is missing, extend the
+     ramp here rather than inlining a literal. */
+  --accent-06: color-mix(in srgb, var(--accent) 6%, transparent);
+  --accent-08: color-mix(in srgb, var(--accent) 8%, transparent);
+  --accent-10: color-mix(in srgb, var(--accent) 10%, transparent);
+  --accent-12: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-16: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-18: color-mix(in srgb, var(--accent) 18%, transparent);
+  --accent-22: color-mix(in srgb, var(--accent) 22%, transparent);
+  --accent-30: color-mix(in srgb, var(--accent) 30%, transparent);
+  --accent-38: color-mix(in srgb, var(--accent) 38%, transparent);
+  --accent-40: color-mix(in srgb, var(--accent) 40%, transparent);
+  --accent-60: color-mix(in srgb, var(--accent) 60%, transparent);
   --accent-pale: var(--accent-12);
   --accent-dim: var(--accent-08);
-  /* The one focus treatment for inputs and interactive controls. */
-  --focus-ring: 0 0 0 3px var(--accent-06);
-  --floating-elevation: 0 8px 24px rgba(0, 0, 0, 0.4);
-  --green: #4ade80;
-  --green-dim: #0e2419;
-  --amber: #f59e0b;
-  --blue: #60a5fa;
-  --blue-dim: rgba(96, 165, 250, 0.16);
-  --red: #fc8181;
-  --font-ui: 'IBM Plex Sans', system-ui, sans-serif;
-  --font-mono: 'IBM Plex Mono', 'Fira Code', monospace;
-  /* Current type scale — sizes only, shared by the component styles.
-     New/touched code uses these instead of px literals. */
-  --fs-display: 22px;
+  /* The one focus treatment for inputs and interactive controls: a clearly
+     visible ring separated from the control by a background-colored gap. */
+  --focus-ring: 0 0 0 1px var(--bg), 0 0 0 3px var(--accent-60);
+  --floating-elevation:
+    0 0 0 1px rgba(0, 0, 0, 0.2), 0 12px 32px rgba(0, 0, 0, 0.45);
+  /* Status colors. Amber (running/warning) is deliberately yellower than the
+     orange accent so a warning never reads as a selection or primary action. */
+  --green: #5fcf8f;
+  --green-dim: color-mix(in srgb, var(--green) 12%, transparent);
+  --amber: #e5b53e;
+  --amber-dim: color-mix(in srgb, var(--amber) 12%, transparent);
+  --blue: #74adf2;
+  --blue-dim: color-mix(in srgb, var(--blue) 16%, transparent);
+  --red: #f28b82;
+  --red-dim: color-mix(in srgb, var(--red) 12%, transparent);
+  --font-ui: 'Geist', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'Cascadia Code', monospace;
+  /* Type scale — sizes only, shared by the component styles. Use these
+     instead of px literals. Sans carries all interface text; the mono sizes
+     are for code-like values only (ids, paths, Model ids, logs, numbers). */
+  --fs-display: 24px;
   --fs-heading-lg: 20px;
-  --fs-heading-md: 18px;
+  --fs-heading-md: 17px;
   --fs-heading-sm: 15px;
-  --fs-body-lg: 14px;
-  --fs-body-md: 13.5px;
-  --fs-body-sm: 12.5px;
-  --fs-label-md: 13px;
-  --fs-label-sm: 12px;
-  --fs-mono-body: 12px;
-  --fs-mono-sm: 11.5px;
-  --fs-mono-xs: 10.5px;
+  --fs-body-lg: 15px;
+  --fs-body-md: 14px;
+  --fs-body-sm: 13px;
+  --fs-label-md: 13.5px;
+  --fs-label-sm: 12.5px;
+  --fs-mono-body: 13px;
+  --fs-mono-sm: 12.5px;
+  --fs-mono-xs: 12px;
   --r-sm: 3px;
   --r-md: 6px;
   --r-lg: 10px;
@@ -194,7 +189,7 @@ body {
   color: var(--text-hi);
   background: var(--bg);
   font-family: var(--font-ui);
-  font-size: 13.5px;
+  font-size: var(--fs-body-md);
   line-height: 1.5;
 }
 
@@ -237,12 +232,12 @@ svg {
 
 ::selection {
   color: var(--text-hi);
-  background: rgba(232, 135, 10, 0.32);
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
 }
 
 ::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -250,8 +245,13 @@ svg {
 }
 
 ::-webkit-scrollbar-thumb {
-  border-radius: 2px;
-  background: var(--border-2);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--border-2) padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint) padding-box;
 }
 
 * {

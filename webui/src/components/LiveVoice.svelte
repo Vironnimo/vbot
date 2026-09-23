@@ -233,14 +233,18 @@
     flex: 0 0 14px;
     fill: currentColor;
   }
-  .live-voice__button:hover,
-  .live-voice__button--active {
-    color: var(--accent);
+  .live-voice__button:hover {
+    color: var(--text-hi);
+  }
+  /* A running Live session is a running state, so it takes amber. */
+  .live-voice__button--active,
+  .live-voice__button--active:hover {
+    color: var(--amber);
   }
   .live-voice__button:focus-visible {
     outline: 1px solid var(--accent);
     outline-offset: 4px;
-    border-radius: 3px;
+    border-radius: var(--r-sm);
   }
   .live-voice__button:disabled {
     cursor: default;

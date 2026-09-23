@@ -175,7 +175,7 @@
   .debug-view__probe-title {
     margin: 0;
     color: var(--text-hi);
-    font-size: 15px;
+    font-size: var(--fs-heading-sm);
     font-weight: 600;
     letter-spacing: -0.01em;
   }
@@ -196,25 +196,23 @@
 
   .debug-view__probe-label {
     color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
+    font-size: var(--fs-label-sm);
     font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
   }
 
   .debug-view__probe-select {
     width: 200px;
-    padding: 7px 28px 7px 11px;
+    min-height: 34px;
+    padding: 6px 28px 6px 11px;
     border: 1px solid var(--border-2);
     border-radius: var(--r-md);
     color: var(--text-hi);
-    background-color: var(--surface-2);
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%239a8c7e'/%3E%3C/svg%3E");
+    background-color: var(--field-surface);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23948a7e'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 10px center;
-    font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--fs-body-md);
+    line-height: 1.4;
     cursor: pointer;
     appearance: none;
   }
@@ -226,7 +224,7 @@
   }
 
   .debug-view__probe-select:disabled {
-    opacity: 0.4;
+    opacity: 0.55;
     cursor: not-allowed;
   }
 
@@ -249,11 +247,8 @@
   .debug-view__detail-heading {
     margin: 0 0 6px;
     color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    font-size: var(--fs-label-sm);
+    font-weight: 600;
   }
 
   .debug-view__code-block {
@@ -269,7 +264,7 @@
     color: var(--text-med);
     background: var(--bg);
     font-family: var(--font-mono);
-    font-size: 11.5px;
+    font-size: var(--fs-mono-xs);
     line-height: 1.55;
     user-select: text;
     -webkit-user-select: text;
@@ -290,17 +285,17 @@
   .debug-view__probe-model-chip {
     padding: 3px 8px;
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: 999px;
     color: var(--text-med);
     background: var(--surface-2);
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--fs-mono-xs);
   }
 
   .debug-view__probe-model-count {
     color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--fs-label-sm);
+    font-variant-numeric: tabular-nums;
   }
 
   @media (max-width: 860px) {

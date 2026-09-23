@@ -667,7 +667,6 @@
             </section>
           {/if}
         {:else}<section class="start">
-            <p class="eyebrow">{t('swarm.start', 'Start')}</p>
             <h2>{t('swarm.startTitle', 'Give the group a goal')}</h2>
             <p>
               {t(

@@ -34,7 +34,7 @@ body {
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .secondary-list__item.active {
-  color: var(--accent);
+  color: var(--text-hi);
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .sidebar-title {
@@ -88,10 +88,9 @@ body {
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .eyebrow {
   margin: 0;
-  color: var(--text-med);
-  font: var(--fs-mono-xs) var(--font-mono);
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-weight: 600;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .swarm-head,
@@ -110,6 +109,8 @@ body {
   .swarm-head
   h2 {
   font-size: var(--fs-display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
   margin: 0;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
@@ -141,7 +142,8 @@ body {
   align-items: center;
   gap: 6px;
   color: var(--text-med);
-  font: var(--fs-mono-xs) var(--font-mono);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
   background: transparent;
   border: 0;
 }
@@ -159,6 +161,7 @@ body {
   dd {
   margin: 6px 0 0;
   font-family: var(--font-mono);
+  font-size: var(--fs-mono-body);
   overflow-wrap: anywhere;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .muted,
@@ -186,6 +189,7 @@ body {
   h3 {
   margin: 0;
   font-size: var(--fs-heading-sm);
+  font-weight: 600;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .start {
   display: grid;
@@ -198,6 +202,8 @@ body {
   .start
   h2 {
   font-size: var(--fs-display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
   margin: 0;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
@@ -249,7 +255,8 @@ body {
   .board
   small {
   color: var(--text-med);
-  font: var(--fs-mono-xs) var(--font-mono);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .post-header {
@@ -355,7 +362,7 @@ body {
   .run-indicator {
   display: block;
   color: var(--text-med);
-  font: var(--fs-mono-xs) var(--font-mono);
+  font-size: var(--fs-label-sm);
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .run-indicator {
@@ -385,13 +392,16 @@ body {
   pre,
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .panel
-  pre {
+  pre,
+.swarm-page-modal-copy > pre {
   overflow: auto;
   max-height: 420px;
   white-space: pre-wrap;
   background: var(--bg);
   padding: 10px;
   color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
 }
 .swarm-page-modal-copy,
 .swarm-page-communication {
@@ -437,14 +447,17 @@ body {
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .usage-summary
   dt {
-  color: var(--text-med);
-  font: var(--fs-mono-xs) var(--font-mono);
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-weight: 500;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .usage-summary
   dd {
   margin: 5px 0 0;
   color: var(--text-hi);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .table-wrap {
@@ -454,7 +467,8 @@ body {
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) table {
   width: 100%;
   border-collapse: collapse;
-  font: var(--fs-mono-xs) var(--font-mono);
+  font-size: var(--fs-body-sm);
+  font-variant-numeric: tabular-nums;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) th,
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) td {
@@ -464,7 +478,9 @@ body {
   white-space: nowrap;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) th {
-  color: var(--text-med);
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-weight: 500;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) td {
   color: var(--text-hi);
@@ -610,7 +626,7 @@ body {
   min-width: 22px;
   height: 22px;
   padding-inline: 3px;
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
   border: 0;
   background: transparent;
 }
@@ -622,8 +638,8 @@ body {
   background: var(--text-med);
 }
 .swarm-page .participant-status[data-state='running'] {
-  background: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-10);
+  background: var(--amber);
+  box-shadow: 0 0 0 3px var(--amber-dim);
 }
 .swarm-page .participant-status[data-state='failed'],
 .swarm-page .participant-status[data-state='interrupted'] {

@@ -356,6 +356,7 @@
   function levelTone(level) {
     switch (level) {
       case 'error':
+      case 'critical':
         return 'logs-entry--error';
       case 'warn':
       case 'warning':
@@ -414,9 +415,6 @@
 <section class="logs-view view-frame" aria-labelledby="logs-title">
   <header class="logs-view__header view-header">
     <div class="view-header__intro">
-      <p class="logs-view__eyebrow view-header__eyebrow">
-        {t('logs.eyebrow', 'Daily log viewer')}
-      </p>
       <h2 id="logs-title" class="logs-view__title view-header__title">
         {t('logs.title', 'Logs')}
       </h2>
@@ -657,26 +655,20 @@
   }
 
   .logs-view__input {
-    padding: 7px 11px;
+    min-height: 34px;
+    padding: 6px 11px;
     border: 1px solid var(--border-2);
     border-radius: var(--r-md);
     color: var(--text-hi);
-    background: var(--surface-2);
-    font-family: var(--font-mono);
-    font-size: 12.5px;
-    line-height: 1.5;
+    background: var(--field-surface);
+    font-size: var(--fs-body-md);
+    line-height: 1.4;
   }
 
   .logs-view__input:focus-visible {
     border-color: var(--accent-40);
     box-shadow: var(--focus-ring);
     outline: none;
-  }
-
-  :global(.logs-view__dropdown .dropdown-primitive__trigger),
-  :global(.logs-view__dropdown .dropdown-primitive__option) {
-    font-family: var(--font-mono);
-    font-size: 12.5px;
   }
 
   :global(.logs-view__dropdown-list) {
@@ -705,6 +697,9 @@
     padding-right: 4px;
   }
 
+  /* Routine rows carry no marker; only warnings and errors get a thin left
+     marker in their level color, and only errors a faint row tint, so a busy
+     file does not turn the whole list amber. */
   .logs-entry {
     display: grid;
     grid-template-columns:
@@ -714,25 +709,16 @@
     gap: 4px 10px;
     min-width: 0;
     padding: 1px 10px;
-    border-left: 3px solid var(--border-2);
-  }
-
-  .logs-entry--info {
-    border-left-color: var(--accent);
+    border-left: 2px solid transparent;
   }
 
   .logs-entry--warn {
     border-left-color: var(--amber);
-    background: rgba(245, 158, 11, 0.08);
   }
 
   .logs-entry--error {
     border-left-color: var(--red);
-    background: rgba(252, 129, 129, 0.05);
-  }
-
-  .logs-entry--neutral {
-    border-left-color: var(--border-2);
+    background: var(--red-dim);
   }
 
   .logs-entry__timestamp,
@@ -748,16 +734,21 @@
   .logs-entry__logger {
     color: var(--text-lo);
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--fs-mono-xs);
   }
 
+  /* Level color: DEBUG and unknown levels stay quiet, INFO is neutral, and
+     only WARN/ERROR carry status color. */
   .logs-entry__level {
     justify-self: start;
-    color: var(--text-med);
+    color: var(--text-lo);
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: var(--fs-mono-xs);
     font-weight: 600;
-    letter-spacing: 0.06em;
+  }
+
+  .logs-entry--info .logs-entry__level {
+    color: var(--text-med);
   }
 
   .logs-entry--warn .logs-entry__level {
@@ -768,14 +759,10 @@
     color: var(--red);
   }
 
-  .logs-entry--info .logs-entry__level {
-    color: var(--accent);
-  }
-
   .logs-entry__message {
     color: var(--text-hi);
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--fs-mono-xs);
     line-height: 1.4;
   }
 

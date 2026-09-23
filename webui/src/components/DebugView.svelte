@@ -508,15 +508,17 @@
   }
   h2 {
     margin: 0;
-    font-size: var(--fs-heading-lg);
-    font-weight: 500;
+    font-size: var(--fs-display);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
     color: var(--text-hi);
   }
   .debug-header p {
     margin: 6px 0 0;
-    color: var(--text-med);
+    color: var(--text-lo);
     font-size: var(--fs-body-md);
-    line-height: 1.6;
+    line-height: 1.5;
   }
   .capture-state {
     color: var(--text-med);
@@ -573,9 +575,10 @@
     width: 88px;
     padding: 6px 10px;
     border: 1px solid var(--border-2);
-    border-radius: var(--r-sm);
-    background: var(--surface);
+    border-radius: var(--r-md);
+    background: var(--field-surface);
     color: var(--text-hi);
+    font-variant-numeric: tabular-nums;
   }
   .storage-actions {
     display: flex;

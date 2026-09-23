@@ -170,6 +170,7 @@
   .tool-size {
     color: var(--text-med);
     font-size: var(--fs-body-sm);
+    font-variant-numeric: tabular-nums;
   }
   .tool-list {
     display: flex;
@@ -189,9 +190,15 @@
     white-space: normal;
   }
   .tool-list :global(.tool-index-item[aria-current='true']) {
-    background: var(--accent-dim);
-    border-color: var(--accent-30);
+    background: var(--surface-3);
+    border-color: transparent;
+    box-shadow: inset 2px 0 0 var(--accent);
     color: var(--text-hi);
+  }
+  .tool-list :global(.tool-index-item[aria-current='true']:focus-visible) {
+    box-shadow:
+      inset 2px 0 0 var(--accent),
+      var(--focus-ring);
   }
   .tool-name {
     font-family: var(--font-mono);
@@ -217,7 +224,7 @@
   .tool-detail-header h3 {
     margin: 0 0 6px;
     color: var(--text-hi);
-    font: 500 var(--fs-body-lg)/1.5 var(--font-mono);
+    font: 600 var(--fs-mono-body)/1.5 var(--font-mono);
     overflow-wrap: anywhere;
   }
   .tool-detail-body {

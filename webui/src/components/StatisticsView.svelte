@@ -104,9 +104,6 @@
 <section class="stats-view view-frame" aria-labelledby="stats-title">
   <header class="stats-view__header view-header">
     <div class="view-header__intro">
-      <p class="stats-view__eyebrow view-header__eyebrow">
-        {t('statistics.eyebrow', 'Usage & activity')}
-      </p>
       <h2 id="stats-title" class="stats-view__title view-header__title">
         {t('statistics.title', 'Statistics')}
       </h2>

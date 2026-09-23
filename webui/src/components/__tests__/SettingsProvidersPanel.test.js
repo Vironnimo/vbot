@@ -14,6 +14,10 @@ vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
+vi.mock('svelte/reactivity', async () => {
+  return import('../../../node_modules/svelte/src/reactivity/index-client.js');
+});
+
 vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
 
 const { default: SettingsProvidersPanel } =
@@ -120,6 +124,51 @@ describe('SettingsProvidersPanel', () => {
     await waitForCondition(
       () => onRefreshProviderSettingsMock.mock.calls.length >= 1,
     );
+  });
+
+  it('toggles provider details from the whole row without double-toggling the button', () => {
+    mountedComponent = mount(SettingsProvidersPanel, {
+      target: document.body,
+      props: {
+        settings: {
+          providers: {
+            items: [
+              {
+                id: 'local-ai',
+                name: 'Local AI',
+                adapter: 'openai_compatible',
+                base_url: 'http://127.0.0.1:8080/v1',
+                auth: 'api_key',
+                custom: true,
+                editable: true,
+                credentials_configured: false,
+                usable: false,
+                model_count: 0,
+                connections: [],
+              },
+            ],
+          },
+        },
+        visible: true,
+        onRefreshProviderSettings: onRefreshProviderSettingsMock,
+      },
+    });
+    flushSync();
+
+    const details = findButton('Details for local-ai', true);
+    const sub = document.querySelector('.s-disclosure-sub');
+    expect(details.getAttribute('aria-expanded')).toBe('false');
+    expect(sub.hidden).toBe(true);
+
+    document.querySelector('.s-provider-head .s-row-label').click();
+    flushSync();
+    expect(details.getAttribute('aria-expanded')).toBe('true');
+    expect(sub.hidden).toBe(false);
+
+    details.click();
+    flushSync();
+    expect(details.getAttribute('aria-expanded')).toBe('false');
+    expect(sub.hidden).toBe(true);
   });
 
   it('keeps an unconfigured Custom Provider visible and deletes it through RPC', async () => {

@@ -60,7 +60,8 @@
 }
 .sp-view .sp-token-count {
   color: var(--text-med);
-  font: var(--fs-mono-body)/1.5 var(--font-mono);
+  font: var(--fs-body-sm)/1.5 var(--font-ui);
+  font-variant-numeric: tabular-nums;
 }
 .sp-view .sp-scope-control {
   display: flex;
@@ -358,7 +359,7 @@
   }
   .sp-view .sp-token-count {
     flex-basis: 100%;
-    font-size: var(--fs-mono-sm);
+    font-size: var(--fs-label-sm);
   }
   .sp-view .sp-refresh {
     position: absolute;

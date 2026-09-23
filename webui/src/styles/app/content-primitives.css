@@ -20,7 +20,7 @@
 .code-block__language {
   color: var(--text-lo);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-mono-xs);
   letter-spacing: 0.05em;
 }
 
@@ -41,7 +41,7 @@ kbd {
 .msg-code code,
 .code-block code {
   color: var(--text-med);
-  font-size: 12px;
+  font-size: var(--fs-mono-xs);
   line-height: 1.65;
   white-space: pre;
 }
@@ -55,7 +55,7 @@ kbd {
   border-radius: var(--r-sm);
   color: var(--text-med);
   background: var(--surface-3);
-  font-size: 10.5px;
+  font-size: var(--fs-mono-xs);
   line-height: 1.5;
 }
 
@@ -67,9 +67,8 @@ kbd {
   flex-direction: column;
   gap: 6px;
   padding: 28px;
-  border: 1px dashed var(--border);
+  border: 1px dashed var(--border-2);
   border-radius: var(--r-lg);
-  background: rgba(255, 255, 255, 0.02);
   text-align: center;
 }
 
@@ -79,16 +78,18 @@ kbd {
   border-radius: var(--r-md);
 }
 
+/* A whole work area with nothing in it needs no frame: centered copy and an
+   action read as an invitation instead of an empty box. */
 .empty-state--fill {
   min-height: 0;
   flex: 1;
+  border: 0;
 }
 
 .empty-state__icon {
   display: flex;
   margin-bottom: 4px;
-  color: var(--text-lo);
-  opacity: 0.35;
+  color: var(--text-faint);
 }
 
 .empty-state__icon svg {
@@ -99,16 +100,16 @@ kbd {
 .empty-state__title {
   margin: 0;
   color: var(--text-hi);
-  font-size: var(--fs-body-lg);
+  font-size: var(--fs-heading-sm);
   font-weight: 600;
   line-height: 1.35;
 }
 
 .empty-state__description {
-  max-width: 560px;
+  max-width: 480px;
   margin: 0;
-  color: var(--text-med);
-  font-size: var(--fs-body-sm);
+  color: var(--text-lo);
+  font-size: var(--fs-body-md);
   line-height: 1.5;
 }
 
@@ -117,7 +118,7 @@ kbd {
   flex-wrap: wrap;
   justify-content: center;
   gap: 8px;
-  margin-top: 6px;
+  margin-top: 10px;
 }
 
 /* Content tabs share one semantic and keyboard model. Underline is the broad
@@ -161,8 +162,7 @@ kbd {
 }
 
 .tab-list--compact .tab-list__tab {
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-sm);
+  font-size: var(--fs-body-sm);
 }
 
 .tab-list--underline.tab-list--compact .tab-list__tab {
@@ -175,7 +175,7 @@ kbd {
 
 .tab-list--underline .tab-list__tab--active {
   border-bottom-color: var(--accent);
-  color: var(--accent);
+  color: var(--text-hi);
 }
 
 .tab-list--segmented {
@@ -196,14 +196,12 @@ kbd {
 
 .tab-list--segmented.tab-list--compact .tab-list__tab {
   padding: 3px 8px;
-  font-size: var(--fs-mono-xs);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: var(--fs-label-sm);
 }
 
 .tab-list--segmented .tab-list__tab--active {
-  color: var(--accent);
-  background: var(--accent-12);
+  color: var(--text-hi);
+  background: var(--surface-3);
 }
 
 .tab-list__tab:focus-visible {
@@ -260,7 +258,7 @@ kbd {
 
 .placeholder-view h2 {
   color: var(--text-med);
-  font-size: 14px;
+  font-size: var(--fs-body-md);
   font-weight: 500;
   line-height: 1.3;
 }

@@ -307,6 +307,25 @@ describe('LogsView', () => {
     );
   });
 
+  it('marks critical entries with the error tone', async () => {
+    listLogsMock.mockResolvedValue({
+      files: ['2026-05-11'],
+      default_file: '2026-05-11',
+    });
+    readLogFileMock.mockResolvedValue({
+      file: '2026-05-11',
+      entries: [entry({ level: 'critical', message: 'Halted' })],
+      cursor: 'cursor-critical',
+    });
+
+    mountedComponent = mount(LogsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() => document.body.textContent.includes('Halted'));
+
+    const row = document.querySelector('.logs-entry');
+    expect(row.classList.contains('logs-entry--error')).toBe(true);
+  });
+
   it('renders dense rows and applies live append events without extra reads', async () => {
     listLogsMock.mockResolvedValue({
       files: ['2026-05-11'],

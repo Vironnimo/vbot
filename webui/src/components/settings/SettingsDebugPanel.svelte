@@ -1,7 +1,7 @@
 <script>
   import { onDestroy, untrack } from 'svelte';
 
-  import Button from '../ui/Button.svelte';
+  import SaveButton from '../ui/SaveButton.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import { updateSettings } from '$lib/api.js';
@@ -238,11 +238,10 @@
 </div>
 
 <div class="s-footer">
-  <Button
-    variant="tertiary"
+  <SaveButton
     class="s-save-button s-save-button--inline"
+    {saving}
+    pending={debugAutosave.participant.hasPending()}
     onClick={handleManualDebugSettingsSave}
-  >
-    {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
-  </Button>
+  />
 </div>

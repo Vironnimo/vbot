@@ -2,7 +2,7 @@
   import { onDestroy, onMount, untrack } from 'svelte';
 
   import SearchableDropdown from '../SearchableDropdown.svelte';
-  import Button from '../ui/Button.svelte';
+  import SaveButton from '../ui/SaveButton.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import { listConnections, listModels } from '$lib/api.js';
   import {
@@ -238,11 +238,10 @@
 </div>
 
 <div class="s-footer">
-  <Button
-    variant="tertiary"
+  <SaveButton
     class="s-save-button s-save-button--inline"
+    {saving}
+    pending={sessionTitlesAutosave.participant.hasPending()}
     onClick={saveNow}
-  >
-    {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
-  </Button>
+  />
 </div>

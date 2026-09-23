@@ -99,22 +99,19 @@
 .agents-view .agent-item-name {
   overflow: hidden;
   color: var(--text-hi);
-  font-size: 13px;
+  font-size: var(--fs-body-sm);
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.agents-view .agent-item.active .agent-item-name {
-  color: var(--accent);
-}
-
+/* The sub line shows the Model id (or the Agent id as fallback). */
 .agents-view .agent-item-sub {
   overflow: hidden;
   margin-top: 1px;
-  color: var(--text-med);
+  color: var(--text-lo);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-mono-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -170,17 +167,18 @@
 
 .agents-view .detail-heading {
   color: var(--text-hi);
-  font-size: 22px;
+  font-size: var(--fs-display);
   font-weight: 600;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.02em;
   line-height: 1.2;
 }
 
+/* "id: <agent id>" under the heading. */
 .agents-view .detail-sub {
   margin-top: 4px;
   color: var(--text-lo);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-mono-sm);
 }
 
 .agents-view .detail-btns {
@@ -252,23 +250,21 @@
 
 .agents-view .f-label {
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.05em;
-  line-height: 1;
-  text-transform: uppercase;
+  font-size: var(--fs-label-sm);
+  font-weight: 500;
+  line-height: 1.2;
 }
 
 .agents-view .f-value {
   color: var(--text-hi);
-  font-size: 13.5px;
+  font-size: var(--fs-body-md);
   font-weight: 500;
 }
 
 .agents-view .f-value.mono {
   color: var(--text-med);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-mono-xs);
 }
 
 .agents-view .tl-section {
@@ -291,16 +287,11 @@
   padding: 0 16px 16px;
 }
 
-.agents-view .btn-tertiary {
-  padding: 2px 8px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
-
+/* Skill names are identifiers. */
 .agents-view .tl-item-name {
   color: var(--text-med);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-mono-sm);
 }
 
 .agents-view .agents-view__prompt-toggle-row {
@@ -329,7 +320,7 @@
 .agents-view .agents-view__prompt-toggle-label {
   min-width: 0;
   color: var(--text-med);
-  font-size: 13px;
+  font-size: var(--fs-body-sm);
   font-weight: 500;
 }
 
@@ -367,7 +358,7 @@
   min-height: 40px;
   padding: 8px;
   color: var(--text-hi);
-  font-family: var(--font-sans);
+  font-family: var(--font-ui);
   font-size: var(--fs-label-md);
   text-align: left;
 }
@@ -381,9 +372,9 @@
 }
 
 .agents-view .agents-view__access-group-count {
-  color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-sm);
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .agents-view #agent-project-targets {
@@ -400,7 +391,7 @@
   border: 0;
   border-radius: 0 0 var(--r-lg) var(--r-lg);
   color: var(--text-med);
-  font-family: var(--font-sans);
+  font-family: var(--font-ui);
   font-size: var(--fs-label-md);
   text-align: left;
 }
@@ -408,7 +399,6 @@
 .agents-view .agents-view__memory-chevron {
   display: inline-block;
   color: var(--text-lo);
-  font-family: var(--font-mono);
   transition: transform 160ms ease;
 }
 
@@ -419,8 +409,8 @@
 .agents-view .agents-view__memory-total {
   margin-left: auto;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .agents-view .agents-view__memory-manager {
@@ -474,7 +464,7 @@
 .agents-view .agents-view__memory-scope--inactive .agents-view__memory-count,
 .agents-view .agents-view__memory-scope--inactive .agents-view__memory-list,
 .agents-view .agents-view__memory-scope--inactive .agents-view__memory-empty {
-  opacity: 0.55;
+  opacity: 0.7;
 }
 
 .agents-view .agents-view__memory-scope-title-row {
@@ -506,8 +496,8 @@
 .agents-view .agents-view__memory-count {
   flex-shrink: 0;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
   line-height: 1.4;
 }
 
@@ -600,18 +590,17 @@
   gap: 3px;
 }
 
+/* Routine warnings carry a thin amber marker and amber text, not a tinted
+   box. */
 .agents-view .agents-view__skill-warnings {
   display: flex;
   flex-direction: column;
   gap: 4px;
   margin-top: 3px;
-  padding: 7px 9px;
-  border: 1px solid rgba(245, 158, 11, 0.18);
+  padding: 2px 0 2px 9px;
   border-left: 2px solid var(--amber);
-  border-radius: var(--r-sm);
   color: var(--amber);
-  background: rgba(245, 158, 11, 0.06);
-  font-size: 11.5px;
+  font-size: var(--fs-label-sm);
   line-height: 1.35;
 }
 
@@ -622,12 +611,9 @@
 
 .agents-view .agents-view__warning-label,
 .agents-view .agents-view__invalid-skills-title {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.07em;
-  line-height: 1;
-  text-transform: uppercase;
+  font-size: var(--fs-label-sm);
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 .agents-view .agents-view__invalid-skills {
@@ -654,7 +640,7 @@
   justify-content: space-between;
   gap: 12px;
   padding: 9px 10px;
-  border: 1px solid rgba(245, 158, 11, 0.18);
+  border: 1px solid var(--border);
   border-radius: var(--r-md);
   background: var(--surface-2);
 }
@@ -663,7 +649,7 @@
   overflow-wrap: anywhere;
   color: var(--text-lo);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-mono-xs);
   line-height: 1.35;
 }
 
@@ -687,10 +673,11 @@
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text-med);
-  border-radius: 6px;
+  border-radius: var(--r-md);
   cursor: pointer;
 }
 
+/* The remove button carries only the × glyph, so its size stays literal. */
 .agents-view .agents-view__fallback-remove {
   flex: none;
   width: 28px;
@@ -700,18 +687,19 @@
 }
 
 .agents-view .agents-view__fallback-remove:hover {
-  color: var(--danger, #c0392b);
-  border-color: var(--danger, #c0392b);
+  color: var(--red);
+  border-color: var(--red);
 }
 
 .agents-view .agents-view__fallback-add {
   padding: 5px 10px;
-  font-size: 12.5px;
+  font-size: var(--fs-body-sm);
 }
 
 .agents-view .agents-view__fallback-add:hover {
   color: var(--text-hi);
-  border-color: var(--text-med);
+  border-color: var(--border-2);
+  background: var(--surface-3);
 }
 
 .agents-view .agents-view__thinking-list {
@@ -723,7 +711,7 @@
 .agents-view .agents-view__list-state {
   margin: 0;
   color: var(--text-med);
-  font-size: 12.5px;
+  font-size: var(--fs-body-sm);
   line-height: 1.4;
 }
 
@@ -756,7 +744,7 @@
 .agents-view .agents-view__inherit-link {
   align-self: flex-start;
   padding: 2px 8px;
-  font-size: 11px;
+  font-size: var(--fs-label-sm);
 }
 
 .agents-view .agents-view__inherit-hint {
@@ -778,7 +766,6 @@
 .agents-view .agents-view__reset-inherit {
   flex-shrink: 0;
   padding: 4px 10px;
-  font-family: var(--font-mono);
 }
 
 @media (max-width: 960px) {

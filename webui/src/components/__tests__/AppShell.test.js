@@ -93,7 +93,7 @@ describe('AppShell Desktop context menu', () => {
     document.body.append(ordinaryIconButton);
 
     try {
-      expect(getComputedStyle(ordinaryIconButton).minHeight).toBe('30px');
+      expect(getComputedStyle(ordinaryIconButton).minHeight).toBe('32px');
       expect(getComputedStyle(toggle).minHeight).toBe('0px');
       toggle.click();
       flushSync();

@@ -316,14 +316,16 @@
         </span>
         <div class="pane-header-actions">
           <Button
-            variant="primary"
+            variant="tertiary"
+            icon
+            ariaLabel={t('cron.detail.createTitle', 'Create Scheduled Run')}
+            tooltip={t('cron.detail.createTitle', 'Create Scheduled Run')}
             disabled={!hasAgents}
             onClick={editor.startCreate}
           >
-            <svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true">
-              <path d="M7 1v12M1 7h12" />
+            <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
+              <path d="M7 1.5v11M1.5 7h11" />
             </svg>
-            {t('common.add', 'Add')}
           </Button>
         </div>
       </div>
@@ -359,11 +361,8 @@
           </div>
         {:else if jobs.length === 0}
           <EmptyState
-            title={t('cron.emptyTitle', 'No scheduled runs yet')}
-            description={t(
-              'cron.emptyListSubtitle',
-              'Use Add to create a recurring or one-time Run.',
-            )}
+            density="compact"
+            description={t('cron.emptyTitle', 'No scheduled runs yet')}
           />
         {:else}
           <ul
@@ -406,13 +405,26 @@
         <EmptyState
           fill
           class="master-detail-empty"
-          title={!serverUnavailable && !hasAgents
+          title={jobs.length === 0
+            ? t('cron.emptyDetailTitle', 'Schedule a Run')
+            : t('cron.selectTitle', 'Select a scheduled Run')}
+          description={!serverUnavailable && !hasAgents
             ? t('cron.noAgents', 'Create an agent before adding cron jobs.')
             : t(
                 'cron.emptySubtitle',
                 'Create a recurring or one-time Run. Every fire gets a fresh Session unless you choose an existing one.',
               )}
-        />
+        >
+          {#snippet actions()}
+            <Button
+              variant={jobs.length === 0 ? 'primary' : 'secondary'}
+              disabled={!hasAgents}
+              onClick={editor.startCreate}
+            >
+              {t('cron.detail.createTitle', 'Create Scheduled Run')}
+            </Button>
+          {/snippet}
+        </EmptyState>
       </div>
     {:else}
       {#key editor.isCreating ? 'cron-create' : editor.selectedJobId}
@@ -514,7 +526,7 @@
                   <strong class="cron-summary-value">
                     {agentLabel(editor.selectedJob.agent_id)}
                   </strong>
-                  <span class="cron-summary-support cron-summary-support--mono">
+                  <span class="cron-summary-support">
                     {sessionSummary(editor.selectedJob)}
                   </span>
                 </div>
@@ -553,7 +565,9 @@
                   </div>
                   <div>
                     <dt>{t('cron.detail.lastRun', 'Last Run')}</dt>
-                    <dd>{displayValue(editor.selectedJob.last_run_id)}</dd>
+                    <dd class="cron-execution-grid__id">
+                      {displayValue(editor.selectedJob.last_run_id)}
+                    </dd>
                   </div>
                   <div>
                     <dt>{t('cron.detail.failures', 'Failures')}</dt>
@@ -565,7 +579,9 @@
                   </div>
                   <div>
                     <dt>{t('cron.detail.scheduleId', 'Schedule ID')}</dt>
-                    <dd>{editor.selectedJob.id}</dd>
+                    <dd class="cron-execution-grid__id">
+                      {editor.selectedJob.id}
+                    </dd>
                   </div>
                 </dl>
               </details>

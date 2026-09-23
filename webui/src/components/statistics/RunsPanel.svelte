@@ -188,7 +188,7 @@
           <tbody>
             {#each runs.longest_runs as run (`${run.agent_id}:${run.session_id}:${run.run_id}`)}
               <tr>
-                <td class="stats-mono">{@render agentName(run.agent_id)}</td>
+                <td>{@render agentName(run.agent_id)}</td>
                 <td>{formatDurationMs(run.duration_ms)}</td>
                 <td>{statusLabel(run.status)}</td>
                 <td class="stats-mono">{run.models.join(', ')}</td>
