@@ -1,10 +1,13 @@
 import asyncio
 import json
+import sqlite3
+from contextlib import closing
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
+from core.database import write_bootstrap_marker
 from core.model_tasks.decision_types import DecisionError
 from core.model_tasks.decisions import DecisionService
 
@@ -14,6 +17,7 @@ def service(tmp_path):
         binding_is_usable=lambda task: True,
         binding_for=lambda task: SimpleNamespace(target="openrouter/typesafe/jev-1.13::api_key"),
     )
+    write_bootstrap_marker(tmp_path)
     return DecisionService(bindings, None, tmp_path / "decisions.db")
 
 
@@ -135,4 +139,10 @@ async def test_explicit_cancel_and_shutdown_retain_distinct_outcomes(tmp_path, m
     second = await owner.start(exp["id"], 1, "second")
     await entered.wait()
     await owner.aclose()
-    assert owner._store.evaluation(second["id"])["status"] == "interrupted"
+    assert owner.database.is_closed()
+    # Read the closed file directly: reopening would run startup recovery.
+    with closing(sqlite3.connect(f"file:{tmp_path / 'decisions.db'}?mode=ro", uri=True)) as db:
+        (status,) = db.execute(
+            "SELECT status FROM evaluations WHERE id=?", (second["id"],)
+        ).fetchone()
+    assert status == "interrupted"

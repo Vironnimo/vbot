@@ -10,6 +10,7 @@ from typing import Any
 
 import httpx
 
+from core.database import Database
 from core.model_tasks.decision_actions import run_command, validate_control
 from core.model_tasks.decision_providers import ProviderDecisionClient
 from core.model_tasks.decision_store import DecisionStore
@@ -38,6 +39,11 @@ class DecisionService:
         self._starts: set[asyncio.Task[dict[str, Any]]] = set()
         self._admission = asyncio.Lock()
         self._closed = False
+
+    @property
+    def database(self) -> Database:
+        """The canonical ``decisions.db`` handle, for data snapshots and health."""
+        return self._store.database
 
     def available(self) -> bool:
         if self._closed or not self._model_tasks.binding_is_usable("decision"):
@@ -280,23 +286,30 @@ class DecisionService:
 
     def close(self) -> None:
         self._closed = True
-        for operation in tuple(self._starts):
-            operation.cancel()
-        for identifier, task in tuple(self._tasks.items()):
-            if not task.cancelling():
-                task.cancel()
-            self._store.finish(identifier, "interrupted")
-        self._workers.shutdown()
+        try:
+            for operation in tuple(self._starts):
+                operation.cancel()
+            for identifier, task in tuple(self._tasks.items()):
+                if not task.cancelling():
+                    task.cancel()
+                if not self._store.database.is_closed():
+                    self._store.finish(identifier, "interrupted")
+            self._workers.shutdown()
+        finally:
+            self._store.close()
 
     async def aclose(self) -> None:
         self._closed = True
-        await asyncio.gather(*tuple(self._starts), return_exceptions=True)
-        async with self._admission:
-            tasks = tuple(self._tasks.items())
-            for _, task in tasks:
-                if not task.cancelling():
-                    task.cancel()
-            await asyncio.gather(*(task for _, task in tasks), return_exceptions=True)
-            for identifier, _ in tasks:
-                await self._workers.run(self._store.finish, identifier, "interrupted")
-            self._workers.shutdown()
+        try:
+            await asyncio.gather(*tuple(self._starts), return_exceptions=True)
+            async with self._admission:
+                tasks = tuple(self._tasks.items())
+                for _, task in tasks:
+                    if not task.cancelling():
+                        task.cancel()
+                await asyncio.gather(*(task for _, task in tasks), return_exceptions=True)
+                for identifier, _ in tasks:
+                    await self._workers.run(self._store.finish, identifier, "interrupted")
+                self._workers.shutdown()
+        finally:
+            self._store.close()
