@@ -373,6 +373,178 @@ def test_main_rejects_direct_file_without_registered_capability(monkeypatch, cap
     assert "webui/package.json" in captured.out
 
 
+def _fake_which(available: set[str]):
+    return lambda name: name if name in available else None
+
+
+def test_main_routes_lifecycle_scripts_to_native_syntax_checks(monkeypatch, capsys):
+    module = _load_quality_module()
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        module.sys, "argv", ["quality.py", "scripts/uninstall.ps1", "scripts/uninstall.sh"]
+    )
+    monkeypatch.setattr(module.shutil, "which", _fake_which({"bash", "pwsh"}))
+
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
+        commands.append(cmd)
+        stdout = "66 passed in 0.01s\n" if cmd[2:3] == ["pytest"] else ""
+        return module.subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.main() == 0
+
+    output = capsys.readouterr().out
+    # An empty Ruff target list would lint the whole repository instead.
+    assert not any(cmd[2:3] in (["ruff"], ["mypy"]) for cmd in commands)
+    for label in ("ruff format", "ruff fix", "ruff check", "mypy"):
+        line = next(line for line in output.splitlines() if line.startswith(label))
+        assert "NO FILES" in line
+    assert ["bash", "-c", module.BASH_SYNTAX_LOOP, "bash", "scripts/uninstall.sh"] in commands
+    powershell = next(cmd for cmd in commands if cmd[0] == "pwsh")
+    assert "'scripts/uninstall.ps1'" in powershell[-1]
+    assert "scripts/uninstall.sh" not in powershell[-1]
+    pytest_command = next(cmd for cmd in commands if cmd[2:3] == ["pytest"])
+    assert pytest_command[-1] == "tests/scripts/test_install_scripts.py"
+    assert "sh syntax     .... PASS" in output
+    assert "ps1 syntax    .... PASS" in output
+
+
+def test_main_keeps_scripts_out_of_python_tools_in_mixed_scope(monkeypatch, capsys):
+    module = _load_quality_module()
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        module.sys, "argv", ["quality.py", "--check", "scripts/quality.py", "scripts/setup.sh"]
+    )
+    monkeypatch.setattr(module.shutil, "which", _fake_which({"bash"}))
+
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
+        commands.append(cmd)
+        stdout = "2 passed in 0.01s\n" if cmd[2:3] == ["pytest"] else ""
+        return module.subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.main() == 0
+
+    capsys.readouterr()
+    assert next(cmd for cmd in commands if cmd[2:4] == ["ruff", "format"])[5:] == [
+        "scripts/quality.py"
+    ]
+    assert next(cmd for cmd in commands if cmd[2:3] == ["mypy"])[4:] == ["scripts/quality.py"]
+    assert ["bash", "-c", module.BASH_SYNTAX_LOOP, "bash", "scripts/setup.sh"] in commands
+    assert next(cmd for cmd in commands if cmd[2:3] == ["pytest"])[-2:] == [
+        "tests/scripts/test_quality.py",
+        "tests/scripts/test_install_scripts.py",
+    ]
+
+
+def test_main_reports_skipped_syntax_check_without_interpreter(monkeypatch, capsys):
+    module = _load_quality_module()
+    commands: list[list[str]] = []
+    monkeypatch.setattr(module.sys, "argv", ["quality.py", "scripts/install.sh"])
+    monkeypatch.setattr(module.shutil, "which", _fake_which(set()))
+
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
+        commands.append(cmd)
+        return module.subprocess.CompletedProcess(cmd, 0, stdout="1 passed\n", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.main() == 0
+
+    output = capsys.readouterr().out
+    syntax_line = next(line for line in output.splitlines() if line.startswith("sh syntax"))
+    assert "SKIPPED" in syntax_line
+    assert "PASS" not in syntax_line
+    assert "note: scripts/install.sh" in output
+    assert [cmd[0] for cmd in commands] == [module.sys.executable]
+
+
+def test_main_fails_on_script_syntax_error(monkeypatch, capsys):
+    module = _load_quality_module()
+    monkeypatch.setattr(module.sys, "argv", ["quality.py", "--check", "scripts/setup.ps1"])
+    monkeypatch.setattr(module.shutil, "which", _fake_which({"powershell"}))
+
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
+        if cmd[0] == "powershell":
+            return module.subprocess.CompletedProcess(
+                cmd, 1, stdout="scripts/setup.ps1:3:1: Missing closing '}'\n", stderr=""
+            )
+        return module.subprocess.CompletedProcess(cmd, 0, stdout="1 passed\n", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.main() == 1
+
+    output = capsys.readouterr().out
+    assert "ps1 syntax    .... FAIL" in output
+    assert "--- ps1 syntax ---" in output
+    assert "scripts/setup.ps1:3:1: Missing closing '}'" in output
+
+
+def test_bash_syntax_loop_checks_every_script(tmp_path):
+    module = _load_quality_module()
+    bash = module.shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is unavailable")
+    (tmp_path / "good.sh").write_text("echo ok\n", encoding="utf-8")
+    (tmp_path / "bad.sh").write_text("if then fi (\n", encoding="utf-8")
+
+    # `bash -n good.sh bad.sh` would only parse good.sh; the loop must reach bad.sh.
+    result = module.subprocess.run(
+        [bash, "-c", module.BASH_SYNTAX_LOOP, "bash", "good.sh", "bad.sh"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode != 0
+    assert "bad.sh" in result.stderr
+
+
+def test_powershell_parse_command_reports_errors_per_script(tmp_path):
+    module = _load_quality_module()
+    powershell = module.shutil.which("pwsh") or module.shutil.which("powershell")
+    if powershell is None:
+        pytest.skip("PowerShell is unavailable")
+    (tmp_path / "good.ps1").write_text("Write-Output 'ok'\n", encoding="utf-8")
+    (tmp_path / "bad.ps1").write_text("function Broken {\n  if ($true) {\n", encoding="utf-8")
+
+    passing = module.subprocess.run(
+        module._powershell_parse_command(powershell, ["good.ps1"]),
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    failing = module.subprocess.run(
+        module._powershell_parse_command(powershell, ["good.ps1", "bad.ps1"]),
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert passing.returncode == 0, passing.stdout + passing.stderr
+    assert failing.returncode == 1
+    assert failing.stdout.startswith("bad.ps1:")
+    assert "good.ps1" not in failing.stdout
+
+
+def test_translate_maps_lifecycle_scripts_to_install_script_tests():
+    module = _load_quality_module()
+
+    test_paths, notes = module.translate_to_test_paths(
+        ["scripts/install.ps1", "scripts/setup.sh", "scripts/windows/smoke_installer.ps1"]
+    )
+
+    assert test_paths == ["tests/scripts/test_install_scripts.py"]
+    assert len(notes) == 1
+    assert "scripts/windows/smoke_installer.ps1" in notes[0]
+
+
 def test_main_routes_python_config_to_full_pipeline(monkeypatch, capsys):
     module = _load_quality_module()
     commands: list[list[str]] = []
