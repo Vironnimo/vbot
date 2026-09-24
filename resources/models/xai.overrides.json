@@ -130,6 +130,60 @@
       "context_window": 1000000,
       "max_output_tokens": 30000,
       "family": "grok"
+    },
+    "grok-voice-think-fast-2.0": {
+      "name": "Grok Voice Think Fast 2.0",
+      "connections": ["api-key", "subscription"],
+      "capabilities": {
+        "vision": false,
+        "tools": false,
+        "json_mode": false,
+        "reasoning": { "supported": false },
+        "input_modalities": ["audio"],
+        "output_modalities": ["audio"],
+        "task_types": ["live_voice"],
+        "task_options": {
+          "live_voice": {
+            "parameters": {
+              "voice": {
+                "type": "enum",
+                "values": [
+                  "ara",
+                  "eve",
+                  "leo",
+                  "rex",
+                  "sal",
+                  "carina",
+                  "zagan",
+                  "helix",
+                  "orion",
+                  "luna",
+                  "iris",
+                  "altair",
+                  "zenith",
+                  "perseus",
+                  "helios",
+                  "lux",
+                  "kepler",
+                  "rigel",
+                  "cosmo",
+                  "celeste",
+                  "ursa",
+                  "sirius",
+                  "lumen",
+                  "castor",
+                  "naksh",
+                  "atlas",
+                  "aurora",
+                  "liora"
+                ],
+                "default": "eve"
+              },
+              "backend_model": { "type": "model", "default": "", "allow_none": true }
+            }
+          }
+        }
+      }
     }
   }
 }
