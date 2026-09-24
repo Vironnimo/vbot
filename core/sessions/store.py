@@ -398,27 +398,6 @@ class SessionStore:
             return None
         return _store_history.message_rows_since(connection, address, since)
 
-    def start_tool(
-        self,
-        address: SessionAddress,
-        run_id: str,
-        assistant_id: str,
-        call_id: str,
-        started_at: str,
-    ) -> None:
-        from core.sessions import _store_runs
-
-        self._execute_write(
-            lambda connection: _store_runs.start_tool(
-                connection,
-                address,
-                run_id,
-                assistant_id,
-                call_id,
-                started_at,
-            )
-        )
-
     def create_bound_temporary_session(
         self,
         address: SessionAddress,

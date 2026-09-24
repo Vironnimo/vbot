@@ -57,25 +57,6 @@ def record_run_kind(connection: sqlite3.Connection, address: SessionAddress, run
     _store_mutations.mutate_metadata(connection, address, update)
 
 
-def start_tool(
-    connection: sqlite3.Connection,
-    address: SessionAddress,
-    run_id: str,
-    assistant_id: str,
-    call_id: str,
-    started_at: str,
-) -> None:
-    state = _store_values._require_live(connection, address)
-    updated = connection.execute(
-        "UPDATE tool_calls SET status='running',started_at=? WHERE tool_call_id=? "
-        "AND status='pending' AND message_key IN (SELECT message_key FROM messages "
-        "WHERE session_key=? AND run_id=? AND message_id=?)",
-        (started_at, call_id, state["session_key"], run_id, assistant_id),
-    )
-    if updated.rowcount != 1:
-        raise ChatSessionError("Tool start must identify one pending invocation")
-
-
 def finish_run(
     connection: sqlite3.Connection, address: SessionAddress, completion: SessionRunCompletion
 ) -> JsonObject:
