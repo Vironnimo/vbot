@@ -112,6 +112,7 @@ from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
+from core.utils.tls import prewarm_shared_ssl_context
 
 if TYPE_CHECKING:
     from core.runtime.runtime import Runtime
@@ -201,6 +202,8 @@ def bootstrap(runtime: Runtime) -> None:
             resources_path=resources_path,
             logger=runtime.logger,
         )
+        # Outbound HTTP clients share one TLS context; build it off the Event Loop.
+        prewarm_shared_ssl_context()
         local_speech = LocalSpeechExecutor(engines_dir=runtime._storage.layout.speech_engines)
         runtime._model_tasks = TaskModelService(
             runtime._providers,

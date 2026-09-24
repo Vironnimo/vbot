@@ -39,6 +39,7 @@ from core.providers.token_store import OAuthToken, TokenStore
 from core.utils.errors import ProviderError
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
+from core.utils.tls import shared_ssl_context
 
 _LOGGER = get_logger("providers.auth_flow")
 
@@ -216,7 +217,10 @@ class DeviceFlowEngine:
     ) -> DeviceFlowSession:
         """Request a Device Flow session from the provider."""
 
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(
+            timeout=HTTP_TIMEOUT_SECONDS,
+            verify=shared_ssl_context(),
+        ) as client:
             if self._is_minimax_flow(oauth_config):
                 code_verifier, code_challenge, state = _minimax_pkce_pair()
                 response = await retry_async(
@@ -369,7 +373,10 @@ class DeviceFlowEngine:
             )
             if not code_verifier:
                 raise DeviceFlowTerminalError("missing_pkce_verifier")
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(
+            timeout=HTTP_TIMEOUT_SECONDS,
+            verify=shared_ssl_context(),
+        ) as client:
             while True:
                 if datetime.now(UTC) >= expires_at:
                     raise DeviceFlowTerminalError(EXPIRED_TOKEN_ERROR)

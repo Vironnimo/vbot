@@ -23,6 +23,7 @@ from core.providers.task_client import (
     classify_task_response,
     merge_extra_options,
 )
+from core.utils.tls import shared_ssl_context
 
 JsonObject = dict[str, Any]
 MUSIC_ENDPOINT = "/chat/completions"
@@ -85,6 +86,7 @@ class ProviderMusicClient(ProviderTaskClient):
         async with httpx.AsyncClient(
             base_url=self._base_url,
             timeout=MUSIC_REQUEST_TIMEOUT_SECONDS,
+            verify=shared_ssl_context(),
         ) as client:
             # Music has no Chat streaming clocks; keep the task's read timeout.
             request = client.build_request(

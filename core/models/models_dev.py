@@ -53,6 +53,7 @@ from core.providers.reasoning import THINKING_EFFORT_ORDER
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
+from core.utils.tls import shared_ssl_context
 
 _LOGGER = get_logger("models.models_dev")
 
@@ -228,7 +229,10 @@ async def fetch_catalog(
 
     async def _request() -> ModelsDevCatalog:
         owns_client = client is None
-        active = client or httpx.AsyncClient(timeout=_CATALOG_HTTP_TIMEOUT_SECONDS)
+        active = client or httpx.AsyncClient(
+            timeout=_CATALOG_HTTP_TIMEOUT_SECONDS,
+            verify=shared_ssl_context(),
+        )
         try:
             try:
                 response = await active.get(url)

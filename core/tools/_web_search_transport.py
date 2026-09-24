@@ -13,6 +13,7 @@ from core.tools._web_search_common import (
 from core.utils.http_status import HttpRequestFailure, is_retryable_status, parse_retry_after
 from core.utils.logging import get_logger
 from core.utils.retry import MAX_RETRIES, sleep_for_retry
+from core.utils.tls import shared_ssl_context
 
 _LOGGER = get_logger("tools.web_search")
 
@@ -112,7 +113,11 @@ async def _request_bounded(
     GET retries include 500. Search POSTs are billed per attempt, so use the
     narrower transient set (429/502/503/504) plus explicit vendor exceptions.
     """
-    async with httpx.AsyncClient(headers=_BROWSER_HEADERS, timeout=_REQUEST_TIMEOUT) as client:
+    async with httpx.AsyncClient(
+        headers=_BROWSER_HEADERS,
+        timeout=_REQUEST_TIMEOUT,
+        verify=shared_ssl_context(),
+    ) as client:
         for attempt in range(MAX_RETRIES + 1):
             try:
                 response = await _read_bounded_response(

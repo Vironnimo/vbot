@@ -18,6 +18,7 @@ from core.model_tasks.model_tasks import TaskModelService, parse_task_model_targ
 from core.providers.errors import NetworkError, ProviderError, ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
 from core.utils.logging import get_logger
+from core.utils.tls import shared_ssl_context
 from core.utils.workers import BoundedWorkerPool
 
 _LOGGER = get_logger("decisions")
@@ -211,7 +212,7 @@ class DecisionService:
             "steps": [],
             "phase": "observing",
         }
-        async with httpx.AsyncClient() as http_client:
+        async with httpx.AsyncClient(verify=shared_ssl_context()) as http_client:
             while not setup["max_steps"] or progress["steps_completed"] < setup["max_steps"]:
                 progress["phase"] = "observing"
                 await self._workers.run(self._store.progress, record["id"], progress)

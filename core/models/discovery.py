@@ -55,6 +55,7 @@ from core.providers.xai import XAIAdapter
 from core.utils.errors import ProviderError, VBotError
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
+from core.utils.tls import shared_ssl_context
 
 _LOGGER = get_logger("models.discovery")
 _HeaderSource = dict[str, str] | Callable[[], Awaitable[dict[str, str]]]
@@ -623,7 +624,7 @@ async def _fetch_json_payload(
 
     async def _request() -> Any:
         request_headers = await headers() if callable(headers) else headers
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=60.0, verify=shared_ssl_context()) as client:
             try:
                 response = await client.get(url, headers=request_headers)
             except httpx.TransportError as exc:
@@ -671,7 +672,7 @@ async def _post_json_payload(
 
     async def _request() -> Any:
         request_headers = await headers() if callable(headers) else headers
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=60.0, verify=shared_ssl_context()) as client:
             try:
                 response = await client.post(url, headers=request_headers, json=payload)
             except httpx.TransportError as exc:
