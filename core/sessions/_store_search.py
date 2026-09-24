@@ -1,4 +1,4 @@
-"""Bounded FTS and canonical Message search within one supplied snapshot."""
+"""Exact, bounded Message search within one supplied read transaction."""
 # ruff: noqa: E501
 
 from __future__ import annotations
@@ -7,31 +7,33 @@ import builtins
 import json
 import re
 import sqlite3
-from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from contextlib import closing
+from typing import Any
 
 from core.sessions import (
-    _store_codec,
     _store_fts,
     _store_values,
 )
+from core.sessions._types import SessionSearchHit, SessionSearchOrder, SessionSearchResult
 from core.sessions.schema import (
     FTS_TABLE,
     FTS_TRIGRAM_TABLE,
 )
 
-if TYPE_CHECKING:
-    from core.chat.messages import ChatMessage
-    from core.sessions._types import SessionAddress
-
-_SearchRow = tuple["SessionAddress", str, str, str, float]
-_CANONICAL_FETCH_BATCH = 250
-_KEYED_RECORDS_SQL = (
-    f"SELECT s.project_id, s.agent_id, s.session_id, {_store_values._MESSAGE_RECORD_COLUMNS} "
-    f"FROM history_records AS m {_store_values._MESSAGE_RECORD_JOINS} "
-    "JOIN sessions AS s ON s.session_key = m.session_key "
+# Candidates are checked in batches whose text is read by key; the first batch
+# is sized to the request so a typical page reads only the rows it returns.
+_MIN_FIRST_BATCH = 16
+_CHECK_BATCH = 256
+_PROJECTION_SQL = (
+    "SELECT m.message_key, s.project_id, s.agent_id, s.session_id, m.message_id, m.role, "
+    "m.timestamp, COALESCE(m.content, m.content_search) AS text, t.name AS tool_name "
+    "FROM history_records AS m JOIN sessions AS s ON s.session_key = m.session_key "
+    "LEFT JOIN tool_calls AS t ON t.result_key = m.message_key "
     f"WHERE {_store_values._KEYED_RECORDS}"
 )
+
+_Batch = builtins.list[tuple[int, float]]
 
 
 def search(
@@ -42,6 +44,7 @@ def search(
     agent_id: str | None,
     session_id: str | None = None,
     match_mode: str = "all_terms",
+    order: SessionSearchOrder = "relevance",
     limit: int = _store_values._SEARCH_RESULT_LIMIT,
     roles: Sequence[str] | None = None,
     since: str | None = None,
@@ -49,18 +52,24 @@ def search(
     excluded_session_ids: Sequence[str] = (),
     include_subagents: bool = False,
     use_fts: bool = True,
-    fallback_reason: str = "fts_unavailable",
-) -> Callable[[], builtins.list[_SearchRow]]:
-    """Search canonical Messages through FTS or a truthful projection fallback.
+    fallback_reason: str | None = None,
+) -> SessionSearchResult:
+    """Return up to ``limit`` exactly matching active Messages in ``order``.
 
-    All SQL runs in the caller's read transaction. The returned decoder builds
-    the result rows from the selected records and runs after that transaction.
+    FTS or a scan only enumerates candidates in order; each candidate's
+    conversation text is checked against the literal query before it counts,
+    so the result is full whenever enough matches exist. At most
+    ``_SEARCH_CANDIDATE_LIMIT`` candidates are checked; a result cut short by
+    that budget is marked incomplete. Scans order by Message time, newest first
+    for relevance. ``fallback_reason`` labels a scan the caller forced with
+    ``use_fts=False``. All SQL runs in the caller's read transaction.
     """
+    empty = SessionSearchResult((), True, "fts" if use_fts else "scan", fallback_reason)
     if not query or not query.strip() or limit <= 0 or (roles is not None and not roles):
-        return list
+        return empty
     compact = re.sub(r"\s+", " ", query).strip()
     if not compact:
-        return list
+        return empty
 
     folded = compact.casefold()
     folded_terms = [term for term in folded.split(" ") if term]
@@ -84,60 +93,31 @@ def search(
         excluded_session_ids=excluded_session_ids,
         include_subagents=include_subagents,
     )
+    check = _Check(connection, matches=matches, limit=limit)
 
-    terms = [term for term in compact.split(" ") if term]
-    if match_mode == "phrase":
-        escaped = compact.replace('"', '""')
-        expression = f'"{escaped}"'
-        trigram_supported = len(compact) >= 3
-    else:
-        expression = (" OR " if match_mode == "any_term" else " AND ").join(
-            f'"{term.replace(chr(34), chr(34) * 2)}"' for term in terms
-        )
-        trigram_supported = bool(terms) and all(len(term) >= 3 for term in terms)
-
-    expression = "{content content_search} : (" + expression + ")"
-
-    if (
-        not use_fts
-        or not _store_fts._fts_health_from_connection(connection, verify_coverage=False).available
-    ):
-        return _canonical_rows(
-            connection, where, params, matches=matches, limit=limit, fallback_reason=fallback_reason
-        )
-
-    hits = _fts_hits(
-        connection,
-        FTS_TRIGRAM_TABLE
-        if trigram_supported and roles is not None and "tool" not in roles
-        else FTS_TABLE,
-        expression,
-        where,
-        params,
-        limit=limit,
-    )
-    if not hits and (roles is None or "tool" in roles):
-        return _canonical_rows(
-            connection,
-            where,
-            params,
-            matches=matches,
-            limit=limit,
-            fallback_reason="tool_inclusive",
-        )
-    return lambda: _store_values._FtsSearchRows(
-        [
-            (
-                _store_values._address(row),
-                str(row["message_id"]),
-                str(row["timestamp"]),
-                _store_codec._message_payload(row),
-                rank,
+    if use_fts:
+        if _store_fts._fts_health_from_connection(connection, verify_coverage=False).available:
+            tool_inclusive = roles is None or "tool" in roles
+            table = (
+                FTS_TABLE
+                if tool_inclusive or not _trigram_supported(compact, match_mode)
+                else FTS_TRIGRAM_TABLE
             )
-            for row, rank in hits
-        ],
-        source="fts",
-    )
+            hits, complete = check.run(
+                _fts_candidates(
+                    connection, table, _fts_expression(compact, match_mode), where, params, order
+                ),
+                ranked=order == "relevance",
+            )
+            # The trigram index omits Tool rows, so a Tool-inclusive search uses
+            # whole-token FTS; when that finds nothing, substrings are scanned.
+            if hits or not tool_inclusive:
+                return SessionSearchResult(tuple(hits), complete, "fts")
+            fallback_reason = "tool_inclusive"
+        else:
+            fallback_reason = "fts_unavailable"
+    hits, complete = check.run(_scan_candidates(connection, where, params, order), ranked=False)
+    return SessionSearchResult(tuple(hits), complete, "scan", fallback_reason)
 
 
 def _record_filter(
@@ -187,115 +167,159 @@ def _record_filter(
     return where, params
 
 
-def _fts_hits(
+def _trigram_supported(compact: str, match_mode: str) -> bool:
+    if match_mode == "phrase":
+        return len(compact) >= 3
+    terms = [term for term in compact.split(" ") if term]
+    return bool(terms) and all(len(term) >= 3 for term in terms)
+
+
+def _fts_expression(compact: str, match_mode: str) -> str:
+    """Build a ``MATCH`` expression over the conversation-text columns only."""
+    if match_mode == "phrase":
+        expression = '"' + compact.replace('"', '""') + '"'
+    else:
+        expression = (" OR " if match_mode == "any_term" else " AND ").join(
+            '"' + term.replace('"', '""') + '"' for term in compact.split(" ") if term
+        )
+    return "{content content_search} : (" + expression + ")"
+
+
+def _fts_candidates(
     connection: sqlite3.Connection,
     fts_table: str,
     expression: str,
     where: str,
     params: Sequence[Any],
-    *,
-    limit: int,
-) -> builtins.list[tuple[sqlite3.Row, float]]:
-    """Return the best-ranked eligible FTS records, ordered by rank, recency, and key.
+    order: SessionSearchOrder,
+) -> sqlite3.Cursor:
+    """Enumerate eligible FTS hits by rank, or by Message time.
 
-    One full ``MATCH`` scan ranks every hit, so bm25 statistics stay those of the
-    whole index. Only the ``limit`` best ranks and their ties leave SQLite; their
-    records are read by key.
+    One full ``MATCH`` scan ranks every hit, so bm25 statistics stay those of
+    the whole index; rank order breaks ties by key here and by recency when
+    the candidates are checked.
     """
-    ranked = connection.execute(
-        f"WITH eligible(k, rank) AS MATERIALIZED ("
-        f"SELECT rowid, bm25({fts_table}) FROM {fts_table} "
-        f"WHERE {fts_table} MATCH ? "
-        f"AND +rowid IN (SELECT m.message_key FROM history_records AS m WHERE {where})) "
-        "SELECT k, rank FROM eligible WHERE rank <= COALESCE("
-        "(SELECT rank FROM eligible ORDER BY rank LIMIT 1 OFFSET ?), rank)",
-        (expression, *params, limit - 1),
-    ).fetchall()
-    ranks: dict[int, float] = {int(key): float(rank) for key, rank in ranked}
-    if len(ranks) > limit:
-        stamps = dict(
-            connection.execute(
-                "SELECT m.message_key, m.timestamp FROM history_records AS m "
-                f"WHERE {_store_values._KEYED_RECORDS}",
-                (json.dumps(list(ranks)),),
-            ).fetchall()
+    budget = _store_values._SEARCH_CANDIDATE_LIMIT + 1
+    if order == "relevance":
+        return connection.execute(
+            f"WITH eligible(k, rank) AS MATERIALIZED ("
+            f"SELECT rowid, bm25({fts_table}) FROM {fts_table} "
+            f"WHERE {fts_table} MATCH ? "
+            f"AND +rowid IN (SELECT m.message_key FROM history_records AS m WHERE {where})) "
+            "SELECT k, rank FROM eligible ORDER BY rank, k LIMIT ?",
+            (expression, *params, budget),
         )
-        kept = _rank_order(ranks, stamps)[:limit]
-        ranks = {key: ranks[key] for key in kept}
-    rows = _addressed_records(connection, list(ranks))
-    order = _rank_order(ranks, {key: row["timestamp"] for key, row in rows.items()})
-    return [(rows[key], ranks[key]) for key in order]
+    direction = "ASC" if order == "oldest" else "DESC"
+    return connection.execute(
+        f"SELECT m.message_key, 0.0 FROM history_records AS m WHERE {where} "
+        f"AND m.message_key IN (SELECT rowid FROM {fts_table} WHERE {fts_table} MATCH ?) "
+        f"ORDER BY julianday(m.timestamp) {direction}, m.message_key {direction} LIMIT ?",
+        (*params, expression, budget),
+    )
 
 
-def _rank_order(ranks: dict[int, float], stamps: dict[int, Any]) -> builtins.list[int]:
+def _scan_candidates(
+    connection: sqlite3.Connection,
+    where: str,
+    params: Sequence[Any],
+    order: SessionSearchOrder,
+) -> sqlite3.Cursor:
+    """Enumerate eligible records by Message time; relevance scans newest first."""
+    direction = "ASC" if order == "oldest" else "DESC"
+    return connection.execute(
+        f"SELECT m.message_key, 0.0 FROM history_records AS m WHERE {where} "
+        f"ORDER BY julianday(m.timestamp) {direction}, m.message_key {direction} LIMIT ?",
+        (*params, _store_values._SEARCH_CANDIDATE_LIMIT + 1),
+    )
+
+
+class _Check:
+    """Check ordered candidates against the literal query within the budget."""
+
+    def __init__(
+        self, connection: sqlite3.Connection, *, matches: Callable[[str], bool], limit: int
+    ) -> None:
+        from core.recall.canonical import (
+            RECALL_TOOL_RESULT_NAMES,
+            SESSION_RECALL_CONVERSATION_ROLES,
+        )
+
+        self._connection = connection
+        self._matches = matches
+        self._limit = limit
+        self._roles = frozenset(SESSION_RECALL_CONVERSATION_ROLES)
+        self._artifact_tools = RECALL_TOOL_RESULT_NAMES
+
+    def run(
+        self, cursor: sqlite3.Cursor, *, ranked: bool
+    ) -> tuple[builtins.list[SessionSearchHit], bool]:
+        """Return the first ``limit`` matches and whether the budget covered them."""
+        budget = _store_values._SEARCH_CANDIDATE_LIMIT
+        hits: builtins.list[SessionSearchHit] = []
+        with closing(cursor):
+            for batch in _batches(cursor, first=self._limit, keep_ties=ranked):
+                ranks = dict(batch)
+                rows = self._rows(ranks)
+                keys = _rank_order(ranks, rows) if ranked else builtins.list(ranks)
+                for key in keys:
+                    if budget == 0:
+                        return hits, False
+                    budget -= 1
+                    row = rows.get(key)
+                    if row is None:
+                        continue
+                    text = self._text(row)
+                    if not text or not self._matches(text):
+                        continue
+                    hits.append(
+                        SessionSearchHit(
+                            address=_store_values._address(row),
+                            message_id=str(row["message_id"]),
+                            role=str(row["role"]),
+                            timestamp=str(row["timestamp"] or ""),
+                            text=text,
+                            rank=ranks[key],
+                        )
+                    )
+                    if len(hits) == self._limit:
+                        return hits, True
+        return hits, True
+
+    def _rows(self, keys: Iterable[int]) -> dict[int, sqlite3.Row]:
+        return {
+            int(row["message_key"]): row
+            for row in self._connection.execute(_PROJECTION_SQL, (json.dumps(list(keys)),))
+        }
+
+    def _text(self, row: sqlite3.Row) -> str:
+        """Return a record's conversation text, or ``""`` when search ignores it.
+
+        Search reads only conversation roles, never notes or Skill contexts,
+        and never the persisted results of earlier Recall searches.
+        """
+        role = row["role"]
+        if role not in self._roles or (role == "tool" and row["tool_name"] in self._artifact_tools):
+            return ""
+        return str(row["text"] or "")
+
+
+def _batches(rows: Iterable[Any], *, first: int, keep_ties: bool) -> Iterator[_Batch]:
+    """Group ordered ``(key, rank)`` rows; ranked batches never split a rank."""
+    size = min(max(first, _MIN_FIRST_BATCH), _CHECK_BATCH)
+    batch: _Batch = []
+    for key, rank in rows:
+        if len(batch) >= size and not (keep_ties and float(rank) == batch[-1][1]):
+            yield batch
+            batch, size = [], _CHECK_BATCH
+        batch.append((int(key), float(rank)))
+    if batch:
+        yield batch
+
+
+def _rank_order(ranks: dict[int, float], rows: dict[int, sqlite3.Row]) -> builtins.list[int]:
     """Order keys like ``ORDER BY rank, timestamp DESC, message_key``."""
+    stamps = {key: rows[key]["timestamp"] if key in rows else None for key in ranks}
     ordered = sorted(ranks)
     ordered.sort(key=lambda key: (stamps[key] is not None, stamps[key] or ""), reverse=True)
     ordered.sort(key=ranks.__getitem__)
     return ordered
-
-
-def _canonical_rows(
-    connection: sqlite3.Connection,
-    where: str,
-    params: Sequence[Any],
-    *,
-    matches: Callable[[str], bool],
-    limit: int,
-    fallback_reason: str,
-) -> Callable[[], builtins.list[_SearchRow]]:
-    """Match the newest eligible records in Python, bounded by the scan limit.
-
-    Only keys are ordered in SQLite; full records are read in newest-first
-    batches and decoding stops once ``limit`` records match.
-    """
-    scan_limit = _store_values._CANONICAL_SEARCH_SCAN_LIMIT
-    keys = [
-        int(row[0])
-        for row in connection.execute(
-            f"SELECT m.message_key FROM history_records AS m WHERE {where} "
-            "ORDER BY julianday(m.timestamp) DESC, m.message_key DESC LIMIT ?",
-            (*params, scan_limit + 1),
-        )
-    ]
-    complete = len(keys) <= scan_limit
-    del keys[scan_limit:]
-    matched: builtins.list[tuple[sqlite3.Row, ChatMessage]] = []
-    for start in range(0, len(keys), _CANONICAL_FETCH_BATCH):
-        batch = keys[start : start + _CANONICAL_FETCH_BATCH]
-        rows = _addressed_records(connection, batch)
-        for key in batch:
-            message = _store_codec.message_from_row(rows[key])
-            if matches(_store_fts._search_projection(message)):
-                matched.append((rows[key], message))
-            if len(matched) >= limit:
-                break
-        if len(matched) >= limit:
-            complete = True
-            break
-    return lambda: _store_values._FtsSearchRows(
-        [
-            (
-                _store_values._address(row),
-                str(row["message_id"]),
-                str(row["timestamp"]),
-                _store_codec._message_json(message),
-                0.0,
-            )
-            for row, message in matched
-        ],
-        source="canonical",
-        complete=complete,
-        fallback_reason=fallback_reason,
-    )
-
-
-def _addressed_records(
-    connection: sqlite3.Connection, keys: Sequence[int]
-) -> dict[int, sqlite3.Row]:
-    if not keys:
-        return {}
-    return {
-        int(row["message_key"]): row
-        for row in connection.execute(_KEYED_RECORDS_SQL, (json.dumps(list(keys)),))
-    }

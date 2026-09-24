@@ -6,30 +6,25 @@ import asyncio
 import json
 import sqlite3
 from contextlib import closing
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-from core.chat.messages import ChatMessage
 from core.recall.canonical import (
     CANONICAL_FALLBACK_PARTIAL_REASON,
-    CANONICAL_FALLBACK_SCAN_LIMIT,
     CanonicalSessionRecallBackend,
     RecallScope,
     _check_snapshot,
     _session_address,
     compact_text,
     first_match_span,
-    message_matches_search_request,
-    message_search_text,
+    message_hit,
     parse_persisted_timestamp,
     query_terms,
     text_matches_search_request,
 )
 from core.recall.passages import build_session_passages
 from core.recall.recall import (
-    JsonObject,
     RecallBackendContext,
     RecallSearchCapabilities,
     RecallSearchHit,
@@ -89,21 +84,18 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
         self.data_dir = context.data_dir
         self.index_path = self.data_dir / _INDEX_DIR_NAME / _INDEX_FILE_NAME
         self.logger = context.logger
-        self._fallback = CanonicalSessionRecallBackend(
-            context.sessions,
-            search_scan_limit=CANONICAL_FALLBACK_SCAN_LIMIT,
-        )
         self._index_lock = asyncio.Lock()
 
     def _search_page_with_canonical_fts(
         self, request: RecallSearchRequest, scope: RecallScope
     ) -> RecallSearchPage:
-        rows = self.sessions.fts_search(
+        result = self.sessions.search_messages(
             request.query,
             project_id=request.project_id,
             agent_id=request.agent_id,
             session_id=request.session_id,
             match_mode=request.match_mode,
+            order=request.order,
             limit=request.offset + request.limit + 1,
             roles=request.roles,
             since=None if request.since is None else request.since.isoformat(),
@@ -111,75 +103,31 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             excluded_session_ids=request.excluded_session_ids,
             include_subagents=request.include_subagents,
         )
-        fallback_reason = str(getattr(rows, "fallback_reason", "") or "")
-        complete = bool(getattr(rows, "complete", True))
-        used_canonical_fallback = bool(fallback_reason)
-        used_fts_fallback = fallback_reason in {"fts_unavailable", "fts_error"}
-        hits: list[tuple[float, str, str, RecallSearchHit]] = []
-        for address, message_id, timestamp, message_payload, rank in rows:
-            session_id = address.session_id
-            message = _message_from_fts_payload(message_payload)
-            if str(message.id) != message_id:
-                continue
-            if not message_matches_search_request(message, request):
-                continue
-            text = message_search_text(message)
-            if not text_matches_search_request(text, request):
-                continue
-            sort_rank = float(rank) if request.order == "relevance" else 0.0
-            hits.append(
-                (
-                    sort_rank,
-                    timestamp,
-                    session_id,
-                    RecallSearchHit(
-                        result_type="message",
-                        session_id=session_id,
-                        message_id=str(message.id),
-                        role=str(message.role),
-                        timestamp=str(message.timestamp),
-                        text=text,
-                        score=float(rank),
-                        match_start=first_match_span(text, request.query, request.match_mode)[0],
-                        match_end=first_match_span(text, request.query, request.match_mode)[1],
-                    ),
-                )
-            )
-
-        def _ts(value: str) -> float:
-            parsed_ts = parse_persisted_timestamp(value)
-            return parsed_ts.timestamp() if parsed_ts is not None else 0.0
-
-        if request.order == "relevance":
-            hits.sort(key=lambda x: (x[0], -_ts(x[1])))
-        elif request.order == "newest":
-            hits.sort(key=lambda x: _ts(x[1]), reverse=True)
-        else:
-            hits.sort(key=lambda x: _ts(x[1]))
-        page_hits = hits[request.offset : request.offset + request.limit + 1]
-        has_more = len(page_hits) > request.limit
-        page_hits = page_hits[: request.limit]
+        # Every returned hit already matched literally, so one extra hit proves more.
+        selected = result.hits[request.offset : request.offset + request.limit]
+        fts_failed = result.fallback_reason in {"fts_unavailable", "fts_error"}
+        scan_order = "newest" if request.order == "relevance" else request.order
         return RecallSearchPage(
-            hits=tuple(h[3] for h in page_hits),
+            hits=tuple(message_hit(hit, request) for hit in selected),
             result_type="message",
             ranking=(
-                f"substring_scan_{'newest' if request.order == 'relevance' else request.order}"
-                if used_canonical_fallback
+                f"substring_scan_{scan_order}"
+                if result.method == "scan"
                 else "bm25"
                 if request.order == "relevance"
                 else f"message_time_{request.order}"
             ),
             snapshot_id=scope.snapshot_id,
-            has_more=has_more,
+            has_more=len(result.hits) > request.offset + request.limit,
             total_candidate_sessions=len(scope.candidates),
-            degraded=used_fts_fallback or not complete,
+            degraded=fts_failed or not result.complete,
             degradation_reason=(
                 _FTS_PARTIAL_FALLBACK_REASON
-                if used_fts_fallback and not complete
+                if fts_failed and not result.complete
                 else _FTS_FALLBACK_REASON
-                if used_fts_fallback
+                if fts_failed
                 else CANONICAL_FALLBACK_PARTIAL_REASON
-                if not complete
+                if not result.complete
                 else None
             ),
         )
@@ -207,26 +155,7 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
     async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
         scope = await asyncio.to_thread(self._read_scope, request)
         _check_snapshot(request, scope.snapshot_id)
-        snapshot_id = scope.snapshot_id
-        try:
-            return await asyncio.to_thread(self._search_page_with_canonical_fts, request, scope)
-        except Exception as error:  # pragma: no cover
-            self._warning("Canonical FTS page failed; falling back: %s", error)
-        fallback_request = replace(
-            request,
-            order="newest" if request.order == "relevance" else request.order,
-            snapshot_id=None,
-        )
-        page = await self._fallback.search_page(fallback_request)
-        return replace(
-            page,
-            snapshot_id=snapshot_id,
-            ranking=f"substring_scan_{fallback_request.order}",
-            degraded=True,
-            degradation_reason=(
-                _FTS_PARTIAL_FALLBACK_REASON if page.degraded else _FTS_FALLBACK_REASON
-            ),
-        )
+        return await asyncio.to_thread(self._search_page_with_canonical_fts, request, scope)
 
     async def search_passages(self, request: RecallSearchRequest) -> RecallSearchPage:
         """Return Passage-level literal ranking for Hybrid fusion."""
@@ -755,10 +684,3 @@ def _fts_expression_search(request: RecallSearchRequest) -> str | None:
 
 def _quote_fts_value(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
-
-
-def _message_from_fts_payload(payload: str) -> ChatMessage:
-    data = json.loads(payload)
-    if not isinstance(data, dict):
-        raise ValueError("canonical FTS payload must be a Message object")
-    return ChatMessage.from_dict(cast(JsonObject, data))

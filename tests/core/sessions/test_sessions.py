@@ -358,13 +358,13 @@ def test_role_specific_relational_message_storage_round_trips(
     monkeypatch.setattr(session_store_module, "message_from_row", original_message_from_row)
 
     assert forked.load() == session.load()
-    fork_hits = manager.fts_search(
+    fork_hits = manager.search_messages(
         "normalized",
         project_id=forked.address.project_id,
         agent_id=forked.address.agent_id,
         session_id=forked.address.session_id,
-    )
-    assert [hit[1] for hit in fork_hits] == [user.id]
+    ).hits
+    assert [hit.message_id for hit in fork_hits] == [user.id]
 
 
 def test_session_list_order_queries_use_declared_indexes(manager, tmp_path) -> None:

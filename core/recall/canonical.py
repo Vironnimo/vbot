@@ -26,6 +26,7 @@ from core.recall.recall import (
 from core.sessions import (
     ChatSessionManager,
     SessionAddress,
+    SessionSearchHit,
     is_skill_context_note,
     recall_visibilities,
 )
@@ -51,7 +52,6 @@ SESSION_RECALL_MATCH_MODES: tuple[RecallMatchMode, ...] = (
     "phrase",
 )
 SESSION_RECALL_SORT_MODES: tuple[RecallOrder, ...] = ("newest", "oldest")
-CANONICAL_FALLBACK_SCAN_LIMIT = 10_000
 CANONICAL_FALLBACK_PARTIAL_REASON = (
     "Search could not check all eligible Messages. Results are incomplete. Narrow period or "
     "session_id; an empty result does not establish that no matching text exists."
@@ -265,6 +265,23 @@ def _check_snapshot(request: RecallSearchRequest, snapshot_id: str) -> None:
 
     if request.snapshot_id is not None and request.snapshot_id != snapshot_id:
         raise RecallSearchError("stale_cursor", "Session search source changed; repeat the search.")
+
+
+def message_hit(hit: SessionSearchHit, request: RecallSearchRequest) -> RecallSearchHit:
+    """Present one exact Session search hit as a Recall Message hit."""
+
+    match_start, match_end = first_match_span(hit.text, request.query, request.match_mode)
+    return RecallSearchHit(
+        result_type="message",
+        session_id=hit.address.session_id,
+        message_id=hit.message_id,
+        role=hit.role,
+        timestamp=hit.timestamp,
+        text=hit.text,
+        score=hit.rank,
+        match_start=match_start,
+        match_end=match_end,
+    )
 
 
 def is_recall_artifact_message(message: Any) -> bool:

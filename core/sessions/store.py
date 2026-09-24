@@ -30,6 +30,8 @@ from core.sessions._types import (
     SessionChatHistorySnapshot,
     SessionHistoryRevision,
     SessionRecallVisibility,
+    SessionSearchOrder,
+    SessionSearchResult,
 )
 from core.sessions.errors import (
     FtsHealth,
@@ -938,7 +940,7 @@ class SessionStore:
         with self._runtime.read_ctx() as connection:
             return _store_history.recall_context(connection, address, message_id)
 
-    def fts_search(
+    def search_messages(
         self,
         query: str,
         *,
@@ -946,16 +948,16 @@ class SessionStore:
         agent_id: str | None,
         session_id: str | None = None,
         match_mode: str = "all_terms",
+        order: SessionSearchOrder = "relevance",
         limit: int = _store_values._SEARCH_RESULT_LIMIT,
         roles: Sequence[str] | None = None,
         since: str | None = None,
         until: str | None = None,
         excluded_session_ids: Sequence[str] = (),
         include_subagents: bool = False,
-    ) -> builtins.list[tuple[SessionAddress, str, str, str, float]]:
-        def select(
-            **fallback: Any,
-        ) -> Callable[[], builtins.list[tuple[SessionAddress, str, str, str, float]]]:
+        use_fts: bool = True,
+    ) -> SessionSearchResult:
+        def select(*, use_fts: bool, fallback_reason: str | None = None) -> SessionSearchResult:
             with self._runtime.read_ctx() as connection:
                 return _store_search.search(
                     connection,
@@ -964,17 +966,21 @@ class SessionStore:
                     agent_id=agent_id,
                     session_id=session_id,
                     match_mode=match_mode,
+                    order=order,
                     limit=limit,
                     roles=roles,
                     since=since,
                     until=until,
                     excluded_session_ids=excluded_session_ids,
                     include_subagents=include_subagents,
-                    **fallback,
+                    use_fts=use_fts,
+                    fallback_reason=fallback_reason,
                 )
 
+        if not use_fts:
+            return select(use_fts=False)
         try:
-            decode = select()
+            return select(use_fts=True)
         except sqlite3.Error as exc:
             if "fts" in str(exc).lower() or "messages_fts" in str(exc).lower():
                 error_message = str(exc)
@@ -982,8 +988,7 @@ class SessionStore:
                     self._execute_write(
                         lambda connection: _store_fts._detach_fts(connection, error_message)
                     )
-            decode = select(use_fts=False, fallback_reason="fts_error")
-        return decode()
+            return select(use_fts=False, fallback_reason="fts_error")
 
     def archive(self, address: SessionAddress) -> None:
         return self._execute_write(lambda connection: _store_mutations.archive(connection, address))
