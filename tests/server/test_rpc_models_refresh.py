@@ -9,13 +9,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.database import write_bootstrap_marker
 from core.models.database import (
     MODEL_DATABASE_SOURCE_RUNTIME,
     MODEL_DATABASE_SOURCE_SYSTEM,
     read_model_database_manifest,
 )
 from core.runtime import Runtime
-from core.sessions.format import write_bootstrap_marker
 from core.utils.config import Config
 from server.events import ServerEventBus
 from server.rpc import (

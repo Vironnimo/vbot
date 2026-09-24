@@ -7,15 +7,31 @@
 const POLL_INTERVAL_MS = 500;
 const BRIDGE_READY_EVENT = 'pywebviewready';
 const BRIDGE_READY_TIMEOUT_MS = 5000;
+const LIVE_REQUEST_EVENT = 'vbot-desktop-live';
+const LIVE_REQUEST_ACTIONS = new Set(['start', 'toggle']);
+const LIVE_REQUEST_SOURCES = new Set(['wakeword', 'hotkey']);
+// A Live voice start never waits longer than this for the Desktop to pause
+// wakeword listening; the microphone is shared, so a slow bridge only delays.
+const LIVE_VOICE_LEASE_TIMEOUT_MS = 3000;
+// A bridge call that never answers must not stall later state changes.
+const LIVE_VOICE_SYNC_CALL_TIMEOUT_MS = 10000;
 const DISABLED_DESKTOP_CAPABILITIES = Object.freeze({
   wakeword: false,
   serverSelection: false,
   contextMenu: false,
+  liveWakeword: false,
+  liveHotkey: false,
+  secureOrigins: Object.freeze([]),
 });
 
 let cachedCapabilities = null;
 let cachedBridgeApi = null;
 let voiceAudioContext = null;
+// Whether this page holds the microphone for Live voice, and the value the
+// Desktop last confirmed (null: unknown, so the next sync sends it).
+let desiredLiveVoiceActive = false;
+let confirmedLiveVoiceActive = null;
+let liveVoiceActiveSync = null;
 
 /** True when the WebUI was loaded through the Desktop accessor URL. */
 export function isDesktopAccessor() {
@@ -98,6 +114,11 @@ export async function getDesktopCapabilities() {
     wakeword: Boolean(caps?.wakeword),
     serverSelection: Boolean(caps?.serverSelection),
     contextMenu: Boolean(caps?.contextMenu),
+    liveWakeword: Boolean(caps?.liveWakeword),
+    liveHotkey: Boolean(caps?.liveHotkey),
+    secureOrigins: Array.isArray(caps?.secureOrigins)
+      ? caps.secureOrigins.filter((origin) => typeof origin === 'string')
+      : [],
   };
   cachedBridgeApi = window.pywebview.api;
   return cachedCapabilities;
@@ -213,6 +234,161 @@ export async function restartWakewordCalibration() {
 /** Retry calibration for one specific model, discarding only its samples. */
 export async function retryWakewordModelCalibration(modelId) {
   return callBridge('retryWakewordModelCalibration', modelId);
+}
+
+/**
+ * Tell the Desktop whether a Live voice call holds the microphone, so it
+ * pauses wakeword listening meanwhile.
+ *
+ * Calls are serialized and only the latest value is sent, so a quick
+ * start/stop can never leave the Desktop with a stale state. Rejects with the
+ * bridge failure when the latest value could not be delivered.
+ */
+export function setDesktopLiveVoiceActive(active) {
+  desiredLiveVoiceActive = active === true;
+  return syncDesktopLiveVoiceActive();
+}
+
+/**
+ * Send this page's Live voice state to the Desktop unless it already has it.
+ * A new page calls this once the bridge is discovered, which also ends a pause
+ * left behind by a previous page.
+ */
+export function syncDesktopLiveVoiceActive() {
+  liveVoiceActiveSync ??= (async () => {
+    // Yield first: the promise must be stored before this body can finish.
+    await null;
+    let failure = null;
+    try {
+      while (confirmedLiveVoiceActive !== desiredLiveVoiceActive) {
+        const active = desiredLiveVoiceActive;
+        try {
+          await withTimeout(
+            callBridge('setLiveVoiceActive', active),
+            LIVE_VOICE_SYNC_CALL_TIMEOUT_MS,
+          );
+          confirmedLiveVoiceActive = active;
+          failure = null;
+        } catch (error) {
+          confirmedLiveVoiceActive = null;
+          failure = error;
+          if (active === desiredLiveVoiceActive) break;
+        }
+      }
+    } finally {
+      liveVoiceActiveSync = null;
+    }
+    if (failure) throw failure;
+  })();
+  return liveVoiceActiveSync;
+}
+
+function withTimeout(promise, timeoutMs) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error('Desktop bridge timed out')),
+      timeoutMs,
+    );
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Create the Desktop microphone lease for Live voice.
+ *
+ * `acquire()` resolves `null` when the call may open the microphone, after
+ * asking the Desktop to pause wakeword listening, or a Live voice notice code
+ * when it cannot: `desktop_restart_required` when this server is not a secure
+ * context because it was added after the Desktop app started. Bridge failures
+ * are logged and never block Live voice. `release()` resumes wakeword
+ * listening.
+ */
+export function createDesktopLiveVoiceLease({
+  timeoutMs = LIVE_VOICE_LEASE_TIMEOUT_MS,
+} = {}) {
+  async function capabilities() {
+    try {
+      if (!(await waitForDesktopBridge(timeoutMs))) return null;
+      return await withTimeout(getDesktopCapabilities(), timeoutMs);
+    } catch (error) {
+      console.warn('Desktop capabilities unavailable for Live voice', error);
+      return null;
+    }
+  }
+
+  // Whether this lease asked the Desktop to pause, so release resumes it.
+  let paused = false;
+
+  return {
+    async acquire() {
+      const caps = await capabilities();
+      if (window.isSecureContext === false) {
+        // Desktop makes every server it knows at startup a secure context.
+        if (!caps?.secureOrigins.includes(window.location.origin))
+          return 'desktop_restart_required';
+        console.warn(
+          'Desktop marked this server secure, but the page is not a secure context',
+        );
+      }
+      if (!caps?.liveWakeword) return null;
+      paused = true;
+      try {
+        await withTimeout(setDesktopLiveVoiceActive(true), timeoutMs);
+      } catch (error) {
+        console.warn('Desktop could not pause wakeword for Live voice', error);
+      }
+      return null;
+    },
+    release() {
+      if (!paused) return;
+      paused = false;
+      setDesktopLiveVoiceActive(false).catch((error) => {
+        console.warn(
+          'Desktop could not resume wakeword after Live voice',
+          error,
+        );
+      });
+    },
+  };
+}
+
+/**
+ * Handle Live voice requests the Desktop pushes to this page (a wakeword
+ * model with the Live voice action or the global hotkey).
+ *
+ * `handler({action, source})` receives `start` or `toggle` from `wakeword` or
+ * `hotkey`; returning `false` reports the request as not handled. Returns a
+ * cleanup function.
+ */
+export function onDesktopLiveRequest(handler) {
+  if (typeof window === 'undefined') return () => {};
+  const listener = (event) => {
+    const action = event?.detail?.action;
+    const source = event?.detail?.source;
+    if (!LIVE_REQUEST_ACTIONS.has(action) || !LIVE_REQUEST_SOURCES.has(source))
+      return;
+    // The Desktop reads a cancelled event as "handled".
+    if (handler({ action, source }) !== false) event.preventDefault();
+  };
+  window.addEventListener(LIVE_REQUEST_EVENT, listener);
+  return () => window.removeEventListener(LIVE_REQUEST_EVENT, listener);
+}
+
+/**
+ * Read the Desktop's global Live voice shortcut:
+ * `{supported, enabled, hotkey: {ctrl, alt, shift, win, key}, error_code}`.
+ */
+export async function getDesktopLiveHotkey() {
+  return callBridge('getLiveHotkey');
+}
+
+/**
+ * Change the Live voice shortcut (`enabled` and/or the key combination); the
+ * Desktop saves and registers it and answers with the resulting state.
+ */
+export async function setDesktopLiveHotkey(changes) {
+  return callBridge('setLiveHotkey', changes);
 }
 
 /**

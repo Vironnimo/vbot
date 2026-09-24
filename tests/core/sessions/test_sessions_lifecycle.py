@@ -163,13 +163,13 @@ def test_fork_titles_and_classifies_the_copy_in_its_one_write(manager, monkeypat
     notified: list[object] = []
     manager.add_title_changed_callback(notified.append)
     writes: list[object] = []
-    original = manager._store._runtime.execute_write
+    original = manager._store.database.write
 
     def counted(fn, **kwargs):
         writes.append(fn)
         return original(fn, **kwargs)
 
-    monkeypatch.setattr(manager._store._runtime, "execute_write", counted)
+    monkeypatch.setattr(manager._store.database, "write", counted)
 
     forked = asyncio.run(
         manager.fork(

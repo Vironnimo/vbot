@@ -4,6 +4,7 @@ from __future__ import annotations
 
 # mypy: disable-error-code=arg-type
 import asyncio
+import sqlite3
 
 import pytest
 
@@ -237,6 +238,26 @@ async def test_swarm_snapshots_profile_and_has_stable_roster(store: SwarmStore) 
     profile["name"] = "Later"
     await store.save_profile(profile, expected_revision=1)
     assert (await store.get_swarm(started["swarm_id"]))["profile_snapshot"]["name"] == "Research"
+
+
+def test_named_read_columns_match_the_schema():
+    from resources.extensions.swarm import _store_database as database
+
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.executescript(database._SCHEMA)
+        for table, columns in {
+            "swarms": database.SWARM_COLUMNS,
+            "participants": database.PARTICIPANT_COLUMNS,
+            "discussions": database.DISCUSSION_COLUMNS,
+            "posts": database.POST_COLUMNS,
+            "wiki_pages": database.WIKI_PAGE_COLUMNS,
+            "wiki_revisions": database.WIKI_REVISION_COLUMNS,
+        }.items():
+            declared = [row[1] for row in connection.execute(f"PRAGMA table_info({table})")]
+            assert columns.split(",") == declared, table
+    finally:
+        connection.close()
 
 
 def test_participant_name_pool_is_short_and_unique():

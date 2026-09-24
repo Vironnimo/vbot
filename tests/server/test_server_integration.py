@@ -9,11 +9,11 @@ from typing import Any, cast
 
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
+from core.database import write_bootstrap_marker
 from core.providers.accounts import ConnectionRef
 from core.providers.adapter import ProviderAdapter
 from core.runtime import Runtime
 from core.sessions._metadata import _decode_chat_history_cursor
-from core.sessions.format import write_bootstrap_marker
 from core.settings.normalizers import normalize_compaction_settings
 from core.utils.config import Config
 from server.app import create_app
@@ -128,7 +128,7 @@ def test_invalid_settings_do_not_block_application_startup(tmp_path: Path) -> No
     data_dir.mkdir(parents=True)
     write_bootstrap_marker(data_dir)
     (data_dir / "settings.json").write_text(
-        json.dumps({"server_port": 8500, "compaction": {"enabled": "yes"}}),
+        json.dumps({"format_version": 1, "server_port": 8500, "compaction": {"enabled": "yes"}}),
         encoding="utf-8",
     )
     app = create_app(runtime=StubRuntime(Config(data_dir=data_dir)))

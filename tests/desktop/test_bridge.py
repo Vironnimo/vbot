@@ -29,6 +29,9 @@ def test_get_desktop_capabilities(tmp_path: Path) -> None:
         "wakeword": True,
         "serverSelection": True,
         "contextMenu": True,
+        "liveWakeword": True,
+        "liveHotkey": False,
+        "secureOrigins": [],
     }
 
 
@@ -74,7 +77,12 @@ def test_get_wakeword_status_shape(tmp_path: Path) -> None:
         DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.7,
         DEFAULT_WAKEWORD_MODEL_IDS[1]: 0.5,
     }
+    assert status["model_actions"] == {
+        DEFAULT_WAKEWORD_MODEL_IDS[0]: "command",
+        DEFAULT_WAKEWORD_MODEL_IDS[1]: "command",
+    }
     assert status["state"] == "off"
+    assert status["pause_reason"] is None
     assert "engine" in status
     assert "microphone" in status
     assert "target_agent_id" in status

@@ -1,8 +1,8 @@
 """Pinned SQLite library for private Windows CPython runtimes.
 
 CPython's Windows builds ship an SQLite that still carries the WAL-reset
-corruption bug (3.7.0 through 3.51.2), which confines the Session store to
-the slower rollback journal (``core.sessions.schema.required_journal_mode``).
+corruption bug (3.7.0 through 3.51.2), which confines vBot's SQLite databases to
+the slower rollback journal (``core.database.required_journal_mode``).
 Every prepared runtime therefore replaces ``DLLs/sqlite3.dll`` with the
 official sqlite.org build pinned in ``scripts/windows/sqlite.lock.json``.
 SQLite keeps its C ABI stable, so CPython's ``_sqlite3`` extension loads the

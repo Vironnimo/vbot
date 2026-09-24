@@ -461,7 +461,8 @@ def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:
         connection = _oauth_connection(state.runtime, provider_id, connection_id)
         account_id = _effective_account_id(provider_id, connection_id, account)
         token_store = _runtime_token_store(state.runtime)
-        had_token = token_store.load(provider_id, connection.id, account_id=account_id) is not None
+        # Existence, not a load: disconnect must also remove a token file that fails to load.
+        had_token = token_store.exists(provider_id, connection.id, account_id=account_id)
         engine = getattr(state, "device_flow_engine", None)
         flow_active = _device_flow_active(engine, provider_id, connection.id, account_id)
         token_store.delete(provider_id, connection.id, account_id=account_id)

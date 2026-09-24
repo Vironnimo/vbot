@@ -5,8 +5,8 @@ document that disables Skills by name across every origin and marks an Identity
 Agent's private Skills as shared with specific other Identity Agents. A missing
 file means an empty policy. A malformed file yields diagnostics plus an empty
 effective policy instead of breaking startup; the manager surfaces the
-diagnostics. There is deliberately no legacy compatibility or auto-migration —
-an unsupported schema version is simply invalid.
+diagnostics, and mutations refuse to overwrite it. Another ``format_version`` is
+invalid; data from before persistence Generation 1 is converted, not migrated.
 """
 
 from __future__ import annotations
@@ -20,21 +20,29 @@ from typing import Any, Protocol
 
 from core.config_validation import (
     JsonDiagnostic,
+    JsonValidationReport,
     add_error,
     child_path,
-    validate_required_fields,
+    validate_json_file,
     validate_string_list,
     warn_unknown_keys,
 )
+from core.json_documents import (
+    JsonDocumentFormat,
+    JsonDocumentWriteError,
+    json_document,
+    validate_format_version,
+    write_json_document,
+)
 from core.skills.skill_validator import SKILL_NAME_TRIGGER_PATTERN
-from core.utils.atomic import atomic_write_text
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
-POLICY_SCHEMA_VERSION = 2
+POLICY_FORMAT_VERSION = 1
 _SKILLS_DIRNAME = "skills"
 _POLICY_FILENAME = "policy.json"
-_POLICY_KEYS = frozenset({"version", "disabled", "shared"})
+# ``shared`` is keyed by data (owner ids, Skill names), so only the root has fields.
+POLICY_SHAPE = json_document({"disabled", "shared"})
 
 _LOGGER = get_logger("skills")
 
@@ -62,16 +70,19 @@ class SkillPolicy:
     shared: Mapping[str, Mapping[str, frozenset[str]]] = field(default_factory=dict)
 
 
+def validate_skill_policy_file(policy_path: str | Path) -> JsonValidationReport:
+    """Validate the optional persisted ``skills/policy.json`` without consuming it."""
+    return validate_json_file(policy_path, _validate_policy_document, missing_ok=True)
+
+
 def _validate_policy_document(data: Any) -> list[JsonDiagnostic]:
     """Validate one decoded policy document, transport-neutral."""
     diagnostics: list[JsonDiagnostic] = []
     if not isinstance(data, dict):
         add_error(diagnostics, "$", "must be a JSON object")
         return diagnostics
-    validate_required_fields(diagnostics, "$", data, frozenset({"version"}))
-    version = data.get("version")
-    if version != POLICY_SCHEMA_VERSION or isinstance(version, bool):
-        add_error(diagnostics, "$.version", f"must be {POLICY_SCHEMA_VERSION}")
+    if not validate_format_version(diagnostics, data, POLICY_FORMAT_VERSION):
+        return diagnostics
     disabled = data.get("disabled", [])
     if disabled is not None:
         validate_string_list(diagnostics, "$.disabled", disabled)
@@ -90,8 +101,17 @@ def _validate_policy_document(data: Any) -> list[JsonDiagnostic]:
                     child_path(owner_path, str(skill_name)),
                     receivers,
                 )
-    warn_unknown_keys(diagnostics, "$", data, _POLICY_KEYS, "key")
+    warn_unknown_keys(diagnostics, "$", data, POLICY_SHAPE.fields, "key")
     return diagnostics
+
+
+POLICY_FORMAT = JsonDocumentFormat(
+    name="Skill policy",
+    version=POLICY_FORMAT_VERSION,
+    shape=POLICY_SHAPE,
+    validate=_validate_policy_document,
+    sort_keys=True,
+)
 
 
 class SkillPolicyService:
@@ -266,7 +286,6 @@ class SkillPolicyService:
 
     def _write_policy(self, policy: SkillPolicy, *, operation: str, target: str) -> SkillPolicy:
         document = {
-            "version": POLICY_SCHEMA_VERSION,
             "disabled": sorted(policy.disabled),
             "shared": {
                 owner_id: {
@@ -277,11 +296,11 @@ class SkillPolicyService:
             },
         }
         try:
-            atomic_write_text(
-                self.policy_path,
-                json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-                data_dir=self._storage.data_dir,
+            write_json_document(
+                self.policy_path, document, POLICY_FORMAT, data_dir=self._storage.data_dir
             )
+        except JsonDocumentWriteError as error:
+            raise SkillPolicyError(str(error)) from error
         except OSError as error:
             raise SkillPolicyError(f"Cannot write skill policy: {error}") from error
         _LOGGER.info(

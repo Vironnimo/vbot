@@ -1,6 +1,6 @@
 # Server, Paths, Update, Uninstall, Autostart, Desktop, Doctor
 
-These commands run locally. Management commands in other areas normally contact the server; Session-store maintenance also has local operations described in `session-store.md`.
+These commands run locally. Management commands in other areas normally contact the server; data-store maintenance also has local operations described in `data-store.md`.
 
 ## Select the instance
 
@@ -65,7 +65,7 @@ The updater reports phases and elapsed time while running. Its final status dist
 
 The update invocation itself stays `vbot update`. In vBot Run context the CLI internally hands the restart to a short-lived detached helper, allowing the update command and its Bash launcher to finish before the old server enters normal Runtime shutdown. Do not find PIDs, stop the server first, or invoke an internal helper manually. The Bootstrap remains required because it resumes verification after the intentional process restart; it is not process-cleanup machinery.
 
-Updates the installation from its git checkout and requests a server restart unless suppressed. In the current Run, restart is scheduled; the command’s success does not establish post-restart health. Let the saved Bootstrap verify startup. Preserves runtime data and creates a verified Session snapshot before changing code when a current Session database exists. A snapshot failure stops the update.
+Updates the installation from its git checkout and requests a server restart unless suppressed. In the current Run, restart is scheduled; the command’s success does not establish post-restart health. Let the saved Bootstrap verify startup. Preserves runtime data and creates a verified data snapshot of every registered database before changing code. A snapshot failure stops the update.
 
 - The track is auto-detected: a branch checkout pulls and rebuilds the WebUI locally (needs Node); a release-tag checkout fetches the latest release with its prebuilt WebUI (no Node, re-downloaded only when the tag changed).
 - On Windows, close every vBot Desktop window first. The updater refuses before changing the checkout when this installation's exact Desktop launcher is running and checks again before pip; follow the printed source-based `resume update` command if an earlier pip failure damaged the normal `vbot` launcher.

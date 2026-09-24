@@ -1,0 +1,240 @@
+"""Generation 1 conversion of the durable JSON documents in a data directory.
+
+Every document gets a top-level ``format_version`` 1. Documents that were JSON
+arrays become objects with a named array (Cron and Bootstrap ``jobs``, Calendar
+``events``, prompt layout ``entries``, MCP ``connections``), the Skill policy and
+Terminal documents move from ``version`` to ``format_version``, and the legacy
+data Generation 1 no longer tolerates is normalized:
+
+- Cron jobs lose the ignored per-job ``timezone`` and get the name vBot derived
+  from their prompt at load time.
+- A Project without ``allowed_tools`` gets the default Tool whitelist it used.
+- An Identity Agent's retired ``allowed_tools`` becomes ``tool_access``, or is
+  dropped when ``tool_access`` already exists.
+- A Channel's retired ``owner_user_ids`` is dropped.
+
+Unknown fields and invalid collection entries are carried over unchanged; the
+application reports them. A document that already has ``format_version`` 1 is
+not rewritten. A document that cannot be converted without guessing is left
+unconverted and reported, so the application refuses it until it is repaired.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from core.json_documents import FORMAT_VERSION_FIELD, render_json_document
+from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
+from scripts.converters.agent_tool_access import (
+    AgentToolAccessConversionError,
+    convert_legacy_allowed_tools,
+)
+from scripts.converters.persistence_generation_1._context import ConversionContext
+
+AREA = "json_documents"
+FORMAT_VERSION = 1
+
+# The pre-Generation-1 name derivation for a Cron job saved without a name,
+# frozen here so the converted names match what vBot showed for those jobs.
+_CRON_JOB_NAME_MAX_LENGTH = 80
+_MARKDOWN_PREFIX_PATTERN = re.compile(r"^(?:(?:#{1,6}|>|[-*+])\s+|\d+[.)]\s+|\[[ xX]\]\s*)+")
+_POLICY_LEGACY_VERSION = 2
+_TERMINAL_LEGACY_VERSION = 1
+
+
+class _UnconvertibleError(Exception):
+    """Raised when a document cannot be converted without guessing."""
+
+
+@dataclass(frozen=True, slots=True)
+class _Document:
+    kind: str
+    convert: Callable[[Any, _Notes], dict[str, Any]]
+
+
+@dataclass(frozen=True, slots=True)
+class _Notes:
+    """Report sink for one document."""
+
+    context: ConversionContext
+    relative: str
+
+    def count(self, key: str) -> None:
+        self.context.report.count(AREA, key)
+
+    def approximate(self, reason: str) -> None:
+        self.context.report.skip(AREA, self.relative, reason)
+
+
+def convert(context: ConversionContext) -> None:
+    """Stage the Generation 1 form of every JSON document in the source data directory."""
+    for pattern, document in _DOCUMENTS:
+        for path in sorted(context.source.glob(pattern)):
+            if path.is_file():
+                _convert_file(context, document, path)
+
+
+def _convert_file(context: ConversionContext, document: _Document, path: Path) -> None:
+    relative = path.relative_to(context.source).as_posix()
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as error:
+        context.report.skip(AREA, relative, f"left unconverted: unreadable JSON ({error})")
+        return
+    if isinstance(value, dict) and FORMAT_VERSION_FIELD in value:
+        if value[FORMAT_VERSION_FIELD] == FORMAT_VERSION:
+            context.report.count(AREA, "already_current")
+        else:
+            context.report.skip(
+                AREA,
+                relative,
+                f"left unconverted: unexpected format_version {value[FORMAT_VERSION_FIELD]!r}",
+            )
+        return
+    try:
+        body = document.convert(value, _Notes(context, relative))
+    except _UnconvertibleError as error:
+        context.report.skip(AREA, relative, f"left unconverted: {error}")
+        return
+    context.staged(relative).write_text(
+        render_json_document(body, version=FORMAT_VERSION), encoding="utf-8"
+    )
+    context.report.count(AREA, document.kind)
+
+
+def _object(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise _UnconvertibleError(f"expected a JSON object, got {type(value).__name__}")
+    return dict(value)
+
+
+def _array(value: Any) -> list[Any]:
+    if not isinstance(value, list):
+        raise _UnconvertibleError(f"expected a JSON array, got {type(value).__name__}")
+    return list(value)
+
+
+def _versioned(value: Any, legacy_version: int) -> dict[str, Any]:
+    document = _object(value)
+    version = document.pop("version", None)
+    if version != legacy_version or isinstance(version, bool):
+        raise _UnconvertibleError(f"expected version {legacy_version}, got {version!r}")
+    return document
+
+
+def _plain(value: Any, notes: _Notes) -> dict[str, Any]:
+    return _object(value)
+
+
+def _named_array(collection: str) -> Callable[[Any, _Notes], dict[str, Any]]:
+    def convert(value: Any, notes: _Notes) -> dict[str, Any]:
+        return {collection: _array(value)}
+
+    return convert
+
+
+def _agent(value: Any, notes: _Notes) -> dict[str, Any]:
+    agent = _object(value)
+    if "allowed_tools" not in agent:
+        return agent
+    legacy = agent.pop("allowed_tools")
+    if "tool_access" in agent:
+        notes.count("agent_allowed_tools_dropped")
+        notes.approximate("retired allowed_tools dropped; the existing tool_access applies")
+        return agent
+    try:
+        policy = convert_legacy_allowed_tools(legacy, Path(notes.relative))
+    except AgentToolAccessConversionError as error:
+        raise _UnconvertibleError(str(error)) from error
+    agent["tool_access"] = policy.to_dict()
+    notes.count("agent_allowed_tools_converted")
+    return agent
+
+
+def _project(value: Any, notes: _Notes) -> dict[str, Any]:
+    project = _object(value)
+    if project.get("allowed_tools") is None:
+        project["allowed_tools"] = list(PROJECT_DEFAULT_ALLOWED_TOOLS)
+        notes.count("project_allowed_tools_filled")
+    return project
+
+
+def _channel(value: Any, notes: _Notes) -> dict[str, Any]:
+    channel = _object(value)
+    if "owner_user_ids" in channel:
+        del channel["owner_user_ids"]
+        notes.count("channel_owner_user_ids_dropped")
+        notes.approximate(
+            "retired owner_user_ids dropped; configure group admins in the Channel access settings"
+        )
+    return channel
+
+
+def _cron_jobs(value: Any, notes: _Notes) -> dict[str, Any]:
+    jobs: list[Any] = []
+    for job in _array(value):
+        if isinstance(job, dict):
+            job = dict(job)
+            if "timezone" in job:
+                del job["timezone"]
+                notes.count("cron_timezones_dropped")
+            if not job.get("name") and "prompt" in job:
+                job["name"] = _derive_cron_job_name(job["prompt"])
+                notes.count("cron_names_derived")
+        jobs.append(job)
+    return {"jobs": jobs}
+
+
+def _derive_cron_job_name(prompt: object) -> str:
+    for line in str(prompt).splitlines():
+        collapsed_line = " ".join(line.split())
+        if not collapsed_line:
+            continue
+        without_markdown = _MARKDOWN_PREFIX_PATTERN.sub("", collapsed_line).strip()
+        if without_markdown:
+            return without_markdown[:_CRON_JOB_NAME_MAX_LENGTH]
+    return "Scheduled Run"
+
+
+def _skill_policy(value: Any, notes: _Notes) -> dict[str, Any]:
+    return _versioned(value, _POLICY_LEGACY_VERSION)
+
+
+def _terminal_document(value: Any, notes: _Notes) -> dict[str, Any]:
+    return _versioned(value, _TERMINAL_LEGACY_VERSION)
+
+
+def _mcp_connections(value: Any, notes: _Notes) -> dict[str, Any]:
+    connections = _array(value)
+    for connection in connections:
+        if isinstance(connection, dict) and "agents" in connection:
+            notes.approximate(
+                f"MCP connection {connection.get('id')!r} keeps its retired agents field as "
+                "an ignored unknown field; grant access through each Agent's tool_access"
+            )
+    return {"connections": connections}
+
+
+_DOCUMENTS: tuple[tuple[str, _Document], ...] = (
+    ("settings.json", _Document("settings", _plain)),
+    ("agents/*/agent.json", _Document("agents", _agent)),
+    ("agents/order.json", _Document("agent_order", _plain)),
+    ("agents/*/prompts/layout.json", _Document("prompt_layouts", _named_array("entries"))),
+    ("prompts/layout.json", _Document("prompt_layouts", _named_array("entries"))),
+    ("projects/*/project.json", _Document("projects", _project)),
+    ("channels/*/channel.json", _Document("channels", _channel)),
+    ("cron/jobs.json", _Document("cron_jobs", _cron_jobs)),
+    ("bootstrap/jobs.json", _Document("bootstrap_jobs", _named_array("jobs"))),
+    ("calendar/events.json", _Document("calendar_events", _named_array("events"))),
+    ("calendar/actions.json", _Document("calendar_actions", _plain)),
+    ("skills/policy.json", _Document("skill_policy", _skill_policy)),
+    ("terminals/launch-history.json", _Document("terminal_documents", _terminal_document)),
+    ("terminals/groups.json", _Document("terminal_documents", _terminal_document)),
+    ("oauth/*.json", _Document("oauth_tokens", _plain)),
+    ("mcp/connections.json", _Document("mcp_connections", _mcp_connections)),
+)

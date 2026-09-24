@@ -80,7 +80,7 @@ def test_client_only_execution_never_targets_snapshots_or_starts_servers(
         worker.processes, "stop", lambda *_args, **_kwargs: pytest.fail("must not stop")
     )
     monkeypatch.setattr(
-        worker, "_ensure_update_session_snapshot", lambda _target: calls.append("snapshot")
+        worker, "_ensure_update_data_snapshot", lambda _target: calls.append("snapshot")
     )
     monkeypatch.setattr(
         worker, "validate_release", lambda *_args, **_kwargs: calls.append("validate")
@@ -213,7 +213,7 @@ def test_busy_server_quiesces_before_stopping_after_waiting_for_idle(
     monkeypatch.setattr(worker, "control", control)
     monkeypatch.setattr(worker, "wait_for_handoff", lambda *_args: "ticket-one")
     monkeypatch.setattr(worker.time, "sleep", lambda _seconds: sequence.append("wait"))
-    monkeypatch.setattr(worker, "_ensure_update_session_snapshot", lambda _target: _ok())
+    monkeypatch.setattr(worker, "_ensure_update_data_snapshot", lambda _target: _ok())
 
     def stop(_install):
         sequence.append("stop")
@@ -258,7 +258,7 @@ def test_candidate_failure_rolls_back_only_after_previous_version_verifies(
         lambda _target: SimpleNamespace(is_vbot=True, reachable=True),
     )
     monkeypatch.setattr(worker, "quiesce", lambda *_args: None)
-    monkeypatch.setattr(worker, "_ensure_update_session_snapshot", lambda _target: _ok())
+    monkeypatch.setattr(worker, "_ensure_update_data_snapshot", lambda _target: _ok())
     monkeypatch.setattr(worker.processes, "stop", lambda _install: _ok())
 
     def start(_install, *, version_id=None, verification=False, breakaway=True):
@@ -296,7 +296,7 @@ def test_post_pointer_normal_start_failure_needs_attention_without_data_restore(
         lambda _target: SimpleNamespace(is_vbot=True, reachable=True),
     )
     monkeypatch.setattr(worker, "quiesce", lambda *_args: None)
-    monkeypatch.setattr(worker, "_ensure_update_session_snapshot", lambda _target: _ok())
+    monkeypatch.setattr(worker, "_ensure_update_data_snapshot", lambda _target: _ok())
     monkeypatch.setattr(worker.processes, "stop", lambda _install: _ok())
 
     def start(_install, *, version_id=None, verification=False, breakaway=True):

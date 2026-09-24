@@ -1,0 +1,83 @@
+# Database
+
+The shared SQLite kernel (`core/database/`): how every vBot database opens, evolves, stays consistent under concurrency, and is snapshotted and recovered.
+
+## Overview
+
+`core/database/` owns connection policy, schema evolution, the canonical and disposable profiles, the data-store marker and maintenance guard, data snapshots, quarantine, recovery incidents, automatic restore, and operator-safe status. An owner declares a `DatabaseSpec` and calls `open_database`; it keeps its own DDL, queries, domain errors and domain semantics. The kernel knows no Session, Channel or Provider concept.
+
+Owners today: the Session store (`sessions.md`, `core/sessions/_store_schema.session_database_spec`). Decisions, swarm, Statistics and the Recall indexes still open SQLite on their own and are expected to move onto the kernel in later phases; `APPLICATION_IDS` already reserves their ids.
+
+Not owned here: data-directory placement and creation (`storage.md`; `layout.initialize_data_directory` only writes the bootstrap marker through `write_bootstrap_marker`), the CLI/RPC/WebUI operator surfaces (`cli.md`, `server.md`, `webui.md`), and the offline Generation 1 converter (`scripts/converters/persistence_generation_1/`); converters build their outputs with `open_offline_database`.
+
+## Terms
+
+Core terms (Session, Run, Runtime) live in `.vorch/GLOSSARY.md`.
+
+### Format generation
+The incompatible-format counter of one database, stored in `PRAGMA user_version`, `kernel_meta.format_generation` and the marker entry. Generation 1 is current. Within a generation only additive changes happen; a new generation needs an explicit offline converter.
+
+### Migration ledger
+The `kernel_migrations` table: one row per applied named data migration with `applied_at`, `applied_by_version` and `breaks_older`. It replaces ad-hoc version keys in owner tables.
+
+### Retired index
+An index a spec no longer declares and lists in `retired_indexes`; the kernel drops it on open. The only object the kernel ever drops, because an index is derived data.
+
+### Canonical / disposable profile
+Canonical: authoritative data, registered in `data-store.json`, `synchronous=FULL`, included in data snapshots, quarantined and auto-restored on corruption. Disposable: a rebuildable projection with `kernel_meta.projection_version`, `synchronous=NORMAL`; a version mismatch, foreign/newer file or corruption discards the file with its sidecars and rebuilds it empty. Busy or locked is unavailable in both profiles and never grounds to discard or quarantine.
+
+### Data snapshot
+A verified copy of every canonical database registered in the marker: `<data-dir>/snapshots/<YYYYmmddTHHMMSSZ-uuid8>/` with one `<name>.db` member per database plus a strict `manifest.json`. Not a Session-only backup; JSON documents are not members yet.
+
+## Evolution contract (Generation 1)
+
+This is the engineering contract behind the PROJECT.md "Persisted formats are stable" convention.
+
+1. Additive schema changes apply automatically on open: new tables, views, indexes, triggers, and new columns that are nullable or have a default (not generated, not part of the primary key). The reconciler diffs the declared DDL against the live database and applies the missing objects plus pending migrations in one `BEGIN IMMEDIATE` transaction; an up-to-date database needs no write transaction.
+2. Forbidden within a generation: renaming, retyping or dropping columns or tables; changing or adding constraints on an existing table; a NOT NULL column without default; changing an existing index, view or trigger definition. A changed object gets a new name. The reconciler never drops or rewrites objects and fails closed (`DatabaseCorruptError`) when a live object with the same name differs. Extra live columns, tables and objects are tolerated: a newer vBot may have added them.
+3. Data migrations are `Migration(name, breaks_older=False, apply=None)` steps with stable append-only names (`[a-z0-9][a-z0-9_.-]*`, e.g. `sessions.0003_backfill_x`). `apply` must be idempotent and may only fill new structures or NULLs; it runs after the reconcile inside the same transaction. A freshly created database records every declared migration as applied without running it.
+4. `breaks_older=True` is required when older code would misread the data (a new role or enum value, a changed meaning); a marker migration without `apply` is enough. An older vBot that finds an unknown ledger row with `breaks_older=1` refuses to open with `DatabaseFormatError` and never quarantines; recovery is the pre-update data snapshot.
+5. Runtime reads name their columns: no `SELECT *` and no `alias.*` in runtime SQL under `core/`, `server/` or `resources/extensions/`. `tests/core/database/test_named_columns.py` enforces this; its allowlist holds only the Session store modules the Generation 1 Session rewrite replaces, and a count may only shrink (a stale entry fails the test).
+6. A generation change is a destructive offline conversion run by the updater or CLI under a data snapshot and the maintenance guard. Normal startup never converts; a database with an older or newer generation raises `DatabaseFormatError` naming the converter. App code knows only the current generation.
+
+Schema design rules for every Generation 1 table and later addition: no enum CHECK constraints on extensible vocabularies (roles, kinds, statuses, causes; CHECK stays for permanent invariants such as `>= 0`, `json_valid`, paired nullability); hot tables stay narrow with large payloads in 1:1 side tables; integer surrogate keys for internal relations; JSON only for genuinely open payloads; content-addressed storage for large repeated values; timestamps as fixed-width UTC text `YYYY-MM-DDTHH:MM:SS.ffffffZ` (`marker.utc_now()`); `AUTOINCREMENT` where a key feeds a derived index or projection; every index has a named reader; growing values are appended as chunk rows, never rewritten.
+
+## Data Model
+
+- Kernel tables in every database: `kernel_meta(key, value)` (`database_id`, `database_name`, `format_generation`, `created_at`, `created_by_version`, and `projection_version` for disposable databases) and `kernel_migrations(name, applied_at, applied_by_version, breaks_older)`, both STRICT. `PRAGMA application_id` comes from `APPLICATION_IDS` (one id per owner; Extensions share one).
+- Names: `lower_snake` for core owners, `ext.<owner>.<name>` for Extensions. Canonical paths are fixed by name (`canonical_database_path`): `sessions` -> `sessions.db`, `provider_usage` -> `provider-usage.db`, `ext.<owner>.<name>` -> `extension-data/<owner>/<name>.db`.
+- `<data-dir>/data-store.json`: closed schema `{"format_version": 1, "databases": {"<name>": {"database_id": "<32 hex>", "format_generation": N}}}`, written atomically. `data-maintenance.json` (`operation_id`, `operation`, `started_at`, `pid`) exists while an offline operation is incomplete. `data-store.lock` is the OS-owned operation lock (msvcrt/flock on an open descriptor; crash-released, never broken by age).
+- Snapshot manifest members record identity, generation, applied migrations, size, SHA-256, `quick_check`/`foreign_key_check` results and owner facts. Attempt health: `snapshots/health.json`. Incidents: `<data-dir>/incidents/<name>.json`, `pending` before anything is replaced, `ok` once the restored file verified. Quarantine: `<data-dir>/quarantine/<name>/<YYYYmmddTHHMMSS>-<uuid8>/` holding the database file plus sidecars, never deleted automatically.
+
+## Interfaces
+
+- Declarations (`spec.py`): `DatabaseSpec(name, path, profile, application_id, format_generation, schema_sql, migrations=(), retired_indexes=(), after_open=None, snapshot_facts=None, health=None, projection_version=None)`; `Migration`; `SnapshotFacts(queries)` (fact name -> SQL returning one integer, recorded per member and recomputed on verification); `DatabaseHealth(state, reason=None, details={})` returned by `health(connection)` for status.
+- Opening: `open_database(spec) -> Database` applies the profile rules; `open_offline_database(spec)` creates or opens a canonical file anywhere without marker, guard, registration or restore (converters, staging, tests).
+- `Database`: `read()` (context manager, one read transaction), `write(op, *, patience_s=20.0)` (one `BEGIN IMMEDIATE` transaction with jittered busy retry), `read_async`/`write_async`/`run_async` on the database's own `BoundedWorkerPool` (8 workers), `backup(dest, *, cancelled) -> bool`, `checkpoint()`, `verify_read_write()`, `health()`, `close()`, plus `name`, `path`, `database_id`, `data_dir`, `spec`, `writer` (diagnostics/tests only).
+- Snapshots and recovery: `create_data_snapshot(data_dir, *, reason, databases=(), specs=(), cancelled=None) -> Path | None`; `restore_data_snapshot(data_dir, snapshot_dir, *, specs=(), names=None, cause=..., check_only=False) -> list[str]`; `acknowledge_incident(data_dir, incident_id) -> bool` (raises `IncidentConflictError` when a newer incident replaced the observed one); `list_data_snapshots`, `snapshot_summaries`, `read_verified_manifest`, `read_snapshot_health`, `active_incidents`.
+- Status: `data_store_status(data_dir, *, databases=(), specs=())` -> one overall state (`maintenance` > `unavailable` > `recovered_with_incident` > `degraded` > `snapshot_degraded` > `healthy`), per-database entries with owner health, verified snapshots and unacknowledged incidents. It never mutates the data directory.
+- Errors (`errors.py`): `DatabaseError` base; `DatabaseUnavailableError` (busy, locked, permission, disk full, transient I/O), `DatabaseCorruptError` (classified corruption, schema mismatch, untrusted snapshot/incident evidence), `DatabaseFormatError` (missing marker, maintenance guard, newer/older generation, unknown `breaks_older` migration), `IncidentConflictError`. None inherits a domain error; owners may subclass (`SessionStoreCorruptError`). RPC maps every `DatabaseError` to `domain_error` with the message naming the database and failure kind, and `IncidentConflictError` to `invalid_request` (`server/rpc/error_mapping.py`).
+- Runtime composition: `Runtime.canonical_databases()` returns the open handles; `core/runtime/databases.canonical_database_specs(data_dir)` declares them for offline tools (CLI status/restore, updater). A new canonical owner is added in both places.
+- Metrics: `sqlite.<name>.write`, `sqlite.<name>.write_wait` and `sqlite.<name>.read` on the `sqlite` performance Track (`performance.md`).
+
+## Conventions
+
+- Canonical open: the maintenance guard refuses first; no marker is `DatabaseFormatError`; a listed database that is missing, corrupt, or has another identity is auto-restored from the newest verified snapshot member with the same `database_id`, else the error surfaces; an unlisted database is created (or an existing unlisted file adopted after full open checks) and registered under the operation lock, so new owners stay additive.
+- Every open checks application id, generation, `kernel_meta` and the ledger read-only before the journal policy may touch the file, then reconciles, runs `after_open`, and probes every declared table and view.
+- Recovery stages the verified member bytes before it publishes a `pending` incident or quarantines anything; quarantine moves the bundle all-or-rollback, and a failed rollback keeps the moved members and reports their path. An operational verification, copy, quarantine or publication failure stops candidate fallback instead of trying an older snapshot. A retry keeps the original quarantine reference and failure time, and a pending incident finalizes only when the canonical file matches the intended snapshot member. Malformed incident evidence is corruption, unreadable evidence is unavailability, and the possible-loss interval stays visible until the exact incident is acknowledged.
+- Automatic restore uses pending incidents, not the maintenance guard: a crash mid-restore resumes on the next open. It never replaces a database a newer vBot changed and never picks an older snapshot after a newer candidate failed operationally. An operator restore (`restore_data_snapshot`) also holds the maintenance guard; a failed one leaves the guard so Runtime refuses the half-restored directory until a restore completes.
+- Snapshot creation copies open databases online through their handle and unopened registered ones from their files, verifies every member before atomic publication, and prunes by `SNAPSHOT_KEEP_COUNT` (5) / `SNAPSHOT_KEEP_BYTES` (512 MiB) always keeping the newly published snapshot and never rehashing retained ones. Owner facts are verified only when a matching spec is supplied; kernel identity checks always apply.
+- Journal policy is per SQLite build (`required_journal_mode()`): WAL unless the build carries the WAL-reset bug, in which case rollback-journal (DELETE) mode is used and an existing WAL file is never live-downgraded. Packaged Windows runtimes pin a fixed WAL-safe SQLite (`cli/windows-application.md`); source checkouts use the SQLite bundled with their Python.
+- Connections: busy timeout 1s at the SQLite level, then the kernel's jittered retry up to the caller's patience. Readers are query-only, open only after the writer has checked identity and reconciled, and form a LIFO pool of 8 permits (60s open retry); page caches are 64 MiB for the writer and 16 MiB per reader. `close()` drains the pool; in-flight worker-pool work fails as unavailable.
+- Owners never open their own connections to a kernel database, never commit inside a helper that receives the kernel's connection, and keep domain decisions (e.g. FTS repair) in their `after_open`/`health` hooks.
+
+## Constraints & Gotchas
+
+- Rollback-journal mode serves reads on the serialized writer, and `backup()` holds the connection lock for the copy's duration; decode large results after the read transaction ends.
+- `backup()` uses one `VACUUM INTO` read transaction (cancellable via a progress handler), never a stepped `Connection.backup`, which restarts on every concurrent commit.
+- Quarantine, discard and restore refuse while this process still has a tracked connection to the file (`has_live_connection`); every connection goes through `connect_tracked`.
+- The operation lock is per open file description, so it is exclusive across threads of one process as well as across processes.
+- `open_offline_database` skips all marker safety; never use it for Runtime paths.
+- Data snapshots do not yet contain the JSON documents of the persistence plan, and the updater does not yet restore the pre-update snapshot automatically after a failed candidate verification.
+
+Tests: `tests/core/database/` (`test_connections`, `test_schema`, `test_ledger` incl. the older-binary simulation, `test_profiles`, `test_marker`, `test_snapshots`, `test_recovery`, `test_status`, `test_errors`, `test_named_columns`); Session integration in `tests/core/sessions/test_store_database.py`.

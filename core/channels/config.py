@@ -20,6 +20,13 @@ from core.config_validation import (
     validate_non_empty_string,
     warn_unknown_keys,
 )
+from core.json_documents import (
+    FORMAT_VERSION_FIELD,
+    JsonDocumentFormat,
+    json_document,
+    strip_unknown_fields,
+    validate_format_version,
+)
 from core.settings import is_valid_agent_id
 from core.utils.errors import VBotError
 
@@ -66,7 +73,13 @@ _MUTABLE_FIELDS = frozenset(
 )
 
 
-_CHANNEL_CONFIG_FIELDS = _MUTABLE_FIELDS | {"id", "owner_user_ids"}
+_CHANNEL_CONFIG_FIELDS = _MUTABLE_FIELDS | {"id"}
+
+
+CHANNEL_FORMAT_VERSION = 1
+
+
+CHANNEL_SHAPE = json_document(_CHANNEL_CONFIG_FIELDS)
 
 
 class ChannelError(VBotError):
@@ -100,22 +113,48 @@ class ChannelConfigError(ChannelError):
 
 def validate_channel_file(config_path: str | Path) -> JsonValidationReport:
     """Validate one persisted ``channel.json`` without consuming it."""
-    return validate_json_file(config_path, validate_channel_data, missing_ok=False)
+    return validate_json_file(config_path, validate_channel_document, missing_ok=False)
 
 
 def load_validated_channel_json(config_path: str | Path) -> JsonObject:
-    """Load one schema-valid ``channel.json`` mapping."""
+    """Load the Channel config fields of one schema-valid ``channel.json``.
+
+    Unknown fields are left out; the Channel writer merges them back from disk.
+    """
     try:
-        return cast(
-            "JsonObject",
-            load_validated_json_file(config_path, validate_channel_data, missing_ok=False),
-        )
+        data = load_validated_json_file(config_path, validate_channel_document, missing_ok=False)
     except JsonConfigValidationError as error:
         raise ChannelConfigError(str(error)) from error
+    fields = cast("JsonObject", strip_unknown_fields(data, CHANNEL_SHAPE))
+    fields.pop(FORMAT_VERSION_FIELD, None)
+    return fields
+
+
+def validate_channel_document(data: Any) -> list[JsonDiagnostic]:
+    """Validate a decoded raw ``channel.json`` document, including its version."""
+    if not isinstance(data, dict):
+        return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
+    diagnostics: list[JsonDiagnostic] = []
+    if not validate_format_version(diagnostics, data, CHANNEL_FORMAT_VERSION):
+        return diagnostics
+    fields = {key: value for key, value in data.items() if key != FORMAT_VERSION_FIELD}
+    return diagnostics + validate_channel_data(fields)
+
+
+CHANNEL_FORMAT = JsonDocumentFormat(
+    name="Channel config",
+    version=CHANNEL_FORMAT_VERSION,
+    shape=CHANNEL_SHAPE,
+    validate=validate_channel_document,
+    sort_keys=True,
+)
 
 
 def validate_channel_data(data: Any) -> list[JsonDiagnostic]:
-    """Validate a decoded raw ``channel.json`` mapping."""
+    """Validate the Channel config fields of a decoded mapping.
+
+    ``format_version`` belongs to the file; see :func:`validate_channel_document`.
+    """
     diagnostics: list[JsonDiagnostic] = []
     if not isinstance(data, dict):
         return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
@@ -192,12 +231,6 @@ def validate_channel_data(data: Any) -> list[JsonDiagnostic]:
         ALLOWED_CHANNEL_RESPONSE_MODES,
     )
     _validate_regex_list(diagnostics, "$.mention_patterns", data.get("mention_patterns", []))
-    if "owner_user_ids" in data:
-        add_error(
-            diagnostics,
-            "$.owner_user_ids",
-            "is retired; configure group admins in channel access settings and remove this field",
-        )
     return diagnostics
 
 

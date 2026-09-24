@@ -24,7 +24,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from desktop.settings import read_wakeword_settings, write_wakeword_settings
+from desktop.settings import (
+    WAKEWORD_ACTION_COMMAND,
+    read_wakeword_settings,
+    write_wakeword_settings,
+)
 from desktop.system_actions import DesktopSystemActions
 from desktop.wakeword._bridge_values import (
     _CALIBRATION_NOISE_MARGIN,
@@ -36,12 +40,14 @@ from desktop.wakeword._bridge_values import (
     _CALIBRATION_TIMEOUT_SECONDS,
     _KNOWN_WAKEWORD_KEYS,
     _MAX_CUSTOM_WAKEWORD_MODEL_BASE64_CHARS,
+    _PAUSE_REASON_LIVE_VOICE,
     _SERVER_PROFILE_KEYS,
     _VALID_STATES,
     _WAKEWORD_EVENT_HISTORY_LIMIT,
     _WAKEWORD_STATE_ERROR,
     _WAKEWORD_STATE_LISTENING,
     _WAKEWORD_STATE_OFF,
+    _WAKEWORD_STATE_PAUSED,
     _WAKEWORD_STATE_RECORDING,
     _WAKEWORD_STATES_WITH_REASON,
     ConnectionDelegate,
@@ -54,6 +60,7 @@ from desktop.wakeword._bridge_values import (
     _server_url,
     _validated_active_model_ids,
     _validated_config_value,
+    _validated_model_actions,
     _validated_model_sensitivities,
 )
 from desktop.wakeword.engine import (
@@ -66,7 +73,7 @@ from desktop.wakeword.engine import (
 )
 
 if TYPE_CHECKING:
-    pass
+    from desktop.hotkey import LiveHotkeyController
 
 __all__ = ["ConnectionDelegate", "DesktopBridge", "logger"]
 
@@ -93,6 +100,9 @@ class DesktopBridge:
         model_catalog: Any = None,
         speech_readiness_checker: Callable[[str], str | None] | None = None,
         system_actions: DesktopSystemActions | None = None,
+        live_hotkey: LiveHotkeyController | None = None,
+        live_requests: Callable[[str, str], None] | None = None,
+        secure_origins: tuple[str, ...] = (),
     ) -> None:
         self._settings_path = settings_path
         self._worker = worker
@@ -111,6 +121,16 @@ class DesktopBridge:
         )
         self._speech_readiness_checker = speech_readiness_checker
         self._system_actions = system_actions or DesktopSystemActions()
+        self._live_hotkey = live_hotkey
+        # Delivers hands-free Live voice requests to the page (wakeword models
+        # with the Live voice action); never blocks the caller.
+        self._live_requests = live_requests
+        # Remote HTTP origins WebView2 treats as secure for this process. A
+        # server added later needs a Desktop restart before its microphone works.
+        self._secure_origins = tuple(secure_origins)
+        # True while the page reports a Live voice call holding the microphone.
+        # Guarded by the worker lifecycle lock: every worker start honors it.
+        self._live_voice_active = False
         self._state = _WAKEWORD_STATE_OFF
         self._error_code: str | None = None
         self._active_microphone: dict[str, Any] | None = None
@@ -148,9 +168,20 @@ class DesktopBridge:
 
     # -- Capabilities --------------------------------------------------------
 
-    def getDesktopCapabilities(self) -> dict[str, bool]:  # noqa: N802
-        """Return desktop-only feature flags for the WebUI feature gates."""
-        return {"wakeword": True, "serverSelection": True, "contextMenu": True}
+    def getDesktopCapabilities(self) -> dict[str, Any]:  # noqa: N802
+        """Return desktop-only feature flags for the WebUI feature gates.
+
+        ``secureOrigins`` lists the remote HTTP origins that are secure contexts
+        in this Desktop process (fixed at startup).
+        """
+        return {
+            "wakeword": True,
+            "serverSelection": True,
+            "contextMenu": True,
+            "liveWakeword": True,
+            "liveHotkey": self._live_hotkey is not None and self._live_hotkey.supported,
+            "secureOrigins": list(self._secure_origins),
+        }
 
     def setClipboardText(self, text: Any) -> dict[str, bool]:  # noqa: N802
         """Replace the host clipboard with validated plain text."""
@@ -184,9 +215,11 @@ class DesktopBridge:
             "microphone": config.get("microphone"),
             "active_model_ids": config["active_model_ids"],
             "model_sensitivities": config["model_sensitivities"],
+            "model_actions": config["model_actions"],
             "target_agent_id": config.get("target_agent_id"),
             "session_behavior": config.get("session_behavior", "active"),
             "error_code": error_code,
+            "pause_reason": _PAUSE_REASON_LIVE_VOICE if state == _WAKEWORD_STATE_PAUSED else None,
             "active_microphone": active_microphone,
             "events": events,
             # Runtime-only fields (not editable config): the mock flag lets the
@@ -245,10 +278,14 @@ class DesktopBridge:
                 raise WakewordModelError("The active wakeword model cannot be removed")
             with self._model_lock:
                 self._model_catalog.delete_model(model_id)
-            sensitivities = current.get("model_sensitivities")
-            if isinstance(sensitivities, dict) and model_id in sensitivities:
-                del sensitivities[model_id]
-                current["model_sensitivities"] = sensitivities
+            changed = False
+            for key in ("model_sensitivities", "model_actions"):
+                values = current.get(key)
+                if isinstance(values, dict) and model_id in values:
+                    del values[model_id]
+                    current[key] = values
+                    changed = True
+            if changed:
                 write_wakeword_settings(current, self._settings_path)
         return {"deleted": True}
 
@@ -316,6 +353,17 @@ class DesktopBridge:
                 sensitivities.update(sensitivity_updates)
                 current["model_sensitivities"] = sensitivities
                 changed = True
+            if "model_actions" in config:
+                action_updates = _validated_model_actions(config["model_actions"])
+                with self._model_lock:
+                    for model_id in action_updates:
+                        self._model_catalog.resolve(model_id)
+                actions = current.get("model_actions")
+                if not isinstance(actions, dict):
+                    actions = {}
+                actions.update(action_updates)
+                current["model_actions"] = actions
+                changed = True
             profile_changes = {
                 key: _validated_config_value(key, config[key])
                 for key in _SERVER_PROFILE_KEYS
@@ -372,6 +420,50 @@ class DesktopBridge:
                 if callable(stop_recording):
                     stop_recording()
         return self.getWakewordStatus()
+
+    # -- Live voice ----------------------------------------------------------
+
+    def setLiveVoiceActive(self, active: Any) -> dict[str, bool]:  # noqa: N802
+        """Pause wakeword listening while a Live voice call holds the microphone.
+
+        While active, an enabled worker is stopped (microphone closed) and the
+        status reports ``paused`` with ``pause_reason: "live_voice"``; Voice
+        stays enabled. Inactive resumes it like a retry, with the current
+        config and server. Enabling Voice or changing its config during a call
+        keeps it paused until the call ends.
+        """
+        active = active is True
+        with self._worker_lifecycle_lock:
+            if active == self._live_voice_active:
+                return {"active": active}
+            self._live_voice_active = active
+            with self._lock:
+                enabled = bool(read_wakeword_settings(self._settings_path).get("enabled", False))
+            if not enabled:
+                return {"active": active}
+            if active:
+                logger.info("Wakeword listening paused for Live voice")
+                self._stop_worker()
+                self.publish_state(_WAKEWORD_STATE_PAUSED)
+            else:
+                logger.info("Wakeword listening resumes after Live voice")
+                self._start_worker()
+        return {"active": active}
+
+    def request_live_voice(self, action: str, source: str) -> None:
+        """Ask the loaded page to start or toggle Live voice (never blocks)."""
+        if self._live_requests is None:
+            logger.debug("Live voice request dropped; no page dispatcher is attached")
+            return
+        self._live_requests(action, source)
+
+    def getLiveHotkey(self) -> dict[str, Any]:  # noqa: N802
+        """Return ``{supported, enabled, hotkey, error_code}`` for the Live voice hotkey."""
+        return self._require_live_hotkey().status()
+
+    def setLiveHotkey(self, changes: Any) -> dict[str, Any]:  # noqa: N802
+        """Merge, persist, and re-register the Live voice hotkey; returns the status."""
+        return self._require_live_hotkey().update(changes)
 
     def startWakewordCalibration(self) -> dict[str, Any]:  # noqa: N802
         """Pause command activation and expose raw per-model detector scores."""
@@ -572,22 +664,35 @@ class DesktopBridge:
         the new URL from :attr:`server_url` when it next starts. A no-op when the
         URL is unchanged (so the launch auto-connect never needlessly restarts a
         worker already pointed at that server).
+
+        Every successful connect replaces the page, and with it any Live voice
+        call, so a Live voice pause ends here too: a replaced or crashed page can
+        never leave wakeword listening paused.
         """
         normalized = (url or "").rstrip("/")
         with self._worker_lifecycle_lock:
+            was_paused = self._live_voice_active
+            self._live_voice_active = False
             with self._lock:
-                if normalized == self._server_url:
-                    return
+                changed = normalized != self._server_url
                 self._server_url = normalized
                 enabled = bool(read_wakeword_settings(self._settings_path).get("enabled", False))
-            if enabled:
-                self._stop_worker()
-                self._start_worker()
+            if not enabled or not (changed or was_paused):
+                return
+            if was_paused:
+                logger.info("Wakeword listening resumes after a server connection")
+            self._stop_worker()
+            self._start_worker()
 
     # -- Internal ------------------------------------------------------------
 
     def _start_worker(self) -> None:
         with self._worker_lifecycle_lock:
+            if self._live_voice_active:
+                # Every start path (enable, config change, retry, server switch)
+                # lands here, so a Live voice call keeps the microphone free.
+                self.publish_state(_WAKEWORD_STATE_PAUSED)
+                return
             if self._worker is None and self._worker_factory is not None:
                 try:
                     self._worker = self._worker_factory(self)
@@ -651,6 +756,13 @@ class DesktopBridge:
             )
         config["active_model_ids"] = list(active_model_ids)
         config["model_sensitivities"] = normalized_sensitivities
+        # Every active model reports its effective action; stored entries for
+        # inactive models are kept so they return when the model is re-activated.
+        stored_actions = config.get("model_actions")
+        actions = dict(stored_actions) if isinstance(stored_actions, dict) else {}
+        for model_id in active_model_ids:
+            actions.setdefault(model_id, WAKEWORD_ACTION_COMMAND)
+        config["model_actions"] = actions
         profiles = config.get("server_profiles")
         profile_key = _canonical_profile_key(self._server_url)
         profile = profiles.get(profile_key, {}) if isinstance(profiles, dict) else {}
@@ -846,6 +958,11 @@ class DesktopBridge:
         self._calibration_candidate_peak = 0.0
         self._calibration_release_frames = 0
         self._calibration_sample_armed = False
+
+    def _require_live_hotkey(self) -> LiveHotkeyController:
+        if self._live_hotkey is None:
+            raise RuntimeError("DesktopBridge has no Live voice hotkey controller attached")
+        return self._live_hotkey
 
     def _require_connection(self) -> ConnectionDelegate:
         if self._connection is None:

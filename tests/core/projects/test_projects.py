@@ -402,6 +402,7 @@ def test_project_from_dict_defaults_optional_fields() -> None:
         "project_id": "vbot",
         "display_name": "vBot",
         "cwd": "/srv/repos/vbot",
+        "allowed_tools": ["read_file"],
         "created_at": "2026-06-18T10:00:00Z",
         "updated_at": "2026-06-18T10:00:00Z",
     }
@@ -415,11 +416,7 @@ def test_project_from_dict_defaults_optional_fields() -> None:
     # An old project.json without the field loads at the default format.
     assert project.source_format == "opencode"
     assert project.auto_load == []
-    # An old project.json without the whitelist fields loads at the same defaults a
-    # new project is seeded with: base tool list, empty skill lists (decision 10).
-    assert project.allowed_tools == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
-    assert "apply_patch" in project.allowed_tools
-    assert "edit" not in project.allowed_tools
+    assert project.allowed_tools == ["read_file"]
     assert project.skills_bundled_enabled == []
     assert project.skills_project_disabled == []
     # An old project.json without overrides loads at the empty map.

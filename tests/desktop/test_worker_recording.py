@@ -132,6 +132,78 @@ def test_calibration_suppresses_wakeword_activation(fake_bridge: FakeBridge) -> 
     assert fake_bridge.states == ["listening"]
 
 
+def test_live_voice_model_requests_a_call_instead_of_recording(
+    fake_bridge: FakeBridge,
+) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    engine = DetectOnceEngine()
+    worker = WakewordWorker(
+        engine=engine,
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    worker._read_config = lambda: {  # type: ignore[method-assign]
+        "target_agent_id": "main",
+        "model_actions": {"builtin/okay_nabu": "live_voice"},
+    }
+    worker._target_agent_available = lambda _agent_id: True  # type: ignore[assignment,method-assign]
+    worker._handle_detection = MagicMock(side_effect=AssertionError("recorded"))  # type: ignore[method-assign]
+    reads: list[int] = []
+
+    def stop_after_second_read() -> None:
+        reads.append(1)
+        if len(reads) == 2:
+            worker._running.clear()
+
+    worker._open_stream = lambda: setattr(  # type: ignore[method-assign]
+        worker,
+        "_stream",
+        FakeSounddeviceStream([_make_silence_chunk()] * 2, on_read=stop_after_second_read),
+    )
+    worker._running.set()
+
+    worker._run()
+
+    # The detector kept listening on the same stream after the request.
+    assert engine.calls == 2
+    assert fake_bridge.live_requests == [("start", "wakeword")]
+    assert fake_bridge.states == ["listening", "wakeword_detected", "listening"]
+
+
+def test_command_models_keep_recording_when_another_model_starts_live_voice(
+    fake_bridge: FakeBridge,
+) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    worker = WakewordWorker(
+        engine=DetectOnceEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    worker._read_config = lambda: {  # type: ignore[method-assign]
+        "target_agent_id": "main",
+        "model_actions": {"builtin/hey_nabu": "live_voice"},
+    }
+    worker._target_agent_available = lambda _agent_id: True  # type: ignore[assignment,method-assign]
+    worker._open_stream = lambda: setattr(  # type: ignore[method-assign]
+        worker,
+        "_stream",
+        FakeSounddeviceStream([_make_silence_chunk()]),
+    )
+
+    def handle(_pre_roll: object = b"") -> None:
+        worker._running.clear()
+
+    worker._handle_detection = handle  # type: ignore[assignment,method-assign]
+    worker._running.set()
+
+    worker._run()
+
+    assert fake_bridge.live_requests == []
+    assert fake_bridge.states == ["listening", "wakeword_detected"]
+
+
 def test_recording_prepends_end_aligned_pre_roll_when_new_speech_arrives(
     fake_bridge: FakeBridge,
     monkeypatch: pytest.MonkeyPatch,

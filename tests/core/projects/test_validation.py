@@ -18,12 +18,14 @@ from core.settings import is_valid_project_id
 
 def _valid_project_data() -> dict[str, object]:
     return {
+        "format_version": 1,
         "project_id": "vbot",
         "display_name": "vBot",
         "cwd": "/srv/repos/vbot",
         "default_agent": "orchestrator",
         "default_model": "openai/gpt-5",
         "auto_load": ["AGENTS.md", "PROJECT.md"],
+        "allowed_tools": ["read_file", "bash"],
         "created_at": "2026-06-18T10:00:00Z",
         "updated_at": "2026-06-18T10:00:00Z",
     }
@@ -40,10 +42,12 @@ def test_validate_project_data_accepts_full_valid_config() -> None:
     assert validate_project_data(_valid_project_data()) == []
 
 
-def test_validate_project_data_accepts_only_identity_and_cwd() -> None:
+def test_validate_project_data_accepts_only_identity_cwd_and_tool_whitelist() -> None:
     data = {
+        "format_version": 1,
         "project_id": "scratch",
         "cwd": "/srv/repos/scratch",
+        "allowed_tools": [],
     }
 
     assert validate_project_data(data) == []
@@ -277,13 +281,18 @@ def test_validate_project_data_rejects_empty_override_object() -> None:
     assert ("error", "$.overrides.builder", "must set at least one field") in _diagnostics(data)
 
 
-def test_validate_project_data_rejects_unknown_override_field() -> None:
+def test_validate_project_data_warns_on_unknown_override_fields() -> None:
     data = _valid_project_data()
-    data["overrides"] = {"builder": {"nope": "x"}}
+    data["overrides"] = {
+        "builder": {"nope": "x", "tool_access": {"mode": "all", "future": 1}},
+        "future_only": {"future": True},
+    }
 
-    assert ("error", "$.overrides.builder.nope", "unknown override field: nope") in _diagnostics(
-        data
-    )
+    assert _diagnostics(data) == [
+        ("warning", "$.overrides.builder.nope", "unknown override field: nope"),
+        ("warning", "$.overrides.builder.tool_access.future", "unknown override field: future"),
+        ("warning", "$.overrides.future_only.future", "unknown override field: future"),
+    ]
 
 
 def test_validate_project_data_rejects_empty_override_model_value() -> None:
@@ -319,12 +328,24 @@ def test_validate_project_data_warns_on_unknown_field() -> None:
 
 
 def test_validate_project_data_reports_missing_required_fields() -> None:
-    paths = {path for _, path, _ in _diagnostics({"project_id": "vbot"})}
+    paths = {path for _, path, _ in _diagnostics({"format_version": 1, "project_id": "vbot"})}
 
     assert "$.cwd" in paths
+    assert "$.allowed_tools" in paths
     assert "$.display_name" not in paths
     assert "$.created_at" not in paths
     assert "$.updated_at" not in paths
+
+
+def test_validate_project_data_requires_the_current_format_version() -> None:
+    data = _valid_project_data()
+    del data["format_version"]
+
+    assert [(severity, path) for severity, path, _ in _diagnostics(data)] == [
+        ("error", "$.format_version")
+    ]
+    data["format_version"] = 2
+    assert "written by a newer vBot" in _diagnostics(data)[0][2]
 
 
 def test_validate_project_file_reports_missing_file(tmp_path: Path) -> None:
@@ -356,7 +377,7 @@ def test_load_validated_project_json_returns_mapping(tmp_path: Path) -> None:
 
 def test_load_validated_project_json_raises_on_invalid(tmp_path: Path) -> None:
     config_path = tmp_path / "project.json"
-    config_path.write_text(json.dumps({"project_id": "x"}), encoding="utf-8")
+    config_path.write_text(json.dumps({"format_version": 1, "project_id": "x"}), encoding="utf-8")
 
     with pytest.raises(ProjectError):
         load_validated_project_json(config_path)

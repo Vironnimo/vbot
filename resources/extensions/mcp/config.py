@@ -1,4 +1,11 @@
-"""Validated MCP connection records and atomic, Extension-owned persistence."""
+"""Validated MCP connection records and atomic, Extension-owned persistence.
+
+``connections.json`` is a versioned JSON document ``{"format_version": 1,
+"connections": [...]}``. Each connection loads on its own: an invalid or
+duplicate one is skipped with an issue and kept verbatim on every save, and
+unknown fields are reported, ignored, and written back unchanged. A document
+whose root fails to load, including one from a newer vBot, is never overwritten.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +19,24 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from jsonschema import Draft202012Validator
+
+from core.config_validation import (
+    JsonDiagnostic,
+    JsonValidationReport,
+    add_error,
+    format_report_diagnostics,
+    read_json_file,
+    validate_json_file,
+    warn_unknown_keys,
+)
+from core.json_documents import (
+    JsonDocumentFormat,
+    json_document,
+    json_list,
+    json_object,
+    validate_collection_root,
+    write_json_document,
+)
 
 CONNECTION_ID_PATTERN = r"^[a-z][a-z0-9_]{0,31}$"
 ENVIRONMENT_KEY_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"
@@ -37,6 +62,11 @@ CONNECTION_SCHEMA: dict[str, Any] = {
     "required": ["id", "transport"],
     "additionalProperties": False,
 }
+CONNECTIONS_FORMAT_VERSION = 1
+CONNECTION_FIELDS = frozenset(CONNECTION_SCHEMA["properties"])
+CONNECTIONS_SHAPE = json_document(
+    {"connections"}, {"connections": json_list(json_object(CONNECTION_FIELDS), key="id")}
+)
 
 
 def validate_connection(value: Any) -> dict[str, Any]:
@@ -73,6 +103,92 @@ def validate_connection(value: Any) -> dict[str, Any]:
     return record
 
 
+def validate_connections_document(data: Any) -> list[JsonDiagnostic]:
+    """Validate the root of ``connections.json``; connections load one by one."""
+    diagnostics: list[JsonDiagnostic] = []
+    validate_collection_root(
+        diagnostics,
+        data,
+        version=CONNECTIONS_FORMAT_VERSION,
+        shape=CONNECTIONS_SHAPE,
+        collection="connections",
+        label="MCP connections field",
+    )
+    return diagnostics
+
+
+CONNECTIONS_FORMAT = JsonDocumentFormat(
+    name="MCP connections",
+    version=CONNECTIONS_FORMAT_VERSION,
+    shape=CONNECTIONS_SHAPE,
+    validate=validate_connections_document,
+)
+
+
+def validate_connections_file(path: str | Path) -> JsonValidationReport:
+    """Validate an optional ``connections.json``, including every connection."""
+    return validate_json_file(path, _validate_connections_data, missing_ok=True)
+
+
+def _validate_connections_data(data: Any) -> list[JsonDiagnostic]:
+    diagnostics = validate_connections_document(data)
+    if any(diagnostic.severity == "error" for diagnostic in diagnostics):
+        return diagnostics
+    _records, issues = parse_connections(data["connections"])
+    for issue in issues:
+        path = f"$.connections[{issue['index']}]"
+        if issue["code"] == "unknown_fields":
+            item = data["connections"][issue["index"]]
+            warn_unknown_keys(diagnostics, path, item, CONNECTION_FIELDS, "MCP connection field")
+        else:
+            add_error(diagnostics, path, issue["message"])
+    return diagnostics
+
+
+def parse_connections(
+    entries: list[Any],
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    """Return the valid connections by id and an issue for every skipped entry."""
+    issues: list[dict[str, Any]] = []
+    identifiers = Counter(
+        item["id"] for item in entries if isinstance(item, dict) and isinstance(item.get("id"), str)
+    )
+    records = {}
+    for index, item in enumerate(entries):
+        location: dict[str, Any] = {"index": index}
+        if isinstance(item, dict):
+            identifier = item.get("id")
+            if isinstance(identifier, str) and re.fullmatch(CONNECTION_ID_PATTERN, identifier):
+                location["connection_id"] = identifier
+            if isinstance(identifier, str) and identifiers[identifier] > 1:
+                issues.append(
+                    {
+                        **location,
+                        "code": "duplicate_id",
+                        "message": "Duplicate connection id; connection skipped",
+                    }
+                )
+                continue
+            unknown = sorted(set(item) - CONNECTION_FIELDS)
+            if unknown:
+                issues.append(
+                    {
+                        **location,
+                        "code": "unknown_fields",
+                        "fields": unknown,
+                        "message": "Unrecognized fields ignored",
+                    }
+                )
+            item = {key: value for key, value in item.items() if key in CONNECTION_FIELDS}
+        try:
+            record = validate_connection(item)
+        except ValueError as error:
+            issues.append({**location, "code": "invalid_connection", "message": str(error)})
+            continue
+        records[record["id"]] = record
+    return records, issues
+
+
 class ConnectionStore:
     """Load connections independently and preserve unrecognized persisted data."""
 
@@ -81,68 +197,39 @@ class ConnectionStore:
         self.path = directory / "connections.json"
         self.issues: list[dict[str, Any]] = []
 
-    def _read(self) -> list[Any]:
-        if not self.path.exists():
-            return []
-        data = json.loads(self.path.read_text(encoding="utf-8"))
-        if not isinstance(data, list):
-            raise ValueError("MCP connections document must be an array")
-        return data
+    def _read(self) -> dict[str, Any] | None:
+        report, data = read_json_file(self.path, validate_connections_document, missing_ok=True)
+        if not report.exists:
+            return None
+        if not report.ok:
+            details = "; ".join(format_report_diagnostics(report))
+            raise ValueError(f"MCP connections document failed to load: {details}")
+        return data if isinstance(data, dict) else None
 
-    def _parse(self, data: list[Any]) -> dict[str, dict[str, Any]]:
-        self.issues = []
-        identifiers = Counter(
-            item["id"]
-            for item in data
-            if isinstance(item, dict) and isinstance(item.get("id"), str)
-        )
-        records = {}
-        for index, item in enumerate(data):
-            location: dict[str, Any] = {"index": index}
-            if isinstance(item, dict):
-                identifier = item.get("id")
-                if isinstance(identifier, str) and re.fullmatch(CONNECTION_ID_PATTERN, identifier):
-                    location["connection_id"] = identifier
-                if isinstance(identifier, str) and identifiers[identifier] > 1:
-                    self.issues.append(
-                        {
-                            **location,
-                            "code": "duplicate_id",
-                            "message": "Duplicate connection id; connection skipped",
-                        }
-                    )
-                    continue
-                unknown = sorted(set(item) - CONNECTION_SCHEMA["properties"].keys())
-                if unknown:
-                    self.issues.append(
-                        {
-                            **location,
-                            "code": "unknown_fields",
-                            "fields": unknown,
-                            "message": "Unrecognized fields ignored",
-                        }
-                    )
-                item = {
-                    key: value
-                    for key, value in item.items()
-                    if key in CONNECTION_SCHEMA["properties"]
-                }
-            try:
-                record = validate_connection(item)
-            except ValueError as error:
-                self.issues.append(
-                    {**location, "code": "invalid_connection", "message": str(error)}
-                )
-                continue
-            records[record["id"]] = record
+    def _parse(self, document: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+        if document is None:
+            self.issues = []
+            return {}
+        records, self.issues = parse_connections(document["connections"])
+        unknown = sorted(set(document) - CONNECTIONS_SHAPE.fields)
+        if unknown:
+            self.issues.insert(
+                0,
+                {
+                    "code": "unknown_fields",
+                    "fields": unknown,
+                    "message": "Unrecognized document fields ignored",
+                },
+            )
         return records
 
     def load(self) -> dict[str, dict[str, Any]]:
         return self._parse(self._read())
 
     def save(self, records: dict[str, dict[str, Any]]) -> None:
-        data = self._read()
-        previous = self._parse(data)
+        document = self._read()
+        data: list[Any] = document["connections"] if document is not None else []
+        previous = self._parse(document)
         normalized = {
             identifier: validate_connection(record) for identifier, record in records.items()
         }
@@ -155,9 +242,7 @@ class ConnectionStore:
             if isinstance(identifier, str) and identifier in normalized:
                 if identifier not in written:
                     extras = {
-                        key: value
-                        for key, value in item.items()
-                        if key not in CONNECTION_SCHEMA["properties"]
+                        key: value for key, value in item.items() if key not in CONNECTION_FIELDS
                     }
                     values.append({**extras, **normalized[identifier]})
                     written.add(identifier)
@@ -167,8 +252,8 @@ class ConnectionStore:
         values.extend(
             record for identifier, record in normalized.items() if identifier not in written
         )
-        atomic_json(self.path, values)
-        self._parse(values)
+        write_json_document(self.path, {"connections": values}, CONNECTIONS_FORMAT)
+        self._parse(self._read())
 
 
 def atomic_json(path: Path, data: Any) -> None:

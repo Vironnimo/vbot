@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -13,9 +12,9 @@ from zoneinfo import ZoneInfo
 from core.config_validation import (
     JsonDiagnostic,
 )
+from core.json_documents import JsonDocumentWriteError, write_json_document
 from core.runs import RunCancelledError, RunKind
 from core.sessions import SessionAddress
-from core.utils.atomic import atomic_write_text
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
@@ -30,6 +29,7 @@ from core.automation._cron_jobs import (
     _MUTABLE_FIELDS,
     _RESTART_FIELDS,
     CRON_EXPRESSION_FIELD_COUNT,
+    CRON_JOBS_FORMAT,
     MAX_ACTIVE_CRON_JOBS,
     MAX_CONCURRENT_CRON_RUNS,
     MAX_CONSECUTIVE_CRON_FAILURES,
@@ -53,7 +53,7 @@ from core.automation._cron_jobs import (
     ParsedSchedule,
     ScheduleType,
     _as_utc,
-    _derive_legacy_cron_job_name,
+    _derive_cron_job_name,
     _load_cron_jobs_payload,
     _parse_iso_datetime,
     _resolve_timezone,
@@ -181,7 +181,7 @@ class CronService:
         job = CronJob(
             id=new_id("cron", claim=lambda candidate: candidate not in self._jobs),
             agent_id=agent_id,
-            name=name if name is not None else _derive_legacy_cron_job_name(prompt),
+            name=name if name is not None else _derive_cron_job_name(prompt),
             prompt=prompt,
             schedule_type=schedule_type,
             cron_expression=cron_expression,
@@ -530,7 +530,7 @@ class CronService:
         jobs: dict[str, CronJob] = {}
         for index, item in enumerate(raw_payload):
             diagnostics: list[JsonDiagnostic] = []
-            _validate_cron_job_data(diagnostics, index, item)
+            _validate_cron_job_data(diagnostics, f"$.jobs[{index}]", item)
             errors = [diagnostic for diagnostic in diagnostics if diagnostic.severity == "error"]
             if errors:
                 details = "; ".join(
@@ -543,25 +543,30 @@ class CronService:
                 job = CronJob.from_dict(cast("dict[str, Any]", item))
                 self._validate_job(job, validate_references=False)
             except (CronJobValidationError, TypeError, ValueError) as error:
-                _LOGGER.warning("Skipping invalid Cron job at $[%d]: %s", index, error)
+                _LOGGER.warning("Skipping invalid Cron job at $.jobs[%d]: %s", index, error)
                 self._invalid_job_entries.append(item)
                 continue
             if job.id in jobs:
-                _LOGGER.warning("Skipping duplicate Cron job id at $[%d]: %s", index, job.id)
+                _LOGGER.warning("Skipping duplicate Cron job id at $.jobs[%d]: %s", index, job.id)
                 self._invalid_job_entries.append(item)
                 continue
             jobs[job.id] = job
         return jobs
 
     def _save_jobs(self) -> None:
-        """Persist cron jobs to <data_root>/cron/jobs.json using atomic replace."""
+        """Persist cron jobs to <data_root>/cron/jobs.json using atomic replace.
+
+        Invalid entries are written back verbatim and unknown fields of the file
+        on disk are kept; a file that no longer loads is never overwritten.
+        """
         self._ensure_storage_exists()
-        payload = [
+        jobs = [
             job.to_dict() for job in sorted(self._jobs.values(), key=lambda item: item.created_at)
         ] + list(self._invalid_job_entries)
-        serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         try:
-            atomic_write_text(self._jobs_path, serialized)
+            write_json_document(self._jobs_path, {"jobs": jobs}, CRON_JOBS_FORMAT)
+        except JsonDocumentWriteError as error:
+            raise CronStorageError(str(error)) from error
         except OSError as error:
             raise CronStorageError(f"Cannot write {self._jobs_path}: {error}") from error
 
@@ -959,7 +964,7 @@ class CronService:
         try:
             self._cron_dir.mkdir(parents=True, exist_ok=True)
             if not self._jobs_path.exists():
-                self._jobs_path.write_text("[]\n", encoding="utf-8")
+                write_json_document(self._jobs_path, {"jobs": []}, CRON_JOBS_FORMAT)
         except OSError as error:
             raise CronStorageError(
                 f"Cannot initialize cron storage at {self._cron_dir}: {error}"

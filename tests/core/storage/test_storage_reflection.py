@@ -51,7 +51,9 @@ class TestLoadReflectionSettings:
     def test_defaults_non_object_reflection_section(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
-        storage.settings_path.write_text(json.dumps({"reflection": []}), encoding="utf-8")
+        storage.settings_path.write_text(
+            json.dumps({"format_version": 1, "reflection": []}), encoding="utf-8"
+        )
 
         assert storage.load_reflection_settings() == DEFAULTS
 
@@ -59,7 +61,7 @@ class TestLoadReflectionSettings:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
-            json.dumps({"reflection": {"enabled": "yes"}}), encoding="utf-8"
+            json.dumps({"format_version": 1, "reflection": {"enabled": "yes"}}), encoding="utf-8"
         )
 
         assert storage.load_reflection_settings() == DEFAULTS
@@ -70,7 +72,7 @@ class TestLoadReflectionSettings:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
-            json.dumps({"reflection": {field: value}}), encoding="utf-8"
+            json.dumps({"format_version": 1, "reflection": {field: value}}), encoding="utf-8"
         )
 
         assert storage.load_reflection_settings() == DEFAULTS

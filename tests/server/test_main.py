@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from core.sessions.format import read_session_store_marker
+from core.database import DataStoreMarker, read_marker
 from core.utils.config import Config
 from core.utils.logging import ManagedLoggerProxyHandler, QuietLogsWebSocketLifecycleFilter
 from server import main as server_main
@@ -60,7 +60,9 @@ def test_resolve_port_priority_explicit_then_environment_then_settings(
     monkeypatch,
 ) -> None:
     settings_path = tmp_path / "settings.json"
-    settings_path.write_text(json.dumps({"server_port": 8500}), encoding="utf-8")
+    settings_path.write_text(
+        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
+    )
     monkeypatch.setenv("VBOT_SERVER_PORT", "8600")
     config = Config(data_dir=tmp_path)
 
@@ -71,7 +73,9 @@ def test_resolve_port_priority_explicit_then_environment_then_settings(
 def test_resolve_port_uses_settings_then_default(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
     settings_path = tmp_path / "settings.json"
-    settings_path.write_text(json.dumps({"server_port": 8500}), encoding="utf-8")
+    settings_path.write_text(
+        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
+    )
 
     assert resolve_port(Config(data_dir=tmp_path)) == 8500
     assert resolve_port(Config(data_dir=tmp_path / "missing")) == DEFAULT_PORT
@@ -89,7 +93,7 @@ def test_resolve_port_keeps_valid_port_next_to_invalid_settings(
 ) -> None:
     monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
     (tmp_path / "settings.json").write_text(
-        json.dumps({"server_port": 8500, "debug": {"enabled": "yes"}}),
+        json.dumps({"format_version": 1, "server_port": 8500, "debug": {"enabled": "yes"}}),
         encoding="utf-8",
     )
 
@@ -115,14 +119,18 @@ def test_resolve_port_accepts_port_keys_from_settings(
     monkeypatch.setenv("PORT", "8600")
     monkeypatch.setenv("SERVER_PORT", "8800")
     settings_path = tmp_path / "settings.json"
-    settings_path.write_text(json.dumps({"SERVER_PORT": 8700}), encoding="utf-8")
+    settings_path.write_text(
+        json.dumps({"format_version": 1, "SERVER_PORT": 8700}), encoding="utf-8"
+    )
 
     assert resolve_port(Config(data_dir=tmp_path)) == 8700
 
 
 def test_resolve_server_bind_tracks_host_port_and_source(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
-    (tmp_path / "settings.json").write_text(json.dumps({"server_port": 8500}), encoding="utf-8")
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
+    )
 
     assert resolve_server_bind(Config(data_dir=tmp_path), host="0.0.0.0") == {
         "listen_host": "0.0.0.0",
@@ -136,7 +144,9 @@ def test_resolve_server_bind_uses_explicit_port_before_environment_and_settings(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("VBOT_SERVER_PORT", "8600")
-    (tmp_path / "settings.json").write_text(json.dumps({"server_port": 8500}), encoding="utf-8")
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
+    )
 
     assert resolve_server_bind(Config(data_dir=tmp_path), host="127.0.0.1", explicit_port=8700) == {
         "listen_host": "127.0.0.1",
@@ -245,14 +255,14 @@ def test_main_initializes_only_a_missing_data_directory(
     data_dir = tmp_path / "data"
     if existing:
         data_dir.mkdir()
-    markers: list[dict[str, Any] | None] = []
+    markers: list[DataStoreMarker | None] = []
 
     class FakeServer:
         def __init__(self, config: object) -> None:
             self.config = config
 
         def run(self) -> None:
-            markers.append(read_session_store_marker(data_dir))
+            markers.append(read_marker(data_dir))
 
     monkeypatch.setattr(
         server_main,
@@ -271,7 +281,7 @@ def test_main_initializes_only_a_missing_data_directory(
         assert not (data_dir / "agents").exists()
     else:
         assert markers[0] is not None
-        assert markers[0]["state"] == "bootstrap"
+        assert markers[0].databases == {}
 
 
 def test_managed_logger_proxy_handler_routes_records_into_vbot_namespace() -> None:

@@ -42,10 +42,8 @@ export default Object.freeze({
     'This browser cannot play Live voice audio for this Model. Use a current browser and start again.',
   'live.error.mediaMismatch':
     'The Live voice Model changed while starting. Start again.',
-  'live.error.wakeword':
-    'Turn off wakeword Voice in Settings before starting Live voice.',
-  'live.error.desktop':
-    'The Desktop app did not respond. Restart it and try again.',
+  'live.error.desktopRestart':
+    'Restart the vBot Desktop app to use the microphone with this server.',
   'live.error.uiAction': 'Live voice could not change the view as requested.',
   'live.error.notification':
     'Live voice could not announce a finished Run. Check the chat for its result.',
@@ -140,6 +138,7 @@ export default Object.freeze({
   'voice.state.no_speech': 'No speech heard',
   'voice.state.transcription_failed': 'Not understood',
   'voice.state.microphone_disconnected': 'Microphone disconnected',
+  'voice.state.paused': 'Paused during Live voice',
   'voice.state.processing': 'Processing',
   'voice.state.error': 'Voice error',
   'voice.mic.tooltip.off': 'Wakeword disabled',
@@ -153,6 +152,7 @@ export default Object.freeze({
   'voice.mic.tooltip.noSpeech': 'No speech heard',
   'voice.mic.tooltip.transcriptionFailed': 'Voice command was not understood',
   'voice.mic.tooltip.microphoneDisconnected': 'Microphone disconnected',
+  'voice.mic.tooltip.paused': 'Wakeword paused during Live voice',
   'voice.mic.tooltip.error': 'Voice error',
   'voice.toast.sentTitle': 'Voice command sent',
   'voice.toast.noSpeechTitle': 'No speech heard',

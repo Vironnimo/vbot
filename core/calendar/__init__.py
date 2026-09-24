@@ -1,5 +1,6 @@
 """Calendar domain public API."""
 
+from core.calendar.actions import validate_calendar_actions_file
 from core.calendar.errors import (
     CalendarEventNotFoundError,
     CalendarServiceError,
@@ -34,6 +35,7 @@ __all__ = [
     "EventOccurrence",
     "FreeSlot",
     "parse_when",
+    "validate_calendar_actions_file",
     "validate_calendar_events_data",
     "validate_calendar_events_file",
 ]

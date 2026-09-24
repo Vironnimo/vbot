@@ -328,7 +328,9 @@ class StubBlockStore:
     def read_block_override(self, scope: str, block_id: str) -> str | None:
         return self._overrides.get((scope, block_id))
 
-    def write_layout(self, scope: str, entries: Sequence[LayoutEntry]) -> None:
+    def write_layout(
+        self, scope: str, entries: Sequence[LayoutEntry], *, reset: bool = False
+    ) -> None:
         self._layouts[scope] = list(entries)
 
     def prune_layout(

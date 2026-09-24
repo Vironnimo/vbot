@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import tomllib
 from collections.abc import Mapping
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as _installed_package_version
 from pathlib import Path
 from typing import Any, cast
 
@@ -21,37 +18,7 @@ _VBOT_ROOT = VBOT_ROOT
 _DEFAULT_RESOURCES_DIR = _VBOT_ROOT / "resources"
 
 
-_PACKAGE_NAME = "vbot"
-
-
-_UNKNOWN_VBOT_VERSION = "0.0.0+unknown"
-
-
 _SKILLS_DIRNAME = "skills"
-
-
-def _detect_vbot_version() -> str:
-    """Resolve the running vBot version from its single source of truth.
-
-    The version lives once, in ``pyproject.toml`` → ``project.version``. Read
-    that file directly when it sits next to the running code (the dev and
-    clone-based deployments vBot actually ships as): it is the *live* value, so a
-    version bump — or a ``vbot update`` git pull — flows through without a
-    reinstall. Installed package metadata is only a fallback for a pure wheel
-    install where the source tree is absent; it is a snapshot frozen at install
-    time and would otherwise drift behind an edited ``pyproject.toml``.
-    """
-    try:
-        with (_VBOT_ROOT / "pyproject.toml").open("rb") as handle:
-            version = tomllib.load(handle)["project"]["version"]
-        if isinstance(version, str) and version:
-            return version
-    except (OSError, KeyError, tomllib.TOMLDecodeError):
-        pass
-    try:
-        return _installed_package_version(_PACKAGE_NAME)
-    except PackageNotFoundError:
-        return _UNKNOWN_VBOT_VERSION
 
 
 def _positive_size_setting(

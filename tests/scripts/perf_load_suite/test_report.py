@@ -103,7 +103,7 @@ def test_markdown_report_contains_summary_and_level_details():
     markdown = render_markdown(_result([_level(1, ttft_overhead_p50=100.0)]))
 
     assert "| TTFT overhead p50 / p95 ms | 100 / 200 |" in markdown
-    assert "| sqlite.write_wait p50 / p99 / max ms | 0.50 / 30.0 / 120 |" in markdown
+    assert "| sqlite.sessions.write_wait p50 / p99 / max ms | 0.50 / 30.0 / 120 |" in markdown
     assert "| sqlite | 4 | 12.0 | 20.0 | - | - | - |" in markdown
     assert "| read | 2 | 3.00 | 5.00 | 5.00 |" in markdown
     assert "Worst Event Loop stall: 250 ms" in markdown

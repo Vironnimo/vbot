@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from core.database import write_bootstrap_marker
 from core.runtime.runtime import Runtime
-from core.sessions.format import write_bootstrap_marker
 
 
 def _authorize_session_store(data_dir: Path) -> None:
@@ -68,7 +68,9 @@ def _write_extension(data_dir: Path, name: str, source: str) -> None:
 def _write_settings(data_dir: Path, settings: dict) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     _authorize_session_store(data_dir)
-    (data_dir / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+    (data_dir / "settings.json").write_text(
+        json.dumps({"format_version": 1, **settings}), encoding="utf-8"
+    )
 
 
 def _marker_lines(marker: Path) -> list[str]:
