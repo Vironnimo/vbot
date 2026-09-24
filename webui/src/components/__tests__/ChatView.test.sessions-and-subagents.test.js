@@ -8,6 +8,7 @@ import {
   findCancelRunButton,
   findNewSessionButton,
   flushSync,
+  getSessionMock,
   it,
   listSessionsMock,
   rpcMock,
@@ -730,35 +731,21 @@ describe('ChatView', () => {
   });
 
   it('opens the source Session from a Reflection Session info link', async () => {
-    listSessionsMock.mockImplementation(async (_agentId, query = {}) => {
-      const requiredSessionId = query.requiredSession?.sessionId;
-      if (requiredSessionId === 'session-1') {
-        return {
-          sessions: [
-            {
-              id: 'session-1',
-              run_kinds: ['reflection'],
-              fork_source: {
-                agent_id: 'alpha',
-                session_id: 'source-session',
-                project_id: null,
-              },
-            },
-          ],
-        };
-      }
-      if (requiredSessionId === 'source-session') {
-        return {
-          sessions: [
-            {
-              id: 'source-session',
-              title: 'Original research',
-            },
-          ],
-        };
-      }
-      return { sessions: [] };
-    });
+    const sessions = {
+      'session-1': {
+        id: 'session-1',
+        run_kinds: ['reflection'],
+        fork_source: {
+          agent_id: 'alpha',
+          session_id: 'source-session',
+          project_id: null,
+        },
+      },
+      'source-session': { id: 'source-session', title: 'Original research' },
+    };
+    getSessionMock.mockImplementation(async (agentAddress, sessionId) => ({
+      session: agentAddress === 'alpha' ? (sessions[sessionId] ?? null) : null,
+    }));
     rpcMock.mockImplementation(
       createChatRpcMock({
         sessionMessages: {
