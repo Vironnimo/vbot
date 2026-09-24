@@ -73,7 +73,15 @@ async def test_run_event_bridge_publishes_non_rpc_runs() -> None:
     assert all(event["payload"]["run_id"] == run.id for event in state.event_bus.events[:2])
     assert [event["payload"] for event in state.event_bus.events[-2:]] == [
         {"kind": "debug_traces"},
-        {"kind": "sessions", "scope": {"agent_id": "coder"}},
+        {
+            "kind": "sessions",
+            "scope": {
+                "project_id": None,
+                "agent_id": "coder",
+                "session_id": "session-one",
+                "run_id": run.id,
+            },
+        },
     ]
 
 
@@ -103,7 +111,7 @@ def test_session_title_bridge_publishes_sessions_invalidation(tmp_path: Path) ->
     assert state.event_bus.events[-1]["type"] == "resource_changed"
     assert state.event_bus.events[-1]["payload"] == {
         "kind": "sessions",
-        "scope": {"agent_id": "coder"},
+        "scope": {"project_id": None, "agent_id": "coder", "session_id": "session-one"},
     }
 
 
@@ -134,7 +142,12 @@ def test_session_completion_read_bridge_publishes_sessions_invalidation(tmp_path
     assert state.event_bus.events[-1]["type"] == "resource_changed"
     assert state.event_bus.events[-1]["payload"] == {
         "kind": "sessions",
-        "scope": {"agent_id": "coder"},
+        "scope": {
+            "project_id": None,
+            "agent_id": "coder",
+            "session_id": "session-one",
+            "read_run_id": "run-one",
+        },
     }
 
 

@@ -17,7 +17,6 @@ from server.events import (
     RESOURCE_KIND_CALENDAR,
     RESOURCE_KIND_CRON,
     RESOURCE_KIND_EXTENSIONS,
-    RESOURCE_KIND_SESSIONS,
     RESOURCE_KIND_TERMINALS,
     ServerEventBus,
 )
@@ -26,6 +25,7 @@ from server.rpc.event_bridge import (
     bridge_run_to_event_bus,
     publish_bash_process_status_changed,
     publish_resource_changed,
+    publish_session_changed,
 )
 from server.rpc.statistics_methods import statistics_service
 
@@ -128,10 +128,8 @@ def _register_session_title_bridge(state: Any) -> Any:
     if not callable(add_callback):
         return None
     return add_callback(
-        lambda address: publish_resource_changed(
-            state,
-            RESOURCE_KIND_SESSIONS,
-            scope={"agent_id": address.agent_id},
+        lambda address: publish_session_changed(
+            state, address.project_id, address.agent_id, address.session_id
         )
     )
 
@@ -148,11 +146,15 @@ def _register_session_completion_read_bridge(state: Any) -> Any:
     add_callback = getattr(sessions, "add_completion_read_callback", None)
     if not callable(add_callback):
         return None
+    # The acknowledged Run id lets other windows clear their unread marker
+    # without re-reading activity when they already know that completion.
     return add_callback(
-        lambda address: publish_resource_changed(
+        lambda address, run_id: publish_session_changed(
             state,
-            RESOURCE_KIND_SESSIONS,
-            scope={"agent_id": address.agent_id},
+            address.project_id,
+            address.agent_id,
+            address.session_id,
+            read_run_id=run_id,
         )
     )
 
