@@ -187,22 +187,20 @@ export function normalizeOptionSchema(result) {
 // value (stored, else its default); a value without an entry keeps them all.
 export function visibleFieldOptions(field, fields, options) {
   const choices = field?.options ?? [];
-  const optionsBy = field?.optionsBy;
-  if (!optionsBy) {
+  const allowed = narrowedChoiceValues(field, fields, options);
+  if (allowed === null) {
     return choices;
   }
-  const referenced = (fields ?? []).find(
-    (candidate) => candidate.name === optionsBy.field,
-  );
-  const referencedValue = referenced
-    ? effectiveOptionValue(referenced, options)
-    : options?.[optionsBy.field];
-  const key = textOrEmpty(referencedValue);
-  if (!Object.hasOwn(optionsBy.values, key)) {
-    return choices;
-  }
-  const allowed = new Set(optionsBy.values[key]);
-  return choices.filter((choice) => allowed.has(choice.value));
+  const shown = new Set(allowed);
+  return choices.filter((choice) => shown.has(choice.value));
+}
+
+// Whether a field is hidden for a binding's current options: its `optionsBy`
+// entry for the referenced value is an empty list, so that value makes the
+// field irrelevant. The stored value stays in the binding and is ignored.
+export function isOptionFieldHidden(field, fields, options) {
+  const allowed = narrowedChoiceValues(field, fields, options);
+  return allowed !== null && allowed.length === 0;
 }
 
 // After the option `changedName` changes, move every select whose choices
@@ -337,6 +335,23 @@ function normalizeOptionsBy(optionsBy) {
     }
   }
   return { field, values };
+}
+
+// The choice values `optionsBy` lists for the referenced field's current
+// value, or null when the field is not narrowed for that value.
+function narrowedChoiceValues(field, fields, options) {
+  const optionsBy = field?.optionsBy;
+  if (!optionsBy) {
+    return null;
+  }
+  const referenced = (fields ?? []).find(
+    (candidate) => candidate.name === optionsBy.field,
+  );
+  const referencedValue = referenced
+    ? effectiveOptionValue(referenced, options)
+    : options?.[optionsBy.field];
+  const key = textOrEmpty(referencedValue);
+  return Object.hasOwn(optionsBy.values, key) ? optionsBy.values[key] : null;
 }
 
 // The value a field shows: the stored draft value, else its schema default.

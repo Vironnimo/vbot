@@ -96,6 +96,16 @@
         'live.error.playback',
         'Audio playback was blocked. Allow audio for this app and start Live again.',
       ),
+    audio_unsupported: () =>
+      t(
+        'live.error.audioUnsupported',
+        'This browser cannot play Live voice audio for this Model. Use a current browser and start again.',
+      ),
+    media_mismatch: () =>
+      t(
+        'live.error.mediaMismatch',
+        'The Live voice Model changed while starting. Start again.',
+      ),
     desktop_restart_required: () =>
       t(
         'live.error.desktopRestart',

@@ -27,6 +27,7 @@ from websockets.asyncio.client import connect as websocket_connect
 from websockets.exceptions import ConnectionClosed
 
 from core.model_tasks._live_wire import (
+    MEDIA_WEBRTC,
     JsonObject,
     WireCaption,
     WireClosed,
@@ -36,6 +37,7 @@ from core.model_tasks._live_wire import (
     WireSendError,
     WireStarted,
     WireUsage,
+    websocket_url,
 )
 from core.providers.errors import ProviderAuthError
 from core.providers.openai_subscription_auth import extract_chatgpt_account_id
@@ -172,7 +174,7 @@ class _OpenAILiveClient(ProviderTaskClient):
                 retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
                 http_client=http_client,
             )
-            control_url = _websocket_url(self._base_url, f"/live/sessions/{call_id}/attach")
+            control_url = websocket_url(self._base_url, f"/live/sessions/{call_id}/attach")
         return call_id, answer_sdp, control_url, dict(self._control_headers)
 
     async def _codex_headers(self) -> dict[str, str]:
@@ -220,15 +222,6 @@ def _parse_public_session(response: httpx.Response) -> tuple[str, str]:
     return call_id, answer_sdp
 
 
-def _websocket_url(base_url: str, path: str) -> str:
-    base = base_url.rstrip("/")
-    if base.startswith("https://"):
-        base = "wss://" + base.removeprefix("https://")
-    elif base.startswith("http://"):
-        base = "ws://" + base.removeprefix("http://")
-    return base + path
-
-
 async def _join_control(connect: WebSocketConnector, url: str, headers: dict[str, str]) -> Any:
     options: JsonObject = {
         "additional_headers": headers,
@@ -257,8 +250,12 @@ class OpenAILiveWire:
         return self._call_id
 
     @property
-    def answer_sdp(self) -> str:
-        return self._answer_sdp
+    def media(self) -> JsonObject:
+        return {"type": MEDIA_WEBRTC, "sdp": self._answer_sdp}
+
+    @property
+    def announces_as_user_input(self) -> bool:
+        return False
 
     async def events(self) -> AsyncIterator[WireEvent]:
         try:
@@ -299,6 +296,9 @@ class OpenAILiveWire:
                     "content": chunk,
                 }
             )
+
+    async def send_audio(self, pcm: bytes) -> None:
+        """WebRTC audio flows between the accessor and OpenAI; nothing to forward."""
 
     async def announce(self, text: str) -> None:
         if self._dialect == DIALECT_CODEX:

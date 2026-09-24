@@ -2,7 +2,15 @@
 
 A Live wire is one provider call whose control channel is joined by the server.
 It normalizes provider events into the small event set below and accepts the few
-commands a Live call needs. Media never passes through a WebRTC wire.
+commands a Live call needs. Its ``media`` descriptor tells the accessor how
+audio flows:
+
+* ``{"type": "webrtc", "sdp": <answer>}``: the accessor connects audio directly
+  to the provider; media never passes through the server.
+* ``{"type": "relay", "audio": RELAY_AUDIO_FORMAT}``: audio is relayed through
+  the server. The wire accepts microphone PCM through ``send_audio`` and emits
+  assistant audio as :class:`WireAudio` and barge-in as
+  :class:`WirePlaybackClear`.
 """
 
 from __future__ import annotations
@@ -12,6 +20,34 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 JsonObject = dict[str, Any]
+
+MEDIA_WEBRTC = "webrtc"
+MEDIA_RELAY = "relay"
+RELAY_SAMPLE_RATE = 24000
+# 16-bit mono PCM: bytes per millisecond of relayed audio.
+RELAY_BYTES_PER_MS = RELAY_SAMPLE_RATE * 2 // 1000
+RELAY_AUDIO_FORMAT: JsonObject = {
+    "encoding": "pcm16",
+    "sample_rate": RELAY_SAMPLE_RATE,
+    "channels": 1,
+}
+
+
+def relay_media() -> JsonObject:
+    """Return a fresh relay media descriptor."""
+
+    return {"type": MEDIA_RELAY, "audio": dict(RELAY_AUDIO_FORMAT)}
+
+
+def websocket_url(base_url: str, path: str) -> str:
+    """Return the WebSocket URL for *path* under an HTTP(S) Provider base URL."""
+
+    base = base_url.rstrip("/")
+    if base.startswith("https://"):
+        base = "wss://" + base.removeprefix("https://")
+    elif base.startswith("http://"):
+        base = "ws://" + base.removeprefix("http://")
+    return base + path
 
 
 class WireSendError(Exception):
@@ -47,6 +83,32 @@ class WireDelegation:
 
 
 @dataclass(frozen=True)
+class WireToolCall:
+    """The voice model called one app Tool itself (direct Tools mode).
+
+    ``arguments`` is the decoded argument value, which may not be an object.
+    The result returns through :meth:`LiveWire.deliver_result` with the same id.
+    """
+
+    call_id: str
+    name: str
+    arguments: Any
+
+
+@dataclass(frozen=True)
+class WireAudio:
+    """Assistant audio to play, little-endian PCM in the relay format (relay media)."""
+
+    item_id: str
+    pcm: bytes
+
+
+@dataclass(frozen=True)
+class WirePlaybackClear:
+    """The user started speaking; audio not yet played must be dropped (relay media)."""
+
+
+@dataclass(frozen=True)
 class WireUsage:
     """Cumulative provider usage for the call."""
 
@@ -73,7 +135,17 @@ class WireClosed:
     confirmed: bool
 
 
-WireEvent = WireStarted | WireCaption | WireDelegation | WireUsage | WireProblem | WireClosed
+WireEvent = (
+    WireStarted
+    | WireCaption
+    | WireDelegation
+    | WireToolCall
+    | WireAudio
+    | WirePlaybackClear
+    | WireUsage
+    | WireProblem
+    | WireClosed
+)
 
 
 class LiveWire(Protocol):
@@ -83,7 +155,9 @@ class LiveWire(Protocol):
     def call_id(self) -> str: ...
 
     @property
-    def answer_sdp(self) -> str: ...
+    def media(self) -> JsonObject:
+        """How the accessor connects audio; see the module docstring."""
+        ...
 
     def events(self) -> AsyncIterator[WireEvent]:
         """Yield normalized events until the control channel ends.
@@ -93,7 +167,20 @@ class LiveWire(Protocol):
         ...
 
     async def deliver_result(self, delegation_id: str, text: str) -> None:
-        """Return speakable delegation output to the voice model."""
+        """Return delegation output, or a Tool call's JSON result, to the voice model."""
+        ...
+
+    async def send_audio(self, pcm: bytes) -> None:
+        """Forward microphone PCM (relay media only); dropped before the session runs."""
+        ...
+
+    @property
+    def announces_as_user_input(self) -> bool:
+        """Whether announcements reach the voice model like user input.
+
+        The voice model then follows instructions quoted in them, so the call
+        leaves untrusted text such as Run result excerpts out.
+        """
         ...
 
     async def announce(self, text: str) -> None:

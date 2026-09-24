@@ -14,10 +14,14 @@ import json
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from core.chat.model_resolution import resolve_request_temperature
-from core.model_tasks._live_tools import DELEGATION_INSTRUCTIONS, LIVE_TOOL_NAMES, live_tools
+from core.model_tasks._live_tools import (
+    DELEGATION_INSTRUCTIONS,
+    live_tool_rejection,
+    live_tools,
+)
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderAuthError, ProviderRateLimitError
 from core.utils.errors import VBotError
@@ -172,14 +176,14 @@ class LiveBrain:
     async def _execute(self, tool_call: JsonObject, performed: list[str]) -> JsonObject:
         name = tool_call.get("name")
         arguments = tool_call.get("arguments")
-        if name not in LIVE_TOOL_NAMES:
-            return _tool_error("unknown_tool", f"Unknown Tool: {name}")
-        if not isinstance(arguments, dict):
-            return _tool_error("invalid_arguments", "Tool arguments must be a JSON object.")
-        action = arguments.get("action")
+        rejection = live_tool_rejection(name, arguments)
+        if rejection is not None:
+            return rejection
+        checked = cast(JsonObject, arguments)
+        action = checked.get("action")
         if action not in _READ_ONLY_ACTIONS:
             performed.append(f"{name} {action}" if isinstance(action, str) else str(name))
-        return await self._execute_tool(str(name), dict(arguments))
+        return await self._execute_tool(str(name), dict(checked))
 
 
 def _render_input(delegation: DelegationInput, request_label: str) -> str:
@@ -197,10 +201,6 @@ def _request_context(adapter: Any, conversation_id: str) -> JsonObject:
     if not callable(build):
         return {}
     return dict(build(agent_id="live-voice", session_id=conversation_id))
-
-
-def _tool_error(code: str, message: str) -> JsonObject:
-    return {"ok": False, "error": {"code": code, "message": message}}
 
 
 def _failure_reason(error: BaseException) -> str:

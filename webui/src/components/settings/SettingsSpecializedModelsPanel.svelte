@@ -28,6 +28,7 @@
     JSON_OPTION_TYPE,
     TASK_MODEL_ROWS,
     createTaskModelUpdatePayload,
+    isOptionFieldHidden,
     normalizeOptionSchema,
     normalizeTargets,
     normalizeTaskModelSettings,
@@ -523,6 +524,14 @@
     }));
   }
 
+  function taskModelFieldHidden(taskType, field) {
+    return isOptionFieldHidden(
+      field,
+      taskModelSchemasByType[taskType] ?? [],
+      taskModelBindings[taskType]?.options ?? {},
+    );
+  }
+
   function taskModelFieldChoices(taskType, field) {
     return visibleFieldOptions(
       field,
@@ -714,7 +723,9 @@
         {#if fields.length > 0}
           <div class="s-task-model-options">
             {#each fields as field (field.name)}
-              {#if field.type === JSON_OPTION_TYPE}
+              {#if taskModelFieldHidden(row.taskType, field)}
+                <!-- Irrelevant for the current value of another option. -->
+              {:else if field.type === JSON_OPTION_TYPE}
                 <details class="s-task-model-advanced">
                   <summary
                     >{field.label}<span aria-hidden="true">JSON</span></summary
