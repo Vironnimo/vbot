@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
@@ -13,6 +13,7 @@ from core.sessions import (
     FORK_SOURCE_META_KEY,
     ChatSession,
     OwnedRunRecord,
+    OwnedSessionSummary,
     SessionAddress,
 )
 from core.statistics._measurements import (
@@ -96,6 +97,27 @@ class SessionSource(Protocol):
         after: int = 0,
         limit: int = 100,
     ) -> list[OwnedRunRecord]: ...
+
+    def list_owned_session_summaries(
+        self,
+        *,
+        owner_name: str | None = None,
+        group_id: str | None = None,
+        metadata_keys: Sequence[str] = (),
+    ) -> list[OwnedSessionSummary]: ...
+
+
+def extension_session_summary(owned: OwnedSessionSummary) -> JsonObject:
+    """Label an owner-managed Session by its group title and participant name.
+
+    Participant Sessions carry no meaningful title of their own; report rows
+    show which group and participant produced the activity instead.
+    """
+    summary = dict(owned.summary)
+    label = " · ".join(part for part in (owned.group_title, owned.participant_name) if part)
+    if label:
+        summary["title"] = label
+    return summary
 
 
 def _indexed_activity_summary(summary: JsonObject) -> JsonObject:
@@ -182,7 +204,15 @@ def _session_activity_messages(
     return messages[copied_message_count:]
 
 
-def _owner_scopes(records: Sequence[OwnedRunRecord]) -> tuple[StatisticsScope, ...]:
+def _owner_scopes(
+    records: Sequence[OwnedRunRecord],
+    summaries: Mapping[SessionAddress, JsonObject],
+) -> tuple[StatisticsScope, ...]:
+    """Group owned Run Sessions into index scopes.
+
+    ``summaries`` supplies the same labelled summaries the full report indexes,
+    so a group read never rewrites a shared index row with a thinner summary.
+    """
     grouped: dict[tuple[str | None, str], list[JsonObject]] = {}
     seen: set[SessionAddress] = set()
     for record in records:
@@ -190,7 +220,7 @@ def _owner_scopes(records: Sequence[OwnedRunRecord]) -> tuple[StatisticsScope, .
             continue
         seen.add(record.address)
         grouped.setdefault((record.address.project_id, record.address.agent_id), []).append(
-            {"id": record.address.session_id}
+            summaries.get(record.address, {"id": record.address.session_id})
         )
     return tuple(
         StatisticsScope(

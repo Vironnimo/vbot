@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable, Iterator
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -19,6 +19,7 @@ from core.sessions import (
 from core.statistics._aggregation import (
     _Aggregator,
 )
+from core.statistics._extensions import ExtensionSliceKey, extension_actor_key
 from core.statistics._sources import (
     AgentDirectory,
     ProjectDirectory,
@@ -29,6 +30,7 @@ from core.statistics._sources import (
     _run_activity_record,
     _run_overlaps,
     _session_activity_messages,
+    extension_session_summary,
 )
 from core.statistics.index import (
     IndexedStatisticsSession,
@@ -54,6 +56,14 @@ _LOGGER = get_logger("statistics")
 
 
 _GROUP_USAGE_WORKERS = BoundedWorkerPool(name="statistics-group-usage", max_workers=2)
+
+
+@dataclass(frozen=True)
+class _ExtensionSession:
+    """One owner-managed participant Session: its index scope and report slice."""
+
+    scope: StatisticsScope
+    key: ExtensionSliceKey
 
 
 MAX_RUN_ACTIVITY = 200
@@ -100,7 +110,9 @@ class StatisticsService:
 
     def warm_index(self) -> None:
         """Reconcile the disposable index without building a report."""
-        self._indexed_snapshot(self._statistics_scopes())
+        scopes = self._statistics_scopes()
+        extension_sessions = self._extension_sessions()
+        self._indexed_snapshot(_index_scopes(scopes, extension_sessions))
 
     def report(
         self, *, since: datetime | None = None, until: datetime | None = None
@@ -108,7 +120,8 @@ class StatisticsService:
         """Reconcile all Session scopes and return the aggregated report."""
         aggregator = _Aggregator(since=since, until=until, pricing_lookup=self._pricing_lookup)
         scopes = self._statistics_scopes()
-        snapshot = self._indexed_snapshot(scopes)
+        extension_sessions = self._extension_sessions()
+        snapshot = self._indexed_snapshot(_index_scopes(scopes, extension_sessions))
         for scope in scopes:
             summaries: list[JsonObject] = []
             aggregator.register_scope(agent_id=scope.agent_id, project_id=scope.project_id)
@@ -116,6 +129,24 @@ class StatisticsService:
                 aggregator.process_session(scope.display_key, str(summary["id"]), messages, summary)
                 summaries.append(summary)
             aggregator.register_agent(scope.display_key, summaries)
+        # Extension-owned Sessions count once per owner under its reserved actor
+        # key, never under their synthetic participant Agent ids.
+        owner_summaries: dict[str, list[JsonObject]] = {}
+        for entry in extension_sessions:
+            aggregator.register_scope(agent_id=None, project_id=entry.scope.project_id)
+            surviving = owner_summaries.setdefault(entry.key.owner_name, [])
+            for summary, messages in self._scope_sessions(entry.scope, snapshot):
+                aggregator.process_session(
+                    entry.scope.display_key,
+                    str(summary["id"]),
+                    messages,
+                    summary,
+                    extension=entry.key,
+                )
+                surviving.append(summary)
+        for owner_name, summaries in owner_summaries.items():
+            if summaries:
+                aggregator.register_agent(extension_actor_key(owner_name), summaries)
         return aggregator.build(self._skill_inventory)
 
     def run_activity(
@@ -128,8 +159,9 @@ class StatisticsService:
 
         runs: list[RunActivity] = []
         scopes = self._statistics_scopes()
-        snapshot = self._indexed_snapshot(scopes)
-        for scope in scopes:
+        extension_sessions = self._extension_sessions()
+        snapshot = self._indexed_snapshot(_index_scopes(scopes, extension_sessions))
+        for scope in _index_scopes(scopes, extension_sessions):
             for summary, messages in self._scope_sessions(scope, snapshot):
                 session_id = str(summary["id"])
                 title = summary.get("title")
@@ -188,7 +220,7 @@ class StatisticsService:
         ):
             raise ValueError("participant_id must be a non-empty string")
         records = self._owned_run_page(owner_name, group_id, participant_id)
-        report, participant_reports = self._group_report(records)
+        report, participant_reports = self._group_report(owner_name, group_id, records)
         participants = {record.owner.participant_id for record in records}
         return {
             "group_id": group_id,
@@ -230,9 +262,15 @@ class StatisticsService:
             after = page[-1].record_key
 
     def _group_report(
-        self, records: list[OwnedRunRecord]
+        self, owner_name: str, group_id: str, records: list[OwnedRunRecord]
     ) -> tuple[StatisticsReport, dict[str, StatisticsReport]]:
-        scopes = _owner_scopes(records)
+        summaries = {
+            owned.address: extension_session_summary(owned)
+            for owned in self._sessions.list_owned_session_summaries(
+                owner_name=owner_name, group_id=group_id, metadata_keys=("seen_skills",)
+            )
+        }
+        scopes = _owner_scopes(records, summaries)
         snapshot = self._index.snapshot(self._sessions, scopes, prune=False, scope_only=True)
         by_address: dict[SessionAddress, list[OwnedRunRecord]] = {}
         for record in records:
@@ -309,6 +347,34 @@ class StatisticsService:
             )
         return tuple(scopes)
 
+    def _extension_sessions(self) -> tuple[_ExtensionSession, ...]:
+        """Discover every live Extension-owned participant Session in one read."""
+        entries: list[_ExtensionSession] = []
+        for owned in self._sessions.list_owned_session_summaries(metadata_keys=("seen_skills",)):
+            summary = extension_session_summary(owned)
+            created_at = summary.get("created_at")
+            entries.append(
+                _ExtensionSession(
+                    scope=StatisticsScope(
+                        project_id=owned.address.project_id,
+                        agent_id=owned.address.agent_id,
+                        display_key=extension_actor_key(owned.owner_name),
+                        summaries=(summary,),
+                    ),
+                    key=ExtensionSliceKey(
+                        owner_name=owned.owner_name,
+                        group_id=owned.group_id,
+                        group_title=owned.group_title,
+                        participant_id=owned.participant_id,
+                        participant_name=owned.participant_name,
+                        model=owned.model,
+                        session_id=owned.address.session_id,
+                        created_at=created_at if isinstance(created_at, str) else None,
+                    ),
+                )
+            )
+        return tuple(entries)
+
     def _indexed_snapshot(
         self,
         scopes: tuple[StatisticsScope, ...],
@@ -367,3 +433,9 @@ class StatisticsService:
                     continue
                 messages = _session_activity_messages(messages, summary)
             yield _indexed_activity_summary(summary), messages
+
+
+def _index_scopes(
+    scopes: tuple[StatisticsScope, ...], extension_sessions: tuple[_ExtensionSession, ...]
+) -> tuple[StatisticsScope, ...]:
+    return (*scopes, *(entry.scope for entry in extension_sessions))
