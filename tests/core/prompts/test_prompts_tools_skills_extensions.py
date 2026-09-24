@@ -416,6 +416,9 @@ def test_subagent_block_renders_only_with_tool_and_lists_additional_targets(
                 )
             ]
 
+        def foreground_timeout_minutes(self) -> int:
+            return 17
+
     tools = ToolRegistry()
     prompt_blocks = ToolPromptBlockRegistry()
     register_subagent_tools(tools, cast(Any, Coordinator()), prompt_blocks)
@@ -427,11 +430,16 @@ def test_subagent_block_renders_only_with_tool_and_lists_additional_targets(
     allowed = _agent(workspace, allowed_tools=["subagent"])
     denied = _agent(workspace, allowed_tools=[])
 
-    prompt = manager.build_system_prompt(allowed, agent_project_id="vbot")
+    top_level_blocks: list[dict[str, Any]] = []
+    nested_blocks: list[dict[str, Any]] = []
+    prompt = manager.build_system_prompt(
+        allowed, agent_project_id="vbot", block_details=top_level_blocks
+    )
     nested_prompt = manager.build_system_prompt(
         allowed,
         agent_project_id="vbot",
         nesting_depth=1,
+        block_details=nested_blocks,
     )
 
     denied_prompt = manager.build_system_prompt(
@@ -443,6 +451,10 @@ def test_subagent_block_renders_only_with_tool_and_lists_additional_targets(
         assert value in nested_prompt
         assert value not in denied_prompt
     assert prompt != nested_prompt
+    top_level_block = next(block for block in top_level_blocks if block["id"] == "tool:subagent")
+    nested_block = next(block for block in nested_blocks if block["id"] == "tool:subagent")
+    assert "17" in nested_block["text"]
+    assert "17" not in top_level_block["text"]
 
 
 def test_subagent_block_stays_visible_without_additional_targets(

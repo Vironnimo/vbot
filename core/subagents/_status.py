@@ -12,6 +12,7 @@ from core.runs import (
 from core.sessions import SessionAddress
 from core.subagents._completion import (
     _add_interruption_details,
+    _cancelled_continuation_note,
     _poll_result_from_session,
     _public_subagent_result,
     _register_result_acknowledgement_after_parent_persistence,
@@ -190,7 +191,7 @@ async def _handle_subagent_cancel(
         work_id,
     )
     if owned is None:
-        return _subagent_not_owned_failure(work_id)
+        return _subagent_not_found_failure(work_id)
     parent_key, entry = owned
     if entry.complete:
         return tool_failure(
@@ -299,7 +300,12 @@ async def _cancel_owned_subagent_run(
         queue_item_id=entry.queue_item_id,
     )
     await _emit_subagent_status_changed(context, data)
-    return tool_success(_without_internal_handles(data))
+    # A started child keeps its Session history; removed Queue work never ran.
+    result = _without_internal_handles(data)
+    result["note"] = _cancelled_continuation_note(
+        entry.agent_id, entry.project_id, entry.session_id
+    )
+    return tool_success(result)
 
 
 def _cancelled_subagent_descriptor(
@@ -326,10 +332,13 @@ def _cancelled_subagent_descriptor(
     return data
 
 
-def _subagent_not_owned_failure(work_id: str) -> JsonObject:
+def _subagent_not_found_failure(work_id: str) -> JsonObject:
+    """Explain an untracked id without revealing whether another Session owns it."""
     return tool_failure(
-        "subagent_not_owned",
-        f"Sub-Agent work is not owned by this Parent Agent Session: {work_id}",
+        "subagent_not_found",
+        f"No Sub-Agent work with id {work_id} is tracked for this Session. Work stops being "
+        "tracked after its result was delivered to you or vBot restarted; use that "
+        "delivered result, or call status without id to list tracked work.",
     )
 
 
@@ -373,7 +382,7 @@ async def _handle_subagent_status(
         work_id,
     )
     if owned is None:
-        return _subagent_not_owned_failure(work_id)
+        return _subagent_not_found_failure(work_id)
     parent_key, entry = owned
     return await _subagent_status_snapshot(
         context, parent_key, entry, runtime=runtime, batch_tracker=batch_tracker
