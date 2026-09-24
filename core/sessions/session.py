@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -12,8 +12,9 @@ from core.chat.errors import ChatSessionError
 from core.sessions._io import (
     _run_session_io,
 )
-from core.sessions._metadata import _decode_chat_history_cursor
+from core.sessions._metadata import _decode_chat_history_cursor, _new_prompt_cache_affinity_id
 from core.sessions._types import (
+    PROMPT_CACHE_AFFINITY_META_KEY,
     JsonObject,
     SessionAddress,
     SessionChatHistorySnapshot,
@@ -84,6 +85,7 @@ class ChatSession:
         *,
         continuation_records: Sequence[JsonObject] = (),
         since: SessionReadCursor | None = None,
+        metadata_mutation: Callable[[JsonObject], None] | None = None,
     ) -> SessionReadBatch | None:
         """Append *messages*; see ``SessionStore.append_messages`` for the options."""
         delta = self._store.append_messages(
@@ -93,7 +95,61 @@ class ChatSession:
             assistant_message_id=self.assistant_message_id,
             continuation_records=continuation_records,
             since=since,
+            metadata_mutation=metadata_mutation,
         )
+        self._appended(messages)
+        return delta
+
+    def commit_compaction_checkpoint(
+        self,
+        checkpoint: ChatMessage,
+        *,
+        since: SessionReadCursor,
+        metadata_mutation: Callable[[JsonObject], None] | None = None,
+    ) -> tuple[SessionReadBatch, str] | None:
+        """Append a Compaction *checkpoint* only while *since* is still current.
+
+        One transaction verifies the cursor, appends the checkpoint, applies
+        *metadata_mutation* and rotates the prompt-cache affinity id, because a
+        committed checkpoint starts a new prompt lineage. Returns the records
+        after *since* with the new affinity id, or ``None`` (nothing written)
+        when another writer advanced the Session first.
+        """
+        affinity_id = _new_prompt_cache_affinity_id()
+
+        def mutate(metadata: JsonObject) -> None:
+            if metadata_mutation is not None:
+                metadata_mutation(metadata)
+            metadata[PROMPT_CACHE_AFFINITY_META_KEY] = affinity_id
+
+        delta = self._store.append_messages(
+            self.address,
+            [checkpoint],
+            run_id=self.run_id,
+            assistant_message_id=self.assistant_message_id,
+            since=since,
+            metadata_mutation=mutate,
+            require_current=True,
+        )
+        if delta is None:
+            return None
+        self._appended([checkpoint])
+        return delta, affinity_id
+
+    async def commit_compaction_checkpoint_async(
+        self,
+        checkpoint: ChatMessage,
+        *,
+        since: SessionReadCursor,
+        metadata_mutation: Callable[[JsonObject], None] | None = None,
+    ) -> tuple[SessionReadBatch, str] | None:
+        return await _run_session_io(
+            lambda: self.commit_compaction_checkpoint(
+                checkpoint, since=since, metadata_mutation=metadata_mutation
+            )
+        )
+
+    def _appended(self, messages: list[ChatMessage]) -> None:
         roles = {message.role for message in messages}
         if "compaction_checkpoint" in roles:
             # The appended checkpoint is now the newest history row, so only
@@ -106,7 +162,6 @@ class ChatSession:
             with self._buffers.lock:
                 self._buffers.activated_skill_contents = {}
                 self._buffers.activated_skill_cache_loaded = False
-        return delta
 
     async def start_tool_async(self, call_id: str, started_at: str) -> None:
         if not self.run_id or not self.assistant_message_id:
@@ -129,6 +184,7 @@ class ChatSession:
         *,
         continuation_records: Sequence[JsonObject] = (),
         since: SessionReadCursor | None = None,
+        metadata_mutation: Callable[[JsonObject], None] | None = None,
     ) -> SessionReadBatch | None:
         if not messages:
             return None
@@ -137,6 +193,7 @@ class ChatSession:
                 list(messages),
                 continuation_records=list(continuation_records),
                 since=since,
+                metadata_mutation=metadata_mutation,
             )
         )
 
