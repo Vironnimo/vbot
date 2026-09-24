@@ -127,7 +127,6 @@ class ChatSessionManager:
     def add_completion_read_callback(
         self, callback: Callable[[SessionAddress, str], None]
     ) -> Callable[[], None]:
-        """Call ``callback(address, run_id)`` after a completion is newly marked read."""
         self._completion_read_callbacks.append(callback)
         return lambda: (
             self._completion_read_callbacks.remove(callback)
@@ -499,11 +498,7 @@ class ChatSessionManager:
         )
 
     def summary(self, address: SessionAddress) -> JsonObject | None:
-        """Return one live Session's list summary, or ``None`` when it is absent.
-
-        This is the Session-list row projection read by exact address: it
-        neither counts nor pages the Agent's other Sessions.
-        """
+        """Read one live Session's list row by exact address; ``None`` if absent."""
         row = self._store.summary_row(address)
         return None if row is None else _session_list_summary_from_state(row)
 
@@ -526,12 +521,7 @@ class ChatSessionManager:
     def list_completion_activity(
         self, scopes: Sequence[tuple[str | None, str]]
     ) -> dict[tuple[str | None, str], builtins.list[JsonObject]]:
-        """Return completion activity for many Agent scopes from one read snapshot.
-
-        Every requested ``(project_id, agent_id)`` scope is a key; its list holds
-        only live Sessions that have a latest completion, read or unread, ordered
-        by Session id. A Session without a completion is omitted.
-        """
+        """Map every ``(project_id, agent_id)`` scope to its live Sessions with a completion."""
         result: dict[tuple[str | None, str], builtins.list[JsonObject]] = {
             (project_id or None, agent_id): [] for project_id, agent_id in scopes
         }
