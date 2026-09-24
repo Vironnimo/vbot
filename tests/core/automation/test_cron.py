@@ -443,11 +443,11 @@ def test_once_timestamp_is_normalized_from_server_timezone_to_explicit_utc(
         agent_id="agent-one",
         prompt="Run at local wall time",
         schedule_type="once",
-        run_at="2026-07-18T16:00",
+        run_at="2099-07-18T16:00",
     )
 
-    assert created.run_at == "2026-07-18T14:00:00+00:00"
-    assert service.next_fire_at(created) == "2026-07-18T14:00:00+00:00"
+    assert created.run_at == "2099-07-18T14:00:00+00:00"
+    assert service.next_fire_at(created) == "2099-07-18T14:00:00+00:00"
 
 
 def test_system_timezone_uses_iana_zone_with_dst_rules(tmp_path: Path) -> None:

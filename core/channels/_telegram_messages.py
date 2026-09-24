@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, TypeGuard
 
+from core.channels._message_chunks import split_message
 from core.channels.config import ChannelConfigError
 
 TELEGRAM_MESSAGE_LIMIT = 4096
@@ -17,24 +18,9 @@ def split_telegram_message(message: str, max_chars: int = TELEGRAM_MESSAGE_LIMIT
     astral-plane character (most emoji) counts as two. Splitting on Python's code-point
     slicing would let an emoji-heavy chunk exceed the wire limit and fail with BadRequest,
     so chunk boundaries are placed by UTF-16 length and never inside a character.
+    Messages are sent as plain text, so code fences are not closed and reopened.
     """
-    if max_chars <= 0:
-        raise ValueError("max_chars must be positive")
-    if not message:
-        return []
-
-    chunks: list[str] = []
-    chunk_start = 0
-    chunk_units = 0
-    for index, character in enumerate(message):
-        units = _utf16_units(character)
-        if chunk_units + units > max_chars and index > chunk_start:
-            chunks.append(message[chunk_start:index])
-            chunk_start = index
-            chunk_units = 0
-        chunk_units += units
-    chunks.append(message[chunk_start:])
-    return chunks
+    return split_message(message, max_chars, measure=_utf16_length, code_fences=False)
 
 
 def _utf16_units(character: str) -> int:

@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from core.automation.cron import CronJobNotFoundError, CronJobValidationError, CronServiceError
+from core.automation.cron import (
+    CronJobInPastError,
+    CronJobNotFoundError,
+    CronJobValidationError,
+    CronServiceError,
+)
 from core.projects import format_agent_address, parse_agent_address
 from core.tools._argument_repair import normalize_call_arguments
 from core.tools.arguments import optional_string, required_string
@@ -59,6 +64,16 @@ _ACTION_RECOMMENDATIONS = {
     "enable": 'Use {"action":"enable","id":"<job-id>"}',
     "disable": 'Use {"action":"disable","id":"<job-id>"}',
 }
+_PAST_ONCE_RECOMMENDATIONS = {
+    "create": 'For example use "schedule":"in 30m" or a later ISO timestamp',
+    "update": (
+        'For example use {"action":"update","id":"<job-id>","schedule":"in 30m"} or a later '
+        "ISO timestamp"
+    ),
+    "enable": (
+        'Set one with {"action":"update","id":"<job-id>","schedule":"in 30m"}, then enable the job'
+    ),
+}
 
 _CRON_ID_PARAMETER: JsonObject = {
     "type": "string",
@@ -98,8 +113,9 @@ _CRON_SCHEDULE_PARAMETER: JsonObject = {
         "Schedule for create or update: ISO 8601 timestamp, 'in <duration>', "
         "'every <duration>', or exactly five cron fields. Durations use a positive whole "
         "number plus m, h, or d. Bare durations, fuzzy dates, and six-field cron are invalid. "
-        "Examples: 'every 2h', 'in 30m', '0 9 * * *', "
-        "'2026-08-07T09:00:00+02:00'. Omit on update to keep the existing schedule."
+        "An ISO 8601 timestamp must lie in the future. Examples: 'every 2h', 'in 30m', "
+        "'0 9 * * *', '2030-08-07T09:00:00+02:00'. Omit on update to keep the existing "
+        "schedule."
     ),
 }
 _CRON_REPEAT_PARAMETER: JsonObject = {
@@ -237,6 +253,13 @@ def _handle_cron_tool(
         return tool_failure(
             "job_not_found",
             f'{error}. Use {{"action":"list"}} to get current job ids',
+            retryable=False,
+        )
+    except CronJobInPastError as error:
+        recommendation = _PAST_ONCE_RECOMMENDATIONS.get(action, _ACTION_RECOMMENDATIONS[action])
+        return tool_failure(
+            "invalid_arguments",
+            f"{str(error).rstrip('. ')}. {recommendation}",
             retryable=False,
         )
     except CronJobValidationError as error:

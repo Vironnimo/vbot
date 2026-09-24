@@ -12,6 +12,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 from core.attachments import AttachmentStore
+from core.channels._message_chunks import split_message
 from core.channels.adapter import (
     ChannelAccessRegistry,
     ChannelAdapter,
@@ -768,12 +769,8 @@ class DiscordChannelAdapter(ChannelAdapter):
 
 
 def split_discord_message(message: str, max_chars: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
-    """Split one message into Discord-size chunks."""
-    if max_chars <= 0:
-        raise ValueError("max_chars must be positive")
-    if not message:
-        return []
-    return [message[start : start + max_chars] for start in range(0, len(message), max_chars)]
+    """Split one Markdown message into Discord-size chunks (code points)."""
+    return split_message(message, max_chars)
 
 
 def _normalize_optional_message(message: str | None) -> str | None:

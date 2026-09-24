@@ -37,6 +37,9 @@ _WHEN = re.compile(r"^(start|end)(?:\s*([+-])\s*([1-9][0-9]*)\s*([mhd]))?$")
 _TERMINAL = frozenset({"completed", "failed", "cancelled", "interrupted", "missed"})
 _MAX_OFFSET = 31 * 24 * 60
 _MAX_ACTIONS = 16
+# Finished history is kept this long after expiry, then pruned once the scan
+# window no longer reaches its occurrence (it can then never become due again).
+_RETENTION = timedelta(days=30)
 
 
 def parse_action_when(value: object) -> tuple[str, int, str]:
@@ -311,6 +314,8 @@ class CalendarActions:
                     previous = self._executions.get(key)
                     if previous and self._consumed(previous, row):
                         row = previous
+                    elif _instant(row["expires_at"]) <= datetime.now(UTC) - _RETENTION:
+                        continue  # History beyond retention is no longer known.
                     elif _instant(row["expires_at"]) <= datetime.now(UTC):
                         row["status"] = "missed"
                     result.append(copy.deepcopy(row))
@@ -403,6 +408,7 @@ class CalendarActions:
         desired: dict[
             str, tuple[dict[str, Any], dict[str, Any], CalendarEvent, EventOccurrence]
         ] = {}
+        seen: set[str] = set()
         changed = False
         for action_id, action in list(self._actions.items()):
             if action["event_id"] not in live and not self._calendar._invalid_event_entries:
@@ -423,6 +429,7 @@ class CalendarActions:
                 occurrences = self._calendar.event_occurrences(event, lower, edge)
                 for occurrence in occurrences:
                     key, row = self._execution(action, event, occurrence)
+                    seen.add(key)
                     due, expires = _instant(row["scheduled_at"]), _instant(row["expires_at"])
                     if due > now:
                         self._sleep_seconds = min(
@@ -439,17 +446,20 @@ class CalendarActions:
                         continue
                     if expires <= now:
                         row["status"] = "missed"
-                    else:
-                        desired[key] = (row, action, event, occurrence)
                     if previous != row:
                         self._executions[key] = row
                         changed = True
+                    # Workers mutate the stored row, never a recomputed copy: an
+                    # equal pending row already stored stays the single source of truth.
+                    stored = self._executions[key]
+                    if stored["status"] == "pending":
+                        desired[key] = (stored, action, event, occurrence)
                 lower = edge
             if now - _instant(action["scanned_until"]) >= timedelta(minutes=1):
                 action["scanned_until"] = now.isoformat()
                 changed = True
         for key, row in list(self._executions.items()):
-            if row["status"] == "pending" and key not in desired and key not in self._workers:
+            if key not in self._workers and self._prunable(key, row, desired, seen, now):
                 del self._executions[key]
                 changed = True
         if changed:
@@ -466,6 +476,21 @@ class CalendarActions:
         if changed:
             # Invalidation must not withdraw our own pending work.
             self._calendar._notify_action_changed()
+
+    def _prunable(
+        self, key: str, row: dict[str, Any], desired: dict[str, Any], seen: set[str], now: datetime
+    ) -> bool:
+        if row["status"] == "pending":
+            return key not in desired
+        if row["action_id"] not in self._actions:
+            return True  # Action ids are never reused, so its history cannot refire.
+        # The scan recomputes every occurrence it still reaches; retaining those rows
+        # keeps them consumed. Expired rows it no longer reaches can never become due.
+        return (
+            row["status"] in _TERMINAL
+            and key not in seen
+            and _instant(row["expires_at"]) <= now - _RETENTION
+        )
 
     def _worker_done(self, key: str, task: asyncio.Task[None]) -> None:
         if self._workers.get(key) is task:
@@ -507,15 +532,20 @@ class CalendarActions:
             nonlocal input_persisted
             input_persisted = True
 
+        def mark(**fields: Any) -> None:
+            # Always record progress in the stored row, even if a compensating
+            # rollback replaced the execution map while this worker was waiting.
+            self._executions.setdefault(key, row).update(fields)
+
         try:
             assert self._trigger is not None
             self._validate(action)
             remaining = (_instant(row["expires_at"]) - datetime.now(UTC)).total_seconds()
             if remaining <= 0:
-                row["status"] = "missed"
+                mark(status="missed")
                 return
             # The claim precedes any await that can admit work.
-            row["status"] = "claimed"
+            mark(status="claimed")
             self._save()
             agent, project = parse_agent_address(action["target"])
             message = json.dumps(
@@ -543,27 +573,31 @@ class CalendarActions:
                     input_persisted_hook=admitted,
                 )
             self._runs[key] = run
-            row.update(status="running", run_id=run.id, session=run.session_id)
+            mark(status="running", run_id=run.id, session=run.session_id)
             try:
                 self._save()
             except CalendarStorageError:
                 _LOGGER.exception("Cannot persist admitted calendar Run (action=%s)", action["id"])
             self._calendar._notify_action_changed()
             await run.wait()
-            row["status"] = "completed"
+            mark(status="completed")
         except TimeoutError:
-            row["status"] = (
-                "failed" if run is not None else "interrupted" if input_persisted else "missed"
+            mark(
+                status="failed"
+                if run is not None
+                else "interrupted"
+                if input_persisted
+                else "missed"
             )
         except asyncio.CancelledError:
-            row["status"] = "interrupted" if run is not None or input_persisted else "pending"
+            mark(status="interrupted" if run is not None or input_persisted else "pending")
             raise
         except Exception:
-            row["status"] = "failed"
             if run is None:
+                mark(status="failed")
                 _LOGGER.exception("Calendar action admission failed (action=%s)", action["id"])
             else:
-                row["status"] = run.status.value
+                mark(status=run.status.value)
         finally:
             self._runs.pop(key, None)
             self._workers.pop(key, None)

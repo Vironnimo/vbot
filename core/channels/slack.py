@@ -161,10 +161,10 @@ class SlackChannelAdapter(NetworkChannelAdapter):
     ) -> None:
         self.check_send(message, files, buttons)
         self.remember(await self.target_facts(platform_target))
-        for start in range(0, len(message or ""), 3500):
+        for chunk in self.message_chunks(message):
             payload: dict[str, Any] = {
                 "channel": platform_target,
-                "text": (message or "")[start : start + 3500],
+                "text": chunk,
                 "unfurl_links": False,
                 "unfurl_media": False,
             }
