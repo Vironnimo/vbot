@@ -20,6 +20,7 @@ from core.providers._http_shared import (
     connect_streaming_with_retry,
     format_http_error_detail,
     iter_sse_data,
+    iter_stream_lines,
     parse_sse_json_data,
     post_json_with_retry,
     wrap_network_error,
@@ -441,7 +442,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         event_lines: list[str] = []
         seen_finish_delta = False
         try:
-            async for line in response.aiter_lines():
+            async for line in iter_stream_lines(response):
                 if line:
                     event_lines.append(line)
                     continue

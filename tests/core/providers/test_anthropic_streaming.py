@@ -709,7 +709,7 @@ class TestStreamSSE:
             def __init__(self) -> None:
                 self.closed = False
 
-            def aiter_lines(self):
+            def aiter_bytes(self):
                 return _BrokenLineIterator()
 
             async def aclose(self) -> None:
@@ -754,7 +754,7 @@ class TestStreamSSE:
             def __init__(self) -> None:
                 self.closed = False
 
-            def aiter_lines(self):
+            def aiter_bytes(self):
                 return _BrokenTimeoutLineIterator()
 
             async def aclose(self) -> None:
@@ -799,7 +799,7 @@ class TestStreamSSE:
             def __init__(self) -> None:
                 self.closed = False
 
-            def aiter_lines(self):
+            def aiter_bytes(self):
                 return _BrokenProtocolLineIterator()
 
             async def aclose(self) -> None:

@@ -23,6 +23,7 @@ from core.providers._http_shared import (
     PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS,
     connect_streaming_with_retry,
     format_http_error_detail,
+    iter_stream_lines,
     post_json_with_retry,
     wrap_network_error,
 )
@@ -850,7 +851,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         event_lines: list[str] = []
         seen_finish_delta = False
         try:
-            async for line in response.aiter_lines():
+            async for line in iter_stream_lines(response):
                 if line:
                     event_lines.append(line)
                     continue
