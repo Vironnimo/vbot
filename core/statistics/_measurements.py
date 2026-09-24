@@ -25,6 +25,11 @@ def _provider_model_key(model: str | None) -> str:
     return parse_bare_model(model)
 
 
+def _provider_of(model_key: str) -> str:
+    """Return the Provider part of a bare Model key, the key itself without one."""
+    return model_key.split("/", 1)[0] if "/" in model_key else model_key
+
+
 def _parse_envelope(content: Any) -> JsonObject | None:
     """Parse a tool result envelope; return ``None`` when it is not one.
 
