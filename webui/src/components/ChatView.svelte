@@ -96,10 +96,14 @@
     // later lifecycle events). An owner mounted after the app connected starts
     // from it instead of replaying the retained snapshot and event window.
     activeRuns = null,
-    // Bumped by App on `resource_changed(kind:"sessions")`; forwarded to the
-    // session drawer so a new/switched session in another window appears in the
-    // list. It deliberately does NOT switch the viewed conversation.
+    // Bumped by App when Session-list continuity is uncertain (replay gap or
+    // server restart): activity, the drawer, and the Parent Session link
+    // re-read everything. It deliberately does NOT switch the viewed
+    // conversation.
     sessionsRefreshToken = 0,
+    // App's bounded window of `resource_changed(kind:"sessions")` scopes
+    // (`{ id, scope }`); each consumer refreshes only what a scope names.
+    sessionInvalidations = [],
     // Bumped when Extension lifecycle changes alter the live slash-command catalog.
     commandsRefreshToken = 0,
     // Scope object of the latest `resource_changed(kind:"queue")` (a fresh
@@ -153,6 +157,9 @@
   const navigation = createChatViewNavigation({
     get sessionsRefreshToken() {
       return sessionsRefreshToken;
+    },
+    get sessionInvalidations() {
+      return sessionInvalidations;
     },
     get chatController() {
       return chatController;
@@ -450,7 +457,9 @@
     untrack(() => chatController.applyBackgroundBashStatusEvents(events));
   });
 
-  let lastActivityRefreshKey = '';
+  // Durable completion activity for the displayed Agent addresses. A reconnect
+  // or a full Session refresh re-reads every address; an address joining the
+  // set is read once. Scoped Session invalidations are applied separately.
   $effect(() => {
     const addresses = [
       ...chatState.agents.map((agent) => agent.id),
@@ -461,12 +470,15 @@
     const reconnectRevision = connectionSnapshot
       ? `${connectionSnapshot.epoch ?? ''}:${connectionSnapshot.last_sequence ?? ''}`
       : '';
-    const refreshKey = `${sessionsRefreshToken}:${reconnectRevision}:${addresses.join('|')}`;
-    if (refreshKey === lastActivityRefreshKey) {
-      return;
-    }
-    lastActivityRefreshKey = refreshKey;
-    void chatController.refreshAgentActivity(addresses);
+    const refreshKey = `${sessionsRefreshToken}:${reconnectRevision}`;
+    untrack(() => chatController.syncAgentActivity(addresses, refreshKey));
+  });
+
+  $effect(() => {
+    const entries = sessionInvalidations;
+    untrack(() =>
+      chatController.applySessionInvalidations(entries, runServerEvents),
+    );
   });
 
   $effect(() => {
@@ -789,6 +801,7 @@
             currentSessionId={navigation.viewingSessionId ||
               target.activeAgent.current_session_id}
             reloadToken={sessionsRefreshToken}
+            invalidations={sessionInvalidations}
             agents={target.sessionDrawerAgents}
             liveActivity={sessionDrawerActivity}
             initialFilters={sessionFilters}

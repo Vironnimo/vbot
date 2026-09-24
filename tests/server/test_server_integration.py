@@ -91,6 +91,7 @@ def test_bootstrap_agent_and_current_history(tmp_path: Path) -> None:
             "background_bash_statuses": {},
             "reflection_runs": [],
             "compaction_policy": normalize_compaction_settings(None),
+            "context_usage": None,
             "session_usage": {
                 "measured_turns": 0,
                 "estimated_turns": 0,

@@ -74,9 +74,12 @@ async def test_fork_to_other_agent_strips_catalog_and_lands_under_target() -> No
     )
     # Both endpoints are resolved before any file work.
     assert resolver.resolved == [(None, "builder"), (None, "reviewer")]
-    # The refresh event is scoped to the target agent.
+    # The refresh event names the fork under the target agent.
     assert _sessions_resource_events(state) == [
-        {"kind": "sessions", "scope": {"agent_id": "reviewer"}}
+        {
+            "kind": "sessions",
+            "scope": {"project_id": None, "agent_id": "reviewer", "session_id": "fork-1"},
+        }
     ]
 
 

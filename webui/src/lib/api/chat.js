@@ -113,6 +113,26 @@ export function listSessions(agentIds, query = {}, options = {}) {
   return rpc('session.list', params, options);
 }
 
+// Read one live Session's list summary by exact address; `session` is null
+// when the Session does not exist.
+export function getSession(agentId, sessionId, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'session.get',
+  );
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'session.get',
+  );
+  return rpc(
+    'session.get',
+    { agent_id: agentId, session_id: sessionId },
+    options,
+  );
+}
+
 export function listSessionActivity(agentIds, options = {}) {
   if (
     !Array.isArray(agentIds) ||

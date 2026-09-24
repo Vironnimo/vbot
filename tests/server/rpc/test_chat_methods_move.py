@@ -245,8 +245,15 @@ async def test_move_directions_relocate_and_re_home_pointers(
         {"kind": change.kind, **({"scope": dict(change.scope)} if change.scope else {})}
         for change in state._command_changes
     ]
-    assert {"kind": "sessions", "scope": {"agent_id": "builder"}} in resource_events
-    assert {"kind": "sessions", "scope": {"agent_id": target_agent}} in resource_events
+    # Both scopes name the moved Session; an identity side omits the project.
+    source_scope = {"agent_id": "builder", "session_id": "s1"}
+    if source_project is not None:
+        source_scope["project_id"] = source_project
+    target_scope = {"agent_id": target_agent, "session_id": "s1"}
+    if target_project is not None:
+        target_scope["project_id"] = target_project
+    assert {"kind": "sessions", "scope": source_scope} in resource_events
+    assert {"kind": "sessions", "scope": target_scope} in resource_events
     agents_events = [event for event in resource_events if event["kind"] == "agents"]
     assert (agents_events == [{"kind": "agents"}]) is (reset or update)
 

@@ -54,6 +54,16 @@ SUBAGENT_PARENT_METADATA_KEY = "subagent_parent"
 AGENT_TAKEOVER_NOTE = "This session was just moved to you from {source}."
 
 
+def _session_change(
+    project_id: str | None, agent_id: str, session_id: str
+) -> CommandResourceChange:
+    """Name the exact Session a command changed; identity Agents omit the project."""
+    scope = {"agent_id": agent_id, "session_id": session_id}
+    if project_id is not None:
+        scope["project_id"] = project_id
+    return CommandResourceChange(kind="sessions", scope=scope)
+
+
 def _build_handoff_prompt(base_instruction: str, instruction: str | None) -> str:
     base = base_instruction.strip()
     cleaned = (instruction or "").strip()
@@ -182,7 +192,7 @@ async def _execute_handoff(
             target_agent_id,
             current_session_id=target_session.id,
         )
-    change = CommandResourceChange(kind="sessions", scope={"agent_id": target_agent_id})
+    change = _session_change(target_project_id, target_agent_id, target_session.id)
     context.report_change(change)
     target_run = await trigger_service.trigger_run(
         target_agent_id,
@@ -297,13 +307,19 @@ async def _execute_reflect(
     extra_instruction = (
         f"The user asked you to focus this reflection on:\n{focus}" if focus else None
     )
-    change = CommandResourceChange(kind="sessions", scope={"agent_id": context.agent_id})
+    changes: list[CommandResourceChange] = []
+
+    def report_fork(fork_id: str) -> None:
+        change = _session_change(context.project_id, context.agent_id, fork_id)
+        changes.append(change)
+        context.report_change(change)
+
     result = await reflection.run_review(
         context.agent_id,
         context.session_id,
         project_id=context.project_id,
         extra_instruction=extra_instruction,
-        on_fork_created=lambda _fork_id: context.report_change(change),
+        on_fork_created=report_fork,
         reply_surface=context.reply_surface,
     )
     await _COMMAND_WORKERS.run(
@@ -316,7 +332,7 @@ async def _execute_reflect(
         command="reflect",
         feedback=CommandFeedback(kind="notice", text=result.summary or "Reflection completed."),
         facts={"session_id": result.session_id, "agent_id": context.agent_id},
-        resource_changes=(change,),
+        resource_changes=tuple(changes),
     )
 
 
@@ -457,8 +473,8 @@ async def _execute_agent(
         )
 
     changes = [
-        CommandResourceChange(kind="sessions", scope={"agent_id": context.agent_id}),
-        CommandResourceChange(kind="sessions", scope={"agent_id": target_agent_id}),
+        _session_change(context.project_id, context.agent_id, context.session_id),
+        _session_change(target_project_id, target_agent_id, context.session_id),
     ]
     if context.project_id is None or target_project_id is None:
         changes.append(CommandResourceChange(kind="agents"))
@@ -562,9 +578,7 @@ async def _execute_new(
             session_id=session.id,
             project_id=context.project_id,
         ),
-        resource_changes=(
-            CommandResourceChange(kind="sessions", scope={"agent_id": context.agent_id}),
-        ),
+        resource_changes=(_session_change(context.project_id, context.agent_id, session.id),),
     )
 
 

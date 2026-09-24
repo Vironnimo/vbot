@@ -164,16 +164,35 @@ class SessionMessagePage:
 
 
 @dataclass(frozen=True)
+class SessionBackgroundRecord:
+    """One active Note or Tool Result, reduced to what a status fold reads."""
+
+    role: str
+    name: str | None
+    content: str | None
+
+
+@dataclass(frozen=True)
 class SessionChatHistorySnapshot:
+    """One History page and whole-Session facts from a single read.
+
+    ``background_records`` hold the requested background candidates in
+    sequence order; an incremental snapshot holds only those appended in its
+    page range. ``unchanged`` marks an ``after`` read already at the Session's
+    end when the caller asked to skip it: the page is empty, and usage, context
+    and background candidates were not read.
+    """
+
     page: SessionMessagePage
     session_usage: JsonObject
     context_messages: tuple[ChatMessage, ...]
-    background_messages: tuple[ChatMessage, ...]
+    background_records: tuple[SessionBackgroundRecord, ...]
     generation_id: str = ""
     after_cursor: str = ""
     incremental: bool = False
     has_newer: bool = False
     runs: tuple[JsonObject, ...] = ()
+    unchanged: bool = False
 
 
 @dataclass(frozen=True)

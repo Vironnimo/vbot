@@ -7,6 +7,7 @@ import {
   expect,
   findButtonByText,
   flushSync,
+  getSessionMock,
   it,
   listQueueMock,
   listSessionActivityMock,
@@ -22,10 +23,18 @@ import {
   waitForCondition,
 } from './ChatView.support.js';
 
+// Serve `session.get` point reads from `sessions` keyed `address::sessionId`.
+function serveSessions(sessions) {
+  getSessionMock.mockImplementation(async (agentAddress, sessionId) => ({
+    session: sessions[`${agentAddress}::${sessionId}`] ?? null,
+  }));
+}
+
 // A two-member Team (Orchestrator is the project default) whose Session
 // activity is served from `unreadResults` (address -> { sessionId, runId }),
-// so a test can reveal a finished result later and bump the Sessions refresh
-// token. `session.mark_read` acknowledges the result the way the server does.
+// so a test can reveal a finished result later and signal it (a scoped Session
+// invalidation or a full Sessions refresh). `session.mark_read` acknowledges
+// the result the way the server does.
 async function mountTeamWithUnreadResults(chatViewTest, unreadResults) {
   showProjectMock.mockResolvedValue({
     project: { project_id: 'vbot', default_agent: 'orchestrator' },
@@ -129,6 +138,9 @@ async function mountTeamWithUnreadResults(chatViewTest, unreadResults) {
       selectedProjectId: 'vbot',
       get sessionsRefreshToken() {
         return parentHarness.sessionsRefreshToken;
+      },
+      get sessionInvalidations() {
+        return parentHarness.sessionInvalidations;
       },
     },
   });
@@ -741,13 +753,31 @@ describe('ChatView', () => {
       unreadResults,
     );
 
+    await waitForCondition(
+      () =>
+        listSessionActivityMock.mock.calls.some(([addresses]) =>
+          addresses.includes('explorer@vbot'),
+        ),
+      100,
+    );
+    listSessionActivityMock.mockClear();
     // A result finishes in another Session of the displayed Orchestrator.
+    // This window holds no event of that Run, so only the named Agent's
+    // activity is read again.
     unreadResults['orchestrator@vbot'] = {
       sessionId: 'orch-unread',
       runId: 'run-orch',
     };
-    parentHarness.bumpSessionsRefreshToken();
+    parentHarness.pushSessionInvalidation({
+      project_id: 'vbot',
+      agent_id: 'orchestrator',
+      session_id: 'orch-unread',
+      run_id: 'run-orch',
+    });
     await waitForCondition(() => teamTabIsUnread('Orchestrator'), 100);
+    expect(listSessionActivityMock.mock.calls).toEqual([
+      [['orchestrator@vbot']],
+    ]);
 
     teamTab('Orchestrator').click();
     await waitForCondition(
@@ -763,23 +793,15 @@ describe('ChatView', () => {
   });
 
   it('returns from a sub-agent session to its parent session (item 4)', async () => {
-    listSessionsMock.mockImplementation(async (_agentId, query = {}) => {
-      if (query.requiredSession?.sessionId === 'session-parent') {
-        return {
-          sessions: [{ id: 'session-parent', title: 'Parent planning' }],
-        };
-      }
-      return {
-        sessions: [
-          {
-            id: 'sub-session-1',
-            subagent_parent: {
-              agent_id: 'alpha',
-              session_id: 'session-parent',
-            },
-          },
-        ],
-      };
+    serveSessions({
+      'alpha::sub-session-1': {
+        id: 'sub-session-1',
+        subagent_parent: { agent_id: 'alpha', session_id: 'session-parent' },
+      },
+      'alpha::session-parent': {
+        id: 'session-parent',
+        title: 'Parent planning',
+      },
     });
     rpcMock.mockImplementation(
       createChatRpcMock({
@@ -866,41 +888,18 @@ describe('ChatView', () => {
         current_session_id: 'gamma-current',
       }),
     ];
-    listSessionsMock.mockImplementation(async (agentId) => {
-      if (agentId === 'gamma') {
-        return {
-          sessions: [
-            {
-              id: 'grandchild-session',
-              is_subagent_session: true,
-              subagent_parent: {
-                agent_id: 'beta',
-                session_id: 'child-session',
-              },
-            },
-          ],
-        };
-      }
-      if (agentId === 'beta') {
-        return {
-          sessions: [
-            {
-              id: 'child-session',
-              is_subagent_session: true,
-              subagent_parent: {
-                agent_id: 'alpha',
-                session_id: 'root-session',
-              },
-            },
-          ],
-        };
-      }
-      if (agentId === 'alpha') {
-        return {
-          sessions: [{ id: 'root-session' }],
-        };
-      }
-      return { sessions: [] };
+    serveSessions({
+      'gamma::grandchild-session': {
+        id: 'grandchild-session',
+        is_subagent_session: true,
+        subagent_parent: { agent_id: 'beta', session_id: 'child-session' },
+      },
+      'beta::child-session': {
+        id: 'child-session',
+        is_subagent_session: true,
+        subagent_parent: { agent_id: 'alpha', session_id: 'root-session' },
+      },
+      'alpha::root-session': { id: 'root-session' },
     });
     rpcMock.mockImplementation(
       createChatRpcMock({
