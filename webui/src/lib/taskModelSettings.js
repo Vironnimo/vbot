@@ -177,8 +177,65 @@ export function normalizeOptionSchema(result) {
       max: Number.isFinite(field?.max) ? field.max : null,
       step: Number.isFinite(field?.step) ? field.step : null,
       options: normalizeFieldOptions(field?.options),
+      optionsBy: normalizeOptionsBy(field?.options_by),
     }))
     .filter((field) => field.name.length > 0);
+}
+
+// The choices a select shows for a binding's current options. A field with
+// `optionsBy` shows only the choices listed for the referenced field's current
+// value (stored, else its default); a value without an entry keeps them all.
+export function visibleFieldOptions(field, fields, options) {
+  const choices = field?.options ?? [];
+  const optionsBy = field?.optionsBy;
+  if (!optionsBy) {
+    return choices;
+  }
+  const referenced = (fields ?? []).find(
+    (candidate) => candidate.name === optionsBy.field,
+  );
+  const referencedValue = referenced
+    ? effectiveOptionValue(referenced, options)
+    : options?.[optionsBy.field];
+  const key = textOrEmpty(referencedValue);
+  if (!Object.hasOwn(optionsBy.values, key)) {
+    return choices;
+  }
+  const allowed = new Set(optionsBy.values[key]);
+  return choices.filter((choice) => allowed.has(choice.value));
+}
+
+// After the option `changedName` changes, move every select whose choices
+// depend on it off a value that is no longer shown: to its default when shown,
+// else to '' when shown, else to the first shown choice. Dependents of a moved
+// field follow the same rule. Returns `options` itself when nothing moves.
+export function reconcileDependentOptions(fields, options, changedName) {
+  let next = options ?? {};
+  const pending = [changedName];
+  const moved = new Set();
+  while (pending.length > 0) {
+    const name = pending.shift();
+    for (const field of fields ?? []) {
+      if (field.optionsBy?.field !== name || moved.has(field.name)) {
+        continue;
+      }
+      const shown = visibleFieldOptions(field, fields, next).map(
+        (choice) => choice.value,
+      );
+      if (
+        shown.length === 0 ||
+        shown.includes(effectiveOptionValue(field, next))
+      ) {
+        continue;
+      }
+      const fallback =
+        [field.default, ''].find((value) => shown.includes(value)) ?? shown[0];
+      next = { ...next, [field.name]: fallback };
+      moved.add(field.name);
+      pending.push(field.name);
+    }
+  }
+  return next;
 }
 
 export function applyOptionDefaults(binding, fields) {
@@ -245,16 +302,47 @@ function normalizeOptionsForPayload(options) {
   return normalized;
 }
 
+// An empty value is a real choice (for example "Provider default"); only
+// choices without any value are dropped.
 function normalizeFieldOptions(options) {
   if (!Array.isArray(options)) {
     return [];
   }
   return options
+    .filter((option) => option?.value !== undefined && option?.value !== null)
     .map((option) => ({
-      value: textOrEmpty(option?.value),
-      label: textOrFallback(option?.label, option?.value),
-    }))
-    .filter((option) => option.value.length > 0);
+      value: textOrEmpty(option.value),
+      label: textOrFallback(option.label, option.value),
+    }));
+}
+
+function normalizeOptionsBy(optionsBy) {
+  if (!optionsBy || typeof optionsBy !== 'object') {
+    return null;
+  }
+  const field = textOrEmpty(optionsBy.field);
+  const source = optionsBy.values;
+  if (
+    !field ||
+    !source ||
+    typeof source !== 'object' ||
+    Array.isArray(source)
+  ) {
+    return null;
+  }
+  const values = {};
+  for (const [key, allowed] of Object.entries(source)) {
+    if (Array.isArray(allowed)) {
+      values[key] = allowed.map((value) => textOrEmpty(value));
+    }
+  }
+  return { field, values };
+}
+
+// The value a field shows: the stored draft value, else its schema default.
+function effectiveOptionValue(field, options) {
+  const value = options?.[field.name];
+  return value === undefined || value === null ? field.default : value;
 }
 
 function textOrEmpty(value) {

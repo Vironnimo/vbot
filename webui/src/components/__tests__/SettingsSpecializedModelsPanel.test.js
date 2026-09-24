@@ -907,6 +907,82 @@ describe('SettingsSpecializedModelsPanel', () => {
     },
   );
 
+  it('narrows dependent choices and never keeps a hidden value', async () => {
+    const target = 'openai/gpt-live-1::api-key';
+    getTaskModelOptionsMock.mockResolvedValue({
+      fields: [
+        {
+          name: 'backend_model',
+          type: 'select',
+          label: 'Backend model',
+          default: 'terra',
+          required: true,
+          options: [
+            { value: 'terra', label: 'Terra' },
+            { value: 'astra', label: 'Astra' },
+          ],
+        },
+        {
+          name: 'backend_thinking_effort',
+          type: 'select',
+          label: 'Backend reasoning',
+          default: 'low',
+          options: ['', 'none', 'low', 'medium', 'high'].map((value) => ({
+            value,
+            label: value || 'Model default',
+          })),
+          options_by: {
+            field: 'backend_model',
+            values: {
+              terra: ['', 'none', 'low', 'high'],
+              astra: ['', 'none', 'medium'],
+            },
+          },
+        },
+      ],
+    });
+    mountedComponent = mount(SettingsSpecializedModelsPanel, {
+      target: document.body,
+      props: {
+        taskTypes: ['live_voice'],
+        settings: { model_tasks: { live_voice: { target, options: {} } } },
+      },
+    });
+    const effortId = 'task-model-live_voice-backend_thinking_effort';
+    await waitForCondition(() => document.getElementById(effortId));
+
+    document.getElementById(effortId).click();
+    flushSync();
+    expect(optionLabels()).toEqual(['Model default', 'none', 'low', 'high']);
+    document.getElementById(effortId).click();
+    flushSync();
+
+    document.getElementById('task-model-live_voice-backend_model').click();
+    flushSync();
+    [...document.querySelectorAll('[role="option"]')]
+      .find((option) => option.textContent.trim() === 'Astra')
+      .click();
+    flushSync();
+
+    expect(document.getElementById(effortId).textContent.trim()).toBe(
+      'Model default',
+    );
+    document.getElementById(effortId).click();
+    flushSync();
+    expect(optionLabels()).toEqual(['Model default', 'none', 'medium']);
+    document.getElementById(effortId).click();
+    flushSync();
+
+    button('Save').click();
+    await waitForCondition(() => updateTaskModelSettingsMock.mock.calls.length);
+    expect(updateTaskModelSettingsMock.mock.calls[0][0]).toEqual({
+      live_voice: {
+        target,
+        options: { backend_model: 'astra', backend_thinking_effort: '' },
+      },
+    });
+  });
+
   it('auto-saves after a boolean option toggle is flipped', async () => {
     // The boolean option field is the shared Toggle (role="switch"); flipping it
     // must arm the same autosave flow as the other option controls.
@@ -997,6 +1073,12 @@ function selectTarget(taskType, label) {
   expect(option).toBeTruthy();
   option.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   flushSync();
+}
+
+function optionLabels() {
+  return [...document.querySelectorAll('[role="option"]')].map((option) =>
+    option.textContent.trim(),
+  );
 }
 
 function button(label) {

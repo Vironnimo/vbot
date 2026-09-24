@@ -32,8 +32,10 @@
     normalizeTargets,
     normalizeTaskModelSettings,
     parseJsonFieldValue,
+    reconcileDependentOptions,
     stringifyJsonFieldValue,
     taskModelBindingsMatch,
+    visibleFieldOptions,
   } from '$lib/taskModelSettings.js';
   import {
     SURFACE_FORM,
@@ -425,15 +427,15 @@
       target: '',
       options: {},
     };
+    // A select whose choices depend on this field never keeps a hidden value.
+    const options = reconcileDependentOptions(
+      taskModelSchemasByType[taskType] ?? [],
+      { ...(currentBinding.options ?? {}), [field.name]: value },
+      field.name,
+    );
     taskModelBindings = {
       ...taskModelBindings,
-      [taskType]: {
-        ...currentBinding,
-        options: {
-          ...(currentBinding.options ?? {}),
-          [field.name]: value,
-        },
-      },
+      [taskType]: { ...currentBinding, options },
     };
     onError('');
     autoSaveArmed = true;
@@ -521,6 +523,14 @@
     }));
   }
 
+  function taskModelFieldChoices(taskType, field) {
+    return visibleFieldOptions(
+      field,
+      taskModelSchemasByType[taskType] ?? [],
+      taskModelBindings[taskType]?.options ?? {},
+    );
+  }
+
   function taskModelOptionValue(taskType, field) {
     const options = taskModelBindings[taskType]?.options ?? {};
     const value = options[field.name];
@@ -592,7 +602,7 @@
         <Dropdown
           id={formField.controlId}
           value={taskModelOptionValue(taskType, field)}
-          options={field.options}
+          options={taskModelFieldChoices(taskType, field)}
           ariaLabel={field.label}
           ariaDescribedby={formField.describedBy}
           triggerClass="settings-view__dropdown"

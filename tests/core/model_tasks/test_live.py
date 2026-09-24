@@ -406,8 +406,28 @@ async def test_invalid_offers_are_rejected_before_resolution(offer: str):
         FakeModelTasks(configured=False),
         FakeModelTasks(target="xai/grok-voice::api-key"),
         FakeModelTasks(options={"voice": "cove", "backend_model": "gpt-image-2"}),
+        FakeModelTasks(
+            options={
+                "voice": "cove",
+                "backend_model": "gpt-5.6-terra",
+                "backend_thinking_effort": "turbo",
+            }
+        ),
+        FakeModelTasks(
+            options={
+                "voice": "cove",
+                "backend_model": "gpt-5.6-terra",
+                "backend_thinking_effort": 3,
+            }
+        ),
     ],
-    ids=["unbound", "unsupported-provider", "backend-not-candidate"],
+    ids=[
+        "unbound",
+        "unsupported-provider",
+        "backend-not-candidate",
+        "unknown-effort",
+        "non-string-effort",
+    ],
 )
 async def test_unusable_configuration_is_not_configured(model_tasks, candidates):
     with pytest.raises(LiveStartRejected) as caught:
@@ -459,4 +479,44 @@ async def test_start_call_opens_the_bound_target_and_returns_a_running_call(
     assert opened[0]["offer_sdp"] == OFFER
     assert call.id == "rtc_1"
     assert host.updates == [{"type": "state", "phase": "connecting"}]
+    await call.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored", "sent"),
+    [
+        ({}, "low"),
+        ({"backend_thinking_effort": None}, "low"),
+        ({"backend_thinking_effort": ""}, None),
+        ({"backend_thinking_effort": "high"}, "high"),
+    ],
+    ids=["saved-before-the-option", "unset", "model-default", "configured"],
+)
+async def test_the_backend_uses_the_configured_reasoning_effort(
+    stored: dict[str, Any],
+    sent: str | None,
+    candidates: list[tuple[Any, ...]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    brains: list[Any] = []
+
+    async def open_wire(runtime: Any, target_ref: Any, **kwargs: Any) -> FakeWire:
+        return FakeWire()
+
+    def record_brain(runtime: Any, target: Any, execute_tool: Any, **kwargs: Any) -> FakeBrain:
+        brains.append(target)
+        return FakeBrain()
+
+    monkeypatch.setattr(live_module, "open_openai_live_wire", open_wire)
+    monkeypatch.setattr(live_module, "LiveBrain", record_brain)
+    model_tasks = FakeModelTasks(
+        options={"voice": "cove", "backend_model": "gpt-5.6-luna", **stored}
+    )
+
+    call = await _service(model_tasks).start_call(offer_sdp=OFFER, host=FakeHost())
+
+    assert [(target.model_id, target.thinking_effort) for target in brains] == [
+        ("gpt-5.6-luna", sent)
+    ]
     await call.close()

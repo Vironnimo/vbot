@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from core.models import Model
@@ -167,6 +168,46 @@ class TaskModelOptionChoice:
 
 
 @dataclass(frozen=True)
+class TaskModelOptionsBy:
+    """Narrows a select's visible choices by the current value of another field.
+
+    ``values`` maps a value of the referenced ``field`` to the choice values
+    shown for it; a referenced value without an entry keeps every choice
+    visible. The narrowing is a render hint only: validation still accepts
+    every choice of the select.
+    """
+
+    field: str
+    values: Mapping[str, tuple[str, ...]]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.field, str) or not self.field.strip():
+            raise TaskModelOptionValidationError(
+                "TaskModelOptionsBy.field must be a non-empty string"
+            )
+        if not isinstance(self.values, Mapping):
+            raise TaskModelOptionValidationError("TaskModelOptionsBy.values must be a mapping")
+        frozen: dict[str, tuple[str, ...]] = {}
+        for key, allowed in self.values.items():
+            if not isinstance(key, str) or not isinstance(allowed, list | tuple):
+                raise TaskModelOptionValidationError(
+                    "TaskModelOptionsBy.values must map strings to lists of choice values"
+                )
+            if not all(isinstance(value, str) for value in allowed):
+                raise TaskModelOptionValidationError(
+                    f"TaskModelOptionsBy.values[{key!r}] must contain only strings"
+                )
+            frozen[key] = tuple(allowed)
+        object.__setattr__(self, "values", MappingProxyType(frozen))
+
+    def to_dict(self) -> JsonObject:
+        return {
+            "field": self.field,
+            "values": {key: list(allowed) for key, allowed in self.values.items()},
+        }
+
+
+@dataclass(frozen=True)
 class TaskModelOptionField:
     """One renderable task-model option field."""
 
@@ -180,6 +221,7 @@ class TaskModelOptionField:
     min_value: float | None = None
     max_value: float | None = None
     step: float | None = None
+    options_by: TaskModelOptionsBy | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -191,6 +233,26 @@ class TaskModelOptionField:
             raise TaskModelOptionValidationError(
                 f"Unsupported option type '{self.type}' for field '{self.name}'. Allowed: {allowed}"
             )
+        if self.options_by is not None:
+            self._validate_options_by(self.options_by)
+
+    def _validate_options_by(self, options_by: TaskModelOptionsBy) -> None:
+        if self.type != "select":
+            raise TaskModelOptionValidationError(
+                f"Field '{self.name}' narrows its choices but is not a select"
+            )
+        if options_by.field == self.name:
+            raise TaskModelOptionValidationError(
+                f"Field '{self.name}' cannot narrow its choices by its own value"
+            )
+        choices = {option.value for option in self.options}
+        for key, allowed in options_by.values.items():
+            unknown = sorted(set(allowed) - choices)
+            if unknown:
+                raise TaskModelOptionValidationError(
+                    f"Field '{self.name}' allows unknown choices for "
+                    f"{options_by.field}={key!r}: {', '.join(unknown)}"
+                )
 
     def to_dict(self) -> JsonObject:
         payload: JsonObject = {
@@ -210,6 +272,8 @@ class TaskModelOptionField:
             payload["max"] = self.max_value
         if self.step is not None:
             payload["step"] = self.step
+        if self.options_by is not None:
+            payload["options_by"] = self.options_by.to_dict()
         return payload
 
 
