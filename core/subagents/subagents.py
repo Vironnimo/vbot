@@ -47,9 +47,12 @@ from core.subagents._constants import (
     DEFAULT_SUBAGENT_TIMEOUT_MINUTES,
     SECONDS_PER_MINUTE,
     SUBAGENT_PARENT_METADATA_KEY,
+    SUBAGENT_QUEUED_TIMEOUT_MESSAGE_TEMPLATE,
+    SUBAGENT_REMOVED_FROM_QUEUE_MESSAGE,
     SUBAGENT_SESSION_METADATA_FLAG,
     SUBAGENT_SESSION_STARTED_EVENT,
     SUBAGENT_SESSION_TITLE_MAX_CHARACTERS,
+    SUBAGENT_START_FAILED_MESSAGE_TEMPLATE,
     SUBAGENT_STATUS_QUEUED,
     TOP_LEVEL_BACKGROUND_NOTE,
     TOP_LEVEL_QUEUED_BACKGROUND_NOTE,
@@ -351,6 +354,12 @@ async def _handle_subagent(
             activity_file=activity_file,
         )
 
+        # One foreground bound covers both waiting in a busy Session's Queue and
+        # the child's execution, so the Parent never blocks longer than the limit.
+        loop = asyncio.get_running_loop()
+        foreground_deadline = (
+            loop.time() + settings["subagent_timeout_minutes"] * SECONDS_PER_MINUTE
+        )
         try:
             sub_run = await _start_subagent_run(
                 runtime,
@@ -466,7 +475,22 @@ async def _handle_subagent(
                         )
                     sub_run = queued_run
                 else:
-                    sub_run = await asyncio.shield(item.future)
+                    queued_outcome = await _await_queued_foreground_start(
+                        runtime,
+                        item,
+                        context=context,
+                        parent_run=parent_run,
+                        batch_tracker=batch_tracker,
+                        parent_key=parent_key,
+                        agent_id=target_agent_id,
+                        project_id=target_project_id,
+                        session_id=session.id,
+                        timeout_seconds=max(0.0, foreground_deadline - loop.time()),
+                        timeout_minutes=settings["subagent_timeout_minutes"],
+                    )
+                    if not isinstance(queued_outcome, Run):
+                        return queued_outcome
+                    sub_run = queued_outcome
             except BaseException:
                 if not background:
                     _cancel_subagent_child(
@@ -540,10 +564,10 @@ async def _handle_subagent(
                 )
             )
 
-        timeout_seconds = settings["subagent_timeout_minutes"] * SECONDS_PER_MINUTE
         try:
             result = await asyncio.wait_for(
-                _wait_for_subagent_result(sub_run, activity_file), timeout=timeout_seconds
+                _wait_for_subagent_result(sub_run, activity_file),
+                timeout=max(0.0, foreground_deadline - loop.time()),
             )
         except TimeoutError:
             sub_run.request_cancel()
@@ -597,6 +621,75 @@ async def _handle_subagent(
             activity.finish_unstarted()
         if not slot_registered:
             batch_tracker.release_slot(parent_key)
+
+
+async def _await_queued_foreground_start(
+    runtime: RuntimeServices,
+    item: Any,
+    *,
+    context: ToolContext,
+    parent_run: Run | None,
+    batch_tracker: SubAgentBatchTracker,
+    parent_key: ParentKey,
+    agent_id: str,
+    project_id: str | None,
+    session_id: str,
+    timeout_seconds: float,
+    timeout_minutes: int,
+) -> Run | JsonObject:
+    """Wait inline for a queued foreground child to start, or explain why it never will.
+
+    The shield keeps Parent cancellation from cancelling the Queue item directly
+    (the Parent cascade owns that). The item's own future is cancelled only when
+    the item is removed from the Queue; that is an ordinary Tool outcome for the
+    Parent, while a cancellation of the Parent itself keeps propagating.
+    """
+    try:
+        return cast(
+            Run, await asyncio.wait_for(asyncio.shield(item.future), timeout=timeout_seconds)
+        )
+    except asyncio.CancelledError:
+        if not item.future.cancelled() or _parent_cancellation_requested(context, parent_run):
+            raise
+        batch_tracker.remove_queued(parent_key, item.item_id)
+        return tool_failure("subagent_removed", SUBAGENT_REMOVED_FROM_QUEUE_MESSAGE)
+    except TimeoutError:
+        runtime.chat_run_manager.remove_queued(
+            agent_id, session_id, item.item_id, project_id=project_id
+        )
+        if not item.future.done():
+            item.future.cancel()
+        if item.future.cancelled():
+            batch_tracker.remove_queued(parent_key, item.item_id)
+            return tool_failure(
+                "subagent_timeout",
+                SUBAGENT_QUEUED_TIMEOUT_MESSAGE_TEMPLATE.format(minutes=timeout_minutes),
+            )
+        if item.future.exception() is None:
+            # The child started just as the bound expired; the caller's run wait
+            # has no time left and cancels it through the ordinary timeout path.
+            return cast(Run, item.future.result())
+        error = item.future.exception()
+        batch_tracker.remove_queued(parent_key, item.item_id)
+        return tool_failure(
+            "subagent_start_failed",
+            SUBAGENT_START_FAILED_MESSAGE_TEMPLATE.format(error=error),
+        )
+    except Exception as error:
+        batch_tracker.remove_queued(parent_key, item.item_id)
+        return tool_failure(
+            "subagent_start_failed",
+            SUBAGENT_START_FAILED_MESSAGE_TEMPLATE.format(error=error),
+        )
+
+
+def _parent_cancellation_requested(context: ToolContext, parent_run: Run | None) -> bool:
+    task = asyncio.current_task()
+    return (
+        (task is not None and task.cancelling() > 0)
+        or context.is_cancelled()
+        or (parent_run is not None and parent_run.cancel_requested)
+    )
 
 
 async def _start_subagent_run(
