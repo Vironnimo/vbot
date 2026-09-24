@@ -111,11 +111,11 @@
       title={t('toolAccess.empty', 'No matching Tools.')}
     />
   {/if}
-  <div class="tool-access-groups">
+  <div class="s-check-groups">
     {#each groups as group (group.id ?? 'individual')}
       {@const state = familyState(group)}
-      <section class="tool-access-group">
-        <header class="tool-access-group-header">
+      <section class="s-group s-check-group">
+        <header class="s-check-group__head">
           {#if group.family && onToggleGroup}
             <Checkbox
               class="tool-access-family-toggle"
@@ -129,18 +129,18 @@
               onChange={(next) => onToggleGroup(group.members, next)}
             />
           {/if}
-          <h4>{familyLabel(group)}</h4>
+          <h4 class="s-check-group__title">{familyLabel(group)}</h4>
           {#if familyUnavailable(group)}
             <span class="tool-catalog-unavailable tool-catalog-family-status"
               >{t('toolAccess.unavailable', 'Currently unavailable')}</span
             >
           {/if}
-          <span class="tool-catalog-count"
+          <span class="s-check-group__count"
             >{group.members.filter((tool) => tool.allowed).length}/{group
               .members.length}</span
           >
         </header>
-        <div class="tool-catalog-rows">
+        <div class="s-check-group__rows">
           {#each group.members as tool (tool.name)}
             {@const status = toolStatus(tool, group)}
             <div
@@ -148,7 +148,7 @@
               class:is-unavailable={tool.ready === false}
             >
               <Checkbox
-                class="tool-access-chip"
+                class="s-check-row tool-access-chip"
                 checked={tool.allowed}
                 ariaLabel={toggleLabel(tool)}
                 aria-describedby={status
@@ -159,11 +159,11 @@
                 {disabled}
                 onChange={(next) => onToggle(tool, next)}
               >
-                <span class="tool-access-name">{tool.name}</span>
+                <span class="s-check-row__name">{tool.name}</span>
                 {#if status}
                   <span
                     id="{catalogId}-{tool.name}-status"
-                    class="tool-catalog-status"
+                    class="s-check-row__state"
                     class:tool-catalog-unavailable={status.unavailable}
                     >{status.text}</span
                   >
@@ -243,80 +243,13 @@
     outline: none;
     box-shadow: var(--field-focus-ring);
   }
-  /* Each family is its own panel; panels flow through two balanced columns
-     so a short family never leaves a hole beside a long one, and a family
-     never splits across columns. */
-  .tool-access-groups {
-    columns: 2;
-    column-gap: 16px;
-  }
-  .tool-access-group {
-    display: block;
-    min-width: 0;
-    margin-bottom: 16px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-lg);
-    background: var(--surface);
-    break-inside: avoid;
-    overflow: hidden;
-  }
-  .tool-access-group-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-height: 44px;
-    padding: 8px 14px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface-2);
-  }
-  .tool-access-group-header h4 {
-    margin: 0;
-    color: var(--text-hi);
-    font: 600 var(--fs-body-md) / 1.4 var(--font-ui);
-  }
-  .tool-catalog-count {
-    margin-left: auto;
-    color: var(--text-lo);
-    font: var(--fs-label-sm) var(--font-ui);
-    font-variant-numeric: tabular-nums;
-  }
-  .tool-catalog-rows {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    padding: 4px 0;
-  }
+  /* Each family is a Checkbox group (styles/settings/sections.css); the
+     wrapper anchors the row's hover card. */
   .tool-access-chip-wrap {
     min-width: 0;
   }
-  /* The whole row is the checkbox. */
-  .tool-access-groups :global(.tool-access-chip) {
-    min-height: 34px;
-    padding: 6px 14px;
-    border-radius: 0;
-  }
-  .tool-access-groups :global(.tool-access-chip:hover:not(:disabled)) {
-    background: var(--surface-2);
-  }
-  .tool-access-groups :global(.tool-access-chip:focus-visible) {
-    box-shadow: inset 0 0 0 2px var(--accent);
-  }
-  .tool-access-name {
-    min-width: 0;
-    overflow-wrap: anywhere;
-    color: var(--text-hi);
-    /* Tool names are identifiers. */
-    font: var(--fs-mono-sm) var(--font-mono);
-  }
-  .tool-access-chip-wrap.is-unavailable .tool-access-name {
+  .tool-access-chip-wrap.is-unavailable .s-check-row__name {
     color: var(--text-med);
-  }
-  .tool-catalog-status {
-    flex-shrink: 0;
-    margin-left: auto;
-    padding-left: 8px;
-    color: var(--text-lo);
-    font-size: var(--fs-label-sm);
-    text-align: right;
   }
   .tool-catalog-unavailable {
     color: var(--amber);
@@ -340,15 +273,7 @@
     margin: 6px 0 0;
     white-space: pre-wrap;
   }
-  @media (max-width: 760px) {
-    .tool-access-groups {
-      columns: 1;
-    }
-  }
   @media (max-width: 640px) {
-    .tool-access-groups :global(.tool-access-chip) {
-      min-height: 40px;
-    }
     .tool-catalog-search {
       max-width: none;
       margin-left: 0;

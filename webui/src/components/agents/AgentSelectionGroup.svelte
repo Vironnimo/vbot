@@ -1,7 +1,8 @@
 <script>
   // One allow-list of the Agent editor (Skills, Identity Agents, Project
-  // Agents) as a group panel: a head with the group checkbox, the title and
-  // the selection count, then one labelled checkbox row per member. The caller
+  // Agents) as a shared Checkbox group (styles/settings/sections.css): a head
+  // with the group checkbox, the title and the selection count, then one
+  // labelled checkbox row per member. The caller
   // owns the selection policy (wildcards and what selecting a whole group
   // means) and the filter text shared by the groups of a section.
   import Checkbox from '../ui/Checkbox.svelte';
@@ -51,13 +52,12 @@
 </script>
 
 <section
-  class={['s-group', 'agents-selection', className].filter(Boolean).join(' ')}
+  class={['s-group', 's-check-group', className].filter(Boolean).join(' ')}
   aria-labelledby={titleId}
 >
-  <div class="agents-selection__head">
+  <div class="s-check-group__head">
     {#if items.length > 0}
       <Checkbox
-        class="agents-selection__all"
         checked={groupState === 'on'}
         indeterminate={groupState === 'mixed'}
         ariaLabel={allLabel}
@@ -78,49 +78,44 @@
           class:disclosure-chevron--open={open}
           aria-hidden="true"
         ></span>
-        <span class="agents-selection__title" id={titleId}>{title}</span>
-        <span class="agents-selection__count">
+        <span class="s-check-group__title" id={titleId}>{title}</span>
+        <span class="s-check-group__count">
           {selectedCount}/{items.length}
         </span>
       </button>
     {:else}
-      <h4 class="agents-selection__title" id={titleId}>{title}</h4>
-      <span class="agents-selection__count">
+      <h4 class="s-check-group__title" id={titleId}>{title}</h4>
+      <span class="s-check-group__count">
         {selectedCount}/{items.length}
       </span>
     {/if}
   </div>
-  <div
-    class="agents-selection__body"
-    id={contentId}
-    hidden={collapsible && !open}
-  >
+  <div class="s-check-group__rows" id={contentId} hidden={collapsible && !open}>
     {#if items.length === 0}
-      <p class="agents-selection__note">{emptyLabel}</p>
+      <p class="s-check-group__note">{emptyLabel}</p>
     {:else if visibleItems.length === 0}
-      <p class="agents-selection__note">
+      <p class="s-check-group__note">
         {t('access.noMatches', 'No matches.')}
       </p>
     {:else}
       {#each visibleItems as item (item.name)}
         <Checkbox
-          class="agents-selection__row"
+          class="s-check-row"
           checked={item.allowed}
           ariaLabel={toggleLabel(item.name)}
           onChange={(next) => onToggle(item.name, next)}
         >
-          <span class="agents-selection__text">
-            <span class="agents-selection__name">{item.name}</span>
+          <span class="s-check-row__text">
+            <span class="s-check-row__name">{item.name}</span>
             {#if item.detail}
               <span
-                class="agents-selection__detail"
-                class:agents-selection__detail--warn={item.unavailable}
+                class="s-check-row__detail"
+                class:s-check-row__detail--warn={item.unavailable}
                 >{item.detail}</span
               >
             {/if}
             {#each item.warnings ?? [] as warning, index (`${item.name}-warning-${index}`)}
-              <span
-                class="agents-selection__detail agents-selection__detail--warn"
+              <span class="s-check-row__detail s-check-row__detail--warn"
                 >{warning}</span
               >
             {/each}

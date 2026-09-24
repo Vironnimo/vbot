@@ -521,35 +521,8 @@
   max-width: 260px;
 }
 
-/* An allow-list group: a head with the group checkbox, title and count, then
-   one checkbox row per member (the same panel as the Tool catalog's
-   families). */
-.agents-view .agents-selection {
-  overflow: hidden;
-}
-
-.agents-view .agents-selection__head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 44px;
-  padding: 8px 14px;
-  background: var(--surface-2);
-}
-
-.agents-view .agents-selection__title {
-  margin: 0;
-  color: var(--text-hi);
-  font: 600 var(--fs-body-md) / 1.4 var(--font-ui);
-}
-
-.agents-view .agents-selection__count {
-  margin-left: auto;
-  color: var(--text-lo);
-  font: var(--fs-label-sm) var(--font-ui);
-  font-variant-numeric: tabular-nums;
-}
-
+/* Allow-lists are shared Checkbox groups (styles/settings/sections.css); a
+   collapsible group's title and count form its disclosure button. */
 .agents-view .agents-selection__toggle {
   display: flex;
   min-width: 0;
@@ -566,68 +539,6 @@
 .agents-view .agents-selection__toggle:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
-}
-
-.agents-view .agents-selection__body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  padding: 4px 0;
-}
-
-.agents-view .agents-selection__body[hidden] {
-  display: none;
-}
-
-/* The whole row is the checkbox. */
-.agents-view .agents-selection__row {
-  align-items: flex-start;
-  min-height: 34px;
-  padding: 7px 14px;
-  border-radius: 0;
-}
-
-.agents-view .agents-selection__row .checkbox__box {
-  margin-top: 1px;
-}
-
-.agents-view .agents-selection__row:hover:not(:disabled) {
-  background: var(--surface-2);
-}
-
-.agents-view .agents-selection__row:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--accent);
-}
-
-.agents-view .agents-selection__text {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 1px;
-}
-
-/* Skill and Agent names are identifiers. */
-.agents-view .agents-selection__name {
-  overflow-wrap: anywhere;
-  color: var(--text-hi);
-  font: var(--fs-mono-sm) / 1.5 var(--font-mono);
-}
-
-.agents-view .agents-selection__detail {
-  overflow-wrap: anywhere;
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  line-height: 1.4;
-}
-
-.agents-view .agents-selection__detail--warn {
-  color: var(--amber);
-}
-
-.agents-view .agents-selection__note {
-  margin: 0;
-  padding: 8px 14px;
-  color: var(--text-lo);
-  font-size: var(--fs-body-sm);
 }
 
 .agents-view .agents-view__invalid-skill-name {
@@ -754,10 +665,6 @@
 
   .agents-view .agents-view__filter {
     max-width: none;
-  }
-
-  .agents-view .agents-selection__row {
-    min-height: 40px;
   }
 }
 

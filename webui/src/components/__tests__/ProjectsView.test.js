@@ -381,7 +381,7 @@ describe('ProjectsView', () => {
 
     const headings = Array.from(
       document.querySelectorAll(
-        '#project-detail-panel-access .tool-access-group-header h4',
+        '#project-detail-panel-access .s-check-group__title',
       ),
     ).map((heading) => heading.textContent.trim());
     expect(headings).toEqual(['Files', 'Execution', 'Individual Tools']);
