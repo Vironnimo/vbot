@@ -341,18 +341,32 @@ class CompactionService:
         request_messages: list[JsonObject] | None = None,
         active_adapter: Any | None = None,
         active_model_id: str | None = None,
+        minimum_reclaim_tokens: int = 0,
     ) -> bool:
-        """Return whether automatic Compaction has a non-summary Head to replace."""
+        """Return whether automatic Compaction has new Context worth a Model call.
+
+        Summary+Tail needs a non-summary Head before the Tail boundary. Continuation
+        replaces the whole effective Context with a new summary, so it needs content
+        added since the latest checkpoint, and that content must be able to reclaim
+        *minimum_reclaim_tokens*: the new summary is assumed to be no smaller than
+        the checkpoint notes it replaces, so only the later content can be reclaimed.
+        Without either, the call is skipped instead of paying for a checkpoint that
+        the reclaim floor would discard.
+        """
 
         strategy = self._strategies.get(settings.strategy)
         if strategy is None:
             raise CompactionError(f"Unknown compaction strategy: {settings.strategy}")
-        if strategy.id != STRATEGY_SUMMARY_TAIL:
-            return True
-
         effective = effective_compaction_messages(messages)
         if not effective:
             return False
+        if strategy.id != STRATEGY_SUMMARY_TAIL:
+            new_context = [
+                message for message in effective if not _is_compaction_checkpoint_note(message)
+            ]
+            return bool(new_context) and _estimate_token_span(new_context) >= max(
+                minimum_reclaim_tokens, 1
+            )
         try:
             tail_plan = _plan_working_tail(
                 effective,
