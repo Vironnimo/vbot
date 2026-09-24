@@ -1,18 +1,28 @@
-"""Disposable SQLite read model for Statistics-relevant Session facts."""
+"""Disposable typed SQLite read model for Statistics-relevant Session facts.
+
+One :class:`StatisticsIndex` owns the index file of a data directory. Every
+read reconciles canonical Sessions into typed tables and then hands one SQL
+connection to a consumer that aggregates in SQL; no projection is hydrated or
+kept in memory between reads. Canonical history is only touched for Sessions
+whose generation, revision or fork boundary changed, and an unchanged index is
+read without any write.
+
+Failure policy: a busy or locked index raises :class:`StatisticsUnavailableError`
+so the caller can retry; a corrupt or inconsistent index is discarded and
+rebuilt once; any other index failure computes the read from a transient
+in-memory projection with the same code, so Statistics stay available.
+"""
 
 from __future__ import annotations
 
-import json
 import sqlite3
 import threading
-from collections.abc import Iterator, Sequence
-from contextlib import closing
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, TypeVar
 
-from core.chat.messages import ChatMessage, MessageRole
-from core.models.pricing import project_cost
 from core.sessions import (
     FORK_SOURCE_META_KEY,
     ChatSession,
@@ -20,26 +30,191 @@ from core.sessions import (
     SessionNotFoundError,
     SessionReadBatch,
     SessionReadCursor,
-    skill_context_note_name,
-    skill_tool_activation_name,
 )
 from core.sessions.schema import required_journal_mode
-from core.statistics.skills import SEEN_SKILLS_META_KEY
-from core.tools import is_tool_result_envelope, tool_failure, tool_success
+from core.statistics._projection import ProjectedRows
+from core.utils.errors import VBotError
+from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
+_Result = TypeVar("_Result")
+
+_LOGGER = get_logger("statistics")
 
 _INDEX_DIRECTORY = "statistics"
 _INDEX_FILENAME = "session-statistics.sqlite"
 _GLOBAL_SCOPE = ""
-# v5 adds saved cost snapshots and nested Compaction Model Usage. Older
-# disposable projections rebuild from canonical Session generations/revisions.
-_SCHEMA_VERSION = 5
+# v6 replaces JSON message projections with typed, indexed fact tables.
+# Older disposable projections are dropped and rebuilt from canonical Sessions.
+_SCHEMA_VERSION = 6
 _SQLITE_BUSY_TIMEOUT_MS = 1000
+_SQLITE_CACHE_KIB = 32 * 1024
+_SQLITE_PRIMARY_CODE_MASK = 0xFF
+_BUSY_CODES = frozenset({sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED})
+_REBUILD_CODES = frozenset(
+    {
+        sqlite3.SQLITE_CORRUPT,
+        sqlite3.SQLITE_FORMAT,
+        sqlite3.SQLITE_NOTADB,
+        # Missing tables or columns: the disposable schema is inconsistent.
+        sqlite3.SQLITE_ERROR,
+        sqlite3.SQLITE_CONSTRAINT,
+        sqlite3.SQLITE_SCHEMA,
+        sqlite3.SQLITE_MISMATCH,
+    }
+)
+
+SESSION_FACT_TABLES = (
+    "stat_records",
+    "stat_calls",
+    "stat_tools",
+    "stat_errors",
+    "stat_checkpoints",
+    "stat_runs",
+    "stat_skills",
+)
+
+_SCHEMA = """
+CREATE TABLE stat_sessions (
+    session_key INTEGER PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    generation_id TEXT NOT NULL,
+    history_revision INTEGER NOT NULL,
+    next_seq INTEGER NOT NULL,
+    message_count INTEGER NOT NULL,
+    last_message_id TEXT,
+    fork_message_count INTEGER NOT NULL,
+    min_instant INTEGER,
+    max_instant INTEGER,
+    untimed_records INTEGER NOT NULL,
+    UNIQUE (project_id, agent_id, session_id)
+);
+CREATE TABLE stat_records (
+    session_key INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    instant INTEGER,
+    run_id TEXT,
+    PRIMARY KEY (session_key, seq)
+) WITHOUT ROWID;
+CREATE INDEX stat_records_run
+    ON stat_records(session_key, run_id, seq, role, instant)
+    WHERE run_id IS NOT NULL;
+CREATE TABLE stat_calls (
+    session_key INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    kind INTEGER NOT NULL,
+    instant INTEGER,
+    day INTEGER,
+    model_key TEXT NOT NULL,
+    has_model INTEGER NOT NULL,
+    visible INTEGER NOT NULL,
+    has_usage INTEGER NOT NULL,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    reasoning_tokens INTEGER,
+    cache_read_tokens INTEGER,
+    cache_write_tokens INTEGER,
+    input_estimated INTEGER NOT NULL,
+    output_estimated INTEGER NOT NULL,
+    has_cache INTEGER NOT NULL,
+    reasoning_present INTEGER NOT NULL,
+    cache_read_present INTEGER NOT NULL,
+    cache_write_present INTEGER NOT NULL,
+    price_estimated INTEGER NOT NULL,
+    reported_cost_usd REAL,
+    retrospective INTEGER NOT NULL,
+    priced INTEGER NOT NULL,
+    cost_usd REAL,
+    cost_source INTEGER NOT NULL,
+    cost_json TEXT,
+    PRIMARY KEY (session_key, seq)
+) WITHOUT ROWID;
+CREATE INDEX stat_calls_retrospective
+    ON stat_calls(model_key) WHERE retrospective = 1;
+CREATE INDEX stat_calls_unpriced
+    ON stat_calls(model_key) WHERE retrospective = 1 AND priced = 0;
+CREATE TABLE stat_tools (
+    session_key INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    instant INTEGER,
+    name TEXT NOT NULL,
+    outcome INTEGER,
+    error_code TEXT,
+    duration_ms INTEGER,
+    PRIMARY KEY (session_key, seq)
+) WITHOUT ROWID;
+CREATE TABLE stat_errors (
+    session_key INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    instant INTEGER,
+    day INTEGER,
+    kind TEXT NOT NULL,
+    PRIMARY KEY (session_key, seq)
+) WITHOUT ROWID;
+CREATE TABLE stat_checkpoints (
+    session_key INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    instant INTEGER,
+    strategy TEXT NOT NULL,
+    context_before INTEGER,
+    context_after INTEGER,
+    duration_ms INTEGER,
+    PRIMARY KEY (session_key, seq)
+) WITHOUT ROWID;
+CREATE TABLE stat_runs (
+    session_key INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    instant INTEGER,
+    day INTEGER,
+    run_id TEXT,
+    status TEXT NOT NULL,
+    duration_ms INTEGER,
+    timing_started_at TEXT,
+    timing_completed_at TEXT,
+    activity_start INTEGER,
+    activity_end INTEGER,
+    PRIMARY KEY (session_key, seq)
+) WITHOUT ROWID;
+CREATE INDEX stat_runs_run ON stat_runs(session_key, run_id);
+CREATE INDEX stat_runs_activity
+    ON stat_runs(activity_end, activity_start)
+    WHERE activity_start IS NOT NULL AND activity_end IS NOT NULL;
+CREATE TABLE stat_skills (
+    session_key INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    PRIMARY KEY (session_key, seq)
+) WITHOUT ROWID;
+CREATE TABLE stat_pricing (
+    model_key TEXT PRIMARY KEY,
+    fingerprint TEXT NOT NULL
+) WITHOUT ROWID;
+"""
+
+_INSERT_ROWS = {
+    "records": "INSERT INTO stat_records VALUES (?, ?, ?, ?, ?, ?)",
+    "calls": (
+        "INSERT INTO stat_calls VALUES ("
+        "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ),
+    "tools": "INSERT INTO stat_tools VALUES (?, ?, ?, ?, ?, ?, ?)",
+    "errors": "INSERT INTO stat_errors VALUES (?, ?, ?, ?, ?)",
+    "checkpoints": "INSERT INTO stat_checkpoints VALUES (?, ?, ?, ?, ?, ?, ?)",
+    "runs": "INSERT INTO stat_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "skills": "INSERT INTO stat_skills VALUES (?, ?, ?)",
+}
 
 
 class StatisticsIndexError(RuntimeError):
-    """The disposable Statistics index could not be read consistently."""
+    """The disposable Statistics index is internally inconsistent."""
+
+
+class StatisticsUnavailableError(VBotError):
+    """The Statistics index is busy; the read can be retried shortly."""
 
 
 class StatisticsSessionSource(Protocol):
@@ -49,8 +224,6 @@ class StatisticsSessionSource(Protocol):
 
     def get(self, address: SessionAddress) -> ChatSession: ...
 
-    def history_version(self, address: SessionAddress) -> tuple[str, int]: ...
-
     def list_history_versions(
         self, addresses: Sequence[SessionAddress]
     ) -> dict[SessionAddress, tuple[str, int]]: ...
@@ -58,7 +231,7 @@ class StatisticsSessionSource(Protocol):
 
 @dataclass(frozen=True)
 class StatisticsScope:
-    """One identity or Project Session scope in report order."""
+    """One identity, Project or Extension-owned Session scope in report order."""
 
     project_id: str | None
     agent_id: str
@@ -67,454 +240,498 @@ class StatisticsScope:
 
 
 @dataclass(frozen=True)
-class IndexedStatisticsSession:
-    """One compact Session projection hydrated from SQLite."""
+class IndexedSession:
+    """One reconciled Session: its index key, canonical generation and summary.
 
+    ``summary`` is the last listed summary of the Session across all scopes,
+    which also decides its fork boundary.
+    """
+
+    session_key: int
     generation_id: str
     summary: JsonObject
-    messages: tuple[ChatMessage, ...]
+
+
+@dataclass(frozen=True)
+class IndexView:
+    """A reconciled index read: one connection and the Sessions it covers."""
+
+    connection: sqlite3.Connection
+    sessions: Mapping[tuple[str, str, str], IndexedSession]
+
+    def session(
+        self, project_id: str | None, agent_id: str, session_id: str
+    ) -> IndexedSession | None:
+        return self.sessions.get(statistics_session_key(project_id, agent_id, session_id))
+
+
+@dataclass(frozen=True)
+class _StoredSession:
+    session_key: int
+    generation_id: str
+    history_revision: int
+    next_seq: int
+    message_count: int
+    last_message_id: str | None
+    fork_message_count: int
+    min_instant: int | None
+    max_instant: int | None
+    untimed_records: int
+
+
+class _SourceFailureError(Exception):
+    """Carries a canonical Session failure through index error handling."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__(str(error))
+        self.error = error
 
 
 class StatisticsIndex:
-    """Persist and incrementally reconcile compact Session projections."""
+    """Own one disposable typed Statistics index file and its reconciliation."""
 
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = Path(data_dir)
         self.index_path = self.data_dir / _INDEX_DIRECTORY / _INDEX_FILENAME
         self._lock = threading.RLock()
-        self._snapshot_cache: dict[tuple[str, str, str], IndexedStatisticsSession] | None = None
-        self._snapshot_generation: int | None = None
 
-    def snapshot(
+    def read(
         self,
         sessions: StatisticsSessionSource,
-        scopes: tuple[StatisticsScope, ...],
+        scopes: Sequence[StatisticsScope],
+        consume: Callable[[IndexView], _Result],
         *,
         prune: bool = True,
-        scope_only: bool = False,
-    ) -> dict[tuple[str, str, str], IndexedStatisticsSession]:
-        """Reconcile canonical sources and return one consistent compact snapshot."""
+    ) -> _Result:
+        """Reconcile ``scopes`` and run ``consume`` on one consistent index view.
+
+        ``prune`` removes indexed Sessions outside ``scopes``; partial readers
+        such as one Extension group pass ``False`` so they never shrink the
+        shared index.
+        """
         with self._lock:
-            self.index_path.parent.mkdir(parents=True, exist_ok=True)
-            with closing(self._connect()) as connection:
-                self._initialize_schema(connection)
-                with connection:
-                    changes_before = connection.total_changes
-                    current_keys = self._reconcile(connection, sessions, scopes)
-                    if prune:
-                        self._prune_missing(connection, current_keys)
-                    changed = connection.total_changes != changes_before
-                    if changed:
-                        connection.execute(
-                            """
-                            UPDATE statistics_index_state
-                            SET generation = generation + 1
-                            WHERE id = 1
-                            """
-                        )
-                generation = int(
-                    connection.execute(
-                        "SELECT generation FROM statistics_index_state WHERE id = 1"
-                    ).fetchone()[0]
-                )
-                if (
-                    not changed
-                    and self._snapshot_cache is not None
-                    and self._snapshot_generation == generation
-                ):
-                    if scope_only:
-                        return {
-                            key: self._snapshot_cache[key]
-                            for key in current_keys
-                            if key in self._snapshot_cache
-                        }
-                    return self._snapshot_cache
-                if scope_only:
-                    return self._load_snapshot(connection, keys=current_keys)
-                snapshot = self._load_snapshot(connection)
-                self._snapshot_cache = snapshot
-                self._snapshot_generation = generation
-                return snapshot
+            try:
+                for attempt in range(2):
+                    try:
+                        return self._read_file(sessions, scopes, consume, prune=prune)
+                    except (sqlite3.Error, StatisticsIndexError, OSError) as error:
+                        disposition = _failure_disposition(error)
+                        if disposition == "busy":
+                            raise StatisticsUnavailableError(
+                                "Statistics are busy; retry shortly"
+                            ) from error
+                        if disposition != "rebuild" or attempt:
+                            _LOGGER.warning(
+                                "Statistics index unavailable; using a transient projection: %s",
+                                error,
+                            )
+                            break
+                        _LOGGER.warning("Statistics index is inconsistent; rebuilding: %s", error)
+                        try:
+                            self._discard_files()
+                        except OSError as discard_error:
+                            _LOGGER.warning(
+                                "Could not discard the Statistics index: %s", discard_error
+                            )
+                            break
+                return self._read_memory(sessions, scopes, consume, prune=prune)
+            except _SourceFailureError as failure:
+                raise failure.error from failure.error.__cause__
 
     def discard(self) -> None:
         """Delete the disposable database and its SQLite sidecars."""
         with self._lock:
-            self._snapshot_cache = None
-            self._snapshot_generation = None
-            for path in (
-                self.index_path,
-                Path(f"{self.index_path}-wal"),
-                Path(f"{self.index_path}-shm"),
-                Path(f"{self.index_path}-journal"),
-            ):
-                path.unlink(missing_ok=True)
+            self._discard_files()
+
+    def _discard_files(self) -> None:
+        for path in (
+            self.index_path,
+            Path(f"{self.index_path}-wal"),
+            Path(f"{self.index_path}-shm"),
+            Path(f"{self.index_path}-journal"),
+        ):
+            path.unlink(missing_ok=True)
+
+    def _read_file(
+        self,
+        sessions: StatisticsSessionSource,
+        scopes: Sequence[StatisticsScope],
+        consume: Callable[[IndexView], _Result],
+        *,
+        prune: bool,
+    ) -> _Result:
+        self.index_path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(self._connect()) as connection:
+            return _read(connection, sessions, scopes, consume, prune=prune)
+
+    def _read_memory(
+        self,
+        sessions: StatisticsSessionSource,
+        scopes: Sequence[StatisticsScope],
+        consume: Callable[[IndexView], _Result],
+        *,
+        prune: bool,
+    ) -> _Result:
+        with closing(sqlite3.connect(":memory:", isolation_level=None)) as connection:
+            connection.execute("PRAGMA temp_store = MEMORY")
+            return _read(connection, sessions, scopes, consume, prune=prune)
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(
             self.index_path,
             timeout=_SQLITE_BUSY_TIMEOUT_MS / 1000,
+            isolation_level=None,
         )
         try:
-            connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA foreign_keys = ON")
             connection.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
             journal_mode = required_journal_mode(sqlite3.sqlite_version_info)
             connection.execute(f"PRAGMA journal_mode = {journal_mode.upper()}")
             connection.execute("PRAGMA synchronous = NORMAL")
+            connection.execute("PRAGMA temp_store = MEMORY")
+            connection.execute(f"PRAGMA cache_size = -{_SQLITE_CACHE_KIB}")
             return connection
         except Exception:
             connection.close()
             raise
 
-    @staticmethod
-    def _initialize_schema(connection: sqlite3.Connection) -> None:
-        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if version != _SCHEMA_VERSION:
-            connection.executescript(
-                """
-                DROP TABLE IF EXISTS statistics_records;
-                DROP TABLE IF EXISTS statistics_sessions;
-                DROP TABLE IF EXISTS statistics_index_state;
-                """
-            )
-        connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS statistics_sessions (
-                project_id TEXT NOT NULL,
-                agent_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                generation_id TEXT NOT NULL,
-                history_revision INTEGER NOT NULL,
-                cursor_generation_id TEXT NOT NULL,
-                cursor_history_revision INTEGER NOT NULL,
-                cursor_next_seq INTEGER NOT NULL,
-                cursor_message_count INTEGER NOT NULL,
-                cursor_last_message_id TEXT,
-                fork_message_count INTEGER NOT NULL,
-                summary_json TEXT NOT NULL,
-                PRIMARY KEY (project_id, agent_id, session_id)
-            );
-            CREATE TABLE IF NOT EXISTS statistics_records (
-                project_id TEXT NOT NULL,
-                agent_id TEXT NOT NULL,
-                session_id TEXT NOT NULL,
-                ordinal INTEGER NOT NULL,
-                payload_json TEXT NOT NULL,
-                PRIMARY KEY (project_id, agent_id, session_id, ordinal),
-                FOREIGN KEY (project_id, agent_id, session_id)
-                    REFERENCES statistics_sessions(project_id, agent_id, session_id)
-                    ON DELETE CASCADE
-            );
-            CREATE TABLE IF NOT EXISTS statistics_index_state (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                generation INTEGER NOT NULL
-            );
-            INSERT OR IGNORE INTO statistics_index_state(id, generation) VALUES (1, 0);
-            """
-        )
-        if version != _SCHEMA_VERSION:
-            connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
-            connection.commit()
 
-    def _reconcile(
-        self,
-        connection: sqlite3.Connection,
-        sessions: StatisticsSessionSource,
-        scopes: tuple[StatisticsScope, ...],
-    ) -> set[tuple[str, str, str]]:
-        current_keys: set[tuple[str, str, str]] = set()
-        # Resolve every address in one batched query first; the previous
-        # per-session `history_version` call doubled the canonical reads.
-        versions = sessions.list_history_versions(
-            [
+def _failure_disposition(error: Exception) -> str:
+    if isinstance(error, StatisticsIndexError):
+        return "rebuild"
+    if isinstance(error, sqlite3.ProgrammingError | sqlite3.InterfaceError):
+        raise error
+    if isinstance(error, sqlite3.Error):
+        code = getattr(error, "sqlite_errorcode", None)
+        primary = None if code is None else code & _SQLITE_PRIMARY_CODE_MASK
+        if primary in _BUSY_CODES:
+            return "busy"
+        if primary in _REBUILD_CODES or isinstance(error, sqlite3.IntegrityError):
+            return "rebuild"
+    return "transient"
+
+
+def _read(
+    connection: sqlite3.Connection,
+    sessions: StatisticsSessionSource,
+    scopes: Sequence[StatisticsScope],
+    consume: Callable[[IndexView], _Result],
+    *,
+    prune: bool,
+) -> _Result:
+    _ensure_schema(connection)
+    indexed = _reconcile(connection, sessions, scopes, prune=prune)
+    with _transaction(connection):
+        return consume(IndexView(connection, indexed))
+
+
+def _ensure_schema(connection: sqlite3.Connection) -> None:
+    if int(connection.execute("PRAGMA user_version").fetchone()[0]) == _SCHEMA_VERSION:
+        return
+    with _transaction(connection, immediate=True):
+        tables = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            )
+        ]
+        for table in tables:
+            connection.execute(f'DROP TABLE IF EXISTS "{table}"')
+        for statement in _SCHEMA.split(";"):
+            if statement.strip():
+                connection.execute(statement)
+        connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+
+
+@contextmanager
+def _transaction(connection: sqlite3.Connection, *, immediate: bool = False) -> Iterator[None]:
+    connection.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+    try:
+        yield
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+    connection.execute("COMMIT")
+
+
+def _reconcile(
+    connection: sqlite3.Connection,
+    sessions: StatisticsSessionSource,
+    scopes: Sequence[StatisticsScope],
+    *,
+    prune: bool,
+) -> dict[tuple[str, str, str], IndexedSession]:
+    """Bring the index up to date, touching canonical history only for changes."""
+    # A Session listed by several scopes keeps its first position and its last
+    # listed summary.
+    listed: dict[tuple[str, str, str], tuple[SessionAddress, JsonObject]] = {}
+    for scope in scopes:
+        for summary in scope.summaries:
+            session_id = str(summary["id"])
+            key = statistics_session_key(scope.project_id, scope.agent_id, session_id)
+            listed[key] = (
                 SessionAddress(
                     project_id=scope.project_id,
                     agent_id=scope.agent_id,
-                    session_id=str(raw_summary["id"]),
-                )
-                for scope in scopes
-                for raw_summary in scope.summaries
-            ]
-        )
-        for scope in scopes:
-            project_key = _scope_key(scope.project_id)
-            for raw_summary in scope.summaries:
-                session_id = str(raw_summary["id"])
-                key = (project_key, scope.agent_id, session_id)
-                address = SessionAddress(
-                    project_id=scope.project_id,
-                    agent_id=scope.agent_id,
                     session_id=session_id,
-                )
-                version = versions.get(address)
-                if version is None:
-                    continue
-                summary = _statistics_summary(raw_summary)
-                try:
-                    handle = sessions.get(address)
-                    self._reconcile_session(
-                        connection,
-                        sessions,
-                        handle,
-                        key,
-                        summary,
-                        version=version,
-                    )
-                except SessionNotFoundError:
-                    # The live generation vanished after the batched version read.
-                    # Omitting its key also prunes an older derived row below.
-                    continue
-                current_keys.add(key)
-        return current_keys
-
-    def _reconcile_session(
-        self,
-        connection: sqlite3.Connection,
-        sessions: StatisticsSessionSource,
-        session: ChatSession,
-        key: tuple[str, str, str],
-        summary: JsonObject,
-        *,
-        version: tuple[str, int] | None,
-    ) -> None:
-        row = connection.execute(
-            """
-            SELECT * FROM statistics_sessions
-            WHERE project_id = ? AND agent_id = ? AND session_id = ?
-            """,
-            key,
-        ).fetchone()
-        address = SessionAddress(project_id=key[0] or None, agent_id=key[1], session_id=key[2])
+                ),
+                summary,
+            )
+    versions = _source(sessions.list_history_versions, [address for address, _ in listed.values()])
+    stored = _stored_sessions(connection)
+    current: dict[tuple[str, str, str], IndexedSession] = {}
+    changed: list[
+        tuple[
+            tuple[str, str, str], SessionAddress, JsonObject, tuple[str, int], _StoredSession | None
+        ]
+    ] = []
+    for key, (address, summary) in listed.items():
+        version = versions.get(address)
         if version is None:
-            generation_id, history_revision = sessions.history_version(address)
-        else:
-            generation_id, history_revision = version
-        summary_json = _compact_json(summary)
-        if row is None:
-            self._replace_session(connection, session, key, summary_json)
-            return
-
-        existing_count = int(row["cursor_message_count"])
-        effective_fork = _effective_fork_message_count(summary, existing_count)
+            continue
+        row = stored.get(key)
         if (
-            str(row["generation_id"]) == generation_id
-            and int(row["history_revision"]) == history_revision
-            and effective_fork == int(row["fork_message_count"])
+            row is not None
+            and row.generation_id == version[0]
+            and row.history_revision == version[1]
+            and _effective_fork_message_count(summary, row.message_count) == row.fork_message_count
         ):
-            if summary_json != str(row["summary_json"]):
-                connection.execute(
-                    """
-                    UPDATE statistics_sessions SET summary_json = ?
-                    WHERE project_id = ? AND agent_id = ? AND session_id = ?
-                    """,
-                    (summary_json, *key),
-                )
-            return
+            current[key] = IndexedSession(row.session_key, row.generation_id, summary)
+        else:
+            changed.append((key, address, summary, version, row))
+    stale = [row.session_key for key, row in stored.items() if key not in current] if prune else []
+    if not changed and not stale:
+        return current
 
-        if str(row["generation_id"]) != generation_id or effective_fork != int(
-            row["fork_message_count"]
-        ):
-            self._replace_session(connection, session, key, summary_json)
-            return
-
-        cursor = SessionReadCursor(
-            generation_id=str(row["cursor_generation_id"]),
-            history_revision=int(row["cursor_history_revision"]),
-            next_seq=int(row["cursor_next_seq"]),
-            message_count=int(row["cursor_message_count"]),
-            last_message_id=cast(str | None, row["cursor_last_message_id"]),
-        )
-        batch = session.load_since(cursor)
-        if batch is None:
-            self._replace_session(connection, session, key, summary_json)
-            return
-        self._append_batch(
-            connection,
-            session,
-            key,
-            summary_json,
-            batch,
-            first_ordinal=cursor.next_seq,
-            fork_message_count=effective_fork,
-        )
-
-    def _replace_session(
-        self,
-        connection: sqlite3.Connection,
-        session: ChatSession,
-        key: tuple[str, str, str],
-        summary_json: str,
-    ) -> None:
-        batch = session.load_since()
-        if batch is None:
-            raise StatisticsIndexError(f"could not read canonical Session {key[2]}")
-        summary = _json_object(summary_json)
-        fork_message_count = _effective_fork_message_count(
-            summary,
-            batch.cursor.message_count,
-        )
-        connection.execute(
-            """
-            INSERT INTO statistics_sessions (
-                project_id, agent_id, session_id,
-                generation_id, history_revision, cursor_generation_id,
-                cursor_history_revision, cursor_next_seq,
-                cursor_message_count, cursor_last_message_id,
-                fork_message_count, summary_json
-            ) VALUES (?, ?, ?, '', 0, '', 0, 0, 0, NULL, ?, ?)
-            ON CONFLICT(project_id, agent_id, session_id) DO UPDATE SET
-                generation_id = '',
-                history_revision = 0,
-                cursor_generation_id = '',
-                cursor_history_revision = 0,
-                cursor_next_seq = 0,
-                cursor_message_count = 0,
-                cursor_last_message_id = NULL,
-                fork_message_count = excluded.fork_message_count,
-                summary_json = excluded.summary_json
-            """,
-            (*key, fork_message_count, summary_json),
-        )
-        connection.execute(
-            """
-            DELETE FROM statistics_records
-            WHERE project_id = ? AND agent_id = ? AND session_id = ?
-            """,
-            key,
-        )
-        self._append_batch(
-            connection,
-            session,
-            key,
-            summary_json,
-            batch,
-            first_ordinal=0,
-            fork_message_count=fork_message_count,
-        )
-
-    @staticmethod
-    def _append_batch(
-        connection: sqlite3.Connection,
-        session: ChatSession,
-        key: tuple[str, str, str],
-        summary_json: str,
-        batch: SessionReadBatch,
-        *,
-        first_ordinal: int,
-        fork_message_count: int,
-    ) -> None:
-        rows = []
-        for offset, message in enumerate(batch.messages):
-            ordinal = first_ordinal + offset
-            if ordinal < fork_message_count:
+    with _transaction(connection, immediate=True):
+        removed = False
+        for key, address, summary, version, row in changed:
+            try:
+                handle = _source(sessions.get, address)
+                indexed = _refresh(connection, handle, key, summary, version, row)
+            except SessionNotFoundError:
+                # The live generation vanished after the batched version read;
+                # a stale derived row is pruned below.
                 continue
-            rows.append((*key, ordinal, _compact_json(_project_message(message))))
-        if rows:
-            connection.executemany(
-                """
-                INSERT INTO statistics_records (
-                    project_id, agent_id, session_id, ordinal, payload_json
-                ) VALUES (?, ?, ?, ?, ?)
-                """,
-                rows,
-            )
-
-        connection.execute(
-            """
-            UPDATE statistics_sessions SET
-                generation_id = ?,
-                history_revision = ?,
-                cursor_generation_id = ?,
-                cursor_history_revision = ?,
-                cursor_next_seq = ?,
-                cursor_message_count = ?,
-                cursor_last_message_id = ?,
-                fork_message_count = ?,
-                summary_json = ?
-            WHERE project_id = ? AND agent_id = ? AND session_id = ?
-            """,
-            (
-                batch.cursor.generation_id,
-                batch.cursor.history_revision,
-                batch.cursor.generation_id,
-                batch.cursor.history_revision,
-                batch.cursor.next_seq,
-                batch.cursor.message_count,
-                batch.cursor.last_message_id,
-                fork_message_count,
-                summary_json,
-                *key,
-            ),
-        )
-
-    @staticmethod
-    def _prune_missing(
-        connection: sqlite3.Connection,
-        current_keys: set[tuple[str, str, str]],
-    ) -> None:
-        stored_keys = {
-            (str(row[0]), str(row[1]), str(row[2]))
-            for row in connection.execute(
-                "SELECT project_id, agent_id, session_id FROM statistics_sessions"
-            )
-        }
-        for key in stored_keys - current_keys:
+            # Replacing or extending an existing Session may retire priced Models.
+            removed = removed or row is not None
+            current[key] = indexed
+        if prune:
+            stale_keys = [row.session_key for key, row in stored.items() if key not in current]
+            if stale_keys:
+                _delete_facts(connection, stale_keys)
+                connection.executemany(
+                    "DELETE FROM stat_sessions WHERE session_key = ?",
+                    [(session_key,) for session_key in stale_keys],
+                )
+                removed = True
+        if removed:
             connection.execute(
                 """
-                DELETE FROM statistics_sessions
-                WHERE project_id = ? AND agent_id = ? AND session_id = ?
-                """,
-                key,
-            )
-
-    @staticmethod
-    def _load_snapshot(
-        connection: sqlite3.Connection,
-        *,
-        keys: set[tuple[str, str, str]] | None = None,
-    ) -> dict[tuple[str, str, str], IndexedStatisticsSession]:
-        def rows(table: str, columns: str, order: str = "") -> Iterator[sqlite3.Row]:
-            if keys is None:
-                yield from connection.execute(f"SELECT {columns} FROM {table} {order}")
-                return
-            selected = sorted(keys)
-            for offset in range(0, len(selected), 200):
-                batch = selected[offset : offset + 200]
-                placeholders = ",".join("(?,?,?)" for _ in batch)
-                yield from connection.execute(
-                    f"SELECT {columns} FROM {table} "
-                    "WHERE (project_id,agent_id,session_id) IN "
-                    f"(VALUES {placeholders}) {order}",
-                    [value for key in batch for value in key],
+                DELETE FROM stat_pricing
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM stat_calls
+                    WHERE retrospective = 1 AND model_key = stat_pricing.model_key
                 )
-
-        summaries: dict[tuple[str, str, str], JsonObject] = {}
-        messages: dict[tuple[str, str, str], list[ChatMessage]] = {}
-        for row in rows(
-            "statistics_sessions", "project_id, agent_id, session_id, generation_id, summary_json"
-        ):
-            key = (str(row["project_id"]), str(row["agent_id"]), str(row["session_id"]))
-            summaries[key] = {
-                "generation_id": str(row["generation_id"]),
-                "summary": _json_object(str(row["summary_json"])),
-            }
-            messages[key] = []
-        for row in rows(
-            "statistics_records",
-            "project_id, agent_id, session_id, ordinal, payload_json",
-            "ORDER BY project_id, agent_id, session_id, ordinal",
-        ):
-            key = (str(row["project_id"]), str(row["agent_id"]), str(row["session_id"]))
-            payload = _json_object(str(row["payload_json"]))
-            messages[key].append(_message_from_projection(payload, int(row["ordinal"])))
-        return {
-            key: IndexedStatisticsSession(
-                generation_id=str(summary["generation_id"]),
-                summary=cast(JsonObject, summary["summary"]),
-                messages=tuple(messages[key]),
+                """
             )
-            for key, summary in summaries.items()
-        }
+    return current
+
+
+def _stored_sessions(connection: sqlite3.Connection) -> dict[tuple[str, str, str], _StoredSession]:
+    return {
+        (str(row[0]), str(row[1]), str(row[2])): _StoredSession(
+            session_key=int(row[3]),
+            generation_id=str(row[4]),
+            history_revision=int(row[5]),
+            next_seq=int(row[6]),
+            message_count=int(row[7]),
+            last_message_id=row[8],
+            fork_message_count=int(row[9]),
+            min_instant=row[10],
+            max_instant=row[11],
+            untimed_records=int(row[12]),
+        )
+        for row in connection.execute(
+            """
+            SELECT project_id, agent_id, session_id, session_key, generation_id,
+                history_revision, next_seq, message_count, last_message_id,
+                fork_message_count, min_instant, max_instant, untimed_records
+            FROM stat_sessions
+            """
+        )
+    }
+
+
+def _refresh(
+    connection: sqlite3.Connection,
+    session: ChatSession,
+    key: tuple[str, str, str],
+    summary: JsonObject,
+    version: tuple[str, int],
+    row: _StoredSession | None,
+) -> IndexedSession:
+    if (
+        row is not None
+        and row.generation_id == version[0]
+        and _effective_fork_message_count(summary, row.message_count) == row.fork_message_count
+    ):
+        batch = _source(
+            session.load_since,
+            SessionReadCursor(
+                generation_id=row.generation_id,
+                history_revision=row.history_revision,
+                next_seq=row.next_seq,
+                message_count=row.message_count,
+                last_message_id=row.last_message_id,
+            ),
+        )
+        if batch is not None:
+            _append(connection, row, batch)
+            return IndexedSession(row.session_key, batch.cursor.generation_id, summary)
+    batch = _source(session.load_since)
+    if batch is None:
+        raise SessionNotFoundError(f"Session {key[2]} has no readable history")
+    return _replace(connection, key, summary, batch, row)
+
+
+def _replace(
+    connection: sqlite3.Connection,
+    key: tuple[str, str, str],
+    summary: JsonObject,
+    batch: SessionReadBatch,
+    row: _StoredSession | None,
+) -> IndexedSession:
+    fork_message_count = _effective_fork_message_count(summary, batch.cursor.message_count)
+    if row is None:
+        cursor = connection.execute(
+            """
+            INSERT INTO stat_sessions (
+                project_id, agent_id, session_id, generation_id, history_revision,
+                next_seq, message_count, last_message_id, fork_message_count,
+                min_instant, max_instant, untimed_records
+            ) VALUES (?, ?, ?, '', 0, 0, 0, NULL, 0, NULL, NULL, 0)
+            """,
+            key,
+        )
+        session_key = int(cursor.lastrowid or 0)
+    else:
+        session_key = row.session_key
+        _delete_facts(connection, [session_key])
+    rows = _project_batch(session_key, batch, first_seq=0, fork_message_count=fork_message_count)
+    _insert_rows(connection, rows)
+    _write_session_state(
+        connection,
+        session_key,
+        batch.cursor,
+        fork_message_count=fork_message_count,
+        min_instant=rows.min_instant,
+        max_instant=rows.max_instant,
+        untimed_records=rows.untimed_records,
+    )
+    return IndexedSession(session_key, batch.cursor.generation_id, summary)
+
+
+def _append(connection: sqlite3.Connection, row: _StoredSession, batch: SessionReadBatch) -> None:
+    rows = _project_batch(
+        row.session_key,
+        batch,
+        first_seq=row.next_seq,
+        fork_message_count=row.fork_message_count,
+    )
+    _insert_rows(connection, rows)
+    _write_session_state(
+        connection,
+        row.session_key,
+        batch.cursor,
+        fork_message_count=row.fork_message_count,
+        min_instant=_bound(min, row.min_instant, rows.min_instant),
+        max_instant=_bound(max, row.max_instant, rows.max_instant),
+        untimed_records=row.untimed_records + rows.untimed_records,
+    )
+
+
+def _bound(pick: Callable[[int, int], int], stored: int | None, added: int | None) -> int | None:
+    if stored is None:
+        return added
+    if added is None:
+        return stored
+    return pick(stored, added)
+
+
+def _project_batch(
+    session_key: int, batch: SessionReadBatch, *, first_seq: int, fork_message_count: int
+) -> ProjectedRows:
+    rows = ProjectedRows(session_key)
+    for offset, message in enumerate(batch.messages):
+        seq = first_seq + offset
+        # A fork's copied prefix belongs to its source Session's activity.
+        if seq < fork_message_count:
+            continue
+        rows.add(seq, message)
+    return rows
+
+
+def _insert_rows(connection: sqlite3.Connection, rows: ProjectedRows) -> None:
+    for name, statement in _INSERT_ROWS.items():
+        values = getattr(rows, name)
+        if values:
+            connection.executemany(statement, values)
+
+
+def _write_session_state(
+    connection: sqlite3.Connection,
+    session_key: int,
+    cursor: SessionReadCursor,
+    *,
+    fork_message_count: int,
+    min_instant: int | None,
+    max_instant: int | None,
+    untimed_records: int,
+) -> None:
+    connection.execute(
+        """
+        UPDATE stat_sessions SET
+            generation_id = ?,
+            history_revision = ?,
+            next_seq = ?,
+            message_count = ?,
+            last_message_id = ?,
+            fork_message_count = ?,
+            min_instant = ?,
+            max_instant = ?,
+            untimed_records = ?
+        WHERE session_key = ?
+        """,
+        (
+            cursor.generation_id,
+            cursor.history_revision,
+            cursor.next_seq,
+            cursor.message_count,
+            cursor.last_message_id,
+            fork_message_count,
+            min_instant,
+            max_instant,
+            untimed_records,
+            session_key,
+        ),
+    )
+
+
+def _delete_facts(connection: sqlite3.Connection, session_keys: Sequence[int]) -> None:
+    parameters = [(session_key,) for session_key in session_keys]
+    for table in SESSION_FACT_TABLES:
+        connection.executemany(f"DELETE FROM {table} WHERE session_key = ?", parameters)
+
+
+def _source(call: Callable[..., _Result], *args: Any) -> _Result:
+    """Run one canonical Session read, keeping its failures apart from index failures."""
+    try:
+        return call(*args)
+    except SessionNotFoundError:
+        raise
+    except Exception as error:
+        raise _SourceFailureError(error) from error
 
 
 def _scope_key(project_id: str | None) -> str:
@@ -530,18 +747,6 @@ def statistics_session_key(
     return (_scope_key(project_id), agent_id, session_id)
 
 
-def _statistics_summary(summary: JsonObject) -> JsonObject:
-    projected: JsonObject = {
-        "id": str(summary["id"]),
-        "created_at": summary.get("created_at"),
-        "last_active_at": summary.get("last_active_at"),
-    }
-    for key in ("title", FORK_SOURCE_META_KEY, SEEN_SKILLS_META_KEY):
-        if key in summary:
-            projected[key] = summary[key]
-    return projected
-
-
 def _effective_fork_message_count(summary: JsonObject, total_messages: int) -> int:
     fork_source = summary.get(FORK_SOURCE_META_KEY)
     if not isinstance(fork_source, dict):
@@ -550,151 +755,3 @@ def _effective_fork_message_count(summary: JsonObject, total_messages: int) -> i
     if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > total_messages:
         return 0
     return value
-
-
-def _project_message(message: ChatMessage) -> JsonObject:
-    payload: JsonObject = {
-        "timestamp": message.timestamp,
-        "role": message.role,
-    }
-    if message.run_id is not None:
-        payload["run_id"] = message.run_id
-    if message.role == "assistant":
-        if isinstance(message.content, str) and message.content.strip():
-            payload["content"] = "visible"
-        if message.model is not None:
-            payload["model"] = message.model
-        if message.usage is not None:
-            payload["usage"] = _project_usage(message.usage, assistant=True)
-    elif message.role == "tool":
-        if message.name is not None:
-            payload["name"] = message.name
-        content = _project_tool_content(message)
-        if content is not None:
-            payload["content"] = content
-        timing = _project_timing(message.timing)
-        if timing is not None:
-            payload["timing"] = timing
-    elif message.role == "note":
-        skill_name = skill_context_note_name(message)
-        if skill_name is not None:
-            payload["content"] = (
-                '[skill-context] {"name":'
-                + json.dumps(skill_name, ensure_ascii=False)
-                + ',"content":"indexed"}'
-            )
-    elif message.role == "error":
-        if message.error_kind is not None:
-            payload["error_kind"] = message.error_kind
-    elif message.role == "compaction_checkpoint":
-        if message.compaction_strategy is not None:
-            payload["compaction_strategy"] = message.compaction_strategy
-        if message.usage is not None:
-            payload["usage"] = _project_usage(message.usage, assistant=False)
-    elif message.role == "run_summary":
-        if message.run_id is not None:
-            payload["run_id"] = message.run_id
-        if message.status is not None:
-            payload["status"] = message.status
-        timing = _project_timing(message.timing)
-        if timing is not None:
-            payload["timing"] = timing
-    return payload
-
-
-def _project_usage(usage: JsonObject, *, assistant: bool) -> JsonObject:
-    keys = (
-        (
-            "input_tokens",
-            "output_tokens",
-            "reasoning_tokens",
-            "estimated",
-            "input_tokens_estimated",
-            "output_tokens_estimated",
-            "cache_read_tokens",
-            "cache_write_tokens",
-            "reported_cost_usd",
-            "cost",
-        )
-        if assistant
-        else ("context_tokens_before", "context_tokens_after", "compaction_duration_ms")
-    )
-    projected = {key: usage[key] for key in keys if key in usage}
-    if "cost" in projected:
-        projected["cost"] = project_cost(projected["cost"])
-    call = usage.get("model_call")
-    if not assistant and isinstance(call, dict) and isinstance(call.get("usage"), dict):
-        projected["model_call"] = {
-            "model": call.get("model"),
-            "usage": _project_usage(call["usage"], assistant=True),
-        }
-    return projected
-
-
-def _project_timing(timing: JsonObject | None) -> JsonObject | None:
-    if timing is None:
-        return None
-    projected: JsonObject = {
-        key: timing[key] for key in ("started_at", "completed_at", "duration_ms") if key in timing
-    }
-    return projected or None
-
-
-def _project_tool_content(message: ChatMessage) -> str | None:
-    activation_name = skill_tool_activation_name(message)
-    if activation_name is not None:
-        envelope = tool_success(
-            {
-                "status": "loaded",
-                "name": activation_name,
-                "content": "indexed",
-            }
-        )
-        return _compact_json(envelope)
-    if not isinstance(message.content, str):
-        return None
-    try:
-        envelope = json.loads(message.content)
-    except (TypeError, ValueError):
-        return None
-    if not isinstance(envelope, dict) or not is_tool_result_envelope(envelope):
-        return None
-    if envelope["ok"]:
-        return _compact_json(tool_success({}))
-    error = envelope["error"]
-    if not isinstance(error, dict) or not isinstance(error.get("code"), str):
-        return None
-    return _compact_json(tool_failure(error["code"], "indexed"))
-
-
-def _message_from_projection(payload: JsonObject, ordinal: int) -> ChatMessage:
-    usage = payload.get("usage")
-    timing = payload.get("timing")
-    return ChatMessage(
-        id=f"statistics-{ordinal}",
-        timestamp=str(payload["timestamp"]),
-        role=cast(MessageRole, payload["role"]),
-        content=cast(str | None, payload.get("content")),
-        model=cast(str | None, payload.get("model")),
-        usage=dict(usage) if isinstance(usage, dict) else None,
-        timing=dict(timing) if isinstance(timing, dict) else None,
-        name=cast(str | None, payload.get("name")),
-        error_kind=cast(str | None, payload.get("error_kind")),
-        compaction_strategy=cast(str | None, payload.get("compaction_strategy")),
-        run_id=cast(str | None, payload.get("run_id")),
-        status=cast(str | None, payload.get("status")),
-    )
-
-
-def _compact_json(value: JsonObject) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-
-
-def _json_object(value: str) -> JsonObject:
-    try:
-        parsed = json.loads(value)
-    except (TypeError, ValueError) as error:
-        raise StatisticsIndexError("invalid JSON in Statistics index") from error
-    if not isinstance(parsed, dict):
-        raise StatisticsIndexError("Statistics index JSON row must be an object")
-    return parsed

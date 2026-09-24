@@ -9,6 +9,7 @@ from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
 from core.runs import ChatRunManager
+from core.statistics import StatisticsIndex
 from core.utils.log_viewer import LogViewer
 from server._bind import ServerBindState
 from server._http_dependencies import FastAPIType, HTTPException
@@ -34,6 +35,14 @@ if TYPE_CHECKING:
 
 
 JsonObject = dict[str, Any]
+
+# The Session methods a Statistics index warmup reads through.
+_STATISTICS_SESSION_METHODS = (
+    "list_summaries",
+    "list_owned_session_summaries",
+    "list_history_versions",
+    "get",
+)
 
 
 def _initialize_app_state(
@@ -87,18 +96,19 @@ def _register_run_event_bridge(state: Any) -> Any:
 
 
 def _start_statistics_warmup(state: Any) -> asyncio.Task[None] | None:
+    """Reconcile the Statistics index in the background when the runtime serves it."""
     runtime = state.runtime
     sessions = getattr(runtime, "chat_sessions", None)
     agents = getattr(runtime, "agents", None)
     projects = getattr(runtime, "projects", None)
+    models = getattr(runtime, "models", None)
     if not (
-        sessions is not None
-        and hasattr(sessions, "data_dir")
-        and callable(getattr(sessions, "list_with_metadata", None))
-        and callable(getattr(sessions, "get", None))
+        isinstance(getattr(runtime, "statistics_index", None), StatisticsIndex)
+        and all(callable(getattr(sessions, name, None)) for name in _STATISTICS_SESSION_METHODS)
         and callable(getattr(agents, "list", None))
         and callable(getattr(projects, "list", None))
         and callable(getattr(projects, "session_owning_agents", None))
+        and callable(getattr(models, "pricing_for", None))
     ):
         return None
     service = statistics_service(state)
