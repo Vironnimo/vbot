@@ -248,11 +248,16 @@ def test_store_backfills_normalized_session_metadata_columns(tmp_path) -> None:
         "list_visibility_mask",
         "active_sort",
     }
-    old_schema = "\n".join(
+    # Only the sessions table predates these projection columns; other tables may
+    # declare same-named columns of their own.
+    sessions_start = SCHEMA_SQL.index("CREATE TABLE sessions (")
+    sessions_end = SCHEMA_SQL.index(") STRICT;", sessions_start)
+    sessions_table = "\n".join(
         line
-        for line in SCHEMA_SQL.splitlines()
+        for line in SCHEMA_SQL[sessions_start:sessions_end].splitlines()
         if not any(line.startswith(f"  {column} ") for column in projection_columns)
     )
+    old_schema = SCHEMA_SQL[:sessions_start] + sessions_table + SCHEMA_SQL[sessions_end:]
     old_schema = old_schema.replace(
         "CREATE INDEX sessions_live_scope_order\n"
         "  ON sessions (project_id, agent_id, active_sort DESC, session_id)\n"

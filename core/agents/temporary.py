@@ -241,6 +241,7 @@ class TemporaryExecutionGroups:
         resources: Sequence[ExecutionResources] = (),
         usage: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
         validate_binding: Callable[[TemporarySessionBinding], Awaitable[None]] | None = None,
+        title: Callable[[str, str], Awaitable[str | None]] | None = None,
     ) -> None:
         self._registry = registry
         self._chat = chat
@@ -250,6 +251,7 @@ class TemporaryExecutionGroups:
         self._manager = run_manager
         self._resources = tuple(resources)
         self._usage = usage
+        self._title = title
         self._validate_binding = validate_binding
         self._groups: dict[str, _Group] = {}
         self._lifecycle = asyncio.Lock()
@@ -697,6 +699,26 @@ class TemporaryExecutionGroups:
         result = await self._usage(group_id, query)
         self._require_current()
         return result
+
+    async def title_group(self, group_id: str, source_text: str) -> str | None:
+        """Name this group from its originating request and return the stored title.
+
+        A local title is stored immediately; the shared title generator may
+        replace it before this returns. Group titles are display metadata for
+        this owner's page and for Statistics, which keeps showing them after
+        the owner is disabled. They never authorize access.
+        """
+        self._require_current()
+        if self._title is None:
+            raise RuntimeError("Extension group titles are unavailable")
+        return await self._title(group_id, source_text)
+
+    async def group_titles(self, group_ids: Sequence[str]) -> dict[str, str]:
+        """Read stored titles of this owner's groups, keyed by group id."""
+        self._require_current()
+        return await self._sessions.temporary_group_titles_async(
+            owner_name=self._identity.name, group_ids=group_ids
+        )
 
     async def delivery_receipt(
         self, address: SessionAddress, generation_id: str, receipt_id: str

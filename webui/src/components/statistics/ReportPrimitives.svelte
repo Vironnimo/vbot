@@ -67,6 +67,18 @@
       >
         <Badge variant="info">{display.projectId}</Badge>
       </span>
+    {:else if display.extension}
+      <span
+        class="stats-agent__project tooltip-anchor"
+        use:tooltip={t(
+          'statistics.agent.extensionBadgeTitle',
+          'Sessions this Extension runs on its own, such as Swarm participants',
+        )}
+      >
+        <Badge variant="neutral"
+          >{t('statistics.agent.extensionBadge', 'Extension')}</Badge
+        >
+      </span>
     {/if}
   </span>
 {/snippet}

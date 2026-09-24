@@ -11,6 +11,7 @@
   import CompactionsPanel from './statistics/CompactionsPanel.svelte';
   import ToolsPanel from './statistics/ToolsPanel.svelte';
   import SkillsPanel from './statistics/SkillsPanel.svelte';
+  import ExtensionsPanel from './statistics/ExtensionsPanel.svelte';
   import './statistics/report.css';
   import { getStatisticsReport } from '$lib/api.js';
   import { t, activeLocaleTag } from '$lib/i18n.js';
@@ -91,6 +92,8 @@
         return t('statistics.subview.skills', 'Skills');
       case 'limits':
         return t('statistics.subview.limits', 'Limits');
+      case 'extensions':
+        return t('statistics.subview.extensions', 'Extensions');
       default:
         return t('statistics.subview.overview', 'Overview');
     }
@@ -224,6 +227,8 @@
       <ToolsPanel {report} />
     {:else if report && activeSubView === 'skills'}
       <SkillsPanel {report} />
+    {:else if report && activeSubView === 'extensions'}
+      <ExtensionsPanel {report} />
     {/if}
   </div>
 </section>

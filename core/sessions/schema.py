@@ -116,6 +116,13 @@ CREATE TABLE temporary_session_bindings (
 CREATE INDEX temporary_session_bindings_owner_group
   ON temporary_session_bindings (owner_name, group_id, participant_id);
 
+CREATE TABLE temporary_group_titles (
+  owner_name TEXT NOT NULL,
+  group_id TEXT NOT NULL,
+  title TEXT NOT NULL CHECK (length(title) > 0),
+  PRIMARY KEY (owner_name, group_id)
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE session_delivery_receipts (
   session_key INTEGER NOT NULL,
   generation_id TEXT NOT NULL,

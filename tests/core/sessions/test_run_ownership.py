@@ -156,3 +156,57 @@ async def test_run_start_boundaries_include_owned_and_ordinary_successors(tmp_pa
         ]
     finally:
         sessions.close()
+
+
+@pytest.mark.asyncio
+async def test_group_titles_label_owned_summaries_and_leave_with_their_group(tmp_path):
+    sessions, binding, _owner = make_sessions(tmp_path)
+    second_binding = sessions.create_bound_temporary_session(
+        SessionAddress(None, "temporary-2", "participant-2"),
+        owner_name="fixture",
+        group_id="group",
+        participant_id="peer-2",
+        config={"name": "Xenia", "model": "provider/model", "instructions": "private"},
+    )
+    sessions.create_bound_temporary_session(
+        SessionAddress(None, "temporary-3", "participant-3"),
+        owner_name="other",
+        group_id="group",
+        participant_id="peer",
+        config={},
+    )
+    ordinary = sessions.create("agent")
+
+    def set_title(title: str) -> None:
+        sessions.set_temporary_group_title(owner_name="fixture", group_id="group", title=title)
+
+    async def titles(owner_name: str, *group_ids: str) -> dict[str, str]:
+        stored: dict[str, str] = await sessions.temporary_group_titles_async(
+            owner_name=owner_name, group_ids=group_ids
+        )
+        return stored
+
+    set_title("First")
+    set_title("Parser")
+    for invalid in ("", " padded ", "two\nlines", "x" * 121):
+        with pytest.raises(ChatSessionError):
+            set_title(invalid)
+
+    assert await titles("fixture", "group", "missing") == {"group": "Parser"}
+    assert await titles("other", "group") == {}
+    owned = sessions.list_owned_session_summaries(owner_name="fixture", group_id="group")
+    assert [entry.address for entry in owned] == [binding.address, second_binding.address]
+    assert [entry.group_title for entry in owned] == ["Parser", "Parser"]
+    assert (owned[1].participant_name, owned[1].model) == ("Xenia", "provider/model")
+    assert owned[1].summary["id"] == "participant-2"
+    assert "instructions" not in owned[1].summary
+    assert {entry.owner_name for entry in sessions.list_owned_session_summaries()} == {
+        "fixture",
+        "other",
+    }
+    assert sessions.list_addresses(exclude_owner_managed=True) == [ordinary.address]
+
+    await sessions.delete_temporary_group(owner_name="fixture", group_id="group")
+
+    assert await titles("fixture", "group") == {}
+    assert [entry.owner_name for entry in sessions.list_owned_session_summaries()] == ["other"]

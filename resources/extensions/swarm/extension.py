@@ -108,6 +108,7 @@ class SwarmExtension:
         self.host: ExtensionHost | None = None
         self.store: SwarmStore | None = None
         self._cleanup_tasks: set[asyncio.Task[None]] = set()
+        self._title_tasks: set[asyncio.Task[None]] = set()
         self._wake_tasks: dict[str, asyncio.Task[None]] = {}
         self._wake_dirty: set[str] = set()
         self._control_lock = asyncio.Lock()
@@ -135,6 +136,11 @@ class SwarmExtension:
             await self.host.temporary_agents.quiesce()
         if self._cleanup_tasks:
             await asyncio.gather(*self._cleanup_tasks, return_exceptions=True)
+        # A pending title request keeps the stored local title; never delay close.
+        for task in self._title_tasks:
+            task.cancel()
+        if self._title_tasks:
+            await asyncio.gather(*self._title_tasks, return_exceptions=True)
         for task in self._wake_tasks.values():
             task.cancel()
         if self._wake_tasks:
@@ -488,7 +494,19 @@ class SwarmExtension:
 
     async def _swarms_list(self, arguments: Json) -> Json:
         page = await self._store().list_swarms(**_page_arguments(arguments))
-        return _management_page(page)
+        result = _management_page(page)
+        host = self.host
+        if host is not None and host.temporary_agents is not None and result["entries"]:
+            # Generated Run titles live with the canonical execution group; Runs
+            # started before titles existed keep their first goal line.
+            titles = await host.temporary_agents.group_titles(
+                [entry["id"] for entry in result["entries"]]
+            )
+            result["entries"] = [
+                {**entry, "title": titles.get(entry["id"], entry["title"])}
+                for entry in result["entries"]
+            ]
+        return result
 
     async def _swarms_get(self, arguments: Json) -> Json:
         _exact(arguments, {"swarm_id"})
@@ -747,6 +765,26 @@ class SwarmExtension:
         self._cleanup_tasks.add(task)
         task.add_done_callback(self._observe_cleanup_task)
 
+    def _enqueue_title(self, swarm_id: str, prompt: str, revision: int) -> None:
+        """Name a started Run from its goal without delaying the Start reply."""
+        task = asyncio.create_task(self._title_swarm(swarm_id, prompt, revision))
+        self._title_tasks.add(task)
+        task.add_done_callback(self._observe_title_task)
+
+    async def _title_swarm(self, swarm_id: str, prompt: str, revision: int) -> None:
+        host = self.host
+        if host is None or host.temporary_agents is None:
+            return
+        await host.temporary_agents.title_group(swarm_id, prompt)
+        self._changed(swarm_id, revision)
+
+    def _observe_title_task(self, task: asyncio.Task[None]) -> None:
+        self._title_tasks.discard(task)
+        if not task.cancelled():
+            error = task.exception()
+            if error is not None:
+                self.api.logger.warning("Swarm Run title failed (error=%s)", type(error).__name__)
+
     def _observe_cleanup_task(self, task: asyncio.Task[None]) -> None:
         self._cleanup_tasks.discard(task)
         if not task.cancelled():
@@ -914,9 +952,11 @@ class SwarmExtension:
             await self._store().fail_startup(snapshot["id"], expected_epoch=snapshot["epoch"])
             raise
         self._changed(snapshot["id"], snapshot["settings_revision"])
-        return await self._store().finish_admission(
+        result = await self._store().finish_admission(
             snapshot["id"], request_id=request_id, kind="start", runs=admissions
         )
+        self._enqueue_title(snapshot["id"], prompt, snapshot["settings_revision"])
+        return result
 
     async def _resume_swarm(
         self, swarm_id: str, request_id: str, *, participant_id: str | None = None

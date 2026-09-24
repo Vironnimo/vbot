@@ -30,6 +30,7 @@ from core.runtime.interfaces import (
     ProviderCredentialResolverProtocol,
 )
 from core.sessions import ChatSessionManager
+from core.sessions.titles import SessionTitleService
 from core.skills.skills import SkillRegistry
 from core.statistics import StatisticsService
 from core.tools import (
@@ -128,6 +129,7 @@ class ExtensionHostFactory:
         project_skill_names: Callable[[str | None], frozenset[str]],
         resources: Sequence[ExecutionResources],
         get_change_publisher: Callable[[], Callable[[str, str, Sequence[str], int], None] | None],
+        get_title_service: Callable[[], SessionTitleService | None],
         logger: LoggerProtocol | None,
     ) -> None:
         self._host = host
@@ -149,6 +151,7 @@ class ExtensionHostFactory:
         self.project_skill_names = project_skill_names
         self._resources = resources
         self._get_change_publisher = get_change_publisher
+        self._get_title_service = get_title_service
         self.logger = logger
         self._temporary_groups: list[TemporaryExecutionGroups] = []
         self._statistics_service: StatisticsService | None = None
@@ -177,6 +180,9 @@ class ExtensionHostFactory:
             validate_binding=self._validate_extension_session_binding,
             usage=lambda group_id, query: self._extension_group_usage(
                 identity.name, group_id, query
+            ),
+            title=lambda group_id, source_text: self._extension_group_title(
+                identity.name, group_id, source_text
             ),
         )
         self._temporary_groups.append(groups)
@@ -314,6 +320,22 @@ class ExtensionHostFactory:
             owner_name=owner_name,
             group_id=group_id,
             query=query,
+        )
+
+    async def _extension_group_title(
+        self, owner_name: str, group_id: str, source_text: str
+    ) -> str | None:
+        title_service = self._get_title_service()
+        if title_service is None:
+            raise RuntimeError("Extension group titles are unavailable")
+        participants = await self.chat_sessions.list_owned_session_summaries_async(
+            owner_name=owner_name, group_id=group_id
+        )
+        return await title_service.generate_group_title(
+            owner_name=owner_name,
+            group_id=group_id,
+            source_text=source_text,
+            participants=participants,
         )
 
     def _publish_extension_change(

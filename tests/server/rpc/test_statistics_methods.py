@@ -143,7 +143,9 @@ def test_report_returns_full_shape_for_seeded_data(tmp_path: Path) -> None:
         "errors",
         "tools",
         "skills",
+        "extensions",
     }
+    assert result["extensions"] == {"extensions": []}
     assert result["overview"]["total_agents"] == 1
     assert result["overview"]["total_runs"] == 1
     assert result["usage"]["totals"]["measured_input_tokens"] == 30

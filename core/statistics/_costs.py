@@ -45,6 +45,17 @@ class CostTotals:
             self.estimated_usd = (self.estimated_usd or 0) + amount
             self.retrospective_calls += int(retrospective)
 
+    def merge(self, other: CostTotals) -> None:
+        self.calls += other.calls
+        self.reported_calls += other.reported_calls
+        self.estimated_calls += other.estimated_calls
+        self.unpriced_calls += other.unpriced_calls
+        self.retrospective_calls += other.retrospective_calls
+        if other.reported_usd is not None:
+            self.reported_usd = (self.reported_usd or 0) + other.reported_usd
+        if other.estimated_usd is not None:
+            self.estimated_usd = (self.estimated_usd or 0) + other.estimated_usd
+
 
 @dataclass(frozen=True)
 class ModelCosts:
@@ -112,7 +123,8 @@ class CostAccumulator:
         session_id: str,
         session_title: str | None,
         kind: str = "chat",
-    ) -> None:
+    ) -> tuple[dict[str, Any], bool]:
+        """Accumulate one call and return its projected cost and retrospective flag."""
         model = _provider_model_key(message.model)
         usage = message.usage or {}
         cost = usage.get("cost")
@@ -160,6 +172,7 @@ class CostAccumulator:
                 ),
                 reverse=True,
             )[:50]
+        return cost, retrospective
 
     def build(self) -> CostsSection:
         return CostsSection(

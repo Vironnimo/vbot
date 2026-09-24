@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from core.statistics._costs import CostsSection
+    from core.statistics._extensions import ExtensionsSection
 
 from core.statistics.skills import (
     SkillsSection,
@@ -446,6 +447,7 @@ class StatisticsReport:
     tools: ToolsSection
     skills: SkillsSection
     costs: CostsSection
+    extensions: ExtensionsSection
 
     def to_dict(self) -> JsonObject:
         """Return a JSON-serializable dictionary of the whole report."""
