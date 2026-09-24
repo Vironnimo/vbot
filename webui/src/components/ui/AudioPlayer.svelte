@@ -19,6 +19,9 @@
   let muted = $state(false);
   let rate = $state(1);
   let error = $state('');
+  // The automatic start is requested once per attached source: withdrawing
+  // `autoplay` afterwards neither cancels a pending start nor stops playback.
+  let autoplayRequested = false;
   let autoplayAttempted = false;
   let generation = 0;
   let playPending = false;
@@ -45,7 +48,11 @@
   // source replacement. Artifact URLs themselves remain caller/server-owned.
   function ownMedia(node, source) {
     audio = node;
+    let attached;
     function replace(next) {
+      // Re-rendering the caller with an equal source keeps the playback.
+      if (next === attached) return;
+      attached = next;
       generation += 1;
       playPending = false;
       node.pause();
@@ -54,7 +61,9 @@
       duration = 0;
       currentTime = 0;
       error = '';
+      autoplayRequested = autoplay;
       autoplayAttempted = false;
+      node.preload = autoplayRequested ? 'auto' : 'metadata';
       node.src = next;
       node.load();
       node.volume = volume;
@@ -137,7 +146,7 @@
   function ready() {
     syncTime();
     loading = false;
-    if (autoplay && !autoplayAttempted) {
+    if (autoplayRequested && !autoplayAttempted) {
       autoplayAttempted = true;
       void play(true);
     }
@@ -182,7 +191,6 @@
 <div class={`audio-player ${className}`} role="group" aria-label={ariaLabel}>
   <audio
     use:ownMedia={src}
-    preload={autoplay ? 'auto' : 'metadata'}
     aria-hidden="true"
     onloadedmetadata={() => {
       syncTime();

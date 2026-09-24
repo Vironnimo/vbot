@@ -639,3 +639,78 @@ it('keeps repeated Provider Tool ids separate by their persisted Assistant ident
   expect(tools.map((tool) => tool.result)).toEqual(['first', 'second']);
   expect(new Set(tools.map((tool) => tool.id)).size).toBe(2);
 });
+
+it('keeps the live timeline ids when a finished Run is rebuilt from history', () => {
+  const state = ensureSessionState(createChatState(), 'agent', 'session');
+  const result = {
+    ok: true,
+    data: { artifact: { kind: 'speech', url: '/a' } },
+  };
+  const toolCall = { id: 'call', name: 'text_to_speech', arguments: {} };
+  startRun(state, { run_id: 'run', status: 'running' });
+  [
+    {
+      type: 'user_message_persisted',
+      payload: { message: { id: 'user', role: 'user', content: 'Speak' } },
+    },
+    {
+      type: 'tool_call_started',
+      payload: { assistant_message_id: 'call-step', tool_call: toolCall },
+    },
+    {
+      type: 'tool_call_result',
+      payload: {
+        assistant_message_id: 'call-step',
+        tool_call: toolCall,
+        result,
+      },
+    },
+    {
+      type: 'assistant_output',
+      payload: {
+        message: { id: 'answer', role: 'assistant', content: 'Spoken.' },
+      },
+    },
+    { type: 'run_completed', payload: { status: 'completed' } },
+  ].forEach((event, index) =>
+    appendRunEvent(state, { ...event, run_id: 'run', sequence: index + 1 }),
+  );
+  const assistantRun = () =>
+    visibleTimelineItemsForRender(state).find(
+      (item) => item.type === 'assistant_run',
+    );
+  const liveRun = assistantRun();
+
+  loadHistory(
+    state,
+    [
+      { id: 'user', role: 'user', content: 'Speak' },
+      { id: 'call-step', role: 'assistant', tool_calls: [toolCall] },
+      {
+        id: 'tool',
+        role: 'tool',
+        tool_call_id: 'call',
+        name: 'text_to_speech',
+        content: JSON.stringify(result),
+      },
+      { id: 'answer', role: 'assistant', content: 'Spoken.' },
+    ].map((message, index) => ({
+      ...message,
+      history_run_id: 'run',
+      history_sequence: index + 1,
+    })),
+    { runs: [{ run_id: 'run', complete: true }] },
+  );
+  const historyRun = assistantRun();
+
+  expect(state.runEvents).toEqual([]);
+  expect(historyRun.source).toBe('history');
+  expect(historyRun.tools[0].result).toBe(JSON.stringify(result));
+  expect(historyRun.id).toBe(liveRun.id);
+  expect(historyRun.items.map((child) => child.id)).toEqual(
+    liveRun.items.map((child) => child.id),
+  );
+  expect(assistantRun().items.map((child) => child.id)).toEqual(
+    liveRun.items.map((child) => child.id),
+  );
+});

@@ -235,3 +235,104 @@ function childrenMatch(saved, live, phaseMessageId) {
     ids.has(event.payload?.message?.id),
   );
 }
+
+// Once History holds a finished Run, its live projection retires and the Run is
+// rebuilt from History under history-derived timeline ids. Keyed rendering
+// would then remount the Run with its expanded rows and any playing speech.
+// Remember the Run each view last showed live and give its ids to the first
+// History rebuild of that Run and to the children that rebuild shares with it.
+const liveRunsBySession = new WeakMap();
+
+export function keepLiveRunIdentities(sessionState, items) {
+  let liveRuns = liveRunsBySession.get(sessionState);
+  if (!liveRuns) {
+    liveRuns = new Map();
+    liveRunsBySession.set(sessionState, liveRuns);
+  }
+  for (const item of items) {
+    if (item.type === 'assistant_run' && item.source === 'live' && item.runId)
+      liveRuns.set(item.runId, { live: item });
+  }
+  if (liveRuns.size === 0) return items;
+
+  const usedIds = new Set(items.map((item) => item.id));
+  const rebuiltRuns = new Set();
+  return items.map((item) => {
+    const entry =
+      item.type === 'assistant_run' && item.source === 'history'
+        ? liveRuns.get(item.runId)
+        : undefined;
+    if (!entry || rebuiltRuns.has(item.runId)) return item;
+    rebuiltRuns.add(item.runId);
+    // Keep only the ids, not the retired live projection and its events.
+    entry.identity ??= runIdentity(entry.live);
+    delete entry.live;
+    if (usedIds.has(entry.identity.id)) return item;
+    usedIds.add(entry.identity.id);
+    return withRunIdentity(item, entry.identity);
+  });
+}
+
+function runIdentity(assistantRun) {
+  return {
+    id: assistantRun.id,
+    children: (assistantRun.items ?? []).map((child) => ({
+      id: child.id,
+      assistantMessageId: child.assistantMessageId,
+      keys: childIdentityKeys(child),
+    })),
+  };
+}
+
+function childIdentityKeys(child) {
+  if (child.type === 'tool_call')
+    return child.toolCallId ? [`tool_call:${child.toolCallId}`] : [];
+  const messages = [
+    child.message,
+    ...(child.messages ?? []),
+    ...(child.events ?? []).map((event) => event?.payload?.message),
+  ];
+  return [
+    ...new Set(
+      messages
+        .map((message) => message?.id)
+        .filter(Boolean)
+        .map((id) => `${child.type}:${id}`),
+    ),
+  ];
+}
+
+function withRunIdentity(assistantRun, identity) {
+  const candidates = new Map();
+  for (const recorded of identity.children) {
+    for (const key of recorded.keys) {
+      if (!candidates.has(key)) candidates.set(key, []);
+      candidates.get(key).push(recorded);
+    }
+  }
+  const claimed = new Set();
+  const children = (assistantRun.items ?? []).map((child) => {
+    const match = childIdentityKeys(child)
+      .flatMap((key) => candidates.get(key) ?? [])
+      .find(
+        (recorded) =>
+          !claimed.has(recorded) &&
+          (!recorded.assistantMessageId ||
+            !child.assistantMessageId ||
+            recorded.assistantMessageId === child.assistantMessageId),
+      );
+    if (!match) return child;
+    claimed.add(match);
+    return match.id === child.id ? child : { ...child, id: match.id };
+  });
+  const rebuilt = {
+    ...assistantRun,
+    id: identity.id,
+    items:
+      new Set(children.map((child) => child.id)).size === children.length
+        ? children
+        : assistantRun.items,
+  };
+  syncAssistantRunCollections(rebuilt);
+  return rebuilt;
+}

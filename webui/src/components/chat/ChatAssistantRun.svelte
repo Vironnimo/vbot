@@ -616,8 +616,9 @@
           {#if isTextToSpeechTool(child)}
             {@const speechArtifact = speechArtifactFromTool(child)}
             {#if speechArtifact}
-              <!-- Only a live Run starts its fresh speech; a Run rebuilt from
-                   Session history keeps the player paused. -->
+              <!-- Only a live Run starts its fresh speech; a player first
+                   mounted for a Run rebuilt from Session history stays paused,
+                   while one kept through that handoff keeps playing. -->
               <AudioPlayer
                 class="speech-audio-player"
                 src={speechArtifact.url}
