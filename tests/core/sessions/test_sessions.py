@@ -6,10 +6,13 @@ import asyncio
 import dataclasses
 import sqlite3
 
+import pytest
+
 import core.sessions._store_codec as session_store_module
 from core.chat import ChatMessage
 from core.chat.content_blocks import FileMentionBlock, TextBlock
 from core.chat.continuation import fold_continuation_records
+from core.chat.errors import ChatSessionError
 from core.chat.messages import MessageSender, ToolCall, ToolCallRejection
 from core.chat.output_files import AssistantFileReference
 from core.sessions import (
@@ -91,6 +94,29 @@ def test_continuation_events_update_one_normalized_current_state(manager) -> Non
         assert connection.execute("SELECT COUNT(*) FROM continuations").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM continuation_steps").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM continuation_operations").fetchone()[0] == 1
+
+
+def test_continuation_steps_start_at_one_and_a_rejected_record_rolls_back_its_append(
+    manager,
+) -> None:
+    session = manager.create("coder", session_id="continuation-steps")
+    session.append_continuation_records([_continuation_start()])
+    step_zero = {
+        "version": 1,
+        "type": "stream_delta",
+        "run_id": "run-one",
+        "timestamp": "2026-08-31T12:00:01+00:00",
+        "step": 0,
+        "content_delta": "lost",
+    }
+
+    with pytest.raises(ChatSessionError):
+        session.append_many([ChatMessage.user("not committed")], continuation_records=[step_zero])
+
+    assert session.load() == []
+    state = fold_continuation_records(session.load_continuation_records())
+    assert state is not None
+    assert state.partial_output == ""
 
 
 def test_fork_copies_history_but_not_activity_or_continuation(manager) -> None:

@@ -15,10 +15,16 @@ _CONTINUATION_SYNTHETIC_TIMESTAMP = "1970-01-01T00:00:00+00:00"
 
 
 def _continuation_step(record: JsonObject) -> int:
+    """Return the Run-local Model step; Chat numbers a Run's first step 1."""
     value = record.get("step")
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ChatSessionError("continuation record step must be a non-negative integer")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ChatSessionError("continuation record step must be a positive integer")
     return value
+
+
+def _optional_text(record: JsonObject, key: str) -> str | None:
+    value = record.get(key)
+    return value if isinstance(value, str) else None
 
 
 def _next_continuation_ordinal(connection: sqlite3.Connection, table: str, session_key: int) -> int:
@@ -138,72 +144,60 @@ def _apply_continuation_record(
     if record_type in {"stream_delta", "stream_attempt_discarded", "assistant_boundary"}:
         run_id = _continuation_string(record, "run_id")
         step = _continuation_step(record)
-        existing = connection.execute(
-            """
-            SELECT reasoning, content, assistant_message_id, interrupted
-            FROM continuation_steps WHERE session_key = ? AND run_id = ? AND step = ?
-            """,
-            (session_key, run_id, step),
-        ).fetchone()
         if record_type == "stream_attempt_discarded":
             connection.execute(
                 "DELETE FROM continuation_steps WHERE session_key = ? AND run_id = ? AND step = ?",
                 (session_key, run_id, step),
             )
             return
-        reasoning = "" if existing is None else str(existing["reasoning"])
-        content = "" if existing is None else str(existing["content"])
-        assistant_message_id = None if existing is None else existing["assistant_message_id"]
-        interrupted = False if existing is None else bool(existing["interrupted"])
         if record_type == "stream_delta":
-            if isinstance(record.get("reasoning_delta"), str):
-                reasoning += str(record["reasoning_delta"])
-            if isinstance(record.get("content_delta"), str):
-                content += str(record["content_delta"])
-        else:
-            if isinstance(record.get("reasoning"), str):
-                reasoning = str(record["reasoning"])
-            if isinstance(record.get("content"), str):
-                content = str(record["content"])
-            value = record.get("message_id")
-            assistant_message_id = value if isinstance(value, str) else None
-            interrupted = record.get("interrupted") is True
-        if existing is None:
+            # Append in SQL: a long step never round-trips its accumulated text.
             connection.execute(
                 """
                 INSERT INTO continuation_steps (
-                    session_key, run_id, step, ordinal, reasoning, content,
-                    assistant_message_id, interrupted
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    session_key, run_id, step, ordinal, reasoning, content
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (session_key, run_id, step) DO UPDATE SET
+                    reasoning = reasoning || excluded.reasoning,
+                    content = content || excluded.content
                 """,
                 (
                     session_key,
                     run_id,
                     step,
                     _next_continuation_ordinal(connection, "continuation_steps", session_key),
-                    reasoning,
-                    content,
-                    assistant_message_id,
-                    int(interrupted),
+                    _optional_text(record, "reasoning_delta") or "",
+                    _optional_text(record, "content_delta") or "",
                 ),
             )
-        else:
-            connection.execute(
-                """
-                UPDATE continuation_steps
-                SET reasoning = ?, content = ?, assistant_message_id = ?, interrupted = ?
-                WHERE session_key = ? AND run_id = ? AND step = ?
-                """,
-                (
-                    reasoning,
-                    content,
-                    assistant_message_id,
-                    int(interrupted),
-                    session_key,
-                    run_id,
-                    step,
-                ),
-            )
+            return
+        reasoning = _optional_text(record, "reasoning")
+        content = _optional_text(record, "content")
+        connection.execute(
+            """
+            INSERT INTO continuation_steps (
+                session_key, run_id, step, ordinal, reasoning, content,
+                assistant_message_id, interrupted
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (session_key, run_id, step) DO UPDATE SET
+                reasoning = COALESCE(?, reasoning),
+                content = COALESCE(?, content),
+                assistant_message_id = excluded.assistant_message_id,
+                interrupted = excluded.interrupted
+            """,
+            (
+                session_key,
+                run_id,
+                step,
+                _next_continuation_ordinal(connection, "continuation_steps", session_key),
+                reasoning or "",
+                content or "",
+                _optional_text(record, "message_id"),
+                int(record.get("interrupted") is True),
+                reasoning,
+                content,
+            ),
+        )
         if record_type == "assistant_boundary" and isinstance(record.get("tool_calls"), list):
             for tool_call in record["tool_calls"]:
                 if not isinstance(tool_call, dict):
