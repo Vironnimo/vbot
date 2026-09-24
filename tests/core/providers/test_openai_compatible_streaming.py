@@ -60,7 +60,7 @@ class TestStreamConnectRetryRebuildsHeaders:
         )
 
         # Act
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
             async for _ in adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
                 pass
 
@@ -532,7 +532,7 @@ class TestStreamSSE:
 
         # Act / Assert
         with (
-            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            patch("core.utils.retry._sleep", new_callable=AsyncMock),
             pytest.raises(ProviderTimeoutError),
         ):
             async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
@@ -547,7 +547,7 @@ class TestStreamSSE:
 
         # Act / Assert
         with (
-            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            patch("core.utils.retry._sleep", new_callable=AsyncMock),
             pytest.raises(NetworkError, match="connection failed"),
         ):
             async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):

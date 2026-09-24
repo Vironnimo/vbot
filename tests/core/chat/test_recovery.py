@@ -21,7 +21,7 @@ async def test_nine_attempts_fit_with_slow_failures_and_maximum_backoff(monkeypa
         delays.append(delay)
         now[0] += delay
 
-    monkeypatch.setattr("core.chat.recovery.asyncio.sleep", sleep)
+    monkeypatch.setattr("core.chat.recovery._sleep", sleep)
     monkeypatch.setattr("core.utils.retry.random.uniform", lambda low, high: high)
     budget = RecoveryBudget(clock=lambda: now[0])
     for target in ("primary", "backup"):
@@ -39,7 +39,7 @@ async def test_nine_attempts_fit_with_slow_failures_and_maximum_backoff(monkeypa
 @pytest.mark.asyncio
 async def test_retry_after_applies_to_shared_budget_and_is_observable(monkeypatch):
     sleep = AsyncMock()
-    monkeypatch.setattr("core.chat.recovery.asyncio.sleep", sleep)
+    monkeypatch.setattr("core.chat.recovery._sleep", sleep)
     notices = []
     budget = RecoveryBudget()
     await budget.begin("primary", notices.append)
@@ -103,7 +103,7 @@ async def test_switches_do_not_reset_total_budget_or_deadline(monkeypatch):
 async def test_no_retry_starts_when_wait_would_exceed_remaining_budget(monkeypatch):
     now = [0.0]
     sleep = AsyncMock()
-    monkeypatch.setattr("core.chat.recovery.asyncio.sleep", sleep)
+    monkeypatch.setattr("core.chat.recovery._sleep", sleep)
     budget = RecoveryBudget(clock=lambda: now[0])
     await budget.begin("primary", lambda notice: None)
     error = ProviderRateLimitError("limited")
