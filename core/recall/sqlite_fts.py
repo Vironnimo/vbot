@@ -237,6 +237,15 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
     async def search_passages(self, request: RecallSearchRequest) -> RecallSearchPage:
         """Return Passage-level literal ranking for Hybrid fusion."""
 
+        prepared = await self.prepare_passage_search(request)
+        return await prepared.page(request.offset, request.limit)
+
+    async def prepare_passage_search(self, request: RecallSearchRequest) -> PreparedPassageSearch:
+        """Reconcile the Passage index for the request's candidates once.
+
+        The prepared search ranks at any depth without repeating freshness work.
+        """
+
         summaries = await asyncio.to_thread(self._search_candidate_summaries, request)
         snapshot_id = await asyncio.to_thread(self._search_snapshot, request, summaries)
         if request.snapshot_id is not None and request.snapshot_id != snapshot_id:
@@ -244,48 +253,55 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
                 "stale_cursor", "Session search source changed; repeat the search."
             )
         expression = _fts_expression_search(request)
-        if expression is None:
-            return await asyncio.to_thread(self._scan_passages, request, summaries, snapshot_id)
-        async with self._index_lock:
-            try:
-                return await asyncio.to_thread(
-                    self._search_passages_with_sqlite,
-                    request,
-                    summaries,
-                    expression,
-                    snapshot_id,
-                )
-            except (OSError, sqlite3.DatabaseError) as error:
-                self._warning("SQLite Passage index failed; rebuilding once: %s", error)
-                await asyncio.to_thread(self._delete_index_file)
-            try:
-                return await asyncio.to_thread(
-                    self._search_passages_with_sqlite,
-                    request,
-                    summaries,
-                    expression,
-                    snapshot_id,
-                )
-            except (OSError, sqlite3.DatabaseError) as error:
-                self._warning("SQLite Passage index rebuild failed: %s", error)
-        return await asyncio.to_thread(self._scan_passages, request, summaries, snapshot_id)
+        if expression is not None and summaries:
+            async with self._index_lock:
+                if not await self._refresh_passage_index(request, summaries):
+                    expression = None
+        return PreparedPassageSearch(self, request, summaries, snapshot_id, expression)
 
-    def _search_passages_with_sqlite(
+    async def _refresh_passage_index(
+        self,
+        request: RecallSearchRequest,
+        summaries: list[JsonObject],
+    ) -> bool:
+        """Reconcile the disposable index, rebuilding a failed file once."""
+
+        try:
+            await asyncio.to_thread(self._sync_passage_index, request, summaries)
+            return True
+        except (OSError, sqlite3.DatabaseError) as error:
+            self._warning("SQLite Passage index failed; rebuilding once: %s", error)
+            await asyncio.to_thread(self._delete_index_file)
+        try:
+            await asyncio.to_thread(self._sync_passage_index, request, summaries)
+            return True
+        except (OSError, sqlite3.DatabaseError) as error:
+            self._warning("SQLite Passage index rebuild failed: %s", error)
+        return False
+
+    def _sync_passage_index(
+        self,
+        request: RecallSearchRequest,
+        summaries: list[JsonObject],
+    ) -> None:
+        with closing(self._connect()) as connection:
+            self._initialize_schema(connection)
+            self._cleanup_missing_sessions(connection, request)
+            self._ensure_indexed(connection, request, summaries)
+
+    def _query_passage_page(
         self,
         request: RecallSearchRequest,
         summaries: list[JsonObject],
         expression: str,
         snapshot_id: str,
+        offset: int,
+        limit: int,
     ) -> RecallSearchPage:
-        if not summaries:
-            return _empty_passage_page(snapshot_id)
         with closing(self._connect()) as connection:
-            self._initialize_schema(connection)
-            self._cleanup_missing_sessions(connection, request)
-            self._ensure_indexed(connection, request, summaries)
-            rows = self._query_passages(connection, request, summaries, expression)
-        has_more = len(rows) > request.limit
-        hits = tuple(_passage_hit_from_row(row, request) for row in rows[: request.limit])
+            rows = self._query_passages(connection, request, summaries, expression, offset, limit)
+        has_more = len(rows) > limit
+        hits = tuple(_passage_hit_from_row(row, request) for row in rows[:limit])
         return RecallSearchPage(
             hits=hits,
             result_type="passage",
@@ -295,12 +311,11 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             total_candidate_sessions=len(summaries),
         )
 
-    def _scan_passages(
+    def _rank_scanned_passages(
         self,
         request: RecallSearchRequest,
         summaries: list[JsonObject],
-        snapshot_id: str,
-    ) -> RecallSearchPage:
+    ) -> list[RecallSearchHit]:
         ranked: list[tuple[float, str, str, RecallSearchHit]] = []
         for summary in summaries:
             session_id = str(summary["id"])
@@ -332,15 +347,7 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
                 )
                 ranked.append((score, passage.start_timestamp, session_id, hit))
         ranked.sort(key=lambda item: (item[0], item[1], item[2]))
-        page = ranked[request.offset : request.offset + request.limit]
-        return RecallSearchPage(
-            hits=tuple(item[3] for item in page),
-            result_type="passage",
-            ranking="substring_scan_relevance",
-            snapshot_id=snapshot_id,
-            has_more=request.offset + len(page) < len(ranked),
-            total_candidate_sessions=len(summaries),
-        )
+        return [item[3] for item in ranked]
 
     def _connect(self) -> sqlite3.Connection:
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
@@ -602,6 +609,8 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
         request: RecallSearchRequest,
         summaries: list[JsonObject],
         expression: str,
+        offset: int,
+        limit: int,
     ) -> list[sqlite3.Row]:
         session_ids = [str(summary["id"]) for summary in summaries]
         session_placeholders = ", ".join("?" for _ in session_ids)
@@ -623,7 +632,7 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
         if request.until is not None:
             conditions.append("julianday(p.start_timestamp) <= julianday(?)")
             parameters.append(request.until.isoformat())
-        parameters.extend((request.limit + 1, request.offset))
+        parameters.extend((limit + 1, offset))
         sql = f"""
             SELECT
               p.session_id,
@@ -661,15 +670,74 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             self.logger.warning(message, *args)
 
 
-def _empty_passage_page(snapshot_id: str) -> RecallSearchPage:
-    return RecallSearchPage(
-        hits=(),
-        result_type="passage",
-        ranking="bm25_trigram",
-        snapshot_id=snapshot_id,
-        has_more=False,
-        total_candidate_sessions=0,
-    )
+class PreparedPassageSearch:
+    """Literal Passage ranking over an index reconciled once for one search.
+
+    Without a usable trigram expression or index, the ranking comes from one
+    canonical scan that later pages slice.
+    """
+
+    def __init__(
+        self,
+        backend: SqliteFtsRecallBackend,
+        request: RecallSearchRequest,
+        summaries: list[JsonObject],
+        snapshot_id: str,
+        expression: str | None,
+    ) -> None:
+        self._backend = backend
+        self._request = request
+        self._summaries = summaries
+        self._snapshot_id = snapshot_id
+        self._expression = expression
+        self._scanned: list[RecallSearchHit] | None = None
+
+    async def page(self, offset: int, limit: int) -> RecallSearchPage:
+        if self._expression is not None:
+            if not self._summaries:
+                return self._page((), ranking="bm25_trigram", has_more=False)
+            async with self._backend._index_lock:
+                try:
+                    return await asyncio.to_thread(
+                        self._backend._query_passage_page,
+                        self._request,
+                        self._summaries,
+                        self._expression,
+                        self._snapshot_id,
+                        offset,
+                        limit,
+                    )
+                except (OSError, sqlite3.DatabaseError) as error:
+                    self._backend._warning(
+                        "SQLite Passage query failed; scanning canonical history: %s", error
+                    )
+                    self._expression = None
+        if self._scanned is None:
+            self._scanned = await asyncio.to_thread(
+                self._backend._rank_scanned_passages, self._request, self._summaries
+            )
+        selected = self._scanned[offset : offset + limit]
+        return self._page(
+            tuple(selected),
+            ranking="substring_scan_relevance",
+            has_more=offset + len(selected) < len(self._scanned),
+        )
+
+    def _page(
+        self,
+        hits: tuple[RecallSearchHit, ...],
+        *,
+        ranking: str,
+        has_more: bool,
+    ) -> RecallSearchPage:
+        return RecallSearchPage(
+            hits=hits,
+            result_type="passage",
+            ranking=ranking,
+            snapshot_id=self._snapshot_id,
+            has_more=has_more,
+            total_candidate_sessions=len(self._summaries),
+        )
 
 
 def _passage_hit_from_row(row: sqlite3.Row, request: RecallSearchRequest) -> RecallSearchHit:
