@@ -269,6 +269,11 @@ class SessionStore:
     def metadata(self, address: SessionAddress) -> JsonObject:
         return _store_values._session_metadata_from_state(self.state(address))
 
+    def prompt_cache_affinity_value(self, address: SessionAddress) -> Any:
+        """Return the stored affinity value, or ``None`` when the Session has none."""
+        with self._runtime.read_ctx() as connection:
+            return _store_queries.prompt_cache_affinity_value(connection, address)
+
     def descriptor_source(
         self, address: SessionAddress
     ) -> tuple[JsonObject, int, ChatMessage | None]:
