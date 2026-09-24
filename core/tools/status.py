@@ -19,7 +19,14 @@ from core.chat.status_report import (
     resolve_status_temperature,
 )
 from core.models.models import ModelRegistry
-from core.projects import AgentResolutionError, AgentResolver, ProjectStore
+from core.projects import (
+    AgentResolutionError,
+    AgentResolver,
+    ProjectStore,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
+    format_agent_address,
+)
 from core.providers.providers import ProviderRegistry
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager, SessionAddress
@@ -66,6 +73,17 @@ STATUS_TOOL_PARAMETERS: JsonObject = {
     },
     "required": [],
 }
+
+# ``target`` is ``agent`` or ``agent@project``; ``reason`` is the resolver's explanation.
+_AGENT_UNAVAILABLE_MESSAGE_TEMPLATE = (
+    "Agent {target} cannot run, so its status cannot be reported: {reason}. Repeating "
+    "this call fails the same way until that is fixed. Tell the user that {target} "
+    "cannot run and why."
+)
+_PROJECT_NOT_FOUND_MESSAGE_TEMPLATE = (
+    "project does not exist: {project_id}. Status reports only on Sessions of the "
+    "current Project, so tell the user that this Project is missing."
+)
 
 
 _STATUS_RUNTIME_CONTRACT = compile_tool_contract(
@@ -136,12 +154,26 @@ def make_status_handler(
         # Resolve through the one seam so ``/status`` shows the agent profile the
         # run actually uses: a project run (``context.project_id`` set) reports the
         # resolved config-agent profile, an identity run resolves the store agent
-        # exactly as before. A resolver "not found" is the same clean failure the
-        # former ``AgentNotFoundError`` produced.
+        # exactly as before. Only a missing Agent or Project is "not found"; an
+        # existing target that cannot run reports why.
         try:
             agent = agent_resolver.resolve_agent(context.project_id, agent_id)
-        except AgentResolutionError:
+        except ResolutionProjectNotFoundError:
+            return tool_failure(
+                "project_not_found",
+                _PROJECT_NOT_FOUND_MESSAGE_TEMPLATE.format(project_id=context.project_id),
+                retryable=False,
+            )
+        except ResolutionAgentNotFoundError:
             return tool_failure("agent_not_found", f"agent does not exist: {agent_id}")
+        except AgentResolutionError as error:
+            return tool_failure(
+                "agent_unavailable",
+                _AGENT_UNAVAILABLE_MESSAGE_TEMPLATE.format(
+                    target=format_agent_address(agent_id, context.project_id), reason=error
+                ),
+                retryable=False,
+            )
 
         try:
             snapshot = sessions.get(
