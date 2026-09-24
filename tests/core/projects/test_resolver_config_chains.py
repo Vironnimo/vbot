@@ -5,6 +5,8 @@ from .resolver_test_support import (
     AgentStore,
     Path,
     ProjectStore,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
     _openai_configured,
     _project,
     _resolver,
@@ -56,9 +58,12 @@ def test_model_chain_falls_all_the_way_through_raises(
     project = _project(projects, repo, default_model="")
     resolver = _resolver(agents, projects, _openai_configured(), global_default="")
 
-    # Act / Assert
-    with pytest.raises(AgentResolutionError):
+    # Act / Assert: an existing Agent without a usable Model is not a missing resource.
+    with pytest.raises(AgentResolutionError) as error:
         resolver.resolve_agent(project.project_id, "writer")
+    assert not isinstance(
+        error.value, (ResolutionAgentNotFoundError, ResolutionProjectNotFoundError)
+    )
 
 
 def test_unconfigured_agent_model_falls_through_to_default(
