@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.models.discovery import build_discovery_request
+
 from .discovery_test_support import (
     API_KEY,
     OPENAI_SUBSCRIPTION_MODELS_URL,
@@ -740,3 +742,68 @@ class TestRefreshModels:
         assert result["model_count"] == 1
         assert model.capabilities.tools is False
         assert model.context_window is None
+
+
+class TestBuildDiscoveryRequest:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_resolves_connection_endpoint_params_and_headers(
+        self,
+        openai_subscription_connection_config: ProviderConfig,
+    ):
+        """The builder yields the exact primary catalog request refresh sends."""
+
+        access_token = jwt_with_openai_account("acct_openai")
+        mock_openai_codex_package()
+        connection = openai_subscription_connection_config.connections[0]
+
+        request = await build_discovery_request(openai_subscription_connection_config, connection)
+
+        assert request.base_url == "https://chatgpt.com/backend-api"
+        assert request.url == f"{OPENAI_SUBSCRIPTION_MODELS_URL}?client_version=0.144.6"
+        headers = request.headers(access_token)
+        assert headers["Authorization"] == f"Bearer {access_token}"
+        assert headers["chatgpt-account-id"] == "acct_openai"
+        assert headers["originator"] == "vbot"
+
+    @pytest.mark.asyncio
+    async def test_keyless_connection_headers_omit_auth(self):
+        keyless_connection = ConnectionConfig(
+            id="local",
+            type="none",
+            label="Local",
+            auth=AuthConfig(header="", prefix="", credential_key=""),
+        )
+        provider_config = ProviderConfig(
+            id="localhost",
+            name="Localhost",
+            adapter="openai_compatible",
+            base_url="http://localhost:9999/v1",
+            connections=[keyless_connection],
+            models_endpoint="/models",
+        )
+
+        request = await build_discovery_request(provider_config, keyless_connection)
+
+        assert request.url == "http://localhost:9999/v1/models"
+        assert "" not in request.headers("")
+        assert "Authorization" not in request.headers("")
+
+    @pytest.mark.asyncio
+    async def test_rejects_connection_without_endpoint(self):
+        connection = ConnectionConfig(
+            id="api-key",
+            type="api_key",
+            label="API Key",
+            auth=AuthConfig(header="Authorization", prefix="Bearer ", credential_key="KEY"),
+        )
+        provider_config = ProviderConfig(
+            id="openai",
+            name="OpenAI",
+            adapter="openai",
+            base_url="https://api.openai.com/v1",
+            connections=[connection],
+        )
+
+        with pytest.raises(ValueError, match="does not define a models_endpoint"):
+            await build_discovery_request(provider_config, connection)

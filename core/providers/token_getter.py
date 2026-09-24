@@ -32,6 +32,8 @@ from core.utils.retry import retry_async
 
 _LOGGER = get_logger("providers.token_getter")
 
+_OAUTH_ERROR_CODE_PATTERN = re.compile(r"[a-z0-9_.:-]{1,64}")
+
 TOKEN_EXPIRY_BUFFER_SECONDS = 30
 TOKEN_EXCHANGE_FALLBACK_MINUTES = 25
 GITHUB_OAUTH_TOKEN_EXTRA_KEY = "github_oauth_token"
@@ -570,15 +572,47 @@ def _classify_nous_refresh_status(status_code: int, response_body: str) -> None:
 def _classify_token_exchange_status(status_code: int, response_body: str) -> None:
     if status_code < 400:
         return
-    detail = f"{status_code} {response_body}".strip() if response_body else str(status_code)
+    # Token endpoints may echo credentials or account details in their error
+    # bodies, so messages and logs carry only the status and the error code.
+    detail = _token_endpoint_failure_detail(status_code, response_body)
     if status_code == 429:
-        raise ProviderRateLimitError(f"Rate limited: {detail}")
+        raise ProviderRateLimitError(f"OAuth token refresh rate limited ({detail})")
     # OAuth token exchange is a non-idempotent POST: authorization codes are
     # single-use, so a 500 (possibly already-consumed code, often deterministic)
     # must not be blindly retried.
     if is_retryable_status(status_code, idempotent=False):
-        raise ProviderError(f"Provider error: {detail}", retryable=True)
-    raise ProviderAuthError("OAuth token refresh failed — please reconnect")
+        raise ProviderError(f"OAuth token endpoint unavailable ({detail})", retryable=True)
+    raise ProviderAuthError(f"OAuth token refresh failed ({detail}) — please reconnect")
+
+
+def _token_endpoint_failure_detail(status_code: int, response_body: str) -> str:
+    """Return ``HTTP <status>`` plus the validated OAuth error code when present."""
+
+    error_code = _oauth_error_code(response_body)
+    return f"HTTP {status_code}, {error_code}" if error_code else f"HTTP {status_code}"
+
+
+def _oauth_error_code(response_body: str) -> str | None:
+    """Return the token endpoint's OAuth ``error`` code, or ``None``.
+
+    Reads the RFC 6749 string ``error`` member, or ``error.code`` when a
+    Provider nests its error object. Only a short lowercase code matching
+    ``_OAUTH_ERROR_CODE_PATTERN`` survives; ``error_description`` and all other
+    body text are dropped.
+    """
+
+    try:
+        payload = json.loads(response_body)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    if isinstance(error, dict):
+        error = error.get("code")
+    if isinstance(error, str) and _OAUTH_ERROR_CODE_PATTERN.fullmatch(error):
+        return error
+    return None
 
 
 def copilot_token_extra(

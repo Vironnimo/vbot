@@ -346,6 +346,29 @@ def _extract_openai_reasoning_meta(
     return meta or None
 
 
+def _openai_response_carries_reasoning(
+    response: Mapping[str, Any], *, preferred_field: str | None = None
+) -> bool:
+    """Return whether a completed response returned any Reasoning state.
+
+    Non-empty visible reasoning text or non-empty opaque reasoning meta (for
+    example ``reasoning_details``) counts. Diagnostic-only: a malformed
+    response shape is reported as carrying nothing instead of raising, so
+    normalization keeps owning shape errors.
+    """
+
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
+        return False
+    message = choices[0].get("message")
+    if not isinstance(message, dict):
+        return False
+    if _extract_openai_reasoning(message, preferred_field=preferred_field):
+        return True
+    meta = _extract_openai_reasoning_meta(message, preferred_field=preferred_field)
+    return meta is not None and any(meta.values())
+
+
 def _apply_openai_reasoning_meta(
     message: dict[str, Any],
     reasoning_meta: Any,

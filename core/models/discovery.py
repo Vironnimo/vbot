@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -91,6 +92,62 @@ class PassthroughModelFilter:
         return True
 
 
+@dataclass(frozen=True)
+class DiscoveryRequest:
+    """The primary catalog request Model discovery sends for one Connection.
+
+    ``url`` is the effective models endpoint - Connection ``base_url`` and
+    ``models_endpoint`` over Provider values - with the Adapter's discovery
+    query parameters. ``base_url`` is the effective base for follow-up catalog
+    requests. :meth:`headers` renders the request headers for one credential.
+    """
+
+    provider_config: ProviderConfig
+    connection: ConnectionConfig | None
+    adapter_class: Any
+    base_url: str
+    url: str
+
+    def headers(self, credential_value: str) -> dict[str, str]:
+        """Return the catalog request headers for *credential_value*.
+
+        Provider extra headers, the Connection auth header (omitted for a
+        keyless Connection or an empty credential), then the Adapter's
+        discovery headers. An Adapter that derives required routing from the
+        credential may raise ``ProviderAuthError``.
+        """
+
+        return _build_headers(
+            self.provider_config, credential_value, self.adapter_class, self.connection
+        )
+
+
+async def build_discovery_request(
+    provider_config: ProviderConfig,
+    connection: ConnectionConfig | None = None,
+) -> DiscoveryRequest:
+    """Resolve the primary catalog request exactly as :func:`refresh_models` sends it.
+
+    Time-sensitive query parameters an Adapter resolves from a public source
+    fall back to its static parameters on failure, as during refresh.
+
+    Raises:
+        ValueError: The Connection has no effective ``models_endpoint`` or the
+            Provider's Adapter has no discovery normalizer.
+    """
+
+    base_url, models_endpoint = _require_discovery_target(provider_config, connection)
+    adapter_class = _adapter_class_for_discovery(provider_config.adapter)
+    discovery_params = await _resolve_discovery_params(adapter_class)
+    return DiscoveryRequest(
+        provider_config=provider_config,
+        connection=connection,
+        adapter_class=adapter_class,
+        base_url=base_url,
+        url=_append_query_params(_join_url(base_url, models_endpoint), discovery_params),
+    )
+
+
 async def refresh_models(
     provider_config: ProviderConfig,
     credential_value: str | TokenGetter,
@@ -123,20 +180,17 @@ async def refresh_models(
             and the regen script) so it is not re-fetched per provider.
     """
 
-    base_url, models_endpoint = _resolve_discovery_target(provider_config, credential_connection)
-    if not models_endpoint:
-        raise ValueError(
-            f"Provider '{provider_config.id}' connection "
-            f"'{credential_connection.id if credential_connection else None}' "
-            "does not define a models_endpoint"
-        )
+    _require_discovery_target(provider_config, credential_connection)
 
     raw_filter = raw_filter or PassthroughRawFilter()
     model_filter = model_filter or PassthroughModelFilter()
 
     fetched_at = datetime.now(UTC).isoformat()
     try:
-        adapter_class = _adapter_class_for_discovery(provider_config.adapter)
+        request = await build_discovery_request(provider_config, credential_connection)
+        adapter_class = request.adapter_class
+        base_url = request.base_url
+        url = request.url
         token_getter = (
             StaticTokenGetter(credential_value)
             if isinstance(credential_value, str)
@@ -144,9 +198,7 @@ async def refresh_models(
         )
 
         async def build_headers() -> dict[str, str]:
-            return _build_headers(
-                provider_config, await token_getter(), adapter_class, credential_connection
-            )
+            return request.headers(await token_getter())
 
         connection = credential_connection or next(iter(provider_config.connections), None)
 
@@ -156,12 +208,6 @@ async def refresh_models(
                 if connection is not None and connection.type == "oauth"
                 else None
             )
-
-        discovery_params = await _resolve_discovery_params(adapter_class)
-        url = _append_query_params(
-            _join_url(base_url, models_endpoint),
-            discovery_params,
-        )
 
         raw_payload, raw_models = await _fetch_raw_models(
             url, build_headers, auth_recovery=request_auth_recovery()
@@ -686,6 +732,22 @@ def _build_headers(
 
 def _join_url(base_url: str, endpoint: str) -> str:
     return f"{base_url.rstrip('/')}/{endpoint.lstrip('/')}"
+
+
+def _require_discovery_target(
+    provider_config: ProviderConfig,
+    credential_connection: ConnectionConfig | None,
+) -> tuple[str, str]:
+    """Return the effective ``(base_url, models_endpoint)`` or raise ``ValueError``."""
+
+    base_url, models_endpoint = _resolve_discovery_target(provider_config, credential_connection)
+    if not models_endpoint:
+        raise ValueError(
+            f"Provider '{provider_config.id}' connection "
+            f"'{credential_connection.id if credential_connection else None}' "
+            "does not define a models_endpoint"
+        )
+    return base_url, models_endpoint
 
 
 def _resolve_discovery_target(
