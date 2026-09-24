@@ -305,8 +305,12 @@
     })),
   );
 
+  // While New session is pending, the displayed Session is about to be
+  // replaced; a message sent now would land in the Session being left.
   let composerDisabled = $derived(
-    !target.activeAgent || chatState.loadingHistory,
+    !target.activeAgent ||
+      chatState.loadingHistory ||
+      navigation.creatingSession,
   );
   // Provider availability is the first prerequisite for every current Agent.
   // Do not infer it from Models: App supplies Settings' authoritative usable-
