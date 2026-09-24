@@ -69,9 +69,11 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
         # Each arm reconciles its index, and the semantic arm embeds the query,
         # once per search; adaptive depth growth reruns only the rankings.
         arm_request = dataclasses.replace(request, offset=0, limit=depth, snapshot_id=None)
+        # Both arms search the same candidates, read once from the Session store.
+        scope = await asyncio.to_thread(self._read_scope, arm_request)
         literal_prepared, semantic_prepared = await asyncio.gather(
-            self._fts.prepare_passage_search(arm_request),
-            self._vector.prepare_search(arm_request),
+            self._fts.prepare_passage_search(arm_request, scope),
+            self._vector.prepare_search(arm_request, scope),
             return_exceptions=True,
         )
         literal_arm = None if isinstance(literal_prepared, BaseException) else literal_prepared

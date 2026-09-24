@@ -74,24 +74,6 @@ def _rebuild_identities(
     return sorted(rows, key=lambda row: row["message_key"])[:_FTS_BATCH_SIZE]
 
 
-def _search_projection(message: ChatMessage) -> str:
-    """Build the Recall-owned text projection from one canonical Message."""
-    from core.recall.canonical import (
-        SESSION_RECALL_CONVERSATION_ROLES,
-        is_recall_artifact_message,
-        message_search_text,
-    )
-    from core.sessions.history import is_skill_context_note
-
-    if (
-        message.role not in SESSION_RECALL_CONVERSATION_ROLES
-        or is_recall_artifact_message(message)
-        or is_skill_context_note(message)
-    ):
-        return ""
-    return message_search_text(message)
-
-
 def _message_is_searchable(message: ChatMessage) -> bool:
     """Test index eligibility without materializing large Message search text."""
     from core.recall.canonical import (
