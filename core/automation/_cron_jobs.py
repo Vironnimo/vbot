@@ -19,7 +19,6 @@ from core.config_validation import (
     JsonObject,
     JsonValidationReport,
     add_error,
-    error_diagnostic,
     load_validated_json_file,
     validate_allowed_string,
     validate_json_file,
@@ -27,6 +26,14 @@ from core.config_validation import (
     validate_optional_allowed_string,
     validate_optional_string,
     warn_unknown_keys,
+)
+from core.json_documents import (
+    JsonDocumentFormat,
+    json_document,
+    json_list,
+    json_object,
+    strip_unknown_fields,
+    validate_collection_root,
 )
 from core.projects import ResolutionAgentNotFoundError, ResolutionProjectNotFoundError
 from core.settings import is_valid_agent_id, is_valid_project_id
@@ -112,7 +119,11 @@ _CRON_JOB_FIELDS = _MUTABLE_FIELDS | {
     "last_run_id",
 }
 
-_LEGACY_CRON_JOB_FIELDS = frozenset(("timezone",))
+CRON_JOBS_FORMAT_VERSION = 1
+
+CRON_JOB_SHAPE = json_object(_CRON_JOB_FIELDS)
+
+CRON_JOBS_SHAPE = json_document({"jobs"}, {"jobs": json_list(CRON_JOB_SHAPE, key="id")})
 
 
 def _cron_is_schedulable(expression: str, reference: datetime) -> bool:
@@ -195,74 +206,73 @@ def validate_cron_jobs_file(jobs_path: str | Path) -> JsonValidationReport:
 
 
 def load_validated_cron_jobs_json(jobs_path: str | Path) -> list[JsonObject]:
-    """Load schema-valid Cron jobs, defaulting a missing file to an empty list."""
+    """Load the modeled fields of schema-valid Cron jobs; a missing file has none."""
     try:
-        return cast(
-            "list[JsonObject]",
-            load_validated_json_file(
-                jobs_path,
-                validate_cron_jobs_data,
-                missing_ok=True,
-                missing_default=[],
-            ),
-        )
+        data = load_validated_json_file(jobs_path, validate_cron_jobs_data, missing_ok=True)
     except JsonConfigValidationError as error:
         raise CronStorageError(str(error)) from error
+    if data is None:
+        return []
+    return cast("list[JsonObject]", strip_unknown_fields(data, CRON_JOBS_SHAPE)["jobs"])
 
 
 def _load_cron_jobs_payload(jobs_path: str | Path) -> list[Any]:
-    """Load the JSON array without letting one bad job reject its siblings."""
+    """Load the job entries without letting one bad job reject its siblings."""
     try:
-        return cast(
-            "list[Any]",
-            load_validated_json_file(
-                jobs_path,
-                _validate_cron_jobs_container,
-                missing_ok=True,
-                missing_default=[],
-            ),
-        )
+        data = load_validated_json_file(jobs_path, _validate_cron_jobs_root, missing_ok=True)
     except JsonConfigValidationError as error:
         raise CronStorageError(str(error)) from error
+    return [] if data is None else list(data["jobs"])
 
 
-def _validate_cron_jobs_container(data: Any) -> list[JsonDiagnostic]:
-    if isinstance(data, list):
-        return []
-    return [error_diagnostic("$", f"Expected a JSON array, got {type(data).__name__}")]
-
-
-def validate_cron_jobs_data(data: Any) -> list[JsonDiagnostic]:
-    """Validate a decoded raw ``cron/jobs.json`` array."""
+def _validate_cron_jobs_root(data: Any) -> list[JsonDiagnostic]:
     diagnostics: list[JsonDiagnostic] = []
-    if not isinstance(data, list):
-        return [error_diagnostic("$", f"Expected a JSON array, got {type(data).__name__}")]
-
-    for index, item in enumerate(data):
-        _validate_cron_job_data(diagnostics, index, item)
+    validate_collection_root(
+        diagnostics,
+        data,
+        version=CRON_JOBS_FORMAT_VERSION,
+        shape=CRON_JOBS_SHAPE,
+        collection="jobs",
+        label="cron jobs field",
+    )
     return diagnostics
 
 
-def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], index: int, item: Any) -> None:
-    item_path = f"$[{index}]"
+def validate_cron_jobs_data(data: Any) -> list[JsonDiagnostic]:
+    """Validate a decoded raw ``cron/jobs.json`` document."""
+    diagnostics: list[JsonDiagnostic] = []
+    entries = validate_collection_root(
+        diagnostics,
+        data,
+        version=CRON_JOBS_FORMAT_VERSION,
+        shape=CRON_JOBS_SHAPE,
+        collection="jobs",
+        label="cron jobs field",
+    )
+    for index, item in enumerate(entries or []):
+        _validate_cron_job_data(diagnostics, f"$.jobs[{index}]", item)
+    return diagnostics
+
+
+# A Cron job file keeps invalid entries verbatim, so only an unreadable document
+# root refuses a write.
+CRON_JOBS_FORMAT = JsonDocumentFormat(
+    name="Cron jobs",
+    version=CRON_JOBS_FORMAT_VERSION,
+    shape=CRON_JOBS_SHAPE,
+    validate=_validate_cron_jobs_root,
+    sort_keys=True,
+)
+
+
+def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], item_path: str, item: Any) -> None:
     if not isinstance(item, dict):
         add_error(diagnostics, item_path, "Expected a JSON object")
         return
-    warn_unknown_keys(
-        diagnostics,
-        item_path,
-        item,
-        _CRON_JOB_FIELDS | _LEGACY_CRON_JOB_FIELDS,
-        "cron job field",
-    )
+    warn_unknown_keys(diagnostics, item_path, item, CRON_JOB_SHAPE.fields, "cron job field")
     validate_non_empty_string(diagnostics, f"{item_path}.id", item.get("id"), required=True)
     _validate_cron_agent_id(diagnostics, f"{item_path}.agent_id", item.get("agent_id"))
-    validate_non_empty_string(
-        diagnostics,
-        f"{item_path}.name",
-        item.get("name"),
-        required=False,
-    )
+    validate_non_empty_string(diagnostics, f"{item_path}.name", item.get("name"), required=True)
     validate_non_empty_string(diagnostics, f"{item_path}.prompt", item.get("prompt"), required=True)
     validate_allowed_string(
         diagnostics,
@@ -280,9 +290,6 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], index: int, item:
         "cron_expression",
         "interval_anchor_at",
         "run_at",
-        # Accepted only so installations with pre-migration data can load. The
-        # runtime ignores this legacy per-job override and the next save drops it.
-        "timezone",
         "session_id",
         "project_id",
         "last_fired_at",
@@ -448,7 +455,7 @@ class CronJob:
         return cls(
             id=str(payload["id"]),
             agent_id=str(payload["agent_id"]),
-            name=str(payload.get("name") or _derive_legacy_cron_job_name(payload["prompt"])),
+            name=str(payload["name"]),
             prompt=str(payload["prompt"]),
             schedule_type=payload["schedule_type"],
             cron_expression=payload.get("cron_expression"),
@@ -476,8 +483,8 @@ class CronJob:
         )
 
 
-def _derive_legacy_cron_job_name(prompt: object) -> str:
-    """Derive and persist the same stable fallback used for unnamed new jobs."""
+def _derive_cron_job_name(prompt: object) -> str:
+    """Derive the stable name of a new job created without one."""
     for line in str(prompt).splitlines():
         collapsed_line = " ".join(line.split())
         if not collapsed_line:

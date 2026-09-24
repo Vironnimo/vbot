@@ -32,6 +32,7 @@ from core.config_validation import (
     JsonValidationReport,
     add_error,
     child_path,
+    error_diagnostic,
     format_report_diagnostics,
     read_json_file,
     warn_unknown_keys,
@@ -171,6 +172,41 @@ def validate_format_version(
         )
         return False
     return True
+
+
+def validate_collection_root(
+    diagnostics: list[JsonDiagnostic],
+    data: Any,
+    *,
+    version: int,
+    shape: JsonShape,
+    collection: str,
+    label: str = "field",
+) -> list[Any] | None:
+    """Check the root of a document that holds a named array of entries.
+
+    Returns the entries, or ``None`` when the document cannot be read as this
+    version. Owners that keep invalid entries verbatim use the root check alone
+    as the write guard of the document.
+    """
+
+    if not isinstance(data, dict):
+        diagnostics.append(
+            error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")
+        )
+        return None
+    if not validate_format_version(diagnostics, data, version):
+        return None
+    warn_unknown_keys(diagnostics, "$", data, shape.fields, label)
+    entries_path = child_path("$", collection)
+    if collection not in data:
+        add_error(diagnostics, entries_path, "is required")
+        return None
+    entries = data[collection]
+    if not isinstance(entries, list):
+        add_error(diagnostics, entries_path, "must be an array")
+        return None
+    return entries
 
 
 def strip_unknown_fields(value: Any, shape: JsonShape) -> Any:
