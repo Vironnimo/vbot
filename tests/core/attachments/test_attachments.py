@@ -451,6 +451,7 @@ def test_short_attachment_ids_reserve_sidecars_across_extensions(tmp_path, monke
         b"OggS container notes\n",
         b"fLaC is the FLAC magic.\n",
         b"GIF8 is how a GIF starts.\n",
+        b"GIF89a version notes\n",
     ],
 )
 def test_text_starting_with_a_media_magic_word_is_text(data: bytes) -> None:
@@ -463,12 +464,31 @@ def test_text_starting_with_a_media_magic_word_is_text(data: bytes) -> None:
         (b"ID3\x03\x00\x00\x00\x00\x02\x01rest", "audio/mpeg"),
         (b"OggS\x00\x02" + b"\x00" * 21, "audio/ogg"),
         (b"fLaC\x80\x00\x00\x22" + b"\x00" * 34, "audio/flac"),
-        (b"GIF89a\x01\x00\x01\x00\x80\x00\x00", "image/gif"),
-        (b"GIF87a\x10\x00\x10\x00\x00\x00\x00", "image/gif"),
+        (b"GIF87a\x10\x00\x10\x00\x00\x00\x00\x3b", "image/gif"),
+        # Global colour tables (flag 0x80) of 2 and 256 entries precede the first block.
+        (b"GIF89a\x01\x00\x01\x00\x80\x00\x00" + b"\x00" * 6 + b"\x2c", "image/gif"),
+        (b"GIF89a\x01\x00\x01\x00\x87\x00\x00" + b"\xff" * 768 + b"\x21", "image/gif"),
     ],
 )
 def test_media_magic_words_with_real_headers_keep_their_type(data: bytes, expected: str) -> None:
     assert sniff_media_type(data, "file.bin") == expected
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        # Header only: the first block is missing.
+        b"GIF89a\x01\x00\x01\x00\x00\x00\x00",
+        # No colour table, and the byte after the header is no block marker.
+        b"GIF89a\x01\x00\x01\x00\x00\x00\x00\x00",
+        # A marker inside the declared colour table does not count.
+        b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x2c",
+        # Colour table cut short before the first block.
+        b"GIF89a\x01\x00\x01\x00\x87\x00\x00" + b"\xff" * 767,
+    ],
+)
+def test_gif_signature_without_a_first_block_is_not_gif(data: bytes) -> None:
+    assert sniff_media_type(data, "file.gif") != "image/gif"
 
 
 @pytest.mark.parametrize("data", [b"BMW is a car maker\n", b"BM25 ranking notes\n"])

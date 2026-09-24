@@ -614,7 +614,10 @@ async def test_read_strips_utf8_bom(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("first_line", ["ID3 tags", "OggS notes", "fLaC header", "GIF8 frames"])
+@pytest.mark.parametrize(
+    "first_line",
+    ["ID3 tags", "OggS notes", "fLaC header", "GIF8 frames", "GIF89a version notes"],
+)
 async def test_text_starting_with_a_media_magic_word_is_read_as_text(
     tmp_path: Path, first_line: str
 ) -> None:
