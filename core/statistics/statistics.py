@@ -10,8 +10,9 @@ from pathlib import Path
 from core.models.pricing import TokenPricing
 from core.projects.address import format_agent_address
 from core.sessions import OwnedRunRecord, SessionAddress
-from core.statistics._aggregation import ReportBuilder, load_run_activity
+from core.statistics._aggregation import ReportBuilder
 from core.statistics._extensions import ExtensionSliceKey, extension_actor_key
+from core.statistics._runs import load_run_activity
 from core.statistics._sources import (
     AgentDirectory,
     ProjectDirectory,
