@@ -89,7 +89,7 @@ class TestSendErrorClassification:
 
         # Act / Assert
         with (
-            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            patch("core.utils.retry._sleep", new_callable=AsyncMock),
             pytest.raises(ProviderRateLimitError, match="429"),
         ):
             await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
@@ -103,7 +103,7 @@ class TestSendErrorClassification:
 
         # Act / Assert
         with (
-            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            patch("core.utils.retry._sleep", new_callable=AsyncMock),
             pytest.raises(ProviderTimeoutError),
         ):
             await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
@@ -117,7 +117,7 @@ class TestSendErrorClassification:
 
         # Act / Assert
         with (
-            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            patch("core.utils.retry._sleep", new_callable=AsyncMock),
             pytest.raises(NetworkError, match="connection failed"),
         ):
             await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
@@ -155,7 +155,7 @@ class TestSendErrorClassification:
 
         # Act / Assert
         with (
-            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            patch("core.utils.retry._sleep", new_callable=AsyncMock),
             pytest.raises(ProviderError) as exc_info,
         ):
             await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
@@ -182,7 +182,7 @@ class TestSendErrorClassification:
 
         # Act / Assert
         with (
-            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            patch("core.utils.retry._sleep", new_callable=AsyncMock),
             pytest.raises(ProviderError) as exc_info,
         ):
             await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
@@ -199,7 +199,7 @@ class TestSendErrorClassification:
 
         # Act / Assert
         with (
-            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            patch("core.utils.retry._sleep", new_callable=AsyncMock),
             pytest.raises(NetworkError, match="connection reset"),
         ):
             await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
@@ -229,7 +229,7 @@ class TestSendErrorClassification:
         )
 
         # Act
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
             result = await anthropic_adapter.send(
                 SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
             )
@@ -248,7 +248,7 @@ class TestSendErrorClassification:
 
         # Act / Assert
         with (
-            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            patch("core.utils.retry._sleep", new_callable=AsyncMock),
             pytest.raises(NetworkError, match="server disconnected"),
         ):
             await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
@@ -311,7 +311,7 @@ class TestSendRetry:
         )
 
         # Act
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
             result = await anthropic_adapter.send(
                 SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
             )
@@ -333,7 +333,7 @@ class TestSendRetry:
         )
 
         # Act
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
             result = await anthropic_adapter.send(
                 SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
             )
@@ -355,7 +355,7 @@ class TestSendRetry:
         )
 
         # Act
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
             result = await anthropic_adapter.send(
                 SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
             )
@@ -377,7 +377,7 @@ class TestSendRetry:
         )
 
         # Act
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
             result = await anthropic_adapter.send(
                 SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
             )
@@ -427,7 +427,7 @@ class TestSendRetry:
         )
 
         # Act
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
             result = await anthropic_adapter.send(
                 SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
             )
@@ -451,7 +451,7 @@ class TestSendRetry:
         )
 
         # Act
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
             result = await anthropic_adapter.send(
                 SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
             )

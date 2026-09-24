@@ -61,6 +61,8 @@ CONNECTION_CLOSE_TIMEOUT_SECONDS = 15
 DISCOVERY_PROTOCOL_VERSION = "2026-07-28"
 STDERR_CHUNK_SIZE = 4096
 _LOGGER = logging.getLogger("vbot.extensions.mcp")
+# Tests patch this seam instead of the process-wide ``asyncio.sleep``.
+_sleep = asyncio.sleep
 EXPECTED_FAILURES = (
     ValueError,
     OSError,
@@ -493,7 +495,7 @@ class ConnectionRunner:
                     raise
                 delay = READ_RETRY_BASE_SECONDS * (2**attempt) * random.uniform(0.5, 1.5)
                 self._record("read_retry", {"operation": operation, "attempt": attempt + 1})
-                await asyncio.sleep(delay)
+                await _sleep(delay)
         raise AssertionError("Read retry loop must return or raise")
 
     async def _perform(self, operation: str, arguments: dict[str, Any]) -> dict[str, Any]:

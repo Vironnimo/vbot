@@ -739,7 +739,7 @@ class CronService:
             self._abandon_once_job(job_id, attempts)
             return True
 
-        await asyncio.sleep(_timing._once_retry_delay(attempts))
+        await _timing._sleep(_timing._once_retry_delay(attempts))
         return False
 
     def _abandon_once_job(self, job_id: str, attempts: int) -> None:
@@ -910,7 +910,7 @@ class CronService:
         for _attempt in range(_POST_FIRE_SAVE_MAX_ATTEMPTS):
             if self._save_jobs_after_fire(job_id):
                 return
-            await asyncio.sleep(_POST_FIRE_SAVE_RETRY_SECONDS)
+            await _timing._sleep(_POST_FIRE_SAVE_RETRY_SECONDS)
         _LOGGER.error(
             "Cron job state could not be persisted after %d attempts (job=%s); "
             "continuing with in-memory state",

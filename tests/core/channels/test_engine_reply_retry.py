@@ -30,7 +30,7 @@ def kill_retry_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     async def instant_sleep(_delay: float) -> None:
         return None
 
-    monkeypatch.setattr("core.utils.retry.asyncio.sleep", instant_sleep)
+    monkeypatch.setattr("core.utils.retry._sleep", instant_sleep)
 
 
 @pytest.mark.asyncio

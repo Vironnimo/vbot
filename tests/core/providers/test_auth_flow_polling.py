@@ -119,7 +119,7 @@ async def test_poll_loop_exchanges_openai_device_authorization_code(
     )
 
     # Act
-    with patch("core.providers.auth_flow.asyncio.sleep", new_callable=AsyncMock) as sleep_mock:
+    with patch("core.providers.auth_flow._sleep", new_callable=AsyncMock) as sleep_mock:
         await engine._poll_for_token(
             "openai",
             "subscription",
@@ -171,7 +171,7 @@ async def test_poll_loop_waits_on_authorization_pending(tmp_path: Path) -> None:
     on_complete = AsyncMock()
 
     # Act
-    with patch("core.providers.auth_flow.asyncio.sleep", new_callable=AsyncMock) as sleep_mock:
+    with patch("core.providers.auth_flow._sleep", new_callable=AsyncMock) as sleep_mock:
         await engine._poll_for_token(
             "github-copilot",
             "oauth",
@@ -202,7 +202,7 @@ async def test_poll_loop_stops_when_device_flow_session_expires(tmp_path: Path) 
     on_complete = AsyncMock()
 
     # Act
-    with patch("core.providers.auth_flow.asyncio.sleep", new_callable=AsyncMock) as sleep_mock:
+    with patch("core.providers.auth_flow._sleep", new_callable=AsyncMock) as sleep_mock:
         await engine._poll_for_token(
             "github-copilot",
             "oauth",
@@ -234,7 +234,7 @@ async def test_poll_loop_increases_interval_on_slow_down(tmp_path: Path) -> None
     )
 
     # Act
-    with patch("core.providers.auth_flow.asyncio.sleep", new_callable=AsyncMock) as sleep_mock:
+    with patch("core.providers.auth_flow._sleep", new_callable=AsyncMock) as sleep_mock:
         await engine._poll_for_token(
             "github-copilot",
             "oauth",

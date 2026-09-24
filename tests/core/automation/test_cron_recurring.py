@@ -96,7 +96,7 @@ async def test_run_cron_job_continues_after_trigger_failure(
     monkeypatch.setattr(
         "core.automation._cron_timing._sleep_until_utc", AsyncMock(return_value=True)
     )
-    monkeypatch.setattr(cron_module.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr("core.automation._cron_timing._sleep", AsyncMock())
     trigger_service.trigger_run.side_effect = trigger_then_fail_then_pause
 
     # Act

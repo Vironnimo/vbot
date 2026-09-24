@@ -388,7 +388,7 @@ class TestOpenCodeGoAdapterMinimaxRouting:
             ]
         )
 
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
             response = await opencode_go_adapter.send(
                 [{"role": "user", "content": "hello"}],
                 model_id="deepseek-v4-flash",

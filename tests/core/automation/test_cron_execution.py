@@ -339,7 +339,7 @@ async def test_run_once_job_retries_trigger_failure_without_completing(
     async def record_sleep(delay_seconds: float) -> None:
         sleep_delays.append(delay_seconds)
 
-    monkeypatch.setattr(cron_module.asyncio, "sleep", record_sleep)
+    monkeypatch.setattr(cron_timing, "_sleep", record_sleep)
     trigger_service.trigger_run.side_effect = [RuntimeError("boom"), None]
 
     # Act
@@ -374,7 +374,7 @@ async def test_run_once_job_abandons_after_attempt_limit_with_backoff(
     async def record_sleep(delay_seconds: float) -> None:
         sleep_delays.append(delay_seconds)
 
-    monkeypatch.setattr(cron_module.asyncio, "sleep", record_sleep)
+    monkeypatch.setattr(cron_timing, "_sleep", record_sleep)
     trigger_service.trigger_run.side_effect = RuntimeError("agent deleted")
 
     # Act
@@ -472,7 +472,7 @@ async def test_run_once_job_retries_completed_save_without_refiring(
         run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
     )
     monkeypatch.setattr(cron_timing, "_sleep_until_utc", AsyncMock())
-    monkeypatch.setattr(cron_module.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(cron_timing, "_sleep", AsyncMock())
     save_attempts = 0
 
     original_save_jobs = service._save_jobs

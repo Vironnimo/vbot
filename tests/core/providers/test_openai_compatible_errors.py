@@ -64,7 +64,7 @@ class TestSendErrorClassification:
 
         # Act / Assert
         with (
-            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            patch("core.utils.retry._sleep", new_callable=AsyncMock),
             pytest.raises(ProviderRateLimitError, match="429"),
         ):
             await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
@@ -78,7 +78,7 @@ class TestSendErrorClassification:
 
         # Act / Assert
         with (
-            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            patch("core.utils.retry._sleep", new_callable=AsyncMock),
             pytest.raises(ProviderTimeoutError),
         ):
             await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
@@ -92,7 +92,7 @@ class TestSendErrorClassification:
 
         # Act / Assert
         with (
-            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            patch("core.utils.retry._sleep", new_callable=AsyncMock),
             pytest.raises(NetworkError, match="connection failed"),
         ):
             await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
@@ -118,7 +118,7 @@ class TestSendErrorClassification:
         respx.post(OPENAI_URL).mock(return_value=httpx.Response(502, text="Bad Gateway"))
 
         # Act / Assert
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
             with pytest.raises(ProviderError) as exc_info:
                 await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
 
@@ -134,7 +134,7 @@ class TestSendErrorClassification:
 
         # Act / Assert
         with (
-            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            patch("core.utils.retry._sleep", new_callable=AsyncMock),
             pytest.raises(NetworkError, match="connection reset"),
         ):
             await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
@@ -153,7 +153,7 @@ class TestSendErrorClassification:
         )
 
         # Act
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
             result = await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
 
         # Assert
@@ -170,7 +170,7 @@ class TestSendErrorClassification:
 
         # Act / Assert
         with (
-            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            patch("core.utils.retry._sleep", new_callable=AsyncMock),
             pytest.raises(NetworkError, match="server disconnected"),
         ):
             await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
@@ -261,7 +261,7 @@ class TestSendRetry:
         )
 
         # Act
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
             result = await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
 
         # Assert
@@ -281,7 +281,7 @@ class TestSendRetry:
         )
 
         # Act
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
             result = await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
 
         # Assert
@@ -301,7 +301,7 @@ class TestSendRetry:
         )
 
         # Act
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
             result = await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
 
         # Assert
@@ -347,7 +347,7 @@ class TestSendRetry:
         )
 
         # Act
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
             result = await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
 
         # Assert
@@ -369,7 +369,7 @@ class TestSendRetry:
         )
 
         # Act
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
             result = await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
 
         # Assert
