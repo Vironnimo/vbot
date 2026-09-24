@@ -8,7 +8,7 @@ Everything the Model sees at runtime arrives through one of seven channels. They
 
 The core term System Reminder lives in `.vorch/GLOSSARY.md`.
 
-These seven channels describe canonical vBot Agent/Chat communication. The accessor's separate GPT-Live media session uses provider-native ephemeral thinking/commentary appends for attributed Run updates; it never injects those appends into a vBot Session. Its fixed instructions, trust boundary, and lifecycle are owned by `model_tasks/live.md`.
+These seven channels describe canonical vBot Agent/Chat communication. A Live voice call gives its voice model attributed Run updates through provider-native ephemeral context appends; it never injects them into a vBot Session. Its instructions, trust boundary, and lifecycle are owned by `model_tasks/live.md`.
 
 ## Channels
 
