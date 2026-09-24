@@ -8,7 +8,8 @@ from typing import Any
 
 import pytest
 
-from core.runs import ActiveRunError
+from core.runs import ActiveRunError, ChatRunManager
+from core.sessions import SessionAddress
 from server.events import ServerEventBus
 from server.rpc.chat_methods import (
     _chat_queue_remove,
@@ -89,6 +90,8 @@ class _FakeQueueRuns:
                 item_id="q-1",
                 internal=False,
                 editable=self.editable,
+                steering_run_id=None,
+                steering_in_flight=False,
             )
         ]
 
@@ -233,6 +236,65 @@ async def test_queue_update_rejects_attachment_items() -> None:
             {"agent_id": "builder", "session_id": "s1", "item_id": "q-1", "content": "edit"},
         )
     assert exc_info.value.code == "invalid_request"
+
+
+async def _steering_queue_state() -> tuple[SimpleNamespace, ChatRunManager, Any, Any]:
+    manager = ChatRunManager()
+    release = asyncio.Event()
+    address = SessionAddress(project_id=None, agent_id="builder", session_id="s1")
+
+    async def execute(run: Any) -> str:
+        run.accepts_steering = True
+        await release.wait()
+        return "done"
+
+    run = await manager.start(address, execute)
+    await asyncio.sleep(0)
+    item = await manager.enqueue(address, execute, steerable=True, editable=True)
+    manager.steer_queued("builder", "s1", item.item_id, project_id=None, run_id=run.id)
+    state = _make_queue_state(_QueueOnBusyLoop())
+    state.chat_runs = manager
+    return state, manager, run, item
+
+
+@pytest.mark.asyncio
+async def test_queue_update_reports_item_being_steered() -> None:
+    state, manager, _run, item = await _steering_queue_state()
+    try:
+        with pytest.raises(RpcError) as exc_info:
+            await _chat_queue_update(
+                state,
+                {
+                    "agent_id": "builder",
+                    "session_id": "s1",
+                    "item_id": item.item_id,
+                    "content": "x",
+                },
+            )
+        assert exc_info.value.code == "queue_item_steering"
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_queue_remove_reports_item_whose_steering_delivery_is_in_flight() -> None:
+    state, manager, run, item = await _steering_queue_state()
+    errors: list[RpcError] = []
+
+    async def remove_during_append(_item: Any) -> None:
+        try:
+            _chat_queue_remove(
+                state, {"agent_id": "builder", "session_id": "s1", "item_id": item.item_id}
+            )
+        except RpcError as error:
+            errors.append(error)
+
+    try:
+        assert await manager.deliver_steering(run, remove_during_append)
+        assert [error.code for error in errors] == ["queue_item_steering"]
+        assert item.future.result() is run
+    finally:
+        await manager.aclose()
 
 
 @pytest.mark.asyncio

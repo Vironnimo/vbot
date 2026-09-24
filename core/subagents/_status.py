@@ -391,6 +391,20 @@ async def _subagent_status_snapshot(
     """Resolve one captured entry and acknowledge only after Parent persistence."""
     work_id = entry.work_id
 
+    if entry.run_id is None and entry.complete and entry.result is not None:
+        # Queued work that never started (removed from the Queue, or failed its
+        # admission) stays answerable until the Parent durably received it.
+        context.after_result_persisted(lambda: batch_tracker.mark_work_fetched(parent_key, work_id))
+        return tool_success(
+            _public_subagent_result(
+                work_id,
+                entry.agent_id,
+                entry.project_id,
+                entry.session_id,
+                dict(entry.result),
+            )
+        )
+
     if entry.run_id is None:
         return tool_success(
             _public_subagent_result(

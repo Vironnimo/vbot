@@ -51,6 +51,7 @@ import {
 import { startRun } from './runEvents.js';
 import { resolveMoveActionFromResponse } from './addressing.js';
 
+const RPC_ERROR_QUEUE_ITEM_STEERING = 'queue_item_steering';
 const HISTORY_INITIAL_LIMIT = 100;
 
 const HISTORY_OLDER_LIMIT = 50;
@@ -697,8 +698,21 @@ export function createChatController({
       invalidateQueueSync(sessionState);
       removeQueuedMessage(sessionState, queuedMessageId);
     } catch (error) {
+      if (await reportQueueItemSteering(sessionState, error)) return;
       sessionState.actionError = `${translate('queue.removeError', 'Queued message could not be removed.')} ${errorMessage(error)}`;
     }
+  }
+
+  // The item is already bound for the running Run; refresh the Queue so its
+  // steering state (or its delivery) replaces the stale local controls.
+  async function reportQueueItemSteering(sessionState, error) {
+    if (error?.code !== RPC_ERROR_QUEUE_ITEM_STEERING) return false;
+    sessionState.actionError = translate(
+      'queue.steeringLocked',
+      'This message is already being delivered to the running Run and can no longer be changed.',
+    );
+    await syncSessionQueue(sessionState);
+    return true;
   }
 
   async function updateQueued(
@@ -728,6 +742,7 @@ export function createChatController({
       });
       return true;
     } catch (error) {
+      if (await reportQueueItemSteering(sessionState, error)) return false;
       sessionState.actionError = `${translate('queue.editError', 'Queued message could not be edited.')} ${errorMessage(error)}`;
       return false;
     }

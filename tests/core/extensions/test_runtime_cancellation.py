@@ -124,3 +124,21 @@ async def test_uncancelled_mutation_preserves_failure_without_duplicate_logging(
             await runtime.apply_disabled_change({"fixture"})
     assert caught.value is failure
     assert not [record for record in caplog.records if record.name == _LOGGER_NAME]
+
+
+@pytest.mark.asyncio
+async def test_closed_runtime_rejects_mutations_with_expected_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.extensions.extensions import ExtensionUnavailableError
+
+    async def refresh() -> None:
+        return None
+
+    runtime = _runtime(tmp_path, monkeypatch, refresh)
+    await runtime.aclose()
+
+    with pytest.raises(ExtensionUnavailableError):
+        await runtime.reload()
+    with pytest.raises(ExtensionUnavailableError):
+        await runtime.apply_disabled_change({"fixture"})
