@@ -14,9 +14,10 @@ Every provider target also gets an ``extra_options`` JSON escape hatch merged
 into the provider request by the wire layer, so an option vBot does not
 surface is usable without a code change. Video fields come from OpenRouter's
 dedicated Video catalog; Music exposes only sampling controls published by its
-Model. Live voice renders its voice and delegating backend Model from its
-``live_voice`` facts; backend choices depend on the Model registry and the
-target's Connection, so its schema carries no ``extra_options``."""
+Model. Live voice renders its voice, delegating backend Model, and that
+backend's reasoning effort from its ``live_voice`` facts; backend choices
+depend on the Model registry and the target's Connection, so its schema
+carries no ``extra_options``."""
 
 from __future__ import annotations
 
@@ -28,8 +29,10 @@ from core.model_tasks._image_options import (
     _image_generation_fields,
 )
 from core.model_tasks._live_options import (
+    BACKEND_THINKING_EFFORT_DEFAULT,
     ModelCatalog,
     _live_voice_fields,
+    backend_thinking_efforts,
     live_backend_candidates,
 )
 from core.model_tasks._media_options import (
@@ -65,6 +68,7 @@ from core.model_tasks._option_types import (
     JsonObject,
     TaskModelOptionChoice,
     TaskModelOptionField,
+    TaskModelOptionsBy,
     TaskModelOptionSchema,
     TaskModelOptionValidationError,
     _extra_options_field,
@@ -82,6 +86,7 @@ from core.models import Model
 
 __all__ = [
     "ALLOWED_OPTION_TYPES",
+    "BACKEND_THINKING_EFFORT_DEFAULT",
     "DALL_E_STYLE_CHOICES",
     "EMBEDDING_RESERVED_PAYLOAD_FIELDS",
     "FALLBACK_ASPECT_RATIOS",
@@ -110,6 +115,8 @@ __all__ = [
     "TaskModelOptionField",
     "TaskModelOptionSchema",
     "TaskModelOptionValidationError",
+    "TaskModelOptionsBy",
+    "backend_thinking_efforts",
     "live_backend_candidates",
     "option_schema_for",
     "validate_task_model_options",

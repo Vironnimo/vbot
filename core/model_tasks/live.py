@@ -28,7 +28,11 @@ from core.model_tasks.model_tasks import (
     TaskModelTargetRef,
     public_provider_target_id,
 )
-from core.model_tasks.options import live_backend_candidates
+from core.model_tasks.options import (
+    BACKEND_THINKING_EFFORT_DEFAULT,
+    backend_thinking_efforts,
+    live_backend_candidates,
+)
 from core.model_tasks.task_execution import TaskBindingResolver
 from core.providers.errors import (
     ProviderAuthError,
@@ -226,10 +230,11 @@ class LiveVoiceService:
         call = LiveCallSession(wire=wire, brain=brain, host=host, target=label)
         call.start()
         _LOGGER.info(
-            "Live call started: call_id=%s target=%s backend_model=%s",
+            "Live call started: call_id=%s target=%s backend_model=%s backend_effort=%s",
             call.id,
             label,
             brain_target.model_id,
+            brain_target.thinking_effort or "default",
         )
         return call
 
@@ -251,6 +256,7 @@ class LiveVoiceService:
             raise LiveStartRejected(
                 "not_configured", "The Live voice backend model is not available"
             )
+        thinking_effort = _backend_thinking_effort(options)
         voice = options.get("voice")
         return (
             target_ref,
@@ -259,8 +265,20 @@ class LiveVoiceService:
                 provider_id=target_ref.provider_id,
                 connection_id=target_ref.connection_id,
                 model_id=str(backend_model),
+                thinking_effort=thinking_effort,
             ),
         )
+
+
+def _backend_thinking_effort(options: JsonObject) -> str | None:
+    """Return the configured backend effort; ``None`` leaves it to the Model."""
+
+    effort = options.get("backend_thinking_effort", BACKEND_THINKING_EFFORT_DEFAULT)
+    if not isinstance(effort, str) or effort not in backend_thinking_efforts():
+        raise LiveStartRejected(
+            "not_configured", "The Live voice backend reasoning effort is not valid"
+        )
+    return effort or None
 
 
 def _valid_offer(offer_sdp: object) -> bool:

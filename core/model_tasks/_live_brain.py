@@ -30,7 +30,6 @@ _LOGGER = get_logger(__name__)
 
 MAX_MODEL_STEPS = 8
 HISTORY_PAIRS = 10
-_THINKING_EFFORT = "low"
 _MODEL_RETRY_DELAYS_SECONDS = (0.5, 1.5)
 # Failure notes list only actions that may have changed something.
 _READ_ONLY_ACTIONS = frozenset({"context", "sessions", "read", "list"})
@@ -38,11 +37,16 @@ _READ_ONLY_ACTIONS = frozenset({"context", "sessions", "read", "list"})
 
 @dataclass(frozen=True)
 class BrainTarget:
-    """The backend model: exact Provider Connection plus model id."""
+    """The backend model: exact Provider Connection, model id, and reasoning effort.
+
+    ``thinking_effort`` is the requested reasoning effort; ``None`` leaves it to
+    the Model's Provider default. The Adapter fits it to the Model's ladder.
+    """
 
     provider_id: str
     connection_id: str
     model_id: str
+    thinking_effort: str | None
 
 
 @dataclass(frozen=True)
@@ -154,7 +158,7 @@ class LiveBrain:
                         self._target.provider_id,
                         self._target.model_id,
                     ),
-                    thinking_effort=_THINKING_EFFORT,
+                    thinking_effort=self._target.thinking_effort,
                     tools=live_tools(),
                     **request_context,
                 )
