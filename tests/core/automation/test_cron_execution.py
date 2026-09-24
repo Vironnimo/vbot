@@ -487,10 +487,12 @@ def test_start_completes_claimed_once_job_without_refiring(
     assert not cron_claims.path_for(restarted_service._once_fire_claims_dir, job.id).exists()
 
 
-def test_start_degrades_cron_when_once_fire_claim_is_invalid(
+@pytest.mark.parametrize("claim_bytes", [b"{", b"\xff"])
+def test_start_holds_only_the_once_job_with_an_unreadable_fire_claim(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    claim_bytes: bytes,
 ) -> None:
     service, _trigger_service = make_service(tmp_path)
     recurring = service.create_job(
@@ -505,50 +507,71 @@ def test_start_degrades_cron_when_once_fire_claim_is_invalid(
         schedule_type="once",
         run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
     )
+    jobs_path = tmp_path / "cron" / "jobs.json"
+    persisted = json.loads(jobs_path.read_text(encoding="utf-8"))
+    for item in persisted:
+        if item["id"] == once.id:  # Its time passed while vBot was offline.
+            item["run_at"] = (datetime.now(UTC) - timedelta(minutes=15)).isoformat()
+    jobs_path.write_text(json.dumps(persisted), encoding="utf-8")
     claim_path = cron_claims.path_for(service._once_fire_claims_dir, once.id)
     claim_path.parent.mkdir(parents=True, exist_ok=True)
-    claim_path.write_text("{", encoding="utf-8")
-    restarted_service, _restarted_trigger_service = make_service(tmp_path)
+    claim_path.write_bytes(claim_bytes)
+    restarted_service, restarted_trigger_service = make_service(tmp_path)
     start_job_task = Mock()
     monkeypatch.setattr(restarted_service, "_start_job_task", start_job_task)
 
-    with caplog.at_level(logging.ERROR, logger="vbot.automation.cron"):
+    with caplog.at_level(logging.WARNING, logger="vbot.automation.cron"):
         restarted_service.start()
 
-    assert restarted_service.list_jobs() == []
-    with pytest.raises(CronStorageError):
-        restarted_service.update_job(recurring.id, prompt="Must not overwrite")
-    start_job_task.assert_not_called()
-    assert caplog.records
-    assert claim_path.read_text(encoding="utf-8") == "{"
+    # The possibly fired once job is held, never fired and never marked missed.
+    assert [call.args[0].id for call in start_job_task.call_args_list] == [recurring.id]
+    assert restarted_service.get_job(once.id).status == "active"
+    assert any(once.id in record.getMessage() for record in caplog.records)
+    assert claim_path.read_bytes() == claim_bytes
+    restarted_trigger_service.trigger_run.assert_not_called()
+    # Storage stays writable; one bad claim file does not disable Cron.
+    assert restarted_service.update_job(recurring.id, prompt="Still editable").prompt == (
+        "Still editable"
+    )
 
 
-def test_start_degrades_cron_when_once_fire_claim_is_not_utf8(
+def test_start_keeps_cron_available_when_reconciliation_save_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     service, _trigger_service = make_service(tmp_path)
-    once = service.create_job(
+    recurring = service.create_job(
         agent_id="agent-one",
-        prompt="Once prompt",
+        prompt="Recurring prompt",
+        schedule_type="cron",
+        cron_expression="* * * * *",
+    )
+    claimed = service.create_job(
+        agent_id="agent-one",
+        prompt="Claimed once",
         schedule_type="once",
         run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
     )
-    claim_path = cron_claims.path_for(service._once_fire_claims_dir, once.id)
-    claim_path.parent.mkdir(parents=True, exist_ok=True)
-    claim_path.write_bytes(b"\xff")
-    restarted_service, _restarted_trigger_service = make_service(tmp_path)
+    cron_claims.write(service._once_fire_claims_dir, claimed, datetime.now(UTC).isoformat())
+    restarted_service, restarted_trigger_service = make_service(tmp_path)
     start_job_task = Mock()
     monkeypatch.setattr(restarted_service, "_start_job_task", start_job_task)
+    real_save = restarted_service._save_jobs
+    monkeypatch.setattr(
+        restarted_service, "_save_jobs", Mock(side_effect=CronStorageError("disk busy"))
+    )
 
-    with caplog.at_level(logging.ERROR, logger="vbot.automation.cron"):
-        restarted_service.start()
+    restarted_service.start()
 
-    assert restarted_service.list_jobs() == []
-    start_job_task.assert_not_called()
-    assert caplog.records
-    assert claim_path.read_bytes() == b"\xff"
+    assert [call.args[0].id for call in start_job_task.call_args_list] == [recurring.id]
+    assert restarted_service.get_job(claimed.id).status == "completed"
+    # The claim survives until the reconciled state is durable.
+    assert cron_claims.path_for(restarted_service._once_fire_claims_dir, claimed.id).exists()
+    restarted_trigger_service.trigger_run.assert_not_called()
+    monkeypatch.setattr(restarted_service, "_save_jobs", real_save)
+    restarted_service.update_job(recurring.id, prompt="Saved later")
+    persisted = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
+    assert {job["id"]: job["status"] for job in persisted}[claimed.id] == "completed"
 
 
 @pytest.mark.asyncio
