@@ -253,6 +253,11 @@
 .stats-view .stats-agent__project {
   flex-shrink: 0;
 }
+.stats-view .stats-extension .stats-block__title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
 /* Only Skills with recorded opportunities but no matching activation are
      candidates, marked by a thin amber left marker rather than a row tint.
      A fresh Skill with no offer data stays neutral. */
