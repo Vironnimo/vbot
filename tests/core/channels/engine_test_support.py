@@ -50,6 +50,12 @@ from core.runs import (
 from core.sessions import ChatSessionManager
 from core.sessions.format import write_bootstrap_marker
 
+# Generous Channel queue drain deadline: under xdist load the queue worker can
+# need several seconds for lazy imports and durable Session setup before the
+# queue drains. It stays below the gate's 30 s per-test timeout, so a real hang
+# still fails as a readable TimeoutError instead of a crashed worker.
+QUEUE_DRAIN_TIMEOUT_SECONDS = 20.0
+
 SESSION_ID = "ch-tg-assistant-12345"
 CHANNEL_REPLY_SURFACE = ReplySurface.channel(
     platform="telegram",
@@ -388,9 +394,7 @@ async def drain(engine: ChannelConversationEngine, platform_target: int) -> None
     if queue is None:
         await asyncio.sleep(0)
         return
-    # The suite-wide timeout remains the deadlock guard. A shorter nested timeout
-    # flakes under xdist load even though the queue is still making progress.
-    await queue.join()
+    await asyncio.wait_for(queue.join(), timeout=QUEUE_DRAIN_TIMEOUT_SECONDS)
 
 
 def assert_member_trigger(

@@ -39,6 +39,11 @@ from core.model_tasks.speech_types import (
     SpeechTranscriptionResult,
 )
 
+# Tests that import real torch/transformers: whichever case runs first on an xdist
+# worker pays the cold native imports, which take 20-30 s under parallel load and
+# would exceed the gate's 30 s per-test timeout.
+_cold_native_imports = pytest.mark.timeout(120)
+
 
 def wav(samples: Any = None, *, rate: int = 16_000, channels: int = 1) -> bytes:
     if samples is None:
@@ -261,6 +266,7 @@ async def test_cancellation_waits_for_inference_then_shutdown_releases_model() -
         await executor.aclose()
 
 
+@_cold_native_imports
 @pytest.mark.parametrize("engine_name", ["qwen", "parakeet", "nemotron"])
 def test_native_transformers_adapter_contracts_without_weights(
     engine_name: str, monkeypatch: pytest.MonkeyPatch
@@ -347,6 +353,7 @@ def test_native_transformers_adapter_contracts_without_weights(
     assert engine._model is None and engine._processor is None
 
 
+@_cold_native_imports
 @pytest.mark.parametrize("frames", [1, 48, 49, 50, 104, 105, 106, 3000])
 @pytest.mark.parametrize("language", ["", "de-DE"])
 def test_nemotron_keeps_every_streaming_frame_and_language_prompt(frames, language):

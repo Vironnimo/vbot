@@ -17,6 +17,8 @@ from cli.application.state import (
     load_operation,
 )
 
+_THREAD_COORDINATION_TIMEOUT_SECONDS = 10.0
+
 
 def _install(root: Path, *, shape: str = "server") -> Installation:
     install = Installation(
@@ -385,12 +387,12 @@ def test_worker_holds_operation_lock_for_the_entire_transaction(
 
     def blocked_execute(_install: Installation, _operation: Operation) -> None:
         entered.set()
-        assert release.wait(2)
+        assert release.wait(_THREAD_COORDINATION_TIMEOUT_SECONDS)
 
     monkeypatch.setattr(worker, "execute", blocked_execute)
     thread = threading.Thread(target=worker.run, args=(install, operation.id))
     thread.start()
-    assert entered.wait(2)
+    assert entered.wait(_THREAD_COORDINATION_TIMEOUT_SECONDS)
     try:
         assert load_operation(install, operation.id).id == operation.id
         with (
@@ -400,5 +402,5 @@ def test_worker_holds_operation_lock_for_the_entire_transaction(
             pass
     finally:
         release.set()
-        thread.join(timeout=2)
+        thread.join(timeout=_THREAD_COORDINATION_TIMEOUT_SECONDS)
     assert not thread.is_alive()

@@ -34,6 +34,8 @@ from tests.core.chat.chat_loop_tools_test_support import (
     JsonObject,
 )
 
+_ASYNC_COORDINATION_TIMEOUT_SECONDS = 10.0
+
 
 @pytest.mark.asyncio
 async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Path) -> None:
@@ -322,7 +324,7 @@ async def test_per_call_cancel_persists_cancelled_and_completed_siblings_in_orde
     run = await loop.start_run("coder", "Run siblings.", session_id="session-one")
     await asyncio.wait_for(
         asyncio.gather(cancellable_started.wait(), sibling_started.wait()),
-        timeout=5,
+        timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS,
     )
 
     assert run.cancel_tool_call("call_cancel") is True
@@ -359,4 +361,4 @@ async def _wait_for_tool_result_event(run: Any, tool_call_id: str) -> None:
         ):
             await asyncio.sleep(0)
 
-    await asyncio.wait_for(result_was_emitted(), timeout=5)
+    await asyncio.wait_for(result_was_emitted(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)

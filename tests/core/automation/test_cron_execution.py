@@ -24,6 +24,8 @@ from tests.core.automation.cron_test_support import (
     make_service,
 )
 
+_ASYNC_COORDINATION_TIMEOUT_SECONDS = 10.0
+
 
 @pytest.mark.asyncio
 async def test_start_creates_active_tasks_and_records_missed_once_jobs(
@@ -97,7 +99,7 @@ async def test_cron_service_aclose_awaits_cancelled_job_tasks(
     monkeypatch.setattr(service, "_run_cron_job", hold_cron_task)
 
     service.start()
-    await asyncio.wait_for(started.wait(), timeout=1)
+    await asyncio.wait_for(started.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
 
     await service.aclose()
 
@@ -136,7 +138,7 @@ async def test_unexpected_scheduler_task_failure_restarts_active_recurring_job(
 
     with caplog.at_level(logging.ERROR, logger="vbot.automation.cron"):
         service.start()
-        await asyncio.wait_for(restarted.wait(), timeout=1)
+        await asyncio.wait_for(restarted.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
 
     recovered = service.get_job(job.id)
     persisted = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
@@ -679,7 +681,7 @@ async def test_rescheduling_keeps_live_run_waiter_and_global_slot(tmp_path, monk
     monkeypatch.setattr(cron_timing, "_sleep_until_utc", sleep_until)
     service.start()
     try:
-        await asyncio.wait_for(running.wait(), 1)
+        await asyncio.wait_for(running.wait(), _ASYNC_COORDINATION_TIMEOUT_SECONDS)
         task = service._job_tasks[job.id]
         available = service._run_slots._value
         service.update_job(job.id, cron_expression="*/2 * * * *")
@@ -688,7 +690,7 @@ async def test_rescheduling_keeps_live_run_waiter_and_global_slot(tmp_path, monk
         assert not task.cancelling()
         assert service._run_slots._value == available
         release.set()
-        await asyncio.wait_for(resumed.wait(), 1)
+        await asyncio.wait_for(resumed.wait(), _ASYNC_COORDINATION_TIMEOUT_SECONDS)
         assert service._run_slots._value == available + 1
         assert trigger.trigger_run.await_count == 1
     finally:
