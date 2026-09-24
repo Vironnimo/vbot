@@ -107,7 +107,7 @@ def test_provider_usage_history_clear_posts_clear_rpc(
         calls.append(json)
         return httpx.Response(
             200,
-            json={"ok": True, "result": {"deleted_samples": 12, "deleted_files": 2}},
+            json={"ok": True, "result": {"deleted_samples": 12, "deleted_files": 1}},
         )
 
     monkeypatch.setattr(provider_management.httpx, "post", fake_post)
@@ -115,7 +115,7 @@ def test_provider_usage_history_clear_posts_clear_rpc(
     result = provider_management.provider_usage_history_clear(instance, True)
 
     assert result.ok is True
-    assert result.message == "deleted provider usage history: 12 samples across 2 files"
+    assert result.message == "deleted provider usage history: 12 samples"
     assert calls == [{"method": "provider.usage_history.clear", "params": {}}]
 
 
@@ -124,4 +124,15 @@ def test_parse_args_supports_usage_history_commands() -> None:
     clear = cli_main.parse_args(["provider", "usage-history-clear", "--yes"])
 
     assert (history.command, history.since, history.until) == ("usage-history", None, None)
+    assert (clear.command, clear.yes) == ("usage-history-clear", True)
+
+
+def test_parse_args_resolves_the_readable_history_paths() -> None:
+    # Help teaches ``provider history list|clear``; both reach the same actions.
+    history = cli_main.parse_args(
+        ["provider", "history", "list", "--since", "2026-08-01T00:00:00Z"]
+    )
+    clear = cli_main.parse_args(["provider", "history", "clear", "--yes"])
+
+    assert (history.command, history.since) == ("usage-history", "2026-08-01T00:00:00Z")
     assert (clear.command, clear.yes) == ("usage-history-clear", True)

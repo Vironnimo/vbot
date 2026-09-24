@@ -25,6 +25,7 @@ from typing import Any
 
 import httpx
 
+from core.database import Database, DatabaseError
 from core.providers._http_shared import classify_http_status
 from core.providers._usage_parsers import (
     _parse_copilot_usage,
@@ -172,8 +173,11 @@ class ProviderUsageService:
     ) -> None:
         self._runtime = runtime
         self._transport = transport or HttpxUsageTransport()
+        # A store opened here from ``data_root`` is owned and closed by this
+        # service; an injected store stays with its caller.
+        self._owns_history = history_store is None and data_root is not None
         self._history = history_store or (
-            ProviderUsageHistoryStore(data_root) if data_root is not None else None
+            ProviderUsageHistoryStore.open(data_root) if data_root is not None else None
         )
         self._timeout = timeout
         self._cache_ttl = cache_ttl
@@ -214,14 +218,31 @@ class ProviderUsageService:
         if task is not None:
             task.cancel()
 
+    def close(self) -> None:
+        """Cancel automatic sampling and close an owned history database."""
+
+        self.stop()
+        self._close_history()
+
     async def aclose(self) -> None:
-        """Cancel and await the automatic sampler."""
+        """Cancel and await the automatic sampler, then close an owned history database."""
 
         task = self._history_task
         self.stop()
         if task is not None:
             with suppress(asyncio.CancelledError):
                 await task
+        self._close_history()
+
+    @property
+    def history_database(self) -> Database | None:
+        """The Provider usage database handle, for data snapshots and status."""
+
+        return self._history.database if self._history is not None else None
+
+    def _close_history(self) -> None:
+        if self._owns_history and self._history is not None:
+            self._history.close()
 
     async def report(self, connections: list[str] | None = None) -> UsageReport:
         """Return usage snapshots for every supported, logged-in connection.
@@ -238,7 +259,7 @@ class ProviderUsageService:
         meaningful = [snapshot for snapshot in snapshots if _is_meaningful(snapshot)]
         return UsageReport(generated_at=self._now_iso(), providers=meaningful)
 
-    def history_report(
+    async def history_report(
         self,
         *,
         since: datetime | None = None,
@@ -248,14 +269,15 @@ class ProviderUsageService:
 
         if self._history is None:
             return UsageHistoryReport(generated_at=self._now_iso())
-        return self._history.report(since=since, until=until)
+        samples = await self._history.samples(since=since, until=until)
+        return UsageHistoryReport(generated_at=self._now_iso(), samples=samples)
 
-    def clear_history(self) -> UsageHistoryClearResult:
+    async def clear_history(self) -> UsageHistoryClearResult:
         """Explicitly delete all durable automatic usage samples."""
 
         if self._history is None:
             return UsageHistoryClearResult(deleted_samples=0, deleted_files=0)
-        return self._history.clear()
+        return await self._history.clear()
 
     async def collect_history_sample(self) -> bool:
         """Fetch/coalesce live state and persist at most one automatic sample."""
@@ -264,17 +286,17 @@ class ProviderUsageService:
             return False
         try:
             report = await self.report()
-            return self._history.append(
+            return await self._history.append(
                 report.generated_at,
                 [snapshot.to_dict() for snapshot in report.providers],
             )
-        except UsageHistoryError as exc:
+        except (UsageHistoryError, DatabaseError) as exc:
             _LOGGER.warning("Provider usage history sample could not be stored: %s", exc)
             return False
 
     async def _history_loop(self) -> None:
         try:
-            delay = self._initial_history_delay()
+            delay = await self._initial_history_delay()
             if delay > 0:
                 await asyncio.sleep(delay)
             while self._history_started:
@@ -295,12 +317,12 @@ class ProviderUsageService:
             self._history_started = False
             self._history_task = None
 
-    def _initial_history_delay(self) -> float:
+    async def _initial_history_delay(self) -> float:
         if self._history is None:
             return self._history_interval
         try:
-            latest = self._history.latest_sampled_at()
-        except UsageHistoryError as exc:
+            latest = await self._history.latest_sampled_at()
+        except DatabaseError as exc:
             _LOGGER.warning("Provider usage history freshness could not be read: %s", exc)
             return 0.0
         except Exception as exc:  # noqa: BLE001 — background sampling must fail soft

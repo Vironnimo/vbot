@@ -186,6 +186,8 @@ def bootstrap(runtime: Runtime) -> None:
                 runtime._storage, runtime.logger
             ),
         )
+        # Opens the canonical provider-usage.db in every startup mode, so an
+        # update's verification start checks it; only normal startup samples.
         runtime._provider_usage = ProviderUsageService(
             runtime,
             data_root=runtime._storage.data_dir,
