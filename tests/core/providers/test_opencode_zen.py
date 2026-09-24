@@ -959,6 +959,30 @@ def test_error_policy_distinguishes_auth_entitlement_region_and_retryable_rate_l
     assert exc_info.value.retryable is retryable
 
 
+def test_messages_route_keeps_zen_policy_and_retries_overloaded_529(
+    adapter: OpenCodeZenAdapter,
+) -> None:
+    messages = adapter._messages
+    with pytest.raises(ProviderError) as overloaded:
+        messages._classify_http_status(
+            529,
+            detail='529 {"type":"error","error":{"type":"overloaded_error"}}',
+            response_headers=httpx.Headers(),
+        )
+    with pytest.raises(ProviderError) as exhausted:
+        messages._classify_http_status(
+            429,
+            detail="429 FreeUsageLimitError: daily allowance exhausted",
+            response_headers=httpx.Headers(),
+        )
+    with pytest.raises(ProviderError) as chat_route_529:
+        adapter._classify_http_status(529, detail="529", response_headers=httpx.Headers())
+
+    assert overloaded.value.retryable is True
+    assert exhausted.value.retryable is False
+    assert chat_route_529.value.retryable is False
+
+
 @respx.mock
 @pytest.mark.asyncio
 @pytest.mark.parametrize("response_id", [None, "same_response"])
