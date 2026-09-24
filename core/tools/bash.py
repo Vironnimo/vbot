@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,8 +39,8 @@ from core.tools._bash_results import (
 )
 from core.tools._bash_update_handoff import (
     HANDOFF_ENV,
-    acknowledge_update_handoff_ticket,
-    create_update_handoff_ticket,
+    UpdateHandoffGrant,
+    UpdateHandoffs,
 )
 from core.tools._powershell import with_utf8_output
 from core.tools.arguments import optional_number, optional_string
@@ -218,6 +218,7 @@ async def bash_handler(
     process_manager: ProcessManager,
     trigger_service: Any | None = None,
     credential_resolver: CredentialResolver | None = None,
+    update_handoffs: UpdateHandoffs | None = None,
 ) -> JsonObject:
     """Run a shell command and return a stable tool result envelope."""
     parsed = _parse_arguments(arguments)
@@ -246,51 +247,10 @@ async def bash_handler(
             "invalid_arguments",
             f"env_keys contains key(s) not granted to this Agent: {names}",
         )
-    env = await get_shell_env()
-    env.pop(HANDOFF_ENV, None)
     resolve_credential = credential_resolver or (lambda key: os.environ.get(key, ""))
-    for key in requested_env_keys:
-        env[key] = resolve_credential(key)
-    env[VBOT_RUN_AGENT_ID_ENV] = context.agent_id
-    env[VBOT_RUN_SESSION_ID_ENV] = context.session_id
-    if context.project_id is None:
-        env.pop(VBOT_RUN_PROJECT_ID_ENV, None)
-    else:
-        env[VBOT_RUN_PROJECT_ID_ENV] = context.project_id
-    handoff = None
-    if context.result_persisted_hook is not None:
-        handoff = create_update_handoff_ticket(
-            context.data_root,
-            run_id=context.run_id,
-            tool_call_id=context.tool_call_id,
-            agent_id=context.agent_id,
-            project_id=context.project_id,
-            session_id=context.session_id,
-        )
-        env[HANDOFF_ENV] = str(handoff.path)
-        context.after_result_persisted(lambda: acknowledge_update_handoff_ticket(handoff))
-    argv = _shell_argv(command)
+    handoff = _issue_update_handoff(update_handoffs, context)
 
-    try:
-        process_id = await process_manager.spawn(
-            context.run_id,
-            context.agent_id,
-            argv,
-            project_id=context.project_id,
-            env=env,
-            cwd=workdir,
-            execution_owner=context.execution_owner,
-        )
-    except FileNotFoundError:
-        # The shell binary itself (pwsh/bash) was not found. This is not a
-        # user-command failure — it means the shell executable disappeared or
-        # PATH is stale. Re-probe the environment once in case PATH changed,
-        # then retry the spawn before giving up.
-        _LOGGER.info(
-            "Shell spawn failed with FileNotFoundError; refreshing shell "
-            "environment cache and retrying once.",
-        )
-        reset_shell_env_cache()
+    async def command_environment() -> dict[str, str]:
         env = await get_shell_env()
         env.pop(HANDOFF_ENV, None)
         for key in requested_env_keys:
@@ -302,21 +262,25 @@ async def bash_handler(
         else:
             env[VBOT_RUN_PROJECT_ID_ENV] = context.project_id
         if handoff is not None:
-            env[HANDOFF_ENV] = str(handoff.path)
-        try:
-            process_id = await process_manager.spawn(
-                context.run_id,
-                context.agent_id,
-                argv,
-                project_id=context.project_id,
-                env=env,
-                cwd=workdir,
-                execution_owner=context.execution_owner,
-            )
-        except (OSError, ValueError) as error:
-            return tool_failure("process_spawn_failed", _spawn_failure_message(argv, error))
-    except (OSError, ValueError) as error:
-        return tool_failure("process_spawn_failed", _spawn_failure_message(argv, error))
+            env[HANDOFF_ENV] = handoff.token
+        return env
+
+    argv = _shell_argv(command)
+    try:
+        spawned = await _spawn_command(
+            process_manager, context, argv, workdir, environment=command_environment
+        )
+    except BaseException:
+        if handoff is not None:
+            handoff.release()
+        raise
+    if not isinstance(spawned, str):
+        if handoff is not None:
+            handoff.release()
+        return spawned
+    process_id = spawned
+    if handoff is not None:
+        _release_handoff_after_exit(process_manager, context, process_id, handoff)
 
     _register_user_cancel_callback(process_manager, context, process_id)
 
@@ -397,6 +361,7 @@ def register_bash_tool(
     *,
     credential_resolver: CredentialResolver | None = None,
     prompt_blocks: ToolPromptBlockRegistry | None = None,
+    update_handoffs: UpdateHandoffs | None = None,
 ) -> None:
     """Register the bash tool with a vBot tool registry."""
 
@@ -407,6 +372,7 @@ def register_bash_tool(
             process_manager,
             trigger_service=trigger_service,
             credential_resolver=credential_resolver,
+            update_handoffs=update_handoffs,
         )
 
     registry.register(
@@ -618,6 +584,90 @@ def _maybe_spawn_completion_watcher(
             f"agent={context.agent_id} session={context.session_id}",
         )
     )
+
+
+def _issue_update_handoff(
+    update_handoffs: UpdateHandoffs | None,
+    context: ToolContext,
+) -> UpdateHandoffGrant | None:
+    """Give a call whose Tool Result has a persistence boundary its handoff token."""
+    if update_handoffs is None or context.result_persisted_hook is None:
+        return None
+    handoff = update_handoffs.issue(
+        run_id=context.run_id,
+        tool_call_id=context.tool_call_id,
+        agent_id=context.agent_id,
+        project_id=context.project_id,
+        session_id=context.session_id,
+    )
+    context.after_result_persisted(handoff.acknowledge)
+    return handoff
+
+
+async def _spawn_command(
+    process_manager: ProcessManager,
+    context: ToolContext,
+    argv: list[str],
+    workdir: Path,
+    *,
+    environment: Callable[[], Awaitable[dict[str, str]]],
+) -> str | JsonObject:
+    """Spawn the shell and return its process id, or a spawn failure envelope."""
+    env = await environment()
+    try:
+        return await process_manager.spawn(
+            context.run_id,
+            context.agent_id,
+            argv,
+            project_id=context.project_id,
+            env=env,
+            cwd=workdir,
+            execution_owner=context.execution_owner,
+        )
+    except FileNotFoundError:
+        # The shell binary itself (pwsh/bash) was not found. This is not a
+        # user-command failure — it means the shell executable disappeared or
+        # PATH is stale. Re-probe the environment once in case PATH changed,
+        # then retry the spawn before giving up.
+        _LOGGER.info(
+            "Shell spawn failed with FileNotFoundError; refreshing shell "
+            "environment cache and retrying once.",
+        )
+        reset_shell_env_cache()
+        env = await environment()
+        try:
+            return await process_manager.spawn(
+                context.run_id,
+                context.agent_id,
+                argv,
+                project_id=context.project_id,
+                env=env,
+                cwd=workdir,
+                execution_owner=context.execution_owner,
+            )
+        except (OSError, ValueError) as error:
+            return tool_failure("process_spawn_failed", _spawn_failure_message(argv, error))
+    except (OSError, ValueError) as error:
+        return tool_failure("process_spawn_failed", _spawn_failure_message(argv, error))
+
+
+def _release_handoff_after_exit(
+    process_manager: ProcessManager,
+    context: ToolContext,
+    process_id: str,
+    handoff: UpdateHandoffGrant,
+) -> None:
+    """Keep the handoff token claimable exactly while the call's process may run."""
+    try:
+        wait_task = process_manager.get_process(
+            process_id, context.agent_id, project_id=context.project_id
+        ).wait_task
+    except ProcessNotFoundError:
+        wait_task = None
+    if wait_task is None or wait_task.done():
+        handoff.release()
+        return
+    wait_task.add_done_callback(lambda _task: handoff.release())
 
 
 def _register_user_cancel_callback(
@@ -897,6 +947,7 @@ __all__ = [
     "BASH_TOOL_DESCRIPTION",
     "BASH_TOOL_NAME",
     "BASH_TOOL_PARAMETERS",
+    "UpdateHandoffs",
     "bash_handler",
     "format_bash_env_usage",
     "project_bash_tool_definitions",

@@ -7,14 +7,25 @@ from pathlib import Path
 from typing import Any, cast
 
 from core.sessions import SessionAddress
-from core.tools._bash_update_handoff import read_update_handoff_ticket
+from core.tools._bash_update_handoff import (
+    CONTINUATION_DIRECTORY,
+    UpdateHandoffUnavailableError,
+    read_update_handoff_ticket,
+)
 from core.utils.atomic import atomic_write_text
+from core.utils.logging import get_logger
 from core.utils.server_control import is_authorized_control_token
 from server.rpc.dispatcher import RpcMethodHandler
-from server.rpc.errors import RPC_ERROR_ACTIVE_RUN, RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.errors import (
+    RPC_ERROR_ACTIVE_RUN,
+    RPC_ERROR_DOMAIN,
+    RPC_ERROR_INVALID_REQUEST,
+    RpcError,
+)
 from server.rpc.validation import _reject_unsupported, _required_string
 
 JsonObject = dict[str, Any]
+_LOGGER = get_logger("server.rpc.application")
 _OPERATION_ID_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 _CONTINUATION_PROMPT = (
     "A vBot update was requested from this Session. Inspect its saved result with "
@@ -72,6 +83,22 @@ def _verified_ticket(state: Any, ticket_id: str):
     return ticket, address
 
 
+async def _update_handoff_mint(state: Any, params: JsonObject) -> JsonObject:
+    # The live Bash token is the whole authorization; identity comes only from
+    # the server-side record of the Tool call that received it.
+    _reject_unsupported(params, {"handoff_token"}, "application.update_handoff_mint")
+    token = _required_string(params, "handoff_token")
+    try:
+        ticket = state.runtime.update_handoffs.mint(token)
+    except UpdateHandoffUnavailableError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    except OSError as exc:
+        # The error text names the ticket path, which is itself a capability.
+        _LOGGER.warning("Update handoff ticket could not be saved (%s)", type(exc).__name__)
+        raise RpcError(RPC_ERROR_DOMAIN, "update handoff ticket could not be saved") from exc
+    return {"handoff_ticket": str(ticket.path)}
+
+
 async def _maintenance_begin(state: Any, params: JsonObject) -> JsonObject:
     operation_id = _authorize(
         state,
@@ -127,8 +154,7 @@ async def _maintenance_end(state: Any, params: JsonObject) -> JsonObject:
 def _continuation_receipt_path(state: Any, operation_id: str) -> Path:
     return (
         Path(state.runtime.storage.data_dir).resolve()
-        / "runtime"
-        / "update-continuations"
+        / CONTINUATION_DIRECTORY
         / f"{operation_id}.json"
     )
 
@@ -218,6 +244,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "application.maintenance_status": _maintenance_status,
         "application.maintenance_end": _maintenance_end,
         "application.update_continuation": _update_continuation,
+        "application.update_handoff_mint": _update_handoff_mint,
     }
 
 

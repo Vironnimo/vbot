@@ -139,11 +139,13 @@ async def test_two_bash_calls_can_run_concurrently_by_default(
         *,
         trigger_service: Any | None = None,
         credential_resolver: Callable[[str], str] | None = None,
+        update_handoffs: Any | None = None,
     ) -> dict[str, Any]:
         nonlocal active_count, max_active_count
         assert process_manager is manager
         assert trigger_service is None
         assert credential_resolver is None
+        assert update_handoffs is None
         assert arguments["command"].startswith("download-")
         active_count += 1
         max_active_count = max(max_active_count, active_count)

@@ -84,6 +84,7 @@ from core.subagents import SubAgentCoordinator
 from core.tools import (
     ChangeTracker,
     FileReadState,
+    UpdateHandoffs,
     register_skill_manage_tool,
     register_skill_tool,
 )
@@ -166,6 +167,7 @@ class Runtime:
         self._memory_service: MemoryService | None = None
         self._file_state: FileReadState | None = None
         self._process_manager: ProcessManager | None = None
+        self._update_handoffs: UpdateHandoffs | None = None
         self._terminal_manager: TerminalManager | None = None
         self._skills: SkillRegistry | None = None
         self._skill_authoring: SkillAuthoringService | None = None
@@ -924,6 +926,10 @@ class Runtime:
 
     process_manager: _StartedService[ProcessManager] = _StartedService(
         lambda runtime: runtime._process_manager, "Process manager service not available"
+    )
+
+    update_handoffs: _StartedService[UpdateHandoffs] = _StartedService(
+        lambda runtime: runtime._update_handoffs, "Update handoff service not available"
     )
 
     terminal_manager: _StartedService[TerminalManager] = _StartedService(
