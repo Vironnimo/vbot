@@ -80,6 +80,7 @@ from core.skills.authoring import SkillAuthoringService
 from core.skills.policy import SkillPolicyService
 from core.skills.runtime import SkillRuntime
 from core.skills.skills import SkillMetadata, SkillRegistry
+from core.statistics import StatisticsIndex
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
 from core.tools import (
@@ -178,6 +179,7 @@ class Runtime:
         self._extensions: ExtensionRegistry | None = None
         self._extension_runtime: ExtensionRuntime | None = None
         self._chat_sessions: ChatSessionManager | None = None
+        self._statistics_index: StatisticsIndex | None = None
         self._projects: ProjectStore | None = None
         self._agent_resolver: AgentResolver | None = None
         self._temporary_agents: TemporaryAgentRegistry | None = None
@@ -241,6 +243,7 @@ class Runtime:
                 projects=self.projects,
                 agents=self.agents,
                 sessions=self.chat_sessions,
+                statistics_index=self.statistics_index,
                 tools=self.tools,
                 models=self.models,
                 provider_credentials=self.provider_credentials,
@@ -989,6 +992,10 @@ class Runtime:
 
     chat_sessions: _StartedService[ChatSessionManager] = _StartedService(
         lambda runtime: runtime._chat_sessions, "Chat session service not available"
+    )
+
+    statistics_index: _StartedService[StatisticsIndex] = _StartedService(
+        lambda runtime: runtime._statistics_index, "Statistics index is not available"
     )
 
     subagents: _StartedService[SubAgentCoordinator] = _StartedService(

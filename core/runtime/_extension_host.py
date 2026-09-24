@@ -32,7 +32,7 @@ from core.runtime.interfaces import (
 from core.sessions import ChatSessionManager
 from core.sessions.titles import SessionTitleService
 from core.skills.skills import SkillRegistry
-from core.statistics import StatisticsService
+from core.statistics import StatisticsIndex, StatisticsService
 from core.tools import (
     resolve_tool_access,
     tool_is_ready,
@@ -119,6 +119,7 @@ class ExtensionHostFactory:
         projects: ProjectStore,
         agents: AgentStore,
         sessions: ChatSessionManager,
+        statistics_index: StatisticsIndex,
         tools: ToolRegistry,
         models: ModelRegistry,
         provider_credentials: ProviderCredentialResolverProtocol,
@@ -141,6 +142,7 @@ class ExtensionHostFactory:
         self.projects = projects
         self.agents = agents
         self.chat_sessions = sessions
+        self._statistics_index = statistics_index
         self.tools = tools
         self.models = models
         self.provider_credentials = provider_credentials
@@ -315,6 +317,7 @@ class ExtensionHostFactory:
                 self.chat_sessions,
                 cast(Any, self.agents),
                 cast(Any, self.projects),
+                index=self._statistics_index,
             )
         return await self._statistics_service.group_usage(
             owner_name=owner_name,

@@ -226,17 +226,20 @@ async def test_group_usage_combines_peers_resumed_runs_and_rebuilds_exactly(tmp_
 
 
 @pytest.mark.asyncio
-async def test_group_usage_never_hydrates_unrelated_indexed_sessions(tmp_path, monkeypatch):
-    from core.statistics import index as index_module
+async def test_group_usage_never_loads_or_prunes_unrelated_indexed_sessions(tmp_path, monkeypatch):
+    import sqlite3
+
+    from core.sessions import ChatSession
     from core.statistics.index import StatisticsScope
 
     manager = ChatSessionManager(tmp_path)
     service = StatisticsService(manager, cast(AgentDirectory, _FakeAgents([])))
     unrelated = manager.create("outside")
     unrelated.append(_assistant(model="unrelated", at=BASE, usage={"input_tokens": 1000}))
-    service._index.snapshot(  # noqa: SLF001 - populate the shared disposable index
+    service._index.read(  # noqa: SLF001 - populate the shared disposable index
         manager,
-        (StatisticsScope(None, "outside", "outside", ({"id": unrelated.address.session_id},)),),
+        (StatisticsScope(None, "outside", "outside", ({"id": unrelated.id},)),),
+        lambda _view: None,
     )
     binding = manager.create_bound_temporary_session(
         SessionAddress(None, "temporary", "participant"),
@@ -249,17 +252,21 @@ async def test_group_usage_never_hydrates_unrelated_indexed_sessions(tmp_path, m
     await manager.record_run_owner_async(binding.address, run_id="owned", owner=owner)
     session = manager.get(binding.address).for_run("owned")
     session.append(_assistant(model="owned", at=BASE, usage={"input_tokens": 2}))
-    decoded = []
-    original = index_module._message_from_projection  # noqa: SLF001 - observe hydration boundary
+    loaded = []
+    original = ChatSession.load_since
 
-    def decode(payload, ordinal):
-        decoded.append(payload.get("model"))
-        return original(payload, ordinal)
+    def track_load_since(self, cursor=None):
+        loaded.append(self.id)
+        return original(self, cursor)
 
-    monkeypatch.setattr(index_module, "_message_from_projection", decode)
+    monkeypatch.setattr(ChatSession, "load_since", track_load_since)
     for expected in (2, 5):
         result = await service.group_usage(owner_name="swarm", group_id="group")
         assert result["usage"]["totals"]["measured_input_tokens"] == expected
-        assert "unrelated" not in decoded
         session.append(_assistant(model="owned", at=BASE, usage={"input_tokens": 3}))
-    assert decoded
+    assert loaded
+    assert unrelated.id not in loaded
+    index_path = tmp_path / "statistics" / "session-statistics.sqlite"
+    with sqlite3.connect(index_path) as connection:
+        indexed = {row[0] for row in connection.execute("SELECT session_id FROM stat_sessions")}
+    assert unrelated.id in indexed

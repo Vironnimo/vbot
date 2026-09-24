@@ -9,7 +9,8 @@ import pytest
 from core.chat import ChatMessage
 from core.chat.errors import ChatSessionError
 from core.chat.messages import ToolCall
-from core.runs import ChatRunManager
+from core.runs import ChatRunManager, RunAdmission, RunKind
+from core.sessions import SESSION_RUN_KINDS_META_KEY
 from tests.core.sessions.sessions_test_support import manager as manager
 
 
@@ -62,6 +63,31 @@ async def test_completion_commits_entities_before_publishing_terminal_event(mana
     assert snapshot.runs[0]["complete"] is True
     assert session.load_run_result(run_id=run.id).assistant.content == "done"
     await runs.aclose()
+
+
+@pytest.mark.asyncio
+async def test_run_admission_records_its_run_kind_in_the_same_transaction(manager, monkeypatch):
+    session = manager.create("coder")
+    runs = ChatRunManager(persistence=manager)
+    writes = 0
+    execute_write = manager._store._execute_write
+
+    def counting_write(*args, **kwargs):
+        nonlocal writes
+        writes += 1
+        return execute_write(*args, **kwargs)
+
+    monkeypatch.setattr(manager._store, "_execute_write", counting_write)
+
+    async def execute(run):
+        assert writes == 1
+        assert manager.get_metadata(session.address)[SESSION_RUN_KINDS_META_KEY] == ["cron"]
+        return None
+
+    run = await runs.start(session.address, execute, admission=RunAdmission(run_kind=RunKind.CRON))
+    await run.wait()
+
+    assert manager.get_metadata(session.address)[SESSION_RUN_KINDS_META_KEY] == ["cron"]
 
 
 def test_restart_settles_run_and_unfinished_calls_once(manager):

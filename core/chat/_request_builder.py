@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Sequence
-from dataclasses import replace
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -159,6 +159,14 @@ SKILL_AVAILABLE_NEW_SKILLS_HEADER = (
 )
 
 
+@dataclass(frozen=True)
+class _SkillAnnouncement:
+    """A newly-available-Skill note and the seen-Skill baseline change it commits with."""
+
+    note: str | None = None
+    record_seen: Callable[[JsonObject], None] | None = None
+
+
 class RequestBuilder:
     """Build Chat requests from canonical history, pinned prompts and Model routes."""
 
@@ -263,57 +271,59 @@ class RequestBuilder:
         allowed = ["*"] if allowed_skills is None else allowed_skills
         return sorted(str(skill.name) for skill in filter_allowed(allowed))
 
-    def _announce_newly_available_skills(
+    def _plan_skill_announcement(
         self,
-        agent_id: str,
-        session_id: str,
-        session: ChatSession,
+        address: SessionAddress,
         agent: Any,
         skill_registry: SkillRegistry,
-        project_id: str | None,
-    ) -> None:
-        """Tell the model about Skills that became available during this prompt epoch.
+    ) -> _SkillAnnouncement:
+        """Plan the note for Skills that became available during this prompt epoch.
 
         The Session's ``<available_skills>`` block stays pinned between Compactions,
-        so a Skill that becomes available mid-epoch does not change the prompt. This
-        appends a one-time ``<system-reminder>`` note for each newly available+allowed
-        Skill, leaving the cached prefix untouched. Additions only — a Skill that
+        so a Skill that becomes available mid-epoch does not change the prompt. The
+        plan is a one-time ``<system-reminder>`` note for each newly available+allowed
+        Skill, leaving the cached prefix untouched. Additions only - a Skill that
         becomes unavailable is not announced. The first Run and every successful
         Compaction seed the baseline from the catalog without announcing it. The diff
         uses the registry already resolved for this Run, so it is an in-memory set
-        comparison rather than another scan.
+        comparison against one stored value rather than another scan.
+
+        Nothing is written here: the caller commits ``record_seen`` in the same
+        transaction as the note, so a Skill is marked seen exactly when its
+        announcement persists.
         """
         # Minimal/degraded skill registries (e.g. some test doubles) may not expose
         # ``filter_allowed``; the announcement is an optional enhancement, so skip it
-        # cleanly rather than break the run — the real ``SkillRegistry`` always has it.
+        # cleanly rather than break the run - the real ``SkillRegistry`` always has it.
         available_names = self.available_skill_names(agent, skill_registry)
         if available_names is None:
-            return
+            return _SkillAnnouncement()
         allowed_skills = getattr(agent, "allowed_skills", None)
         allowed = ["*"] if allowed_skills is None else allowed_skills
         available = {
             str(skill.name): str(skill.description)
             for skill in skill_registry.filter_allowed(allowed)
         }
-        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
-        new_names: list[str] = []
+        seen = self._dependencies.sessions.metadata_value(address, SEEN_SKILLS_META_KEY)
+        new_names = sorted(set(available) - set(seen)) if isinstance(seen, list) else []
 
-        def update(metadata: JsonObject) -> None:
-            nonlocal new_names
-            seen = metadata.get(SEEN_SKILLS_META_KEY)
-            if not isinstance(seen, list):
+        def record_seen(metadata: JsonObject) -> None:
+            current = metadata.get(SEEN_SKILLS_META_KEY)
+            if not isinstance(current, list):
                 metadata[SEEN_SKILLS_META_KEY] = available_names
-                return
-            new_names = sorted(set(available) - set(seen))
-            if new_names:
-                metadata[SEEN_SKILLS_META_KEY] = sorted(set(seen) | set(new_names))
+            elif new_names:
+                metadata[SEEN_SKILLS_META_KEY] = sorted(set(current) | set(new_names))
 
-        self._dependencies.sessions.mutate_metadata(address, update)
+        if not isinstance(seen, list):
+            return _SkillAnnouncement(record_seen=record_seen)
         if not new_names:
-            return
+            return _SkillAnnouncement()
         lines = [SKILL_AVAILABLE_NEW_SKILLS_HEADER]
         lines.extend(f"- {name}: {available[name]}" for name in new_names)
-        session.add_note(SKILL_AVAILABLE_NOTE_PREFIX + "\n".join(lines))
+        return _SkillAnnouncement(
+            note=SKILL_AVAILABLE_NOTE_PREFIX + "\n".join(lines),
+            record_seen=record_seen,
+        )
 
     async def _build_request_messages(
         self,
