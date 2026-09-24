@@ -17,7 +17,7 @@ import pytest
 import respx
 
 from core.providers._http_shared import classify_http_status, post_json_with_retry
-from core.providers.errors import ProviderAuthError
+from core.providers.errors import ProviderAuthError, ProviderError
 from core.providers.providers import AuthConfig, OAuthConfig
 from core.providers.token_getter import (
     OAuthRequestRecovery,
@@ -30,6 +30,7 @@ from tests.core.providers.token_getter_helpers import (
     CONNECTION_ID,
     PROVIDER_ID,
     TOKEN_EXCHANGE_URL,
+    XAI_TOKEN_URL,
     _minimax_oauth_config,
     _nous_oauth_config,
     _opencode_oauth_config,
@@ -304,6 +305,42 @@ async def test_oauth_token_getter_refreshes_expired_token_with_exchange_url(
         assert stored.expires_at > datetime.now(UTC)
     assert stored.extra["github_oauth_token"] == "github-oauth-secret"
     assert stored.extra["copilot_api_endpoint"] == ("https://api.enterprise.githubcopilot.com")
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flow", ["copilot-exchange", "openai-refresh", "xai-rotating-refresh"])
+async def test_malformed_token_endpoint_json_is_fatal_provider_error_and_keeps_token(
+    tmp_path: Path, oauth_config: OAuthConfig, flow: str
+) -> None:
+    """A non-JSON 2xx token reply is malformed output, not an auth rejection."""
+
+    token_store = TokenStore(tmp_path)
+    original = OAuthToken(
+        access_token="expired-access",
+        refresh_token=None if flow == "copilot-exchange" else "still-valid-refresh",
+        expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        extra={"github_oauth_token": "github-oauth-secret"} if flow == "copilot-exchange" else {},
+    )
+    token_store.save(PROVIDER_ID, CONNECTION_ID, original)
+    malformed = httpx.Response(200, text="<html>captive portal</html>")
+    if flow == "copilot-exchange":
+        config, route = oauth_config, respx.get(TOKEN_EXCHANGE_URL).mock(return_value=malformed)
+    elif flow == "openai-refresh":
+        config = _openai_oauth_config()
+        route = respx.post(OPENAI_TOKEN_URL).mock(return_value=malformed)
+    else:
+        config, route = _xai_oauth_config(), respx.post(XAI_TOKEN_URL).mock(return_value=malformed)
+    getter = OAuthTokenGetter(token_store, PROVIDER_ID, CONNECTION_ID, config)
+
+    with pytest.raises(ProviderError, match="malformed JSON") as exc_info:
+        await getter()
+
+    assert not isinstance(exc_info.value, ProviderAuthError)
+    assert exc_info.value.retryable is False
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert route.call_count == 1
+    assert token_store.load(PROVIDER_ID, CONNECTION_ID) == original
 
 
 @respx.mock

@@ -154,10 +154,10 @@ class _BrokenLineIterator:
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> str:
+    async def __anext__(self) -> bytes:
         if not self._emitted_first_line:
             self._emitted_first_line = True
-            return self._first_line
+            return f"{self._first_line}\n".encode()
         raise self._error
 
 
@@ -168,7 +168,7 @@ class _BrokenStreamResponse:
         self._iterator = _BrokenLineIterator(first_line, error)
         self.closed = False
 
-    def aiter_lines(self):
+    def aiter_bytes(self):
         return self._iterator
 
     async def aclose(self) -> None:

@@ -10,7 +10,7 @@ import httpx
 import pytest
 import respx
 
-from core.providers.errors import ProviderAuthError, ProviderError
+from core.providers.errors import NetworkError, ProviderAuthError, ProviderError
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OPENCODE_SESSION_HEADER, OpenCodeGoAdapter
 from core.utils.retry import MAX_RETRIES, RetryNotice, caller_owns_retries, observe_retries
@@ -247,3 +247,32 @@ def test_other_compatible_providers_keep_the_shared_403_policy(
             response_headers=httpx.Headers(),
         )
     assert failure.value.retryable is False
+
+
+class _InterruptedErrorBody(httpx.AsyncByteStream):
+    closed = False
+
+    async def __aiter__(self):
+        yield b'{"error":'
+        raise httpx.ReadError("body interrupted")
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_responses_error_body_read_failure_is_retryable_network_error_and_closes(
+    opencode_go_adapter: OpenCodeGoAdapter,
+) -> None:
+    body = _InterruptedErrorBody()
+    respx.post(OPENCODE_GO_RESPONSES_URL).mock(return_value=httpx.Response(503, stream=body))
+
+    with caller_owns_retries(), pytest.raises(NetworkError) as caught:
+        async for _ in opencode_go_adapter.stream(
+            [{"role": "user", "content": "hello"}], model_id="gpt-5.6-luna"
+        ):
+            pass
+
+    assert caught.value.retryable is True
+    assert body.closed

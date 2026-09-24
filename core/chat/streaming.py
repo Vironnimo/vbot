@@ -409,13 +409,16 @@ class _ToolCallFragments:
         if provider_id is not None:
             self.provider_id = provider_id
 
-    def append(self, *, name_delta: str, arguments_delta: str) -> tuple[str, str]:
-        self.name_text, normalized_name_delta = _merge_stream_fragment(self.name_text, name_delta)
-        self.arguments_text, normalized_arguments_delta = _merge_stream_fragment(
-            self.arguments_text,
-            arguments_delta,
-        )
-        return normalized_name_delta, normalized_arguments_delta
+    def append(self, *, name_delta: str, arguments_delta: str) -> None:
+        """Append true deltas verbatim.
+
+        Adapters own wire snapshots and emit only unseen suffixes. Repeated or
+        prefix-overlapping bytes are therefore meaningful content, including
+        a second identical top-level argument value that finalization expands
+        into a sibling Call.
+        """
+        self.name_text += name_delta
+        self.arguments_text += arguments_delta
 
     def to_tool_calls(self) -> list[JsonObject]:
         return normalize_tool_call_candidates(
@@ -609,12 +612,7 @@ class StreamingAccumulator:
         fragments.accept_provider_id(provider_id)
         if not name_delta and not arguments_delta:
             return None
-        name_delta, arguments_delta = fragments.append(
-            name_delta=name_delta,
-            arguments_delta=arguments_delta,
-        )
-        if not name_delta and not arguments_delta:
-            return None
+        fragments.append(name_delta=name_delta, arguments_delta=arguments_delta)
 
         # Tool-call deltas are transient. Before an index-based wire supplies its
         # real id, this field is only a stable display correlation handle; the
@@ -785,17 +783,6 @@ def _joined_or_none(parts: list[str]) -> str | None:
     if not parts:
         return None
     return "".join(parts)
-
-
-def _merge_stream_fragment(existing: str, delta: str) -> tuple[str, str]:
-    if not delta:
-        return existing, ""
-    if not existing:
-        return delta, delta
-    if delta.startswith(existing):
-        suffix = delta[len(existing) :]
-        return delta, suffix
-    return existing + delta, delta
 
 
 async def _close_async_iterator(iterator: AsyncIterator[JsonObject]) -> None:

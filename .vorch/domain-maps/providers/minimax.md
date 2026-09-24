@@ -42,7 +42,7 @@ MiniMax owns three Connections behind one Adapter: global and China API/Token Pl
 
 - MiniMax's browser login is a provider-specific Device Flow selected by `oauth.device_flow: "minimax_oauth"`: authorization posts PKCE S256 plus state to `/oauth/code`, validates the echoed state, then polls `/oauth/token` with the `user_code` grant and verifier.
 - MiniMax's `expired_in` is ambiguous in practice: it may be TTL seconds or an absolute Unix-millisecond timestamp. `resolve_minimax_oauth_expiry()` handles both for initial exchange and refresh.
-- Access tokens are refreshed through the standard `refresh_token` grant on every request when expiring. A terminal refresh failure deletes the dead MiniMax token so subsequent requests require reconnect instead of replaying a rotated/revoked refresh token; transient Provider failures retain it.
+- Access tokens are refreshed through the standard `refresh_token` grant on every request when expiring; the refresh POST is never replayed automatically. A terminal refresh failure deletes the dead MiniMax token so subsequent requests require reconnect instead of replaying a rotated/revoked refresh token; transient Provider failures retain it.
 - PKCE verifiers stay in `DeviceFlowEngine` memory, keyed by Provider/Connection/Account/user code, and are removed on completion, cancellation, supersession, or engine close.
 
 ## Usage Probe (`token_plan/remains`)

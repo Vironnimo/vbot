@@ -7,6 +7,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from core.providers._http_shared import split_stream_lines
 from core.providers._responses_output import (
     _assistant_phase_from_output,
     _extract_output_text_parts,
@@ -33,15 +34,8 @@ from core.providers.adapter import (
     normalize_tool_call_candidates,
 )
 from core.providers.errors import (
-    IN_BAND_AUTH_ERROR_CODES,
-    IN_BAND_RATE_LIMIT_ERROR_CODES,
-    IN_BAND_RETRYABLE_NUMERIC_CODES,
-    IN_BAND_TIMEOUT_ERROR_CODES,
-    IN_BAND_TRANSIENT_ERROR_CODES,
-    ProviderAuthError,
     ProviderError,
-    ProviderRateLimitError,
-    ProviderTimeoutError,
+    classify_in_band_error_type,
     classify_in_band_provider_error,
 )
 from core.providers.reasoning import merge_reasoning_meta
@@ -164,8 +158,7 @@ def _iter_sse_events(lines: Iterable[str]) -> Iterator[tuple[str, Mapping[str, A
     event_name = ""
     data_parts: list[str] = []
     for raw_chunk in lines:
-        for raw_line in raw_chunk.splitlines():
-            line = raw_line.rstrip("\r\n")
+        for line in split_stream_lines(raw_chunk):
             if not line:
                 yield from _flush_sse_event(event_name, data_parts)
                 event_name = ""
@@ -603,18 +596,11 @@ def _classify_responses_stream_error(
             }
         return classify_in_band_provider_error(router_error, lenient_unknown=True)
 
-    if classifier in IN_BAND_AUTH_ERROR_CODES or numeric_code in {401, 403}:
-        return ProviderAuthError(message)
-    if classifier in IN_BAND_RATE_LIMIT_ERROR_CODES or numeric_code == 429:
-        return ProviderRateLimitError(message)
-    if classifier in IN_BAND_TIMEOUT_ERROR_CODES or numeric_code == 504:
-        return ProviderTimeoutError(message)
-    if (
-        classifier in IN_BAND_TRANSIENT_ERROR_CODES
-        or numeric_code in IN_BAND_RETRYABLE_NUMERIC_CODES
-    ):
-        return ProviderError(message, retryable=True)
-    return ProviderError(message, retryable=False)
+    return classify_in_band_error_type(
+        message,
+        classifier=classifier,
+        numeric_code=numeric_code,
+    )
 
 
 def _responses_error_payload(event_data: Mapping[str, Any]) -> Mapping[str, Any]:
