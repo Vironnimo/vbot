@@ -244,18 +244,7 @@ class ChatSessionManager:
     def record_run_kind(self, address: SessionAddress, run_kind: RunKind) -> None:
         if not isinstance(run_kind, RunKind):
             raise ChatSessionError("run kind must be a RunKind")
-
-        def update(metadata: JsonObject) -> None:
-            values = metadata.get(SESSION_RUN_KINDS_META_KEY, [])
-            if not isinstance(values, list) or not all(
-                isinstance(value, str) and value in {kind.value for kind in RunKind}
-                for value in values
-            ):
-                raise ChatSessionError("session run_kinds metadata is invalid")
-            if run_kind.value not in values:
-                metadata[SESSION_RUN_KINDS_META_KEY] = [*values, run_kind.value]
-
-        self._store.mutate_metadata(address, update)
+        self._store.mutate_metadata(address, lambda metadata: _append_run_kind(metadata, run_kind))
 
     def recover_interrupted_runs(self) -> None:
         self._store.recover_interrupted_runs()
@@ -332,14 +321,9 @@ class ChatSessionManager:
 
     def set_title(self, address: SessionAddress, title: str) -> str | None:
         normalized = _normalize_session_title(title)
-
-        def update(metadata: JsonObject) -> None:
-            if normalized is None:
-                metadata.pop(SESSION_TITLE_KEY, None)
-            else:
-                metadata[SESSION_TITLE_KEY] = normalized
-
-        previous_metadata, _updated = self._store.mutate_metadata(address, update)
+        previous_metadata, _updated = self._store.mutate_metadata(
+            address, lambda metadata: _set_title(metadata, normalized)
+        )
         previous = previous_metadata.get(SESSION_TITLE_KEY)
         if previous != normalized:
             self._notify_callbacks(self._title_changed_callbacks, address)
@@ -946,17 +930,30 @@ class ChatSessionManager:
         target_agent_id: str | None = None,
         target_project_id: str | None = None,
         strip_meta_keys: frozenset[str] = frozenset(),
+        title: str | None = None,
+        run_kind: RunKind | None = None,
     ) -> ChatSession:
+        """Copy a Session into a new generation in one write transaction.
+
+        ``title`` replaces the inherited title and ``run_kind`` classifies the
+        fork before its first Run, so a background fork never appears with the
+        source's identity in a Session list.
+        """
         _validate_session_id(source.session_id)
         async with self.write_lock(source):
-            return await _run_session_io(
+            fork = await _run_session_io(
                 self._fork,
                 source,
                 target_agent_id or source.agent_id,
                 target_project_id,
                 strip_meta_keys,
                 target_agent_id is not None,
+                title,
+                run_kind,
             )
+        if title is not None:
+            self._notify_callbacks(self._title_changed_callbacks, fork.address)
+        return fork
 
     def _fork(
         self,
@@ -965,8 +962,13 @@ class ChatSessionManager:
         target_project_id: str | None,
         strip_meta_keys: frozenset[str],
         target_explicit: bool,
+        title: str | None = None,
+        run_kind: RunKind | None = None,
     ) -> ChatSession:
         _validate_agent_id(target_agent_id)
+        normalized_title = None if title is None else _normalize_session_title(title)
+        if run_kind is not None and not isinstance(run_kind, RunKind):
+            raise ChatSessionError("run kind must be a RunKind")
         same_scope = target_agent_id == source.agent_id and target_project_id == source.project_id
         target = SessionAddress(target_project_id, target_agent_id, "")
         cross_scope_affinity_id = None if same_scope else _new_prompt_cache_affinity_id()
@@ -993,6 +995,10 @@ class ChatSessionManager:
                 "forked_at": forked_at,
                 "message_count": message_count,
             }
+            if title is not None:
+                _set_title(metadata, normalized_title)
+            if run_kind is not None:
+                _append_run_kind(metadata, run_kind)
 
         target = self._store.fork(
             source,
@@ -1068,6 +1074,23 @@ class ChatSessionManager:
                 callback(address)
             except Exception:
                 logging.getLogger(__name__).exception("Session callback failed")
+
+
+def _set_title(metadata: JsonObject, normalized: str | None) -> None:
+    if normalized is None:
+        metadata.pop(SESSION_TITLE_KEY, None)
+    else:
+        metadata[SESSION_TITLE_KEY] = normalized
+
+
+def _append_run_kind(metadata: JsonObject, run_kind: RunKind) -> None:
+    values = metadata.get(SESSION_RUN_KINDS_META_KEY, [])
+    if not isinstance(values, list) or not all(
+        isinstance(value, str) and value in {kind.value for kind in RunKind} for value in values
+    ):
+        raise ChatSessionError("session run_kinds metadata is invalid")
+    if run_kind.value not in values:
+        metadata[SESSION_RUN_KINDS_META_KEY] = [*values, run_kind.value]
 
 
 def _owned_run_record(row: Any) -> OwnedRunRecord:

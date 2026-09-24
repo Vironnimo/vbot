@@ -234,7 +234,7 @@ async def test_queued_run_keeps_agent_activity_projection_policy_when_drained() 
     item = await manager.enqueue(
         SessionAddress(project_id=None, agent_id="coder", session_id="session-one"),
         queued_execute,
-        admission=RunAdmission(contributes_to_agent_activity=False),
+        admission=RunAdmission(contributes_to_agent_activity=False, source_session_id="source"),
     )
 
     assert item.admission.contributes_to_agent_activity is False
@@ -244,6 +244,7 @@ async def test_queued_run_keeps_agent_activity_projection_policy_when_drained() 
     queued_run = await asyncio.wait_for(item.future, timeout=1)
     assert await queued_run.wait() == "queued"
     assert queued_run.contributes_to_agent_activity is False
+    assert queued_run.source_session_id == "source"
     assert all(event.contributes_to_agent_activity is False for event in queued_run.events)
 
 

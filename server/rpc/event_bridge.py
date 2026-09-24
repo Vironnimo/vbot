@@ -37,9 +37,7 @@ from core.runs import (
     QueuedRunItem,
     Run,
     RunEvent,
-    RunKind,
 )
-from core.sessions import SessionAddress
 from core.subagents import (
     SUBAGENT_SESSION_STARTED_EVENT,
     SUBAGENT_STATUS_CHANGED_EVENT,
@@ -66,46 +64,6 @@ DEFAULT_BRIDGED_RUN_RETENTION_LIMIT = 1024
 
 # Public payload field carrying the Session a background review fork reviews.
 RUN_SOURCE_SESSION_FIELD = "source_session_id"
-# Reflection Runs execute in a same-Agent fork; only these kinds carry source
-# provenance worth resolving for accessors.
-REFLECTION_RUN_KIND_VALUES = frozenset(
-    kind.value for kind in (RunKind.REFLECTION, RunKind.MEMORY_REFLECTION, RunKind.SKILL_REFLECTION)
-)
-
-
-def reflection_source_session_id(sessions: Any, run: Run) -> str:
-    """Resolve the source Session a reflection review fork belongs to.
-
-    The fork's metadata sidecar self-describes its origin through the
-    ``fork_source`` provenance key written by the Session fork; accessors need
-    that link to project the running or finished review onto its originating
-    Session. Non-reflection Runs, missing session storage, and unreadable
-    provenance yield an empty string so payloads stay unchanged.
-    """
-    if run.run_kind.value not in REFLECTION_RUN_KIND_VALUES:
-        return ""
-    if sessions is None or not callable(getattr(sessions, "get_metadata", None)):
-        return ""
-    try:
-        metadata = sessions.get_metadata(
-            SessionAddress(
-                project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
-            )
-        )
-    except Exception:
-        _LOGGER.warning(
-            "Reflection fork provenance unavailable",
-            exc_info=True,
-            extra={"session_id": run.session_id},
-        )
-        return ""
-    fork_source = metadata.get("fork_source") if isinstance(metadata, dict) else None
-    if not isinstance(fork_source, dict):
-        return ""
-    source_session_id = fork_source.get("session_id")
-    if isinstance(source_session_id, str) and source_session_id:
-        return source_session_id
-    return ""
 
 
 def _bridge_run_to_event_bus(state: Any, run: Run) -> None:
@@ -120,9 +78,6 @@ def _bridge_run_to_event_bus(state: Any, run: Run) -> None:
             event_bus,
             run,
             file_delivery=getattr(state, "file_delivery", None),
-            source_session_id=reflection_source_session_id(
-                getattr(getattr(state, "runtime", None), "chat_sessions", None), run
-            ),
         )
     )
     task.add_done_callback(_on_run_event_bridge_done)
@@ -257,8 +212,9 @@ async def _publish_run_events(
     run: Run,
     *,
     file_delivery: Any | None = None,
-    source_session_id: str = "",
 ) -> None:
+    # A review Run carries the Session it examines; stamping it needs no read.
+    source_session_id = run.source_session_id or ""
     async for event in run.subscribe():
         if event.type in RUN_DELTA_EVENT_TYPES:
             continue

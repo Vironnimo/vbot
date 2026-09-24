@@ -29,8 +29,11 @@ async def test_reflections_restore_running_and_durable_reviews(tmp_path: Path) -
     state = make_state(tmp_path, StubAdapter())
     sessions = state.runtime.chat_sessions
     source = sessions.create("coder", session_id="source")
-    fork = await sessions.fork(source.address, strip_meta_keys=SESSION_FORK_ALWAYS_STRIP_META_KEYS)
-    sessions.record_run_kind(fork.address, RunKind.SKILL_REFLECTION)
+    fork = await sessions.fork(
+        source.address,
+        strip_meta_keys=SESSION_FORK_ALWAYS_STRIP_META_KEYS,
+        run_kind=RunKind.SKILL_REFLECTION,
+    )
     release = asyncio.Event()
 
     async def execute(run):
@@ -41,7 +44,9 @@ async def test_reflections_restore_running_and_durable_reviews(tmp_path: Path) -
         fork.address,
         execute,
         admission=RunAdmission(
-            run_kind=RunKind.SKILL_REFLECTION, contributes_to_agent_activity=False
+            run_kind=RunKind.SKILL_REFLECTION,
+            contributes_to_agent_activity=False,
+            source_session_id=source.id,
         ),
     )
     try:
