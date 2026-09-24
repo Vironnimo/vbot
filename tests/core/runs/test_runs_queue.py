@@ -530,6 +530,49 @@ async def test_queue_drain_skips_future_cancelled_in_same_tick() -> None:
     assert manager.list_queued("coder", "session-one", project_id=None) == []
 
 
+async def test_unexpected_drain_failure_resolves_item_and_keeps_draining(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    broken_work_id = "broken"
+
+    def admission_validator(_address: SessionAddress, admission: RunAdmission) -> None:
+        if admission.work_id == broken_work_id and active_release.is_set():
+            raise RuntimeError("validator exploded")
+
+    manager = ChatRunManager(admission_validator=admission_validator)
+    active_release = asyncio.Event()
+    address = SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+
+    async def active_execute(_run: Run) -> str:
+        await active_release.wait()
+        return "active"
+
+    async def queued_execute(_run: Run) -> str:
+        return "queued"
+
+    active_run = await manager.start(address, active_execute)
+    broken_item = await manager.enqueue(
+        address,
+        queued_execute,
+        admission=RunAdmission(work_id=broken_work_id),
+    )
+    healthy_item = await manager.enqueue(address, queued_execute)
+
+    with caplog.at_level(logging.ERROR, logger="vbot.runs"):
+        active_release.set()
+        assert await active_run.wait() == "active"
+        await asyncio.sleep(0)
+
+    with pytest.raises(RuntimeError, match="validator exploded"):
+        broken_item.future.result()
+    healthy_run = await asyncio.wait_for(healthy_item.future, 1)
+    assert await healthy_run.wait() == "queued"
+    assert manager.list_queued("coder", "session-one", project_id=None) == []
+    assert any(
+        record.levelno == logging.ERROR and record.exc_info is not None for record in caplog.records
+    )
+
+
 async def test_update_queued_item_replaces_executor_and_display_content() -> None:
     manager = ChatRunManager()
     active_release = asyncio.Event()
