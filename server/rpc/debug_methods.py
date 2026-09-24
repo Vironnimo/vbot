@@ -23,12 +23,17 @@ import httpx
 
 from core.debug import DebugTraceStore, InvalidTraceIdError
 from core.debug.redaction import redact_headers, redact_url
+from core.models.discovery import build_discovery_request
 from server.events import RESOURCE_KIND_DEBUG_TRACES
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.event_bridge import publish_resource_changed
-from server.rpc.provider_access import _provider_connection
+from server.rpc.provider_access import (
+    _connection_models_endpoint,
+    _discovery_credential,
+    _provider_connection,
+)
 from server.rpc.validation import _reject_unsupported, _required_string
 
 JsonObject = dict[str, Any]
@@ -52,30 +57,6 @@ def _make_debug_store(runtime: Any) -> DebugTraceStore:
     debug_settings = runtime.storage.load_debug_settings()
     trace_limit = debug_settings.get("trace_limit", 50)
     return DebugTraceStore(runtime.storage.data_dir, trace_limit=trace_limit)
-
-
-async def _resolve_connection_credential(
-    runtime: Any,
-    provider_id: str,
-    connection_id: str,
-    connection: Any,
-) -> str:
-    """Resolve the credential value for a single provider connection.
-
-    Handles both API-key and OAuth connection types, raising on
-    missing configuration or unavailable token stores.
-    """
-    if getattr(connection, "type", "") != "oauth" or getattr(connection, "oauth", None) is None:
-        return str(runtime.provider_credentials.get_credentials(provider_id, connection_id))
-
-    from core.providers.token_getter import OAuthTokenGetter
-
-    token_store = getattr(runtime, "token_store", None)
-    if token_store is None:
-        raise RpcError(RPC_ERROR_DOMAIN, "OAuth token store is not available")
-    getter = OAuthTokenGetter(token_store, provider_id, connection.id, connection.oauth)
-    async with getter:
-        return await getter()
 
 
 def _save_model_probe_trace(
@@ -260,10 +241,12 @@ def _debug_trace_clear(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _debug_model_probe(state: Any, params: JsonObject) -> JsonObject:
-    """Fetch a provider's ``models_endpoint`` and return raw + normalized preview.
+    """Fetch a Connection's catalog endpoint and return raw + normalized preview.
 
-    Requires ``debug.enabled`` to be ``true``.  Does **not** write
-    ``resources/models/*.json`` or reload the model registry.
+    Requires ``debug.enabled`` to be ``true``.  Sends the primary catalog
+    request exactly as Model discovery would (effective Connection endpoint,
+    Adapter discovery parameters/headers, discovery credential) but does
+    **not** write ``resources/models/*.json`` or reload the model registry.
 
     Stores the probe result as a ``model_probe`` type trace.
     """
@@ -279,29 +262,30 @@ async def _debug_model_probe(state: Any, params: JsonObject) -> JsonObject:
     except KeyError as exc:
         raise RpcError(RPC_ERROR_DOMAIN, f"unknown provider: {provider_id}") from exc
 
-    models_endpoint = getattr(provider, "models_endpoint", None)
-    if not models_endpoint:
-        raise RpcError(
-            RPC_ERROR_DOMAIN,
-            f"provider '{provider_id}' does not support model probing",
-        )
-
     try:
         connection = _provider_connection(runtime, provider_id, connection_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
-    url = f"{provider.base_url.rstrip('/')}/{models_endpoint.lstrip('/')}"
-    headers = dict(provider.extra_headers or {})
+    if not _connection_models_endpoint(connection, provider):
+        raise RpcError(
+            RPC_ERROR_DOMAIN,
+            f"provider connection '{connection_id}' does not support model probing",
+        )
 
     try:
-        credential_value = await _resolve_connection_credential(
-            runtime, provider_id, connection_id, connection
-        )
+        async with _discovery_credential(runtime, provider_id, connection_id, connection) as (
+            discovery_connection,
+            credential,
+        ):
+            discovery_request = await build_discovery_request(provider, discovery_connection)
+            credential_value = credential if isinstance(credential, str) else await credential()
+            headers = discovery_request.headers(credential_value)
+    except ValueError as exc:
+        raise RpcError(RPC_ERROR_DOMAIN, str(exc)) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-
-    headers[connection.auth.header] = f"{connection.auth.prefix}{credential_value}"
+    url = discovery_request.url
 
     trace_id = uuid4().hex
     start_time = time.monotonic()

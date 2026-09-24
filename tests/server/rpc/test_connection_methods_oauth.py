@@ -106,8 +106,11 @@ class StubProviderCredentials:
             return "api-key-secret"
         raise KeyError(connection_id)
 
-    def resolve_account_id(self, provider_id: str, connection_id: str) -> str:
+    def resolve_account_id(
+        self, provider_id: str, connection_id: str, account_id: str | None = None
+    ) -> str:
         assert f"{provider_id}:{connection_id}" in self._usable_connection_ids
+        assert account_id is None
         return "default"
 
 
