@@ -220,8 +220,9 @@ function anchorInViewport(anchor) {
 /**
  * Shared lifecycle of one open floating layer. `show()` positions the element
  * against its anchor and registers the layer, closing competing layers (see
- * the coordination rule above). While open, the layer follows scrolling and
- * resizing (dismissed once its anchor leaves the viewport) and is dismissed
+ * the coordination rule above). While open, the layer follows scrolling,
+ * viewport resizing (dismissed once its anchor leaves the viewport) and
+ * changes of its own size (content that grows while shown), and is dismissed
  * by an outside press or Escape. `anchor`/`element` return the current nodes;
  * `onDismiss()` must close the owner's state and call `hide()`.
  * `onEscape(event)` defaults to `onDismiss`; an owner consumes Escape with
@@ -237,6 +238,7 @@ export function createFloatingLayer({
 }) {
   let pinned = false;
   let following = false;
+  let sizeObserver = null;
   const layer = {
     kind,
     get pinned() {
@@ -306,6 +308,12 @@ export function createFloatingLayer({
         window.addEventListener('scroll', onScroll, true);
         window.addEventListener('resize', follow);
         window.addEventListener('pointerdown', onPointerDown, true);
+        // Content can change while the layer is shown (a card gaining a row
+        // during a Run); keep it anchored instead of growing over the anchor.
+        if (typeof ResizeObserver === 'function') {
+          sizeObserver = new ResizeObserver(() => position());
+          sizeObserver.observe(element());
+        }
       }
     },
     position,
@@ -316,6 +324,8 @@ export function createFloatingLayer({
         window.removeEventListener('scroll', onScroll, true);
         window.removeEventListener('resize', follow);
         window.removeEventListener('pointerdown', onPointerDown, true);
+        sizeObserver?.disconnect();
+        sizeObserver = null;
       }
       unregisterOpenLayer(layer);
     },
