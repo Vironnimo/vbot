@@ -81,6 +81,8 @@ def test_report_counts_owner_managed_sessions_under_their_extension(tmp_path: Pa
     assert set(agents) == {"main", "extension:swarm"}
     assert agents["extension:swarm"]["sessions"] == 2
     assert agents["extension:swarm"]["runs"] == 2
+    assert report["overview"]["total_agents"] == 1
+    assert report["overview"]["total_sessions"] == 3
     assert report["overview"]["total_runs"] == 3
     assert report["usage"]["totals"]["measured_input_tokens"] == 21
     assert report["tools"]["by_agent"] == [{"key": "extension:swarm", "count": 2}]
