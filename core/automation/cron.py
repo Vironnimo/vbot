@@ -38,6 +38,7 @@ from core.automation._cron_jobs import (
     MIN_INTERVAL_SECONDS,
     TERMINAL_CRON_JOB_STATUSES,
     CronJob,
+    CronJobInPastError,
     CronJobNotFoundError,
     CronJobStatus,
     CronJobValidationError,
@@ -63,6 +64,7 @@ from core.automation._cron_jobs import (
 __all__ = [
     "CRON_EXPRESSION_FIELD_COUNT",
     "CronJob",
+    "CronJobInPastError",
     "CronJobNotFoundError",
     "CronJobStatus",
     "CronJobValidationError",
@@ -185,6 +187,7 @@ class CronService:
             project_id=project_id,
         )
         self._validate_job(job)
+        self._reject_past_once_run(job)
         self._validate_capacity(job)
         self._jobs[job.id] = job
         try:
@@ -339,6 +342,11 @@ class CronService:
             return self._clone_job(job)
 
         self._validate_job(candidate)
+        if {"run_at", "schedule_type"} & set(changed_fields) or (
+            candidate.status == "active" and job.status != "active"
+        ):
+            # Arming a one-time job for an elapsed instant would fire it at once.
+            self._reject_past_once_run(candidate)
         self._validate_capacity(candidate, replacing_id=job_id)
         self._jobs[job_id] = candidate
         try:
@@ -1040,6 +1048,22 @@ class CronService:
             raise CronJobValidationError(
                 f"At most {MAX_ACTIVE_CRON_JOBS} cron jobs may be active at once"
             )
+
+    def _reject_past_once_run(self, job: CronJob) -> None:
+        if job.schedule_type != "once":
+            return
+        now = _timing._utc_now()
+        run_at = _schedule._parse_run_at_utc(self._timezone, job)
+        if run_at >= now:
+            return
+
+        def local(value: datetime) -> str:
+            return value.astimezone(self._timezone).replace(tzinfo=None, microsecond=0).isoformat()
+
+        raise CronJobInPastError(
+            f"The one-time schedule {local(run_at)} is in the past: it is now {local(now)} "
+            f"in the configured timezone {self._timezone}. Choose a future time"
+        )
 
     def _is_missed_once_job(self, job: CronJob, reference_time_utc: datetime) -> bool:
         if job.schedule_type != "once":
