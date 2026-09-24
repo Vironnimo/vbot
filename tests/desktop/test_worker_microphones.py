@@ -113,3 +113,62 @@ def test_saved_microphone_never_uses_recycled_index() -> None:
     requested = {"index": 0, "name": "Studio mic", "host_api": "ASIO"}
 
     assert _candidate_device_indices(RecycledSoundDevice(), requested) == []
+
+
+class _HostApiSoundDevice:
+    """Two host APIs exposing the same headset; WDM-KS is the default input."""
+
+    host_apis = [
+        {"name": "Windows WDM-KS", "default_input_device": 0},
+        {"name": "Windows WASAPI", "default_input_device": 1},
+    ]
+    devices = [
+        {"name": "Headset", "hostapi": 0, "max_input_channels": 1, "default_samplerate": 48000},
+        {"name": "Headset", "hostapi": 1, "max_input_channels": 1, "default_samplerate": 48000},
+        {"name": "Speakers", "hostapi": 1, "max_input_channels": 0, "default_samplerate": 48000},
+    ]
+
+    class default:  # noqa: N801 - mirrors sounddevice.default
+        device = (0, 2)
+
+    def query_devices(self, device: int | None = None):
+        return list(self.devices) if device is None else self.devices[device]
+
+    def query_hostapis(self, index: int | None = None):
+        return list(self.host_apis) if index is None else self.host_apis[index]
+
+    def check_input_settings(self, **_kwargs) -> None:
+        return
+
+
+def test_automatic_selection_never_uses_exclusive_wdm_ks_devices() -> None:
+    from desktop.wakeword._microphones import _candidate_device_indices, _select_capture_format
+
+    sd = _HostApiSoundDevice()
+
+    assert _candidate_device_indices(sd, None) == [1]
+    assert _select_capture_format(sd, None).host_api == "Windows WASAPI"
+
+
+def test_saved_wdm_ks_microphone_reports_unavailable() -> None:
+    import pytest
+
+    from desktop.wakeword._audio_capture import MicrophoneUnavailableError
+    from desktop.wakeword._microphones import _candidate_device_indices, _select_capture_format
+
+    sd = _HostApiSoundDevice()
+    requested = {"index": 0, "name": "Headset", "host_api": "Windows WDM-KS"}
+
+    assert _candidate_device_indices(sd, requested) == []
+    with pytest.raises(MicrophoneUnavailableError):
+        _select_capture_format(sd, requested)
+
+
+def test_microphone_list_hides_wdm_ks_devices(monkeypatch) -> None:
+    monkeypatch.setitem(__import__("sys").modules, "sounddevice", _HostApiSoundDevice())
+
+    from desktop.wakeword.worker import list_microphones
+
+    assert [(device["index"], device["host_api"]) for device in list_microphones()] == [
+        (1, "Windows WASAPI")
+    ]
