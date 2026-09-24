@@ -31,6 +31,8 @@ RPC_ERROR_PROJECT_NOT_FOUND = "project_not_found"
 RPC_ERROR_PROJECT_ALREADY_EXISTS = "project_already_exists"
 RPC_ERROR_PROJECT_BUSY = "project_busy"
 RPC_ERROR_PROJECT_IN_USE = "project_in_use"
+RPC_ERROR_PERFORMANCE_RECORDING_ACTIVE = "performance_recording_active"
+RPC_ERROR_PERFORMANCE_RECORDING_INACTIVE = "performance_recording_inactive"
 
 
 class RpcError(Exception):
