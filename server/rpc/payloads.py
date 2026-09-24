@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, cast
 
 from core.chat import ChatMessage, parse_bare_model
+from core.compaction import effective_compaction_policy
 from core.providers.providers import (
     model_is_local,
     resolve_effective_context_window,
@@ -106,6 +107,26 @@ def _provider_config(state: Any, provider_id: str) -> Any:
         return None
 
 
+def _global_compaction_policy_loader(state: Any) -> Callable[[], JsonObject]:
+    """Return a loader for the global Compaction Policy, read at most once.
+
+    A runtime without Settings storage falls back to the built-in defaults.
+    """
+    storage = getattr(state.runtime, "storage", None)
+    loaded: list[JsonObject] = []
+
+    def load() -> JsonObject:
+        if not loaded:
+            loaded.append(
+                storage.load_compaction_settings()
+                if storage is not None
+                else normalize_compaction_settings(None)
+            )
+        return loaded[0]
+
+    return load
+
+
 def _agent_response(state: Any, agent: Any) -> JsonObject:
     agent_policy = getattr(agent, "compaction_policy", None)
     if not isinstance(agent_policy, dict):
@@ -130,14 +151,8 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "tools": dict(getattr(agent, "tools", {})),
         "custom_system_prompt_enabled": bool(agent.custom_system_prompt_enabled),
         "compaction_policy": dict(agent_policy) if agent_policy is not None else None,
-        "effective_compaction_policy": (
-            dict(agent_policy)
-            if agent_policy is not None
-            else (
-                state.runtime.storage.load_compaction_settings()
-                if getattr(state.runtime, "storage", None) is not None
-                else normalize_compaction_settings(None)
-            )
+        "effective_compaction_policy": effective_compaction_policy(
+            None, agent_policy, _global_compaction_policy_loader(state)
         ),
         "current_session_id": agent.current_session_id,
         "context_window": _resolve_context_window(state, agent.model),
