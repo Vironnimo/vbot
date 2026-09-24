@@ -426,7 +426,7 @@ def test_owned_run_point_lookups_probe_indexes_not_group_history(manager) -> Non
 def test_completion_activity_searches_each_scope_by_live_address_index(history) -> None:
     _address, _anchor, connection = history
     recorder, statements = _recording(connection)
-    _store_queries.list_completion_activity_rows(recorder, [("project", "agent"), (None, "other")])
+    _store_queries.list_completion_activity(recorder, [("project", "agent"), (None, "other")])
     plans = [
         str(row[3])
         for sql, params in statements

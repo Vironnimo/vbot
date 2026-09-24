@@ -129,7 +129,7 @@ class OwnedRunRecord:
 
 @dataclass(frozen=True)
 class RunStartBoundary:
-    """One canonical owner-backed Run start for exact derived projections."""
+    """One canonical Run start, owned or ordinary, in a live or archived generation."""
 
     address: SessionAddress
     generation_id: str

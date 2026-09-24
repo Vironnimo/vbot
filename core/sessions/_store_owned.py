@@ -5,14 +5,22 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from core.chat.errors import ChatSessionError
 from core.runs import RunExecutionOwner
-from core.sessions import _store_codec, _store_fts, _store_values
-from core.sessions._types import JsonObject, OwnedRunRecord
+from core.sessions import _store_codec, _store_fts, _store_queries, _store_values
+from core.sessions._metadata import _decode_state_object
+from core.sessions._types import (
+    DeliveryReceipt,
+    JsonObject,
+    OwnedRunRecord,
+    OwnedSessionSummary,
+    RunStartBoundary,
+    TemporarySessionBinding,
+)
 from core.sessions.errors import SessionStoreCorruptError
 
 if TYPE_CHECKING:
@@ -94,27 +102,40 @@ def create_bound_temporary_session(
     return generation_id
 
 
+def _temporary_binding(row: sqlite3.Row, address: SessionAddress) -> TemporarySessionBinding:
+    return TemporarySessionBinding(
+        address,
+        str(row["generation_id"]),
+        str(row["owner_name"]),
+        str(row["group_id"]),
+        str(row["participant_id"]),
+        _decode_state_object(str(row["config_json"]), "temporary Session config"),
+    )
+
+
 def temporary_binding(
     connection: sqlite3.Connection, address: SessionAddress
-) -> sqlite3.Row | None:
+) -> Callable[[], TemporarySessionBinding | None]:
+    """Select the binding of one live Session; the decoder yields ``None`` for none."""
     state = _store_values._require_live(connection, address)
     row = connection.execute(
         "SELECT * FROM temporary_session_bindings WHERE session_key = ?",
         (state["session_key"],),
     ).fetchone()
-    return cast(sqlite3.Row | None, row)
+    return lambda: None if row is None else _temporary_binding(row, address)
 
 
 def temporary_binding_by_participant(
     connection: sqlite3.Connection, *, owner_name: str, group_id: str, participant_id: str
-) -> tuple[SessionAddress, sqlite3.Row] | None:
+) -> Callable[[], TemporarySessionBinding | None]:
+    """Select one participant's live binding; the decoder yields ``None`` for none."""
     row = connection.execute(
         "SELECT s.project_id, s.agent_id, s.session_id, b.* FROM temporary_session_bindings AS b "
         "JOIN sessions AS s ON s.session_key = b.session_key "
         "WHERE b.owner_name = ? AND b.group_id = ? AND b.participant_id = ? AND s.status = 'live'",
         (owner_name, group_id, participant_id),
     ).fetchone()
-    return None if row is None else (_store_values._address(row), cast(sqlite3.Row, row))
+    return lambda: None if row is None else _temporary_binding(row, _store_values._address(row))
 
 
 def delete_temporary_group(
@@ -149,7 +170,8 @@ def temporary_bindings(
     group_id: str,
     after: str = "",
     limit: int = 100,
-) -> list[tuple[SessionAddress, sqlite3.Row]]:
+) -> Callable[[], list[TemporarySessionBinding]]:
+    """Page one group's live bindings by participant id after ``after``."""
     if type(limit) is not int or not 1 <= limit <= 1000:
         raise ValueError("invalid temporary Session page bounds")
     rows = connection.execute(
@@ -159,7 +181,7 @@ def temporary_bindings(
         "AND s.status = 'live' ORDER BY b.participant_id LIMIT ?",
         (owner_name, group_id, after, limit),
     ).fetchall()
-    return [(_store_values._address(row), row) for row in rows]
+    return lambda: [_temporary_binding(row, _store_values._address(row)) for row in rows]
 
 
 TEMPORARY_GROUP_TITLE_MAX_CHARACTERS = 120
@@ -204,27 +226,22 @@ def temporary_group_titles(
     return {str(row["group_id"]): str(row["title"]) for row in rows}
 
 
-def owned_session_summary_rows(
+def owned_session_summaries(
     connection: sqlite3.Connection,
     *,
     owner_name: str | None = None,
     group_id: str | None = None,
     metadata_keys: Sequence[str] = (),
-) -> list[sqlite3.Row]:
-    """Read live owner-managed Sessions in creation order with their labels."""
+) -> Callable[[], list[OwnedSessionSummary]]:
+    """Read live owner-managed Sessions in creation order with their labels.
+
+    Only display labels and the configured Model leave the protected binding,
+    never its complete configuration. The returned decoder builds the summaries
+    after the read transaction.
+    """
     if group_id is not None and owner_name is None:
         raise ValueError("a temporary group filter requires its owner")
-    selected_keys = tuple(dict.fromkeys(metadata_keys))
-    unknown = set(selected_keys) - _store_values._SUMMARY_METADATA_COLUMNS.keys()
-    if unknown:
-        raise ChatSessionError(
-            f"unsupported Session summary metadata: {', '.join(sorted(unknown))}"
-        )
-    metadata_columns = "".join(
-        f", json_extract(metadata_json, '{_store_values._SUMMARY_METADATA_COLUMNS[key]}') "
-        f"AS metadata_{key}_json"
-        for key in selected_keys
-    )
+    selected_keys, metadata_columns = _store_queries._summary_metadata_columns(metadata_keys)
     rows = connection.execute(
         f"SELECT {_store_values._SESSION_LIST_COLUMNS}{metadata_columns}, "
         "b.owner_name, b.group_id, b.participant_id, "
@@ -239,7 +256,22 @@ def owned_session_summary_rows(
         "ORDER BY b.owner_name, b.group_id, sessions.session_key",
         (owner_name, owner_name, group_id, group_id),
     ).fetchall()
-    return cast(list[sqlite3.Row], rows)
+    return lambda: [_owned_session_summary(row, selected_keys) for row in rows]
+
+
+def _owned_session_summary(row: sqlite3.Row, metadata_keys: Sequence[str]) -> OwnedSessionSummary:
+    participant_name, model = row["participant_name"], row["participant_model"]
+    group_title = row["group_title"]
+    return OwnedSessionSummary(
+        address=_store_values._address(row),
+        owner_name=str(row["owner_name"]),
+        group_id=str(row["group_id"]),
+        group_title=group_title if isinstance(group_title, str) else None,
+        participant_id=str(row["participant_id"]),
+        participant_name=participant_name if isinstance(participant_name, str) else None,
+        model=model if isinstance(model, str) else None,
+        summary=_store_queries._summary(row, metadata_keys),
+    )
 
 
 def append_messages_with_receipts(
@@ -371,7 +403,7 @@ def delivery_receipt(
     generation_id: str,
     owner_name: str,
     receipt_id: str,
-) -> sqlite3.Row | None:
+) -> DeliveryReceipt | None:
     state = _store_values._find_live(connection, address)
     if state is None:
         return None
@@ -382,7 +414,14 @@ def delivery_receipt(
         "FROM session_delivery_receipts WHERE generation_id = ? AND owner_name = ? AND receipt_id = ?",
         (generation_id, owner_name, receipt_id),
     ).fetchone()
-    return cast(sqlite3.Row | None, row)
+    if row is None:
+        return None
+    return DeliveryReceipt(
+        str(row["receipt_id"]),
+        str(row["content_hash"]),
+        str(row["effect_kind"]),
+        {"kind": str(row["carrier_kind"]), "sequence": int(row["carrier_sequence"])},
+    )
 
 
 def record_run_owner(
@@ -568,7 +607,7 @@ def owned_run_by_input(
 
 def run_start_boundaries(
     connection: sqlite3.Connection, addresses: Sequence[SessionAddress]
-) -> list[sqlite3.Row]:
+) -> list[RunStartBoundary]:
     """Read every Run start, owned or ordinary, of up to 100 addresses.
 
     Each address contributes its live generation and any archived generations;
@@ -599,7 +638,15 @@ def run_start_boundaries(
         "ORDER BY s.project_id,s.agent_id,s.session_id,r.start_sequence,r.run_key",
         (*values, *values),
     ).fetchall()
-    return cast(list[sqlite3.Row], rows)
+    return [
+        RunStartBoundary(
+            _store_values._address(row),
+            str(row["generation_id"]),
+            str(row["run_id"]),
+            int(row["start_sequence"]),
+        )
+        for row in rows
+    ]
 
 
 def _record_run_start(
