@@ -10,9 +10,13 @@ bus is empty).
 
 from __future__ import annotations
 
+import asyncio
 import re
+import threading
+import time
 import uuid
-from contextlib import aclosing
+from collections.abc import AsyncGenerator, Iterator
+from contextlib import aclosing, contextmanager
 from typing import Any
 
 import pytest
@@ -24,6 +28,7 @@ from server.events import (
     RESOURCE_CHANGED_EVENT,
     RESOURCE_KIND_MODELS,
     RUN_COMPLETED_SERVER_EVENT,
+    RUN_OUTPUT_SERVER_EVENT,
     RUN_STARTED_SERVER_EVENT,
     ServerEventBus,
 )
@@ -140,32 +145,16 @@ def test_publish_includes_epoch_and_sequence_on_every_event() -> None:
     expected_epoch = bus.epoch
 
     # Act
-    first = bus.publish(RUN_STARTED_SERVER_EVENT, {"id": "a"})
-    second = bus.publish(RUN_COMPLETED_SERVER_EVENT, {"id": "a"})
-    third = bus.publish(APP_ERROR_EVENT, {"message": "boom"})
+    bus.publish(RUN_STARTED_SERVER_EVENT, {"id": "a"})
+    bus.publish(RUN_COMPLETED_SERVER_EVENT, {"id": "a"})
+    bus.publish(APP_ERROR_EVENT, {"message": "boom"})
 
-    # Assert: every event dict carries both ``epoch`` and ``sequence``.
-    for event in (first, second, third):
+    # Assert: every retained event carries both ``epoch`` and ``sequence``.
+    events = bus.events
+    for event in events:
         assert event["epoch"] == expected_epoch
-        assert isinstance(event["sequence"], int)
-        assert event["sequence"] >= 1
     # The three sequences are the three natural numbers in order.
-    assert [first["sequence"], second["sequence"], third["sequence"]] == [1, 2, 3]
-
-
-def test_published_event_matches_retained_window_entry() -> None:
-    # Arrange
-    bus = ServerEventBus()
-
-    # Act
-    published = bus.publish(RUN_STARTED_SERVER_EVENT, {"run_id": "r-1"})
-
-    # Assert: the public events list (used by /ws replay) carries the same
-    # epoch+sequence stamp as the value returned from publish.
-    retained = bus.events[-1]
-    assert retained["epoch"] == published["epoch"]
-    assert retained["sequence"] == published["sequence"]
-    assert retained["type"] == published["type"]
+    assert [event["sequence"] for event in events] == [1, 2, 3]
 
 
 def test_publish_uses_a_none_payload_without_breaking_epoch_stamping() -> None:
@@ -173,10 +162,11 @@ def test_publish_uses_a_none_payload_without_breaking_epoch_stamping() -> None:
     bus = ServerEventBus()
 
     # Act
-    event = bus.publish(APP_ERROR_EVENT, payload=None)
+    bus.publish(APP_ERROR_EVENT, payload=None)
 
     # Assert: epoch/sequence still present, payload is an empty dict (matches
     # the pre-existing ``dict(payload or {})`` contract for None payloads).
+    event = bus.events[-1]
     assert event["epoch"] == bus.epoch
     assert event["sequence"] == 1
     assert event["payload"] == {}
@@ -218,12 +208,11 @@ def test_publish_stamps_epoch_for_every_allowed_event_type() -> None:
     bus = ServerEventBus()
 
     # Act: publish one event of every allowed type.
-    published = [
+    for event_type in ALLOWED_SERVER_EVENT_TYPES:
         bus.publish(event_type, {"sentinel": event_type})
-        for event_type in ALLOWED_SERVER_EVENT_TYPES
-    ]
 
     # Assert: each event carries the epoch and a unique sequence.
+    published = bus.events
     epoch = bus.epoch
     assert len(published) == len(ALLOWED_SERVER_EVENT_TYPES)
     assert len({event["sequence"] for event in published}) == len(published)
@@ -244,9 +233,10 @@ def test_publish_accepts_resource_changed_with_a_kind_payload() -> None:
     bus = ServerEventBus()
 
     # Act
-    event = bus.publish(RESOURCE_CHANGED_EVENT, {"kind": RESOURCE_KIND_MODELS})
+    bus.publish(RESOURCE_CHANGED_EVENT, {"kind": RESOURCE_KIND_MODELS})
 
     # Assert: the payload rides through unchanged (the bus is payload-agnostic).
+    event = bus.events[-1]
     assert event["type"] == RESOURCE_CHANGED_EVENT
     assert event["payload"] == {"kind": "models"}
 
@@ -287,3 +277,139 @@ def test_event_bus_epoch_is_a_valid_uuid4_hex_value() -> None:
     parsed = uuid.UUID(hex=bus.epoch)
     assert parsed.hex == bus.epoch
     assert parsed.version == 4
+
+
+# -- publishing from other threads ------------------------------------------
+
+
+@contextmanager
+def _foreign_loop_calls(loop: asyncio.AbstractEventLoop) -> Iterator[list[Any]]:
+    """Record ``loop.call_soon`` calls made from threads other than the loop's.
+
+    ``call_soon`` is loop-thread-only; a foreign caller queues a callback
+    without waking the loop. ``call_soon_threadsafe`` does not pass through
+    it, so a correct handoff records nothing. The calls still run, so a
+    failing assertion leaves no stuck task behind.
+    """
+    owner = threading.get_ident()
+    original = loop.call_soon
+    foreign: list[Any] = []
+
+    def recording(*args: Any, **kwargs: Any) -> Any:
+        if threading.get_ident() != owner:
+            foreign.append(args[0])
+        return original(*args, **kwargs)
+
+    loop.call_soon = recording  # type: ignore[method-assign,assignment]
+    try:
+        yield foreign
+    finally:
+        del loop.call_soon
+
+
+def _run_threads(targets: list[Any]) -> tuple[list[threading.Thread], list[BaseException]]:
+    errors: list[BaseException] = []
+
+    def guarded(target: Any) -> None:
+        try:
+            target()
+        except BaseException as error:  # noqa: BLE001 - surfaced by the test
+            errors.append(error)
+
+    threads = [threading.Thread(target=guarded, args=(target,)) for target in targets]
+    for thread in threads:
+        thread.start()
+    return threads, errors
+
+
+async def _collect(events: AsyncGenerator[dict[str, Any], None], count: int) -> list[Any]:
+    return [await anext(events) for _ in range(count)]
+
+
+@pytest.mark.asyncio
+async def test_a_worker_thread_publish_wakes_the_waiting_subscriber_promptly() -> None:
+    bus = ServerEventBus()
+    with _foreign_loop_calls(asyncio.get_running_loop()) as foreign_calls:
+        async with aclosing(bus.subscribe()) as events:
+            consumer = asyncio.ensure_future(_collect(events, 1))
+            # Let the subscriber register and block on its live queue.
+            await asyncio.sleep(0.05)
+            started = time.monotonic()
+            threads, errors = _run_threads(
+                [lambda: bus.publish(RUN_STARTED_SERVER_EVENT, {"run_id": "from-worker"})]
+            )
+            done, _pending = await asyncio.wait({consumer}, timeout=5)
+            elapsed = time.monotonic() - started
+            for thread in threads:
+                thread.join()
+
+    assert errors == []
+    assert foreign_calls == []
+    assert done, "the subscriber was not woken by the worker-thread publish"
+
+    [event] = consumer.result()
+    assert event["type"] == RUN_STARTED_SERVER_EVENT
+    assert event["payload"] == {"run_id": "from-worker"}
+    assert event["sequence"] == 1
+    # The handoff wakes the idle loop instead of waiting for its next wake-up.
+    assert elapsed < 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_thread_and_loop_publishes_get_unique_contiguous_sequences() -> None:
+    bus = ServerEventBus()
+    workers, per_worker, on_loop = 6, 40, 40
+    total = workers * per_worker + on_loop
+    barrier = threading.Barrier(workers)
+
+    def publish_batch(worker: int) -> None:
+        barrier.wait()
+        for index in range(per_worker):
+            bus.publish(RUN_OUTPUT_SERVER_EVENT, {"worker": worker, "index": index})
+
+    with _foreign_loop_calls(asyncio.get_running_loop()) as foreign_calls:
+        async with aclosing(bus.subscribe()) as events:
+            consumer = asyncio.ensure_future(_collect(events, total))
+            await asyncio.sleep(0.05)
+            threads, errors = _run_threads(
+                [lambda worker=worker: publish_batch(worker) for worker in range(workers)]
+            )
+            for index in range(on_loop):
+                bus.publish(RUN_OUTPUT_SERVER_EVENT, {"worker": "loop", "index": index})
+                await asyncio.sleep(0)
+            done, _pending = await asyncio.wait({consumer}, timeout=10)
+            for thread in threads:
+                thread.join()
+
+    assert errors == []
+    assert foreign_calls == []
+    assert done, "the subscriber did not receive every published event"
+
+    received = consumer.result()
+    assert [event["sequence"] for event in received] == list(range(1, total + 1))
+    assert bus.last_sequence == total
+    # Each publisher's events keep their publish order.
+    for publisher in [*range(workers), "loop"]:
+        indexes = [
+            event["payload"]["index"]
+            for event in received
+            if event["payload"]["worker"] == publisher
+        ]
+        expected = per_worker if publisher != "loop" else on_loop
+        assert indexes == list(range(expected))
+
+
+def test_a_publish_after_the_bus_loop_closed_is_discarded() -> None:
+    async def create_bus() -> ServerEventBus:
+        return ServerEventBus()
+
+    loop = asyncio.new_event_loop()
+    try:
+        bus = loop.run_until_complete(create_bus())
+    finally:
+        loop.close()
+
+    bus.publish(APP_ERROR_EVENT, {"message": "after shutdown"})
+
+    assert bus.events == []
+    assert bus.last_sequence == 0

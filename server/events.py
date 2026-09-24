@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections.abc import AsyncGenerator
@@ -90,7 +91,13 @@ ALLOWED_RESOURCE_KINDS = frozenset(
 
 
 class ServerEventBus:
-    """Replayable in-memory event bus for server lifecycle events."""
+    """Replayable in-memory event bus for server lifecycle events.
+
+    The bus belongs to one Event Loop: the loop running when it is constructed,
+    or else the loop of its first subscriber. Sequence numbering, retention and
+    subscriber queues are loop-only state, so ``publish`` from any other thread
+    hands the event to that loop. Callers need not know which thread they run on.
+    """
 
     def __init__(
         self,
@@ -109,6 +116,7 @@ class ServerEventBus:
         # (bus restarts at sequence 1, so a sequence regression on its own is
         # ambiguous — the epoch is the authoritative "new server" signal).
         self._epoch = uuid.uuid4().hex
+        self._loop = _running_loop()
 
     @property
     def epoch(self) -> str:
@@ -125,23 +133,42 @@ class ServerEventBus:
         """Return the currently retained replay window."""
         return self._event_stream.events
 
-    def publish(self, event_type: str, payload: JsonObject | None = None) -> JsonObject:
-        """Publish one provider-agnostic server event to active subscribers."""
+    def publish(self, event_type: str, payload: JsonObject | None = None) -> None:
+        """Publish one provider-agnostic server event to active subscribers.
+
+        On the bus's Event Loop, or before the bus has one, the event is
+        retained and fanned out immediately. From another thread it is handed
+        to that loop and published there in arrival order; it receives its
+        sequence number then. Once the loop has closed, no subscriber can
+        receive the event, so it is discarded.
+        """
         if event_type not in ALLOWED_SERVER_EVENT_TYPES:
             raise ValueError(f"unsupported server event type: {event_type}")
+        payload = dict(payload or {})
+        loop = self._loop
+        if loop is None or _running_loop() is loop:
+            self._publish_on_loop(event_type, payload)
+            return
+        try:
+            loop.call_soon_threadsafe(self._publish_on_loop, event_type, payload)
+        except RuntimeError:
+            _LOGGER.debug("Discarded %s server event after the Event Loop closed", event_type)
+
+    def _publish_on_loop(self, event_type: str, payload: JsonObject) -> None:
         event = {
             "sequence": self._next_sequence,
             "epoch": self._epoch,
             "type": event_type,
-            "payload": dict(payload or {}),
+            "payload": payload,
             "timestamp": datetime.now(UTC).isoformat(),
         }
         self._next_sequence += 1
         self._event_stream.publish(event)
-        return event
 
     async def subscribe(self, *, after_sequence: int = 0) -> AsyncGenerator[JsonObject, None]:
         """Replay existing events and stream new events until the client disconnects."""
+        if self._loop is None:
+            self._loop = asyncio.get_running_loop()
         async with aclosing(self._event_stream.subscribe(after_sequence=after_sequence)) as events:
             async for event in events:
                 yield event
@@ -155,3 +182,10 @@ class ServerEventBus:
 def _event_sequence(event: JsonObject) -> int:
     sequence = event.get("sequence", 0)
     return sequence if isinstance(sequence, int) else 0
+
+
+def _running_loop() -> asyncio.AbstractEventLoop | None:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
