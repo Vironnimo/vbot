@@ -134,9 +134,7 @@ def _make_service(
             },
             read_prompt_fragment=lambda name: REFLECT_BRIEFS[name],
         ),
-        agent_resolver=SimpleNamespace(
-            resolve_agent=lambda project_id, agent_id: _identity_agent()
-        ),
+        agent_resolver=SimpleNamespace(resolve_agent_async=_resolve_identity_agent),
         chat_sessions=sessions,
         streaming_chat_loop=loop,
     )
@@ -154,6 +152,10 @@ def _counters(sessions: _FakeSessions, session_id: str = "s1") -> dict[str, int]
 def _counter_generation(sessions: _FakeSessions, session_id: str = "s1") -> int:
     raw = cast("dict[str, int]", sessions.metadata[session_id][REFLECTION_COUNTERS_META_KEY])
     return raw[COUNTER_GENERATION_KEY]
+
+
+async def _resolve_identity_agent(_project_id: str | None, _agent_id: str) -> Any:
+    return _identity_agent()
 
 
 def _identity_agent(*, memory_prompt_mode: str = "agent_user") -> Any:

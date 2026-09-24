@@ -77,6 +77,11 @@ class IntegrationAgentResolver:
         except KeyError as error:
             raise ResolutionAgentNotFoundError(str(error)) from error
 
+    async def resolve_agent_async(
+        self, project_id: str | None, agent_id: str, **options: Any
+    ) -> Any:
+        return self.resolve_agent(project_id, agent_id, **options)
+
 
 class IntegrationProviders:
     def __init__(self) -> None:

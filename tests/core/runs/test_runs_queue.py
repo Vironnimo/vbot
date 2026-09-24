@@ -685,11 +685,13 @@ async def test_chat_loop_queue_run_uses_display_preview_for_busy_session(tmp_pat
     agents = SimpleNamespace(
         get=lambda agent_id: SimpleNamespace(id=agent_id, model="openai/gpt-5.2")
     )
+
+    async def _resolve_agent(_project_id: str | None, agent_id: str) -> Any:
+        return agents.get(agent_id)
+
     runtime = SimpleNamespace(
         agents=agents,
-        agent_resolver=SimpleNamespace(
-            resolve_agent=lambda _project_id, agent_id: agents.get(agent_id)
-        ),
+        agent_resolver=SimpleNamespace(resolve_agent_async=_resolve_agent),
         providers=SimpleNamespace(
             get=lambda provider_id: SimpleNamespace(connections=[SimpleNamespace(id="api-key")])
         ),

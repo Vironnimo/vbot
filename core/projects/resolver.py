@@ -51,6 +51,7 @@ from core.projects.scanners.base import (
     scan_project,
 )
 from core.settings import AgentDefaults
+from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -87,6 +88,11 @@ __all__ = [
     "resolve_working_project_id",
     "runtime_agent_body",
 ]
+
+
+# Resolution reads Agent and Project configuration files, checks Session storage
+# and may wait for the Agent store's write lock; the async variants run it here.
+_RESOLUTION_WORKERS = BoundedWorkerPool(name="agent-resolution", max_workers=4)
 
 
 def _no_project_skills(_project_id: str) -> frozenset[str]:
@@ -203,6 +209,33 @@ class AgentResolver:
         project_id = getattr(address, "project_id", None)
         agent = self._apply_temporary_project(agent, project_id)
         return self._apply_run_overrides(agent, run_overrides)
+
+    async def resolve_agent_async(
+        self,
+        project_id: str | None,
+        agent_id: str,
+        *,
+        run_overrides: AgentRunOverrides | None = None,
+    ) -> RuntimeAgent:
+        """Event-Loop-safe :meth:`resolve_agent`."""
+        return await _RESOLUTION_WORKERS.run(
+            self.resolve_agent, project_id, agent_id, run_overrides=run_overrides
+        )
+
+    async def resolve_temporary_agent_async(
+        self,
+        address: Any,
+        *,
+        generation_id: str,
+        run_overrides: AgentRunOverrides | None = None,
+    ) -> RuntimeAgent:
+        """Event-Loop-safe :meth:`resolve_temporary_agent`."""
+        return await _RESOLUTION_WORKERS.run(
+            self.resolve_temporary_agent,
+            address,
+            generation_id=generation_id,
+            run_overrides=run_overrides,
+        )
 
     def preview_temporary_agent(
         self, config: TemporaryAgentConfig, project_id: str | None = None
