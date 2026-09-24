@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import builtins
-import json
 import sqlite3
 import threading
 import uuid
@@ -193,9 +192,6 @@ class SessionStore:
     def close(self) -> None:
         self._runtime.close()
 
-    def checkpoint(self) -> None:
-        self._runtime.checkpoint()
-
     def backup(
         self,
         destination: Path,
@@ -301,15 +297,6 @@ class SessionStore:
         with self._runtime.read_ctx() as connection:
             return _store_queries.metadata_value(connection, address, key)
 
-    def descriptor_source(
-        self, address: SessionAddress
-    ) -> tuple[JsonObject, int, ChatMessage | None, SessionRecallVisibility]:
-        """Load compact descriptor inputs without reconstructing Session history."""
-        source = self.descriptor_sources((address,)).get(address)
-        if source is None:
-            raise SessionNotFoundError(f"session does not exist: {address.session_id}")
-        return source
-
     def descriptor_sources(
         self, addresses: Sequence[SessionAddress]
     ) -> dict[SessionAddress, tuple[JsonObject, int, ChatMessage | None, SessionRecallVisibility]]:
@@ -350,16 +337,6 @@ class SessionStore:
                 connection, address, mutation, create_missing=create_missing
             )
         )
-
-    def activity(self, address: SessionAddress) -> JsonObject:
-        payload = self.state(address)["activity_json"]
-        try:
-            data = json.loads(payload)
-        except json.JSONDecodeError as exc:
-            raise SessionStoreCorruptError(
-                f"invalid Session activity: {address.session_id}"
-            ) from exc
-        return data if isinstance(data, dict) else {}
 
     def replace_activity(self, address: SessionAddress, activity: JsonObject) -> None:
         return self._execute_write(

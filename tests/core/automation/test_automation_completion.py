@@ -381,8 +381,8 @@ async def test_idle_completion_relays_through_latest_channel_surface(
     session.add_note(surface.to_note_content())
     monkeypatch.setattr(
         ChatSession,
-        "load_async",
-        AsyncMock(side_effect=AssertionError("completion delivery must read only the latest note")),
+        "load",
+        Mock(side_effect=AssertionError("completion delivery must read only the latest note")),
     )
     completion_loop = _CompletionChatLoop(run_manager)
     trigger_service = TriggerService(
