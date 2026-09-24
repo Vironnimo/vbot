@@ -12,10 +12,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from threading import RLock
-from typing import TYPE_CHECKING, Any, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
 
 from core.settings import (
     SettingsValidationError,
@@ -63,6 +64,9 @@ if TYPE_CHECKING:
     from core.prompts import LayoutEntry
 
 SettingsUpdateResult = TypeVar("SettingsUpdateResult")
+# A settings file modified this recently may change again within the same
+# filesystem timestamp tick, so its stat stamp cannot prove it unchanged yet.
+_SETTINGS_RACY_WINDOW_NS = 3_000_000_000
 _LOGGER = get_logger("storage")
 
 DEFAULT_DATA_DIR = Path.home() / ".vbot"
@@ -91,6 +95,8 @@ class StorageManager:
         self.layout = DataDirectoryLayout(self.data_dir)
         self._settings_lock = RLock()
         self._settings_diagnostic_signature: tuple[str, ...] | None = None
+        # Usable Settings of the last loaded file version as JSON, with its stat stamp.
+        self._settings_cache: tuple[tuple[int, int, int], str] | None = None
         self.temporary_files = TemporaryFileManager(self.data_dir)
         self._prompt_fragments = PromptFragmentStore(
             data_dir=self.data_dir,
@@ -245,30 +251,53 @@ class StorageManager:
         Valid siblings remain live when a schema error can be isolated. The
         original file stays untouched and write transactions still use the strict
         loader so a later save can never overwrite invalid user data.
+
+        An unchanged file version is served from memory: its stat stamp (taken
+        before reading) matches and the file is older than the racy window.
+        Every call returns an independent copy.
         """
 
         with self._settings_lock:
-            try:
-                settings, ignored = load_runtime_settings_json(self.settings_path)
-            except SettingsValidationError as exc:
-                self._warn_settings_degradation(
-                    (str(exc),),
-                    "Ignoring invalid settings file %s and using defaults: %s",
-                    exc,
-                )
-                return {}
-            if ignored:
-                details = "; ".join(
-                    f"{diagnostic.path}: {diagnostic.message}" for diagnostic in ignored
-                )
-                self._warn_settings_degradation(
-                    tuple(f"{diagnostic.path}: {diagnostic.message}" for diagnostic in ignored),
-                    "Ignoring invalid Settings keys in %s while keeping valid siblings: %s",
-                    details,
-                )
-            else:
-                self._settings_diagnostic_signature = None
+            stamp = self._settings_stamp()
+            cached = self._settings_cache
+            if stamp is not None and cached is not None and cached[0] == stamp:
+                return cast(dict[str, Any], json.loads(cached[1]))
+            settings = self._load_usable_settings()
+            self._settings_cache = None
+            if stamp is not None and time.time_ns() - stamp[0] >= _SETTINGS_RACY_WINDOW_NS:
+                self._settings_cache = (stamp, json.dumps(settings))
             return settings
+
+    def _settings_stamp(self) -> tuple[int, int, int] | None:
+        try:
+            stat = self.settings_path.stat()
+        except OSError:
+            return None
+        return (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+
+    def _load_usable_settings(self) -> dict[str, Any]:
+        """Read and validate ``settings.json``, logging each new degradation once."""
+        try:
+            settings, ignored = load_runtime_settings_json(self.settings_path)
+        except SettingsValidationError as exc:
+            self._warn_settings_degradation(
+                (str(exc),),
+                "Ignoring invalid settings file %s and using defaults: %s",
+                exc,
+            )
+            return {}
+        if ignored:
+            details = "; ".join(
+                f"{diagnostic.path}: {diagnostic.message}" for diagnostic in ignored
+            )
+            self._warn_settings_degradation(
+                tuple(f"{diagnostic.path}: {diagnostic.message}" for diagnostic in ignored),
+                "Ignoring invalid Settings keys in %s while keeping valid siblings: %s",
+                details,
+            )
+        else:
+            self._settings_diagnostic_signature = None
+        return settings
 
     def _warn_settings_degradation(
         self,
@@ -652,6 +681,7 @@ class StorageManager:
                     f"Settings contain a value that cannot be serialized: {exc}"
                 ) from exc
             self.ensure_directories()
+            self._settings_cache = None
             try:
                 atomic_write_text(self.settings_path, serialized, data_dir=self.data_dir)
             except OSError as exc:
