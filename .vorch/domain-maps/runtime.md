@@ -52,6 +52,8 @@ All service properties raise `RuntimeError` outside a started runtime, **except 
 
 `decisions` owns the Decision Task Model executor and independent experiment/control tasks. Runtime constructs it after TaskModelService, registers `evaluate`, and drains/cancels it on shutdown. Accessor navigation does not affect its lifecycle (`model_tasks/decisions.md`).
 
+`live_voice` (`LiveVoiceService`) is constructed after TaskModelService and holds no background work itself; the server's call registry owns active Live calls and ends them in the lifespan before the Runtime closes (`model_tasks/live.md`).
+
 ### Hot-reload seams
 
 Reload methods refresh already-wired consumers without restart. Provider/Model registry identities stay stable; Skill, Extension, and Recall registries can be replaced through the live callbacks and installation paths below:

@@ -154,11 +154,9 @@ def test_validate_settings_data_rejects_unknown_timezone() -> None:
     assert errors[0].message == "is not a known IANA timezone"
 
 
-def test_live_voice_raw_validation_requires_boolean_opt_in() -> None:
-    assert validate_settings_data({"live_voice": {"enabled": True}}) == []
-    assert validate_settings_data({"live_voice": {"enabled": False}}) == []
-    assert validate_settings_data({"live_voice": {}}) == []
-    invalid_values: tuple[object, ...] = ("true", 1, None, [], {})
-    for value in invalid_values:
-        assert validate_settings_data({"live_voice": {"enabled": value}})
-    assert validate_settings_data({"live_voice": True})
+def test_removed_live_voice_section_is_an_unknown_key() -> None:
+    """Live voice is configured as a Task Model; its old opt-in is not a Setting."""
+
+    diagnostics = validate_settings_data({"live_voice": {"enabled": True}})
+
+    assert [(item.path, item.severity) for item in diagnostics] == [("$.live_voice", "warning")]

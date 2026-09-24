@@ -204,7 +204,6 @@
   let pendingAutosaveTransition = null;
   let debugEnabled = $state(false);
 
-  let liveVoiceView;
   let terminalsView = $state();
   let voiceChatSelection = null;
 
@@ -390,9 +389,11 @@
     };
   };
 
-  const liveNavigate = (view, target = {}) =>
+  // Live voice UI requests. `isCurrent` turns false once the requesting call
+  // stops, so a deferred autosave transition never navigates for an old call.
+  const liveNavigate = (view, target = {}, isCurrent = () => true) =>
     requestAutosaveTransition(() => {
-      if (!liveVoiceView?.isActive()) return false;
+      if (!isCurrent()) return false;
       if (view === 'chat' && target.session_id) {
         return appController.navigateToSession(
           target.agent_id,
@@ -403,15 +404,27 @@
       return true;
     });
 
-  const liveTerminalAction = async (action, args = {}) => {
+  const liveTerminalAction = async (
+    action,
+    args = {},
+    isCurrent = () => true,
+  ) => {
     if (action === 'context')
       return terminalsView?.getVoiceContext() ?? { visible_order: [] };
-    if ((await liveNavigate('terminals')) === false)
+    if ((await liveNavigate('terminals', {}, isCurrent)) === false)
       throw new Error('navigation_not_applied');
     await tick();
-    if (!terminalsView || !liveVoiceView?.isActive())
+    if (!terminalsView || !isCurrent())
       throw new Error('terminal_view_unavailable');
     return terminalsView.applyVoiceAction(action, args);
+  };
+
+  const liveUiActions = {
+    context: () => liveContext(),
+    open: ({ view, agent_id, session_id }, { isCurrent }) =>
+      liveNavigate(view, { agent_id, session_id }, isCurrent),
+    terminalView: ({ op, ...args }, { isCurrent }) =>
+      liveTerminalAction(op, args, isCurrent),
   };
 
   const navigateToSubAgent = (targetOrAgentId, maybeSessionId) =>
@@ -653,14 +666,10 @@
   <ExtensionRequests />
   {#snippet sidebarFooter()}
     <LiveVoice
-      bind:this={liveVoiceView}
-      getContext={liveContext}
-      navigate={liveNavigate}
-      terminalView={liveTerminalAction}
-      runEvents={runServerEvents}
+      configured={Boolean(setup.settings?.model_tasks?.live_voice?.target)}
+      uiActions={liveUiActions}
       wakewordEnabled={desktop.wakewordStatus.enabled}
       {serverUnavailable}
-      enabled={setup.settings?.live_voice?.enabled === true}
       onToast={desktop.showToast}
     />
   {/snippet}

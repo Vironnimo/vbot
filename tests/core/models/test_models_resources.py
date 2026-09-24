@@ -8,6 +8,7 @@ import pytest
 from core.models.models import (
     ModelRegistry,
 )
+from core.models.query import ModelQuery
 from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.providers import ProviderRegistry
 from core.providers.reasoning import resolve_reasoning_intent
@@ -625,6 +626,35 @@ class TestModelRegistryRealResources:
         for model_id in ("gpt-image-1", "gpt-image-1-mini", "gpt-image-1.5", "gpt-image-2"):
             model = registry.get("openai", model_id)
             assert model.capabilities.input_modalities == ("image", "text")
+
+    @pytest.mark.parametrize(
+        ("model_id", "connection_id", "voice_count", "default_voice"),
+        [
+            ("gpt-live-1", "api-key", 22, "marin"),
+            ("gpt-live-1-codex", "subscription", 9, "cove"),
+        ],
+    )
+    def test_openai_live_voice_models_are_task_only_per_connection(
+        self, model_id: str, connection_id: str, voice_count: int, default_voice: str
+    ):
+        """GPT-Live targets are live voice Task Models, never Chat Models."""
+
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        model = registry.get("openai", model_id)
+        assert model.connections == (connection_id,)
+        assert model.capabilities.task_types == ("live_voice",)
+        assert model.capabilities.tools is False
+        assert model.max_output_tokens is None
+        chat_models = registry.query(ModelQuery(provider_id="openai", tasks=("chat",)))
+        assert model_id not in {chat_model.model_id for _, chat_model in chat_models}
+        parameters = model.capabilities.task_options["live_voice"]["parameters"]
+        assert len(parameters["voice"]["values"]) == voice_count
+        assert parameters["voice"]["default"] == default_voice
+        assert parameters["backend_model"] == {"type": "model", "default": "gpt-5.6-terra"}
+        backend = registry.get("openai", "gpt-5.6-terra")
+        assert backend.capabilities.tools is True
+        assert backend.allows_connection(connection_id)
 
     def test_anthropic_opus_4_5_override_pins_budget_control(self):
         """``anthropic.overrides.json`` pins Opus 4.5 to ``budget`` control.

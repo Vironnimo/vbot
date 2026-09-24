@@ -74,6 +74,6 @@ Server startup holds `core.utils.server_control.server_control_claim` for the li
 
 Read only when your task matches:
 
-- Live voice startup RPC or exact completed-Run projection (`chat.run_result`) -> `model_tasks/live.md`
+- Live voice RPCs, the `/ws/live/{call_id}` owner socket, `server/live.py` call registry, Live app operations and Run feed, or exact completed-Run projection (`chat.run_result`) -> `model_tasks/live.md`
 
 - Shared `/ws` events, reconnect/epoch replay, presence, `resource_changed`, Run bridging, SSE replay, log-socket handoff -> `server/events-and-reconnect.md`

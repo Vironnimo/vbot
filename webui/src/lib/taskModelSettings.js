@@ -5,6 +5,7 @@ export const TASK_IMAGE_GENERATION = 'image_generation';
 export const TASK_VIDEO_GENERATION = 'video_generation';
 export const TASK_MUSIC_GENERATION = 'music_generation';
 export const TASK_TEXT_EMBEDDING = 'text_embedding';
+export const TASK_LIVE_VOICE = 'live_voice';
 
 export const JSON_OPTION_TYPE = 'json';
 
@@ -58,6 +59,17 @@ const SPEECH_TASK_ROWS = Object.freeze([
   },
 ]);
 
+const LIVE_VOICE_TASK_ROWS = Object.freeze([
+  {
+    taskType: TASK_LIVE_VOICE,
+    titleKey: 'settings.specializedModels.liveVoice',
+    titleFallback: 'Live voice',
+    descriptionKey: 'settings.specializedModels.liveVoiceDescription',
+    descriptionFallback:
+      'Realtime voice model for spoken conversations with vBot. Delegating models also use a backend model to operate the app.',
+  },
+]);
+
 const IMAGE_TASK_ROWS = Object.freeze([
   {
     taskType: TASK_IMAGE_UNDERSTANDING,
@@ -106,6 +118,7 @@ const GENERATED_MEDIA_TASK_ROWS = Object.freeze([
 
 export const TASK_MODEL_ROWS = Object.freeze([
   ...SPEECH_TASK_ROWS,
+  ...LIVE_VOICE_TASK_ROWS,
   ...IMAGE_TASK_ROWS,
   ...GENERATED_MEDIA_TASK_ROWS,
   ...TEXT_EMBEDDING_TASK_ROWS,
