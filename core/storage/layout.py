@@ -252,6 +252,23 @@ def _write_bootstrap_marker_fallback(data_dir: Path) -> None:
             pass
 
 
+def _create_directory(path: Path) -> bool:
+    """Create *path* and report whether this call created it.
+
+    Returns ``False`` when the path already exists, including when a
+    concurrent initializer created it between the existence check and
+    ``mkdir``. Callers still verify that an existing path is a directory.
+    """
+
+    if path.exists():
+        return False
+    try:
+        path.mkdir(parents=True)
+    except FileExistsError:
+        return False
+    return True
+
+
 @dataclass(frozen=True, slots=True)
 class DataDirectoryInitializationResult:
     """Paths created by one non-destructive initialization call."""
@@ -278,13 +295,13 @@ def initialize_data_directory(
 
     created_directories: list[Path] = []
     created_files: list[Path] = []
-    if not layout.root.exists():
-        layout.root.mkdir(parents=True)
+    if _create_directory(layout.root):
         created_directories.append(layout.root)
-        # Publish the bootstrap marker immediately after the root appears so a
-        # crash before the remaining directories are created does not leave an
-        # existing root without authorization. Re-running initialization on an
-        # existing root never manufactures authorization.
+        # Only the initializer whose mkdir created the root publishes the
+        # bootstrap marker - immediately, so a crash before the remaining
+        # directories are created does not leave an existing root without
+        # authorization. An existing root, including one another process
+        # created concurrently, never manufactures authorization here.
         # Import at call time: storage is at the bottom of the import graph
         # (models.database imports this module), so no Session import may run
         # at module level here. The fallback handles ``python core/storage/
@@ -300,14 +317,12 @@ def initialize_data_directory(
         raise NotADirectoryError(f"Data-directory path is not a directory: {layout.root}")
 
     for directory in layout.directories:
-        if directory.exists():
-            if not directory.is_dir():
-                raise NotADirectoryError(
-                    f"Canonical data-directory path is not a directory: {directory}"
-                )
-            continue
-        directory.mkdir(parents=True)
-        created_directories.append(directory)
+        if _create_directory(directory):
+            created_directories.append(directory)
+        elif not directory.is_dir():
+            raise NotADirectoryError(
+                f"Canonical data-directory path is not a directory: {directory}"
+            )
     environment_template_bytes = b""
     if not layout.environment_file.exists():
         try:
