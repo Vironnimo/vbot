@@ -176,6 +176,9 @@ def test_server_code_selects_the_actual_failed_resource(tmp_path, code, area):
         (["memory", "list", "assistnt"], "agent_not_found", ("agent", "list")),
         (["skill", "share", "a", "notes", "--to", "b"], "agent_not_found", ("agent", "list")),
         (["skill", "share", "a", "notes", "--to", "b"], "skill_not_found", ("skill", "inventory")),
+        # Resolver-backed commands receive the precise code for a missing address part.
+        (["prompt", "preview", "Builder@VBot"], "project_not_found", ("project", "list")),
+        (["session", "list", "Coder"], "agent_not_found", ("agent", "list")),
     ],
 )
 def test_not_found_codes_inspect_the_missing_resource_list(tmp_path, tokens, code, inspection):

@@ -12,7 +12,7 @@ from typing import Any, cast
 from core.chat import ChatSessionManager, CommandDispatcher
 from core.models import Capabilities, Model, ReasoningCapabilities
 from core.models.query import ModelQuery
-from core.projects.resolver import AgentResolutionError
+from core.projects.resolver import ResolutionAgentNotFoundError
 from core.providers.accounts import ConnectionRef, ProviderAccount
 from core.runs import ChatRunManager
 from core.sessions.format import write_bootstrap_marker
@@ -63,8 +63,9 @@ class IntegrationAgentResolver:
     """Resolver seam the chat loop calls; identity path delegates to ``IntegrationAgents``.
 
     ``project_id=None`` returns the same agent ``IntegrationAgents.get`` would (byte-for-byte
-    today's identity path); an unknown agent surfaces as :class:`AgentResolutionError`. These
-    integration tests never exercise the config/project path.
+    today's identity path); an unknown agent surfaces as
+    :class:`ResolutionAgentNotFoundError`, like the real resolver. These integration tests
+    never exercise the config/project path.
     """
 
     def __init__(self, agents: IntegrationAgents) -> None:
@@ -74,7 +75,7 @@ class IntegrationAgentResolver:
         try:
             return self._agents.get(agent_id)
         except KeyError as error:
-            raise AgentResolutionError(str(error)) from error
+            raise ResolutionAgentNotFoundError(str(error)) from error
 
 
 class IntegrationProviders:

@@ -102,7 +102,7 @@ async def test_prompt_preview_rejects_unknown_agent_id(tmp_path: Path) -> None:
     )
 
     assert response["ok"] is False
-    assert response["error"]["code"] == "domain_error"
+    assert response["error"]["code"] == "agent_not_found"
     assert "nobody" in response["error"]["message"]
 
 
@@ -223,7 +223,7 @@ async def test_prompt_preview_rejects_unknown_project_agent(tmp_path: Path) -> N
     )
 
     assert response["ok"] is False
-    assert response["error"]["code"] == "domain_error"
+    assert response["error"]["code"] == "agent_not_found"
     assert "ghost" in response["error"]["message"]
 
 

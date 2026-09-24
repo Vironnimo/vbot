@@ -1,12 +1,13 @@
 """Project scan and Identity-Agent resolution tests."""
 
 from .resolver_test_support import (
-    AgentResolutionError,
     AgentStore,
     ConfigAgent,
     FindingType,
     Path,
     ProjectStore,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
     _openai_configured,
     _project,
     _resolver,
@@ -168,7 +169,7 @@ def test_identity_resolution_unknown_agent_raises(
 ) -> None:
     resolver = _resolver(agents, projects, _openai_configured())
 
-    with pytest.raises(AgentResolutionError):
+    with pytest.raises(ResolutionAgentNotFoundError):
         resolver.resolve_agent(None, "missing-agent")
 
 
@@ -239,6 +240,20 @@ def test_single_agent_config_is_read_fresh_per_resolve(
     assert runtime_agent.body == "v2\n"
 
 
+def test_cached_member_whose_source_vanished_is_not_found(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    project = _project(projects, repo)
+    resolver = _resolver(agents, projects, _openai_configured())
+    resolver.rescan_project(project)
+
+    next(repo.rglob("builder.md")).unlink()
+
+    with pytest.raises(ResolutionAgentNotFoundError):
+        resolver.resolve_agent(project.project_id, "builder")
+
+
 def test_team_membership_uses_cache_not_live_new_file(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
@@ -252,7 +267,7 @@ def test_team_membership_uses_cache_not_live_new_file(
     _write_agent(repo, "planner.md", model="openai/gpt-5.2")
 
     # Act / Assert: the new agent is not on the cached Team until a re-scan.
-    with pytest.raises(AgentResolutionError):
+    with pytest.raises(ResolutionAgentNotFoundError):
         resolver.resolve_agent(project.project_id, "planner")
 
     # After an explicit re-scan, the Team includes the new member.
@@ -268,7 +283,7 @@ def test_resolve_unknown_project_agent_raises(
     project = _project(projects, repo)
     resolver = _resolver(agents, projects, _openai_configured())
 
-    with pytest.raises(AgentResolutionError):
+    with pytest.raises(ResolutionAgentNotFoundError):
         resolver.resolve_agent(project.project_id, "ghost")
 
 
@@ -276,7 +291,8 @@ def test_case_variant_addresses_resolve_as_unknown(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
     # Ids are exact. On a case-insensitive filesystem ``VBot`` and ``MAIN`` open the
-    # stored ``vbot``/``main`` trees; resolution must still treat them as unknown.
+    # stored ``vbot``/``main`` trees; resolution must still treat them as unknown
+    # and name the missing resource precisely.
     from core.agents import AgentNotFoundError
     from core.projects import ProjectNotFoundError, parse_agent_address
 
@@ -286,10 +302,12 @@ def test_case_variant_addresses_resolve_as_unknown(
     resolver = _resolver(agents, projects, _openai_configured())
     agent_id, project_id = parse_agent_address("Builder@VBot")
 
-    with pytest.raises(AgentResolutionError) as project_error:
+    with pytest.raises(ResolutionProjectNotFoundError) as project_error:
         resolver.resolve_agent(project_id, agent_id)
-    with pytest.raises(AgentResolutionError) as identity_error:
+    with pytest.raises(ResolutionAgentNotFoundError) as identity_error:
         resolver.resolve_agent(None, "MAIN")
+    with pytest.raises(ResolutionAgentNotFoundError):
+        resolver.resolve_agent("vbot", "Builder")
 
     assert isinstance(project_error.value.__cause__, ProjectNotFoundError)
     assert isinstance(identity_error.value.__cause__, AgentNotFoundError)
