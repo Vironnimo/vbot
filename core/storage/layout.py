@@ -44,6 +44,10 @@ DATA_DIRECTORY_RELATIVE_PATHS = (
 
 ENVIRONMENT_TEMPLATE_RELATIVE_PATH = Path("data-dir/.env.example")
 SETTINGS_FILE_NAME = "settings.json"
+# An empty Settings document in the current Settings format. Kept literal so this
+# module stays importable without the Settings domain (setup runs it as a script);
+# a test pins it to ``core.settings.SETTINGS_FORMAT``.
+INITIAL_SETTINGS_DOCUMENT = '{\n  "format_version": 1\n}\n'
 ENVIRONMENT_FILE_NAME = ".env"
 
 
@@ -344,7 +348,7 @@ def initialize_data_directory(
 
     try:
         with layout.settings_file.open("x", encoding="utf-8", newline="\n") as settings_file:
-            settings_file.write("{}\n")
+            settings_file.write(INITIAL_SETTINGS_DOCUMENT)
         created_files.append(layout.settings_file)
     except FileExistsError:
         pass

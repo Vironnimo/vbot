@@ -152,7 +152,7 @@ metadata:
         encoding="utf-8",
     )
     config.data_dir.joinpath("settings.json").write_text(
-        json.dumps({"skill_directories": [str(extra_skills_dir)]}),
+        json.dumps({"format_version": 1, "skill_directories": [str(extra_skills_dir)]}),
         encoding="utf-8",
     )
     runtime = Runtime(config)

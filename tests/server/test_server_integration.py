@@ -128,7 +128,7 @@ def test_invalid_settings_do_not_block_application_startup(tmp_path: Path) -> No
     data_dir.mkdir(parents=True)
     write_bootstrap_marker(data_dir)
     (data_dir / "settings.json").write_text(
-        json.dumps({"server_port": 8500, "compaction": {"enabled": "yes"}}),
+        json.dumps({"format_version": 1, "server_port": 8500, "compaction": {"enabled": "yes"}}),
         encoding="utf-8",
     )
     app = create_app(runtime=StubRuntime(Config(data_dir=data_dir)))

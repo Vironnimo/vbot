@@ -5,7 +5,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from core.settings import validate_data_dir_config, validate_settings_data
+import pytest
+
+from core.settings import (
+    SettingsValidationError,
+    load_runtime_settings_json,
+    validate_data_dir_config,
+    validate_settings_data,
+    validate_settings_document,
+)
 
 
 def test_validate_data_dir_config_delegates_project_files(tmp_path: Path) -> None:
@@ -160,3 +168,68 @@ def test_removed_live_voice_section_is_an_unknown_key() -> None:
     diagnostics = validate_settings_data({"live_voice": {"enabled": True}})
 
     assert [(item.path, item.severity) for item in diagnostics] == [("$.live_voice", "warning")]
+
+
+@pytest.mark.parametrize(
+    ("document", "message"),
+    [
+        ({"keep_awake": True}, "is required"),
+        ({"format_version": 2, "keep_awake": True}, "written by a newer vBot"),
+    ],
+)
+def test_settings_document_requires_the_current_format_version(
+    document: dict[str, object], message: str
+) -> None:
+    diagnostics = validate_settings_document(document)
+
+    assert [(item.severity, item.path) for item in diagnostics] == [("error", "$.format_version")]
+    assert message in diagnostics[0].message
+
+
+def test_runtime_settings_refuse_a_newer_format_version(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"format_version": 2, "keep_awake": True}), encoding="utf-8")
+
+    with pytest.raises(SettingsValidationError, match="written by a newer vBot"):
+        load_runtime_settings_json(path)
+
+
+def test_runtime_settings_leave_out_unknown_fields_and_the_version(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "future": True,
+                "web_fetch": {"provider": "direct", "future_mode": "x"},
+                "model_tasks": {"future_task": {"target": "a/b::c"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings, ignored = load_runtime_settings_json(path)
+
+    assert settings == {"web_fetch": {"provider": "direct"}, "model_tasks": {}}
+    assert ignored == ()
+
+
+def test_unknown_fields_below_strict_sections_are_warnings() -> None:
+    diagnostics = validate_settings_data(
+        {
+            "web_fetch": {"provider": "direct", "future_mode": "x"},
+            "model_tasks": {"future_task": {"target": "a/b::c"}},
+            "defaults": {"future_section": {}, "agent": {"future_default": 1}},
+            "providers": {
+                "openrouter": {"routing": {"default": {"mode": "automatic", "future": 1}}}
+            },
+        }
+    )
+
+    assert sorted((item.severity, item.path) for item in diagnostics) == [
+        ("warning", "$.defaults.agent.future_default"),
+        ("warning", "$.defaults.future_section"),
+        ("warning", "$.model_tasks.future_task"),
+        ("warning", "$.providers.openrouter.routing.default.future"),
+        ("warning", "$.web_fetch.future_mode"),
+    ]
