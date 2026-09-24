@@ -69,6 +69,20 @@ def test_reconcile_is_a_noop_on_the_current_schema(data_dir: Path) -> None:
     assert _changes(path, NOTES_SCHEMA_SQL) == []
 
 
+def test_table_constraints_written_without_a_space_reopen_as_current(data_dir: Path) -> None:
+    compact = (
+        NOTES_SCHEMA_SQL + "\nCREATE TABLE pairs(left_id TEXT NOT NULL,right_id TEXT NOT NULL,"
+        "flag INTEGER NOT NULL CHECK(flag IN(0,1)),"
+        "PRIMARY KEY(left_id,right_id),UNIQUE(right_id,left_id)) STRICT;"
+    )
+    database = open_database(notes_spec(data_dir, schema_sql=compact))
+    database.close()
+
+    assert _changes(database.path, compact) == []
+    reopened = open_database(notes_spec(data_dir, schema_sql=compact))
+    reopened.close()
+
+
 def test_open_adds_missing_columns_tables_and_indexes_and_keeps_rows(data_dir: Path) -> None:
     _created(data_dir, "kept")
     grown = NOTES_SCHEMA_SQL + (
