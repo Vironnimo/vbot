@@ -213,3 +213,73 @@ async def test_byte_budget_evicts_slow_live_subscriber_below_count_limit():
     assert stream.subscriber_count == 0
     with pytest.raises(StopAsyncIteration):
         await anext(iterator)
+
+
+@pytest.mark.asyncio
+async def test_events_lost_from_retention_during_historical_replay_evict_subscriber() -> None:
+    lagged: list[bool] = []
+    stream = ReplayEventStream[dict[str, int]](
+        event_retention_limit=10,
+        subscriber_queue_limit=10,
+        sequence_of=_sequence_of,
+        on_lagged=lambda: lagged.append(True),
+    )
+    for sequence in range(1, 11):
+        stream.publish({"sequence": sequence})
+
+    received: list[int] = []
+    async with asyncio.timeout(2):
+        async for event in stream.subscribe(after_sequence=0):
+            received.append(event["sequence"])
+            if event["sequence"] == 1:
+                for later in range(11, 41):
+                    stream.publish({"sequence": later})
+
+    assert received == list(range(1, 11))
+    assert lagged == [True]
+    assert stream.subscriber_count == 0
+
+
+@pytest.mark.asyncio
+async def test_events_lost_from_retention_during_catch_up_evict_subscriber() -> None:
+    lagged: list[bool] = []
+    stream = ReplayEventStream[dict[str, int]](
+        event_retention_limit=10,
+        subscriber_queue_limit=10,
+        sequence_of=_sequence_of,
+        on_lagged=lambda: lagged.append(True),
+    )
+    for sequence in range(1, 4):
+        stream.publish({"sequence": sequence})
+
+    received: list[int] = []
+    async with asyncio.timeout(2):
+        async for event in stream.subscribe(after_sequence=0):
+            received.append(event["sequence"])
+            if event["sequence"] == 1:
+                # Retained for the catch-up scan after historical replay.
+                stream.publish({"sequence": 4})
+            if event["sequence"] == 4:
+                # The catch-up subscriber's queue keeps 5..14 and drops the
+                # rest; retention keeps only 25..34, so 15..24 are gone.
+                for later in range(5, 35):
+                    stream.publish({"sequence": later})
+
+    assert received == list(range(1, 15))
+    assert lagged == [True]
+    assert stream.subscriber_count == 0
+
+
+@pytest.mark.asyncio
+async def test_replay_head_may_start_after_retention_dropped_older_events() -> None:
+    stream = ReplayEventStream[dict[str, int]](
+        event_retention_limit=3,
+        subscriber_queue_limit=10,
+        sequence_of=_sequence_of,
+    )
+    for sequence in range(1, 8):
+        stream.publish({"sequence": sequence})
+
+    received = [event["sequence"] async for event in stream.subscribe(after_sequence=2, live=False)]
+
+    assert received == [5, 6, 7]
