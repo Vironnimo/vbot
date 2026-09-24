@@ -438,7 +438,7 @@ async def _handle_subagent(
                     parent_key=parent_key,
                 )
             _track_queued_subagent_completion(
-                batch_tracker, parent_key, item, activity, activity_file
+                batch_tracker, parent_key, item, activity, activity_file, background=background
             )
             activity_handed_off = activity is not None
             try:

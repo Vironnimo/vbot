@@ -770,3 +770,101 @@ async def test_queued_foreground_wait_is_bounded_by_subagent_timeout(
     finally:
         release_busy.set()
         await manager.aclose()
+
+
+async def _queue_background_child(
+    tmp_path: Path,
+    manager: ChatRunManager,
+    tracker: SubAgentBatchTracker,
+    release_busy: asyncio.Event,
+) -> tuple[Any, Run, str]:
+    runtime = make_runtime(tmp_path, manager)
+    runtime.chat_sessions.create("worker", session_id="busy-child")
+
+    async def busy(_run: Run) -> None:
+        await release_busy.wait()
+
+    busy_run = await manager.start(_address("worker", "busy-child"), busy)
+    result = await _handle_subagent(
+        make_context(nesting_depth=0),
+        {"content": "follow-up", "agent_id": "worker", "session_id": "busy-child"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+    assert result["ok"] is True
+    assert result["data"]["status"] == "queued"
+    return runtime, busy_run, result["data"]["id"]
+
+
+async def test_user_removed_background_queue_item_is_delivered_and_answerable(
+    tmp_path: Path,
+) -> None:
+    manager = ChatRunManager()
+    trigger = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger)
+    release_busy = asyncio.Event()
+    persisted: list[Any] = []
+    try:
+        runtime, _busy, work_id = await _queue_background_child(
+            tmp_path, manager, tracker, release_busy
+        )
+        [item] = manager.list_queued("worker", "busy-child", project_id=None)
+
+        # The public Queue RPC removes the item without involving the coordinator.
+        assert manager.remove_queued("worker", "busy-child", item.item_id, project_id=None)
+        for _ in range(10):
+            await asyncio.sleep(0)
+
+        assert f"subagent:parent-run:{work_id}" in trigger.completion_deliveries
+        status = await _handle_subagent_result(
+            make_context(run_id="later-run", result_persisted_hook=persisted.append),
+            {"id": work_id},
+            runtime=runtime,
+            batch_tracker=tracker,
+        )
+        assert status["ok"] is True
+        assert status["data"]["status"] == "cancelled"
+        assert status["data"]["result"] is None
+        assert "run_id" not in status["data"]
+
+        persisted[0]()
+        assert tracker.owned_entry("parent", "parent-session", None, work_id) is None
+        assert f"subagent:parent-run:{work_id}" not in trigger.completion_deliveries
+    finally:
+        release_busy.set()
+        await manager.aclose()
+
+
+async def test_background_queue_item_failing_admission_is_delivered(tmp_path: Path) -> None:
+    from core.runs import RunAdmissionBlockedError
+
+    blocked = False
+
+    def admission_validator(_address: SessionAddress, _admission: Any) -> None:
+        if blocked:
+            raise RunAdmissionBlockedError("owner closed")
+
+    manager = ChatRunManager(admission_validator=admission_validator)
+    trigger = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger)
+    release_busy = asyncio.Event()
+    try:
+        _runtime, busy_run, work_id = await _queue_background_child(
+            tmp_path, manager, tracker, release_busy
+        )
+        blocked = True
+        release_busy.set()
+        await busy_run.wait()
+        for _ in range(10):
+            await asyncio.sleep(0)
+
+        owned = tracker.owned_entry("parent", "parent-session", None, work_id)
+        assert owned is not None
+        entry = owned[1]
+        assert entry.complete
+        assert entry.result is not None
+        assert entry.result["status"] == "failed"
+        assert f"subagent:parent-run:{work_id}" in trigger.completion_deliveries
+    finally:
+        release_busy.set()
+        await manager.aclose()
