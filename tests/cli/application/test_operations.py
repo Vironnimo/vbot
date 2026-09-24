@@ -160,3 +160,30 @@ def test_worker_failure_before_claim_is_saved_with_its_diagnostics(
     startup_log = install.root / "logs" / f"{failed.id}-startup.log"
     assert str(startup_log) in failed.error
     assert startup_log.read_bytes() == b"native-runtime-failure"
+
+
+def test_agent_handoff_requires_a_server_owned_ticket_in_this_data_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install = _install(tmp_path)
+    client = Installation(tmp_path, "desktop-client", "127.0.0.1", 8420, None)
+    foreign = tmp_path / "elsewhere" / "runtime" / "update-handoffs" / "ticket.json"
+    minted: list[dict[str, object]] = []
+
+    def rpc_call(_target: object, method: str, params: dict[str, object]) -> SimpleNamespace:
+        assert method == "application.update_handoff_mint"
+        minted.append(params)
+        return SimpleNamespace(ok=True, data={"handoff_ticket": str(foreign)}, message="")
+
+    monkeypatch.setattr("cli.rpc_client.rpc_call", rpc_call)
+    monkeypatch.setattr("cli.application.processes.target", lambda _install: SimpleNamespace())
+    monkeypatch.setattr(operations, "spawn_worker", lambda *_args: pytest.fail("must not spawn"))
+
+    with pytest.raises(ApplicationError, match="client-only"):
+        operations.request_update(client, handoff_token="opaque-token")
+    assert minted == []
+
+    with pytest.raises(ApplicationError, match="not valid for this installation's data directory"):
+        operations.request_update(install, handoff_token="opaque-token")
+    assert minted == [{"handoff_token": "opaque-token"}]
+    assert operations.operations(install) == []
