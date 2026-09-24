@@ -143,8 +143,9 @@ async def test_tool_cycle_boundaries_need_no_separate_journal_writes(
 
     await build_chat_loop(runtime).send("coder", "probe once", session_id="session-one")
 
-    # Assistant boundaries and Tool Results commit inside their history writes.
-    assert journal_writes == [["run_started"]]
+    # The journal starts with the input append, and Assistant boundaries and
+    # Tool Results commit inside their history writes.
+    assert journal_writes == []
     persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert persisted_roles(persisted)[-3:] == ["assistant", "tool", "assistant"]
 

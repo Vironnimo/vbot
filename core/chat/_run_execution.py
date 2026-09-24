@@ -44,7 +44,7 @@ from core.chat.events import (
     _persist_run_error,
     _timing_payload,
 )
-from core.chat.messages import ChatMessage
+from core.chat.messages import ChatMessage, JsonObject
 from core.chat.model_resolution import (
     _resolve_fallback_chain,
     _split_agent_model,
@@ -75,6 +75,8 @@ from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from core.chat._agentic_progression import AgenticProgression
     from core.chat._request_builder import RequestBuilder
     from core.chat._run_state import (
@@ -189,13 +191,13 @@ class RunExecution:
                     context_window=None,
                 )
             if not request.internal or prior_continuation is not None:
+                # The chain starts with this Run's input append (see _execute_run_impl).
                 continuation_tracker = ContinuationTracker(
                     session,
                     run_id=run.id,
                     request=_serialize_continuation_request(request.content),
                     prior_state=prior_continuation,
                 )
-                await continuation_tracker.start()
         try:
             context = await create_run_execution_context(
                 self._dependencies,
@@ -271,6 +273,8 @@ class RunExecution:
 
         try:
             session.begin_defer_notes()
+            # Commits with the first write that persists the Skill note (or in its place).
+            record_seen_skills: Callable[[JsonObject], None] | None = None
             try:
                 extension_registry = self._dependencies.get_extension_registry()
                 if extension_registry is not None:
@@ -287,15 +291,15 @@ class RunExecution:
                     )
 
                 run.raise_if_cancelled()
-                await _CHAT_TRANSFORM_WORKERS.run(
-                    self._requests._announce_newly_available_skills,
-                    run.agent_id,
-                    run.session_id,
-                    session,
+                skill_announcement = await _CHAT_TRANSFORM_WORKERS.run(
+                    self._requests._plan_skill_announcement,
+                    session_address,
                     agent,
                     context.skill_registry,
-                    project_id,
                 )
+                if skill_announcement.note is not None:
+                    session.add_note(skill_announcement.note)
+                record_seen_skills = skill_announcement.record_seen
                 async with self._dependencies.sessions.write_lock(session_address):
                     # Another admitted Run may have appended while this Run was
                     # queued for the Session lock. Refresh before assigning image
@@ -322,7 +326,7 @@ class RunExecution:
                         session.add_note(request.content)
                         persisted_messages = session.take_deferred_notes()
                     elif request.input_already_persisted:
-                        persisted_messages = []
+                        persisted_messages = session.take_deferred_notes()
                     else:
                         if request.content is None:
                             raise ChatError("content is required for non-retry runs")
@@ -349,8 +353,33 @@ class RunExecution:
                             *session.take_deferred_notes(),
                             user_message,
                         ]
+                    # One transaction persists the input, starts the Continuation
+                    # chain and records the announced Skills. An edit restarts the
+                    # chain below instead, after its history edit commits.
+                    starting_tracker = (
+                        context.continuation_tracker if request.edit_message_id is None else None
+                    )
                     if persisted_messages:
-                        await context.session_snapshot.append(session, persisted_messages)
+                        await context.session_snapshot.append(
+                            session,
+                            persisted_messages,
+                            journal=(
+                                starting_tracker.start_boundary()
+                                if starting_tracker is not None
+                                else None
+                            ),
+                            metadata_mutation=record_seen_skills,
+                        )
+                    else:
+                        if record_seen_skills is not None:
+                            await _CHAT_TRANSFORM_WORKERS.run(
+                                self._dependencies.sessions.mutate_metadata,
+                                session_address,
+                                record_seen_skills,
+                            )
+                        if starting_tracker is not None:
+                            await starting_tracker.start()
+                    record_seen_skills = None
                     if request.edit_message_id is not None:
                         context.session_snapshot.commit_edit()
                         if context.continuation_tracker is not None:
@@ -386,7 +415,11 @@ class RunExecution:
                                 exc_info=True,
                             )
             finally:
-                await session.flush_deferred_notes_async()
+                # Deferred notes left by a failed input append still persist, and
+                # an unrecorded Skill note carries its seen-Skill change along.
+                await session.append_many_async(
+                    session.take_deferred_notes(), metadata_mutation=record_seen_skills
+                )
             if (
                 not internal
                 and request.temporary_binding is None
