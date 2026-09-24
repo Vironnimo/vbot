@@ -42,6 +42,7 @@ from core.sessions._types import (
     DeliveryReceipt,
     JsonObject,
     OwnedRunRecord,
+    OwnedSessionSummary,
     RunStartBoundary,
     SessionAddress,
     SessionDescriptorSource,
@@ -388,8 +389,15 @@ class ChatSessionManager:
     ) -> builtins.list[ChatSession]:
         return await _run_session_io(self.list, agent_id, project_id)
 
-    def list_addresses(self, project_id: str | None = None) -> builtins.list[SessionAddress]:
-        return self._store.list_addresses(project_id=project_id, agent_id=None)
+    def list_addresses(
+        self, project_id: str | None = None, *, exclude_owner_managed: bool = False
+    ) -> builtins.list[SessionAddress]:
+        """List live addresses in one scope, optionally without Extension-owned Sessions."""
+        return self._store.list_addresses(
+            project_id=project_id,
+            agent_id=None,
+            exclude_owner_managed=exclude_owner_managed,
+        )
 
     def list_with_metadata(
         self, agent_id: str, project_id: str | None = None
@@ -631,6 +639,86 @@ class ChatSessionManager:
             )
             for address, row in rows
         ]
+
+    def set_temporary_group_title(self, *, owner_name: str, group_id: str, title: str) -> None:
+        """Replace the display title of one owner's temporary execution group."""
+        self._store.set_temporary_group_title(owner_name=owner_name, group_id=group_id, title=title)
+
+    async def set_temporary_group_title_async(
+        self, *, owner_name: str, group_id: str, title: str
+    ) -> None:
+        await _run_session_io(
+            lambda: self.set_temporary_group_title(
+                owner_name=owner_name, group_id=group_id, title=title
+            )
+        )
+
+    async def temporary_group_titles_async(
+        self, *, owner_name: str, group_ids: Sequence[str]
+    ) -> dict[str, str]:
+        """Return stored display titles for this owner's groups, keyed by group id."""
+        return await _run_session_io(
+            lambda: self._store.temporary_group_titles(owner_name=owner_name, group_ids=group_ids)
+        )
+
+    def list_owned_session_summaries(
+        self,
+        *,
+        owner_name: str | None = None,
+        group_id: str | None = None,
+        metadata_keys: Sequence[str] = (),
+    ) -> builtins.list[OwnedSessionSummary]:
+        """Return live owner-managed Sessions in creation order with binding labels.
+
+        Derived projections use this set-oriented read instead of enumerating
+        synthetic participant Agent ids. It exposes only display labels and the
+        configured Model from the protected binding, never its complete
+        configuration. ``group_id`` narrows one owner's group.
+        """
+        result: builtins.list[OwnedSessionSummary] = []
+        for state in self._store.owned_session_summary_rows(
+            owner_name=owner_name, group_id=group_id, metadata_keys=metadata_keys
+        ):
+            summary = _session_list_summary_from_state(state)
+            for key in metadata_keys:
+                payload = state[f"metadata_{key}_json"]
+                if payload is not None:
+                    summary[key] = json.loads(str(payload))
+            participant_name = state["participant_name"]
+            model = state["participant_model"]
+            group_title = state["group_title"]
+            result.append(
+                OwnedSessionSummary(
+                    address=SessionAddress(
+                        project_id=str(state["project_id"]) or None,
+                        agent_id=str(state["agent_id"]),
+                        session_id=str(state["session_id"]),
+                    ),
+                    owner_name=str(state["owner_name"]),
+                    group_id=str(state["group_id"]),
+                    group_title=group_title if isinstance(group_title, str) else None,
+                    participant_id=str(state["participant_id"]),
+                    participant_name=(
+                        participant_name if isinstance(participant_name, str) else None
+                    ),
+                    model=model if isinstance(model, str) else None,
+                    summary=summary,
+                )
+            )
+        return result
+
+    async def list_owned_session_summaries_async(
+        self,
+        *,
+        owner_name: str | None = None,
+        group_id: str | None = None,
+        metadata_keys: Sequence[str] = (),
+    ) -> builtins.list[OwnedSessionSummary]:
+        return await _run_session_io(
+            lambda: self.list_owned_session_summaries(
+                owner_name=owner_name, group_id=group_id, metadata_keys=metadata_keys
+            )
+        )
 
     async def append_messages_with_receipts_async(
         self,

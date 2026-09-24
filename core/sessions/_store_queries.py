@@ -103,6 +103,7 @@ def list_addresses(
     project_id: str | None = None,
     agent_id: str | None = None,
     include_all_scopes: bool = False,
+    exclude_owner_managed: bool = False,
 ) -> list[SessionAddress]:
     clauses = ["status = 'live'"]
     params: list[str] = []
@@ -112,6 +113,11 @@ def list_addresses(
     if agent_id is not None:
         clauses.append("agent_id = ?")
         params.append(agent_id)
+    if exclude_owner_managed:
+        clauses.append(
+            "NOT EXISTS (SELECT 1 FROM temporary_session_bindings AS owner_binding "
+            "WHERE owner_binding.session_key = sessions.session_key)"
+        )
     rows = connection.execute(
         "SELECT project_id, agent_id, session_id FROM sessions WHERE "
         + " AND ".join(clauses)

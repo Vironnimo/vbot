@@ -409,6 +409,33 @@ class SessionStore:
                 connection, owner_name=owner_name, group_id=group_id, after=after, limit=limit
             )
 
+    def set_temporary_group_title(self, *, owner_name: str, group_id: str, title: str) -> None:
+        self._execute_write(
+            lambda connection: _store_owned.set_temporary_group_title(
+                connection, owner_name=owner_name, group_id=group_id, title=title
+            )
+        )
+
+    def temporary_group_titles(
+        self, *, owner_name: str, group_ids: Sequence[str]
+    ) -> dict[str, str]:
+        with self._runtime.read_ctx() as connection:
+            return _store_owned.temporary_group_titles(
+                connection, owner_name=owner_name, group_ids=group_ids
+            )
+
+    def owned_session_summary_rows(
+        self,
+        *,
+        owner_name: str | None = None,
+        group_id: str | None = None,
+        metadata_keys: Sequence[str] = (),
+    ) -> list[sqlite3.Row]:
+        with self._runtime.read_ctx() as connection:
+            return _store_owned.owned_session_summary_rows(
+                connection, owner_name=owner_name, group_id=group_id, metadata_keys=metadata_keys
+            )
+
     def append_messages_with_receipts(
         self,
         address: SessionAddress,
@@ -728,6 +755,7 @@ class SessionStore:
         project_id: str | None = None,
         agent_id: str | None = None,
         include_all_scopes: bool = False,
+        exclude_owner_managed: bool = False,
     ) -> list[SessionAddress]:
         with self._runtime.read_ctx() as connection:
             return _store_queries.list_addresses(
@@ -735,6 +763,7 @@ class SessionStore:
                 project_id=project_id,
                 agent_id=agent_id,
                 include_all_scopes=include_all_scopes,
+                exclude_owner_managed=exclude_owner_managed,
             )
 
     def list_state_rows(self, project_id: str | None, agent_id: str) -> list[sqlite3.Row]:

@@ -432,12 +432,16 @@ class ProjectStore:
 
         Queries canonical live Session addresses and keeps each distinct Agent.
         This is the single enumeration point for project-scoped Session
-        discovery (Statistics, Recall). Returns ids sorted for determinism; an
-        unknown Project yields an empty list rather than raising.
+        discovery (Statistics, Team orphan findings). Extension-owned participant Sessions
+        carry synthetic Agent ids outside the Team and are excluded; their owners
+        report them separately. Returns ids sorted for determinism; an unknown
+        Project yields an empty list rather than raising.
         """
         if not self._project_dir(project_id).exists():
             return []
-        addresses = self._session_manager().list_addresses(project_id=project_id)
+        addresses = self._session_manager().list_addresses(
+            project_id=project_id, exclude_owner_managed=True
+        )
         return sorted({address.agent_id for address in addresses})
 
     def _session_manager(self) -> ChatSessionManager:
