@@ -168,11 +168,8 @@ class ChatSessionManager:
         return await _run_session_io(self.exists, address)
 
     def existing_addresses(self, addresses: Sequence[SessionAddress]) -> set[SessionAddress]:
-        """Return which *addresses* name live Sessions, in one set-oriented read.
-
-        An address whose id no Session could carry is simply absent from the result.
-        """
-        return self._store.existing_addresses(addresses) if addresses else set()
+        """Return which *addresses* name live Sessions, in one set-oriented read."""
+        return self._store.existing_addresses(addresses)
 
     def get(self, address: SessionAddress) -> ChatSession:
         _validate_session_id(address.session_id)
@@ -201,13 +198,9 @@ class ChatSessionManager:
         *,
         create_missing: bool = False,
     ) -> tuple[JsonObject, JsonObject]:
-        """Apply an idempotent metadata mutation; unchanged metadata costs only a read.
+        """Re-assert metadata, writing only a real change (or a ``create_missing`` Session).
 
-        Suited to state that is re-asserted on every event (routing context,
-        pointers). With ``create_missing`` a missing Session is created in the
-        same write transaction. The mutation may run twice, so it must be
-        deterministic and side-effect free; ``mutate_metadata`` remains the
-        single-invocation write. Returns the previous and resulting metadata.
+        The mutation may run twice, so it must be deterministic and side-effect free.
         """
         if create_missing:
             _validate_creatable_address(address)
@@ -413,10 +406,7 @@ class ChatSessionManager:
         agent_id: str | None = None,
         exclude_owner_managed: bool = False,
     ) -> builtins.list[SessionAddress]:
-        """List live addresses in one scope (optionally one Agent's), sorted by id.
-
-        ``exclude_owner_managed`` leaves out Extension-owned Sessions.
-        """
+        """List live addresses in one scope or one Agent, optionally without Extension ones."""
         return self._store.list_addresses(
             project_id=project_id,
             agent_id=agent_id,
@@ -430,11 +420,7 @@ class ChatSessionManager:
         return self._store.list_agent_ids(project_id, exclude_owner_managed=exclude_owner_managed)
 
     def newest_session_id(self, agent_id: str, project_id: str | None = None) -> str | None:
-        """Return the most recently active listable Session of one Agent scope, if any.
-
-        Every run kind counts (Sub-Agent, Reflection, Cron and Channel Sessions
-        included); Extension-owned Sessions never do.
-        """
+        """Return the most recently active listed Session (any run kind, no Extension one)."""
         page = self.list_summaries_page([(project_id, agent_id)], limit=1)
         return str(page.sessions[0]["id"]) if page.sessions else None
 
@@ -848,14 +834,13 @@ class ChatSessionManager:
         after: int = 0,
         limit: int = 100,
     ) -> builtins.list[OwnedRunRecord]:
-        rows = self._store.owned_runs(
+        return self._store.owned_runs(
             owner_name=owner_name,
             group_id=group_id,
             participant_id=participant_id,
             after=after,
             limit=limit,
         )
-        return [_owned_run_record(row) for row in rows]
 
     async def owned_runs_async(
         self,
@@ -876,47 +861,25 @@ class ChatSessionManager:
             )
         )
 
-    def owned_runs_by_id(
-        self, *, owner_name: str, group_id: str, run_ids: Sequence[str]
-    ) -> dict[str, OwnedRunRecord]:
-        """Read the execution records of exact Run ids in one owner group.
-
-        Ids without a record in that group, including Runs of deleted Sessions,
-        are absent from the result. Each id is one index probe regardless of how
-        much Run history the group retains.
-        """
-        rows = self._store.owned_runs_by_id(
-            owner_name=owner_name, group_id=group_id, run_ids=run_ids
-        )
-        records = (_owned_run_record(row) for row in rows)
-        return {record.run_id: record for record in records}
-
     async def owned_runs_by_id_async(
         self, *, owner_name: str, group_id: str, run_ids: Sequence[str]
     ) -> dict[str, OwnedRunRecord]:
+        """Read exact Run ids' execution records in one owner group (absent ids omitted)."""
         return await _run_session_io(
-            lambda: self.owned_runs_by_id(owner_name=owner_name, group_id=group_id, run_ids=run_ids)
+            lambda: self._store.owned_runs_by_id(
+                owner_name=owner_name, group_id=group_id, run_ids=run_ids
+            )
         )
-
-    def owned_run_by_input(self, address: SessionAddress, input_id: str) -> OwnedRunRecord | None:
-        """Read the execution record admitted for one input of a live Session."""
-        row = self._store.owned_run_by_input(address, input_id)
-        return None if row is None else _owned_run_record(row)
 
     async def owned_run_by_input_async(
         self, address: SessionAddress, input_id: str
     ) -> OwnedRunRecord | None:
-        return await _run_session_io(lambda: self.owned_run_by_input(address, input_id))
-
-    def tool_result_persisted(self, address: SessionAddress, tool_call_id: str) -> bool:
-        """Report whether a live Session durably holds both a Tool call and its result.
-
-        One indexed probe answers it without loading the transcript.
-        """
-        return self._store.tool_result_persisted(address, tool_call_id)
+        """Read the execution record admitted for one input of a live Session."""
+        return await _run_session_io(self._store.owned_run_by_input, address, input_id)
 
     async def tool_result_persisted_async(self, address: SessionAddress, tool_call_id: str) -> bool:
-        return await _run_session_io(lambda: self.tool_result_persisted(address, tool_call_id))
+        """Report in one indexed probe whether a live Session holds a Tool call's result."""
+        return await _run_session_io(self._store.tool_result_persisted, address, tool_call_id)
 
     def run_start_boundaries(
         self, addresses: Sequence[SessionAddress]
@@ -977,12 +940,7 @@ class ChatSessionManager:
         title: str | None = None,
         run_kind: RunKind | None = None,
     ) -> ChatSession:
-        """Copy a Session into a new generation in one write transaction.
-
-        ``title`` replaces the inherited title and ``run_kind`` classifies the
-        fork before its first Run, so a background fork never appears with the
-        source's identity in a Session list.
-        """
+        """Copy a Session in one write; ``title``/``run_kind`` label the copy in it."""
         _validate_session_id(source.session_id)
         async with self.write_lock(source):
             fork = await _run_session_io(
@@ -1147,23 +1105,3 @@ def _set_title(metadata: JsonObject, normalized: str | None) -> None:
         metadata.pop(SESSION_TITLE_KEY, None)
     else:
         metadata[SESSION_TITLE_KEY] = normalized
-
-
-def _owned_run_record(row: Any) -> OwnedRunRecord:
-    return OwnedRunRecord(
-        record_key=int(row["record_key"]),
-        address=SessionAddress(row["project_id"] or None, row["agent_id"], row["session_id"]),
-        generation_id=str(row["generation_id"]),
-        run_id=str(row["run_id"]),
-        owner=RunExecutionOwner(
-            str(row["owner_name"]),
-            str(row["group_id"]),
-            str(row["participant_id"]),
-            str(row["participant_generation_id"]),
-            str(row["epoch"]),
-        ),
-        start_sequence=int(row["start_sequence"]),
-        terminal_status=row["terminal_status"],
-        terminal_sequence=row["terminal_sequence"],
-        input_id=row["input_id"],
-    )

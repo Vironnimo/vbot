@@ -252,14 +252,16 @@ def test_tool_result_persisted_needs_the_call_and_its_result_in_that_session(man
     run.append_many([ChatMessage.user("update"), assistant])
     run.assistant_message_id = assistant.id
 
+    def persisted(address) -> bool:
+        return bool(asyncio.run(manager.tool_result_persisted_async(address, "call-one")))
+
     # Requested but not yet answered is not durable.
-    assert manager.tool_result_persisted(session.address, "call-one") is False
+    assert persisted(session.address) is False
     run.append(ChatMessage.tool(tool_call_id="call-one", name="bash", content="ok"))
-    assert manager.tool_result_persisted(session.address, "call-one") is True
-    assert asyncio.run(manager.tool_result_persisted_async(session.address, "call-one")) is True
-    assert manager.tool_result_persisted(other.address, "call-one") is False
+    assert persisted(session.address) is True
+    assert persisted(other.address) is False
     with pytest.raises(SessionNotFoundError):
-        manager.tool_result_persisted(_address("coder", "missing"), "call-one")
+        persisted(_address("coder", "missing"))
 
 
 def _count_writes(manager, monkeypatch) -> list[object]:

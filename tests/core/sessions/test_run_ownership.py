@@ -180,24 +180,24 @@ async def test_owned_run_point_lookups_resolve_exact_ids_and_inputs(tmp_path):
         }
         assert records["run6"] == paged["run6"]
         assert records["run6"].terminal_status == "completed"
-        assert not sessions.owned_runs_by_id(owner_name="other", group_id="group", run_ids=["run0"])
-        assert sessions.owned_runs_by_id(owner_name="fixture", group_id="group", run_ids=[]) == {}
+        by_id = sessions.owned_runs_by_id_async
+        assert not await by_id(owner_name="other", group_id="group", run_ids=["run0"])
+        assert await by_id(owner_name="fixture", group_id="group", run_ids=[]) == {}
 
         by_input = await sessions.owned_run_by_input_async(binding.address, "input6")
         assert by_input == paged["run6"]
-        assert sessions.owned_run_by_input(binding.address, "missing") is None
-        assert sessions.owned_run_by_input(binding.address, "initial:foreign") is None
-        assert sessions.owned_run_by_input(SessionAddress(None, "temporary", "gone"), "x") is None
+        by_input_of = sessions.owned_run_by_input_async
+        assert await by_input_of(binding.address, "missing") is None
+        assert await by_input_of(binding.address, "initial:foreign") is None
+        assert await by_input_of(SessionAddress(None, "temporary", "gone"), "x") is None
         with pytest.raises(ValueError):
-            sessions.owned_run_by_input(binding.address, "")
+            await by_input_of(binding.address, "")
         with pytest.raises(ValueError):
-            sessions.owned_runs_by_id(owner_name="fixture", group_id="group", run_ids=[""])
+            await by_id(owner_name="fixture", group_id="group", run_ids=[""])
 
         assert await sessions.delete_temporary_group(owner_name="fixture", group_id="group") == 1
-        assert sessions.owned_run_by_input(binding.address, "input6") is None
-        assert not sessions.owned_runs_by_id(
-            owner_name="fixture", group_id="group", run_ids=["run6"]
-        )
+        assert await by_input_of(binding.address, "input6") is None
+        assert not await by_id(owner_name="fixture", group_id="group", run_ids=["run6"])
     finally:
         sessions.close()
 

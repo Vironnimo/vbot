@@ -341,12 +341,12 @@ def test_owned_run_point_lookups_probe_indexes_not_group_history(manager) -> Non
     connection.row_factory = sqlite3.Row
     try:
         recorder, statements = _recording(connection)
-        rows = _store_owned.owned_runs_by_id(
+        records = _store_owned.owned_runs_by_id(
             recorder, owner_name="owner", group_id="group", run_ids=["run2", "run0"]
         )
-        assert sorted(row["run_id"] for row in rows) == ["run0", "run2"]
-        row = _store_owned.owned_run_by_input(recorder, binding.address, "input1")
-        assert row is not None and row["run_id"] == "run1"
+        assert sorted(records) == ["run0", "run2"]
+        record = _store_owned.owned_run_by_input(recorder, binding.address, "input1")
+        assert record is not None and record.run_id == "run1"
         details = [
             str(plan[3])
             for sql, params in statements
