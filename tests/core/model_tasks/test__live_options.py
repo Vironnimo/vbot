@@ -225,6 +225,7 @@ def test_validation_uses_the_same_backend_choices() -> None:
     validate_task_model_options(schema, {})
     validate_task_model_options(schema, {"voice": "maple", "backend_model": "astra"})
     rejected_options: tuple[dict[str, Any], ...] = (
+        {"backend_model": ""},
         {"backend_model": "platform"},
         {"backend_model": "quiet"},
         {"backend_model": "foreign"},
@@ -245,3 +246,55 @@ def test_backend_model_without_registry_offers_no_valid_choice() -> None:
     for options in ({}, {"backend_model": "terra"}):
         with pytest.raises(TaskModelOptionValidationError):
             validate_task_model_options(schema, options)
+
+
+def test_a_backend_that_allows_none_offers_no_backend_first_and_by_default() -> None:
+    registry = _registry_with_live_facts(
+        {
+            "voice": {"type": "enum", "values": ["cove"]},
+            "backend_model": {"type": "model", "default": "", "allow_none": True},
+        }
+    )
+
+    schema = _live_schema("live-custom", "subscription", registry=registry)
+
+    backend = _fields(schema)["backend_model"]
+    assert backend.required is False
+    assert backend.default == ""
+    assert [(choice.value, choice.label) for choice in backend.options] == [
+        ("", "None (the voice model uses vBot directly)"),
+        ("astra", "Astra"),
+        ("terra", "Terra"),
+    ]
+    assert schema.default_options()["backend_model"] == ""
+    for options in (
+        {},
+        {"backend_model": ""},
+        {"backend_model": "terra"},
+        {"backend_model": "", "backend_thinking_effort": "high"},
+    ):
+        validate_task_model_options(schema, options)
+    with pytest.raises(TaskModelOptionValidationError):
+        validate_task_model_options(schema, {"backend_model": "platform"})
+
+
+def test_backend_reasoning_is_hidden_without_a_backend_model() -> None:
+    parameters = {"backend_model": {"type": "model", "default": "", "allow_none": True}}
+    registry = _registry_with_live_facts(parameters)
+
+    effort = _fields(_live_schema("live-custom", "subscription", registry=registry))[
+        "backend_thinking_effort"
+    ]
+    without_registry = _fields(
+        _live_schema("live-custom", "subscription", registry=registry, use_registry=False)
+    )
+
+    # An empty allowed list hides the field for that backend value.
+    assert effort.to_dict()["options_by"] == {
+        "field": "backend_model",
+        "values": {"": [], "terra": ["", "none", "low", "medium", "high"]},
+    }
+    assert [choice.value for choice in without_registry["backend_model"].options] == [""]
+    hidden_by = without_registry["backend_thinking_effort"].options_by
+    assert hidden_by is not None
+    assert dict(hidden_by.values) == {"": ()}
