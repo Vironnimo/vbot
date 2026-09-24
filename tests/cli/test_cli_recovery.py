@@ -176,6 +176,9 @@ def test_server_code_selects_the_actual_failed_resource(tmp_path, code, area):
         (["memory", "list", "assistnt"], "agent_not_found", ("agent", "list")),
         (["skill", "share", "a", "notes", "--to", "b"], "agent_not_found", ("agent", "list")),
         (["skill", "share", "a", "notes", "--to", "b"], "skill_not_found", ("skill", "inventory")),
+        # Resolver-backed commands receive the precise code for a missing address part.
+        (["prompt", "preview", "Builder@VBot"], "project_not_found", ("project", "list")),
+        (["session", "list", "Coder"], "agent_not_found", ("agent", "list")),
     ],
 )
 def test_not_found_codes_inspect_the_missing_resource_list(tmp_path, tokens, code, inspection):
@@ -188,6 +191,23 @@ def test_not_found_codes_inspect_the_missing_resource_list(tmp_path, tokens, cod
     followup = parse_args(recovery_guidance(parse_args(tokens), result).commands[0][1:])
     assert (followup.area, followup.command) == inspection
     assert followup.host == "192.0.2.8"
+
+
+def test_agent_not_found_names_identity_and_team_lists_without_parsing_the_address(tmp_path):
+    # 'agent list' holds only Identity Agents; Team members live under 'project show'.
+    result = CommandResult(
+        False,
+        "test sentinel",
+        instance(tmp_path),
+        failure=RpcFailure("session.list", "responded", "agent_not_found"),
+    )
+    bare = recovery_guidance(parse_args(["session", "list", "Coder"]), result)
+    qualified = recovery_guidance(parse_args(["session", "list", "builder@vbot"]), result)
+
+    assert "vbot agent list" in bare.explanation
+    assert "vbot project show" in bare.explanation
+    assert qualified.explanation == bare.explanation
+    assert qualified.commands[0][1:3] == ("agent", "list")
 
 
 @pytest.mark.parametrize("mode", ["auto", "plain", "human"])

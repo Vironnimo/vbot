@@ -623,7 +623,11 @@ class TestDebugModelProbe:
         mock_response = AsyncMock()
         mock_response.status_code = 200
         mock_response.text = mock_raw_body
-        mock_response.headers = {"content-type": "application/json"}
+        mock_response.headers = {
+            "content-type": "application/json",
+            "openai-organization": "org-123",
+            "set-cookie": "session=abc",
+        }
 
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
@@ -667,6 +671,12 @@ class TestDebugModelProbe:
         saved = store.get_trace(result["trace_id"])
         assert saved["type"] == "model_probe"
         assert saved["provider_id"] == "openrouter"
+        assert saved["request"]["headers"]["Authorization"] == "[REDACTED]"
+        assert saved["response"]["headers"] == {
+            "content-type": "application/json",
+            "openai-organization": "[REDACTED]",
+            "set-cookie": "[REDACTED]",
+        }
         assert state.event_bus.events[-1]["payload"] == {"kind": "debug_traces"}
 
     @respx.mock

@@ -14,7 +14,14 @@ import pytest
 import core.automation.automation as automation_module
 from core.automation import TriggerService
 from core.chat import ChatSession, ChatSessionError, ChatSessionManager, ReplySurface
-from core.runs import ChatRunManager, Run, RunAdmission, RunExecutionOwner, RunKind
+from core.runs import (
+    ChatRunManager,
+    Run,
+    RunAdmission,
+    RunAdmissionBlockedError,
+    RunExecutionOwner,
+    RunKind,
+)
 from core.sessions import SessionAddress
 from core.subagents import SubAgentBatchTracker
 
@@ -55,6 +62,238 @@ class _CompletionChatLoop:
         )
 
 
+class _OwnerAdmission:
+    """Admission double for owned completions: only open owners may receive work.
+
+    Mirrors the group owner's contract: a group stops admitting its owners before
+    it closes its resources, and a closed epoch or replaced generation never
+    becomes admissible again.
+    """
+
+    def __init__(self, *owners: RunExecutionOwner) -> None:
+        self.open = set(owners)
+        self.checked: list[tuple[SessionAddress, RunExecutionOwner]] = []
+
+    def __call__(self, address: SessionAddress, owner: RunExecutionOwner) -> None:
+        self.checked.append((address, owner))
+        if owner not in self.open:
+            raise RunAdmissionBlockedError("This Session is no longer available.")
+
+
+def _owned_starter(manager: ChatRunManager, started: list[str]) -> Callable[..., Any]:
+    async def start(
+        address: SessionAddress,
+        owner: RunExecutionOwner,
+        content: str,
+        _notice_ids: tuple[str, ...],
+        on_persisted: Callable[[], None],
+    ) -> Run:
+        async def executor(_run: Run) -> str:
+            started.append(content)
+            on_persisted()
+            return content
+
+        return await manager.start(address, executor, admission=RunAdmission(owner=owner))
+
+    return start
+
+
+async def _user_cancelled_origin(manager: ChatRunManager) -> Run:
+    release = asyncio.Event()
+
+    async def executor(_run: Run) -> str:
+        await release.wait()
+        return "unused"
+
+    run = await manager.start(
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"), executor
+    )
+    return await manager.cancel(run.id, reason="user")
+
+
+def _notes(session: ChatSession) -> list[str]:
+    return [
+        message.content
+        for message in session.load()
+        if message.role == "note" and isinstance(message.content, str)
+    ]
+
+
+_LIVE_OWNER = RunExecutionOwner("swarm", "group", "peer", "generation", "epoch")
+
+
+@pytest.mark.parametrize(
+    "stale_owner",
+    [
+        RunExecutionOwner("swarm", "group", "peer", "generation", "closed-epoch"),
+        RunExecutionOwner("swarm", "group", "peer", "replaced-generation", "epoch"),
+    ],
+    ids=["closed-epoch", "stale-generation"],
+)
+@pytest.mark.parametrize("origin_user_cancelled", [False, True])
+async def test_owned_completion_for_an_inadmissible_owner_is_rejected_at_submission(
+    tmp_path: Path, stale_owner: RunExecutionOwner, origin_user_cancelled: bool
+) -> None:
+    # A user-cancelled origin would persist the result without a Run, bypassing
+    # Run admission; the submission check rejects it before any state is kept.
+    manager = ChatRunManager()
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="session-one")
+    loop = _CompletionChatLoop(manager)
+    service = TriggerService(cast(Any, loop), manager, Mock(), sessions=sessions)
+    admission = _OwnerAdmission(_LIVE_OWNER)
+    started: list[str] = []
+    service.set_owned_completion_starter(_owned_starter(manager, started))
+    service.set_owned_completion_validator(admission)
+    origin_id = (await _user_cancelled_origin(manager)).id if origin_user_cancelled else "origin"
+
+    delivery = service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="stale",
+        origin_run_id=origin_id,
+        body="stale owned result",
+        execution_owner=stale_owner,
+    )
+
+    assert delivery.cancelled()
+    assert [owner for _address, owner in admission.checked] == [stale_owner]
+    assert service.has_execution_work(stale_owner) is False
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert _notes(session) == []
+    assert started == []
+    assert loop.messages == []
+    await service.aclose()
+    await manager.aclose()
+    sessions.close()
+
+
+@pytest.mark.parametrize("origin_user_cancelled", [False, True])
+async def test_owned_completion_for_a_live_owner_is_delivered(
+    tmp_path: Path, origin_user_cancelled: bool
+) -> None:
+    manager = ChatRunManager()
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="session-one")
+    loop = _CompletionChatLoop(manager)
+    service = TriggerService(cast(Any, loop), manager, Mock(), sessions=sessions)
+    admission = _OwnerAdmission(_LIVE_OWNER)
+    started: list[str] = []
+    service.set_owned_completion_starter(_owned_starter(manager, started))
+    service.set_owned_completion_validator(admission)
+    origin_id = (await _user_cancelled_origin(manager)).id if origin_user_cancelled else "origin"
+
+    delivery = service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="live",
+        origin_run_id=origin_id,
+        body="live owned result",
+        execution_owner=_LIVE_OWNER,
+    )
+    await asyncio.wait_for(delivery, 2)
+
+    address = SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+    assert (address, _LIVE_OWNER) in admission.checked
+    if origin_user_cancelled:
+        # The cancelled origin gets a note without waking the Agent.
+        assert started == []
+        assert any("live owned result" in note for note in _notes(session))
+    else:
+        assert len(started) == 1
+        assert "live owned result" in started[0]
+    assert loop.messages == []
+    await service.aclose()
+    await manager.aclose()
+    sessions.close()
+
+
+async def test_owned_completion_whose_owner_goes_stale_is_not_written_to_the_session(
+    tmp_path: Path,
+) -> None:
+    # Admitted while live, but the owner is replaced before the Session-write
+    # fallback runs: the write re-checks the owner instead of bypassing admission.
+    manager = ChatRunManager()
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="session-one")
+    loop = _CompletionChatLoop(manager)
+    service = TriggerService(cast(Any, loop), manager, Mock(), sessions=sessions)
+    admission = _OwnerAdmission(_LIVE_OWNER)
+    service.set_owned_completion_starter(_owned_starter(manager, []))
+    service.set_owned_completion_validator(admission)
+    origin = await _user_cancelled_origin(manager)
+
+    delivery = service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="stale-later",
+        origin_run_id=origin.id,
+        body="stale later result",
+        execution_owner=_LIVE_OWNER,
+    )
+    admission.open.clear()
+
+    with pytest.raises(RunAdmissionBlockedError):
+        await asyncio.wait_for(delivery, 2)
+    assert _notes(session) == []
+    await service.aclose()
+    await manager.aclose()
+    sessions.close()
+
+
+async def test_closing_execution_groups_leaves_no_per_group_state(tmp_path: Path) -> None:
+    manager = ChatRunManager()
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="session-one")
+    service = TriggerService(
+        cast(Any, _CompletionChatLoop(manager)), manager, Mock(), sessions=sessions
+    )
+    owners = [
+        RunExecutionOwner("swarm", f"group-{index}", "peer", "generation", f"epoch-{index}")
+        for index in range(3)
+    ]
+    admission = _OwnerAdmission(*owners)
+    service.set_owned_completion_starter(_owned_starter(manager, []))
+    service.set_owned_completion_validator(admission)
+    coordinator = service._completion_delivery
+
+    def state_sizes() -> dict[str, int]:
+        return {
+            name: len(value)
+            for name, value in vars(coordinator).items()
+            if isinstance(value, (dict, set, list))
+        }
+
+    baseline = state_sizes()
+    deliveries = [
+        service.submit_completion(
+            "coder",
+            "session-one",
+            notice_id=f"owned-{owner.group_id}",
+            origin_run_id="origin",
+            body="owned result",
+            execution_owner=owner,
+        )
+        for owner in owners
+    ]
+    for owner in owners:
+        # The group owner stops admitting its owners before closing resources.
+        admission.open.discard(owner)
+        await service.close_execution_group(owner.extension, owner.group_id, owner.epoch)
+
+    assert all(delivery.cancelled() for delivery in deliveries)
+    for _ in range(20):
+        if state_sizes() == baseline:
+            break
+        await asyncio.sleep(0)
+    assert state_sizes() == baseline
+    assert not any(service.has_execution_work(owner) for owner in owners)
+    await service.aclose()
+    await manager.aclose()
+    sessions.close()
+
+
 async def test_owned_completion_close_discards_only_matching_notice(tmp_path):
     manager = ChatRunManager()
     sessions = ChatSessionManager(tmp_path)
@@ -62,6 +301,8 @@ async def test_owned_completion_close_discards_only_matching_notice(tmp_path):
     loop = _CompletionChatLoop(manager)
     service = TriggerService(loop, manager, Mock(), sessions=sessions)
     owner = RunExecutionOwner("swarm", "group", "peer", "generation", "epoch")
+    admission = _OwnerAdmission(owner)
+    service.set_owned_completion_validator(admission)
     owned = service.submit_completion(
         "coder",
         "session-one",
@@ -77,6 +318,7 @@ async def test_owned_completion_close_discards_only_matching_notice(tmp_path):
         origin_run_id="other",
         body="ordinary result",
     )
+    admission.open.discard(owner)
     await service.close_execution_group("swarm", "group", "epoch")
     assert owned.cancelled()
     await asyncio.wait_for(ordinary, 2)
@@ -92,6 +334,8 @@ async def test_owned_completion_close_discards_only_matching_notice(tmp_path):
         execution_owner=owner,
     )
     assert late.cancelled()
+    # Only owned submissions are checked; ordinary results never consult it.
+    assert [checked for _address, checked in admission.checked] == [owner, owner]
     await service.aclose()
     await manager.aclose()
     sessions.close()
@@ -104,6 +348,7 @@ async def test_owned_completion_admission_failure_cannot_fallback_to_session_wri
     loop = _CompletionChatLoop(manager)
     service = TriggerService(loop, manager, Mock(), sessions=sessions)
     owner = RunExecutionOwner("swarm", "group", "peer", "generation", "epoch")
+    service.set_owned_completion_validator(_OwnerAdmission(owner))
     service.set_owned_completion_starter(AsyncMock(side_effect=ValueError("fixture rejection")))
     delivery = service.submit_completion(
         "coder",

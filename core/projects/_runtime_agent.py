@@ -161,8 +161,22 @@ class AgentResolutionError(ValueError):
 
     Expected (handled-locally) failure: an unknown project/agent, or a config
     agent whose model chain fell all the way through (no usable model). It is a
-    clear "cannot run" signal, never a silent degrade.
+    clear "cannot run" signal, never a silent degrade. A missing Agent or
+    Project raises one of the precise subclasses below, so accessors can report
+    the missing resource without parsing the message.
     """
+
+
+class ResolutionAgentNotFoundError(AgentResolutionError):
+    """The addressed Agent does not exist.
+
+    No stored Identity Agent has exactly this id, or the Project Team (and its
+    freshly read repository source) has no member with exactly this id.
+    """
+
+
+class ResolutionProjectNotFoundError(AgentResolutionError):
+    """The addressed Project has no Anchor with exactly this id."""
 
 
 class GlobalAgentDefaultsProvider(Protocol):

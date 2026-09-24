@@ -515,6 +515,12 @@ class ExtensionHostFactory:
                 )
         return models
 
+    def _validate_owned_completion(self, address: Any, owner: Any) -> None:
+        """Raise unless the owner's work may still be admitted to this Session."""
+        from core.runs import RunAdmission
+
+        self._validate_temporary_admission(address, RunAdmission(owner=owner))
+
     async def _start_owned_completion(
         self,
         address: Any,
@@ -523,8 +529,6 @@ class ExtensionHostFactory:
         notice_ids: tuple[str, ...],
         on_persisted: Any,
     ) -> Any:
-        from core.runs import RunAdmission
-
-        self._validate_temporary_admission(address, RunAdmission(owner=owner))
+        self._validate_owned_completion(address, owner)
         groups = next(groups for groups in self._temporary_groups if groups.owns(owner))
         return await groups.continue_completion(address, owner, content, notice_ids, on_persisted)

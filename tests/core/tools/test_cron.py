@@ -9,11 +9,17 @@ from unittest.mock import Mock
 
 import pytest
 
+import core.tools.cron as cron_tool_module
 from core.automation.cron import (
     CronJob,
     CronJobNotFoundError,
     CronJobValidationError,
     ParsedSchedule,
+)
+from core.projects import (
+    AgentResolutionError,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
 )
 from core.tools.cron import CRON_TOOL_NAME, CRON_TOOL_PARAMETERS, register_cron_tool
 from core.tools.tools import ToolContext, ToolRegistry, tool_failure
@@ -565,6 +571,116 @@ def test_past_one_time_schedule_is_rejected_with_future_time_guidance(tmp_path: 
         assert error["retryable"] is False
     assert [job.id for job in cron_service.list_jobs()] == [job_id]
     trigger_service.trigger_run.assert_not_called()
+
+
+@pytest.mark.parametrize("action", ["create", "update"])
+@pytest.mark.parametrize(
+    ("resolver_error", "code", "reason", "recommendation"),
+    [
+        (
+            ResolutionAgentNotFoundError("agent 'ghost' is not on project 'vbot' team"),
+            "agent_not_found",
+            None,
+            cron_tool_module._TARGET_ADDRESS_RECOMMENDATION,
+        ),
+        (
+            ResolutionProjectNotFoundError("Project not found: vbot"),
+            "project_not_found",
+            None,
+            cron_tool_module._TARGET_ADDRESS_RECOMMENDATION,
+        ),
+        (
+            AgentResolutionError("agent 'ghost' has no usable model"),
+            "agent_unavailable",
+            "agent 'ghost' has no usable model",
+            cron_tool_module._TARGET_UNAVAILABLE_RECOMMENDATION,
+        ),
+    ],
+)
+def test_unresolvable_target_gets_target_guidance_instead_of_schedule_examples(
+    tmp_path: Path,
+    action: str,
+    resolver_error: AgentResolutionError,
+    code: str,
+    reason: str | None,
+    recommendation: str,
+) -> None:
+    from tests.core.automation.cron_test_support import make_service
+
+    resolver = Mock()
+    cron_service, trigger_service = make_service(tmp_path, agent_resolver=resolver)
+    job = cron_service.create_job(
+        agent_id="agent-one", prompt="Ping", schedule_type="interval", interval_seconds=7200
+    )
+    resolver.resolve_agent.reset_mock()
+    resolver.resolve_agent.side_effect = resolver_error
+    registry = ToolRegistry()
+    register_cron_tool(registry, cron_service)
+    arguments: dict[str, object] = (
+        {"action": "create", "prompt": "Ping", "schedule": "every 2h", "target": "ghost@vbot"}
+        if action == "create"
+        else {"action": "update", "id": job.id, "target": "ghost@vbot"}
+    )
+
+    # Dispatch directly: the Tool itself must turn the failure into a result.
+    result = asyncio.run(registry.dispatch(_context(tmp_path), arguments, [CRON_TOOL_NAME]))
+
+    assert result["ok"] is False
+    error = cast(dict[str, Any], result["error"])
+    assert error["code"] == code
+    assert error["retryable"] is False
+    assert error["message"].endswith(recommendation)
+    assert cron_tool_module._ACTION_RECOMMENDATIONS[action] not in error["message"]
+    if reason is not None:
+        assert reason in error["message"]
+    resolver.resolve_agent.assert_called_once_with("vbot", "ghost")
+    assert [(stored.id, stored.project_id) for stored in cron_service.list_jobs()] == [
+        (job.id, None)
+    ]
+    trigger_service.trigger_run.assert_not_called()
+
+
+def test_malformed_target_gets_target_guidance(tmp_path: Path) -> None:
+    from tests.core.automation.cron_test_support import make_service
+
+    cron_service, _trigger_service = make_service(tmp_path)
+    registry = ToolRegistry()
+    register_cron_tool(registry, cron_service)
+
+    result = asyncio.run(
+        registry.dispatch(
+            _context(tmp_path),
+            {"action": "create", "prompt": "Ping", "schedule": "every 2h", "target": "ghost@"},
+            [CRON_TOOL_NAME],
+        )
+    )
+
+    error = cast(dict[str, Any], result["error"])
+    # A malformed address names no target, so it is an argument error.
+    assert error["code"] == "invalid_arguments"
+    assert error["retryable"] is False
+    assert error["message"].endswith(cron_tool_module._TARGET_ADDRESS_RECOMMENDATION)
+    assert cron_service.list_jobs() == []
+
+
+def test_schedule_format_failure_keeps_schedule_examples(tmp_path: Path) -> None:
+    from tests.core.automation.cron_test_support import make_service
+
+    cron_service, _trigger_service = make_service(tmp_path)
+    registry = ToolRegistry()
+    register_cron_tool(registry, cron_service)
+
+    result = asyncio.run(
+        registry.dispatch(
+            _context(tmp_path),
+            {"action": "create", "prompt": "Ping", "schedule": "whenever"},
+            [CRON_TOOL_NAME],
+        )
+    )
+
+    error = cast(dict[str, Any], result["error"])
+    assert error["code"] == "invalid_arguments"
+    assert error["message"].endswith(cron_tool_module._ACTION_RECOMMENDATIONS["create"])
 
 
 def test_disable_action_returns_success(tmp_path: Path) -> None:

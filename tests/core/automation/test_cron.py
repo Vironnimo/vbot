@@ -19,6 +19,14 @@ from core.automation.cron import (
     CronJobStatus,
     CronJobValidationError,
     CronStorageError,
+    CronTargetAgentNotFoundError,
+    CronTargetProjectNotFoundError,
+    CronTargetUnavailableError,
+)
+from core.projects import (
+    AgentResolutionError,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
 )
 from core.runs import RunKind
 from core.sessions import SessionAddress
@@ -543,6 +551,88 @@ def test_create_validates_target_and_owned_session(tmp_path: Path) -> None:
     sessions.exists.assert_called_once_with(
         SessionAddress(project_id="vbot", agent_id="agent-one", session_id="wrong-session")
     )
+
+
+@pytest.mark.parametrize("operation", ["create", "update"])
+@pytest.mark.parametrize(
+    ("resolver_error", "expected_error", "resolver_base"),
+    [
+        (
+            ResolutionAgentNotFoundError("agent 'ghost' is not on project 'vbot' team"),
+            CronTargetAgentNotFoundError,
+            ResolutionAgentNotFoundError,
+        ),
+        (
+            ResolutionProjectNotFoundError("Project not found: vbot"),
+            CronTargetProjectNotFoundError,
+            ResolutionProjectNotFoundError,
+        ),
+    ],
+)
+def test_missing_target_is_a_cron_validation_and_resolver_not_found_error(
+    tmp_path: Path,
+    operation: str,
+    resolver_error: AgentResolutionError,
+    expected_error: type[CronJobValidationError],
+    resolver_base: type[AgentResolutionError],
+) -> None:
+    # Cron's own catchers see a validation error; RPC accessors see the precise
+    # resolver not-found error and report agent_not_found / project_not_found.
+    resolver = SimpleNamespace(resolve_agent=Mock(return_value=SimpleNamespace(id="ghost")))
+    service, _trigger_service = make_service(tmp_path, agent_resolver=resolver)
+    job = service.create_job(
+        agent_id="ghost", prompt="Ping", schedule_type="cron", cron_expression="0 9 * * *"
+    )
+    resolver.resolve_agent.side_effect = resolver_error
+
+    with pytest.raises(expected_error) as raised:
+        if operation == "create":
+            service.create_job(
+                agent_id="ghost",
+                prompt="Ping",
+                schedule_type="cron",
+                cron_expression="0 9 * * *",
+                project_id="vbot",
+            )
+        else:
+            service.update_job(job.id, project_id="vbot")
+
+    assert isinstance(raised.value, CronJobValidationError)
+    assert isinstance(raised.value, resolver_base)
+    assert raised.value.__cause__ is resolver_error
+    assert [stored.id for stored in service.list_jobs()] == [job.id]
+    assert service.list_jobs()[0].project_id is None
+
+
+@pytest.mark.parametrize("operation", ["create", "update"])
+def test_target_that_cannot_run_keeps_the_resolver_reason(tmp_path: Path, operation: str) -> None:
+    # An existing target without a usable Model must not be reported as missing.
+    reason = "agent 'stranded' has no usable model"
+    resolver = SimpleNamespace(resolve_agent=Mock(return_value=SimpleNamespace(id="stranded")))
+    service, _trigger_service = make_service(tmp_path, agent_resolver=resolver)
+    job = service.create_job(
+        agent_id="stranded", prompt="Ping", schedule_type="cron", cron_expression="0 9 * * *"
+    )
+    resolver.resolve_agent.side_effect = AgentResolutionError(reason)
+
+    with pytest.raises(CronJobValidationError) as raised:
+        if operation == "create":
+            service.create_job(
+                agent_id="stranded",
+                prompt="Ping",
+                schedule_type="cron",
+                cron_expression="0 9 * * *",
+                project_id="vbot",
+            )
+        else:
+            service.update_job(job.id, project_id="vbot")
+
+    assert isinstance(raised.value, CronTargetUnavailableError)
+    assert not isinstance(
+        raised.value, (ResolutionAgentNotFoundError, ResolutionProjectNotFoundError)
+    )
+    assert reason in str(raised.value)
+    assert "stranded@vbot" in str(raised.value)
 
 
 def test_project_id_defaults_to_none_and_round_trips(tmp_path: Path) -> None:

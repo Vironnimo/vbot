@@ -389,7 +389,7 @@ async def test_runtime_process_manager_cancels_run_scoped_sessions(config: Confi
             cwd=config.data_dir,
         )
 
-        process_manager.cancel_scope("run-one")
+        await process_manager.cancel_scope_async("run-one")
         poll_result = await process_manager.poll(session_id, "agent-one", timeout_ms=1000)
 
         assert poll_result["status"] == "killed"
@@ -399,7 +399,7 @@ async def test_runtime_process_manager_cancels_run_scoped_sessions(config: Confi
 
 @pytest.mark.asyncio
 async def test_chat_run_cancellation_calls_runtime_process_manager(tmp_path: Path) -> None:
-    """ChatLoop wires Run cancellation to Runtime.process_manager.cancel_scope()."""
+    """ChatLoop wires Run cancellation to Runtime.process_manager.cancel_scope_async()."""
     adapter = _BlockingAdapter()
     process_manager = _RecordingProcessManager()
     runtime: Any = _ChatRuntimeStub(tmp_path, adapter, process_manager)
@@ -414,6 +414,8 @@ async def test_chat_run_cancellation_calls_runtime_process_manager(tmp_path: Pat
         await run.wait()
 
     assert process_manager.cancelled_scopes == [run.id]
+    # The settled Run releases its closed scope only after cancellation cleanup.
+    assert process_manager.scope_events == [("cancel", run.id), ("release", run.id)]
 
 
 class _BlockingChannelAdapter:
@@ -453,12 +455,14 @@ class _BlockingAdapter:
 class _RecordingProcessManager:
     def __init__(self) -> None:
         self.cancelled_scopes: list[str] = []
-
-    def cancel_scope(self, scope_key: str) -> None:
-        self.cancelled_scopes.append(scope_key)
+        self.scope_events: list[tuple[str, str]] = []
 
     async def cancel_scope_async(self, scope_key: str) -> None:
         self.cancelled_scopes.append(scope_key)
+        self.scope_events.append(("cancel", scope_key))
+
+    def release_scope(self, scope_key: str) -> None:
+        self.scope_events.append(("release", scope_key))
 
 
 class _ChatRuntimeStub:

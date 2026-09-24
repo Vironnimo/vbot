@@ -622,6 +622,22 @@ async def test_group_close_during_receipt_lookup_rejects_before_history_write(
     sessions.close()
 
 
+class _SettlementProbe:
+    """Execution resource recording owned Run states when the group closes."""
+
+    def __init__(self) -> None:
+        self.runs: list[Any] = []
+        self.statuses_at_close: list[str] = []
+
+    async def close_execution_group(self, extension: str, group_id: str, epoch: str) -> None:
+        del extension, group_id, epoch
+        self.statuses_at_close = [run.status.value for run in self.runs]
+
+    def has_execution_work(self, owner: RunExecutionOwner) -> bool:
+        del owner
+        return False
+
+
 @pytest.mark.asyncio
 async def test_group_close_cancels_exact_descendant_and_queued_work(tmp_path):
     write_bootstrap_marker(tmp_path)
@@ -631,12 +647,14 @@ async def test_group_close_cancels_exact_descendant_and_queued_work(tmp_path):
     manager = ChatRunManager(
         admission_validator=lambda address, admission: groups.validate(address, admission)
     )
+    probe = _SettlementProbe()
     groups = TemporaryExecutionGroups(
         TemporaryAgentRegistry(sessions),
         object(),
         lambda _identity: True,
         identity,
         run_manager=manager,
+        resources=(probe,),
     )
     binding = await groups.create("group", "peer", group_config(tmp_path))
     handle = await groups.open_group("group")
@@ -650,11 +668,15 @@ async def test_group_close_cancels_exact_descendant_and_queued_work(tmp_path):
 
     active = await manager.start(target, pending, admission=RunAdmission(owner=owner))
     await started.wait()
+    probe.runs.append(active)
     queued = await manager.enqueue(target, pending, admission=RunAdmission(owner=owner))
     unrelated = await manager.start(SessionAddress(None, "ordinary", "other"), pending)
     assert groups.has_descendants("group", "peer", "parent", handle.epoch)
     report = await groups.close_group("group")
     assert active.id in report["run_ids"]
+    # Resources close only after the group's Runs settled; ProcessManager relies
+    # on this to release its admission marker at the end of its group close.
+    assert probe.statuses_at_close == ["cancelled"]
     assert queued.future.cancelled()
     assert active.status.value == "cancelled"
     assert unrelated.status.value == "running"

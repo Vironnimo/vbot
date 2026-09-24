@@ -251,10 +251,10 @@ class StubProviderCredentials:
 
 
 class StubProcessManager:
-    def cancel_scope(self, run_id: str) -> None:
+    async def cancel_scope_async(self, run_id: str) -> None:
         del run_id
 
-    async def cancel_scope_async(self, run_id: str) -> None:
+    def release_scope(self, run_id: str) -> None:
         del run_id
 
 

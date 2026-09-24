@@ -97,6 +97,82 @@ def test_initialize_preserves_existing_configuration_bytes(tmp_path: Path) -> No
     assert second.created_files == ()
 
 
+def _race_mkdir(
+    monkeypatch: pytest.MonkeyPatch,
+    target: Path,
+    *,
+    concurrent_creator: str = "directory",
+) -> None:
+    """Let a simulated concurrent initializer create *target* first.
+
+    The existence check still sees the path missing; this call's ``mkdir``
+    then loses the race and raises ``FileExistsError`` like the OS does.
+    """
+
+    original_mkdir = Path.mkdir
+
+    def racing_mkdir(self: Path, *args: object, **kwargs: object) -> None:
+        if self == target:
+            if concurrent_creator == "directory":
+                original_mkdir(self, parents=True)
+            else:
+                self.write_bytes(b"not a directory")
+            raise FileExistsError(str(self))
+        original_mkdir(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "mkdir", racing_mkdir)
+
+
+def test_initialize_losing_root_creation_race_never_writes_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = tmp_path / "data"
+    _race_mkdir(monkeypatch, data_dir)
+
+    result = initialize_data_directory(data_dir, resources_dir=PROJECT_ROOT / "resources")
+
+    # The concurrent creator owns the root and publishes its marker; the loser
+    # treats the root as existing and never manufactures authorization.
+    assert not (data_dir / "session-store.json").exists()
+    assert data_dir / "session-store.json" not in result.created_files
+    assert data_dir not in result.created_directories
+    assert all((data_dir / path).is_dir() for path in DATA_DIRECTORY_RELATIVE_PATHS)
+
+
+def test_initialize_tolerates_concurrently_created_canonical_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = tmp_path / "data"
+    contested = data_dir / "artifacts" / "temp" / "bash"
+    _race_mkdir(monkeypatch, contested)
+
+    result = initialize_data_directory(data_dir, resources_dir=PROJECT_ROOT / "resources")
+
+    assert contested.is_dir()
+    assert contested not in result.created_directories
+    assert data_dir in result.created_directories
+    assert data_dir / "session-store.json" in result.created_files
+
+
+def test_initialize_rejects_concurrently_created_non_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = tmp_path / "data"
+    contested = data_dir / "logs"
+    _race_mkdir(monkeypatch, contested, concurrent_creator="file")
+
+    with pytest.raises(NotADirectoryError):
+        initialize_data_directory(data_dir, resources_dir=PROJECT_ROOT / "resources")
+
+
+def test_initialize_rejects_existing_non_directory_root(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.write_bytes(b"not a directory")
+
+    with pytest.raises(NotADirectoryError):
+        initialize_data_directory(data_dir, resources_dir=PROJECT_ROOT / "resources")
+
+
 def test_initialize_uses_empty_environment_when_template_is_unavailable(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,

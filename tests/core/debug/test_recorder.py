@@ -125,6 +125,32 @@ class TestRedaction:
         assert headers["X-Refresh-Token"] == _REDACTED
         assert headers["X-Request-Id"] == "req-1"
 
+    def test_identifying_request_and_response_headers_are_redacted(self, recorder, store):
+        """Provider Account ids, organization ids, and cookies never persist verbatim."""
+        recorder.set_context(_make_context())
+        capture = recorder.begin_capture(
+            method="POST",
+            url="https://chatgpt.com/backend-api/codex/responses",
+            headers={"chatgpt-account-id": "acct-123", "cookie": "session=abc"},
+            body=None,
+        )
+        capture.record_response_head(
+            200,
+            {"openai-organization": "org-123", "set-cookie": "session=def", "x-request-id": "r1"},
+        )
+        capture.finalize()
+
+        trace = _latest_trace(store)
+        assert trace["request"]["headers"] == {
+            "chatgpt-account-id": _REDACTED,
+            "cookie": _REDACTED,
+        }
+        assert trace["response"]["headers"] == {
+            "openai-organization": _REDACTED,
+            "set-cookie": _REDACTED,
+            "x-request-id": "r1",
+        }
+
     def test_request_body_is_stored_raw_not_redacted(self, recorder, store):
         """Bodies are stored verbatim — prompt/payload content is never redacted."""
         recorder.set_context(_make_context())

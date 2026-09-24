@@ -491,6 +491,7 @@ def bootstrap(runtime: Runtime) -> None:
             sessions=runtime._chat_sessions,
         )
         runtime._trigger_service.set_owned_completion_starter(runtime._start_owned_completion)
+        runtime._trigger_service.set_owned_completion_validator(runtime._validate_owned_completion)
         runtime._terminal_manager = TerminalManager(
             runtime._trigger_service,
             temporary_files=runtime._storage.temporary_files,

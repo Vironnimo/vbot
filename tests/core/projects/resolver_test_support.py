@@ -16,6 +16,8 @@ from core.projects.resolver import (
     AgentRunOverrides,
     ConfigAgent,
     ModelConfigurationChecker,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
     resolve_prompt_project,
     resolve_skill_scope,
 )
@@ -265,6 +267,8 @@ __all__ = [
     "AgentResolver",
     "ConfigAgent",
     "ModelConfigurationChecker",
+    "ResolutionAgentNotFoundError",
+    "ResolutionProjectNotFoundError",
     "resolve_prompt_project",
     "resolve_skill_scope",
     "FindingType",

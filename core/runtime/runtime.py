@@ -263,6 +263,9 @@ class Runtime:
         if admission.owner is not None:
             self._host_operations()._validate_temporary_admission(address, admission)
 
+    def _validate_owned_completion(self, address: Any, owner: Any) -> None:
+        self._host_operations()._validate_owned_completion(address, owner)
+
     async def _start_owned_completion(
         self,
         address: Any,

@@ -1,10 +1,11 @@
 """Effective configuration value and provenance tests."""
 
 from .resolver_test_support import (
-    AgentResolutionError,
     AgentStore,
     Path,
     ProjectStore,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
     _openai_configured,
     _project,
     _resolver,
@@ -203,7 +204,7 @@ def test_effective_config_unknown_project_raises(
 ) -> None:
     resolver = _resolver(agents, projects, _openai_configured())
 
-    with pytest.raises(AgentResolutionError):
+    with pytest.raises(ResolutionProjectNotFoundError):
         resolver.effective_config("missing", "builder")
 
 
@@ -214,7 +215,7 @@ def test_effective_config_unknown_agent_raises(
     _project(projects, repo)
     resolver = _resolver(agents, projects, _openai_configured())
 
-    with pytest.raises(AgentResolutionError):
+    with pytest.raises(ResolutionAgentNotFoundError):
         resolver.effective_config("vbot", "ghost")
 
 
@@ -318,7 +319,7 @@ def test_identity_effective_config_unknown_agent_raises(
 ) -> None:
     resolver = _resolver(agents, projects, _openai_configured())
 
-    with pytest.raises(AgentResolutionError):
+    with pytest.raises(ResolutionAgentNotFoundError):
         resolver.effective_config(None, "missing-agent")
 
 

@@ -24,6 +24,13 @@ from core.tools import ToolRegistry
 from resources.extensions.swarm.extension import register
 from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime, build_chat_loop
 
+# Generous Swarm coordination deadline: under full-gate xdist load, wakes, board
+# writes and state transitions perform durable SQLite work that can take several
+# seconds. These waits guard a stuck coordination step, not a latency SLA. The
+# deadline stays below the gate's 30 s per-test timeout, so a real hang still
+# fails as a readable TimeoutError instead of a killed worker.
+SWARM_COORDINATION_TIMEOUT_SECONDS = 20.0
+
 
 class SlowClosingAdapter(StubAdapter):
     """Keeps a successful Run active while the Provider connection closes."""
@@ -39,7 +46,7 @@ class SlowClosingAdapter(StubAdapter):
 
 
 async def wait_idle(service: Any, swarm_id: str) -> dict[str, Any]:
-    async with asyncio.timeout(5):
+    async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
         while True:
             snapshot = await service.store.get_swarm(swarm_id)
             if snapshot["state"] == "idle":
@@ -95,9 +102,7 @@ async def test_busy_burst_reaches_next_request_without_duplicate_wakes(
     started = await lifecycle.service.operation(
         "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
     )
-    # Fifteen durable SQLite writes can exceed five seconds under parallel load.
-    # This test checks delivery ordering and duplicate wakes, not disk latency.
-    async with asyncio.timeout(15):
+    async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
         await adapter.started.wait()
         await asyncio.gather(
             *(
@@ -189,7 +194,7 @@ async def test_automatic_delivery_updates_pending_during_each_running_iteration(
     )
     sid = started["swarm_id"]
     run = lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"])
-    async with asyncio.timeout(15):
+    async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
         await adapter.started[0].wait()
         for index in range(12):
             await lifecycle.service.operation(
@@ -256,7 +261,7 @@ async def test_wake_failure_retains_pending_and_reports_attention(
         "board.post",
         {"swarm_id": started["swarm_id"], "text": "pending-sentinel", "request_id": "post"},
     )
-    async with asyncio.timeout(5):
+    async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
         while True:
             snapshot = await lifecycle.service.store.get_swarm(started["swarm_id"])
             if snapshot["state"] == "needs_attention":
@@ -744,9 +749,7 @@ async def test_human_post_wakes_idle_participant_with_delivery_policy(
         {"swarm_id": started["swarm_id"], "text": "wake message", "request_id": "post"},
     )
     if wake:
-        # This guards a stuck wake, not a latency SLA. Parallel canonical SQLite
-        # fixtures may briefly occupy the worker pool on Windows.
-        async with asyncio.timeout(15):
+        async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
             while len(lifecycle.runtime.adapter.requests) < 2:
                 await asyncio.sleep(0.01)
     else:
@@ -827,7 +830,7 @@ async def test_replaying_start_preserves_the_active_run(lifecycle, tmp_path, con
     else:
         first = await lifecycle.service.operation("swarms.start", arguments)
         replay = await lifecycle.service.operation("swarms.start", arguments)
-    await asyncio.wait_for(adapter.started.wait(), timeout=5)
+    await asyncio.wait_for(adapter.started.wait(), timeout=SWARM_COORDINATION_TIMEOUT_SECONDS)
     run = lifecycle.runtime.chat_run_manager.get(first["runs"][0]["run_id"])
     assert replay == {**first, "replayed": True}
     assert run.status.value == "running"
@@ -851,7 +854,7 @@ async def test_started_run_is_titled_in_the_background_and_listed_by_title(lifec
         {"profile_id": profile["id"], "prompt": "Review the parser", "request_id": "titled"},
     )
     swarm_id = started["swarm_id"]
-    async with asyncio.timeout(5):
+    async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
         while not lifecycle.titled or lifecycle.service._title_tasks:  # noqa: SLF001
             await asyncio.sleep(0.01)
     listed = await lifecycle.service.operation("swarms.list", {})
@@ -879,10 +882,10 @@ async def test_automatic_wake_publishes_running_state(lifecycle, tmp_path):
         "board.post", {"swarm_id": started["swarm_id"], "text": "wake", "request_id": "post"}
     )
     changes.clear()
-    await asyncio.wait_for(adapter.started.wait(), timeout=5)
+    await asyncio.wait_for(adapter.started.wait(), timeout=SWARM_COORDINATION_TIMEOUT_SECONDS)
     snapshot = await lifecycle.service.store.get_swarm(started["swarm_id"])
     assert snapshot["participants"][0]["state"] == "running"
-    async with asyncio.timeout(5):
+    async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
         while not changes:
             await asyncio.sleep(0.01)
     assert changes[-1][0:2] == ("swarms", [started["swarm_id"]])
@@ -902,19 +905,17 @@ async def test_delivery_mode_after_wake(lifecycle, tmp_path, mode):
         "board.post",
         {"swarm_id": started["swarm_id"], "text": "first-wake-sentinel", "request_id": "post-1"},
     )
-    # Wake admission and receipt delivery perform durable writes under parallel load.
-    # This scenario checks delivery policy, not a five-second storage deadline.
-    await asyncio.wait_for(adapter.started.wait(), timeout=15)
+    await asyncio.wait_for(adapter.started.wait(), timeout=SWARM_COORDINATION_TIMEOUT_SECONDS)
     assert "first-wake-sentinel" in str(adapter.requests[1]["messages"])
     await lifecycle.service.operation(
         "board.post",
         {"swarm_id": started["swarm_id"], "text": "deferred-sentinel", "request_id": "post-2"},
     )
     adapter.release.set()
-    await asyncio.wait_for(adapter.followed.wait(), timeout=5)
+    await asyncio.wait_for(adapter.followed.wait(), timeout=SWARM_COORDINATION_TIMEOUT_SECONDS)
     assert ("deferred-sentinel" in str(adapter.requests[2]["messages"])) is (mode == "all")
     await wait_idle(lifecycle.service, started["swarm_id"])
-    async with asyncio.timeout(5):
+    async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
         while mode != "all" and len(adapter.requests) < 4:
             await asyncio.sleep(0.01)
     if mode != "all":
@@ -935,8 +936,8 @@ async def test_old_stop_retry_preserves_a_new_resume(lifecycle, tmp_path):
     resumed = await lifecycle.service.operation(
         "swarms.resume", {"swarm_id": started["swarm_id"], "request_id": "new-resume"}
     )
-    # Wait for the ordering barrier, allowing parallel SQLite fixture load.
-    await asyncio.wait_for(adapter.started.wait(), timeout=15)
+    # Wait for the ordering barrier.
+    await asyncio.wait_for(adapter.started.wait(), timeout=SWARM_COORDINATION_TIMEOUT_SECONDS)
     run = lifecycle.runtime.chat_run_manager.get(resumed["runs"][0]["run_id"])
     replay = await lifecycle.service.operation("swarms.stop", stop)
     assert replay == {**stopped, "replayed": True}
@@ -954,7 +955,7 @@ async def test_old_stop_retry_preserves_a_new_resume(lifecycle, tmp_path):
     latest = await lifecycle.service.operation(
         "swarms.resume", {"swarm_id": started["swarm_id"], "request_id": "latest-resume"}
     )
-    await asyncio.wait_for(adapter.started.wait(), timeout=15)
+    await asyncio.wait_for(adapter.started.wait(), timeout=SWARM_COORDINATION_TIMEOUT_SECONDS)
     current = lifecycle.runtime.chat_run_manager.get(latest["runs"][0]["run_id"])
     for operation, arguments, original in [
         ("swarms.stop", stop, stopped),
@@ -1055,7 +1056,7 @@ async def test_stop_does_not_report_expected_late_completion_as_failure(
         "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
     )
     run = lifecycle.runtime.chat_run_manager.get(started["runs"][0]["run_id"])
-    async with asyncio.timeout(5):
+    async with asyncio.timeout(SWARM_COORDINATION_TIMEOUT_SECONDS):
         while not adapter.requests:
             await asyncio.sleep(0.01)
     await lifecycle.service.operation(
@@ -1106,7 +1107,7 @@ async def test_human_post_after_stop_continues_same_session_once(
         "swarms.start", {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"}
     )
     sid = started["swarm_id"]
-    await asyncio.wait_for(adapter.started.wait(), timeout=5)
+    await asyncio.wait_for(adapter.started.wait(), timeout=SWARM_COORDINATION_TIMEOUT_SECONDS)
     before = (await lifecycle.groups.list(sid))[0]
     draining = asyncio.Event()
     release = asyncio.Event()
@@ -1123,7 +1124,7 @@ async def test_human_post_after_stop_continues_same_session_once(
         lifecycle.service.operation("swarms.stop", {"swarm_id": sid, "request_id": "stop"})
     )
     if during_stop:
-        await asyncio.wait_for(draining.wait(), timeout=5)
+        await asyncio.wait_for(draining.wait(), timeout=SWARM_COORDINATION_TIMEOUT_SECONDS)
     else:
         await stop
     arguments = {"swarm_id": sid, "text": "continue-sentinel", "request_id": "post"}

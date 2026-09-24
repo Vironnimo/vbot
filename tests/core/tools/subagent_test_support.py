@@ -15,7 +15,7 @@ import core.subagents._constants as subagent_constants
 import core.subagents.subagents as subagent_module
 from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager
-from core.projects import AgentResolutionError
+from core.projects import AgentResolutionError, ResolutionAgentNotFoundError
 from core.runs import (
     DEFAULT_RUN_ADMISSION,
     ActiveRunError,
@@ -242,7 +242,8 @@ class FakeAgentResolver:
     """Resolver seam used by sub-agent target validation.
 
     Delegates to ``FakeAgents`` and re-raises an unknown target as
-    :class:`AgentResolutionError`, matching the real resolver's failure surface.
+    :class:`ResolutionAgentNotFoundError`, matching the real resolver's failure
+    surface.
     """
 
     def __init__(self, agents: FakeAgents) -> None:
@@ -260,7 +261,7 @@ class FakeAgentResolver:
         try:
             return self._agents.get(agent_id)
         except AgentNotFoundError as error:
-            raise AgentResolutionError(str(error)) from error
+            raise ResolutionAgentNotFoundError(str(error)) from error
 
 
 class FakeRunManager:

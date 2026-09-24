@@ -8,6 +8,8 @@ Read this reference when changing how a Project Agent becomes effective runtime 
 
 Team membership is cached per Project, but the selected repository Agent source is reread on each resolution. This gives stable, cheap membership lookup while allowing edits to model, instructions, Tool denials, Agent-target rules, or scalar settings to take effect without a Team rebuild.
 
+Resolution failures are `AgentResolutionError`. A missing address part keeps its precise kind: an unknown Identity Agent, an Agent that is not on the cached Team, or a Team member whose repository source vanished raises `ResolutionAgentNotFoundError`, and an unknown Project raises `ResolutionProjectNotFoundError`; both subclass `AgentResolutionError`, so callers that treat every resolution failure alike keep catching it. Ids are exact, so a case variant such as `Builder@VBot` is one of these not-found failures. Other failures (no usable Model, an unavailable temporary Session, a Project id disagreeing with its Anchor) stay plain `AgentResolutionError`. `effective_config()` and temporary Project application use the same wrapping. RPC maps the two not-found kinds to `agent_not_found` / `project_not_found` (`server.md`).
+
 `AgentResolver.resolve_agent(..., run_overrides=AgentRunOverrides | None)` may apply an immutable execution-only overlay after ordinary Identity or Project Agent resolution. `AgentRunOverrides` deliberately contains only `model` and `thinking_effort`; the resolver returns a replaced runtime dataclass and never mutates the stored Identity Agent, repository Agent, Project overrides, or Session. An empty or omitted overlay returns the ordinary resolved object unchanged.
 
 ## Model & Scalar Resolution
@@ -90,4 +92,4 @@ preserved independently of those ceilings. Evidence: `core/projects/resolver.py`
 - Model usability and Connection gating: `ModelConfigurationChecker` in `core/projects/_model_configuration.py` (public imports remain available through `core.projects` and `resolver.py`)
 - Project entity and override contract: `core/projects/projects.py`
 - Repository inputs: `core/projects/scanners/`
-- Primary tests: `tests/core/projects/test_resolver_config_chains.py`, `tests/core/projects/test_resolver_effective_config.py`, `tests/core/projects/test_resolver_connections.py`, and `tests/core/projects/test_resolver_prompt_skill_scopes.py`
+- Primary tests: `tests/core/projects/test_resolver_config_chains.py`, `tests/core/projects/test_resolver_effective_config.py`, `tests/core/projects/test_resolver_connections.py`, `tests/core/projects/test_resolver_scan_identity.py`, and `tests/core/projects/test_resolver_prompt_skill_scopes.py`; RPC codes for missing addresses: `tests/server/rpc/test_address_resolution_errors.py`
