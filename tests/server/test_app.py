@@ -76,10 +76,14 @@ def test_create_app_wires_owner_qualified_extension_invalidations(tmp_path: Path
     runtime = Runtime(Config(data_dir=tmp_path / "data"))
     app = create_app(runtime=runtime)
 
-    with TestClient(app):
+    with TestClient(app) as client:
         publisher = runtime._extension_change_publisher  # noqa: SLF001 - wiring contract
         assert publisher is not None
         publisher("swarm", "board", ("swarm-one",), 7)
+        # This thread is off the server Event Loop, so the bus hands the event
+        # to that loop; a portal round trip runs after the handed-off publish.
+        assert client.portal is not None
+        client.portal.call(asyncio.sleep, 0)
 
         event = app.state.event_bus.events[-1]
         assert event["type"] == "resource_changed"
