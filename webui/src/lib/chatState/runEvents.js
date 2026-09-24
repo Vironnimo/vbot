@@ -10,6 +10,7 @@ import {
   CHAT_STATUS_INTERRUPTED,
 } from './sessionState.js';
 import { t } from '../i18n.js';
+import { qualifyAgentAddress } from '../agentAddress.js';
 import {
   RUN_EVENT_STREAM_ATTEMPT_RESTARTED,
   RUN_EVENT_TOOL_CALL_DELTA,
@@ -369,7 +370,15 @@ function normalizeRunEvent(event) {
   return {
     sequence: event.sequence,
     run_id: event.run_id,
-    agent_id: event.agent_id,
+    // SSE and retained Run events carry the bare agent id beside
+    // `project_id`; WebSocket events arrive already addressed
+    // (`runEventFromServerEvent`). Rebuilding the outside `agent@projekt`
+    // address here gives every client-side Run event the same address,
+    // whichever transport delivered it; an identity id stays bare.
+    agent_id:
+      typeof event.agent_id === 'string'
+        ? qualifyAgentAddress(event.agent_id, event.project_id)
+        : event.agent_id,
     session_id: event.session_id,
     ...(event.contributes_to_agent_activity === false
       ? { contributes_to_agent_activity: false }
