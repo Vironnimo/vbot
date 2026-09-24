@@ -1,26 +1,26 @@
 """SQLite-vec vector store for Passage-level semantic Recall.
 
 The store is a **disposable derived index**; canonical Session history stays in
-``<data_dir>/sessions.db``. This module opens the connection, observes the
-embedding dimension lazily, and pins the index-policy identity in a header. It
-exposes Passage-vector primitives used by ``core/recall/vector.py``.
+``<data_dir>/sessions.db``. This module opens the connection, pins the
+embedding-space identity and observed dimension in a singleton header, and
+reconciles each Session's stored Passages incrementally.
 
-A Session's searchable text is split into overlapping source-derived Passages.
-Each Passage is its own metadata row and its own row in the ``vec0`` virtual
-table, keyed by the compatibility-named chunk index in the
-``(agent_id, session_id, chunk_index)`` tuple. Callers choose the exact on-disk
-file under ``<data_dir>/recall/``. The ``sqlite-vec``
-extension is loaded via the same enable/disable dance as the rest of
-the project's SQLite work, and the index is schema-versioned through
-``PRAGMA user_version`` so a mismatched index is dropped and rebuilt
-on the next open.
+Every Passage is one metadata row in ``passages`` and one row in the ``vec0``
+virtual table sharing its rowid. ``indexed_sessions`` holds one freshness stamp
+per indexed Session, including Sessions that yield no Passages. A refresh is a
+two-phase operation around the asynchronous embedding call: ``plan_refresh``
+diffs the target Passages against the stored rows and names the texts that have
+no stored vector in the pinned space; ``apply_refresh`` then deletes vanished
+rows, inserts new ones, and advances the stamps in one write transaction.
+Unchanged rows keep their rowids and vectors. The schema is versioned through
+``PRAGMA user_version``; a mismatched file is discarded and rebuilt.
 """
 
 from __future__ import annotations
 
-import json
+import hashlib
 import sqlite3
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -28,6 +28,7 @@ from pathlib import Path
 
 import sqlite_vec  # type: ignore[import-untyped]
 
+from core.recall.passages import Passage
 from core.sessions.schema import required_journal_mode
 
 _INDEX_DIR_NAME = "recall"
@@ -50,16 +51,24 @@ _SQLITE_BUSY_TIMEOUT_MS = 1000
 #      and prevent recreated addresses from reusing stale chunks.
 # v9 → invalid chunk timestamps use unbounded interval endpoints instead of
 #      1970, preserving fail-open time-filter behavior for malformed metadata.
-_SCHEMA_VERSION = 9
+# v10 → Passage rows carry a text hash for incremental reuse, per-Session
+#       freshness stamps move to ``indexed_sessions``, and the duplicate
+#       chunk-era columns are gone.
+_SCHEMA_VERSION = 10
 _VECTOR_TABLE_NAME = "session_vectors"
-_CHUNK_TABLE_NAME = "chunks"
+_PASSAGE_TABLE_NAME = "passages"
+_SESSION_TABLE_NAME = "indexed_sessions"
 _HEADER_TABLE_NAME = "store_header"
-# Cosine distance range — distances are 0 (identical direction) to 2 (opposite).
-# ``overshoot`` is the additional candidate count we ask sqlite-vec for so
-# Recall can validate canonical candidates before returning its bounded page.
-_KNN_OVERSHOOT = 4
 _UNBOUNDED_START_TIMESTAMP_MICROS = -(2**63)
 _UNBOUNDED_END_TIMESTAMP_MICROS = 2**63 - 1
+# Stay well below SQLite's bound-parameter limit in ``IN (...)`` lists.
+_SQL_PARAMETER_CHUNK = 500
+# vec0 rejects a KNN query with more than about 16 constraints; MATCH, k, scope
+# and time filters use up to five, so at most this many ``!=`` exclusions are
+# pushed down individually before exclusions become an allowlist.
+_MAX_PUSHED_EXCLUSIONS = 8
+
+SessionVersion = tuple[str, int]
 
 
 class VectorStoreError(RuntimeError):
@@ -79,40 +88,63 @@ class VectorHeader:
 
 
 @dataclass(frozen=True)
-class ChunkVectorRecord:
-    """One indexed chunk row with its canonical Session history revision.
-
-    The metadata describes a *chunk* of a session (a window of consecutive
-    messages), not the session as a whole. ``history_revision`` is copied onto
-    every chunk row so freshness stays a Session-level comparison.
-
-    ``project_id`` is the chunk's scope key — the recall backend stores the
-    identity/global scope as ``""`` and a project scope as the project id, so a
-    same-UUID session in two scopes is two distinct index keys. Defaulted to
-    ``""`` so identity-only callers/tests stay unchanged.
-    """
+class StoredPassage:
+    """One indexed Passage row with its exact canonical boundaries and text."""
 
     session_id: str
-    agent_id: str
-    started_at: str
-    history_revision: int
-    anchor_message_id: str
-    snippet: str
-    chunk_index: int
+    passage_id: str
+    text: str
     start_message_id: str
     end_message_id: str
-    project_id: str = ""
-    passage_id: str = ""
-    text: str = ""
-    start_timestamp: str = ""
-    end_timestamp: str = ""
-    start_role: str = ""
-    end_role: str = ""
-    generation_id: str = ""
+    start_timestamp: str
+    end_timestamp: str
+    start_role: str
+    end_role: str
+
+
+@dataclass(frozen=True)
+class SessionPassages:
+    """The complete target Passage set of one Session at one canonical version."""
+
+    session_id: str
+    version: SessionVersion
+    previous_version: SessionVersion | None
+    passages: tuple[Passage, ...]
+
+
+@dataclass(frozen=True)
+class _SessionChange:
+    session_id: str
+    version: SessionVersion
+    previous_version: SessionVersion | None
+    delete_rowids: tuple[int, ...]
+    inserts: tuple[Passage, ...]
+
+
+@dataclass(frozen=True)
+class RefreshPlan:
+    """Row-level changes that bring the planned Sessions to their target Passages.
+
+    ``texts_to_embed`` lists each text without a stored vector exactly once;
+    ``apply_refresh`` expects one vector per entry, in this order.
+    """
+
+    header: VectorHeader
+    header_present: bool
+    agent_id: str
+    project_id: str
+    pruned_session_ids: tuple[str, ...]
+    changes: tuple[_SessionChange, ...]
+    reused_vectors: Mapping[str, bytes]
+    texts_to_embed: tuple[str, ...]
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.pruned_session_ids and not self.changes
 
 
 class VectorStore:
-    """sqlite-vec backed store keyed by chunk rowid."""
+    """sqlite-vec backed Passage store keyed by rowid."""
 
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
@@ -150,47 +182,50 @@ class VectorStore:
             raise VectorStoreError(f"could not open vector store: {error}") from error
 
     @staticmethod
-    def _create_chunk_schema(connection: sqlite3.Connection) -> None:
+    def _create_tables(connection: sqlite3.Connection) -> None:
         connection.execute(
             f"""
-            CREATE TABLE IF NOT EXISTS {_CHUNK_TABLE_NAME} (
+            CREATE TABLE IF NOT EXISTS {_PASSAGE_TABLE_NAME} (
               rowid INTEGER PRIMARY KEY,
-              session_id TEXT NOT NULL,
-              agent_id TEXT NOT NULL,
               project_id TEXT NOT NULL,
-              started_at TEXT NOT NULL,
-              generation_id TEXT NOT NULL,
-              history_revision INTEGER NOT NULL,
-              anchor_message_id TEXT NOT NULL,
-              snippet TEXT NOT NULL,
-              chunk_index INTEGER NOT NULL,
+              agent_id TEXT NOT NULL,
+              session_id TEXT NOT NULL,
+              passage_id TEXT NOT NULL,
+              text_hash TEXT NOT NULL,
+              text TEXT NOT NULL,
               start_message_id TEXT NOT NULL,
               end_message_id TEXT NOT NULL,
-              passage_id TEXT NOT NULL,
-              text TEXT NOT NULL,
               start_timestamp TEXT NOT NULL,
               end_timestamp TEXT NOT NULL,
               start_role TEXT NOT NULL,
-              end_role TEXT NOT NULL,
-              UNIQUE (project_id, agent_id, session_id, chunk_index)
+              end_role TEXT NOT NULL
             )
             """
         )
         connection.execute(
             f"""
-            CREATE INDEX IF NOT EXISTS idx_chunks_agent
-              ON {_CHUNK_TABLE_NAME}(project_id, agent_id)
+            CREATE INDEX IF NOT EXISTS idx_passages_session
+              ON {_PASSAGE_TABLE_NAME}(project_id, agent_id, session_id)
             """
         )
         connection.execute(
             f"""
-            CREATE INDEX IF NOT EXISTS idx_chunks_agent_session
-              ON {_CHUNK_TABLE_NAME}(project_id, agent_id, session_id)
+            CREATE INDEX IF NOT EXISTS idx_passages_text_hash
+              ON {_PASSAGE_TABLE_NAME}(text_hash)
             """
         )
-
-    @staticmethod
-    def _create_header_schema(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {_SESSION_TABLE_NAME} (
+              project_id TEXT NOT NULL,
+              agent_id TEXT NOT NULL,
+              session_id TEXT NOT NULL,
+              generation_id TEXT NOT NULL,
+              history_revision INTEGER NOT NULL,
+              PRIMARY KEY (project_id, agent_id, session_id)
+            )
+            """
+        )
         connection.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {_HEADER_TABLE_NAME} (
@@ -208,9 +243,13 @@ class VectorStore:
 
     @staticmethod
     def _drop_schema(connection: sqlite3.Connection) -> None:
-        connection.execute(f"DROP TABLE IF EXISTS {_VECTOR_TABLE_NAME}")
-        connection.execute(f"DROP TABLE IF EXISTS {_CHUNK_TABLE_NAME}")
-        connection.execute(f"DROP TABLE IF EXISTS {_HEADER_TABLE_NAME}")
+        for table in (
+            _VECTOR_TABLE_NAME,
+            _PASSAGE_TABLE_NAME,
+            _SESSION_TABLE_NAME,
+            _HEADER_TABLE_NAME,
+        ):
+            connection.execute(f"DROP TABLE IF EXISTS {table}")
 
     def _initialize_schema(
         self,
@@ -218,37 +257,21 @@ class VectorStore:
         *,
         expected_header: VectorHeader,
     ) -> None:
+        """Create the schema for *expected_header*, discarding any other index."""
+
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
         if version != _SCHEMA_VERSION:
             self._drop_schema(connection)
-        self._create_chunk_schema(connection)
-        self._create_header_schema(connection)
-        if version != _SCHEMA_VERSION:
             connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
-
-        self._ensure_header(connection, expected_header)
-
-    def _ensure_header(
-        self,
-        connection: sqlite3.Connection,
-        expected_header: VectorHeader,
-    ) -> None:
-        """Write the header row if missing; drop & rebuild if the bound model changed."""
-
+        self._create_tables(connection)
         existing = self._read_header(connection)
-        if (
-            existing is not None
-            and self._header_matches(existing, expected_header)
-            and self._has_chunk_table(connection)
-            and self._has_vector_table(connection)
-        ):
+        if existing == expected_header and self._has_table(connection, _VECTOR_TABLE_NAME):
             return
-        if existing is not None or self._has_vector_table(connection):
-            # A mismatched header or a vector table without its committed
+        if existing is not None or self._has_table(connection, _VECTOR_TABLE_NAME):
+            # A different header or a vector table without its committed
             # header is not comparable/complete; rebuild the disposable schema.
             self._drop_schema(connection)
-            self._create_chunk_schema(connection)
-            self._create_header_schema(connection)
+            self._create_tables(connection)
         self._create_vector_table(connection, expected_header.dimension)
         connection.execute(
             f"""
@@ -268,26 +291,10 @@ class VectorStore:
             ),
         )
 
-    @staticmethod
-    def _header_matches(stored: VectorHeader, expected: VectorHeader) -> bool:
-        return (
-            stored.provider_id == expected.provider_id
-            and stored.model_id == expected.model_id
-            and stored.response_model_id == expected.response_model_id
-            and stored.space_fingerprint == expected.space_fingerprint
-            and stored.index_policy == expected.index_policy
-            and stored.dimension == expected.dimension
-        )
-
-    @staticmethod
-    def _read_header(connection: sqlite3.Connection) -> VectorHeader | None:
-        # Defensive: on a brand-new database the header table does not exist
-        # yet, so we look it up through ``sqlite_master`` before querying it.
-        exists = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-            (_HEADER_TABLE_NAME,),
-        ).fetchone()
-        if exists is None:
+    @classmethod
+    def _read_header(cls, connection: sqlite3.Connection) -> VectorHeader | None:
+        # On a brand-new database the header table does not exist yet.
+        if not cls._has_table(connection, _HEADER_TABLE_NAME):
             return None
         row = connection.execute(
             f"""
@@ -306,6 +313,22 @@ class VectorStore:
             space_fingerprint=str(row["space_fingerprint"]),
             index_policy=str(row["index_policy"]),
         )
+
+    @classmethod
+    def _read_current_header(cls, connection: sqlite3.Connection) -> VectorHeader | None:
+        """Read the header, rejecting a populated file from another schema version."""
+
+        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        if version != _SCHEMA_VERSION:
+            populated = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1"
+            ).fetchone()
+            if populated is not None:
+                raise VectorStoreError(
+                    f"vector store schema {version} does not match {_SCHEMA_VERSION}"
+                )
+            return None
+        return cls._read_header(connection)
 
     @staticmethod
     def _create_vector_table(connection: sqlite3.Connection, dimension: int) -> None:
@@ -329,233 +352,342 @@ class VectorStore:
         )
 
     # ------------------------------------------------------------------
-    # Chunk upsert / delete
+    # Incremental refresh
+    # ------------------------------------------------------------------
+
+    def list_indexed_sessions(
+        self, agent_id: str, project_id: str = ""
+    ) -> dict[str, SessionVersion]:
+        """Return ``{session_id: (generation_id, history_revision)}`` for one scope.
+
+        ``project_id`` is the scope key (``""`` for identity/global) so two
+        scopes' same-UUID Sessions stay distinct freshness entries.
+        """
+
+        with closing(self._connect()) as connection:
+            if self._read_current_header(connection) is None:
+                return {}
+            return self._read_stamps(connection, agent_id, project_id)
+
+    @staticmethod
+    def _read_stamps(
+        connection: sqlite3.Connection,
+        agent_id: str | None,
+        project_id: str,
+    ) -> dict[str, SessionVersion]:
+        """Read the freshness stamps of one scope, or of every scope without an Agent."""
+
+        query = f"SELECT session_id, generation_id, history_revision FROM {_SESSION_TABLE_NAME}"
+        parameters: tuple[str, ...] = ()
+        if agent_id is not None:
+            query += " WHERE project_id = ? AND agent_id = ?"
+            parameters = (project_id, agent_id)
+        return {
+            str(row[0]): (str(row[1]), int(row[2]))
+            for row in connection.execute(query, parameters).fetchall()
+        }
+
+    def plan_refresh(
+        self,
+        agent_id: str,
+        project_id: str,
+        *,
+        header: VectorHeader,
+        sessions: Sequence[SessionPassages],
+        pruned_session_ids: Iterable[str] = (),
+    ) -> RefreshPlan:
+        """Diff target Passages against stored rows without writing.
+
+        A stored row is kept only when its Passage id, text hash, boundary
+        Message ids, timestamps and roles all match a target Passage; matching
+        is multiset-aware. New rows reuse any stored vector for the same text in
+        the pinned embedding space, and every other distinct text is listed in
+        ``texts_to_embed``.
+        """
+
+        if header.dimension <= 0:
+            raise VectorStoreError("refresh requires a header with a resolved dimension")
+        with closing(self._connect()) as connection:
+            stored_header = self._read_current_header(connection)
+            if stored_header is not None and stored_header != header:
+                raise VectorStoreError(
+                    "vector store header does not match the embedding space of this refresh"
+                )
+            header_present = stored_header is not None
+            changes: list[_SessionChange] = []
+            insert_texts: dict[str, str] = {}
+            for target in sessions:
+                existing = (
+                    self._stored_row_keys(connection, project_id, agent_id, target.session_id)
+                    if header_present
+                    else {}
+                )
+                inserts: list[Passage] = []
+                for passage in target.passages:
+                    rowids = existing.get(_passage_key(passage))
+                    if rowids:
+                        rowids.pop()
+                        continue
+                    inserts.append(passage)
+                    insert_texts.setdefault(_text_hash(passage.text), passage.text)
+                changes.append(
+                    _SessionChange(
+                        session_id=target.session_id,
+                        version=target.version,
+                        previous_version=target.previous_version,
+                        delete_rowids=tuple(
+                            sorted(rowid for rowids in existing.values() for rowid in rowids)
+                        ),
+                        inserts=tuple(inserts),
+                    )
+                )
+            reused = (
+                self._vectors_for_text_hashes(connection, insert_texts) if header_present else {}
+            )
+        return RefreshPlan(
+            header=header,
+            header_present=header_present,
+            agent_id=agent_id,
+            project_id=project_id,
+            pruned_session_ids=tuple(sorted(set(pruned_session_ids))),
+            changes=tuple(changes),
+            reused_vectors=reused,
+            texts_to_embed=tuple(
+                text for text_hash, text in insert_texts.items() if text_hash not in reused
+            ),
+        )
+
+    def apply_refresh(
+        self,
+        plan: RefreshPlan,
+        vectors: Sequence[Sequence[float]] = (),
+    ) -> None:
+        """Apply *plan* in one write transaction, with one vector per text to embed.
+
+        A Session whose stored stamp no longer equals the planned previous
+        version was refreshed by another writer since planning and is skipped.
+        """
+
+        if len(vectors) != len(plan.texts_to_embed):
+            raise VectorStoreError(
+                f"refresh received {len(vectors)} vectors for {len(plan.texts_to_embed)} texts"
+            )
+        header = plan.header
+        embedded: dict[str, bytes] = {}
+        for text, vector in zip(plan.texts_to_embed, vectors, strict=True):
+            if len(vector) != header.dimension:
+                raise VectorStoreError(
+                    f"vector length {len(vector)} does not match pinned dimension "
+                    f"{header.dimension} for model {header.provider_id}/{header.model_id}"
+                )
+            embedded[_text_hash(text)] = sqlite_vec.serialize_float32([float(v) for v in vector])
+        available = {**plan.reused_vectors, **embedded}
+        with closing(self._connect()) as connection:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                stored_header = self._read_current_header(connection)
+                if stored_header is not None and stored_header != header:
+                    raise VectorStoreError("vector store header changed during refresh")
+                if plan.header_present and stored_header is None:
+                    raise VectorStoreError("vector store was discarded during refresh")
+                if stored_header is not None and plan.is_empty:
+                    connection.rollback()
+                    return
+                self._initialize_schema(connection, expected_header=header)
+                for session_id in plan.pruned_session_ids:
+                    self._delete_session_rows(
+                        connection, plan.agent_id, plan.project_id, session_id
+                    )
+                for change in plan.changes:
+                    self._apply_session_change(connection, plan, change, vectors=available)
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
+    def _apply_session_change(
+        self,
+        connection: sqlite3.Connection,
+        plan: RefreshPlan,
+        change: _SessionChange,
+        *,
+        vectors: Mapping[str, bytes],
+    ) -> None:
+        scope = (plan.project_id, plan.agent_id, change.session_id)
+        stamp = connection.execute(
+            f"""
+            SELECT generation_id, history_revision FROM {_SESSION_TABLE_NAME}
+            WHERE project_id = ? AND agent_id = ? AND session_id = ?
+            """,
+            scope,
+        ).fetchone()
+        current = None if stamp is None else (str(stamp[0]), int(stamp[1]))
+        if current != change.previous_version:
+            return
+        self._delete_rowids(connection, change.delete_rowids)
+        scope_key = _scope_key(plan.project_id, plan.agent_id)
+        for passage in change.inserts:
+            text_hash = _text_hash(passage.text)
+            cursor = connection.execute(
+                f"""
+                INSERT INTO {_PASSAGE_TABLE_NAME} (
+                  project_id, agent_id, session_id, passage_id, text_hash, text,
+                  start_message_id, end_message_id, start_timestamp, end_timestamp,
+                  start_role, end_role
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    *scope,
+                    passage.passage_id,
+                    text_hash,
+                    passage.text,
+                    passage.start_message_id,
+                    passage.end_message_id,
+                    passage.start_timestamp,
+                    passage.end_timestamp,
+                    passage.start_role,
+                    passage.end_role,
+                ),
+            )
+            if cursor.lastrowid is None:
+                raise VectorStoreError(f"failed to insert Passage for {change.session_id}")
+            connection.execute(
+                f"""
+                INSERT INTO {_VECTOR_TABLE_NAME} (
+                  rowid, scope_key, session_id, start_timestamp, end_timestamp, embedding
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    cursor.lastrowid,
+                    scope_key,
+                    change.session_id,
+                    _timestamp_micros(
+                        passage.start_timestamp, fallback=_UNBOUNDED_START_TIMESTAMP_MICROS
+                    ),
+                    _timestamp_micros(
+                        passage.end_timestamp, fallback=_UNBOUNDED_END_TIMESTAMP_MICROS
+                    ),
+                    vectors[text_hash],
+                ),
+            )
+        connection.execute(
+            f"""
+            INSERT INTO {_SESSION_TABLE_NAME} (
+              project_id, agent_id, session_id, generation_id, history_revision
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (project_id, agent_id, session_id) DO UPDATE SET
+              generation_id = excluded.generation_id,
+              history_revision = excluded.history_revision
+            """,
+            (*scope, *change.version),
+        )
+
+    @staticmethod
+    def _stored_row_keys(
+        connection: sqlite3.Connection,
+        project_id: str,
+        agent_id: str,
+        session_id: str,
+    ) -> dict[tuple[str, ...], list[int]]:
+        rows = connection.execute(
+            f"""
+            SELECT rowid, passage_id, text_hash, start_message_id, end_message_id,
+                   start_timestamp, end_timestamp, start_role, end_role
+            FROM {_PASSAGE_TABLE_NAME}
+            WHERE project_id = ? AND agent_id = ? AND session_id = ?
+            """,
+            (project_id, agent_id, session_id),
+        ).fetchall()
+        keys: dict[tuple[str, ...], list[int]] = {}
+        for row in rows:
+            key = tuple(str(value) for value in tuple(row)[1:])
+            keys.setdefault(key, []).append(int(row["rowid"]))
+        return keys
+
+    @staticmethod
+    def _vectors_for_text_hashes(
+        connection: sqlite3.Connection,
+        text_hashes: Iterable[str],
+    ) -> dict[str, bytes]:
+        """Copy one stored vector per requested text hash, from any Session."""
+
+        wanted = list(text_hashes)
+        vectors: dict[str, bytes] = {}
+        for start in range(0, len(wanted), _SQL_PARAMETER_CHUNK):
+            chunk = wanted[start : start + _SQL_PARAMETER_CHUNK]
+            placeholders = ", ".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT p.text_hash, v.embedding
+                FROM {_PASSAGE_TABLE_NAME} AS p
+                JOIN {_VECTOR_TABLE_NAME} AS v ON v.rowid = p.rowid
+                WHERE p.text_hash IN ({placeholders})
+                """,
+                chunk,
+            ).fetchall()
+            for row in rows:
+                vectors.setdefault(str(row[0]), bytes(row[1]))
+        return vectors
+
+    # ------------------------------------------------------------------
+    # Deletion
     # ------------------------------------------------------------------
 
     def delete_session(self, agent_id: str, project_id: str, session_id: str) -> None:
-        """Remove all chunk rows for a scope+agent+session (used for staleness cleanup)."""
+        """Remove one Session's rows and freshness stamp (delete-time cleanup)."""
 
         with closing(self._connect()) as connection, connection:
-            # On a fresh index the chunk table does not exist yet — there is
-            # nothing to delete, and querying it would raise ``no such table``.
-            if not self._has_chunk_table(connection):
+            # A file from another schema holds nothing current; the next
+            # search discards and rebuilds it.
+            version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if version != _SCHEMA_VERSION or self._read_header(connection) is None:
                 return
             self._delete_session_rows(connection, agent_id, project_id, session_id)
 
-    def upsert_many_chunks(
-        self,
-        *,
-        header: VectorHeader,
-        records: Iterable[tuple[ChunkVectorRecord, Sequence[float]]],
-    ) -> int:
-        """Bulk-upsert chunks; replaces all chunks of any touched session.
-
-        Each distinct ``(project_id, agent_id, session_id)`` seen in *records*
-        has its existing chunk rows deleted **once** before the new chunks are
-        inserted. Per-row delete is unsafe here: deleting chunk 1 between
-        inserting chunk 0 and chunk 2 would clobber chunk 0 via the
-        session-wide delete. We collect the distinct session set up front
-        so every session is wiped exactly once, then insert the new
-        chunks in a single pass. Returns the number of chunk rows
-        written.
-        """
-
-        materialized = [(record, vector) for record, vector in records]
-        if not materialized:
-            return 0
-        count = 0
-        with closing(self._connect()) as connection:
-            try:
-                connection.execute("BEGIN IMMEDIATE")
-                self._initialize_schema(connection, expected_header=header)
-                # Delete each scope+session's existing chunks exactly once.
-                distinct_sessions = {
-                    (record.agent_id, record.project_id, record.session_id)
-                    for record, _ in materialized
-                }
-                for agent_id, project_id, session_id in distinct_sessions:
-                    self._delete_session_rows(connection, agent_id, project_id, session_id)
-                for record, vector in materialized:
-                    if len(vector) != header.dimension:
-                        raise VectorStoreError(
-                            f"vector length {len(vector)} does not match pinned dimension "
-                            f"{header.dimension} for model "
-                            f"{header.provider_id}/{header.model_id}"
-                        )
-                    cursor = connection.execute(
-                        f"""
-                        INSERT INTO {_CHUNK_TABLE_NAME} (
-                          session_id, agent_id, project_id, started_at, generation_id,
-                          history_revision,
-                          anchor_message_id, snippet, chunk_index,
-                          start_message_id, end_message_id, passage_id, text,
-                          start_timestamp, end_timestamp, start_role, end_role
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            record.session_id,
-                            record.agent_id,
-                            record.project_id,
-                            record.started_at,
-                            record.generation_id,
-                            record.history_revision,
-                            record.anchor_message_id,
-                            record.snippet,
-                            record.chunk_index,
-                            record.start_message_id,
-                            record.end_message_id,
-                            record.passage_id or f"legacy-{record.chunk_index}",
-                            record.text or record.snippet,
-                            record.start_timestamp or record.started_at,
-                            record.end_timestamp or record.started_at,
-                            record.start_role,
-                            record.end_role,
-                        ),
-                    )
-                    row_id = cursor.lastrowid
-                    if row_id is None:
-                        raise VectorStoreError(
-                            f"failed to insert chunk for session {record.session_id} "
-                            f"chunk_index {record.chunk_index}"
-                        )
-                    connection.execute(
-                        "INSERT INTO "
-                        f"{_VECTOR_TABLE_NAME}("
-                        "rowid, scope_key, session_id, start_timestamp, end_timestamp, embedding"
-                        ") VALUES (?, ?, ?, ?, ?, vec_f32(?))",
-                        (
-                            row_id,
-                            _scope_key(record.project_id, record.agent_id),
-                            record.session_id,
-                            _timestamp_micros(
-                                record.start_timestamp or record.started_at,
-                                fallback=_UNBOUNDED_START_TIMESTAMP_MICROS,
-                            ),
-                            _timestamp_micros(
-                                record.end_timestamp or record.started_at,
-                                fallback=_UNBOUNDED_END_TIMESTAMP_MICROS,
-                            ),
-                            json.dumps([float(value) for value in vector]),
-                        ),
-                    )
-                    count += 1
-                connection.commit()
-            except Exception:
-                connection.rollback()
-                raise
-        return count
-
-    def ensure_index(self, header: VectorHeader) -> None:
-        """Create and commit an empty index for a resolved positive-dimension header."""
-
-        with closing(self._connect()) as connection:
-            try:
-                connection.execute("BEGIN IMMEDIATE")
-                self._initialize_schema(connection, expected_header=header)
-                connection.commit()
-            except Exception:
-                connection.rollback()
-                raise
-
-    @staticmethod
+    @classmethod
     def _delete_session_rows(
+        cls,
         connection: sqlite3.Connection,
         agent_id: str,
         project_id: str,
         session_id: str,
     ) -> None:
-        # Deletes *all* chunk rows for a (scope, agent, session) — re-used for
-        # re-indexing, staleness drops, and the pre-insert wipe in
-        # ``upsert_many_chunks``. Any matching vec0 rowids are removed
-        # first so the vec0 table never dangles.
-        rows = list(
-            connection.execute(
-                f"""
-                SELECT rowid FROM {_CHUNK_TABLE_NAME}
-                WHERE project_id = ? AND agent_id = ? AND session_id = ?
-                """,
-                (project_id, agent_id, session_id),
+        scope = (project_id, agent_id, session_id)
+        rowids = [
+            int(row[0])
+            for row in connection.execute(
+                f"SELECT rowid FROM {_PASSAGE_TABLE_NAME} "
+                "WHERE project_id = ? AND agent_id = ? AND session_id = ?",
+                scope,
             )
-        )
-        for row in rows:
-            connection.execute(
-                f"DELETE FROM {_VECTOR_TABLE_NAME} WHERE rowid = ?",
-                (int(row["rowid"]),),
-            )
+        ]
+        cls._delete_rowids(connection, rowids)
         connection.execute(
-            f"DELETE FROM {_CHUNK_TABLE_NAME} "
+            f"DELETE FROM {_SESSION_TABLE_NAME} "
             "WHERE project_id = ? AND agent_id = ? AND session_id = ?",
-            (project_id, agent_id, session_id),
+            scope,
         )
 
-    # ------------------------------------------------------------------
-    # Freshness + KNN query
-    # ------------------------------------------------------------------
-
-    def list_indexed_sessions(
-        self, agent_id: str, project_id: str = ""
-    ) -> dict[str, tuple[str, int]]:
-        """Return ``{session_id: (generation_id, revision)}`` for indexed Sessions.
-
-        With chunk-keyed storage, a session has one row per chunk; we
-        dedup to one entry per ``session_id`` (every chunk row of a
-        session shares one canonical ``history_revision``).
-        ``project_id`` is the scope key (``""`` for identity/global) so two
-        scopes' same-UUID sessions stay distinct freshness entries.
-        """
-
-        with closing(self._connect()) as connection:
-            if not self._has_chunk_table(connection):
-                return {}
-            rows = connection.execute(
-                f"""
-                SELECT session_id, generation_id, history_revision FROM {_CHUNK_TABLE_NAME}
-                WHERE project_id = ? AND agent_id = ?
-                GROUP BY session_id
-                """,
-                (project_id, agent_id),
-            ).fetchall()
-        return {
-            str(row["session_id"]): (
-                str(row["generation_id"]),
-                int(row["history_revision"]),
+    @staticmethod
+    def _delete_rowids(connection: sqlite3.Connection, rowids: Sequence[int]) -> None:
+        if not rowids:
+            return
+        # vec0 resolves only ``rowid = ?`` as a point lookup; ``IN`` scans the table.
+        connection.executemany(
+            f"DELETE FROM {_VECTOR_TABLE_NAME} WHERE rowid = ?",
+            ((rowid,) for rowid in rowids),
+        )
+        for start in range(0, len(rowids), _SQL_PARAMETER_CHUNK):
+            chunk = rowids[start : start + _SQL_PARAMETER_CHUNK]
+            placeholders = ", ".join("?" for _ in chunk)
+            connection.execute(
+                f"DELETE FROM {_PASSAGE_TABLE_NAME} WHERE rowid IN ({placeholders})",
+                chunk,
             )
-            for row in rows
-        }
 
-    def drop_indexed_sessions(
-        self, agent_id: str, project_id: str, session_ids: Iterable[str]
-    ) -> int:
-        """Remove a scope+agent's indexed session rows that no longer exist in canonical storage."""
-
-        removed = 0
-        with closing(self._connect()) as connection, connection:
-            if not self._has_chunk_table(connection):
-                return 0
-            for session_id in sorted(set(session_ids)):
-                rows_before = connection.execute(
-                    f"""
-                        SELECT rowid FROM {_CHUNK_TABLE_NAME}
-                        WHERE project_id = ? AND agent_id = ? AND session_id = ?
-                        """,
-                    (project_id, agent_id, session_id),
-                ).fetchall()
-                if not rows_before:
-                    continue
-                for row in rows_before:
-                    connection.execute(
-                        f"DELETE FROM {_VECTOR_TABLE_NAME} WHERE rowid = ?",
-                        (int(row["rowid"]),),
-                    )
-                connection.execute(
-                    f"""
-                        DELETE FROM {_CHUNK_TABLE_NAME}
-                        WHERE project_id = ? AND agent_id = ? AND session_id = ?
-                        """,
-                    (project_id, agent_id, session_id),
-                )
-                removed += 1
-        return removed
+    # ------------------------------------------------------------------
+    # KNN query
+    # ------------------------------------------------------------------
 
     def knn_search(
         self,
@@ -569,8 +701,14 @@ class VectorStore:
         excluded_session_ids: Sequence[str] = (),
         since: datetime | None = None,
         until: datetime | None = None,
-    ) -> list[tuple[int, float]]:
-        """Return nearest rows after optional structural metadata prefilters."""
+    ) -> list[tuple[StoredPassage, float]]:
+        """Return the nearest Passages after structural prefilters inside KNN.
+
+        Every scope, Session, exclusion and time filter runs inside the vec0
+        KNN, so filtered rows never take a slot of the ``limit`` nearest. KNN
+        and row hydration run as one statement, so every returned vector has
+        its Passage row.
+        """
 
         if limit <= 0:
             return []
@@ -579,20 +717,17 @@ class VectorStore:
                 f"query vector length {len(query_vector)} does not match pinned dimension "
                 f"{header.dimension} for model {header.provider_id}/{header.model_id}"
             )
-        vector_json = json.dumps([float(value) for value in query_vector])
-        fetch_limit = limit + _KNN_OVERSHOOT
-        clauses = ["embedding MATCH vec_f32(?)", "k = ?"]
-        parameters: list[object] = [vector_json, fetch_limit]
+        excluded = set(excluded_session_ids)
+        if session_id is not None and session_id in excluded:
+            return []
+        clauses = ["embedding MATCH ?", "k = ?"]
+        parameters: list[object] = [
+            sqlite_vec.serialize_float32([float(value) for value in query_vector]),
+            limit,
+        ]
         if agent_id is not None:
             clauses.append("scope_key = ?")
             parameters.append(_scope_key(project_id, agent_id))
-        if session_id is not None:
-            clauses.append("session_id = ?")
-            parameters.append(session_id)
-        if excluded_session_ids:
-            placeholders = ", ".join("?" for _ in excluded_session_ids)
-            clauses.append(f"session_id NOT IN ({placeholders})")
-            parameters.extend(excluded_session_ids)
         if since is not None:
             clauses.append("end_timestamp >= ?")
             parameters.append(_datetime_micros(since))
@@ -600,92 +735,73 @@ class VectorStore:
             clauses.append("start_timestamp <= ?")
             parameters.append(_datetime_micros(until))
         with closing(self._connect()) as connection:
-            stored = self._read_header(connection)
-            if stored is None or not self._header_matches(stored, header):
+            stored = self._read_current_header(connection)
+            if stored is None or stored != header:
                 raise VectorStoreError(
                     "vector store header is missing or does not match the requested embedding space"
                 )
-            if not self._has_vector_table(connection):
+            if not self._has_table(connection, _VECTOR_TABLE_NAME):
                 raise VectorStoreError("vector store table is missing")
+            if session_id is not None:
+                clauses.append("session_id = ?")
+                parameters.append(session_id)
+            elif len(excluded) <= _MAX_PUSHED_EXCLUSIONS:
+                # vec0 filters ``!=`` inside KNN but applies ``NOT IN`` only to
+                # the k nearest rows, which would starve the page.
+                for excluded_id in sorted(excluded):
+                    clauses.append("session_id != ?")
+                    parameters.append(excluded_id)
+            else:
+                # vec0 caps the constraints of one query; many exclusions
+                # become an allowlist of the scope's other indexed Sessions.
+                allowed = sorted(
+                    set(self._read_stamps(connection, agent_id, project_id)) - excluded
+                )
+                if not allowed:
+                    return []
+                clauses.append(f"session_id IN ({', '.join('?' for _ in allowed)})")
+                parameters.extend(allowed)
             rows = connection.execute(
                 f"""
-                SELECT rowid, distance FROM {_VECTOR_TABLE_NAME}
-                WHERE {" AND ".join(clauses)}
-                ORDER BY distance
+                WITH knn AS (
+                  SELECT rowid, distance FROM {_VECTOR_TABLE_NAME}
+                  WHERE {" AND ".join(clauses)}
+                )
+                SELECT p.session_id, p.passage_id, p.text, p.start_message_id,
+                       p.end_message_id, p.start_timestamp, p.end_timestamp,
+                       p.start_role, p.end_role, knn.distance
+                FROM knn JOIN {_PASSAGE_TABLE_NAME} AS p ON p.rowid = knn.rowid
+                ORDER BY knn.distance, p.session_id, p.passage_id
                 """,
                 parameters,
             ).fetchall()
-        return [(int(row["rowid"]), float(row["distance"])) for row in rows]
-
-    def get_chunks_by_rowids(self, row_ids: Iterable[int]) -> dict[int, ChunkVectorRecord]:
-        """Hydrate chunk metadata rows for the given vec0 rowids, keyed by rowid."""
-
-        ids = [int(value) for value in row_ids]
-        if not ids:
-            return {}
-        placeholders = ", ".join("?" for _ in ids)
-        with closing(self._connect()) as connection:
-            if not self._has_chunk_table(connection):
-                return {}
-            rows = connection.execute(
-                f"""
-                SELECT rowid, session_id, agent_id, project_id, started_at, generation_id,
-                       history_revision,
-                       anchor_message_id, snippet, chunk_index, start_message_id, end_message_id,
-                       passage_id, text, start_timestamp, end_timestamp, start_role, end_role
-                FROM {_CHUNK_TABLE_NAME}
-                WHERE rowid IN ({placeholders})
-                """,
-                ids,
-            ).fetchall()
-        return {
-            int(row["rowid"]): ChunkVectorRecord(
-                session_id=str(row["session_id"]),
-                agent_id=str(row["agent_id"]),
-                project_id=str(row["project_id"]),
-                started_at=str(row["started_at"]),
-                generation_id=str(row["generation_id"]),
-                history_revision=int(row["history_revision"]),
-                anchor_message_id=str(row["anchor_message_id"]),
-                snippet=str(row["snippet"]),
-                chunk_index=int(row["chunk_index"]),
-                start_message_id=str(row["start_message_id"]),
-                end_message_id=str(row["end_message_id"]),
-                passage_id=str(row["passage_id"]),
-                text=str(row["text"]),
-                start_timestamp=str(row["start_timestamp"]),
-                end_timestamp=str(row["end_timestamp"]),
-                start_role=str(row["start_role"]),
-                end_role=str(row["end_role"]),
+        return [
+            (
+                StoredPassage(
+                    session_id=str(row["session_id"]),
+                    passage_id=str(row["passage_id"]),
+                    text=str(row["text"]),
+                    start_message_id=str(row["start_message_id"]),
+                    end_message_id=str(row["end_message_id"]),
+                    start_timestamp=str(row["start_timestamp"]),
+                    end_timestamp=str(row["end_timestamp"]),
+                    start_role=str(row["start_role"]),
+                    end_role=str(row["end_role"]),
+                ),
+                float(row["distance"]),
             )
             for row in rows
-        }
+        ]
+
+    # ------------------------------------------------------------------
+    # Header / lifecycle
+    # ------------------------------------------------------------------
 
     def read_header(self) -> VectorHeader | None:
-        """Public read of the stored header — used by tests to assert pinning."""
+        """Read the pinned header; a populated file from another schema is an error."""
 
         with closing(self._connect()) as connection:
-            version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if version != _SCHEMA_VERSION:
-                tables = connection.execute(
-                    """
-                    SELECT 1 FROM sqlite_master
-                    WHERE type = 'table' AND name IN (?, ?, ?)
-                    LIMIT 1
-                    """,
-                    (_VECTOR_TABLE_NAME, _CHUNK_TABLE_NAME, _HEADER_TABLE_NAME),
-                ).fetchone()
-                if tables is not None:
-                    raise VectorStoreError(
-                        f"vector store schema {version} does not match {_SCHEMA_VERSION}"
-                    )
-                return None
-            return self._read_header(connection)
-
-    def drop_index(self) -> None:
-        """Wipe the on-disk disposable index, including SQLite sidecar files."""
-
-        self.reset_index()
+            return self._read_current_header(connection)
 
     def reset_index(self) -> None:
         """Discard the exact derived-index files without opening a corrupt database."""
@@ -699,38 +815,33 @@ class VectorStore:
             path.unlink(missing_ok=True)
 
     @staticmethod
-    def _has_chunk_table(connection: sqlite3.Connection) -> bool:
-        """Whether the chunk metadata table exists (helps the read path on a fresh DB)."""
-
+    def _has_table(connection: sqlite3.Connection, name: str) -> bool:
         return (
             connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-                (_CHUNK_TABLE_NAME,),
-            ).fetchone()
-            is not None
-        )
-
-    @staticmethod
-    def _has_vector_table(connection: sqlite3.Connection) -> bool:
-        return (
-            connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-                (_VECTOR_TABLE_NAME,),
+                (name,),
             ).fetchone()
             is not None
         )
 
 
-def format_started_at(timestamp: str | datetime | None) -> str:
-    """Normalize a started-at timestamp to the ISO format the store persists."""
+def _passage_key(passage: Passage) -> tuple[str, ...]:
+    """Identity of a stored row; the order matches ``_stored_row_keys``."""
 
-    if timestamp is None:
-        return datetime.now(UTC).isoformat()
-    if isinstance(timestamp, datetime):
-        if timestamp.tzinfo is None:
-            return timestamp.replace(tzinfo=UTC).isoformat()
-        return timestamp.astimezone(UTC).isoformat()
-    return str(timestamp)
+    return (
+        passage.passage_id,
+        _text_hash(passage.text),
+        passage.start_message_id,
+        passage.end_message_id,
+        passage.start_timestamp,
+        passage.end_timestamp,
+        passage.start_role,
+        passage.end_role,
+    )
+
+
+def _text_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _scope_key(project_id: str, agent_id: str) -> str:
