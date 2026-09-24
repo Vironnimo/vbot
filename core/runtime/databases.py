@@ -24,8 +24,11 @@ from core.sessions.schema import DATABASE_NAME as SESSIONS_DATABASE_NAME
 def canonical_database_specs(data_dir: Path) -> tuple[DatabaseSpec, ...]:
     """Declarations of every canonical database this vBot owns in ``data_dir``.
 
-    Extension databases are declared by their Extensions at load time and are
-    not listed here; offline tools verify them by kernel identity only.
+    Extension databases (``ext.<owner>.<name>``) are declared only when their
+    Extension opens them through ``host.open_database``: declaring them here
+    would mean running Extension code in an offline tool. Offline tools verify
+    them by kernel identity and integrity only, without owner facts or schema
+    compatibility checks.
     """
     return (
         session_database_spec(canonical_database_path(data_dir, SESSIONS_DATABASE_NAME)),

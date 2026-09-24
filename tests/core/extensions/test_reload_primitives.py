@@ -197,7 +197,7 @@ async def test_reload_retires_old_registry_while_replacement_loads(
         "    )\n",
     )
     old = ExtensionRegistry.load(root)
-    old.bind_host(cast(Any, SimpleNamespace(for_owner=None)))
+    old.bind_host(cast(Any, SimpleNamespace(for_owner=None, release_owner=None)))
     identity = old.registration_identity("hooky")
     old.host_for(identity)
     module = sys.modules[next(name for name in sys.modules if name.startswith("vbot_ext."))]
@@ -229,7 +229,7 @@ async def test_reload_retires_old_registry_while_replacement_loads(
         logger=SimpleNamespace(
             info=lambda *_args, **_kwargs: None, warning=lambda *_args, **_kwargs: None
         ),
-        make_host=lambda: cast(ExtensionHost, SimpleNamespace(for_owner=None)),
+        make_host=lambda: cast(ExtensionHost, SimpleNamespace(for_owner=None, release_owner=None)),
     )
 
     reload_task = asyncio.create_task(runtime.reload())

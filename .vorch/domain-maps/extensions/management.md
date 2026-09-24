@@ -59,7 +59,7 @@ For packaged installs, the application owner resolves one explicit local require
 
 Authoring convention: keep imports and `register(api)` free of resource acquisition; acquire connections, tasks and file handles in startup, release them in shutdown, and make both handlers idempotent because reload cycles every loaded owner. This guidance is also part of the bundled `vbot-cli` authoring reference.
 
-Loaded Extensions fire startup in load order after runtime capability application. Runtime stop fires shutdown for loaded records; live reload awaits old shutdown and new startup on the serving loop; live disable fires only that record's shutdown. Synchronous and asynchronous lifecycle handlers share fail-open logging and do not prevent remaining handlers from running.
+Loaded Extensions fire startup in load order after runtime capability application. Runtime stop fires shutdown for loaded records; live reload awaits old shutdown and new startup on the serving loop; live disable fires only that record's shutdown. After each owner's shutdown handlers, the registry releases that registration through the root host's `release_owner`, closing the databases it opened with `host.open_database` (`extensions.md`). Synchronous and asynchronous lifecycle handlers share fail-open logging and do not prevent remaining handlers from running; a failed release is logged the same way.
 
 ## Source and tests
 

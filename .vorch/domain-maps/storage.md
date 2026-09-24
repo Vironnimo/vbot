@@ -16,7 +16,7 @@ Directory creation does not transfer ownership: Agents own their trees, Channels
 
 The explicit `scripts/converters/data_dir_artifacts_layout.py` converter preflights all supported legacy files and collisions before moving them. Canonical destination ancestry below the chosen data root must contain no symbolic links, including when the destination directory already exists.
 
-Runtime creates `<data-dir>/extension-data/<owner>/` for a loaded Extension's persistent host state. It is separate from `extensions/`, which contains executable overrides, and is not temporary-file cleanup data. The Extension owns its format; canonical temporary Session bindings, delivery receipts and Run ownership remain in `sessions.db` (`extensions.md`, `sessions.md`).
+Runtime creates `<data-dir>/extension-data/<owner>/` for a loaded Extension's persistent host state. It is separate from `extensions/`, which contains executable overrides, and is not temporary-file cleanup data. Databases an Extension opens through `host.open_database` live there as canonical kernel databases `<name>.db` (`database.md`, `extensions.md`). The Extension owns its format; canonical temporary Session bindings, delivery receipts and Run ownership remain in `sessions.db` (`extensions.md`, `sessions.md`).
 
 The archived Browser Use Extension previously owned `artifacts/browser-use/` (including its `refs.db` counter) and `~/.agent-browser/browsers`. Removal from bundled discovery does not delete these existing files or make them Storage cleanup categories; see `extensions/browser-use.md`.
 
