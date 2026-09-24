@@ -90,7 +90,9 @@ def test_resolve_instance_uses_explicit_port_before_environment_and_settings(
 ) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    (data_dir / "settings.json").write_text(json.dumps({"server_port": 8500}), encoding="utf-8")
+    (data_dir / "settings.json").write_text(
+        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
+    )
     monkeypatch.setenv("VBOT_SERVER_PORT", "8600")
 
     instance = resolve_instance(host="localhost", port=8700, data_dir=data_dir)
@@ -125,7 +127,9 @@ def test_resolve_instance_uses_environment_before_settings(
 ) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    (data_dir / "settings.json").write_text(json.dumps({"server_port": 8500}), encoding="utf-8")
+    (data_dir / "settings.json").write_text(
+        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
+    )
     monkeypatch.setenv("VBOT_SERVER_PORT", "8600")
 
     instance = resolve_instance(data_dir=data_dir)
@@ -140,7 +144,9 @@ def test_resolve_instance_uses_settings_before_default(
     monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    (data_dir / "settings.json").write_text(json.dumps({"server_port": 8500}), encoding="utf-8")
+    (data_dir / "settings.json").write_text(
+        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
+    )
 
     assert resolve_instance(data_dir=data_dir).port == 8500
     assert resolve_instance(data_dir=tmp_path / "missing").port == 8420

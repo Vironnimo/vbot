@@ -270,15 +270,15 @@ async def test_routing_a_known_conversation_again_takes_no_writer_transaction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     engine, chat_sessions, _trigger, _transport = make_engine(tmp_path, observe_unaddressed=True)
-    runtime = chat_sessions._store._runtime
-    original = runtime.execute_write
+    database = chat_sessions._store.database
+    original = database.write
     writes: list[object] = []
 
     def counted(fn, **kwargs):
         writes.append(fn)
         return original(fn, **kwargs)
 
-    monkeypatch.setattr(runtime, "execute_write", counted)
+    monkeypatch.setattr(database, "write", counted)
     conversation = make_conversation(kind="group", user_display_name="Alice")
 
     engine.prepare_inbound_route(conversation)

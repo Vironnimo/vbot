@@ -1,4 +1,4 @@
-"""Local update orchestration for git installs, preserving install state and Session snapshots."""
+"""Local update orchestration for git installs, preserving install state and data snapshots."""
 
 from __future__ import annotations
 
@@ -82,60 +82,63 @@ _DESKTOP_INSTALL_SHAPES = frozenset({SERVER_DESKTOP_SHAPE, DESKTOP_CLIENT_SHAPE}
 UNKNOWN_VBOT_VERSION = "unknown"
 
 
-def _ensure_update_session_snapshot(instance: ServerInstance) -> _Step:
-    """Create the mandatory current-format Session snapshot before code changes."""
+def _ensure_update_data_snapshot(instance: ServerInstance) -> _Step:
+    """Create the mandatory pre-update data snapshot of every canonical database."""
 
     from cli.rpc_client import rpc_call
-    from core.sessions.format import read_session_store_marker
+    from core.database import (
+        DatabaseError,
+        canonical_database_path,
+        create_data_snapshot,
+        read_marker,
+    )
 
     data_dir = instance.data_dir
-    database = data_dir / "sessions.db"
     try:
-        marker = read_session_store_marker(data_dir)
-    except Exception as exc:
-        return _Step(False, f"update: Session-store marker cannot be read: {exc}")
+        marker = read_marker(data_dir)
+    except (OSError, DatabaseError) as exc:
+        return _Step(False, f"update: data-store marker cannot be read: {exc}")
     if marker is None:
-        if database.exists():
+        if any(data_dir.glob("*.db")):
             return _Step(
                 False,
-                "update: a sessions.db exists without a current-format Session marker; "
-                "refusing to update without a verified Session snapshot",
+                "update: SQLite databases exist without a current-format data-store marker; "
+                "refusing to update without a verified data snapshot",
             )
         return _Step(True, "")
-    if marker["state"] == "bootstrap" and not database.exists():
+    if not marker.databases:
         return _Step(True, "")
-    if not database.is_file():
+    missing = sorted(
+        name for name in marker.databases if not canonical_database_path(data_dir, name).is_file()
+    )
+    if missing:
         return _Step(
-            False, "update: current-format Session marker exists but sessions.db is missing"
+            False,
+            "update: the data-store marker registers missing databases: " + ", ".join(missing),
         )
 
     health = probe_health(instance)
     if health.reachable:
         if not health.is_vbot:
             return _Step(False, "update: the target port is occupied by a non-vBot process")
-        payload = rpc_call(instance, "session_store.snapshot_create", {"reason": "update"})
+        payload = rpc_call(instance, "data_store.snapshot_create", {"reason": "update"})
         if not payload.ok:
-            return _Step(False, f"update: pre-update Session snapshot failed: {payload.message}")
+            return _Step(False, f"update: pre-update data snapshot failed: {payload.message}")
         snapshot = payload.data.get("snapshot")
         snapshot_id = snapshot.get("snapshot_id") if isinstance(snapshot, dict) else None
         if not isinstance(snapshot_id, str) or not snapshot_id:
-            return _Step(False, "update: pre-update Session snapshot response was incomplete")
-        return _Step(True, f"pre-update Session snapshot: {snapshot_id}")
+            return _Step(False, "update: pre-update data snapshot response was incomplete")
+        return _Step(True, f"pre-update data snapshot: {snapshot_id}")
 
-    from core.sessions.snapshots import create_offline_snapshot
-
+    # The server is stopped: copy the files directly. No owner declarations are
+    # passed, so a snapshot never depends on this checkout's schema shapes.
     try:
-        snapshot = create_offline_snapshot(
-            data_dir,
-            database,
-            database_id=str(marker["database_id"]),
-            reason="update",
-        )
-    except Exception as exc:
-        return _Step(False, f"update: offline Session snapshot failed: {exc}")
-    if snapshot is None:
-        return _Step(False, "update: offline Session snapshot was not verified")
-    return _Step(True, f"pre-update Session snapshot: {snapshot.name}")
+        created = create_data_snapshot(data_dir, reason="update")
+    except (OSError, ValueError, DatabaseError) as exc:
+        return _Step(False, f"update: offline data snapshot failed: {exc}")
+    if created is None:
+        return _Step(False, "update: offline data snapshot was not verified")
+    return _Step(True, f"pre-update data snapshot: {created.name}")
 
 
 @dataclass(frozen=True)
@@ -181,7 +184,7 @@ def run_update(
     host: str | None = None,
     port: int | None = None,
     data_dir: str | Path | None = None,
-    session_snapshot_fn: Callable[[ServerInstance], _Step] = _ensure_update_session_snapshot,
+    data_snapshot_fn: Callable[[ServerInstance], _Step] = _ensure_update_data_snapshot,
     progress: Progress | None = None,
 ) -> CommandResult:
     """Advance the installed checkout and optionally restart the server."""
@@ -249,14 +252,14 @@ def run_update(
     if not desktop_guard.ok:
         return _fail(instance, desktop_guard.message)
 
-    announce("busy", "Creating and verifying a Session snapshot")
-    session_snapshot = session_snapshot_fn(instance)
-    if session_snapshot.message:
-        record(session_snapshot.message, session_snapshot.ok)
-    if not session_snapshot.ok:
-        return _fail(instance, session_snapshot.message)
+    announce("busy", "Creating and verifying a data snapshot")
+    data_snapshot = data_snapshot_fn(instance)
+    if data_snapshot.message:
+        record(data_snapshot.message, data_snapshot.ok)
+    if not data_snapshot.ok:
+        return _fail(instance, data_snapshot.message)
 
-    announce("success", "Session snapshot check completed")
+    announce("success", "Data snapshot check completed")
 
     if inferred_state:
         try:

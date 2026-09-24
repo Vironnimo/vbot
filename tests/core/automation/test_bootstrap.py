@@ -13,6 +13,7 @@ from core.automation import bootstrap as bootstrap_module
 from core.automation.bootstrap import (
     BootstrapJobValidationError,
     BootstrapService,
+    BootstrapStorageError,
     validate_bootstrap_jobs_data,
 )
 from core.chat import ChatMessage
@@ -291,9 +292,10 @@ async def test_restart_reconciles_terminal_run_before_retry(
     )
     jobs_path = tmp_path / "bootstrap" / "jobs.json"
     payload = json.loads(jobs_path.read_text(encoding="utf-8"))
-    payload[0]["last_run_id"] = "run-before-crash"
-    payload[0]["last_session_id"] = "bootstrap-session"
-    payload[0]["last_started_startup_id"] = "crashed-startup"
+    stored = payload["jobs"][0]
+    stored["last_run_id"] = "run-before-crash"
+    stored["last_session_id"] = "bootstrap-session"
+    stored["last_started_startup_id"] = "crashed-startup"
     jobs_path.write_text(json.dumps(payload), encoding="utf-8")
 
     def fail_full_load(self: ChatSession) -> list[ChatMessage]:
@@ -319,18 +321,64 @@ async def test_restart_reconciles_terminal_run_before_retry(
 
 def test_validation_reports_invalid_mode() -> None:
     diagnostics = validate_bootstrap_jobs_data(
-        [
-            {
-                "id": "job",
-                "agent_id": "main",
-                "name": "Check",
-                "prompt": "Check",
-                "mode": "sometimes",
-                "status": "active",
-                "created_at": "2026-08-02T00:00:00+00:00",
-                "armed_after_startup_id": "startup",
-            }
-        ]
+        {
+            "format_version": 1,
+            "jobs": [
+                {
+                    "id": "job",
+                    "agent_id": "main",
+                    "name": "Check",
+                    "prompt": "Check",
+                    "mode": "sometimes",
+                    "status": "active",
+                    "created_at": "2026-08-02T00:00:00+00:00",
+                    "armed_after_startup_id": "startup",
+                }
+            ],
+        }
     )
 
-    assert any(diagnostic.path == "$[0].mode" for diagnostic in diagnostics)
+    assert any(diagnostic.path == "$.jobs[0].mode" for diagnostic in diagnostics)
+
+
+def test_validation_requires_the_versioned_document() -> None:
+    assert [diagnostic.path for diagnostic in validate_bootstrap_jobs_data([])] == ["$"]
+    diagnostics = validate_bootstrap_jobs_data({"jobs": []})
+    assert [diagnostic.path for diagnostic in diagnostics] == ["$.format_version"]
+
+
+def test_save_keeps_invalid_entries_and_unknown_fields(tmp_path: Path) -> None:
+    creator = make_service(StubTriggerService(), tmp_path, "creator")
+    created = creator.create_job(agent_id="main", prompt="Verify", mode="always")
+    jobs_path = tmp_path / "bootstrap" / "jobs.json"
+    payload = json.loads(jobs_path.read_text(encoding="utf-8"))
+    payload["future_setting"] = 1
+    payload["jobs"][0]["future_field"] = "kept"
+    invalid = {"id": "broken", "mode": "sometimes"}
+    payload["jobs"].append(invalid)
+    jobs_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    service = make_service(StubTriggerService(), tmp_path, "later")
+    assert [job.id for job in service.list_jobs()] == [created.id]
+    service.update_job(created.id, prompt="Changed")
+
+    rewritten = json.loads(jobs_path.read_text(encoding="utf-8"))
+    assert rewritten["format_version"] == 1
+    assert rewritten["future_setting"] == 1
+    assert rewritten["jobs"][0]["prompt"] == "Changed"
+    assert rewritten["jobs"][0]["future_field"] == "kept"
+    assert rewritten["jobs"][1] == invalid
+
+
+def test_jobs_written_by_a_newer_vbot_are_never_overwritten(tmp_path: Path) -> None:
+    jobs_path = tmp_path / "bootstrap" / "jobs.json"
+    jobs_path.parent.mkdir(parents=True)
+    original = json.dumps({"format_version": 2, "jobs": []})
+    jobs_path.write_text(original, encoding="utf-8")
+    service = make_service(StubTriggerService(), tmp_path, "startup")
+
+    assert service.list_jobs() == []
+    with pytest.raises(BootstrapStorageError, match="written by a newer vBot"):
+        service.create_job(agent_id="main", prompt="Must not overwrite", mode="once")
+
+    assert jobs_path.read_text(encoding="utf-8") == original

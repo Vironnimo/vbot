@@ -12,26 +12,53 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
-from core.utils.atomic import atomic_write_text
+from core.config_validation import (
+    JsonDiagnostic,
+    JsonValidationReport,
+    add_error,
+    error_diagnostic,
+    validate_json_file,
+)
+from core.json_documents import (
+    JsonDocumentFormat,
+    JsonDocumentWriteError,
+    JsonShape,
+    json_document,
+    json_list,
+    json_object,
+    strip_unknown_fields,
+    validate_format_version,
+    warn_unknown_fields,
+    write_json_document,
+)
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("tools.terminal_store")
 
-TERMINAL_LAUNCH_HISTORY_VERSION = 1
+TERMINAL_LAUNCH_HISTORY_FORMAT_VERSION = 1
 TERMINAL_LAUNCH_HISTORY_MAX_ENTRIES = 50
-TERMINAL_GROUPS_VERSION = 1
+TERMINAL_GROUPS_FORMAT_VERSION = 1
 TERMINAL_GROUP_NAME_MAX_CHARS = 80
 TERMINAL_FINISHED_GROUP_ID = "finished"
 TERMINAL_MANUAL_GROUP_ID = "auto:manual"
 TERMINAL_AGENT_GROUP_ID_PREFIX = "auto:agent:"
 
 GroupKind = Literal["user", "agent", "automatic", "finished"]
+
+_LAUNCH_HISTORY_ENTRY_FIELDS = frozenset(("id", "command", "args", "workdir", "used_at"))
+_GROUP_FIELDS = frozenset(("id", "name", "order", "created_at"))
+LAUNCH_HISTORY_SHAPE = json_document(
+    {"entries"}, {"entries": json_list(json_object(_LAUNCH_HISTORY_ENTRY_FIELDS), key="id")}
+)
+GROUPS_SHAPE = json_document(
+    {"groups"}, {"groups": json_list(json_object(_GROUP_FIELDS), key="id")}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,25 +138,21 @@ def launch_history_id(
 
 
 def parse_launch_history(document: Any) -> list[TerminalLaunchHistoryEntry]:
-    """Parse a strict launch-history document; any deviation raises ``ValueError``."""
-    if not isinstance(document, dict) or set(document) != {"version", "entries"}:
-        raise ValueError("Terminal launch history must contain only version and entries")
-    if document["version"] != TERMINAL_LAUNCH_HISTORY_VERSION:
-        raise ValueError("Unsupported Terminal launch history version")
-    entries = document["entries"]
+    """Parse the modeled fields of a launch-history document.
+
+    Unknown fields are ignored; any other deviation raises ``ValueError``.
+    """
+    document = _modeled_document(
+        document, TERMINAL_LAUNCH_HISTORY_FORMAT_VERSION, LAUNCH_HISTORY_SHAPE, "launch history"
+    )
+    entries = document.get("entries")
     if not isinstance(entries, list) or len(entries) > TERMINAL_LAUNCH_HISTORY_MAX_ENTRIES:
         raise ValueError("Terminal launch history entries are invalid")
 
     parsed: list[TerminalLaunchHistoryEntry] = []
     seen_ids: set[str] = set()
     for raw_entry in entries:
-        if not isinstance(raw_entry, dict) or set(raw_entry) != {
-            "id",
-            "command",
-            "args",
-            "workdir",
-            "used_at",
-        }:
+        if not isinstance(raw_entry, dict) or set(raw_entry) != _LAUNCH_HISTORY_ENTRY_FIELDS:
             raise ValueError("Terminal launch history entry shape is invalid")
         entry_id = raw_entry["id"]
         command = raw_entry["command"]
@@ -160,24 +183,19 @@ def parse_launch_history(document: Any) -> list[TerminalLaunchHistoryEntry]:
 
 
 def parse_groups(document: Any) -> list[TerminalGroup]:
-    """Parse a strict user-groups document; any deviation raises ``ValueError``."""
-    if not isinstance(document, dict) or set(document) != {"version", "groups"}:
-        raise ValueError("Terminal groups must contain only version and groups")
-    if document["version"] != TERMINAL_GROUPS_VERSION:
-        raise ValueError("Unsupported Terminal groups version")
-    raw_groups = document["groups"]
+    """Parse the modeled fields of a user-groups document.
+
+    Unknown fields are ignored; any other deviation raises ``ValueError``.
+    """
+    document = _modeled_document(document, TERMINAL_GROUPS_FORMAT_VERSION, GROUPS_SHAPE, "groups")
+    raw_groups = document.get("groups")
     if not isinstance(raw_groups, list):
         raise ValueError("Terminal groups entries are invalid")
 
     parsed: list[TerminalGroup] = []
     seen_ids: set[str] = set()
     for raw_group in raw_groups:
-        if not isinstance(raw_group, dict) or set(raw_group) != {
-            "id",
-            "name",
-            "order",
-            "created_at",
-        }:
+        if not isinstance(raw_group, dict) or set(raw_group) != _GROUP_FIELDS:
             raise ValueError("Terminal group shape is invalid")
         group_id = raw_group["id"]
         name = raw_group["name"]
@@ -205,6 +223,75 @@ def parse_groups(document: Any) -> list[TerminalGroup]:
     return parsed
 
 
+def validate_terminal_launch_history_file(path: str | Path) -> JsonValidationReport:
+    """Validate the optional persisted Terminal launch history without consuming it."""
+    return validate_json_file(path, _validate_launch_history_document, missing_ok=True)
+
+
+def validate_terminal_groups_file(path: str | Path) -> JsonValidationReport:
+    """Validate the optional persisted Terminal groups without consuming it."""
+    return validate_json_file(path, _validate_groups_document, missing_ok=True)
+
+
+def _modeled_document(document: Any, version: int, shape: JsonShape, what: str) -> dict[str, Any]:
+    if not isinstance(document, dict):
+        raise ValueError(f"Terminal {what} must be a JSON object")
+    diagnostics: list[JsonDiagnostic] = []
+    if not validate_format_version(diagnostics, document, version):
+        raise ValueError(f"Terminal {what} format_version {diagnostics[0].message}")
+    modeled: dict[str, Any] = strip_unknown_fields(document, shape)
+    return modeled
+
+
+def _document_diagnostics(
+    data: Any,
+    *,
+    version: int,
+    shape: JsonShape,
+    parse: Callable[[Any], object],
+) -> list[JsonDiagnostic]:
+    if not isinstance(data, dict):
+        return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
+    diagnostics: list[JsonDiagnostic] = []
+    if not validate_format_version(diagnostics, data, version):
+        return diagnostics
+    warn_unknown_fields(diagnostics, "$", data, shape)
+    try:
+        parse(data)
+    except ValueError as error:
+        add_error(diagnostics, "$", str(error))
+    return diagnostics
+
+
+def _validate_launch_history_document(data: Any) -> list[JsonDiagnostic]:
+    return _document_diagnostics(
+        data,
+        version=TERMINAL_LAUNCH_HISTORY_FORMAT_VERSION,
+        shape=LAUNCH_HISTORY_SHAPE,
+        parse=parse_launch_history,
+    )
+
+
+def _validate_groups_document(data: Any) -> list[JsonDiagnostic]:
+    return _document_diagnostics(
+        data, version=TERMINAL_GROUPS_FORMAT_VERSION, shape=GROUPS_SHAPE, parse=parse_groups
+    )
+
+
+LAUNCH_HISTORY_FORMAT = JsonDocumentFormat(
+    name="Terminal launch history",
+    version=TERMINAL_LAUNCH_HISTORY_FORMAT_VERSION,
+    shape=LAUNCH_HISTORY_SHAPE,
+    validate=_validate_launch_history_document,
+)
+GROUPS_FORMAT = JsonDocumentFormat(
+    name="Terminal groups",
+    version=TERMINAL_GROUPS_FORMAT_VERSION,
+    shape=GROUPS_SHAPE,
+    validate=_validate_groups_document,
+)
+
+
 def _parse_utc_timestamp(value: Any, *, what: str) -> datetime:
     """Parse a strict UTC ISO timestamp; ``what`` names the document in errors."""
     if not isinstance(value, str):
@@ -222,9 +309,10 @@ class TerminalOperatorStore:
     """Own durable operator state: the group collection and the launch history.
 
     Both files load once at construction; a missing or unreadable file degrades
-    to an empty collection with a warning instead of failing startup. Writes go
-    through :func:`atomic_write_text` so a crash mid-write cannot lose the prior
-    document.
+    to an empty collection with a warning instead of failing startup. Writes are
+    atomic, keep the unknown fields of the file on disk, and never overwrite a
+    file that fails to load: until it is repaired or removed, changes stay in
+    memory and each write logs a warning.
     """
 
     def __init__(
@@ -267,17 +355,10 @@ class TerminalOperatorStore:
         path = self._launch_history_path
         if path is None:
             return
-        document = {
-            "version": TERMINAL_LAUNCH_HISTORY_VERSION,
-            "entries": launch_history_document(self.launch_history),
-        }
+        document = {"entries": launch_history_document(self.launch_history)}
         try:
-            atomic_write_text(
-                path,
-                json.dumps(document, ensure_ascii=False, indent=2) + "\n",
-                data_dir=self._data_dir,
-            )
-        except OSError as error:
+            write_json_document(path, document, LAUNCH_HISTORY_FORMAT, data_dir=self._data_dir)
+        except (JsonDocumentWriteError, OSError) as error:
             _LOGGER.warning("Could not persist Terminal launch history to '%s': %s", path, error)
 
     def persist_groups(self) -> None:
@@ -285,7 +366,6 @@ class TerminalOperatorStore:
         if path is None:
             return
         document = {
-            "version": TERMINAL_GROUPS_VERSION,
             "groups": [
                 {
                     "id": group.group_id,
@@ -298,12 +378,8 @@ class TerminalOperatorStore:
             ],
         }
         try:
-            atomic_write_text(
-                path,
-                json.dumps(document, ensure_ascii=False, indent=2) + "\n",
-                data_dir=self._data_dir,
-            )
-        except OSError as error:
+            write_json_document(path, document, GROUPS_FORMAT, data_dir=self._data_dir)
+        except (JsonDocumentWriteError, OSError) as error:
             _LOGGER.warning("Could not persist Terminal groups to '%s': %s", path, error)
 
     def group_by_name(self, name: str) -> TerminalGroup | None:

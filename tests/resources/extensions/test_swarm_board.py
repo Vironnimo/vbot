@@ -13,12 +13,12 @@ from core.agents.temporary import (
 )
 from core.chat import ChatMessage
 from core.chat.messages import ToolCall
+from core.database import write_bootstrap_marker
 from core.extensions import ExtensionAPI, ExtensionRecord, ExtensionRegistry
 from core.extensions.extensions import ExtensionDeclarations
 from core.extensions.operations import ExtensionHost
 from core.runs import ChatRunManager, RunExecutionOwner
 from core.sessions import ChatSessionManager, SessionAddress
-from core.sessions.format import write_bootstrap_marker
 from core.tools import ToolContext, ToolRegistry
 from core.tools.availability import ToolAccess
 from core.utils.ids import new_id

@@ -862,7 +862,7 @@ def test_disabled_extension_contributes_no_skill(config: Config) -> None:
     logging.getLogger("vbot").handlers = []
     _write_extension_with_skill(config.data_dir, "ext-a", "ext-skill", "From an extension.")
     config.data_dir.joinpath("settings.json").write_text(
-        json.dumps({"extensions": {"disabled": ["ext-a"]}}),
+        json.dumps({"format_version": 1, "extensions": {"disabled": ["ext-a"]}}),
         encoding="utf-8",
     )
     runtime = Runtime(config)
@@ -898,7 +898,7 @@ def test_global_skill_sources_win_over_bundled_in_documented_order(
     _write_test_skill(config.data_dir / "extensions" / "ext-a" / "skills", "shared", "Ext.")
     _write_test_skill(config.data_dir / "skills", "coding-agents", "My own global skill.")
     config.data_dir.joinpath("settings.json").write_text(
-        json.dumps({"skill_directories": [str(extra)]}), encoding="utf-8"
+        json.dumps({"format_version": 1, "skill_directories": [str(extra)]}), encoding="utf-8"
     )
     runtime = Runtime(config)
     runtime.start()

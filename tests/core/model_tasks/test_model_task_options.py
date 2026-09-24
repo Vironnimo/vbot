@@ -638,16 +638,34 @@ def test_live_voice_update_validates_backend_against_the_same_choices() -> None:
     service = _live_voice_service(storage)
     target = "openai/live-sub::subscription"
 
-    rejected = {"target": target, "options": {"backend_model": "platform"}}
-    with pytest.raises(TaskModelValidationError, match="backend_model"):
-        service.update({TASK_LIVE_VOICE: rejected})
+    for field_name, value in (("backend_model", "platform"), ("backend_thinking_effort", "turbo")):
+        rejected = {"target": target, "options": {field_name: value}}
+        with pytest.raises(TaskModelValidationError, match=field_name):
+            service.update({TASK_LIVE_VOICE: rejected})
     assert TASK_LIVE_VOICE not in storage.load_model_task_settings()
 
     saved = service.update({TASK_LIVE_VOICE: {"target": target, "options": {}}})
 
     assert saved[TASK_LIVE_VOICE] == {"target": target, "options": {}}
     binding = service.binding_for(TASK_LIVE_VOICE)
-    assert service.options_with_defaults(binding) == {"voice": "juniper", "backend_model": "terra"}
+    assert service.options_with_defaults(binding) == {
+        "voice": "juniper",
+        "backend_model": "terra",
+        "backend_thinking_effort": "low",
+    }
+
+
+def test_live_voice_keeps_an_explicit_model_default_reasoning_effort() -> None:
+    target = "openai/live-sub::subscription"
+    storage = _Storage()
+    service = _live_voice_service(storage)
+
+    service.update(
+        {TASK_LIVE_VOICE: {"target": target, "options": {"backend_thinking_effort": ""}}}
+    )
+
+    binding = service.binding_for(TASK_LIVE_VOICE)
+    assert service.options_with_defaults(binding)["backend_thinking_effort"] == ""
 
 
 def test_live_voice_patch_sets_and_unsets_backend_model() -> None:
@@ -666,4 +684,5 @@ def test_live_voice_patch_sets_and_unsets_backend_model() -> None:
     assert service.options_with_defaults(service.binding_for(TASK_LIVE_VOICE)) == {
         "voice": "cove",
         "backend_model": "terra",
+        "backend_thinking_effort": "low",
     }

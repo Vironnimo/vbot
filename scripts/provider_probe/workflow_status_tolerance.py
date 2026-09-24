@@ -11,10 +11,10 @@ from typing import Any
 from unittest.mock import Mock
 
 from core.agents.agents import Agent
+from core.database import write_bootstrap_marker
 from core.models.models import ModelRegistry
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
-from core.sessions.format import write_bootstrap_marker
 from core.tools import ToolAccess, ToolContext, ToolRegistry, tool_failure
 from core.tools.status import register_status_tool
 

@@ -38,6 +38,7 @@ from core.chat.commands import (
 )
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
 from core.chat.messages import GroupRole
+from core.database import write_bootstrap_marker
 from core.extensions.interactions import InteractionButton, InteractionEvent
 from core.runs import (
     ASSISTANT_OUTPUT_EVENT,
@@ -48,7 +49,6 @@ from core.runs import (
     WaitingWorkAdmission,
 )
 from core.sessions import ChatSessionManager
-from core.sessions.format import write_bootstrap_marker
 
 # Generous Channel queue drain deadline: under xdist load the queue worker can
 # need several seconds for lazy imports and durable Session setup before the
@@ -328,7 +328,7 @@ def make_engine(
     run_button_binding_registry: RunButtonBindingRegistry | None = None,
     access_registry: ChannelAccessRegistry | None = None,
 ) -> tuple[ChannelConversationEngine, ChatSessionManager, AsyncMock, FakeTransport]:
-    if not (tmp_path / "session-store.json").exists():
+    if not (tmp_path / "data-store.json").exists():
         write_bootstrap_marker(tmp_path)
     chat_sessions = ChatSessionManager(tmp_path)
     trigger_mock = trigger_run or AsyncMock()

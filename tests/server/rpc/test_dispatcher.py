@@ -9,11 +9,18 @@ from typing import Any
 
 import pytest
 
+from core.database import (
+    DatabaseCorruptError,
+    DatabaseFormatError,
+    DatabaseUnavailableError,
+    IncidentConflictError,
+)
 from core.performance import PerformanceService
 from core.performance.performance import reset_for_tests
+from core.sessions.errors import SessionStoreCorruptError
 from server.rpc.dispatcher import RpcMethodHandler, dispatch_rpc
 from server.rpc.error_mapping import _map_expected_error
-from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
 
 
 @pytest.mark.asyncio
@@ -62,6 +69,29 @@ async def test_unexpected_rpc_error_is_logged_with_traceback_and_reraised(
 def test_key_error_is_not_an_expected_domain_error() -> None:
     with pytest.raises(KeyError, match="missing internal setting"):
         _map_expected_error(KeyError("missing internal setting"))
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        DatabaseUnavailableError("sessions: busy"),
+        DatabaseCorruptError("sessions: damaged"),
+        DatabaseFormatError("sessions: newer generation"),
+        SessionStoreCorruptError("stored Session rows are invalid"),
+    ],
+    ids=["unavailable", "corrupt", "format", "owner-subclass"],
+)
+def test_every_database_failure_maps_to_one_domain_error(error: Exception) -> None:
+    mapped = _map_expected_error(error)
+
+    assert mapped.code == RPC_ERROR_DOMAIN
+    assert mapped.message == str(error)
+
+
+def test_a_superseded_incident_acknowledgement_is_an_invalid_request() -> None:
+    mapped = _map_expected_error(IncidentConflictError("the recovery incident has changed"))
+
+    assert mapped.code == RPC_ERROR_INVALID_REQUEST
 
 
 @pytest.fixture

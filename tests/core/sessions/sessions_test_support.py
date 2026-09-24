@@ -30,7 +30,7 @@ def _continuation_start() -> dict[str, object]:
 
 @pytest.fixture
 def manager(tmp_path, current_session_store_template):
-    shutil.copy2(current_session_store_template / "session-store.json", tmp_path)
+    shutil.copy2(current_session_store_template / "data-store.json", tmp_path)
     shutil.copy2(current_session_store_template / "sessions.db", tmp_path)
     sessions = ChatSessionManager(tmp_path)
     yield sessions

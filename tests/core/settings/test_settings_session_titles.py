@@ -29,10 +29,11 @@ def test_raw_settings_accept_session_title_section(tmp_path: Path) -> None:
     path.write_text(
         json.dumps(
             {
+                "format_version": 1,
                 "session_titles": {
                     "enabled": False,
                     "model": "",
-                }
+                },
             }
         ),
         encoding="utf-8",
@@ -46,11 +47,12 @@ def test_raw_settings_reject_invalid_session_title_fields(tmp_path: Path) -> Non
     path.write_text(
         json.dumps(
             {
+                "format_version": 1,
                 "session_titles": {
                     "enabled": "yes",
                     "model": 7,
                     "extra": True,
-                }
+                },
             }
         ),
         encoding="utf-8",

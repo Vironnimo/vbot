@@ -20,15 +20,40 @@ sanitized into a path.
 This store carries **no** owner default text: a missing override file reads as
 ``None`` and the definition layer (Phase 1/3) supplies the default. A dynamic
 block has no override path at all — the store never invents one.
+
+``layout.json`` is a versioned JSON document ``{"format_version": 1, "entries":
+[...]}``. A layout that fails to load reads as empty and is never overwritten by
+an edit; only an explicit layout reset replaces it.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Callable, Sequence
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import Any
 
+from core.config_validation import (
+    JsonConfigValidationError,
+    JsonDiagnostic,
+    JsonValidationReport,
+    add_error,
+    child_path,
+    load_validated_json_file,
+    validate_json_file,
+    validate_non_empty_string,
+)
+from core.json_documents import (
+    JsonDocumentFormat,
+    JsonDocumentWriteError,
+    json_document,
+    json_list,
+    json_object,
+    strip_unknown_fields,
+    validate_collection_root,
+    warn_unknown_fields,
+    write_json_document,
+)
 from core.prompts import LayoutEntry
 from core.settings import is_valid_agent_id
 from core.storage.errors import StorageError
@@ -47,7 +72,60 @@ LAYOUT_FILENAME = "layout.json"
 # Override files are plain Markdown text bodies.
 OVERRIDE_SUFFIX = ".md"
 
+LAYOUT_FORMAT_VERSION = 1
+LAYOUT_ENTRY_SHAPE = json_object({"id", "enabled", "source"})
+LAYOUT_SHAPE = json_document({"entries"}, {"entries": json_list(LAYOUT_ENTRY_SHAPE, key="id")})
+_LAYOUT_RESET_HINT = "Reset the layout of this prompt scope to replace it."
+
 _LOGGER = logging.getLogger("vbot.storage")
+
+
+def validate_prompt_layout_file(layout_path: str | Path) -> JsonValidationReport:
+    """Validate one optional persisted prompt ``layout.json`` without consuming it."""
+    return validate_json_file(layout_path, validate_prompt_layout_data, missing_ok=True)
+
+
+def validate_prompt_layout_data(data: Any) -> list[JsonDiagnostic]:
+    """Validate a decoded raw prompt layout document.
+
+    ``enabled`` defaults to ``True`` and ``source`` to none, so an entry needs only
+    its block ``id``.
+    """
+    diagnostics: list[JsonDiagnostic] = []
+    entries = validate_collection_root(
+        diagnostics,
+        data,
+        version=LAYOUT_FORMAT_VERSION,
+        shape=LAYOUT_SHAPE,
+        collection="entries",
+        label="layout field",
+    )
+    for index, entry in enumerate(entries or []):
+        entry_path = f"$.entries[{index}]"
+        if not isinstance(entry, dict):
+            add_error(diagnostics, entry_path, "must be an object")
+            continue
+        warn_unknown_fields(
+            diagnostics, entry_path, entry, LAYOUT_ENTRY_SHAPE, label="layout entry field"
+        )
+        validate_non_empty_string(
+            diagnostics, child_path(entry_path, "id"), entry.get("id"), required=True
+        )
+        if "enabled" in entry and not isinstance(entry["enabled"], bool):
+            add_error(diagnostics, child_path(entry_path, "enabled"), "must be a boolean")
+        source = entry.get("source")
+        if source is not None and not isinstance(source, str):
+            add_error(diagnostics, child_path(entry_path, "source"), "must be a string or null")
+    return diagnostics
+
+
+LAYOUT_FORMAT = JsonDocumentFormat(
+    name="Prompt layout",
+    version=LAYOUT_FORMAT_VERSION,
+    shape=LAYOUT_SHAPE,
+    validate=validate_prompt_layout_data,
+    sort_keys=True,
+)
 
 
 class PromptBlockStore:
@@ -114,42 +192,60 @@ class PromptBlockStore:
     def read_layout(self, scope: str | None) -> list[LayoutEntry]:
         """Read a scope's ordered layout, or ``[]`` when none is written yet.
 
-        A missing or invalid ``layout.json`` reads as empty — the scope owns no order, so
-        Phase 1 defaults every block in at its definition rank. Each JSON object
-        becomes a :class:`LayoutEntry`; ``enabled`` defaults to ``True`` and a
-        missing ``source`` is left ``None`` (Phase 1 re-derives it from the
-        definition).
+        A missing ``layout.json``, or one that fails to load, reads as empty — the
+        scope owns no order, so Phase 1 defaults every block in at its definition
+        rank. Each entry becomes a :class:`LayoutEntry`; ``enabled`` defaults to
+        ``True`` and a missing ``source`` is left ``None`` (Phase 1 re-derives it
+        from the definition). Unknown fields are left out.
         """
 
         layout_path = self.layout_path(scope)
         try:
-            raw = layout_path.read_text(encoding="utf-8")
-            parsed = json.loads(raw)
-            if not isinstance(parsed, list):
-                raise StorageError("Layout must be a JSON array of entries")
-            return [self._parse_layout_entry(item, layout_path) for item in parsed]
-        except FileNotFoundError:
-            return []
-        except (OSError, UnicodeError, ValueError, StorageError) as exc:
-            _LOGGER.warning(
-                "Ignoring invalid prompt layout path=%s error_type=%s",
-                layout_path,
-                type(exc).__name__,
+            data = load_validated_json_file(
+                layout_path, validate_prompt_layout_data, missing_ok=True
             )
+        except (JsonConfigValidationError, OSError) as exc:
+            _LOGGER.warning("Ignoring prompt layout that failed to load: %s", exc)
             return []
+        if data is None:
+            return []
+        modeled = strip_unknown_fields(data, LAYOUT_SHAPE)
+        return [
+            LayoutEntry(
+                id=entry["id"],
+                enabled=entry.get("enabled", True),
+                source=entry.get("source"),
+            )
+            for entry in modeled["entries"]
+        ]
 
-    def write_layout(self, scope: str | None, entries: Sequence[LayoutEntry]) -> Path:
+    def write_layout(
+        self,
+        scope: str | None,
+        entries: Sequence[LayoutEntry],
+        *,
+        reset: bool = False,
+    ) -> Path:
         """Atomically write a scope's ordered layout to ``layout.json``.
 
         Writes the entries verbatim, in order — pruning is a separate caller
-        decision (see :meth:`prune_layout`). The on-disk shape is the D3 list
-        ``[{"id", "enabled", "source"}, ...]``; ``source`` is omitted from a
-        record when the entry does not carry one.
+        decision (see :meth:`prune_layout`). Each entry is ``{"id", "enabled",
+        "source"}``; ``source`` is omitted when the entry does not carry one.
+        Unknown fields of the file on disk are kept. A layout that fails to load
+        is never overwritten (:class:`StorageError`) unless ``reset`` replaces it.
         """
 
-        payload = [self._serialize_layout_entry(entry) for entry in entries]
         target_path = self.layout_path(scope)
-        self._write_json_atomic(target_path, payload, label="layout")
+        body = {"entries": [self._serialize_layout_entry(entry) for entry in entries]}
+        self._ensure_directories()
+        try:
+            write_json_document(
+                target_path, body, LAYOUT_FORMAT, data_dir=self._data_dir, reset=reset
+            )
+        except JsonDocumentWriteError as exc:
+            raise StorageError(f"{exc} {_LAYOUT_RESET_HINT}") from exc
+        except OSError as exc:
+            raise StorageError(f"Cannot write layout {target_path}: {exc}") from exc
         return target_path
 
     def prune_layout(
@@ -289,37 +385,8 @@ class PromptBlockStore:
         return agent_id
 
     @staticmethod
-    def _parse_layout_entry(item: object, layout_path: Path) -> LayoutEntry:
-        if not isinstance(item, dict):
-            raise StorageError(f"Layout entry in {layout_path} must be an object")
-
-        block_id = item.get("id")
-        if not isinstance(block_id, str) or not block_id:
-            raise StorageError(f"Layout entry in {layout_path} is missing a string id")
-
-        enabled = item.get("enabled", True)
-        if not isinstance(enabled, bool):
-            raise StorageError(
-                f"Layout entry {block_id} in {layout_path} has a non-boolean enabled"
-            )
-
-        source = item.get("source")
-        if source is not None and not isinstance(source, str):
-            raise StorageError(f"Layout entry {block_id} in {layout_path} has a non-string source")
-
-        return LayoutEntry(id=block_id, enabled=enabled, source=source)
-
-    @staticmethod
     def _serialize_layout_entry(entry: LayoutEntry) -> dict[str, object]:
         record: dict[str, object] = {"id": entry.id, "enabled": entry.enabled}
         if entry.source is not None:
             record["source"] = entry.source
         return record
-
-    def _write_json_atomic(self, target_path: Path, payload: object, *, label: str) -> None:
-        self._ensure_directories()
-        serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-        try:
-            atomic_write_text(target_path, serialized, data_dir=self._data_dir)
-        except OSError as exc:
-            raise StorageError(f"Cannot write {label} {target_path}: {exc}") from exc

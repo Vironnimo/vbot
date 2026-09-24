@@ -10,9 +10,9 @@ from typing import NoReturn
 
 from cli._parser_agents import (
     _add_agent_parsers,
+    _add_data_store_parsers,
     _add_project_parsers,
     _add_session_parsers,
-    _add_session_store_parsers,
 )
 from cli._parser_common import (
     _add_target_arguments,
@@ -166,7 +166,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_agent_parsers(subparsers)
     _add_project_parsers(subparsers)
     _add_session_parsers(subparsers)
-    _add_session_store_parsers(subparsers)
+    _add_data_store_parsers(subparsers)
     _add_channel_parsers(subparsers)
     _add_tool_parsers(subparsers)
     _add_prompt_parsers(subparsers)

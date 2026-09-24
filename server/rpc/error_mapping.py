@@ -10,6 +10,7 @@ from core.agents import (
 )
 from core.channels import ChannelConfigError, ChannelNotFoundError
 from core.chat import ChatError, ChatSessionError
+from core.database import DatabaseError, IncidentConflictError
 from core.extensions.extensions import SessionCapabilityExpiredError
 from core.model_tasks import TaskModelError, TaskModelValidationError
 from core.performance import RecordingActiveError, RecordingInactiveError
@@ -23,11 +24,7 @@ from core.projects import (
     ResolutionProjectNotFoundError,
 )
 from core.runs import ActiveRunError, RunCancelledError, RunError, RunNotFoundError
-from core.sessions import (
-    SessionPageCursorError,
-    SessionRecoveryConflictError,
-    SessionStoreUnavailableError,
-)
+from core.sessions import SessionPageCursorError
 from core.tools.terminal_manager import (
     TerminalCapacityError,
     TerminalClosedError,
@@ -78,9 +75,11 @@ def _map_expected_error(error: Exception) -> RpcError:
         return RpcError(RPC_ERROR_RUN_NOT_FOUND, str(error))
     if isinstance(error, RunCancelledError):
         return RpcError(RPC_ERROR_CANCELLED, str(error))
-    if isinstance(error, (SessionPageCursorError, SessionRecoveryConflictError)):
+    if isinstance(error, (SessionPageCursorError, IncidentConflictError)):
         return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
-    if isinstance(error, SessionStoreUnavailableError):
+    # Every database failure (unavailable, corrupt, format) maps uniformly;
+    # the message names the database and the kind of failure.
+    if isinstance(error, DatabaseError):
         return RpcError(RPC_ERROR_DOMAIN, str(error))
     # Agent resolution keeps a missing Project or Agent precise, so a missing
     # address reports the same not-found code as a direct store lookup.

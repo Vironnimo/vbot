@@ -9,8 +9,11 @@ from pathlib import Path
 
 import pytest
 
+from core.json_documents import render_json_document
+from core.settings import SETTINGS_FORMAT_VERSION, validate_settings_file
 from core.storage.layout import (
     DATA_DIRECTORY_RELATIVE_PATHS,
+    INITIAL_SETTINGS_DOCUMENT,
     DataDirectoryLayout,
     initialize_data_directory,
 )
@@ -71,10 +74,20 @@ def test_initialize_creates_exact_canonical_layout(tmp_path: Path) -> None:
     }
     actual_files = {path.relative_to(data_dir) for path in data_dir.rglob("*") if path.is_file()}
     assert actual_directories == set(DATA_DIRECTORY_RELATIVE_PATHS)
-    assert actual_files == {Path(".env"), Path("settings.json"), Path("session-store.json")}
+    assert actual_files == {Path(".env"), Path("settings.json"), Path("data-store.json")}
     assert (data_dir / ".env").read_bytes() == RESOURCE_TEMPLATE.read_bytes()
-    assert (data_dir / "settings.json").read_bytes() == b"{}\n"
+    assert (data_dir / "settings.json").read_text(encoding="utf-8") == INITIAL_SETTINGS_DOCUMENT
     assert result.layout.root == data_dir
+
+
+def test_initial_settings_document_is_an_empty_current_settings_document(tmp_path: Path) -> None:
+    assert render_json_document({}, version=SETTINGS_FORMAT_VERSION) == INITIAL_SETTINGS_DOCUMENT
+    initialize_data_directory(tmp_path, resources_dir=PROJECT_ROOT / "resources")
+
+    report = validate_settings_file(tmp_path / "settings.json")
+
+    assert report.exists
+    assert report.diagnostics == ()
 
 
 def test_initialize_preserves_existing_configuration_bytes(tmp_path: Path) -> None:
@@ -133,8 +146,8 @@ def test_initialize_losing_root_creation_race_never_writes_marker(
 
     # The concurrent creator owns the root and publishes its marker; the loser
     # treats the root as existing and never manufactures authorization.
-    assert not (data_dir / "session-store.json").exists()
-    assert data_dir / "session-store.json" not in result.created_files
+    assert not (data_dir / "data-store.json").exists()
+    assert data_dir / "data-store.json" not in result.created_files
     assert data_dir not in result.created_directories
     assert all((data_dir / path).is_dir() for path in DATA_DIRECTORY_RELATIVE_PATHS)
 
@@ -151,7 +164,7 @@ def test_initialize_tolerates_concurrently_created_canonical_directory(
     assert contested.is_dir()
     assert contested not in result.created_directories
     assert data_dir in result.created_directories
-    assert data_dir / "session-store.json" in result.created_files
+    assert data_dir / "data-store.json" in result.created_files
 
 
 def test_initialize_rejects_concurrently_created_non_directory(
@@ -187,9 +200,9 @@ def test_initialize_uses_empty_environment_when_template_is_unavailable(
         )
 
     assert (data_dir / ".env").read_bytes() == b""
-    assert (data_dir / "settings.json").read_bytes() == b"{}\n"
+    assert (data_dir / "settings.json").read_text(encoding="utf-8") == INITIAL_SETTINGS_DOCUMENT
     assert result.created_files == (
-        data_dir / "session-store.json",
+        data_dir / "data-store.json",
         data_dir / ".env",
         data_dir / "settings.json",
     )

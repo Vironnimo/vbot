@@ -11,10 +11,10 @@ from types import SimpleNamespace
 from typing import Any
 
 from core.chat import ChatMessage
+from core.database import write_bootstrap_marker
 from core.projects import ResolutionAgentNotFoundError
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager, SessionAddress
-from core.sessions.format import write_bootstrap_marker
 from core.storage import TemporaryFileManager
 from core.subagents import SubAgentCoordinator
 from core.tools._search_arguments import parse_search_args

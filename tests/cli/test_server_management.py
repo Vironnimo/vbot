@@ -21,7 +21,7 @@ from cli.server_management import (
     start_server_process,
     stop_server,
 )
-from core.sessions.format import read_session_store_marker
+from core.database import DataStoreMarker, read_marker
 from core.utils import processes as process_utils
 from core.utils.logging import CONSOLE_LOGGING_ENV_VAR, resolve_daily_log_path
 from tests.cli.server_management_test_support import (
@@ -229,7 +229,7 @@ def test_start_server_initializes_a_missing_data_directory_before_logging(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     instance = make_instance(tmp_path)
-    markers: list[dict[str, object] | None] = []
+    markers: list[DataStoreMarker | None] = []
     health_results = iter(
         [
             HealthProbeResult(reachable=False, is_vbot=False),
@@ -240,7 +240,7 @@ def test_start_server_initializes_a_missing_data_directory_before_logging(
     def spawn(instance: ServerInstance) -> SimpleNamespace:
         # The server refuses an existing root without the bootstrap marker, so the
         # marker must exist before the child starts.
-        markers.append(read_session_store_marker(instance.data_dir))
+        markers.append(read_marker(instance.data_dir))
         return SimpleNamespace(pid=321, poll=lambda: None)
 
     monkeypatch.setattr(server_management, "probe_health", lambda instance: next(health_results))
@@ -254,7 +254,7 @@ def test_start_server_initializes_a_missing_data_directory_before_logging(
     assert result.ok is True
     assert len(markers) == 1
     assert markers[0] is not None
-    assert markers[0]["state"] == "bootstrap"
+    assert markers[0].databases == {}
     assert instance.log_path.is_file()
 
 
@@ -281,7 +281,7 @@ def test_start_server_does_not_initialize_an_existing_data_directory(
 
     assert result.ok is True
     # Only the server decides about an existing root; the CLI adds just its logs.
-    assert read_session_store_marker(instance.data_dir) is None
+    assert read_marker(instance.data_dir) is None
     assert sorted(path.name for path in instance.data_dir.iterdir()) == ["logs"]
 
 

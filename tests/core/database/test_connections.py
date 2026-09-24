@@ -1,4 +1,4 @@
-"""Connection ownership, retry, and bounded reader contracts."""
+"""Connection ownership, journal policy, retry, bounded readers and metrics."""
 
 from __future__ import annotations
 
@@ -10,40 +10,65 @@ from pathlib import Path
 
 import pytest
 
-from core.performance import PerformanceService
-from core.performance.performance import reset_for_tests
-from core.sessions import sqlite_runtime
-from core.sessions.errors import SessionStoreUnavailableError
-from core.sessions.sqlite_runtime import (
-    READ_CONNECTION_LIMIT,
-    READER_CACHE_KIB,
-    WRITER_CACHE_KIB,
-    SQLiteRuntime,
+from core.database import (
+    Database,
+    DatabaseUnavailableError,
+    open_database,
+    write_bootstrap_marker,
+)
+from core.database import _connections as connections_module
+from core.database import _runtime as runtime_module
+from core.database._connections import (
     copy_database,
     readonly_sqlite_uri,
     tracked_connection_count,
 )
+from core.database._runtime import (
+    READ_CONNECTION_LIMIT,
+    READER_CACHE_KIB,
+    WRITER_CACHE_KIB,
+    ConnectionRuntime,
+)
+from core.performance import PerformanceService
+from core.performance.performance import reset_for_tests
+from tests.core.database.database_test_support import (
+    TEST_APPLICATION_ID,
+    add_note,
+    notes_spec,
+)
 
 
-def _runtime(tmp_path: Path) -> SQLiteRuntime:
-    runtime = SQLiteRuntime(tmp_path / "sessions.db")
-    runtime.open_writer(create=True, database_id="a" * 32)
-    return runtime
+def _bare_runtime(path: Path) -> ConnectionRuntime:
+    return ConnectionRuntime(
+        path,
+        name="notes",
+        synchronous="FULL",
+        application_id=TEST_APPLICATION_ID,
+        format_generation=1,
+    )
+
+
+def _open(data_dir: Path) -> Database:
+    return open_database(notes_spec(data_dir))
+
+
+def _count(database: Database) -> int:
+    return int(database.writer.execute("SELECT COUNT(*) FROM notes").fetchone()[0])
 
 
 def test_open_failure_unregisters_the_connection(tmp_path: Path, monkeypatch) -> None:
-    runtime = SQLiteRuntime(tmp_path / "sessions.db")
+    runtime = _bare_runtime(tmp_path / "notes.db")
     monkeypatch.setattr(
-        sqlite_runtime,
+        runtime_module,
         "apply_wal_with_fallback",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("injected setup failure")),
     )
 
     with pytest.raises(RuntimeError, match="injected setup failure"):
-        runtime.open_writer(create=True, database_id="a" * 32)
+        runtime.open_writer()
 
     assert runtime.live_connection_count() == 0
-    assert tracked_connection_count(tmp_path / "sessions.db") == 0
+    assert tracked_connection_count(tmp_path / "notes.db") == 0
 
 
 @pytest.mark.parametrize(
@@ -58,18 +83,18 @@ def test_open_failure_unregisters_the_connection(tmp_path: Path, monkeypatch) ->
 def test_open_operational_error_never_reports_corruption(
     tmp_path: Path, monkeypatch, code: int, message: str
 ) -> None:
-    runtime = SQLiteRuntime(tmp_path / "sessions.db")
+    runtime = _bare_runtime(tmp_path / "notes.db")
     failure = sqlite3.OperationalError(message)
     failure.sqlite_errorcode = code
 
     def fail(*_args, **_kwargs):
         raise failure
 
-    monkeypatch.setattr(sqlite_runtime, "apply_wal_with_fallback", fail)
-    with pytest.raises(SessionStoreUnavailableError) as raised:
-        runtime.open_writer(create=True, database_id="a" * 32)
+    monkeypatch.setattr(runtime_module, "apply_wal_with_fallback", fail)
+    with pytest.raises(DatabaseUnavailableError) as raised:
+        runtime.open_writer()
     assert raised.value.__cause__ is failure
-    assert tracked_connection_count(tmp_path / "sessions.db") == 0
+    assert tracked_connection_count(tmp_path / "notes.db") == 0
 
 
 def test_safe_wal_reset_fallback_is_reported_as_info(
@@ -79,17 +104,19 @@ def test_safe_wal_reset_fallback_is_reported_as_info(
     connection = sqlite3.connect(database)
     monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 40, 1))
     monkeypatch.setattr(sqlite3, "sqlite_version", "3.40.1")
-    caplog.set_level(logging.INFO, logger="vbot.sessions")
+    caplog.set_level(logging.INFO, logger="vbot.database")
 
     try:
-        mode = sqlite_runtime.apply_wal_with_fallback(connection, db_label="safe-fallback-test.db")
+        mode = connections_module.apply_wal_with_fallback(
+            connection, db_label="safe-fallback-test.db"
+        )
     finally:
         connection.close()
 
     records = [
         record
         for record in caplog.records
-        if record.name == "vbot.sessions" and "safe-fallback-test.db" in record.message
+        if record.name == "vbot.database" and "safe-fallback-test.db" in record.message
     ]
     assert mode == "delete"
     assert len(records) == 1
@@ -100,8 +127,61 @@ def test_safe_wal_reset_fallback_is_reported_as_info(
     )
 
 
-def test_busy_transaction_retries_as_one_idempotent_unit(tmp_path: Path) -> None:
-    runtime = _runtime(tmp_path)
+@pytest.mark.parametrize(
+    ("version_info", "expected"),
+    [
+        ((3, 6, 99), False),
+        ((3, 7, 0), True),
+        ((3, 40, 1), True),
+        ((3, 44, 5), True),
+        ((3, 44, 6), False),
+        ((3, 50, 4), True),
+        ((3, 50, 7), False),
+        ((3, 51, 2), True),
+        ((3, 51, 3), False),
+        ((3, 52, 0), False),
+    ],
+)
+def test_wal_reset_vulnerability_matches_the_official_ranges(
+    version_info: tuple[int, int, int], expected: bool
+) -> None:
+    assert connections_module.is_wal_reset_vulnerable(version_info) is expected
+    assert connections_module.required_journal_mode(version_info) == (
+        "delete" if expected else "wal"
+    )
+
+
+def test_vulnerable_sqlite_uses_rollback_journal_and_keeps_an_existing_wal(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = notes_spec(data_dir).path
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 51, 3))
+    _open(data_dir).close()
+    with closing(sqlite3.connect(path)) as probe:
+        assert probe.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 40, 1))
+    database = _open(data_dir)
+    try:
+        # Never live-downgrade an existing WAL database.
+        assert database.wal_active() is True
+    finally:
+        database.close()
+
+    other = data_dir / "other"
+    other.mkdir()
+    write_bootstrap_marker(other)
+    fresh = _open(other)
+    try:
+        assert fresh.wal_active() is False
+    finally:
+        fresh.close()
+    with closing(sqlite3.connect(notes_spec(other).path)) as probe:
+        assert probe.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+
+
+def test_busy_transaction_retries_as_one_idempotent_unit(data_dir: Path) -> None:
+    database = _open(data_dir)
     attempts = 0
 
     def write(connection: sqlite3.Connection) -> None:
@@ -109,37 +189,49 @@ def test_busy_transaction_retries_as_one_idempotent_unit(tmp_path: Path) -> None
         attempts += 1
         if attempts == 1:
             raise sqlite3.OperationalError("database is locked")
-        connection.execute("CREATE TABLE retry_probe (value TEXT NOT NULL)")
-        connection.execute("INSERT INTO retry_probe(value) VALUES ('once')")
+        connection.execute("INSERT INTO notes (body) VALUES ('once')")
 
     try:
-        runtime.execute_write(write, patience_s=1.0)
+        database.write(write, patience_s=1.0)
         assert attempts == 2
-        assert runtime.writer.execute("SELECT COUNT(*) FROM retry_probe").fetchone()[0] == 1
+        assert _count(database) == 1
     finally:
-        runtime.close()
+        database.close()
 
 
-def test_failed_write_rolls_back_before_preserving_an_unclassified_error(tmp_path: Path) -> None:
-    runtime = _runtime(tmp_path)
-    runtime.writer.execute("CREATE TABLE rollback_probe (value TEXT NOT NULL UNIQUE)")
+def test_busy_write_becomes_unavailable_after_its_patience(data_dir: Path) -> None:
+    database = _open(data_dir)
+
+    def always_busy(_connection: sqlite3.Connection) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    try:
+        with pytest.raises(DatabaseUnavailableError, match="stayed busy"):
+            database.write(always_busy, patience_s=0.1)
+        assert database.writer.in_transaction is False
+    finally:
+        database.close()
+
+
+def test_failed_write_rolls_back_before_preserving_an_unclassified_error(data_dir: Path) -> None:
+    database = _open(data_dir)
 
     def write(connection: sqlite3.Connection) -> None:
-        connection.execute("INSERT INTO rollback_probe(value) VALUES ('transient')")
+        connection.execute("INSERT INTO notes (body) VALUES ('transient')")
         raise sqlite3.IntegrityError("injected unexpected constraint")
 
     try:
         with pytest.raises(sqlite3.IntegrityError, match="unexpected constraint"):
-            runtime.execute_write(write)
-        assert runtime.writer.in_transaction is False
-        assert runtime.writer.execute("SELECT COUNT(*) FROM rollback_probe").fetchone()[0] == 0
+            database.write(write)
+        assert database.writer.in_transaction is False
+        assert _count(database) == 0
     finally:
-        runtime.close()
+        database.close()
 
 
-def test_reader_permits_are_bounded_and_released_on_failure(tmp_path: Path) -> None:
-    runtime = _runtime(tmp_path)
-    readers = []
+def test_reader_permits_are_bounded_and_released_on_failure(data_dir: Path) -> None:
+    database = _open(data_dir)
+    runtime = database._runtime
     try:
         readers = [runtime._checkout_reader() for _ in range(READ_CONNECTION_LIMIT + 2)]
         active = [reader for reader in readers if reader is not None]
@@ -149,33 +241,35 @@ def test_reader_permits_are_bounded_and_released_on_failure(tmp_path: Path) -> N
         for reader in active:
             runtime._close_reader(reader)
 
-        with pytest.raises(KeyboardInterrupt), runtime.read_ctx():
+        with pytest.raises(KeyboardInterrupt), database.read():
             raise KeyboardInterrupt
         assert runtime.reader_stats()[0] == 0
     finally:
-        runtime.close()
-    assert runtime.live_connection_count() == 0
+        database.close()
+    assert database.live_connection_count() == 0
 
 
-def test_writer_and_readers_keep_bounded_page_caches(tmp_path: Path) -> None:
-    runtime = _runtime(tmp_path)
+def test_writer_and_readers_keep_bounded_page_caches(data_dir: Path) -> None:
+    database = _open(data_dir)
+    runtime = database._runtime
     reader = runtime._checkout_reader()
     try:
         assert reader is not None
-        assert runtime.writer.execute("PRAGMA cache_size").fetchone()[0] == -WRITER_CACHE_KIB
+        assert database.writer.execute("PRAGMA cache_size").fetchone()[0] == -WRITER_CACHE_KIB
         assert reader.execute("PRAGMA cache_size").fetchone()[0] == -READER_CACHE_KIB
         # The documented ceiling: every pooled reader plus the writer, full.
         assert WRITER_CACHE_KIB + READ_CONNECTION_LIMIT * READER_CACHE_KIB == 192 * 1024
     finally:
         if reader is not None:
             runtime._close_reader(reader)
-        runtime.close()
-    assert runtime.live_connection_count() == 0
+        database.close()
+    assert database.live_connection_count() == 0
 
 
-def test_reader_open_failure_releases_permit_and_can_retry(tmp_path: Path, monkeypatch) -> None:
-    runtime = _runtime(tmp_path)
-    real_connect = sqlite_runtime.connect_tracked
+def test_reader_open_failure_releases_permit_and_can_retry(data_dir: Path, monkeypatch) -> None:
+    database = _open(data_dir)
+    runtime = database._runtime
+    real_connect = runtime_module.connect_tracked
     calls = 0
 
     def connect(*args, **kwargs):
@@ -185,47 +279,48 @@ def test_reader_open_failure_releases_permit_and_can_retry(tmp_path: Path, monke
             raise sqlite3.OperationalError("database is locked")
         return real_connect(*args, **kwargs)
 
-    monkeypatch.setattr(sqlite_runtime, "connect_tracked", connect)
+    monkeypatch.setattr(runtime_module, "connect_tracked", connect)
     try:
         assert runtime._checkout_reader() is None
         assert runtime.reader_stats()[0] == 0
-        assert runtime.live_connection_count() == 1
+        assert database.live_connection_count() == 1
 
         runtime._reader_open_failed_at = 0
         reader = runtime._checkout_reader()
         assert reader is not None
         runtime._close_reader(reader)
     finally:
-        runtime.close()
-    assert runtime.live_connection_count() == 0
+        database.close()
+    assert database.live_connection_count() == 0
 
 
-def test_checkpoint_with_a_reader_keeps_the_runtime_usable(tmp_path: Path) -> None:
-    runtime = _runtime(tmp_path)
+def test_checkpoint_with_a_reader_keeps_the_runtime_usable(data_dir: Path) -> None:
+    database = _open(data_dir)
+    runtime = database._runtime
     reader = runtime._checkout_reader()
     try:
         assert reader is not None
         reader.execute("BEGIN")
         reader.execute("SELECT 1").fetchone()
-        runtime.checkpoint()
+        database.checkpoint()
         reader.execute("ROLLBACK")
         assert reader.execute("SELECT 1").fetchone()[0] == 1
     finally:
         if reader is not None:
             runtime._close_reader(reader)
-        runtime.close()
-    assert runtime.live_connection_count() == 0
+        database.close()
+    assert database.live_connection_count() == 0
 
 
 def test_readonly_connections_escape_special_path_characters(tmp_path: Path) -> None:
     data_dir = tmp_path / "data#snapshot%source"
     data_dir.mkdir()
-    database = data_dir / "sessions.db"
-    runtime = SQLiteRuntime(database)
-    runtime.open_writer(create=True, database_id="a" * 32)
+    write_bootstrap_marker(data_dir)
+    database = _open(data_dir)
+    runtime = database._runtime
     reader = None
     try:
-        uri = readonly_sqlite_uri(database)
+        uri = readonly_sqlite_uri(database.path)
         assert "%23" in uri
         assert "%25" in uri
         reader = runtime._checkout_reader()
@@ -234,13 +329,51 @@ def test_readonly_connections_escape_special_path_characters(tmp_path: Path) -> 
         runtime._close_reader(reader)
         reader = None
         backup = data_dir / "backup#%copy.db"
-        assert runtime.backup(backup) is True
+        assert database.backup(backup) is True
         with closing(sqlite3.connect(readonly_sqlite_uri(backup), uri=True)) as copy:
             assert copy.execute("PRAGMA quick_check").fetchone()[0] == "ok"
     finally:
         if reader is not None:
             runtime._close_reader(reader)
-        runtime.close()
+        database.close()
+
+
+def test_cancelled_backup_leaves_no_partial_database(data_dir: Path) -> None:
+    database = _open(data_dir)
+    destination = data_dir / "cancelled.db"
+    try:
+        add_note(database, "hello")
+
+        assert database.backup(destination, cancelled=lambda: True) is False
+        assert destination.exists() is False
+        assert not list(data_dir.glob(".cancelled.db.*.tmp"))
+    finally:
+        database.close()
+
+
+def test_close_releases_every_connection_and_refuses_further_work(data_dir: Path) -> None:
+    database = _open(data_dir)
+    database.close()
+
+    assert database.is_closed() is True
+    assert tracked_connection_count(database.path) == 0
+    with pytest.raises(DatabaseUnavailableError):
+        add_note(database, "late")
+
+
+@pytest.mark.asyncio
+async def test_async_work_runs_on_the_database_worker_pool(data_dir: Path) -> None:
+    database = _open(data_dir)
+    try:
+        await database.write_async(
+            lambda connection: connection.execute("INSERT INTO notes (body) VALUES ('async')")
+        )
+        bodies = await database.read_async(
+            lambda connection: [row[0] for row in connection.execute("SELECT body FROM notes")]
+        )
+        assert bodies == ["async"]
+    finally:
+        database.close()
 
 
 def _filled_database(path: Path) -> None:
@@ -336,10 +469,12 @@ def test_copy_database_refuses_an_existing_destination(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_transactions_are_measured_on_the_sqlite_track(tmp_path: Path) -> None:
+async def test_transactions_are_measured_per_database_on_the_sqlite_track(
+    data_dir: Path,
+) -> None:
     reset_for_tests()
-    performance = PerformanceService(tmp_path / "performance")
-    runtime = _runtime(tmp_path)
+    performance = PerformanceService(data_dir / "performance")
+    database = _open(data_dir)
     attempts = 0
 
     def write(connection: sqlite3.Connection) -> None:
@@ -347,26 +482,26 @@ async def test_transactions_are_measured_on_the_sqlite_track(tmp_path: Path) -> 
         attempts += 1
         if attempts == 1:
             raise sqlite3.OperationalError("database is locked")
-        connection.execute("CREATE TABLE measured_probe (value TEXT NOT NULL)")
+        connection.execute("INSERT INTO notes (body) VALUES ('measured')")
 
     try:
         performance.start_recording()
-        runtime.execute_write(write, patience_s=1.0)
-        with runtime.read_ctx() as connection:
-            connection.execute("SELECT COUNT(*) FROM measured_probe").fetchone()
+        database.write(write, patience_s=1.0)
+        with database.read() as connection:
+            connection.execute("SELECT COUNT(*) FROM notes").fetchone()
         result = await performance.stop_recording()
         metrics = (await performance.snapshot())["metrics"]
     finally:
-        runtime.close()
+        database.close()
         await performance.aclose()
         reset_for_tests()
 
     # The busy attempt is measured as well; it spent real time inside the transaction.
-    assert metrics["sqlite.write"]["count"] == 2
-    assert metrics["sqlite.write_wait"]["count"] == 2
-    assert metrics["sqlite.read"]["count"] == 1
+    assert metrics["sqlite.notes.write"]["count"] == 2
+    assert metrics["sqlite.notes.write_wait"]["count"] == 2
+    assert metrics["sqlite.notes.read"]["count"] == 1
     events = json.loads(Path(result["trace_path"]).read_text("utf-8"))["traceEvents"]
     tracks = {e["pid"]: e["args"]["name"] for e in events if e["name"] == "process_name"}
-    spans = [(tracks[e["pid"]], e["name"], e["cat"]) for e in events if e["ph"] == "X"]
-    assert spans.count(("sqlite", "write", "sqlite")) == 2
-    assert ("sqlite", "read", "sqlite") in spans
+    spans = [(tracks[e["pid"]], e["name"]) for e in events if e["ph"] == "X"]
+    assert spans.count(("sqlite", "notes write")) == 2
+    assert ("sqlite", "notes read") in spans

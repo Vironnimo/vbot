@@ -67,7 +67,9 @@ class TestLoadDebugSettings:
     def test_defaults_non_object_debug_section(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
-        storage.settings_path.write_text(json.dumps({"debug": []}), encoding="utf-8")
+        storage.settings_path.write_text(
+            json.dumps({"format_version": 1, "debug": []}), encoding="utf-8"
+        )
 
         assert storage.load_debug_settings() == {"enabled": False, "trace_limit": 50}
 
@@ -75,7 +77,7 @@ class TestLoadDebugSettings:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
-            json.dumps({"debug": {"enabled": "yes"}}), encoding="utf-8"
+            json.dumps({"format_version": 1, "debug": {"enabled": "yes"}}), encoding="utf-8"
         )
 
         assert storage.load_debug_settings() == {"enabled": False, "trace_limit": 50}
@@ -84,7 +86,7 @@ class TestLoadDebugSettings:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
-            json.dumps({"debug": {"trace_limit": "fifty"}}), encoding="utf-8"
+            json.dumps({"format_version": 1, "debug": {"trace_limit": "fifty"}}), encoding="utf-8"
         )
 
         assert storage.load_debug_settings() == {"enabled": False, "trace_limit": 50}
@@ -93,7 +95,7 @@ class TestLoadDebugSettings:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
-            json.dumps({"debug": {"trace_limit": 0}}), encoding="utf-8"
+            json.dumps({"format_version": 1, "debug": {"trace_limit": 0}}), encoding="utf-8"
         )
 
         assert storage.load_debug_settings() == {"enabled": False, "trace_limit": 50}
@@ -102,7 +104,7 @@ class TestLoadDebugSettings:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
-            json.dumps({"debug": {"trace_limit": -1}}), encoding="utf-8"
+            json.dumps({"format_version": 1, "debug": {"trace_limit": -1}}), encoding="utf-8"
         )
 
         assert storage.load_debug_settings() == {"enabled": False, "trace_limit": 50}
@@ -111,7 +113,7 @@ class TestLoadDebugSettings:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
-            json.dumps({"debug": {"trace_limit": 501}}), encoding="utf-8"
+            json.dumps({"format_version": 1, "debug": {"trace_limit": 501}}), encoding="utf-8"
         )
 
         assert storage.load_debug_settings() == {"enabled": False, "trace_limit": 50}
@@ -120,7 +122,7 @@ class TestLoadDebugSettings:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
-            json.dumps({"debug": {"trace_limit": True}}), encoding="utf-8"
+            json.dumps({"format_version": 1, "debug": {"trace_limit": True}}), encoding="utf-8"
         )
 
         assert storage.load_debug_settings() == {"enabled": False, "trace_limit": 50}

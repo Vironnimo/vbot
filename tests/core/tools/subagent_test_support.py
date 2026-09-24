@@ -15,6 +15,7 @@ import core.subagents._constants as subagent_constants
 import core.subagents.subagents as subagent_module
 from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager
+from core.database import write_bootstrap_marker
 from core.projects import AgentResolutionError, ResolutionAgentNotFoundError
 from core.runs import (
     DEFAULT_RUN_ADMISSION,
@@ -25,7 +26,6 @@ from core.runs import (
     RunNotFoundError,
 )
 from core.sessions import SessionAddress
-from core.sessions.format import write_bootstrap_marker
 from core.storage import TemporaryFileManager
 from core.subagents._completion import _wait_for_subagent_result
 from core.subagents._status import _handle_subagent_status
@@ -487,7 +487,7 @@ class FakeChatLoop:
 def make_runtime(
     tmp_path: Path, manager: FakeRunManager, settings: JsonObject | None = None
 ) -> Any:
-    if not (tmp_path / "session-store.json").exists():
+    if not (tmp_path / "data-store.json").exists():
         write_bootstrap_marker(tmp_path)
     agents = FakeAgents()
     return SimpleNamespace(

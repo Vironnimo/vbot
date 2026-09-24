@@ -288,7 +288,7 @@ if [ "$DESKTOP_CLIENT" -eq 0 ]; then
 
     step "Preparing data directory: ${DATA_DIR}"
     if [ "$settings_was_missing" -eq 1 ]; then
-        printf '{\n    "server_port": %s,\n    "defaults": {\n        "agent": {\n            "thinking_effort": "%s"\n        }\n    }\n}\n' \
+        printf '{\n    "format_version": 1,\n    "server_port": %s,\n    "defaults": {\n        "agent": {\n            "thinking_effort": "%s"\n        }\n    }\n}\n' \
             "$PORT" "$DEFAULT_AGENT_THINKING_EFFORT" > "$SETTINGS_PATH"
         echo "Created settings.json with server_port ${PORT} and fresh-install Agent defaults."
     elif [ "$PORT_PROVIDED" -eq 1 ]; then

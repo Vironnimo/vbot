@@ -3,9 +3,9 @@ from dataclasses import replace
 import pytest
 
 from core.chat import ChatMessage, ChatSessionError
+from core.database import write_bootstrap_marker
 from core.runs import RunExecutionOwner
 from core.sessions import ChatSessionManager, SessionAddress
-from core.sessions.format import write_bootstrap_marker
 
 
 def make_sessions(tmp_path):
