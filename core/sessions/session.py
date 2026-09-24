@@ -163,18 +163,6 @@ class ChatSession:
                 self._buffers.activated_skill_contents = {}
                 self._buffers.activated_skill_cache_loaded = False
 
-    async def start_tool_async(self, call_id: str, started_at: str) -> None:
-        if not self.run_id or not self.assistant_message_id:
-            raise ChatSessionError("Tool execution requires its Run and Assistant identity")
-        await _run_session_io(
-            self._store.start_tool,
-            self.address,
-            self.run_id,
-            self.assistant_message_id,
-            call_id,
-            started_at,
-        )
-
     async def append_async(self, message: ChatMessage) -> None:
         await _run_session_io(self.append, message)
 
