@@ -67,7 +67,7 @@ def test_prepare_checks_out_the_exact_release_revision_and_uses_fresh_test_data(
     monkeypatch.setattr(
         customize,
         "validate_release",
-        lambda _path, *, shape: {"revision": revision},
+        lambda _path, *, shape, remove_bytecode_caches: {"revision": revision},
     )
 
     working = customize.prepare(install, source=tmp_path / "source")
@@ -170,12 +170,11 @@ def test_candidate_copies_source_and_resolves_dependencies_only_into_new_runtime
         target.mkdir(parents=True)
         (target / "fresh_dependency.txt").write_text("fresh", encoding="utf-8")
 
-    monkeypatch.setattr("cli.application.payload.copy_application", copy_application)
-    monkeypatch.setattr(customize, "_checked_command", checked)
-    monkeypatch.setattr(
-        customize,
-        "validate_release",
-        lambda path, *, shape: {
+    validations: list[tuple[Path, bool]] = []
+
+    def validate(path: Path, *, shape: str, remove_bytecode_caches: bool = False) -> dict:
+        validations.append((path, remove_bytecode_caches))
+        return {
             "schema_version": 1,
             "bootstrap_protocol": 1,
             "version_id": path.name,
@@ -183,8 +182,11 @@ def test_candidate_copies_source_and_resolves_dependencies_only_into_new_runtime
             "platform": "windows-x86_64",
             "build_inputs": {"dependencies": "old", "web": "web"},
             "files": {"runtime/placeholder": "0" * 64},
-        },
-    )
+        }
+
+    monkeypatch.setattr("cli.application.payload.copy_application", copy_application)
+    monkeypatch.setattr(customize, "_checked_command", checked)
+    monkeypatch.setattr(customize, "validate_release", validate)
 
     inputs = (
         None
@@ -194,6 +196,8 @@ def test_candidate_copies_source_and_resolves_dependencies_only_into_new_runtime
     candidate_id = customize._candidate(install, source, "rel_base", "c" * 40, build_inputs=inputs)
     candidate = install.version(candidate_id)
 
+    # The installed base may carry stray bytecode; the fresh candidate must be exact.
+    assert validations == [(base, True), (candidate, False)]
     assert (candidate / "app" / "custom_source.txt").read_text(encoding="utf-8") == "custom"
     candidate_site = candidate / "runtime" / "Lib" / "site-packages"
     assert (candidate_site / "fresh_dependency.txt").is_file() is (mode != "locked_unchanged")

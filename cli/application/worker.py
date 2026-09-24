@@ -123,7 +123,9 @@ def recover_interrupted(install: Installation, operation: Operation) -> bool:
                 "The candidate is active but its normal server startup is not proven",
             )
             return True
-        validate_release(install.version(candidate), shape=install.install_shape)
+        validate_release(
+            install.version(candidate), shape=install.install_shape, remove_bytecode_caches=True
+        )
         from cli.application.customize import finalize_activation
 
         finalize_activation(install, candidate)
@@ -275,7 +277,7 @@ def execute(install: Installation, operation: Operation) -> None:
     operation.transition(install, "verifying", "Verifying the active application version")
     if install.owns_server and operation.server_was_running:
         require_ok(processes.start(install, breakaway=False))
-    validate_release(install.version(), shape=install.install_shape)
+    validate_release(install.version(), shape=install.install_shape, remove_bytecode_caches=True)
     from cli.application.customize import finalize_activation
 
     finalize_activation(install, candidate)
