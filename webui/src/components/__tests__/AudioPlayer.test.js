@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
+import {
+  createChatState,
+  ensureSessionState,
+  loadHistory,
+  visibleTimelineItemsForRender,
+} from '../../lib/chatState.js';
 import { t } from '../../lib/i18n.js';
 import { reactiveProps } from './reactiveProps.svelte.js';
 
@@ -265,6 +271,7 @@ it.each(['run', 'event'])(
             type: 'assistant_run',
             id: 'run-speech',
             runId: 'run-speech',
+            source: 'live',
             status: 'completed',
             items: [
               {
@@ -288,3 +295,62 @@ it.each(['run', 'event'])(
     expect(control('audio.download')).toBeTruthy();
   },
 );
+
+it('restores a paused player for a speech result read back from Session history', async () => {
+  // Session history carries the Tool result envelope as the Tool message's
+  // JSON text, and a finished Run is rebuilt from it once its live events retire.
+  const url = '/api/speech/artifacts/aud_history';
+  const envelope = {
+    ok: true,
+    error: null,
+    data: { artifact: { id: 'aud_history', kind: 'speech', url } },
+    artifacts: [{ id: 'aud_history', kind: 'speech', url }],
+  };
+  const sessionState = ensureSessionState(
+    createChatState(),
+    'alpha',
+    'session-speech',
+  );
+  loadHistory(
+    sessionState,
+    [
+      { id: 'user-one', role: 'user', content: 'Read it aloud' },
+      {
+        id: 'assistant-one',
+        role: 'assistant',
+        tool_calls: [
+          {
+            id: 'call-speech',
+            name: 'text_to_speech',
+            arguments: { text: 'test-owned speech' },
+          },
+        ],
+      },
+      {
+        id: 'tool-one',
+        role: 'tool',
+        tool_call_id: 'call-speech',
+        name: 'text_to_speech',
+        content: JSON.stringify(envelope),
+      },
+      { id: 'assistant-two', role: 'assistant', content: 'Spoken.' },
+    ].map((message, index) => ({
+      ...message,
+      history_run_id: 'run-speech',
+      history_sequence: index + 1,
+    })),
+  );
+  const item = visibleTimelineItemsForRender(sessionState).find(
+    (entry) => entry.type === 'assistant_run',
+  );
+  render({ item }, ChatAssistantRun);
+  const player = document.querySelector(
+    `[role="group"][aria-label="${t('audio.label')}"]`,
+  );
+  const audio = player?.querySelector('audio');
+  expect(audio?.getAttribute('src')).toBe(url);
+  ready(audio);
+  await flush();
+  expect(play).not.toHaveBeenCalled();
+  expect(control('audio.play', player)).toBeTruthy();
+});
