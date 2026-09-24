@@ -261,6 +261,7 @@ async def test_cancellation_waits_for_inference_then_shutdown_releases_model() -
         await executor.aclose()
 
 
+@pytest.mark.timeout(120)  # The first case in a worker pays cold torch/transformers imports.
 @pytest.mark.parametrize("engine_name", ["qwen", "parakeet", "nemotron"])
 def test_native_transformers_adapter_contracts_without_weights(
     engine_name: str, monkeypatch: pytest.MonkeyPatch
