@@ -82,6 +82,68 @@ describe('App controller', () => {
     );
   });
 
+  it('resolves a startup Extension page link after the page catalog loads', () => {
+    const knownViewIds = ['chat', 'settings'];
+    const { browserHistory, browserWindow, controller, state } = setup({
+      knownViewIds: () => knownViewIds,
+    });
+    // A reload restores the entry's view even without a hash.
+    browserWindow.location.hash = '';
+    browserHistory.state = {
+      marker: 'vbot.navigation',
+      view: 'extension:fixture:main',
+      session: null,
+      selection: null,
+    };
+
+    controller.initializeNavigationHistory();
+    expect(state.activeViewId).toBe('chat');
+    expect(browserHistory.replaceState).not.toHaveBeenCalled();
+
+    knownViewIds.push('extension:fixture:main');
+    expect(controller.resolvePendingExtensionView()).toBe(true);
+    expect(state.activeViewId).toBe('extension:fixture:main');
+    expect(browserHistory.replaceState).toHaveBeenCalledWith(
+      expect.objectContaining({ view: 'extension:fixture:main' }),
+      '',
+      '#extension:fixture:main',
+    );
+    expect(browserHistory.pushState).not.toHaveBeenCalled();
+    // One-shot: later catalog refreshes leave navigation alone.
+    expect(controller.resolvePendingExtensionView()).toBe(false);
+  });
+
+  it('drops a startup Extension page link the page catalog does not contain', () => {
+    const { browserHistory, browserWindow, controller, state } = setup();
+    browserWindow.location.hash = '#extension:missing:page';
+
+    controller.initializeNavigationHistory();
+    expect(controller.resolvePendingExtensionView()).toBe(false);
+
+    expect(state.activeViewId).toBe('chat');
+    expect(browserHistory.replaceState).toHaveBeenCalledWith(
+      expect.objectContaining({ view: 'chat' }),
+      '',
+      '#chat',
+    );
+  });
+
+  it('forgets a startup Extension page link once the user navigates', () => {
+    const knownViewIds = ['chat', 'settings'];
+    const { browserHistory, browserWindow, controller, state } = setup({
+      knownViewIds: () => knownViewIds,
+    });
+    browserWindow.location.hash = '#extension:fixture:main';
+
+    controller.initializeNavigationHistory();
+    controller.selectView('settings');
+    knownViewIds.push('extension:fixture:main');
+
+    expect(controller.resolvePendingExtensionView()).toBe(false);
+    expect(state.activeViewId).toBe('settings');
+    expect(browserHistory.replaceState).not.toHaveBeenCalled();
+  });
+
   it('marks direct Sub-Agent link navigation for live-tail scrolling only', () => {
     const { browserHistory, controller, state } = setup();
 
@@ -148,6 +210,51 @@ describe('App controller', () => {
       sessionId: 'session-one',
     });
     expect(actions.onReloadAgents).toHaveBeenCalledOnce();
+  });
+
+  it('turns a sessions deletion event into a Session deletion for Chat', async () => {
+    const { controller, state } = setup();
+    const deletionEvent = (scope) => ({
+      type: 'resource_changed',
+      payload: { kind: 'sessions', scope },
+    });
+
+    // A plain list change (create/rename) names no deleted Session.
+    await controller.handleServerEvent(deletionEvent({ agent_id: 'alpha' }));
+    expect(state.sessionsRefreshToken).toBe(1);
+    expect(state.sessionDeletion).toBeNull();
+
+    await controller.handleServerEvent(
+      deletionEvent({
+        agent_id: 'builder',
+        project_id: 'vbot',
+        deleted_session_id: 'session-one',
+        next_session_id: 'session-two',
+      }),
+    );
+    expect(state.sessionsRefreshToken).toBe(2);
+    expect(state.sessionDeletion).toEqual({
+      agentAddress: 'builder@vbot',
+      deletedSessionId: 'session-one',
+      nextSessionId: 'session-two',
+    });
+
+    // Each event is a fresh deletion, even for the same identity Session.
+    const identityScope = {
+      agent_id: 'alpha',
+      project_id: null,
+      deleted_session_id: 'session-three',
+      next_session_id: 'session-four',
+    };
+    await controller.handleServerEvent(deletionEvent(identityScope));
+    const first = state.sessionDeletion;
+    await controller.handleServerEvent(deletionEvent(identityScope));
+    expect(first).toEqual({
+      agentAddress: 'alpha',
+      deletedSessionId: 'session-three',
+      nextSessionId: 'session-four',
+    });
+    expect(state.sessionDeletion).not.toBe(first);
   });
 
   it('keeps the active Run list current beyond the bounded event window', async () => {

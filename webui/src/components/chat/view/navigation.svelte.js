@@ -193,8 +193,10 @@ export function createChatViewNavigation(context) {
     applySessionNavigation(navigation);
   });
 
-  // A Session deleted from the other Chat area of the workspace: release this
-  // area's pointer to it too, without a history entry or composer focus.
+  // A Session deleted from the other Chat area of the workspace or reported
+  // deleted by the server (another window, or this window's own deletion
+  // echoed back): release this area's pointer to it too, without a history
+  // entry or composer focus.
   let handledSiblingDeletionId = 0;
   $effect(() => {
     const deletion = context.siblingSessionDeletion;
@@ -203,7 +205,7 @@ export function createChatViewNavigation(context) {
       return;
     }
     handledSiblingDeletionId = requestId;
-    void handleSessionDeleted(deletion, { fromSibling: true });
+    void handleSessionDeleted(deletion, { passive: true });
   });
 
   const handleSelectAgent = async (agentId, { focusComposer = true } = {}) => {
@@ -413,19 +415,25 @@ export function createChatViewNavigation(context) {
       isOwnAgent && sessionId === ownCurrentSessionId ? '' : sessionId;
   };
 
-  // A session was deleted from the drawer (or from the other Chat area). The
-  // area first releases its own pointer to it: this area keeps its Session
-  // selection across roster refreshes (`preserveSessionSelection`), so an
-  // identity Agent's current pointer would otherwise keep naming the archived
-  // Session, and a Project Agent's locally held Session would reopen it on the
-  // next agent selection. The server re-aimed the identity pointer to the
-  // landing it returned (#2: most-recently-active remaining, else a fresh
-  // session). If this area was viewing the deleted Session (current or
-  // override), it then navigates to that landing; otherwise it stays put and
-  // lets the list refresh.
+  // A session was deleted from the drawer (or passively: from the other Chat
+  // area, or reported by the server). The area first releases its own pointer
+  // to it: this area keeps its Session selection across roster refreshes
+  // (`preserveSessionSelection`), so an identity Agent's current pointer would
+  // otherwise keep naming the archived Session, and a Project Agent's locally
+  // held Session would reopen it on the next agent selection. The server
+  // re-aimed the identity pointer to the landing it returned (#2:
+  // most-recently-active remaining, else a fresh session). If this area was
+  // viewing the deleted Session (current or override), it then navigates to
+  // that landing; otherwise it stays put and lets the list refresh.
+  //
+  // The server's deletion event and the drawer's delete response arrive in
+  // either order. When the event came first, this area already followed
+  // passively; the drawer's deletion then completes the deliberate navigation
+  // (history entry, composer focus) instead of finding nothing to do.
+  let passiveDeletionFollow = null;
   const handleSessionDeleted = async (
     { deletedSessionId, nextSessionId, agentAddress } = {},
-    { fromSibling = false } = {},
+    { passive = false } = {},
   ) => {
     const removedId = String(deletedSessionId ?? '').trim();
     const landingId = String(nextSessionId ?? '').trim();
@@ -438,23 +446,38 @@ export function createChatViewNavigation(context) {
     const viewedSessionId =
       viewingSessionId || context.target.activeAgent?.current_session_id || '';
     releaseDeletedSession(ownerAddress, removedId, landingId);
-    if (!fromSibling) {
+    if (!passive) {
       context.onSessionDeleted?.({
         deletedSessionId: removedId,
         nextSessionId: landingId,
         agentAddress: ownerAddress,
       });
     }
+    const followed = passiveDeletionFollow;
+    if (
+      !passive &&
+      followed?.removedId === removedId &&
+      followed.landingId === viewedSessionId
+    ) {
+      passiveDeletionFollow = null;
+      reportSessionNavigation();
+      await followed.loaded;
+      context.layout.requestComposerFocus();
+      return;
+    }
     if (viewedSessionId !== removedId || !landingId) {
       return;
     }
-    if (fromSibling) {
-      // Another area's action: follow it without a browser-history entry or
-      // stealing composer focus.
+    if (passive) {
+      // Another area's or window's action: follow it without a
+      // browser-history entry or stealing composer focus.
       setViewedSession(ownerAddress, landingId, false);
-      await context.loadHistoryForSession(ownerAddress, landingId);
+      const loaded = context.loadHistoryForSession(ownerAddress, landingId);
+      passiveDeletionFollow = { removedId, landingId, loaded };
+      await loaded;
       return;
     }
+    passiveDeletionFollow = null;
     await handleSessionSelected(landingId, ownerAddress);
   };
 

@@ -7,6 +7,7 @@ import {
   buttonsByText,
   cleanupSettingsViewHarness,
   createSettingsRpcMock,
+  flushAsyncUpdates,
   getButton,
   getSettingsUpdateCalls,
   getSimpleTrigger,
@@ -27,10 +28,25 @@ import {
   waitForCondition,
   waitForModelCatalogs,
 } from './SettingsView.support.js';
+import { createAutosaveCoordinator } from '../../lib/autosave.js';
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
+
+const { default: AutosaveContextHost } =
+  await import('./AutosaveContextHost.svelte');
+
+function mountUnderAutosave(component, settings) {
+  rpcMock.mockImplementation(createSettingsRpcMock({ settings }));
+  const coordinator = createAutosaveCoordinator();
+  const mounted = mount(AutosaveContextHost, {
+    target: document.body,
+    props: { component, coordinator },
+  });
+  flushSync();
+  return { coordinator, mounted };
+}
 
 describe('SettingsView', () => {
   let mountedComponent;
@@ -329,5 +345,61 @@ describe('SettingsView', () => {
         },
       },
     });
+  });
+  it.each([
+    ['a stored custom value', 7, 1],
+    ['the stored default value', 12, 0],
+  ])(
+    'settles a cleared Web Search result count over %s instead of blocking navigation',
+    async (_label, storedCount, expectedWrites) => {
+      const stored = settingsPayload();
+      stored.web_search.default_count = storedCount;
+      const { coordinator, mounted } = mountUnderAutosave(SettingsView, stored);
+      mountedComponent = mounted;
+      await openWebSearchPanel();
+      vi.useFakeTimers();
+
+      setInputValue('#settings-web-search-default-count', '');
+      await vi.advanceTimersByTimeAsync(800);
+      await flushAsyncUpdates();
+
+      const writes = getSettingsUpdateCalls();
+      expect(writes).toHaveLength(expectedWrites);
+      if (expectedWrites > 0) {
+        expect(writes[0][1].web_search.default_count).toBe(12);
+        // The field shows what was saved rather than staying blank.
+        expect(
+          document.querySelector('#settings-web-search-default-count').value,
+        ).toBe('12');
+      }
+      expect(coordinator.hasPending()).toBe(false);
+
+      await expect(coordinator.flushPending()).resolves.toBe(true);
+      expect(getSettingsUpdateCalls()).toHaveLength(expectedWrites);
+    },
+  );
+
+  it('settles a Defaults draft that normalizes to the stored values', async () => {
+    const stored = settingsPayload();
+    stored.defaults.agent = { temperature: 0.5 };
+    const { coordinator, mounted } = mountUnderAutosave(AgentsView, stored);
+    mountedComponent = mounted;
+    await openDefaultsPanel();
+    vi.useFakeTimers();
+
+    // An empty fallback row and a respelled temperature send the stored values.
+    document
+      .querySelector('.settings-view__fallback-add')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+    setInputValue('#settings-defaults-temperature', '0.50');
+    await vi.advanceTimersByTimeAsync(800);
+    await flushAsyncUpdates();
+
+    expect(getSettingsUpdateCalls()).toHaveLength(0);
+    expect(coordinator.hasPending()).toBe(false);
+
+    await expect(coordinator.flushPending()).resolves.toBe(true);
+    expect(getSettingsUpdateCalls()).toHaveLength(0);
   });
 });

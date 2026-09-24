@@ -7,10 +7,12 @@ import {
   baseAgent,
   createAgentsRpcMock,
 } from '../components/__tests__/AgentsView.support.js';
+import { createNavigationHistoryState } from '../lib/navigationHistory.js';
 import {
   App,
   cleanupAppHarness,
   createChatRpcMock,
+  createEmptyChatRpcMock,
   createSettingsRpcMock,
   createSubAgentNavigationRpcMock,
   listLogsMock,
@@ -32,6 +34,30 @@ import {
 vi.mock('svelte', async () => {
   return import('../../node_modules/svelte/src/index-client.js');
 });
+
+const FIXTURE_EXTENSION_ROUTE = 'extension:fixture:main';
+const FIXTURE_EXTENSION_PAGE = {
+  extension: 'fixture',
+  page: 'main',
+  title: 'Fixture page',
+  route: FIXTURE_EXTENSION_ROUTE,
+  entry_url: '/fixture-page.html',
+  epoch: 'fixture-epoch',
+};
+
+// The Extension page catalog answers only when the test releases it, like a
+// slow `extensions.pages` read after a deep link or reload.
+function deferredExtensionPagesRpc() {
+  let releasePages;
+  const pages = new Promise((resolve) => {
+    releasePages = resolve;
+  });
+  const chatRpc = createEmptyChatRpcMock();
+  rpcMock.mockImplementation(async (method, params) =>
+    method === 'extensions.pages' ? pages : chatRpc(method, params),
+  );
+  return (catalog) => releasePages({ pages: catalog });
+}
 
 describe('App', () => {
   let mountedComponent;
@@ -298,6 +324,72 @@ describe('App', () => {
       ).toHaveLength(2);
       expect(document.body.textContent).toContain('Sub-agent response');
     });
+  });
+
+  it('opens an Extension page deep link once the page catalog has loaded', async () => {
+    const releasePages = deferredExtensionPagesRpc();
+    window.history.replaceState(null, '', `#${FIXTURE_EXTENSION_ROUTE}`);
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    // Startup cannot know the route yet; the link stays in the URL meanwhile.
+    expect(window.location.hash).toBe(`#${FIXTURE_EXTENSION_ROUTE}`);
+    expect(document.querySelector('iframe')).toBeFalsy();
+
+    releasePages([FIXTURE_EXTENSION_PAGE]);
+
+    await waitForCondition(() => {
+      expect(document.querySelector('iframe')).toBeTruthy();
+      expect(
+        sidebarNavButton('Fixture page')?.getAttribute('aria-current'),
+      ).toBe('page');
+      expect(window.location.hash).toBe(`#${FIXTURE_EXTENSION_ROUTE}`);
+      expect(window.history.state?.view).toBe(FIXTURE_EXTENSION_ROUTE);
+    });
+  });
+
+  it('reopens an Extension page after a reload restores its history entry', async () => {
+    const releasePages = deferredExtensionPagesRpc();
+    window.history.replaceState(
+      createNavigationHistoryState(FIXTURE_EXTENSION_ROUTE),
+      '',
+      `#${FIXTURE_EXTENSION_ROUTE}`,
+    );
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    expect(window.history.state?.view).toBe(FIXTURE_EXTENSION_ROUTE);
+    releasePages([FIXTURE_EXTENSION_PAGE]);
+
+    await waitForCondition(() => {
+      expect(document.querySelector('iframe')).toBeTruthy();
+      expect(window.location.hash).toBe(`#${FIXTURE_EXTENSION_ROUTE}`);
+      expect(window.history.state?.view).toBe(FIXTURE_EXTENSION_ROUTE);
+    });
+  });
+
+  it('does not replace a view the user opened while an Extension page link waited', async () => {
+    const releasePages = deferredExtensionPagesRpc();
+    window.history.replaceState(null, '', `#${FIXTURE_EXTENSION_ROUTE}`);
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    sidebarNavButton('Logs')?.click();
+    flushSync();
+    await waitForCondition(() => {
+      expect(document.querySelector('#logs-title')).toBeTruthy();
+      expect(window.location.hash).toBe('#logs');
+    });
+
+    releasePages([FIXTURE_EXTENSION_PAGE]);
+    await waitForCondition(() => {
+      expect(sidebarNavButton('Fixture page')).toBeTruthy();
+    });
+    flushSync();
+
+    expect(document.querySelector('#logs-title')).toBeTruthy();
+    expect(document.querySelector('iframe')).toBeFalsy();
+    expect(window.location.hash).toBe('#logs');
   });
 
   it('treats tab switches as history entries so browser back returns to the previous tab', async () => {

@@ -66,6 +66,7 @@ export function createAppExtensions(context) {
           extensionPages = Array.isArray(result?.pages) ? result.pages : [];
           extensionPageInvalidationRevision += 1;
           updated = true;
+          context.onPagesLoaded?.();
         } catch {
           // Keep the last valid descriptors while a transient RPC error clears.
         }

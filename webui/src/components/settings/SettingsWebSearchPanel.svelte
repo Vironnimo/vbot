@@ -35,10 +35,7 @@
   );
   // Hosted providers need an API key in the data directory's .env file.
   let keyHint = $derived(webSearchKeyHint(webSearchSettings.provider));
-  let saveDisabled = $derived(
-    saving ||
-      webSearchSettingsMatch(webSearchSettings, getWebSearchSettings(settings)),
-  );
+  let saveDisabled = $derived(saving || !webSearchDraftHasChanges());
   const autosaveContext = useAutosaveContext();
   const webSearchAutosave = createDebouncedAutosave({
     getSnapshot: () => ({
@@ -80,13 +77,13 @@
     );
   }
 
+  // Dirty state, scheduling and saving all compare the normalized draft (the
+  // payload that would be sent) with the persisted values, so a cleared field
+  // that normalizes to the stored value is not a pending change.
   function webSearchDraftHasChanges() {
-    const persisted = getWebSearchSettings(settings);
-    return (
-      webSearchSettings.provider !== persisted.provider ||
-      String(webSearchSettings.default_count) !==
-        String(persisted.default_count) ||
-      webSearchSettings.searxng?.base_url !== persisted.searxng.base_url
+    return !webSearchSettingsMatch(
+      webSearchSettings,
+      getWebSearchSettings(settings),
     );
   }
 

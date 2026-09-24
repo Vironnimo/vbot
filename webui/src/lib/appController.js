@@ -1,3 +1,4 @@
+import { formatAgentAddress } from './agentAddress.js';
 import {
   CONNECTION_REPLAY_STATUS_EPOCH_CHANGED,
   CONNECTION_REPLAY_STATUS_GAP,
@@ -9,8 +10,10 @@ import {
 } from './connectionState.js';
 import {
   createNavigationHistoryState,
+  isExtensionViewId,
   isNavigationHistoryState,
   locationHashForView,
+  requestedViewIdFromLocationHash,
   sameNavigationSelection,
   sameSessionOverride,
   viewIdFromLocationHash,
@@ -97,6 +100,26 @@ function activeRunFromStartedEvent(payload) {
   };
 }
 
+// A `session.delete` names the archived Session and its landing in the
+// `sessions` scope. Every event yields a fresh object so a repeated deletion
+// still reaches the Chat areas.
+function sessionDeletionFromScope(scope) {
+  const agentId = typeof scope?.agent_id === 'string' ? scope.agent_id : '';
+  const deletedSessionId =
+    typeof scope?.deleted_session_id === 'string'
+      ? scope.deleted_session_id
+      : '';
+  if (!agentId || !deletedSessionId) {
+    return null;
+  }
+  return {
+    agentAddress: formatAgentAddress(agentId, scope.project_id),
+    deletedSessionId,
+    nextSessionId:
+      typeof scope.next_session_id === 'string' ? scope.next_session_id : '',
+  };
+}
+
 export function createAppControllerState(activeViewId) {
   return {
     activeViewId,
@@ -121,6 +144,7 @@ export function createAppControllerState(activeViewId) {
     runServerEvents: [],
     serverNoticeState: '',
     serverRecoveryGeneration: 0,
+    sessionDeletion: null,
     sessionsRefreshToken: 0,
     sessionStoreHealth: null,
     sessionStoreIncident: null,
@@ -155,6 +179,9 @@ export function createAppController({
 }) {
   let chatSessionOverride = null;
   let sessionNavigationRequestId = 0;
+  // An initial deep link to an Extension page whose route is unknown until
+  // the page catalog loads; cleared by the first user navigation.
+  let pendingExtensionViewId = '';
   let unavailableNoticeTimer = null;
   let restoredNoticeTimer = null;
   const identityAgentRedirects = new Map();
@@ -225,6 +252,7 @@ export function createAppController({
   }
 
   function pushNavigationState() {
+    pendingExtensionViewId = '';
     try {
       browserHistory?.pushState(
         createNavigationHistoryState(
@@ -267,6 +295,7 @@ export function createAppController({
   }
 
   function applyNavigationState(navState) {
+    pendingExtensionViewId = '';
     navState = remapNavigationState(navState);
     let viewId = currentKnownViewIds().includes(navState.view)
       ? navState.view
@@ -312,37 +341,90 @@ export function createAppController({
     applyNavigationState(createNavigationHistoryState(viewId, null));
   }
 
+  function replaceNavigationState() {
+    try {
+      browserHistory?.replaceState(
+        createNavigationHistoryState(
+          state.activeViewId,
+          null,
+          currentNavigationSelection(),
+        ),
+        '',
+        locationHashForView(state.activeViewId),
+      );
+    } catch {
+      // History API unavailable (non-browser environment).
+    }
+  }
+
+  // The view the page was opened or reloaded with: its hash, else the view of
+  // the restored history entry.
+  function requestedInitialViewId(existingState) {
+    return (
+      requestedViewIdFromLocationHash(browserWindow?.location?.hash ?? '') ||
+      existingState?.view ||
+      ''
+    );
+  }
+
+  function restoreInitialNavigationEntry() {
+    const existingState = isNavigationHistoryState(browserHistory?.state)
+      ? browserHistory.state
+      : null;
+    const requestedViewId = requestedInitialViewId(existingState);
+    if (
+      requestedViewId !== state.activeViewId &&
+      isExtensionViewId(requestedViewId)
+    ) {
+      if (!currentKnownViewIds().includes(requestedViewId)) {
+        // Keep the link's entry and URL, so a reload keeps it too, until the
+        // Extension page catalog shows whether the page exists.
+        pendingExtensionViewId = requestedViewId;
+        return;
+      }
+      state.activeViewId = requestedViewId;
+    }
+    if (
+      existingState &&
+      existingState.view === state.activeViewId &&
+      existingState.session
+    ) {
+      chatSessionOverride = existingState.session;
+      sessionNavigationRequestId += 1;
+      state.pendingSessionNavigation = {
+        ...existingState.session,
+        requestId: sessionNavigationRequestId,
+      };
+      return;
+    }
+    replaceNavigationState();
+  }
+
   function initializeNavigationHistory() {
     try {
-      const existingState = isNavigationHistoryState(browserHistory?.state)
-        ? browserHistory.state
-        : null;
-      if (
-        existingState &&
-        existingState.view === state.activeViewId &&
-        existingState.session
-      ) {
-        chatSessionOverride = existingState.session;
-        sessionNavigationRequestId += 1;
-        state.pendingSessionNavigation = {
-          ...existingState.session,
-          requestId: sessionNavigationRequestId,
-        };
-      } else {
-        browserHistory?.replaceState(
-          createNavigationHistoryState(
-            state.activeViewId,
-            null,
-            currentNavigationSelection(),
-          ),
-          '',
-          locationHashForView(state.activeViewId),
-        );
-      }
+      restoreInitialNavigationEntry();
     } catch {
       // History API unavailable (non-browser environment).
     }
     browserWindow?.addEventListener?.('popstate', handlePopState);
+  }
+
+  // Called after each successful Extension page catalog load. Opens a pending
+  // initial Extension page link in place of the startup view when the page
+  // exists and the user has not navigated meanwhile; when it does not exist,
+  // the startup view replaces the link's entry. Returns whether it opened.
+  function resolvePendingExtensionView() {
+    const viewId = pendingExtensionViewId;
+    if (!viewId) {
+      return false;
+    }
+    pendingExtensionViewId = '';
+    const available = currentKnownViewIds().includes(viewId);
+    if (available) {
+      state.activeViewId = viewId;
+    }
+    replaceNavigationState();
+    return available;
   }
 
   function navigateToSession(
@@ -534,6 +616,10 @@ export function createAppController({
     }
     if (tokenKeys.includes(RESOURCE_TOKEN_SESSIONS)) {
       state.sessionsRefreshToken += 1;
+      const deletion = sessionDeletionFromScope(event.payload?.scope);
+      if (deletion) {
+        state.sessionDeletion = deletion;
+      }
     }
     if (kind === 'queue') {
       const scope = event.payload?.scope ?? {};
@@ -593,6 +679,7 @@ export function createAppController({
     handlePopState,
     handleServerEvent,
     initializeNavigationHistory,
+    resolvePendingExtensionView,
     navigateToPromptScope,
     navigateToSettingsPanel,
     navigateToSubAgent,

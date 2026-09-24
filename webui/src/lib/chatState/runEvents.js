@@ -83,17 +83,17 @@ export function appendRunEvent(sessionState, event) {
     appendCompressedStreamingRunEvent(sessionState, normalizedEvent);
     return normalizedEvent;
   }
-  if (
-    sessionState.runEvents.some(
-      (existingEvent) =>
-        existingEvent.sequence === normalizedEvent.sequence &&
-        existingEvent.run_id === normalizedEvent.run_id,
-    )
-  ) {
+  const previousRunEvents = sessionState.runEvents;
+  const retainedKeys = runEventKeyIndex(previousRunEvents);
+  const eventKey = runEventKey(normalizedEvent);
+  if (retainedKeys.has(eventKey)) {
     return normalizedEvent;
   }
 
-  sessionState.runEvents = [...sessionState.runEvents, normalizedEvent];
+  sessionState.runEvents = [...previousRunEvents, normalizedEvent];
+  retainedKeys.add(eventKey);
+  runEventKeyIndexes.delete(previousRunEvents);
+  runEventKeyIndexes.set(sessionState.runEvents, retainedKeys);
   if (
     normalizedEvent.payload?.context_usage &&
     (!sessionState.currentRun ||
@@ -142,6 +142,74 @@ export function appendRunEvent(sessionState, event) {
   return normalizedEvent;
 }
 
+// Stable events are appended once per (Run id, sequence). The key index
+// belongs to one `runEvents` array: every append or prune assigns a new array,
+// so an owner that replaces it (History reconciliation, edits, stale-Run
+// resets) gets a correctly rebuilt index on the next append instead of having
+// to maintain a second structure.
+const runEventKeyIndexes = new WeakMap();
+
+function runEventKey(event) {
+  return `${event.run_id}:${event.sequence}`;
+}
+
+function runEventKeyIndex(runEvents) {
+  let keys = runEventKeyIndexes.get(runEvents);
+  if (!keys) {
+    keys = new Set(runEvents.map(runEventKey));
+    runEventKeyIndexes.set(runEvents, keys);
+  }
+  return keys;
+}
+
+// A released Run id only has to outlive late re-deliveries of that Run's
+// lifecycle events, so a handful per Session suffices.
+const MAX_RELEASED_RUN_IDS = 16;
+
+// Drops a finished Run's retained live projection from a Session this Chat
+// owner neither displays nor holds History for. Such a Session is never
+// rendered from these events: opening it loads canonical History instead, so
+// keeping them would only accumulate every stable event of every Run for the
+// lifetime of the tab. Run status, unread completion, usage and Queue
+// projections stay untouched; the remembered id keeps a late `run_started`
+// from reviving the finished Run.
+export function releaseFinishedRunEvents(sessionState, runId) {
+  if (!sessionState || !runId) {
+    return sessionState;
+  }
+  const releasedRunIds = sessionState.releasedRunIds ?? [];
+  if (!releasedRunIds.includes(runId)) {
+    sessionState.releasedRunIds = [...releasedRunIds, runId].slice(
+      -MAX_RELEASED_RUN_IDS,
+    );
+  }
+  const belongsToRun = (event) => event?.run_id === runId;
+  if (sessionState.runEvents.some(belongsToRun)) {
+    sessionState.runEvents = sessionState.runEvents.filter(
+      (event) => !belongsToRun(event),
+    );
+  }
+  if (sessionState.streamingRunEvents.some(belongsToRun)) {
+    sessionState.streamingRunEvents = sessionState.streamingRunEvents.filter(
+      (event) => !belongsToRun(event),
+    );
+  }
+  for (const key of sessionState.seenStreamingEventKeys) {
+    if (streamingEventKeyRunId(key) === runId) {
+      sessionState.seenStreamingEventKeys.delete(key);
+    }
+  }
+  return sessionState;
+}
+
+export function isReleasedRun(sessionState, runId) {
+  return Boolean(runId) && (sessionState?.releasedRunIds ?? []).includes(runId);
+}
+
+function streamingEventKeyRunId(key) {
+  return typeof key === 'string' ? key.split(':').slice(0, -2).join(':') : '';
+}
+
 export function applyRunControls(sessionState, run) {
   const current = sessionState?.currentRun;
   if (
@@ -180,6 +248,7 @@ function appendRunEvents(sessionState, events) {
 
 function beginRunFromEvent(sessionState, event) {
   if (
+    isReleasedRun(sessionState, event.run_id) ||
     sessionState.runEvents.some(
       (existing) =>
         existing.run_id === event.run_id &&

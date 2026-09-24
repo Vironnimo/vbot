@@ -164,8 +164,37 @@ async def test_delete_publishes_sessions_resource_changed() -> None:
 
     await _delete_session(state, {"agent_id": "builder", "session_id": "s1"})
 
+    # Other windows learn which Session was archived and where to land.
     assert _sessions_resource_events(state) == [
-        {"kind": "sessions", "scope": {"agent_id": "builder"}}
+        {
+            "kind": "sessions",
+            "scope": {
+                "agent_id": "builder",
+                "project_id": None,
+                "deleted_session_id": "s1",
+                "next_session_id": "landing",
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_delete_project_session_event_names_its_project_address() -> None:
+    state, _resolver, sessions = _make_state()
+    sessions.metadata_rows = [{"id": "recent", "last_active_at": "2026-06-01T00:00:00+00:00"}]
+
+    await _delete_session(state, {"agent_id": "builder@vbot", "session_id": "s1"})
+
+    assert _sessions_resource_events(state) == [
+        {
+            "kind": "sessions",
+            "scope": {
+                "agent_id": "builder",
+                "project_id": "vbot",
+                "deleted_session_id": "s1",
+                "next_session_id": "recent",
+            },
+        }
     ]
 
 
