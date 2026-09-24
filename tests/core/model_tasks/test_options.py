@@ -17,7 +17,9 @@ from core.model_tasks.constants import (
 from core.model_tasks.options import (
     ALLOWED_OPTION_TYPES,
     PROVIDER_DEFAULT_CHOICE_LABEL,
+    TaskModelOptionChoice,
     TaskModelOptionField,
+    TaskModelOptionsBy,
     TaskModelOptionSchema,
     TaskModelOptionValidationError,
     option_schema_for,
@@ -107,6 +109,69 @@ def test_select_without_choices_accepts_no_value() -> None:
     validate_task_model_options(schema, {})
     with pytest.raises(TaskModelOptionValidationError):
         validate_task_model_options(schema, {"voice": "alloy"})
+
+
+def _tier_field(
+    options_by: TaskModelOptionsBy | None, *, field_type: str = "select"
+) -> TaskModelOptionField:
+    return TaskModelOptionField(
+        name="tier",
+        type=field_type,
+        label="Tier",
+        options=tuple(
+            TaskModelOptionChoice(value=value, label=value or "Default")
+            for value in ("", "fast", "deep")
+        ),
+        options_by=options_by,
+    )
+
+
+def test_select_serializes_choices_narrowed_by_another_field() -> None:
+    field = _tier_field(TaskModelOptionsBy(field="engine", values={"lite": ("", "fast")}))
+
+    assert field.to_dict()["options_by"] == {
+        "field": "engine",
+        "values": {"lite": ["", "fast"]},
+    }
+    assert "options_by" not in _tier_field(None).to_dict()
+
+
+@pytest.mark.parametrize(
+    ("options_by", "field_type"),
+    [
+        (TaskModelOptionsBy(field="tier", values={}), "select"),
+        (TaskModelOptionsBy(field="engine", values={"lite": ("turbo",)}), "select"),
+        (TaskModelOptionsBy(field="engine", values={}), "text"),
+    ],
+    ids=["self-reference", "unknown-choice", "not-a-select"],
+)
+def test_narrowed_choices_must_reference_another_field_and_known_choices(
+    options_by: TaskModelOptionsBy, field_type: str
+) -> None:
+    with pytest.raises(TaskModelOptionValidationError):
+        _tier_field(options_by, field_type=field_type)
+
+
+@pytest.mark.parametrize(
+    ("field", "values"),
+    [("", {}), ("engine", {"lite": "fast"}), ("engine", {"lite": [1]}), ("engine", [])],
+    ids=["empty-field", "string-list", "non-string-choice", "not-a-mapping"],
+)
+def test_narrowed_choices_reject_malformed_shapes(field: str, values: Any) -> None:
+    with pytest.raises(TaskModelOptionValidationError):
+        TaskModelOptionsBy(field=field, values=values)
+
+
+def test_narrowed_choices_do_not_restrict_validation() -> None:
+    schema = TaskModelOptionSchema(
+        task_type=TASK_TEXT_TO_SPEECH,
+        target="openai/tts-1::api-key",
+        fields=(_tier_field(TaskModelOptionsBy(field="engine", values={"lite": ("fast",)})),),
+    )
+
+    validate_task_model_options(schema, {"tier": "deep"})
+    with pytest.raises(TaskModelOptionValidationError):
+        validate_task_model_options(schema, {"tier": "turbo"})
 
 
 def test_existing_field_types_still_validate() -> None:
