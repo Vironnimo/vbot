@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -137,6 +138,99 @@ async def test_in_run_round_trips_reasoning_details(
     request_body = json.loads(route.calls.last.request.content)
     assistant_message = request_body["messages"][1]
     assert assistant_message["reasoning_details"] == reasoning_details
+
+
+def _zero_reasoning_token_response(**message_fields: Any) -> dict[str, Any]:
+    return {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "ok", **message_fields},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "completion_tokens_details": {"reasoning_tokens": 0},
+        },
+    }
+
+
+def _openrouter_catalog_adapter(
+    openrouter_config: ProviderConfig, *, reasoning_supported: bool
+) -> OpenRouterAdapter:
+    model = Model(
+        model_id="openai/gpt-4o",
+        name="GPT-4o",
+        capabilities=Capabilities(
+            vision=True,
+            tools=True,
+            json_mode=True,
+            reasoning=ReasoningCapabilities(supported=reasoning_supported),
+        ),
+        context_window=128_000,
+        max_output_tokens=16_384,
+    )
+    return OpenRouterAdapter(openrouter_config, API_KEY, model_lookup={"openai/gpt-4o": model}.get)
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("reasoning_supported", "expected_warnings"), [(False, 0), (True, 1)])
+async def test_swallowed_effort_warning_follows_rendered_reasoning(
+    openrouter_config: ProviderConfig,
+    caplog: pytest.LogCaptureFixture,
+    reasoning_supported: bool,
+    expected_warnings: int,
+) -> None:
+    """A catalog non-reasoning Model gets no reasoning field, so 0 tokens is expected."""
+    adapter = _openrouter_catalog_adapter(
+        openrouter_config, reasoning_supported=reasoning_supported
+    )
+    route = respx.post(OPENROUTER_URL).mock(
+        return_value=httpx.Response(200, json=_zero_reasoning_token_response())
+    )
+
+    with caplog.at_level(logging.WARNING, logger="vbot.providers.openai_compatible"):
+        await adapter.send(
+            [{"role": "user", "content": "Hello"}],
+            model_id="openai/gpt-4o",
+            thinking_effort="high",
+        )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert ("reasoning" in request_body) is reasoning_supported
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == expected_warnings
+    if expected_warnings:
+        assert "rendered_reasoning=high" in warnings[0].getMessage()
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_zero_reasoning_counter_with_returned_reasoning_does_not_warn(
+    openrouter_config: ProviderConfig, caplog: pytest.LogCaptureFixture
+) -> None:
+    """OpenRouter can report 0 reasoning tokens while returning Reasoning."""
+    adapter = _openrouter_catalog_adapter(openrouter_config, reasoning_supported=True)
+    respx.post(OPENROUTER_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_zero_reasoning_token_response(
+                reasoning="Thinking it through.",
+                reasoning_details=[{"type": "reasoning.text", "text": "Thinking it through."}],
+            ),
+        )
+    )
+
+    with caplog.at_level(logging.WARNING, logger="vbot.providers.openai_compatible"):
+        await adapter.send(
+            [{"role": "user", "content": "Hello"}],
+            model_id="openai/gpt-4o",
+            thinking_effort="high",
+        )
+
+    assert [record for record in caplog.records if record.levelno == logging.WARNING] == []
 
 
 def test_collapse_reasoning_newline_runs_collapses_interior_runs() -> None:

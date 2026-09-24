@@ -612,32 +612,64 @@ def reasoning_token_count(usage: Mapping[str, Any] | None) -> int | None:
     return None
 
 
+def _intent_requests_reasoning(intent: ReasoningIntent) -> bool:
+    """Return whether a rendered intent asks the Model to reason.
+
+    ``effort`` with a positive level, ``budget``, and ``on`` ask for reasoning.
+    ``off`` does not, and ``default`` leaves the Provider default untouched, so
+    zero reasoning tokens after either is no evidence of a swallowed request.
+    """
+
+    if intent.kind in (REASONING_INTENT_BUDGET, REASONING_INTENT_ON):
+        return True
+    return intent.kind == REASONING_INTENT_EFFORT and intent.effort_level not in (
+        None,
+        _NONE_EFFORT,
+    )
+
+
+def _rendered_reasoning_label(intent: ReasoningIntent) -> str:
+    """Return a short log label for a rendered reasoning intent."""
+
+    if intent.kind == REASONING_INTENT_BUDGET and intent.budget_tokens is not None:
+        return f"budget:{intent.budget_tokens}"
+    if intent.kind == REASONING_INTENT_EFFORT and intent.effort_level:
+        return intent.effort_level
+    return intent.kind
+
+
 def warn_effort_swallowed(
     *,
-    selected_effort: str,
+    rendered: ReasoningIntent,
     usage: Mapping[str, Any] | None,
+    returned_reasoning: bool,
     model_id: str,
     provider_logger: Any | None = None,
 ) -> None:
-    """Log a structured warning when a non-``none`` effort yielded 0 reasoning tokens.
+    """Log a structured warning when requested reasoning yielded 0 reasoning tokens.
 
-    The selected effort asked the model to think, but the response's reasoning
-    token counter came back as exactly ``0`` — the effort was effectively
-    swallowed. Stays silent when no effort was selected, when the effort was
-    ``none``, or when the reasoning-token count is unknown (sparse usage) or
-    non-zero. No token values beyond the count are logged.
+    *rendered* is the intent the request actually carried — after catalog
+    support, ladder snapping and the Adapter's own mapping, as described by
+    ``ProviderAdapter.describe_reasoning_render`` — not the Agent's raw
+    selection: a catalog non-reasoning Model has its reasoning controls
+    stripped, so zero reasoning tokens is expected there.
+
+    Warns only when that intent asks for reasoning, the response's reasoning
+    token counter is exactly ``0``, and the response returned no Reasoning
+    (*returned_reasoning*: visible text or opaque reasoning details). Some
+    Providers report zero reasoning tokens while returning Reasoning, so the
+    counter alone cannot deny it. An unknown (sparse) or non-zero counter stays
+    silent. No token values beyond the count are logged.
     """
 
-    effort = normalize_thinking_effort(selected_effort)
-    if not effort or effort == _NONE_EFFORT:
+    if not _intent_requests_reasoning(rendered) or returned_reasoning:
         return
-    reasoning_tokens = reasoning_token_count(usage)
-    if reasoning_tokens != 0:
+    if reasoning_token_count(usage) != 0:
         return
     logger = provider_logger if provider_logger is not None else _LOGGER
     logger.warning(
         "Reasoning effort was swallowed: response reported 0 reasoning tokens "
-        "(model=%s, selected_effort=%s)",
+        "and no Reasoning (model=%s, rendered_reasoning=%s)",
         model_id,
-        effort,
+        _rendered_reasoning_label(rendered),
     )
