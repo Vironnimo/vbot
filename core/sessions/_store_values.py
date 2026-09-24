@@ -358,6 +358,10 @@ def _message_records_sql(*, where: str, order_by: str = "") -> str:
     )
 
 
+# Records named by a JSON array of history keys; each view branch probes its own key.
+_KEYED_RECORDS = "m.message_key IN (SELECT value FROM json_each(?))"
+
+
 _SEARCH_RESULT_LIMIT = 1_000
 _CANONICAL_SEARCH_SCAN_LIMIT = 10_000
 

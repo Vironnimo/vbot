@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
@@ -49,9 +50,13 @@ def state(
 
 def descriptor_sources(
     connection: sqlite3.Connection, addresses: Sequence[SessionAddress]
-) -> dict[SessionAddress, tuple[JsonObject, int, ChatMessage | None]]:
-    """Load compact descriptor inputs for many Sessions in set-oriented reads."""
-    sources: dict[SessionAddress, tuple[JsonObject, int, ChatMessage | None]] = {}
+) -> Callable[[], dict[SessionAddress, tuple[JsonObject, int, ChatMessage | None]]]:
+    """Load compact descriptor inputs for many Sessions in set-oriented reads.
+
+    The returned decoder projects metadata and first User Messages after the
+    read transaction.
+    """
+    selected: list[tuple[sqlite3.Row, sqlite3.Row | None]] = []
     by_scope: dict[tuple[str, str], list[str]] = {}
     for address in addresses:
         by_scope.setdefault((address.project_id or "", address.agent_id), []).append(
@@ -72,29 +77,30 @@ def descriptor_sources(
                 continue
             session_keys = [int(state["session_key"]) for state in states]
             key_placeholders = ", ".join("?" for _ in session_keys)
+            # User records exist only in the messages branch of history_records,
+            # so each first User Message key comes from one index probe.
             first_user_rows = connection.execute(
                 _store_values._message_records_sql(
                     where=(
-                        f"m.session_key IN ({key_placeholders}) AND m.role = 'user' "
-                        "AND m.seq = (SELECT MIN(first.seq) FROM history_records AS first "
-                        "WHERE first.session_key = m.session_key AND first.role = 'user')"
+                        "m.message_key IN (SELECT (SELECT u.message_key FROM messages AS u "
+                        "WHERE u.session_key = s.session_key AND u.role = 'user' "
+                        "ORDER BY u.seq LIMIT 1) FROM sessions AS s "
+                        f"WHERE s.session_key IN ({key_placeholders}))"
                     ),
                     order_by="ORDER BY m.session_key",
                 ),
                 session_keys,
             ).fetchall()
-            first_users = {
-                int(row["session_key"]): _store_codec.message_from_row(row)
-                for row in first_user_rows
-            }
-            for state in states:
-                address = _store_values._address(state)
-                sources[address] = (
-                    _store_values._session_projected_metadata_from_state(state),
-                    int(state["message_count"]),
-                    first_users.get(int(state["session_key"])),
-                )
-    return sources
+            first_users = {int(row["session_key"]): row for row in first_user_rows}
+            selected.extend((state, first_users.get(int(state["session_key"]))) for state in states)
+    return lambda: {
+        _store_values._address(state): (
+            _store_values._session_projected_metadata_from_state(state),
+            int(state["message_count"]),
+            None if first_user is None else _store_codec.message_from_row(first_user),
+        )
+        for state, first_user in selected
+    }
 
 
 def list_addresses(
@@ -259,13 +265,15 @@ def session_ids_with_messages(
     role_values = tuple(dict.fromkeys(roles))
     if not role_values:
         return set()
+    # Scope history_records by a subquery rather than a join so SQLite pushes it
+    # into every view branch. The JSON role list keeps a single role from
+    # becoming an equality that invites an automatic index on the view rows.
     clauses = [
-        "s.status = 'live'",
-        "s.project_id = ?",
-        "s.agent_id = ?",
-        f"m.role IN ({','.join('?' for _ in role_values)})",
+        "m.session_key IN (SELECT session_key FROM sessions "
+        "WHERE status = 'live' AND project_id = ? AND agent_id = ?)",
+        "m.role IN (SELECT value FROM json_each(?))",
     ]
-    params: list[str] = [project_id or "", agent_id, *role_values]
+    params: list[str] = [project_id or "", agent_id, json.dumps(role_values)]
     if since is not None:
         clauses.append("julianday(m.timestamp) >= julianday(?)")
         params.append(since.isoformat())
@@ -273,8 +281,8 @@ def session_ids_with_messages(
         clauses.append("julianday(m.timestamp) <= julianday(?)")
         params.append(until.isoformat())
     rows = connection.execute(
-        "SELECT DISTINCT s.session_id FROM sessions AS s "
-        "JOIN history_records AS m ON m.session_key = s.session_key WHERE " + " AND ".join(clauses),
+        "SELECT session_id FROM sessions WHERE session_key IN "
+        "(SELECT m.session_key FROM history_records AS m WHERE " + " AND ".join(clauses) + ")",
         params,
     ).fetchall()
     return {str(row["session_id"]) for row in rows}

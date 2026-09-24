@@ -65,6 +65,7 @@ if TYPE_CHECKING:
 
 
 _WriteResult = TypeVar("_WriteResult")
+_Decoded = TypeVar("_Decoded")
 # Records selected inside a write transaction and decoded after commit.
 _HistoryDelta = tuple[list[sqlite3.Row], "SessionReadCursor"] | None
 
@@ -138,6 +139,18 @@ class SessionStore:
         _store_schema._reconcile_open_database(
             connection, self.path, expected_database_id=expected_database_id
         )
+
+    def _read_decoded(
+        self, select: Callable[[sqlite3.Connection], Callable[[], _Decoded]]
+    ) -> _Decoded:
+        """Select rows in one read transaction, then decode them after it ends.
+
+        A rollback-journal store serves reads under its runtime lock, so Message
+        reconstruction outside the transaction never delays a writer.
+        """
+        with self._runtime.read_ctx() as connection:
+            decode = select(connection)
+        return decode()
 
     def _execute_write(
         self,
@@ -280,8 +293,9 @@ class SessionStore:
     def descriptor_sources(
         self, addresses: Sequence[SessionAddress]
     ) -> dict[SessionAddress, tuple[JsonObject, int, ChatMessage | None]]:
-        with self._runtime.read_ctx() as connection:
-            return _store_queries.descriptor_sources(connection, addresses)
+        return self._read_decoded(
+            lambda connection: _store_queries.descriptor_sources(connection, addresses)
+        )
 
     def replace_metadata(self, address: SessionAddress, metadata: JsonObject) -> None:
         return self._execute_write(
@@ -910,7 +924,9 @@ class SessionStore:
         until: str | None = None,
         excluded_session_ids: Sequence[str] = (),
     ) -> builtins.list[tuple[SessionAddress, str, str, str, float]]:
-        try:
+        def select(
+            **fallback: Any,
+        ) -> Callable[[], builtins.list[tuple[SessionAddress, str, str, str, float]]]:
             with self._runtime.read_ctx() as connection:
                 return _store_search.search(
                     connection,
@@ -924,7 +940,11 @@ class SessionStore:
                     since=since,
                     until=until,
                     excluded_session_ids=excluded_session_ids,
+                    **fallback,
                 )
+
+        try:
+            decode = select()
         except sqlite3.Error as exc:
             if "fts" in str(exc).lower() or "messages_fts" in str(exc).lower():
                 error_message = str(exc)
@@ -932,22 +952,8 @@ class SessionStore:
                     self._execute_write(
                         lambda connection: _store_fts._detach_fts(connection, error_message)
                     )
-            with self._runtime.read_ctx() as connection:
-                return _store_search.search(
-                    connection,
-                    query,
-                    project_id=project_id,
-                    agent_id=agent_id,
-                    session_id=session_id,
-                    match_mode=match_mode,
-                    limit=limit,
-                    roles=roles,
-                    since=since,
-                    until=until,
-                    excluded_session_ids=excluded_session_ids,
-                    use_fts=False,
-                    fallback_reason="fts_error",
-                )
+            decode = select(use_fts=False, fallback_reason="fts_error")
+        return decode()
 
     def archive(self, address: SessionAddress) -> None:
         return self._execute_write(lambda connection: _store_mutations.archive(connection, address))
