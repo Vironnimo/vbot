@@ -682,7 +682,8 @@ class BlockStore(Protocol):
     in the concrete store; ids and slugs are validated there before any path is
     built (defense in depth on top of the manager's edge validation).
 
-    - :meth:`write_layout` persists a scope's ordered entries verbatim.
+    - :meth:`write_layout` persists a scope's ordered entries verbatim; ``reset``
+      replaces a saved layout that fails to load, which a plain write refuses.
     - :meth:`prune_layout` persists only the entries whose id is still in
       *known_ids*, dropping a contributor-gone id on the next write (tolerate, D4).
     - :meth:`seed_agent_layout` seeds an agent scope's layout from a default layout,
@@ -703,8 +704,10 @@ class BlockStore(Protocol):
         """Return *block_id*'s saved override text for *scope* (``None`` if none)."""
         ...
 
-    def write_layout(self, scope: str, entries: Sequence[LayoutEntry]) -> None:
-        """Persist *scope*'s ordered layout entries verbatim."""
+    def write_layout(
+        self, scope: str, entries: Sequence[LayoutEntry], *, reset: bool = False
+    ) -> None:
+        """Persist *scope*'s ordered layout entries verbatim (``reset``: replace a broken one)."""
         ...
 
     def prune_layout(
@@ -746,7 +749,9 @@ class EmptyBlockStore:
     def read_block_override(self, scope: str, block_id: str) -> str | None:
         return None
 
-    def write_layout(self, scope: str, entries: Sequence[LayoutEntry]) -> None:
+    def write_layout(
+        self, scope: str, entries: Sequence[LayoutEntry], *, reset: bool = False
+    ) -> None:
         return None
 
     def prune_layout(
