@@ -29,6 +29,7 @@ from _quality_common import (
     configure_console_encoding,
     deduplicate_paths,
     describe_fix_result,
+    iter_snapshot_files,
     snapshot_target_files,
 )
 
@@ -63,6 +64,11 @@ SNAPSHOT_IGNORED_DIRS = {
     "dist",
     "node_modules",
 }
+# Every suffix ESLint lints here: its default .js/.mjs/.cjs patterns plus the
+# .svelte files webui/eslint.config.js adds. ESLint aborts on a directory whose
+# files it all ignores and only warns (exit 0) on an ignored file, so scoped
+# inputs without these suffixes are not handed to it.
+ESLINT_FILE_SUFFIXES = {".js", ".mjs", ".cjs", ".svelte"}
 
 # ---------- path helpers ----------
 
@@ -345,6 +351,31 @@ def translate_to_vitest_targets(paths: list[str]) -> tuple[list[str], list[str]]
     return targets, notes
 
 
+def translate_to_eslint_targets(paths: list[str]) -> tuple[list[str], list[str]]:
+    """Split scoped WebUI-relative inputs into ESLint targets and notes.
+
+    Returns ``(lint_paths, notes)``: a file is kept when ESLint lints its suffix,
+    a directory when it contains at least one such file outside build and
+    dependency folders. Everything else is dropped with a note instead of making
+    ESLint abort or report a pass for a file it ignored.
+    """
+    lint_paths: list[str] = []
+    notes: list[str] = []
+    for path in paths:
+        absolute = (WEBUI_ROOT / path).resolve()
+        if absolute.is_dir():
+            lintable = bool(
+                iter_snapshot_files(absolute, ESLINT_FILE_SUFFIXES, SNAPSHOT_IGNORED_DIRS)
+            )
+        else:
+            lintable = absolute.suffix in ESLINT_FILE_SUFFIXES
+        if lintable:
+            lint_paths.append(path)
+        else:
+            notes.append(f"{path}: no ESLint-lintable files (.js/.mjs/.cjs/.svelte), not linted")
+    return lint_paths, notes
+
+
 def _tool_path_and_absolute(path: str) -> tuple[str, Path]:
     """Resolve an allowed frontend input and its path from the WebUI working dir."""
     normalized = strip_webui_prefix(path)
@@ -427,9 +458,11 @@ Path behavior:
   project-root-relative (`webui/src/...`) or WebUI-relative (`src/...`) files or
   directories. Source paths select their nearest mirrored Vitest coverage; any
   non-test path under src/ or a bundled Extension ui/ also selects the repo-wide
-  *.guard.test.* suites. A scoped run omits the build unless --build is given.
-  --build adds a full WebUI build without widening the selected lint or test
-  paths. Missing paths abort before any quality tool runs.
+  *.guard.test.* suites. ESLint receives only paths holding .js/.mjs/.cjs/.svelte
+  files; other inputs get a note, and a scope without any reports the ESLint
+  steps as NO FILES (not a pass). A scoped run omits the build unless --build
+  is given. --build adds a full WebUI build without widening the selected lint
+  or test paths. Missing paths abort before any quality tool runs.
 
 Notes:
   npx and npm must be on PATH. The default mode keeps and reports every source-file
@@ -505,12 +538,15 @@ def main() -> int:
     if stripped:
         scope_paths = stripped
         prettier_paths = scope_paths
+        lint_paths, eslint_notes = translate_to_eslint_targets(scope_paths)
         vitest_paths, vitest_notes = translate_to_vitest_targets(scope_paths)
     else:
         scope_paths = ["src/", "scripts/", *_extension_page_ui_paths()]
         prettier_paths = scope_paths
+        lint_paths, eslint_notes = scope_paths, []
         vitest_paths = ["src/", "scripts/"]
         vitest_notes = []
+    step_notes = {"eslint": eslint_notes, "vitest": vitest_notes}
 
     external_scope = any(
         path.startswith("../resources/") or path.startswith("../tests/") for path in scope_paths
@@ -525,16 +561,22 @@ def main() -> int:
     )
     eslint_config = ["--config", "webui/eslint.config.js"] if external_scope else []
     eslint_paths = (
-        [(WEBUI_ROOT / path).resolve().relative_to(PROJECT_ROOT).as_posix() for path in scope_paths]
+        [(WEBUI_ROOT / path).resolve().relative_to(PROJECT_ROOT).as_posix() for path in lint_paths]
         if external_scope
-        else scope_paths
+        else lint_paths
     )
+    # Without a lintable input, ESLint would abort (directory) or lint nothing;
+    # a None command reports the step as NO FILES instead of running it.
+    eslint_fix_command = (
+        [npx_exe, "eslint", *eslint_config, "--fix", *eslint_paths] if eslint_paths else None
+    )
+    eslint_command = [npx_exe, "eslint", *eslint_config, *eslint_paths] if eslint_paths else None
 
-    # Each step: (label, command, kind)
+    # Each step: (label, command, kind, snapshot paths); a None command is skipped.
     # kind: "fix" = auto-fix (shows FIXED), "gate" = validation (PASS/FAIL),
     #       "test" = test runner with count display,
     #       "build" = full build; surfaces stderr warnings on success without failing
-    steps: list[tuple[str, list[str], str, list[str] | None]]
+    steps: list[tuple[str, list[str] | None, str, list[str] | None]]
     if args.check:
         steps = [
             (
@@ -552,16 +594,11 @@ def main() -> int:
                 "fix",
                 prettier_paths,
             ),
-            (
-                "eslint fix",
-                [npx_exe, "eslint", *eslint_config, "--fix"] + eslint_paths,
-                "fix",
-                scope_paths,
-            ),
+            ("eslint fix", eslint_fix_command, "fix", lint_paths),
         ]
     steps.extend(
         [
-            ("eslint", [npx_exe, "eslint", *eslint_config] + eslint_paths, "gate", None),
+            ("eslint", eslint_command, "gate", None),
             (
                 "vitest",
                 # --passWithNoTests: a path filter without nearby tests must not
@@ -588,6 +625,12 @@ def main() -> int:
     build_warnings: list[tuple[str, str]] = []  # (label, stderr) — non-fatal
 
     for label, cmd, kind, snapshot_paths in steps:
+        if cmd is None:
+            print(f"{label:<14}.... NO FILES (nothing lintable)")
+            for note in step_notes.get(label, []):
+                print(f"{'':<18}note: {note}")
+            continue
+
         # A scoped run whose inputs map to no test files must not fall through to
         # ``vitest`` with no path argument — that would silently run the whole
         # suite. Report the honest "no tests" outcome and move on.
@@ -680,9 +723,8 @@ def main() -> int:
         if changed_files:
             for changed_path in changed_files:
                 print(f"{'':<18}{changed_path}")
-        if kind == "test":
-            for note in vitest_notes:
-                print(f"{'':<18}note: {note}")
+        for note in step_notes.get(label, []):
+            print(f"{'':<18}note: {note}")
 
     print()
 
