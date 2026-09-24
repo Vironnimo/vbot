@@ -37,6 +37,9 @@ _WHEN = re.compile(r"^(start|end)(?:\s*([+-])\s*([1-9][0-9]*)\s*([mhd]))?$")
 _TERMINAL = frozenset({"completed", "failed", "cancelled", "interrupted", "missed"})
 _MAX_OFFSET = 31 * 24 * 60
 _MAX_ACTIONS = 16
+# Finished history is kept this long after expiry, then pruned once the scan
+# window no longer reaches its occurrence (it can then never become due again).
+_RETENTION = timedelta(days=30)
 
 
 def parse_action_when(value: object) -> tuple[str, int, str]:
@@ -311,6 +314,8 @@ class CalendarActions:
                     previous = self._executions.get(key)
                     if previous and self._consumed(previous, row):
                         row = previous
+                    elif _instant(row["expires_at"]) <= datetime.now(UTC) - _RETENTION:
+                        continue  # History beyond retention is no longer known.
                     elif _instant(row["expires_at"]) <= datetime.now(UTC):
                         row["status"] = "missed"
                     result.append(copy.deepcopy(row))
@@ -403,6 +408,7 @@ class CalendarActions:
         desired: dict[
             str, tuple[dict[str, Any], dict[str, Any], CalendarEvent, EventOccurrence]
         ] = {}
+        seen: set[str] = set()
         changed = False
         for action_id, action in list(self._actions.items()):
             if action["event_id"] not in live and not self._calendar._invalid_event_entries:
@@ -423,6 +429,7 @@ class CalendarActions:
                 occurrences = self._calendar.event_occurrences(event, lower, edge)
                 for occurrence in occurrences:
                     key, row = self._execution(action, event, occurrence)
+                    seen.add(key)
                     due, expires = _instant(row["scheduled_at"]), _instant(row["expires_at"])
                     if due > now:
                         self._sleep_seconds = min(
@@ -452,7 +459,7 @@ class CalendarActions:
                 action["scanned_until"] = now.isoformat()
                 changed = True
         for key, row in list(self._executions.items()):
-            if row["status"] == "pending" and key not in desired and key not in self._workers:
+            if key not in self._workers and self._prunable(key, row, desired, seen, now):
                 del self._executions[key]
                 changed = True
         if changed:
@@ -469,6 +476,21 @@ class CalendarActions:
         if changed:
             # Invalidation must not withdraw our own pending work.
             self._calendar._notify_action_changed()
+
+    def _prunable(
+        self, key: str, row: dict[str, Any], desired: dict[str, Any], seen: set[str], now: datetime
+    ) -> bool:
+        if row["status"] == "pending":
+            return key not in desired
+        if row["action_id"] not in self._actions:
+            return True  # Action ids are never reused, so its history cannot refire.
+        # The scan recomputes every occurrence it still reaches; retaining those rows
+        # keeps them consumed. Expired rows it no longer reaches can never become due.
+        return (
+            row["status"] in _TERMINAL
+            and key not in seen
+            and _instant(row["expires_at"]) <= now - _RETENTION
+        )
 
     def _worker_done(self, key: str, task: asyncio.Task[None]) -> None:
         if self._workers.get(key) is task:

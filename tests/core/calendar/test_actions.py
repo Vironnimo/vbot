@@ -158,6 +158,44 @@ async def test_withdrawn_worker_is_redispatched_and_fires_once(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_finished_history_is_pruned_after_retention_without_refiring(tmp_path, monkeypatch):
+    service, event, trigger, now = setup(tmp_path)
+    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    await service.actions.tick(now)
+    await drain(service)
+    await service.actions.tick(now + timedelta(days=29))
+    assert [row["status"] for row in service.actions._executions.values()] == ["completed"]
+    later = now + timedelta(days=31)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return later
+
+    monkeypatch.setattr("core.calendar.actions.datetime", Clock)
+    for step in range(2):
+        await service.actions.tick(later + timedelta(minutes=step))
+    assert json.loads(service.actions._path.read_text(encoding="utf-8"))["executions"] == {}
+    assert trigger.trigger_run.await_count == 1
+    # Unknown history is omitted rather than reported as missed.
+    assert service.actions.project(window(service, now)) == []
+
+
+@pytest.mark.asyncio
+async def test_deleted_action_history_is_pruned(tmp_path):
+    service, event, trigger, now = setup(tmp_path)
+    action = service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    kept = service.actions.add(event.id, when="start - 45m", prompt="keep", target="main")
+    await service.actions.tick(now)
+    await drain(service)
+    service.actions.delete(action["id"])
+    await service.actions.tick(now + timedelta(seconds=1))
+    stored = json.loads(service.actions._path.read_text(encoding="utf-8"))["executions"]
+    assert [row["action_id"] for row in stored.values()] == [kept["id"]]
+    assert trigger.trigger_run.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_completed_single_action_rearms_only_after_event_moves(tmp_path):
     service, event, trigger, now = setup(tmp_path)
     service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
