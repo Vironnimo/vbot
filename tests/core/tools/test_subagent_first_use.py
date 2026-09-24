@@ -17,6 +17,9 @@ from core.tools.subagent import register_subagent_tools
 from core.tools.tools import ToolRegistry
 
 from .subagent_test_support import (
+    BACKGROUND_TASK_SETTLE_TICKS,
+    FakeAgentResolver,
+    FakeAgents,
     FakeRunManager,
     RecordingTriggerService,
     make_context,
@@ -94,6 +97,68 @@ async def test_omitted_action_continues_exact_owning_session(dispatch_runtime):
     assert result["data"]["session_id"] == session.id
     assert fixture.manager.started[0][:2] == ("worker", session.id)
     assert len(fixture.runtime.chat_sessions.list("worker")) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caller_agent,caller_project,target_argument,expected_agent_id",
+    [
+        # An Identity Agent delegates to a Project Agent.
+        ("parent", None, "builder@vbot", "builder@vbot"),
+        # A Project Agent delegates to a Team member of its own Project.
+        ("lead", "vbot", "builder", "builder@vbot"),
+        # A Project Agent delegates to a copy of itself.
+        ("lead", "vbot", None, "lead@vbot"),
+    ],
+)
+async def test_returned_agent_id_continues_the_exact_child_session(
+    dispatch_runtime, caller_agent, caller_project, target_argument, expected_agent_id
+):
+    """Copying the returned agent_id and session_id reaches the same child Session."""
+    fixture = dispatch_runtime
+    agents = FakeAgents({"parent", "lead", "builder"})
+    fixture.runtime.agents = agents
+    fixture.runtime.agent_resolver = FakeAgentResolver(agents)
+    context = make_context(agent_id=caller_agent, project_id=caller_project)
+    child_agent = expected_agent_id.split("@")[0]
+    arguments = {"content": BRIEF}
+    if target_argument is not None:
+        arguments["agent_id"] = target_argument
+
+    spawned = await fixture.registry.dispatch(context, arguments)
+    listed = await fixture.registry.dispatch(context, {"action": "status"})
+
+    assert spawned["ok"], spawned
+    child = spawned["data"]
+    assert child["agent_id"] == expected_agent_id
+    assert child["project_id"] == "vbot"
+    assert [entry["agent_id"] for entry in listed["data"]["subagents"]] == [expected_agent_id]
+    first_run = fixture.manager.started[0][3]
+    first_run.mark_completed(ChatMessage.assistant(model="fixture", content="first"))
+    for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
+        await asyncio.sleep(0)
+    assert len(fixture.triggers.calls) == 1
+    assert expected_agent_id in fixture.triggers.calls[0][1]
+
+    continued = await fixture.registry.dispatch(
+        context,
+        {"agent_id": child["agent_id"], "session_id": child["session_id"], "content": "Go on."},
+    )
+
+    assert continued["ok"], continued
+    assert continued["data"]["agent_id"] == expected_agent_id
+    assert continued["data"]["session_id"] == child["session_id"]
+    second_run = fixture.manager.started[1][3]
+    assert (second_run.agent_id, second_run.project_id, second_run.session_id) == (
+        child_agent,
+        "vbot",
+        child["session_id"],
+    )
+    assert fixture.runtime.agent_resolver.calls[-1][:2] == ("vbot", child_agent)
+    assert [
+        session.id for session in fixture.runtime.chat_sessions.list(child_agent, project_id="vbot")
+    ] == [child["session_id"]]
+    assert fixture.runtime.chat_sessions.list(child_agent) == []
 
 
 @pytest.mark.asyncio

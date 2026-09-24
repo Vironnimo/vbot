@@ -103,8 +103,13 @@ async def test_cancelled_background_child_notice_carries_resume_note(
         batch_tracker=tracker,
     )
 
+    emitted_events: list[tuple[str, JsonObject]] = []
     cancelled = await _handle_subagent(
-        make_context(run_id="parent-run-two", project_id="vbot"),
+        make_context(
+            run_id="parent-run-two",
+            project_id="vbot",
+            emit_hook=lambda event_type, payload: emitted_events.append((event_type, payload)),
+        ),
         {"action": "cancel", "id": spawned["data"]["id"]},
         runtime=runtime,
         batch_tracker=tracker,
@@ -112,6 +117,11 @@ async def test_cancelled_background_child_notice_carries_resume_note(
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
         await asyncio.sleep(0)
 
+    # The Agent receives the address it passes back; the event keeps bare ids.
+    assert cancelled["data"]["agent_id"] == "worker@vbot"
+    assert cancelled["data"]["project_id"] == "vbot"
+    event_data = emitted_events[-1][1]["data"]
+    assert (event_data["agent_id"], event_data["project_id"]) == ("worker", "vbot")
     note = cancelled["data"]["note"]
     assert "`worker@vbot`" in note
     assert f"`{spawned['data']['session_id']}`" in note

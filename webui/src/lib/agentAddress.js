@@ -22,6 +22,20 @@ export function formatAgentAddress(agentId, projectId) {
   return `${bareId}${AGENT_ADDRESS_SEPARATOR}${project}`;
 }
 
+// Return the outside address for an agent reference that may already be
+// qualified. A value that already carries `@projekt` stays unchanged, so it is
+// never qualified twice; a bare id is qualified with `projectId` when one is
+// set. Current Sub-Agent Tool results carry `agent@projekt` beside
+// `project_id`, while historical results carry the bare id beside it; both
+// resolve to the same address. Agent ids never contain `@`.
+export function qualifyAgentAddress(agentId, projectId) {
+  const value = typeof agentId === 'string' ? agentId.trim() : '';
+  if (!value || parseAgentAddress(value).projectId) {
+    return value;
+  }
+  return formatAgentAddress(value, projectId);
+}
+
 // Parse an outside `agent@projekt` address into `{ agentId, projectId }`.
 //
 // - No `@` → `{ agentId: address, projectId: null }` (identity address,
