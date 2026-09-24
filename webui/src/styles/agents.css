@@ -128,6 +128,20 @@
   white-space: nowrap;
 }
 
+.agents-view .agents-view__list-state {
+  margin: 0;
+  padding: 12px 16px;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  line-height: 1.4;
+}
+
+.agents-view .agent-list-pane__empty {
+  min-height: 220px;
+}
+
+/* ── Agent editor and Shared defaults pages ─────────────────────────────── */
+
 .agents-view .agent-detail-pane {
   display: flex;
   min-height: 0;
@@ -137,25 +151,42 @@
   overflow: hidden;
 }
 
+/* One scrollport per page. The page follows the shared section grammar
+   (sections.css): title, then `.s-section`s; spacing comes from the sections,
+   not from a flex gap. */
 .agents-view .agent-detail-scroll {
   display: flex;
   min-height: 0;
   min-width: 0;
   flex: 1;
   flex-direction: column;
-  gap: 22px;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 26px 30px;
   scrollbar-gutter: stable;
 }
 
-/* Cap the detail content to the wide content measure and center it; the scroll
-   container itself stays full-width so the scrollbar stays at the pane edge. */
+/* Center the content; the scroll container stays full-width so the scrollbar
+   stays at the pane edge. The measure comes from management.css. */
 .agents-view .agent-detail-scroll > * {
   width: 100%;
-  max-width: var(--content-max-wide);
   margin-inline: auto;
+}
+
+.agents-view .agent-detail-scroll > .management-header,
+.agents-view .agent-detail-scroll > .banner {
+  margin-bottom: 28px;
+}
+
+/* Each editor panel renders one or more sections; consecutive panels keep
+   the section rhythm. */
+.agents-view .agents-view__part + .agents-view__part {
+  margin-top: 44px;
+}
+
+.agents-view .agent-detail-footer {
+  margin-top: 28px;
+  padding-bottom: 4px;
 }
 
 .agents-view .detail-top {
@@ -181,19 +212,6 @@
   font-size: var(--fs-mono-sm);
 }
 
-.agents-view .detail-btns {
-  display: flex;
-  flex-shrink: 0;
-  gap: 8px;
-}
-
-.agents-view .agent-detail-footer {
-  display: flex;
-  flex-shrink: 0;
-  justify-content: flex-end;
-  padding: 0 0 4px;
-}
-
 .agents-view .agents-view__create-modal {
   width: min(520px, 90vw);
 }
@@ -202,228 +220,162 @@
   gap: 14px;
 }
 
-.agents-view .detail-group {
-  flex-shrink: 0;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  background: var(--surface);
+/* ── Rows ───────────────────────────────────────────────────────────────── */
+
+/* Validation message under a row's description; the control carries
+   aria-invalid and points here with aria-describedby. */
+.agents-view .agents-view__row-error {
+  margin: 4px 0 0;
+  color: var(--red);
+  font-size: var(--fs-body-sm);
+  line-height: 1.4;
 }
 
-.agents-view .agents-view__model-group,
-.agents-view .agents-view__prompt-group,
-.agents-view .agents-view__memory-group,
-.agents-view .agents-view__model-fields {
-  position: relative;
-}
-
-.agents-view .agents-view__model-group,
-.agents-view .agents-view__prompt-group,
-.agents-view .agents-view__memory-group {
-  overflow: visible;
-}
-
-.agents-view .detail-group-title {
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
-  border-radius: var(--r-lg) var(--r-lg) 0 0;
-  background: var(--surface);
-}
-
-.agents-view .detail-fields {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-  padding: 16px;
-}
-
-.agents-view .f {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.agents-view .f.wide {
-  grid-column: 1 / -1;
-}
-
-.agents-view .f-label {
-  color: var(--text-lo);
+/* A quiet jump link under a row's description (the Agent's prompt, the
+   Shared defaults). */
+.agents-view .agents-view__row-link {
+  min-height: 0;
+  margin: 4px 0 0 -8px;
+  padding: 2px 8px;
   font-size: var(--fs-label-sm);
-  font-weight: 500;
-  line-height: 1.2;
 }
 
-.agents-view .f-value {
-  color: var(--text-hi);
-  font-size: var(--fs-body-md);
-  font-weight: 500;
-}
-
-.agents-view .f-value.mono {
+.agents-view .agents-view__inherit-hint {
   color: var(--text-med);
+}
+
+.agents-view .agents-view__dropdown {
+  width: 100%;
+}
+
+.agents-view .agents-view__thinking-list {
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+/* Temperature keeps the shared number width; the reset action sits in front
+   of the input instead of widening the column. */
+.agents-view .s-group__rows > .s-row > .agents-view__temperature-control {
+  width: auto;
+  justify-self: end;
+  gap: 6px;
+}
+
+.agents-view .agents-view__temperature-control > .s-input {
+  width: var(--s-number-width);
+}
+
+.agents-view .agents-view__reset-inherit {
+  flex-shrink: 0;
+  padding: 4px 10px;
+}
+
+.agents-view .s-group__rows > .agents-view__fallback-models {
+  align-items: start;
+}
+
+/* Fallback chains (the Agent's and the Shared defaults) stack their entries in
+   the control column. */
+.agents-view .agents-view__fallback-list,
+.agents-view .agent-defaults-fallbacks {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.agents-view .agents-view__fallback-row,
+.agents-view .agent-defaults-fallbacks .settings-view__fallback-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.agents-view .agents-view__fallback-row > .searchable-dropdown {
+  min-width: 0;
+  flex: 1;
+}
+
+.agents-view .agents-view__fallback-remove,
+.agents-view .agents-view__fallback-add {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text-med);
+  background: transparent;
+  cursor: pointer;
+}
+
+/* The remove button carries only the × glyph, so its size stays literal. */
+.agents-view .agents-view__fallback-remove {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.agents-view .agents-view__fallback-remove:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.agents-view .agents-view__fallback-add,
+.agents-view .agent-defaults-fallbacks .settings-view__fallback-add {
+  align-self: flex-end;
+  padding: 5px 10px;
+  font-size: var(--fs-body-sm);
+  white-space: nowrap;
+}
+
+.agents-view .agents-view__fallback-add:hover {
+  border-color: var(--border-2);
+  color: var(--text-hi);
+  background: var(--surface-3);
+}
+
+/* An input with its action (Change ID, Set to default) on one line. */
+.agents-view .agents-view__field-with-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agents-view .agents-view__field-with-action > .s-input {
+  min-width: 0;
+  flex: 1;
+}
+
+.agents-view .agents-view__meta-value {
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.agents-view .agents-view__meta-value--mono {
   font-family: var(--font-mono);
   font-size: var(--fs-mono-xs);
 }
 
-.agents-view .tl-section {
+/* ── Memory entries (inside the Memory group) ───────────────────────────── */
+
+.agents-view .s-group > .agents-view__memory-manager {
   display: flex;
   flex-direction: column;
+  padding: 0;
 }
 
-.agents-view .tl-section + .tl-section {
-  border-top: 1px solid var(--border);
-}
-
-.agents-view .tl-section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 16px 8px;
-}
-
-.agents-view .agents-view__tool-access-content {
-  padding: 0 16px 16px;
-}
-
-/* Skill names are identifiers. */
-.agents-view .tl-item-name {
-  color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-sm);
-}
-
-.agents-view .agents-view__prompt-toggle-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px 16px;
-}
-
-.agents-view .agents-view__prompt-memory-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
-  align-items: center;
-  gap: 12px;
-  padding: 14px 16px 4px;
-}
-
-.agents-view .agents-view__prompt-toggle-controls {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 10px;
-}
-
-.agents-view .agents-view__prompt-toggle-label {
-  min-width: 0;
-  color: var(--text-med);
-  font-size: var(--fs-body-sm);
-  font-weight: 500;
-}
-
-.agents-view .agents-view__prompt-toggle {
-  flex-shrink: 0;
-}
-
-.agents-view .agents-view__memory-dropdown {
-  width: 100%;
-}
-
-.agents-view .agents-view__memory-disclosure {
-  margin-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
-.agents-view .agents-view__access-group-label {
-  margin: 0;
-  padding: 8px 16px;
-  color: var(--text-hi);
-  font-size: var(--fs-label-md);
-}
-
-.agents-view .agents-view__project-targets {
-  margin: 0 16px 14px;
-  border-top: 1px solid var(--border);
-}
-
-.agents-view .agents-view__access-group-toggle {
-  display: flex;
-  width: 100%;
-  justify-content: flex-start;
-  flex-wrap: wrap;
-  gap: var(--space-sm);
-  min-height: 40px;
-  padding: 8px;
-  color: var(--text-hi);
-  font-family: var(--font-ui);
-  font-size: var(--fs-label-md);
-  text-align: left;
-}
-
-.agents-view .agents-view__access-group-count {
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  font-variant-numeric: tabular-nums;
-}
-
-.agents-view #agent-project-targets {
-  border-left: 2px solid var(--border-2);
-}
-
-.agents-view .agents-view__memory-disclosure-toggle {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  justify-content: flex-start;
-  gap: var(--space-sm);
-  padding: 10px 16px;
-  border: 0;
-  border-radius: 0 0 var(--r-lg) var(--r-lg);
-  color: var(--text-med);
-  font-family: var(--font-ui);
-  font-size: var(--fs-label-md);
-  text-align: left;
-}
-
-.agents-view .agents-view__memory-total {
-  margin-left: auto;
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  font-variant-numeric: tabular-nums;
-}
-
-.agents-view .agents-view__memory-manager {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-md);
-  padding: 4px 16px 16px;
-}
-
-.agents-view .agents-view__memory-scopes {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-md);
+.agents-view .agents-view__memory-manager > .banner {
+  margin: 14px 18px 0;
 }
 
 .agents-view .agents-view__memory-scope {
-  display: flex;
   min-width: 0;
-  flex-direction: column;
-  overflow: hidden;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-md);
-  background: var(--surface-2);
-  transition:
-    border-color 160ms ease,
-    background 160ms ease;
+  padding: 14px 18px 16px 33px;
 }
 
-.agents-view .agents-view__memory-scope--inactive {
-  border-color: var(--border);
-  background: var(--surface);
+.agents-view .agents-view__memory-scope + .agents-view__memory-scope {
+  border-top: 1px solid var(--border);
 }
 
 .agents-view .agents-view__memory-scope-header {
@@ -431,8 +383,6 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-md);
-  padding: var(--space-md);
-  border-bottom: 1px solid var(--border);
 }
 
 .agents-view .agents-view__memory-scope-copy {
@@ -456,23 +406,18 @@
   gap: var(--space-sm);
 }
 
-.agents-view .agents-view__memory-scope-title-row h3,
-.agents-view .agents-view__memory-scope-copy p,
-.agents-view .agents-view__memory-entry-content {
+.agents-view .agents-view__memory-scope-title-row h4 {
   margin: 0;
-}
-
-.agents-view .agents-view__memory-scope-title-row h3 {
   color: var(--text-hi);
-  font-size: var(--fs-label-md);
-  font-weight: 600;
+  font: 600 var(--fs-body-md) / 1.4 var(--font-ui);
 }
 
 .agents-view .agents-view__memory-scope-copy p {
-  margin-top: var(--space-xs);
-  color: var(--text-med);
+  max-width: 66ch;
+  margin: 2px 0 0;
+  color: var(--text-lo);
   font-size: var(--fs-body-sm);
-  line-height: 1.4;
+  line-height: 1.5;
 }
 
 .agents-view .agents-view__memory-count {
@@ -484,13 +429,13 @@
 }
 
 .agents-view .agents-view__memory-empty {
-  margin: var(--space-md);
+  margin: 10px 0 0;
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
 }
 
 .agents-view .agents-view__memory-list {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
+  margin: 10px 0 0;
   padding: 0;
   list-style: none;
   transition: opacity 160ms ease;
@@ -498,29 +443,26 @@
 
 .agents-view .agents-view__memory-entry {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) auto;
-  align-items: start;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: baseline;
   gap: 10px;
-  padding: 12px var(--space-md);
-  border-bottom: 1px solid var(--border);
+  padding: 8px 0;
+}
+
+.agents-view .agents-view__memory-entry + .agents-view__memory-entry {
+  border-top: 1px solid var(--border);
 }
 
 .agents-view .agents-view__memory-entry-id {
-  display: flex;
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
   color: var(--text-lo);
   font-family: var(--font-mono);
   font-size: var(--fs-mono-xs);
+  font-variant-numeric: tabular-nums;
 }
 
 .agents-view .agents-view__memory-entry-content {
+  margin: 0;
   overflow-wrap: anywhere;
-  padding-top: var(--space-xs);
   color: var(--text-hi);
   font-size: var(--fs-body-sm);
   line-height: 1.5;
@@ -530,7 +472,11 @@
   display: flex;
   flex-shrink: 0;
   justify-content: flex-end;
-  gap: 6px;
+  gap: 4px;
+}
+
+.agents-view .agents-view__memory-delete:hover:not(:disabled) {
+  color: var(--red);
 }
 
 .agents-view .agents-view__memory-entry-editor {
@@ -551,8 +497,7 @@
   display: flex;
   align-items: flex-end;
   gap: var(--space-sm);
-  margin-top: auto;
-  padding: var(--space-md);
+  margin-top: 12px;
 }
 
 .agents-view .agents-view__memory-add .text-area {
@@ -560,71 +505,46 @@
   flex: 1;
 }
 
-.agents-view .agents-view__memory-add .btn-secondary {
+.agents-view .agents-view__memory-add > .btn-secondary {
   flex-shrink: 0;
 }
 
-.agents-view .agents-view__access-copy {
+/* ── Skills and Sub-Agent targets ───────────────────────────────────────── */
+
+/* One filter per section, above its groups. */
+.agents-view .agents-view__filter-toolbar {
+  justify-content: flex-end;
+}
+
+.agents-view .agents-view__filter {
+  flex: 1 1 180px;
+  max-width: 260px;
+}
+
+/* Allow-lists are shared Checkbox groups (styles/settings/sections.css); a
+   collapsible group's title and count form its disclosure button. */
+.agents-view .agents-selection__toggle {
   display: flex;
   min-width: 0;
+  min-height: 28px;
   flex: 1;
-  flex-direction: column;
-  gap: 3px;
+  align-items: center;
+  padding: 0;
+  border-radius: var(--r-sm);
+  color: inherit;
+  background: transparent;
+  text-align: left;
 }
 
-/* Routine warnings carry a thin amber marker and amber text, not a tinted
-   box. */
-.agents-view .agents-view__skill-warnings {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: 3px;
-  padding: 2px 0 2px 9px;
-  border-left: 2px solid var(--amber);
-  color: var(--amber);
-  font-size: var(--fs-label-sm);
-  line-height: 1.35;
+.agents-view .agents-selection__toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
-.agents-view .agents-view__skill-warnings ul {
-  margin: 0;
-  padding-left: 16px;
-}
-
-.agents-view .agents-view__warning-label,
-.agents-view .agents-view__invalid-skills-title {
-  font-size: var(--fs-label-sm);
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.agents-view .agents-view__invalid-skills {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 16px 14px;
-  border-top: 1px solid var(--border);
-}
-
-.agents-view .agents-view__invalid-skills-title {
-  color: var(--text-lo);
-}
-
-.agents-view .agents-view__invalid-skills-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.agents-view .agents-view__invalid-skill {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 9px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface-2);
+.agents-view .agents-view__invalid-skill-name {
+  overflow-wrap: anywhere;
+  color: var(--text-hi);
+  font: var(--fs-mono-sm) / 1.5 var(--font-mono);
 }
 
 .agents-view .agents-view__invalid-skill-path {
@@ -635,144 +555,71 @@
   line-height: 1.35;
 }
 
-.agents-view .agents-view__dropdown {
-  width: 100%;
-}
-
-.agents-view .agents-view__fallback-row {
+/* Routine warnings carry a thin amber marker and amber text, not a tinted
+   box. */
+.agents-view .agents-view__skill-warnings {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding: 2px 0 2px 9px;
+  border-left: 2px solid var(--amber);
+  color: var(--amber);
+  font-size: var(--fs-label-sm);
+  line-height: 1.35;
+  list-style: none;
 }
 
-.agents-view .agents-view__fallback-row .agents-view__dropdown {
-  flex: 1;
+.agents-view .agents-view__catalog-error {
+  margin: 0;
+  color: var(--amber);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
 }
 
-.agents-view .agents-view__fallback-remove,
-.agents-view .agents-view__fallback-add {
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-med);
-  border-radius: var(--r-md);
+/* ── Workspace & advanced ───────────────────────────────────────────────── */
+
+.agents-view .agents-view__advanced-summary {
+  gap: 0;
+  border-radius: var(--r-sm);
+  list-style: none;
   cursor: pointer;
 }
 
-/* The remove button carries only the × glyph, so its size stays literal. */
-.agents-view .agents-view__fallback-remove {
-  flex: none;
-  width: 28px;
-  height: 28px;
-  font-size: 14px;
-  line-height: 1;
+.agents-view .agents-view__advanced-summary::-webkit-details-marker {
+  display: none;
 }
 
-.agents-view .agents-view__fallback-remove:hover {
-  color: var(--red);
-  border-color: var(--red);
-}
-
-.agents-view .agents-view__fallback-add {
-  padding: 5px 10px;
-  font-size: var(--fs-body-sm);
-}
-
-.agents-view .agents-view__fallback-add:hover {
+.agents-view .agents-view__advanced-summary:hover .disclosure-chevron {
   color: var(--text-hi);
-  border-color: var(--border-2);
-  background: var(--surface-3);
 }
 
-.agents-view .agents-view__thinking-list {
-  max-height: 280px;
-  overflow-y: auto;
+.agents-view .agents-view__advanced-summary:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
-.agents-view .agents-view__placeholder-row,
-.agents-view .agents-view__list-state {
-  margin: 0;
-  color: var(--text-med);
-  font-size: var(--fs-body-sm);
-  line-height: 1.4;
+/* ── Shared defaults ────────────────────────────────────────────────────── */
+
+.agents-view .agent-shared-scope {
+  max-width: 65ch;
+  margin: 6px 0 0;
+  color: var(--text-lo);
+  font-size: var(--fs-body-md);
+  line-height: 1.6;
 }
 
-.agents-view .agents-view__placeholder-row,
-.agents-view .agents-view__list-state {
-  padding: 12px 16px;
-  color: var(--text-med);
-}
-
-.agents-view .agent-list-pane__empty {
-  min-height: 220px;
-}
-
-.agents-view .agents-view__wrap-value {
-  overflow-wrap: anywhere;
-}
-
-/* The subtle jump link to Settings → Agent defaults / the agent's prompt scope,
-   sized down to sit beside a field without competing with it. */
-/* Card title rows that carry a trailing action (e.g. the Model card's single
-   "Edit global defaults" link) keep the standard title look but align the
-   action to the right edge. */
-.agents-view .agents-view__group-title-row {
+/* Quiet jump links; their text lines up with the heading. */
+.agents-view .management-header > .agent-shared-jumps {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.agents-view .agents-view__inherit-link {
-  align-self: flex-start;
-  padding: 2px 8px;
-  font-size: var(--fs-label-sm);
-}
-
-.agents-view .agents-view__inherit-hint {
-  color: var(--text-med);
-}
-
-/* Temperature input + its reset-to-inherit affordance on one row. */
-.agents-view .agents-view__temperature-input {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.agents-view .agents-view__temperature-input > :first-child {
-  flex: 1;
-  min-width: 0;
-}
-
-.agents-view .agents-view__reset-inherit {
-  flex-shrink: 0;
-  padding: 4px 10px;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 12px 0 0 -10px;
 }
 
 @media (max-width: 960px) {
   .agents-view .detail-top {
     flex-direction: column;
-  }
-
-  .agents-view .agent-detail-scroll {
-    padding: 22px 18px;
-  }
-
-  .agents-view .detail-fields {
-    grid-template-columns: 1fr;
-  }
-
-  .agents-view .agents-view__prompt-memory-row {
-    grid-template-columns: 1fr;
-  }
-
-  .agents-view .agents-view__memory-scopes {
-    grid-template-columns: 1fr;
-  }
-
-  .agents-view .detail-btns {
-    flex-wrap: wrap;
   }
 }
 
@@ -785,8 +632,25 @@
     max-height: min(220px, 32vh);
   }
 
+  .agents-view .s-group__rows > .s-row > .agents-view__temperature-control {
+    justify-self: start;
+  }
+
+  .agents-view .agents-view__fallback-add,
+  .agents-view .agent-defaults-fallbacks .settings-view__fallback-add {
+    align-self: flex-start;
+  }
+
+  .agents-view .agents-view__memory-scope {
+    padding: 14px 14px 16px 29px;
+  }
+
+  .agents-view .agents-view__memory-manager > .banner {
+    margin: 14px 14px 0;
+  }
+
   .agents-view .agents-view__memory-entry {
-    grid-template-columns: 28px minmax(0, 1fr);
+    grid-template-columns: 24px minmax(0, 1fr);
   }
 
   .agents-view .agents-view__memory-entry-actions,
@@ -798,10 +662,13 @@
     align-items: stretch;
     flex-direction: column;
   }
+
+  .agents-view .agents-view__filter {
+    max-width: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agents-view .agents-view__memory-scope,
   .agents-view .agents-view__memory-scope-copy,
   .agents-view .agents-view__memory-list {
     transition: none;

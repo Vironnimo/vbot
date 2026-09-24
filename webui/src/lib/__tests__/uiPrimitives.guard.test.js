@@ -438,19 +438,34 @@ describe('UI primitive guard', () => {
     expect(violations).toEqual([]);
   });
 
-  it('bans raw checkbox inputs — boolean toggles use Toggle.svelte', () => {
-    // Every boolean on/off control is the shared Toggle (role="switch") button.
-    // A raw `<input type="checkbox">` would bypass the primitive, so this scan
-    // fails the build if one reappears.
-    const RAW_CHECKBOX = /type\s*=\s*"checkbox"/;
+  it('bans raw checkboxes — use Toggle.svelte or Checkbox.svelte', () => {
+    // A single on/off setting is the shared Toggle (role="switch") button; a
+    // selection within a list is the shared Checkbox (role="checkbox")
+    // button. A raw `<input type="checkbox">` or a hand-built checkbox role
+    // would bypass both primitives, so this scan fails if one reappears.
+    const RAW_CHECKBOX = /type\s*=\s*"checkbox"|role\s*=\s*"checkbox"/;
     const violations = [];
 
     for (const filePath of SVELTE_FILES) {
       const relativePath = relative(SRC_DIR, filePath);
+      if (relativePath.split(sep).join('/') === 'components/ui/Checkbox.svelte')
+        continue;
       if (RAW_CHECKBOX.test(readFileSync(filePath, 'utf8'))) {
-        violations.push(`${relativePath}: <input type="checkbox">`);
+        violations.push(`${relativePath}: raw checkbox`);
       }
     }
+
+    expect(violations).toEqual([]);
+  });
+
+  it('routes every list checkbox through components/ui/Checkbox.svelte', () => {
+    const forbidden = new Set(['checkbox', 'checkbox__box']);
+
+    const violations = findRawClassViolations(
+      ANY_ELEMENT,
+      forbidden,
+      'components/ui/Checkbox.svelte',
+    );
 
     expect(violations).toEqual([]);
   });

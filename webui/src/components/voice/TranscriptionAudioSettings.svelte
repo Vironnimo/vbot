@@ -14,7 +14,14 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { updateSettings } from '$lib/api.js';
-  let { settings, onCommit, onError } = $props();
+  let {
+    settings,
+    onCommit,
+    onError,
+    // Receives the latest save outcome for the caller's section save state:
+    // 'idle', 'saving', 'saved' (and nothing pending) or 'error'.
+    onSaveStatusChange = () => {},
+  } = $props();
 
   let transcriptionAudio = $state(
     untrack(() => normalizeTranscriptionAudio(settings)),
@@ -143,89 +150,91 @@
     };
     void saveTranscriptionAudio();
   }
+  let saveStatus = $derived(
+    transcriptionSaveState === 'saved' && transcriptionAudioHasChanges()
+      ? 'idle'
+      : transcriptionSaveState,
+  );
+  $effect(() => {
+    onSaveStatusChange(saveStatus);
+  });
   onDestroy(unregisterAudioAutosave);
 </script>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.voice.transcriptionProfile', 'Transcription audio')}
+<!-- One group: the profile row and the two values it controls (editable with
+     the Custom profile). -->
+<div class="s-group">
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.voice.transcriptionProfile', 'Transcription audio')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.voice.transcriptionProfileDescription',
+          'The audio sent to the Speech-to-text Model from both the Chat microphone and a command recorded after a wake phrase. Local wakeword detection keeps its optimized 16 kHz stream.',
+        )}
+      </div>
     </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.voice.transcriptionProfileDescription',
-        'The audio sent to the Speech-to-text Model from both the Chat microphone and a command recorded after a wake phrase. Local wakeword detection keeps its optimized 16 kHz stream.',
-      )}
+    <div class="s-row-control">
+      <Dropdown
+        value={transcriptionAudio.profile}
+        options={transcriptionProfileOptions}
+        ariaLabel={t(
+          'settings.voice.transcriptionProfile',
+          'Transcription audio',
+        )}
+        onValueChange={handleTranscriptionProfileChange}
+        disabled={transcriptionSaveState === 'saving'}
+      />
     </div>
   </div>
-  <div class="s-row-control">
-    <Dropdown
-      value={transcriptionAudio.profile}
-      options={transcriptionProfileOptions}
-      ariaLabel={t(
-        'settings.voice.transcriptionProfile',
-        'Transcription audio',
-      )}
-      onValueChange={handleTranscriptionProfileChange}
-      disabled={transcriptionSaveState === 'saving'}
-    />
-  </div>
-</div>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.voice.transcriptionFormat', 'Format')}
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.voice.transcriptionFormat', 'Format')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.voice.transcriptionFormatDescription',
+          'Mono, signed 16-bit audio. WAV has the broadest Provider support; FLAC is lossless and smaller.',
+        )}
+      </div>
     </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.voice.transcriptionFormatDescription',
-        'Mono, signed 16-bit audio. WAV has the broadest Provider support; FLAC is lossless and smaller.',
-      )}
+    <div class="s-row-control">
+      <Dropdown
+        value={transcriptionAudio.format}
+        options={transcriptionFormatOptions}
+        ariaLabel={t('settings.voice.transcriptionFormat', 'Format')}
+        onValueChange={handleTranscriptionFormatChange}
+        disabled={transcriptionAudio.profile !== 'custom' ||
+          transcriptionSaveState === 'saving'}
+      />
     </div>
   </div>
-  <div class="s-row-control">
-    <Dropdown
-      value={transcriptionAudio.format}
-      options={transcriptionFormatOptions}
-      ariaLabel={t('settings.voice.transcriptionFormat', 'Format')}
-      onValueChange={handleTranscriptionFormatChange}
-      disabled={transcriptionAudio.profile !== 'custom' ||
-        transcriptionSaveState === 'saving'}
-    />
-  </div>
-</div>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.voice.transcriptionSampleRate', 'Sample rate')}
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.voice.transcriptionSampleRate', 'Sample rate')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.voice.transcriptionSampleRateDescription',
+          '16 kHz is the speech-focused default. Higher rates retain more source detail but create larger uploads.',
+        )}
+      </div>
     </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.voice.transcriptionSampleRateDescription',
-        '16 kHz is the speech-focused default. Higher rates retain more source detail but create larger uploads.',
-      )}
+    <div class="s-row-control">
+      <Dropdown
+        value={String(transcriptionAudio.sample_rate_hz)}
+        options={transcriptionSampleRateOptions}
+        ariaLabel={t('settings.voice.transcriptionSampleRate', 'Sample rate')}
+        onValueChange={handleTranscriptionSampleRateChange}
+        disabled={transcriptionAudio.profile !== 'custom' ||
+          transcriptionSaveState === 'saving'}
+      />
     </div>
   </div>
-  <div class="s-row-control">
-    <Dropdown
-      value={String(transcriptionAudio.sample_rate_hz)}
-      options={transcriptionSampleRateOptions}
-      ariaLabel={t('settings.voice.transcriptionSampleRate', 'Sample rate')}
-      onValueChange={handleTranscriptionSampleRateChange}
-      disabled={transcriptionAudio.profile !== 'custom' ||
-        transcriptionSaveState === 'saving'}
-    />
-  </div>
-</div>
-
-<div class="voice-save-state" aria-live="polite">
-  {#if transcriptionSaveState === 'saving'}
-    {t('common.saving', 'Saving…')}
-  {:else if transcriptionSaveState === 'saved' && !transcriptionAudioHasChanges()}
-    {t('common.saved', 'Saved')}
-  {:else if transcriptionSaveState === 'error'}
-    {t('common.saveFailed', 'Not saved')}
-  {/if}
 </div>

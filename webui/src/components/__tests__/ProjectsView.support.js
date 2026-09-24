@@ -130,11 +130,11 @@ function optionByText(text) {
   );
 }
 
-// The ordered detail-section titles must appear in the given sequence. The
+// The ordered section titles must appear in the given sequence. The
 // InfoHint "?" dot inside a title is presentation, not part of the title text.
 function expectSectionOrder(titles) {
   const rendered = Array.from(
-    document.querySelectorAll('.detail-section-title'),
+    document.querySelectorAll('.s-section__title'),
   ).map((node) => {
     const clone = node.cloneNode(true);
     clone.querySelectorAll('.info-hint').forEach((dot) => dot.remove());

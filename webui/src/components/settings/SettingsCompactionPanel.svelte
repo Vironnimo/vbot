@@ -154,14 +154,17 @@
   }
 </script>
 
-<CompactionPolicyEditor
-  value={policy}
-  onChange={update}
-  idPrefix="settings-compaction"
-  {summaryModelOptions}
-  {summaryModelSelectValue}
-  onSummaryModelSelect={selectSummaryModel}
-/>
+<div class="s-group">
+  <CompactionPolicyEditor
+    layout="rows"
+    value={policy}
+    onChange={update}
+    idPrefix="settings-compaction"
+    {summaryModelOptions}
+    {summaryModelSelectValue}
+    onSummaryModelSelect={selectSummaryModel}
+  />
+</div>
 
 <div class="s-footer">
   <SaveButton

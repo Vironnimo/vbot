@@ -542,20 +542,21 @@
       </div>
     {/if}
   </div>
-</div>
 
-{#if calibrationDiscardConfirm}
-  <ConfirmDialog
-    title={t(
-      'settings.voice.calibrationDiscardConfirmTitle',
-      'Discard calibration?',
-    )}
-    body={t(
-      'settings.voice.calibrationDiscardConfirm',
-      'All measurements will be discarded. You will need to start calibration again from the beginning.',
-    )}
-    confirmLabel={t('settings.voice.calibrationDiscard', 'Discard and stop')}
-    onConfirm={handleDiscardCalibration}
-    onCancel={() => (calibrationDiscardConfirm = false)}
-  />
-{/if}
+  <!-- Inside the row so the section's group sees a single child. -->
+  {#if calibrationDiscardConfirm}
+    <ConfirmDialog
+      title={t(
+        'settings.voice.calibrationDiscardConfirmTitle',
+        'Discard calibration?',
+      )}
+      body={t(
+        'settings.voice.calibrationDiscardConfirm',
+        'All measurements will be discarded. You will need to start calibration again from the beginning.',
+      )}
+      confirmLabel={t('settings.voice.calibrationDiscard', 'Discard and stop')}
+      onConfirm={handleDiscardCalibration}
+      onCancel={() => (calibrationDiscardConfirm = false)}
+    />
+  {/if}
+</div>

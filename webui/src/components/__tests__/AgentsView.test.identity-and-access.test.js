@@ -280,6 +280,56 @@ describe('AgentsView', () => {
     });
   });
 
+  it('starts an Agent Compaction Policy from the effective policy and edits it as rows', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [
+          {
+            ...baseAgent(),
+            compaction_policy: null,
+            effective_compaction_policy: {
+              enabled: true,
+              trigger: { type: 'context_ratio', threshold: 0.7 },
+              strategy: { type: 'continuation' },
+            },
+          },
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+    await waitForText('Custom compaction policy');
+
+    const group = document.querySelector('.agents-view__compaction-group');
+    expect(group.querySelector('[data-testid="agent-compaction-editor"]')).toBe(
+      null,
+    );
+    vi.useFakeTimers();
+    getButtonByAriaLabel('Use an Agent Policy').click();
+    flushSync();
+
+    const editor = group.querySelector(
+      '[data-testid="agent-compaction-editor"]',
+    );
+    expect(editor.classList.contains('s-row')).toBe(true);
+    expect(
+      group.querySelector('input[name="agent-compaction-strategy"]:checked')
+        .value,
+    ).toBe('continuation');
+    await vi.advanceTimersByTimeAsync(800);
+    await flushAsyncUpdates();
+    expect(getAgentUpdateCalls()).toHaveLength(1);
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      id: 'alpha',
+      compaction_policy: {
+        enabled: true,
+        trigger: { type: 'context_ratio', threshold: 0.7 },
+        strategy: { type: 'continuation' },
+      },
+    });
+  });
+
   it('auto-saves tool access changes', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
@@ -367,7 +417,7 @@ describe('AgentsView', () => {
     flushSync();
     const panel = document.querySelector('#agent-detail-panel-access');
     expect(panel.hidden).toBe(false);
-    const sections = Array.from(panel.querySelectorAll('.tl-section'));
+    const sections = Array.from(panel.querySelectorAll(':scope > .s-section'));
     expect(sections).toHaveLength(3);
     expect(sections[0].contains(toolAccessToggle('subagent'))).toBe(true);
     expect(
@@ -392,34 +442,38 @@ describe('AgentsView', () => {
     );
 
     mountedComponent = mount(AgentsView, { target: document.body });
-    await waitForCondition(
-      () => document.body.querySelectorAll('.tl-section').length === 2,
-      100,
-    );
+    const accessSections = () =>
+      document.body.querySelectorAll('#agent-detail-panel-access > .s-section');
+    await waitForCondition(() => accessSections().length === 2, 100);
 
-    expect(document.body.querySelectorAll('.tl-section')).toHaveLength(2);
+    expect(accessSections()).toHaveLength(2);
+    expect(document.body.textContent).not.toContain('Sub-Agent targets');
   });
 
   it.each([
-    ['identity', 'Deselect all', ['*'], ['builder@vbot', 'builder@demo']],
-    ['project', 'Deselect all', ['*'], ['worker', 'helper']],
+    ['identity', ['*'], 'true', 1, ['builder@vbot', 'builder@demo']],
+    ['project', ['*'], 'true', 1, ['worker', 'helper']],
     [
       'identity',
-      'Select all',
       ['builder@vbot'],
+      'false',
+      1,
       ['builder@vbot', 'worker', 'helper'],
     ],
     [
       'project',
-      'Select all',
       ['worker'],
+      'false',
+      1,
       ['worker', 'builder@vbot', 'builder@demo'],
     ],
-    ['identity', 'Deselect all', ['worker', 'builder@vbot'], ['builder@vbot']],
-    ['project', 'Deselect all', ['worker', 'builder@vbot'], ['worker']],
+    // A mixed group checkbox selects the whole group first; a second click
+    // clears it.
+    ['identity', ['worker', 'builder@vbot'], 'mixed', 2, ['builder@vbot']],
+    ['project', ['worker', 'builder@vbot'], 'mixed', 2, ['worker']],
   ])(
-    'sets %s Agents %s while preserving the other group (%j)',
-    async (group, action, allowed, expected) => {
+    'sets %s Agents with the group checkbox while preserving the other group (%j)',
+    async (group, allowed, initialState, clicks, expected) => {
       rpcMock.mockImplementation(
         createAgentsRpcMock(agentGroupsFixture(allowed)),
       );
@@ -427,18 +481,15 @@ describe('AgentsView', () => {
       await waitForText('builder@demo');
       flushSync();
       vi.useFakeTimers();
-      if (group === 'project') {
-        document.getElementById('agent-project-targets-toggle').click();
+      const groupCheckbox = getButtonByAriaLabel(
+        group === 'identity' ? 'All Identity Agents' : 'All Project Agents',
+      );
+      expect(groupCheckbox.getAttribute('role')).toBe('checkbox');
+      expect(groupCheckbox.getAttribute('aria-checked')).toBe(initialState);
+      for (let click = 0; click < clicks; click += 1) {
+        groupCheckbox.click();
         flushSync();
       }
-      const section =
-        group === 'identity'
-          ? document.querySelector(
-              'section[aria-labelledby="agent-identity-targets-label"]',
-            )
-          : document.getElementById('agent-project-targets');
-      getButtonWithin(section, action).click();
-      flushSync();
       await vi.advanceTimersByTimeAsync(800);
       await flushAsyncUpdates();
       expect(getAgentUpdateCalls()).toHaveLength(1);
@@ -461,7 +512,7 @@ describe('AgentsView', () => {
     const disclosure = document.getElementById('agent-project-targets-toggle');
     const content = document.getElementById('agent-project-targets');
     expect(disclosure.getAttribute('aria-expanded')).toBe('false');
-    expect(disclosure.textContent).toContain('(1/2)');
+    expect(disclosure.textContent).toContain('1/2');
     expect(content.hidden).toBe(true);
     expect(
       document
@@ -474,20 +525,23 @@ describe('AgentsView', () => {
     disclosure.click();
     flushSync();
     expect(content.hidden).toBe(false);
-    const search = content.querySelector('input');
+    const search = document.querySelector(
+      '#agent-detail-panel-access input[type="search"][aria-label="Filter Agents"]',
+    );
+    expect(content.contains(search)).toBe(false);
     search.value = 'demo';
     search.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
-    expect(content.querySelectorAll('[role="switch"]')).toHaveLength(1);
-    expect(disclosure.textContent).toContain('(1/2)');
+    expect(content.querySelectorAll('[role="checkbox"]')).toHaveLength(1);
+    expect(disclosure.textContent).toContain('1/2');
     vi.useFakeTimers();
     getButtonByAriaLabel('Toggle agent builder@demo').click();
     flushSync();
-    expect(disclosure.textContent).toContain('(2/2)');
+    expect(disclosure.textContent).toContain('2/2');
     disclosure.click();
     flushSync();
     expect(content.hidden).toBe(true);
-    expect(disclosure.textContent).toContain('(2/2)');
+    expect(disclosure.textContent).toContain('2/2');
     await vi.advanceTimersByTimeAsync(800);
     await flushAsyncUpdates();
     expect(getAgentUpdateCalls()[0][1].tools.subagent.allowed_agents).toEqual([
@@ -517,9 +571,14 @@ describe('AgentsView', () => {
     ).toBe(true);
     expect(
       document.getElementById('agent-project-targets-toggle').textContent,
-    ).toContain('(1/3)');
+    ).toContain('1/3');
     vi.useFakeTimers();
-    getButtonWithin(identity, 'Deselect all').click();
+    // The mixed Identity group selects everything first, then clears.
+    const identityAll = getButtonByAriaLabel('All Identity Agents');
+    expect(identity.contains(identityAll)).toBe(true);
+    identityAll.click();
+    flushSync();
+    identityAll.click();
     flushSync();
     await vi.advanceTimersByTimeAsync(800);
     await flushAsyncUpdates();
@@ -528,22 +587,21 @@ describe('AgentsView', () => {
     ]);
   });
 
-  it('keeps an existing wildcard on no-op group actions and keeps new complete selections explicit', async () => {
+  it('shows an existing wildcard as a full group and keeps new complete selections explicit', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock(agentGroupsFixture(['*'])));
     mountedComponent = mount(AgentsView, { target: document.body });
     await waitForText('builder@demo');
     vi.useFakeTimers();
-    const identity = document.querySelector(
-      'section[aria-labelledby="agent-identity-targets-label"]',
-    );
-    getButtonWithin(identity, 'Select all').click();
-    flushSync();
-    await vi.advanceTimersByTimeAsync(800);
-    expect(getAgentUpdateCalls()).toHaveLength(0);
+    const identityAll = getButtonByAriaLabel('All Identity Agents');
+    expect(identityAll.getAttribute('aria-checked')).toBe('true');
+    expect(
+      getButtonByAriaLabel('All Project Agents').getAttribute('aria-checked'),
+    ).toBe('true');
 
-    getButtonWithin(identity, 'Deselect all').click();
+    identityAll.click();
     flushSync();
-    getButtonWithin(identity, 'Select all').click();
+    expect(identityAll.getAttribute('aria-checked')).toBe('false');
+    identityAll.click();
     flushSync();
     await vi.advanceTimersByTimeAsync(800);
     await flushAsyncUpdates();
@@ -572,7 +630,7 @@ describe('AgentsView', () => {
     );
 
     mountedComponent = mount(AgentsView, { target: document.body });
-    await waitForText('Sub-Agent settings');
+    await waitForText('Sub-Agent targets');
 
     vi.useFakeTimers();
     toolAccessToggle('subagent').click();
@@ -608,9 +666,9 @@ describe('AgentsView', () => {
     await waitForText('write');
 
     const memoryChip = toolAccessToggle('memory');
-    expect(memoryChip.textContent).toBe('memory');
+    expect(memoryChip.getAttribute('aria-label')).toBe('memory');
     expect(memoryChip.getAttribute('aria-checked')).toBe('true');
-    expect(memoryChip.classList.contains('is-automatic')).toBe(true);
+    expect(memoryChip.textContent).toContain('Automatic');
     expect(memoryChip.disabled).toBe(false);
     expect(document.body.textContent).toContain('Automatic while Memory is on');
   });
@@ -636,7 +694,7 @@ describe('AgentsView', () => {
     await waitForText('bash');
 
     const memoryChip = toolAccessToggle('memory');
-    expect(memoryChip.textContent).toBe('memory');
+    expect(memoryChip.getAttribute('aria-label')).toBe('memory');
     expect(memoryChip.getAttribute('aria-checked')).toBe('true');
     expect(document.body.textContent).toContain('Memory is currently off');
   });
@@ -940,7 +998,7 @@ function memoryScopeNamed(name) {
   const scope = Array.from(
     document.body.querySelectorAll('.agents-view__memory-scope'),
   ).find(
-    (candidate) => candidate.querySelector('h3')?.textContent.trim() === name,
+    (candidate) => candidate.querySelector('h4')?.textContent.trim() === name,
   );
   expect(scope).toBeTruthy();
   return scope;

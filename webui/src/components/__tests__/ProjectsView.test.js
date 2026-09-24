@@ -43,6 +43,7 @@ describe('ProjectsView', () => {
     ).toBeTruthy();
     expectSectionOrder([
       'Repository',
+      'Agent defaults',
       'Team',
       'Auto-load files',
       'Tools',
@@ -87,7 +88,7 @@ describe('ProjectsView', () => {
     expect(
       document
         .querySelector('[data-testid="project-remove-demo"]')
-        .closest('.management-disclosure'),
+        .closest('.projects-repository-actions'),
     ).not.toBeNull();
     expect(document.querySelector('#project-edit-name')).toBe(name);
     expect(name.value).toBe('Draft project');
@@ -232,9 +233,7 @@ describe('ProjectsView', () => {
     await selectDemo();
 
     await waitForCondition(() =>
-      document
-        .querySelectorAll('.detail-section')[2]
-        ?.querySelector('.empty-state'),
+      document.querySelector('#project-detail-panel-team .empty-state'),
     );
     expect(document.querySelector('.projects-team')).toBeNull();
     expect(document.querySelector('[role="alert"]')).toBeFalsy();
@@ -382,7 +381,7 @@ describe('ProjectsView', () => {
 
     const headings = Array.from(
       document.querySelectorAll(
-        '#project-detail-panel-access .tool-access-group-header h4',
+        '#project-detail-panel-access .s-check-group__title',
       ),
     ).map((heading) => heading.textContent.trim());
     expect(headings).toEqual(['Files', 'Execution', 'Individual Tools']);
@@ -392,7 +391,7 @@ describe('ProjectsView', () => {
     search.value = 'edit';
     search.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
-    document.querySelector('[aria-label="Turn on Files"]').click();
+    document.querySelector('[aria-label="All Files Tools"]').click();
     buttonByTestId('project-save-demo').click();
     await waitForCondition(() => setProjectMock.mock.calls.length === 1);
     expect(setProjectMock).toHaveBeenCalledWith('demo', {

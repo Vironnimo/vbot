@@ -136,11 +136,13 @@
   }
 </script>
 
+<!-- A sub-topic of the Extensions section: the MCP Extension's connections
+     under a sub-heading, as one group of connection rows. -->
 <section class="mcp-panel" aria-label={t('mcp.title', 'MCP connections')}>
-  <div class="mcp-heading">
+  <div class="s-subhead mcp-subhead">
     <div>
-      <h3>{t('mcp.title', 'MCP connections')}</h3>
-      <p>
+      <h4 class="s-subhead__title">{t('mcp.title', 'MCP connections')}</h4>
+      <p class="s-subhead__desc">
         {t(
           'mcp.host',
           'Programs and application add-ons run on the machine hosting vBot.',
@@ -148,7 +150,7 @@
       </p>
     </div>
     <Button
-      variant="primary"
+      variant="secondary"
       disabled={blocked || state.loading}
       onClick={() => edit()}>{t('mcp.add', 'Add MCP connection')}</Button
     >
@@ -193,86 +195,93 @@
       )}
     />
   {:else}
-    <div class="mcp-connections">
+    <div class="s-group mcp-connections">
       {#each state.connections as connection (connection.id)}
         {@const appearance = status(connection)}
-        <article class="mcp-connection" aria-label={connection.id}>
-          <div class="mcp-heading">
-            <div class="mcp-identity">
-              <strong>{connection.id}</strong><StatusChip
-                variant={appearance.variant}>{appearance.label}</StatusChip
+        <article class="mcp-connection s-entity" aria-label={connection.id}>
+          <div class="s-entity__head mcp-connection__head">
+            <div class="s-row-info">
+              <div class="mcp-identity">
+                <strong>{connection.id}</strong><StatusChip
+                  variant={appearance.variant}>{appearance.label}</StatusChip
+                >
+              </div>
+              <p class="mcp-endpoint">
+                {connection.configuration.transport === 'stdio'
+                  ? connection.configuration.command
+                  : connection.configuration.url}
+              </p>
+              {#if connection.counts}
+                <p class="mcp-catalog-counts">
+                  {t(
+                    'mcp.catalogCounts',
+                    'Tools: {tools} · Resources: {resources} · Prompts: {prompts}',
+                    {
+                      tools: connection.counts.tools ?? 0,
+                      resources:
+                        (connection.counts.resources ?? 0) +
+                        (connection.counts.resource_templates ?? 0),
+                      prompts: connection.counts.prompts ?? 0,
+                    },
+                  )}
+                </p>
+              {/if}
+            </div>
+            <div class="s-entity__end">
+              <Toggle
+                checked={connection.configuration.enabled}
+                disabled={blocked}
+                ariaLabel={t('mcp.enabledFor', 'Enable {name}', {
+                  name: connection.id,
+                })}
+                onChange={(enabled) =>
+                  controller.mutate(
+                    enabled ? 'enable' : 'disable',
+                    connection.id,
+                  )}
+              />
+            </div>
+          </div>
+          <div class="mcp-connection__body">
+            {#if connection.error}<Banner variant="error"
+                >{connection.error}</Banner
+              >{/if}
+            <div class="mcp-actions">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  capabilityQuery = '';
+                  void controller.inspect(connection.id);
+                }}>{t('mcp.capabilities', 'Capabilities & access')}</Button
+              >
+              <Button
+                variant="tertiary"
+                disabled={blocked}
+                onClick={() => edit(connection)}
+                >{t('common.edit', 'Edit')}</Button
+              >
+              <Button
+                variant="tertiary"
+                disabled={blocked || !connection.configuration.enabled}
+                onClick={() => controller.test(connection.id)}
+                >{t('mcp.test', 'Test connection')}</Button
+              >
+              <Button
+                variant="tertiary"
+                disabled={blocked ||
+                  !mcpCredentialNames(connection.configuration).length}
+                onClick={() => openCredentials(connection)}
+                >{t('mcp.credentials', 'Credentials')}</Button
+              >
+              <Button
+                variant="danger"
+                class="mcp-actions__remove"
+                disabled={blocked}
+                onClick={() => {
+                  removal = connection;
+                }}>{t('common.remove', 'Remove')}</Button
               >
             </div>
-            <Toggle
-              checked={connection.configuration.enabled}
-              disabled={blocked}
-              ariaLabel={t('mcp.enabledFor', 'Enable {name}', {
-                name: connection.id,
-              })}
-              onChange={(enabled) =>
-                controller.mutate(
-                  enabled ? 'enable' : 'disable',
-                  connection.id,
-                )}
-            />
-          </div>
-          <p class="mcp-endpoint">
-            {connection.configuration.transport === 'stdio'
-              ? connection.configuration.command
-              : connection.configuration.url}
-          </p>
-          {#if connection.counts}
-            <p class="mcp-catalog-counts">
-              {t(
-                'mcp.catalogCounts',
-                'Tools: {tools} · Resources: {resources} · Prompts: {prompts}',
-                {
-                  tools: connection.counts.tools ?? 0,
-                  resources:
-                    (connection.counts.resources ?? 0) +
-                    (connection.counts.resource_templates ?? 0),
-                  prompts: connection.counts.prompts ?? 0,
-                },
-              )}
-            </p>
-          {/if}
-          {#if connection.error}<Banner variant="error"
-              >{connection.error}</Banner
-            >{/if}
-          <div class="mcp-actions">
-            <Button
-              variant="secondary"
-              onClick={() => {
-                capabilityQuery = '';
-                void controller.inspect(connection.id);
-              }}>{t('mcp.capabilities', 'Capabilities & access')}</Button
-            >
-            <Button
-              variant="secondary"
-              disabled={blocked}
-              onClick={() => edit(connection)}
-              >{t('common.edit', 'Edit')}</Button
-            >
-            <Button
-              variant="secondary"
-              disabled={blocked || !connection.configuration.enabled}
-              onClick={() => controller.test(connection.id)}
-              >{t('mcp.test', 'Test connection')}</Button
-            >
-            <Button
-              variant="secondary"
-              disabled={blocked ||
-                !mcpCredentialNames(connection.configuration).length}
-              onClick={() => openCredentials(connection)}
-              >{t('mcp.credentials', 'Credentials')}</Button
-            >
-            <Button
-              variant="danger"
-              disabled={blocked}
-              onClick={() => {
-                removal = connection;
-              }}>{t('common.remove', 'Remove')}</Button
-            >
           </div>
         </article>
       {/each}

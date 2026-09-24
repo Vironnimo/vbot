@@ -191,10 +191,13 @@ describe('ToolAccessEditor', () => {
     flushSync();
 
     const sessionRead = toolChip('session_read');
-    expect(sessionRead.textContent).toBe('session_read');
+    expect(sessionRead.getAttribute('aria-label')).toBe('session_read');
     expect(sessionRead.getAttribute('aria-checked')).toBe('true');
-    expect(sessionRead.classList.contains('is-automatic')).toBe(true);
-    expect(toolChip('read').textContent).toBe('read');
+    expect(
+      document.getElementById(sessionRead.getAttribute('aria-describedby'))
+        .textContent,
+    ).toBe('Automatic');
+    expect(toolChip('read').textContent.trim()).toBe('read');
     const readTip = toolTipWithText('Read a file from disk.');
     expect(readTip.textContent).toContain('Read a file from disk.');
     expect(readTip.dataset.floatingOpen).toBe('false');
@@ -270,7 +273,7 @@ describe('ToolAccessEditor', () => {
     ).toBeNull();
   });
 
-  it('uses one family switch for every member', () => {
+  it('uses one family checkbox for every member', () => {
     const onChange = vi.fn();
     mountedComponent = mount(ToolAccessEditor, {
       target: document.body,
@@ -282,7 +285,7 @@ describe('ToolAccessEditor', () => {
     });
     flushSync();
 
-    buttonByAriaLabel('Turn on Files').click();
+    buttonByAriaLabel('All Files Tools').click();
     expect(onChange).toHaveBeenCalledWith({
       mode: 'selected',
       allowed: ['read', 'write'],
@@ -302,14 +305,14 @@ describe('ToolAccessEditor', () => {
     flushSync();
 
     expect(document.body.textContent).toContain('Home Assistant');
-    buttonByAriaLabel('Turn on Home Assistant').click();
+    buttonByAriaLabel('All Home Assistant Tools').click();
     expect(onChange).toHaveBeenCalledWith({
       mode: 'selected',
       allowed: ['ha_call_service', 'ha_get_state'],
     });
   });
 
-  it('uses one binary Tool switch while preserving all-mode denials', () => {
+  it('uses one binary Tool checkbox while preserving all-mode denials', () => {
     const onChange = vi.fn();
     mountedComponent = mount(ToolAccessEditor, {
       target: document.body,
@@ -360,7 +363,7 @@ describe('ToolAccessEditor', () => {
         (tool) => tool.dataset.toolName,
       ),
     ).toEqual(['read']);
-    buttonByAriaLabel('Turn off Files').click();
+    buttonByAriaLabel('All Files Tools').click();
     expect(onChange).toHaveBeenLastCalledWith({
       mode: 'all',
       denied: ['read'],

@@ -118,13 +118,15 @@
   overflow: hidden;
 }
 
+/* One continuous configuration page (section grammar in
+   styles/settings/sections.css): header, operational overview, the Task /
+   Timing / Session sections and the final Save. */
 .cron-view .cron-detail-scroll {
   display: flex;
   min-width: 0;
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  gap: var(--space-lg);
   overflow-y: auto;
   padding: 26px 30px;
   overscroll-behavior: contain;
@@ -133,7 +135,7 @@
 
 .cron-view .cron-detail-scroll > * {
   width: 100%;
-  max-width: var(--content-max-wide);
+  max-width: 860px;
   flex-shrink: 0;
   margin-inline: auto;
 }
@@ -143,6 +145,15 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-lg);
+  margin-bottom: 28px;
+}
+
+.cron-view .cron-overview + .banner {
+  margin-top: 16px;
+}
+
+.cron-view .cron-overview ~ .cron-task-section {
+  margin-top: 44px;
 }
 
 .cron-view .cron-summary-label,
@@ -152,15 +163,6 @@
   font-size: var(--fs-label-sm);
   font-weight: 500;
   line-height: 1.2;
-}
-
-/* The schedule-type legend labels a form control, so it matches the shared
-   form-field label rather than the summary labels above. */
-.cron-view .cron-schedule-type-label {
-  color: var(--text-hi);
-  font-size: var(--fs-label-md);
-  font-weight: 500;
-  line-height: 1.3;
 }
 
 .cron-view .detail-heading {
@@ -195,15 +197,13 @@
   font-weight: 500;
 }
 
-/* ── Operational summary ───────────────────────────────────────────────── */
+/* ── Operational overview ──────────────────────────────────────────────── */
 
+/* One group: the summary strip, then the Execution details disclosure
+   (`.s-disclosure`) as its further row. */
 .cron-view .cron-summary {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  background: var(--surface);
 }
 
 .cron-view .cron-summary-item {
@@ -211,12 +211,11 @@
   min-width: 0;
   min-height: 92px;
   flex-direction: column;
-  padding: 14px 16px;
-  border-right: 1px solid var(--border);
+  padding: 14px 18px;
 }
 
-.cron-view .cron-summary-item:last-child {
-  border-right: 0;
+.cron-view .cron-summary-item + .cron-summary-item {
+  border-left: 1px solid var(--border);
 }
 
 .cron-view .cron-summary-value {
@@ -256,37 +255,10 @@
   font-size: var(--fs-mono-xs);
 }
 
-.cron-view .cron-execution-details,
-.cron-view .cron-technical-details {
-  border-top: 1px solid var(--border);
-}
-
-.cron-view .cron-execution-details {
-  padding-top: 12px;
-}
-
-.cron-view .cron-execution-details summary,
-.cron-view .cron-technical-details summary {
-  color: var(--text-med);
-  cursor: pointer;
-  font-size: var(--fs-body-sm);
-  font-weight: 500;
-  line-height: 1.4;
-}
-
-.cron-view .cron-execution-details summary:hover,
-.cron-view .cron-technical-details summary:hover {
-  color: var(--text-hi);
-}
-
 .cron-view .cron-execution-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px 20px;
-  margin: 12px 0 0;
-  padding: 14px 16px;
-  border-left: 2px solid var(--border-2);
-  background: var(--surface);
 }
 
 .cron-view .cron-execution-grid div {
@@ -308,68 +280,57 @@
   font-size: var(--fs-mono-sm);
 }
 
-/* ── Task / Timing / Session editor ────────────────────────────────────── */
-
-.cron-view .cron-editor-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(300px, 0.8fr);
-  gap: 32px;
-  align-items: start;
+.cron-view .cron-technical-content {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
 
-.cron-view .cron-editor-side {
+.cron-view .cron-technical-id {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 28px;
+  gap: 6px;
 }
 
-/* Form groups are flat, like the Agents and Projects editors: a heading and
-   its fields, separated by space instead of a bordered card. */
-.cron-view .cron-card {
-  min-width: 0;
+.cron-view .cron-technical-content code {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.cron-view .cron-card-header {
-  margin-bottom: 14px;
+/* ── Task / Timing / Session editor ────────────────────────────────────── */
+
+.cron-view .cron-label-with-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
-.cron-view .cron-card-header h2 {
-  margin: 0;
-  color: var(--text-hi);
-  font-size: var(--fs-heading-md);
-  font-weight: 600;
-  line-height: 1.4;
-}
-
-.cron-view .cron-card-header p {
-  margin: 4px 0 0;
+/* Required marker after a row label (the star is decorative; the controls
+   carry their own required state). */
+.cron-view .cron-required {
   color: var(--text-lo);
-  font-size: var(--fs-body-sm);
-  line-height: 1.4;
 }
 
-.cron-view .cron-card-body > .form-field + .form-field,
-.cron-view .cron-card-body > .cron-schedule-type + .form-field {
-  margin-top: 16px;
+.cron-view .s-group > .cron-prompt-row {
+  gap: 10px;
 }
 
 .cron-view .cron-prompt-editor {
   min-height: 224px;
 }
 
-.cron-view .cron-schedule-type {
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.cron-view .cron-schedule-type > legend {
-  margin-bottom: 7px;
-}
-
+/* The schedule type stays a three-way segmented control. */
 .cron-view .cron-radio-group {
   display: grid;
+  width: 100%;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 3px;
   padding: 3px;
@@ -436,50 +397,19 @@
   overflow-y: auto;
 }
 
-.cron-view .cron-expression-preview {
-  display: block;
-  margin-top: 6px;
-  color: var(--text-med);
-  font-size: var(--fs-body-sm);
-  line-height: 1.4;
-}
-
-.cron-view .cron-technical-details {
-  margin-top: 16px;
-  padding-top: 13px;
-}
-
-.cron-view .cron-technical-content {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  margin-top: 12px;
-  padding-left: 12px;
-  border-left: 2px solid var(--border-2);
-}
-
-.cron-view .cron-technical-content code {
-  max-width: 100%;
-  overflow: hidden;
-  color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.cron-view .cron-technical-group {
+  margin-top: 44px;
 }
 
 .cron-view .cron-form-error {
-  flex-shrink: 0;
+  margin-top: 24px;
 }
 
 .cron-view .cron-detail-footer {
-  position: static;
   display: flex;
-  flex-shrink: 0;
   justify-content: flex-end;
   gap: 8px;
+  margin-top: 28px;
   padding: 12px 0 0;
 }
 
@@ -498,25 +428,16 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .cron-view .cron-summary-item:nth-child(2) {
-    border-right: 0;
+  .cron-view .cron-summary-item:nth-child(3) {
+    border-left: 0;
   }
 
-  .cron-view .cron-summary-item:nth-child(-n + 2) {
-    border-bottom: 1px solid var(--border);
-  }
-
-  .cron-view .cron-editor-grid {
-    grid-template-columns: 1fr;
+  .cron-view .cron-summary-item:nth-child(n + 3) {
+    border-top: 1px solid var(--border);
   }
 
   .cron-view .cron-execution-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .cron-view .cron-detail-footer {
-    bottom: -22px;
-    padding-bottom: 18px;
   }
 }
 
@@ -544,16 +465,19 @@
   }
 
   .cron-view .cron-summary-item {
-    min-height: 80px;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
+    min-height: 0;
   }
 
-  .cron-view .cron-summary-item:last-child {
-    border-bottom: 0;
+  .cron-view .cron-summary-item + .cron-summary-item {
+    border-top: 1px solid var(--border);
+    border-left: 0;
   }
 
-  .cron-view .cron-summary-item:nth-child(2) {
-    border-right: 0;
+  .cron-view .cron-summary-value {
+    margin-top: 6px;
+  }
+
+  .cron-view .cron-summary-item {
+    padding-inline: 14px;
   }
 }
