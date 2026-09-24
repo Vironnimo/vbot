@@ -277,17 +277,18 @@ class SessionStore:
                 return
         self._execute_write(lambda connection: _store_mutations.ensure_live(connection, address))
 
-    def exists(self, address: SessionAddress, *, include_archived: bool = False) -> bool:
+    def exists(self, address: SessionAddress) -> bool:
         with self._runtime.read_ctx() as connection:
-            return _store_queries.exists(connection, address, include_archived=include_archived)
+            return _store_queries.exists(connection, address)
 
     def existing_addresses(self, addresses: Sequence[SessionAddress]) -> set[SessionAddress]:
         with self._runtime.read_ctx() as connection:
             return _store_queries.existing_addresses(connection, addresses)
 
-    def state(self, address: SessionAddress, *, include_archived: bool = False) -> sqlite3.Row:
+    def state(self, address: SessionAddress) -> sqlite3.Row:
+        """Read one live Session row; a missing Session raises ``SessionNotFoundError``."""
         with self._runtime.read_ctx() as connection:
-            return _store_queries.state(connection, address, include_archived=include_archived)
+            return _store_values._require_live(connection, address)
 
     def metadata(self, address: SessionAddress) -> JsonObject:
         return _store_values._session_metadata_from_state(self.state(address))

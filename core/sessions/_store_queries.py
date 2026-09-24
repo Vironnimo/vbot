@@ -19,14 +19,12 @@ if TYPE_CHECKING:
     from core.sessions._types import SessionAddress, SessionRecallVisibility
 
 
-def exists(
-    connection: sqlite3.Connection, address: SessionAddress, *, include_archived: bool = False
-) -> bool:
-    clause = "" if include_archived else " AND status = 'live'"
+def exists(connection: sqlite3.Connection, address: SessionAddress) -> bool:
+    """Probe the live address index for one Session."""
     return (
         connection.execute(
-            "SELECT 1 FROM sessions WHERE project_id = ? AND agent_id = ? AND session_id = ?"
-            + clause,
+            "SELECT 1 FROM sessions WHERE project_id = ? AND agent_id = ? AND session_id = ? "
+            "AND status = 'live'",
             _store_values._scope(address),
         ).fetchone()
         is not None
@@ -54,21 +52,6 @@ def existing_addresses(
         ).fetchall()
         found.update(_store_values._address(row) for row in rows)
     return found
-
-
-def state(
-    connection: sqlite3.Connection, address: SessionAddress, *, include_archived: bool = False
-) -> sqlite3.Row:
-    clause = "" if include_archived else " AND status = 'live'"
-    row = connection.execute(
-        "SELECT * FROM sessions WHERE project_id = ? AND agent_id = ? AND session_id = ?"
-        + clause
-        + " ORDER BY status = 'live' DESC, session_key DESC LIMIT 1",
-        _store_values._scope(address),
-    ).fetchone()
-    if row is None:
-        raise SessionNotFoundError(f"session does not exist: {address.session_id}")
-    return cast(sqlite3.Row, row)
 
 
 def descriptor_sources(
