@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 from typing import Any, cast
 
@@ -22,6 +23,7 @@ from core.tools import (
     tool_failure,
     tool_success,
 )
+from core.tools.process_manager import ProcessManager, ProcessManagerError
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
@@ -219,6 +221,7 @@ async def test_real_run_cancel_during_parallel_tools_repairs_the_next_request(
     after_cancel = session.load()
     assert cancel_callbacks == ["call_slow"]
     assert runtime.process_manager.cancelled_scopes == [cancelled_run.id]
+    assert runtime.process_manager.released_scopes == [cancelled_run.id]
     assert persisted_roles(after_cancel) == ["user", "assistant"]
     assert [message.status for message in after_cancel if message.role == "run_summary"] == [
         "cancelled"
@@ -257,6 +260,66 @@ async def test_real_run_cancel_during_parallel_tools_repairs_the_next_request(
         "cancelled",
         "completed",
     ]
+
+
+@pytest.mark.asyncio
+async def test_run_cancel_rejects_a_racing_launch_and_releases_the_settled_scope(
+    tmp_path: Path,
+) -> None:
+    process_manager = ProcessManager(sweep_interval_seconds=3600)
+    tool_started = asyncio.Event()
+    launch_outcomes: list[str] = []
+
+    async def late_launch(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        tool_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            # A launch arriving after the Run cancel but before the Run settles.
+            try:
+                await process_manager.spawn(
+                    context.run_id,
+                    context.agent_id,
+                    [sys.executable, "-c", "import time; time.sleep(30)"],
+                    env=None,
+                    cwd=None,
+                )
+            except ProcessManagerError:
+                launch_outcomes.append("rejected")
+            else:
+                launch_outcomes.append("started")
+            raise
+        return tool_success({})
+
+    tools = ToolRegistry()
+    tools.register("late_launch", "Launch after cancellation.", {"type": "object"}, late_launch)
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["late_launch"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "call_late", "name": "late_launch", "arguments": {}}],
+            }
+        ]
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime.process_manager = process_manager
+    loop = build_chat_loop(runtime)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    try:
+        run = await loop.start_run("coder", "Launch late.", session_id="session-one")
+        await asyncio.wait_for(tool_started.wait(), _ASYNC_COORDINATION_TIMEOUT_SECONDS)
+
+        run.request_cancel(reason="user")
+        with pytest.raises(RunCancelledError):
+            await run.wait()
+
+        assert launch_outcomes == ["rejected"]
+        assert process_manager.list_processes("coder") == []
+        # The settled Run no longer retains its closed-scope marker.
+        assert process_manager._closed_scopes == set()
+    finally:
+        await process_manager.aclose()
 
 
 @pytest.mark.asyncio

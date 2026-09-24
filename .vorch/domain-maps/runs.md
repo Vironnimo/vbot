@@ -101,6 +101,8 @@ drain; a closed owner epoch cannot admit late descendant work. Ownership is sepa
 from Session Tool grants: child Runs can retain cancellation/usage ownership without
 receiving the parent's Session Tools. `core/agents/temporary.py` closes group admission
 before cancelling exact owned Runs, Queue items and injected resource owners.
+Resources close only after those Runs are terminal, so they may release their
+per-group admission state after their own drain.
 Unrelated work in a reused target Session remains outside that group
 (`tests/core/agents/test_temporary.py`, `tests/core/subagents/test_subagents_completion.py`).
 

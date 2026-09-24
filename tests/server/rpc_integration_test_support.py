@@ -386,6 +386,9 @@ class IntegrationProcessManager:
     def cancel_scope(self, run_id: str) -> None:
         del run_id
 
+    def release_scope(self, run_id: str) -> None:
+        del run_id
+
 
 class IntegrationProjects:
     """Empty project-store stub: the integration runtime registers no project, so

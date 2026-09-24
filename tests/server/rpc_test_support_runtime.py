@@ -248,6 +248,9 @@ class StubProcessManager:
     async def cancel_scope_async(self, run_id: str) -> None:
         del run_id
 
+    def release_scope(self, run_id: str) -> None:
+        del run_id
+
 
 class RecordingCompactionService:
     def __init__(self) -> None:

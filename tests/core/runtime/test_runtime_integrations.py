@@ -414,6 +414,8 @@ async def test_chat_run_cancellation_calls_runtime_process_manager(tmp_path: Pat
         await run.wait()
 
     assert process_manager.cancelled_scopes == [run.id]
+    # The settled Run releases its closed scope only after cancellation cleanup.
+    assert process_manager.scope_events == [("cancel", run.id), ("release", run.id)]
 
 
 class _BlockingChannelAdapter:
@@ -453,12 +455,17 @@ class _BlockingAdapter:
 class _RecordingProcessManager:
     def __init__(self) -> None:
         self.cancelled_scopes: list[str] = []
+        self.scope_events: list[tuple[str, str]] = []
 
     def cancel_scope(self, scope_key: str) -> None:
         self.cancelled_scopes.append(scope_key)
 
     async def cancel_scope_async(self, scope_key: str) -> None:
         self.cancelled_scopes.append(scope_key)
+        self.scope_events.append(("cancel", scope_key))
+
+    def release_scope(self, scope_key: str) -> None:
+        self.scope_events.append(("release", scope_key))
 
 
 class _ChatRuntimeStub:
