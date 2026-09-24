@@ -9,7 +9,13 @@ from typing import Any
 import pytest
 
 from core.skills import SkillPolicyError
-from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.errors import (
+    RPC_ERROR_AGENT_NOT_FOUND,
+    RPC_ERROR_DOMAIN,
+    RPC_ERROR_INVALID_REQUEST,
+    RPC_ERROR_SKILL_NOT_FOUND,
+    RpcError,
+)
 from server.rpc.skill_methods import (
     _skill_inspect,
     _skill_inventory,
@@ -110,13 +116,13 @@ class TestSetDisabled:
         assert state.runtime.published == ["skills"]
 
     @pytest.mark.asyncio
-    async def test_unknown_name_is_invalid_request(self, tmp_path: Path) -> None:
+    async def test_unknown_name_is_skill_not_found(self, tmp_path: Path) -> None:
         state = _state(tmp_path)
 
         with pytest.raises(RpcError) as excinfo:
             await _skill_set_disabled(state, {"name": "ghost", "disabled": True})
 
-        assert excinfo.value.code == RPC_ERROR_INVALID_REQUEST
+        assert excinfo.value.code == RPC_ERROR_SKILL_NOT_FOUND
         assert state.runtime.reload_calls == 0
 
     @pytest.mark.asyncio
@@ -187,7 +193,7 @@ class TestShare:
         assert state.runtime.published == ["skills"]
 
     @pytest.mark.asyncio
-    async def test_unknown_agent_is_invalid_request(self, tmp_path: Path) -> None:
+    async def test_unknown_agent_is_agent_not_found(self, tmp_path: Path) -> None:
         state = _state(tmp_path)
 
         with pytest.raises(RpcError) as excinfo:
@@ -196,10 +202,10 @@ class TestShare:
                 {"agent_id": "ghost", "name": "deploy", "shared": True, "receivers": ["reviewer"]},
             )
 
-        assert excinfo.value.code == RPC_ERROR_INVALID_REQUEST
+        assert excinfo.value.code == RPC_ERROR_AGENT_NOT_FOUND
 
     @pytest.mark.asyncio
-    async def test_agent_not_owning_the_skill_is_invalid_request(self, tmp_path: Path) -> None:
+    async def test_agent_not_owning_the_skill_is_skill_not_found(self, tmp_path: Path) -> None:
         state = _state(tmp_path)
 
         with pytest.raises(RpcError) as excinfo:
@@ -208,7 +214,7 @@ class TestShare:
                 {"agent_id": "builder", "name": "notes", "shared": True, "receivers": ["reviewer"]},
             )
 
-        assert excinfo.value.code == RPC_ERROR_INVALID_REQUEST
+        assert excinfo.value.code == RPC_ERROR_SKILL_NOT_FOUND
 
     @pytest.mark.asyncio
     async def test_unshare_passes_false_through(self, tmp_path: Path) -> None:
@@ -219,7 +225,7 @@ class TestShare:
         assert state.runtime.policy_calls == [("set_shared", ("builder", "deploy", False, []))]
 
     @pytest.mark.asyncio
-    async def test_unknown_receiver_is_invalid_request(self, tmp_path: Path) -> None:
+    async def test_unknown_receiver_is_agent_not_found(self, tmp_path: Path) -> None:
         state = _state(tmp_path)
 
         with pytest.raises(RpcError) as excinfo:
@@ -228,7 +234,7 @@ class TestShare:
                 {"agent_id": "builder", "name": "deploy", "shared": True, "receivers": ["ghost"]},
             )
 
-        assert excinfo.value.code == RPC_ERROR_INVALID_REQUEST
+        assert excinfo.value.code == RPC_ERROR_AGENT_NOT_FOUND
 
     @pytest.mark.asyncio
     async def test_self_receiver_is_invalid_request(self, tmp_path: Path) -> None:

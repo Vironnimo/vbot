@@ -170,6 +170,26 @@ def test_server_code_selects_the_actual_failed_resource(tmp_path, code, area):
     assert guidance.commands[0][1] == area
 
 
+@pytest.mark.parametrize(
+    "tokens,code,inspection",
+    [
+        (["memory", "list", "assistnt"], "agent_not_found", ("agent", "list")),
+        (["skill", "share", "a", "notes", "--to", "b"], "agent_not_found", ("agent", "list")),
+        (["skill", "share", "a", "notes", "--to", "b"], "skill_not_found", ("skill", "inventory")),
+    ],
+)
+def test_not_found_codes_inspect_the_missing_resource_list(tmp_path, tokens, code, inspection):
+    result = CommandResult(
+        False,
+        "test sentinel",
+        instance(tmp_path),
+        failure=RpcFailure("memory.list", "responded", code),
+    )
+    followup = parse_args(recovery_guidance(parse_args(tokens), result).commands[0][1:])
+    assert (followup.area, followup.command) == inspection
+    assert followup.host == "192.0.2.8"
+
+
 @pytest.mark.parametrize("mode", ["auto", "plain", "human"])
 def test_real_rpc_error_keeps_stdout_and_adds_recovery_in_every_mode(
     tmp_path, monkeypatch, capsys, mode

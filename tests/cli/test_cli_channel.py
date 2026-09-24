@@ -611,7 +611,8 @@ def test_channel_commands_surface_rpc_domain_errors(
 
     assert result.ok is False
     assert result.instance is instance
-    assert result.message.startswith("channel_not_found:")
+    assert result.failure is not None
+    assert result.failure.code == "channel_not_found"
     assert "tg-unknown" in result.message
 
 
