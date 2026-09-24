@@ -186,12 +186,18 @@ describe('CronView', () => {
       'Default scheduled run',
     );
     expect(document.querySelectorAll('.cron-summary-item')).toHaveLength(4);
-    expect(document.querySelectorAll('.cron-card')).toHaveLength(3);
+    expect(
+      document.querySelectorAll('.cron-detail-scroll .s-section'),
+    ).toHaveLength(3);
     expect(document.querySelector('.cron-technical-details')).toBeTruthy();
     expect(document.querySelector('.detail-sub').textContent).not.toContain(
       'job-first',
     );
-    expect(document.querySelectorAll('.cron-card .form-field').length).toBe(7);
+    expect(
+      document.querySelectorAll(
+        '.cron-detail-scroll .s-group label.s-row-label',
+      ).length,
+    ).toBe(7);
   });
 
   it('disables the selected job via the detail toggle', async () => {

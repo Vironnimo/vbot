@@ -364,8 +364,11 @@
         />
       </label>
     {:else}
+      <!-- List rows use the small switch so a long list of enabled Skills
+           stays calm. -->
       <span class="skills-enable" use:tooltip={t('skills.disableHelp')}>
         <Toggle
+          size="sm"
           checked={!entry.disabled}
           disabled={actions.busy}
           ariaLabel={t('skills.enabledNamed', '', { name: entry.name })}
@@ -580,11 +583,13 @@
           class:skills-mobile-hidden={selected}
           aria-label={t('skills.results')}
         >
-          <div class="skills-results-meta" aria-live="polite">
-            <span
+          <div class="s-group-toolbar skills-results-meta" aria-live="polite">
+            <span class="s-group-toolbar__meta"
               >{t('skills.resultCount', '', { count: filtered.length })}</span
             >
-            {#if loading}<span>{t('skills.refreshing')}</span>{/if}
+            {#if loading}<span class="s-group-toolbar__meta"
+                >{t('skills.refreshing')}</span
+              >{/if}
             {#if searchQuery || statusFilter !== 'all'}
               <Button
                 variant="secondary"
@@ -612,43 +617,47 @@
                 )}
               />
             {:else}
-              {#each visibleSkills as entry (entry.id)}
-                <div
-                  class="skills-row"
-                  class:skills-row--selected={selectedId === entry.id}
-                  class:skills-row--disabled={entry.disabled}
-                >
-                  <button
-                    type="button"
-                    class="skills-row-open"
-                    data-skill-id={entry.id}
-                    aria-pressed={selectedId === entry.id}
-                    aria-label={entry.name}
-                    use:tooltip={entry.description || t('skills.noDescription')}
-                    onclick={() => openSkill(entry)}
+              <div class="s-group skills-group">
+                {#each visibleSkills as entry (entry.id)}
+                  <div
+                    class="skills-row"
+                    class:skills-row--selected={selectedId === entry.id}
+                    class:skills-row--disabled={entry.disabled}
                   >
-                    <span class="skills-row-copy">
-                      <span class="skills-row-title">
-                        <span class="skills-row-name">{entry.name}</span>
-                        {#if entry.status !== 'available'}<StatusChip
-                            variant={skillStatusVariant(entry)}
-                            >{skillStatusLabel(entry, t)}</StatusChip
-                          >
-                        {:else if skillDiagnosticLines(entry).length}<Badge
-                            variant="warn">{t('skills.notes')}</Badge
-                          >{/if}
+                    <button
+                      type="button"
+                      class="skills-row-open"
+                      data-skill-id={entry.id}
+                      aria-pressed={selectedId === entry.id}
+                      aria-label={entry.name}
+                      use:tooltip={entry.description ||
+                        t('skills.noDescription')}
+                      onclick={() => openSkill(entry)}
+                    >
+                      <span class="skills-row-copy">
+                        <span class="skills-row-title">
+                          <span class="skills-row-name">{entry.name}</span>
+                          {#if entry.status !== 'available'}<StatusChip
+                              variant={skillStatusVariant(entry)}
+                              >{skillStatusLabel(entry, t)}</StatusChip
+                            >
+                          {:else if skillDiagnosticLines(entry).length}<Badge
+                              variant="warn">{t('skills.notes')}</Badge
+                            >{/if}
+                        </span>
+                        <span class="skills-row-source">
+                          {skillSourceLabel(entry, t, agents)}{#if entry.shared}
+                            <span
+                              class="skills-source-divider"
+                              aria-hidden="true">·</span
+                            >{t('skills.sharedBadge')}{/if}
+                        </span>
                       </span>
-                      <span class="skills-row-source">
-                        {skillSourceLabel(entry, t, agents)}{#if entry.shared}
-                          <span class="skills-source-divider" aria-hidden="true"
-                            >·</span
-                          >{t('skills.sharedBadge')}{/if}
-                      </span>
-                    </span>
-                  </button>
-                  {@render skillActions(entry)}
-                </div>
-              {/each}
+                    </button>
+                    {@render skillActions(entry)}
+                  </div>
+                {/each}
+              </div>
             {/if}
           </div>
           {#if pageCount > 1}
