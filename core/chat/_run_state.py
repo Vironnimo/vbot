@@ -282,6 +282,8 @@ class _CompactionPromptRefresh:
     memory_files_context: str | None
     skill_registry: SkillRegistry
     skill_catalog: PinnedSkillCatalog
+    # The Project whose Skill pool the refreshed catalog advertises (qualifies its pin).
+    skill_project_id: str | None
     prompt_read_paths: tuple[Path, ...]
     available_skill_names: tuple[str, ...] | None
     memory_prompt_mode: str | None = None
@@ -534,6 +536,7 @@ async def create_run_execution_context(
             agent,
             skill_registry,
             project_id,
+            skill_project_id=skill_project_id,
         )
         prompt_cache_affinity_id = await _CHAT_TRANSFORM_WORKERS.run(
             dependencies.sessions.prompt_cache_affinity_id,

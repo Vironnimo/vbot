@@ -249,7 +249,9 @@ async def test_real_auto_compaction_truncation_preserves_history_skills_and_prom
     session.append(ChatMessage.user("Current request"))
     session.append(ChatMessage.assistant(model=agent.model, content="Current answer"))
     loop = build_chat_loop(runtime, compaction_service=CompactionService())
-    pinned_skill_catalog(loop._dependencies, "coder", session.id, agent, runtime.skills, None)
+    pinned_skill_catalog(
+        loop._dependencies, "coder", session.id, agent, runtime.skills, None, skill_project_id=None
+    )
     runtime.skills = StubSkills(
         [StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))]
     )
@@ -270,7 +272,7 @@ async def test_real_auto_compaction_truncation_preserves_history_skills_and_prom
     assert session.load() == original_history
     assert HISTORY_TOOL_NAME not in request_after.session_tool_grants
     assert session.activated_skill_contents() == original_skills
-    assert metadata[PINNED_SKILL_CATALOG_META_KEY] == {"catalog_text": "catalog:1"}
+    assert metadata[PINNED_SKILL_CATALOG_META_KEY]["catalog_text"] == "catalog:1"
     assert runtime.refresh_skills_for_calls == []
     assert len(adapter.stream_requests) == 1
     assert [event.type for event in run.events] == [

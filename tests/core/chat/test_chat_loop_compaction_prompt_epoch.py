@@ -83,7 +83,15 @@ async def test_compaction_refreshes_pinned_skill_catalog(tmp_path: Path) -> None
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     # Pin the session's catalog (as the first build would), then grow the registry.
-    pinned_skill_catalog(loop._dependencies, "coder", "session-one", agent, runtime.skills, None)
+    pinned_skill_catalog(
+        loop._dependencies,
+        "coder",
+        "session-one",
+        agent,
+        runtime.skills,
+        None,
+        skill_project_id=None,
+    )
     runtime.skills = StubSkills(
         [StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))]
     )
@@ -97,7 +105,7 @@ async def test_compaction_refreshes_pinned_skill_catalog(tmp_path: Path) -> None
     metadata = runtime.chat_sessions.get_metadata(session_address("coder", "session-one"))
     assert runtime.system_prompts.render_skill_catalog_calls == calls_before + 1
     assert runtime.refresh_skills_for_calls == [(None, "coder")]
-    assert metadata[PINNED_SKILL_CATALOG_META_KEY] == {"catalog_text": "catalog:2"}
+    assert metadata[PINNED_SKILL_CATALOG_META_KEY]["catalog_text"] == "catalog:2"
     assert metadata[SEEN_SKILLS_META_KEY] == ["one", "two"]
 
 
@@ -217,7 +225,15 @@ async def test_compaction_refresh_failure_keeps_previous_prompt_snapshot(
             StubCompactionService(should_auto=True, checkpoint=checkpoint),
         ),
     )
-    pinned_skill_catalog(loop._dependencies, "coder", "session-one", agent, runtime.skills, None)
+    pinned_skill_catalog(
+        loop._dependencies,
+        "coder",
+        "session-one",
+        agent,
+        runtime.skills,
+        None,
+        skill_project_id=None,
+    )
 
     def fail_refresh(_project_id: str | None, _agent_id: str | None) -> Any:
         raise RuntimeError("scan failed")
@@ -238,7 +254,7 @@ async def test_compaction_refresh_failure_keeps_previous_prompt_snapshot(
     )
 
     metadata = runtime.chat_sessions.get_metadata(session_address("coder", "session-one"))
-    assert metadata[PINNED_SKILL_CATALOG_META_KEY] == {"catalog_text": "catalog:1"}
+    assert metadata[PINNED_SKILL_CATALOG_META_KEY]["catalog_text"] == "catalog:1"
     assert persisted_roles(session.load())[-1] == "compaction_checkpoint"
     assert any(
         "Prompt context refresh failed after automatic Compaction" in record.message
@@ -458,7 +474,10 @@ async def test_temporary_compaction_refreshes_epoch_without_identity_lookup(
         session_address(run.agent_id, session.id, project_id)
     )
     assert persisted_roles(session.load())[-1] == "compaction_checkpoint"
-    assert metadata[PINNED_SKILL_CATALOG_META_KEY] == {"catalog_text": "catalog:1"}
+    assert metadata[PINNED_SKILL_CATALOG_META_KEY] == {
+        "catalog_text": "catalog:1",
+        "working_project_id": project_id,
+    }
     assert metadata[SEEN_SKILLS_META_KEY] == ["new"]
     assert runtime.refresh_skills_for_calls == [(project_id, None)]
     assert runtime.agent_resolver.calls == []
@@ -469,6 +488,7 @@ async def test_temporary_compaction_refreshes_epoch_without_identity_lookup(
     if project_id:
         assert "OLD_RULES_SENTINEL" in old_project_context
         assert "NEW_RULES_SENTINEL" in metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY]["text"]
+        assert metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY]["working_project_id"] == project_id
         assert "NEW_RULES_SENTINEL" in rebuilt.messages[0]["content"]
         assert runtime.file_read_state.check_stale(session.id, rules.resolve()) is None
         assert (

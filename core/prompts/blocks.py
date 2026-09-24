@@ -352,37 +352,106 @@ def passes_gates(
     return bool(rendered_text.strip())
 
 
-def expand_generated_markers(
-    text: str,
+def _render_generated_marker(
+    name: str,
     producers: Mapping[str, BlockProducer],
     context: BlockRenderContext,
 ) -> str:
-    """Replace every ``{generated:NAME}`` marker with its producer's output.
+    """Return one ``{generated:NAME}`` producer's output, fail-soft.
 
-    A known marker is replaced by ``producer(context)`` (which may be empty — no
-    skills renders ``""`` and the marker leaves no trace after normalization).
     Unknown markers and failing producers render to ``""`` and log a warning —
-    fail-soft, mirroring a missing ``{include:…}``; neither is a
-    :class:`PromptError`.
+    mirroring a missing ``{include:…}``; neither is a :class:`PromptError`.
     """
+    producer = producers.get(name)
+    if producer is None:
+        _LOGGER.warning("Skipping unknown generated marker: {generated:%s}", name)
+        return ""
+    try:
+        return producer(context)
+    except Exception as exc:  # noqa: BLE001 - one producer drops, never the Run
+        _LOGGER.warning(
+            "Skipping generated marker {generated:%s}; producer failed: %s",
+            name,
+            exc,
+        )
+        return ""
+
+
+def _render_workspace_include(
+    filename: str,
+    workspace: str,
+    on_read: Callable[[Path], None] | None,
+) -> str:
+    """Return one ``{include:filename}`` expansion, fail-soft.
+
+    An empty workspace means "no includes": the marker is dropped with no read and
+    no warning — it must never resolve against ``Path("")`` (= ``Path(".")``), which
+    would read SOUL.md/USER.md from the server's process CWD. A safe flat filename
+    resolves under the workspace and is ``<file>``-wrapped; a missing **or**
+    unreadable file is dropped with a warning (a prompt file never aborts a run —
+    user decision). An **unsafe** include path raises :class:`PromptError` — that is
+    a malformed directive, not a readability issue.
+    """
+    if not workspace:
+        return ""
+    validate_workspace_include(filename)
+    include_path = Path(workspace) / filename
+    try:
+        content = include_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        _LOGGER.warning("Skipping missing workspace include: %s", include_path)
+        return ""
+    except (OSError, ValueError) as exc:
+        # Present but unreadable for ANY reason (locked, no permission, a
+        # directory, binary/non-UTF-8, …): log and drop the block, like a
+        # missing include. A prompt file must never abort the run.
+        _LOGGER.warning("Skipping unreadable workspace include %s: %s", include_path, exc)
+        return ""
+    if on_read is not None:
+        on_read(include_path.resolve())
+    return wrap_include_file(filename, content)
+
+
+def expand_block_template(
+    text: str,
+    context: BlockRenderContext,
+    *,
+    producers: Mapping[str, BlockProducer],
+    replacements: Mapping[str, str] = MAPPING_PROXY_EMPTY,
+) -> str:
+    """Expand an editable text block's template in exactly one pass.
+
+    The template is tokenized once for all three marker kinds — ``{generated:NAME}``
+    (producers), ``{include:filename}`` (workspace files) and the exact build-time
+    ``replacements`` keys (runtime variables such as ``{model}``) — and every match
+    is substituted by its expansion **verbatim**. Inserted text is never scanned
+    again: a Producer's output (Skill descriptions, Memory entries, Tool list), an
+    included file's content, or a replacement value that itself contains
+    ``{include:…}``, ``{generated:…}`` or ``{model}`` stays literal. Only the
+    author-controlled template can direct expansion, so user- or Agent-authored data
+    can neither read workspace files, fail the build with an unsafe include, nor
+    have runtime values substituted into it.
+
+    Marker semantics are unchanged: generated markers and includes are fail-soft
+    (see :func:`_render_generated_marker`/:func:`_render_workspace_include`); an
+    unsafe include path in the template raises :class:`PromptError`; unrelated
+    ``{…}`` stays literal. ``context.read_observer`` receives every inlined file.
+    """
+    placeholders = [placeholder for placeholder in replacements if placeholder]
+    alternatives = [GENERATED_PATTERN.pattern, INCLUDE_PATTERN.pattern]
+    alternatives.extend(re.escape(placeholder) for placeholder in placeholders)
+    pattern = re.compile("|".join(alternatives))
+    workspace = context.agent.workspace
 
     def replace(match: re.Match[str]) -> str:
-        name = match.group(1).strip()
-        producer = producers.get(name)
-        if producer is None:
-            _LOGGER.warning("Skipping unknown generated marker: {generated:%s}", name)
-            return ""
-        try:
-            return producer(context)
-        except Exception as exc:  # noqa: BLE001 - one producer drops, never the Run
-            _LOGGER.warning(
-                "Skipping generated marker {generated:%s}; producer failed: %s",
-                name,
-                exc,
-            )
-            return ""
+        generated_name, include_name = match.group(1), match.group(2)
+        if generated_name is not None:
+            return _render_generated_marker(generated_name.strip(), producers, context)
+        if include_name is not None:
+            return _render_workspace_include(include_name.strip(), workspace, context.read_observer)
+        return replacements[match.group(0)]
 
-    return GENERATED_PATTERN.sub(replace, text)
+    return pattern.sub(replace, text)
 
 
 def expand_workspace_includes(
@@ -390,44 +459,19 @@ def expand_workspace_includes(
 ) -> str:
     """Replace every ``{include:filename}`` with the workspace file, fail-soft.
 
-    The single include-expansion path, reused by the manager. An empty workspace
-    means "no includes": every marker is dropped with no read and no warning —
-    it must never resolve against ``Path("")`` (= ``Path(".")``), which would read
-    SOUL.md/USER.md from the server's process CWD. A safe flat filename resolves
-    under the workspace and is ``<file>``-wrapped; a missing **or** unreadable file
-    is dropped with a warning (a prompt file never aborts a run — user decision).
-    An **unsafe** include path raises :class:`PromptError` — that is a
-    malformed directive, not a readability issue.
+    The include-only form of :func:`expand_block_template`, used for the SOUL data
+    block. Included content is inserted verbatim and never scanned again. See
+    :func:`_render_workspace_include` for the empty-workspace, missing/unreadable
+    and unsafe-path rules.
 
     ``on_read``, when given, is called with the resolved absolute path of every file
     whose content is actually inlined (never for a missing/unreadable/dropped one),
     so a caller can register the inlined file as read-before-write.
     """
-    if not workspace:
-        return INCLUDE_PATTERN.sub("", text)
-
-    workspace_path = Path(workspace)
-
-    def replace(match: re.Match[str]) -> str:
-        filename = match.group(1).strip()
-        validate_workspace_include(filename)
-        include_path = workspace_path / filename
-        try:
-            content = include_path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            _LOGGER.warning("Skipping missing workspace include: %s", include_path)
-            return ""
-        except (OSError, ValueError) as exc:
-            # Present but unreadable for ANY reason (locked, no permission, a
-            # directory, binary/non-UTF-8, …): log and drop the block, like a
-            # missing include. A prompt file must never abort the run.
-            _LOGGER.warning("Skipping unreadable workspace include %s: %s", include_path, exc)
-            return ""
-        if on_read is not None:
-            on_read(include_path.resolve())
-        return wrap_include_file(filename, content)
-
-    return INCLUDE_PATTERN.sub(replace, text)
+    return INCLUDE_PATTERN.sub(
+        lambda match: _render_workspace_include(match.group(1).strip(), workspace, on_read),
+        text,
+    )
 
 
 def wrap_include_file(filename: str, content: str) -> str:
@@ -471,12 +515,11 @@ def resolve_block_text(
       on any exception, log a warning and return ``""`` so only this block drops,
       never the run. ``data`` blocks that carry a ``render`` go through here too.
     - **static text** block: take the override cascade result (the injected
-      resolver, falling back to ``default_text``), expand ``{generated:…}``
-      (producers) then ``{include:…}`` (workspace files) — both fail-soft — and
-      finally apply the build-time ``replacements`` (the runtime variables
-      ``{server_hostname}``/``{model}``/… that stay literal placeholders, not
-      ``{generated:…}``, and are filled here at build). Replacements are plain text
-      substitution, so a block that does not contain a placeholder is untouched.
+      resolver, falling back to ``default_text``) and expand its ``{generated:…}``
+      (producers), ``{include:…}`` (workspace files) and build-time
+      ``replacements`` (runtime variables such as ``{server_hostname}``/``{model}``)
+      in one pass over the template via :func:`expand_block_template` — inserted
+      text is never re-expanded, and a block without markers is untouched.
     - **static data** block: its ``default_text`` is rendered **verbatim** —
       never run through marker/include/replacement expansion (mirrors today's
       "agent body substituted last, literally"). A data block that needs expansion
@@ -496,11 +539,7 @@ def resolve_block_text(
 
     override = override_resolver(definition, context.scope)
     text = override if override is not None else (definition.default_text or "")
-    expanded = expand_generated_markers(text, producers, context)
-    included = expand_workspace_includes(
-        expanded, context.agent.workspace, on_read=context.read_observer
-    )
-    return apply_replacements(included, replacements)
+    return expand_block_template(text, context, producers=producers, replacements=replacements)
 
 
 def apply_replacements(text: str, replacements: Mapping[str, str]) -> str:
@@ -788,7 +827,7 @@ __all__ = [
     "apply_replacements",
     "assemble_system_prompt",
     "dedupe_definitions",
-    "expand_generated_markers",
+    "expand_block_template",
     "expand_workspace_includes",
     "load_layout_entries",
     "normalize_blocks",

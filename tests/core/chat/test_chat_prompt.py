@@ -464,6 +464,62 @@ async def test_rooted_project_context_stays_pinned_across_project_tool_call(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("roots", [("alpha", "beta"), ("alpha", None, "beta")])
+async def test_rerooting_replaces_project_dependent_pins(
+    tmp_path: Path, roots: tuple[str | None, ...]
+) -> None:
+    # The working Project is re-resolved per Run: re-rooting A->B (directly or via
+    # an unrooted Run) must never keep showing A's Working Project or Skill catalog.
+    from dataclasses import replace
+
+    from core.prompts.pinned_context import (
+        PINNED_SKILL_CATALOG_META_KEY,
+        PINNED_WORKING_PROJECT_CONTEXT_META_KEY,
+    )
+
+    projects: dict[str, StubProject] = {}
+    for project_id in ("alpha", "beta"):
+        repo = tmp_path / project_id
+        repo.mkdir()
+        (repo / "AGENTS.md").write_text(f"{project_id} rules", encoding="utf-8")
+        projects[project_id] = StubProject(
+            project_id=project_id,
+            cwd=str(repo),
+            auto_load=["AGENTS.md"],
+            display_name=project_id.title(),
+        )
+    agent = StubAgent(id="coder", model=MODEL, allowed_tools=["*"], workspace=tmp_path / "ws")
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None} for _ in roots])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path, agent=agent, adapter=adapter, projects=StubProjects(projects)
+    )
+    runtime.chat_sessions.create("coder", session_id="s1")
+    loop = build_chat_loop(runtime)
+
+    for index, root in enumerate(roots):
+        runtime.agents._agent = replace(agent, root_project_id=root)
+        await loop.send("coder", "Hi", session_id="s1")
+
+        system = str(adapter.requests[index]["messages"][0]["content"])
+        metadata = runtime.chat_sessions.get_metadata(session_address("coder", "s1"))
+        assert metadata[PINNED_SKILL_CATALOG_META_KEY]["working_project_id"] == root
+        if root is None:
+            assert "## Working Project" not in system
+            assert "rules" not in system
+            continue
+        other = "beta" if root == "alpha" else "alpha"
+        assert f"- Project ID: `{root}`" in system
+        assert f"{root} rules" in system
+        assert f"{other} rules" not in system
+        assert metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY]["working_project_id"] == root
+
+    prompts = runtime.system_prompts
+    assert prompts.render_skill_catalog_calls == len(roots)
+    rendered_projects = [call.project_id for call in prompts.render_working_project_context_calls]
+    assert rendered_projects == ["alpha", "beta"]
+
+
+@pytest.mark.asyncio
 async def test_rooted_identity_agent_resolves_skills_against_home_project(tmp_path: Path) -> None:
     # A Rooted Identity Agent resolves the selected Project's skill pool while
     # retaining its own private Agent layer.
