@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import nullcontext
-from dataclasses import replace
 from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
@@ -28,7 +26,6 @@ from core.models.models_dev import (
 from core.models.query import ModelQuery
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import NetworkError, ProviderError
-from core.providers.token_getter import COPILOT_API_ENDPOINT_EXTRA_KEY
 from core.utils.errors import ConfigError
 from server.events import RESOURCE_KIND_MODELS
 from server.rpc.dispatcher import RpcMethodHandler
@@ -37,8 +34,9 @@ from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcEr
 from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.payloads import _model_detail_response, _model_response
 from server.rpc.provider_access import (
+    _connection_models_endpoint,
     _connection_reachability,
-    _runtime_provider_credential,
+    _discovery_credential,
 )
 from server.rpc.validation import _reject_unsupported, _required_string
 
@@ -532,12 +530,6 @@ def _provider_supports_refresh(provider: Any) -> bool:
     )
 
 
-def _connection_effective_endpoint(connection: Any, provider: Any) -> str | None:
-    return getattr(connection, "models_endpoint", None) or getattr(
-        provider, "models_endpoint", None
-    )
-
-
 async def _refresh_provider_connections(
     runtime: Any,
     provider_id: str,
@@ -565,7 +557,7 @@ async def _refresh_provider_connections(
     successes: list[JsonObject] = []
     errors: list[JsonObject] = []
     for connection in getattr(provider, "connections", []):
-        if not _connection_effective_endpoint(connection, provider):
+        if not _connection_models_endpoint(connection, provider):
             continue
         connection_id = f"{provider_id}:{connection.id}"
         requires_credentials = getattr(connection, "catalog_requires_credentials", True)
@@ -574,23 +566,10 @@ async def _refresh_provider_connections(
         ):
             continue
         try:
-            credential_context = (
-                _runtime_provider_credential(runtime, provider_id, connection_id, connection)
-                if requires_credentials
-                else nullcontext("")
-            )
-            async with credential_context as credential_value:
-                discovery_connection = connection
-                if provider_id == "github-copilot":
-                    token_extra_reader = getattr(runtime, "get_connection_token_extra", None)
-                    token_extra = (
-                        token_extra_reader(ConnectionRef(provider_id, connection_id))
-                        if callable(token_extra_reader)
-                        else {}
-                    )
-                    copilot_endpoint = token_extra.get(COPILOT_API_ENDPOINT_EXTRA_KEY)
-                    if copilot_endpoint:
-                        discovery_connection = replace(connection, base_url=copilot_endpoint)
+            async with _discovery_credential(runtime, provider_id, connection_id, connection) as (
+                discovery_connection,
+                credential_value,
+            ):
                 result = await refresh_models(
                     provider,
                     credential_value,

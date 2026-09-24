@@ -5,7 +5,8 @@ Test coverage:
 - ``debug.trace_list``: enabled/disabled gating, returns traces in order
 - ``debug.trace_get``: enabled/disabled gating, returns full trace
 - ``debug.trace_clear``: always allowed, clears all traces
-- ``debug.model_probe``: gating, error cases, success case (mocked HTTP)
+- ``debug.model_probe``: gating, error cases, success case (mocked HTTP), keyless
+  Connections, Connection-level endpoints and Adapter discovery headers/params
 - ``settings.get``: includes ``debug`` section
 """
 
@@ -17,9 +18,18 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
+import respx
 
 from core.debug.store import DebugTraceStore
+from core.providers.credentials import ProviderCredentialResolver
+from core.providers.providers import (
+    AuthConfig,
+    ConnectionConfig,
+    ProviderConfig,
+    ProviderRegistry,
+)
 from core.storage.layout import DataDirectoryLayout
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST
 from server.rpc.methods import dispatch_rpc
@@ -92,33 +102,66 @@ def _make_debug_state(
 def _make_probe_provider(
     provider_id: str = "openrouter",
     base_url: str = "https://openrouter.ai/api/v1",
-    models_endpoint: str = "/models",
+    models_endpoint: str | None = "/models",
     credential_key: str = "OPENROUTER_API_KEY",
     connection_id: str = "api-key",
-) -> SimpleNamespace:
-    """Create a provider stub with full ``auth`` attributes suitable for
-    ``debug.model_probe`` testing."""
-    connections = [
-        SimpleNamespace(
-            id=connection_id,
-            type="api_key",
-            label="API Key",
-            auth=SimpleNamespace(
-                header="Authorization",
-                prefix="Bearer ",
-                credential_key=credential_key,
-            ),
+    *,
+    adapter: str = "openai_compatible",
+    connection_type: str = "api_key",
+    auth: AuthConfig | None = None,
+    connection_base_url: str | None = None,
+    connection_models_endpoint: str | None = None,
+) -> ProviderConfig:
+    """Create a Provider config suitable for ``debug.model_probe`` testing."""
+    if auth is None:
+        auth = (
+            AuthConfig(header="", prefix="")
+            if connection_type == "none"
+            else AuthConfig(header="Authorization", prefix="Bearer ", credential_key=credential_key)
         )
-    ]
-    return SimpleNamespace(
+    return ProviderConfig(
         id=provider_id,
         name=provider_id.title(),
-        adapter="openai_compatible",
+        adapter=adapter,
         base_url=base_url,
+        connections=[
+            ConnectionConfig(
+                id=connection_id,
+                type=connection_type,
+                label="Probe Connection",
+                auth=auth,
+                base_url=connection_base_url,
+                models_endpoint=connection_models_endpoint,
+            )
+        ],
         defaults={"max_tokens": 8192},
         extra_headers={},
         models_endpoint=models_endpoint,
-        connections=connections,
+    )
+
+
+def _use_real_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    state: SimpleNamespace,
+    provider: ProviderConfig,
+    process_env: dict[str, str] | None = None,
+) -> None:
+    """Resolve *provider* credentials with the production resolver."""
+    resolver = ProviderCredentialResolver(
+        ProviderRegistry({provider.id: provider}), process_env=process_env or {}
+    )
+    monkeypatch.setattr(
+        type(state.runtime), "provider_credentials", property(lambda _runtime: resolver)
+    )
+
+
+async def _probe(state: SimpleNamespace, provider_id: str, connection_id: str) -> JsonObject:
+    return await dispatch_rpc(
+        state,
+        {
+            "method": "debug.model_probe",
+            "params": {"provider_id": provider_id, "connection_id": connection_id},
+        },
     )
 
 
@@ -625,6 +668,114 @@ class TestDebugModelProbe:
         assert saved["type"] == "model_probe"
         assert saved["provider_id"] == "openrouter"
         assert state.event_bus.events[-1]["payload"] == {"kind": "debug_traces"}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_keyless_connection_probes_without_auth_header(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A keyless Connection has no auth header name, so none is sent."""
+        state = _make_debug_state(tmp_path, debug_enabled=True)
+        provider = _make_probe_provider(
+            provider_id="local",
+            base_url="http://127.0.0.1:1234/v1",
+            connection_id="local",
+            connection_type="none",
+        )
+        state.runtime.providers.add(provider)
+        _use_real_credentials(monkeypatch, state, provider)
+        route = respx.get("http://127.0.0.1:1234/v1/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "local-model"}]})
+        )
+
+        response = await _probe(state, "local", "local:local")
+
+        assert response["ok"] is True, response
+        assert response["result"]["model_preview"]["model_count"] == 1
+        sent_headers = route.calls.last.request.headers
+        assert "authorization" not in sent_headers
+        assert all(name for name in sent_headers)
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_probe_uses_connection_level_endpoint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Connection ``base_url``/``models_endpoint`` override Provider values as in discovery."""
+        state = _make_debug_state(tmp_path, debug_enabled=True)
+        provider = _make_probe_provider(
+            provider_id="variant",
+            base_url="https://api.variant.test/v1",
+            models_endpoint=None,
+            credential_key="VARIANT_API_KEY",
+            connection_base_url="https://backend.variant.test/api",
+            connection_models_endpoint="/connection/models",
+        )
+        state.runtime.providers.add(provider)
+        _use_real_credentials(
+            monkeypatch, state, provider, process_env={"VARIANT_API_KEY": "sk-variant-secret"}
+        )
+        route = respx.get("https://backend.variant.test/api/connection/models").mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+
+        response = await _probe(state, "variant", "variant:api-key")
+
+        assert response["ok"] is True, response
+        assert route.calls.last.request.headers["authorization"] == "Bearer sk-variant-secret"
+        saved = DebugTraceStore(tmp_path, trace_limit=50).get_trace(response["result"]["trace_id"])
+        assert saved["request"]["url"] == "https://backend.variant.test/api/connection/models"
+        assert "sk-variant-secret" not in json.dumps(saved["request"])
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_probe_sends_adapter_discovery_headers_and_params(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The probe sends the Adapter's discovery request, with credentials redacted."""
+        state = _make_debug_state(tmp_path, debug_enabled=True)
+        provider = _make_probe_provider(
+            provider_id="anthropic-probe",
+            base_url="https://api.anthropic.test/v1",
+            adapter="anthropic",
+            auth=AuthConfig(header="x-api-key", prefix="", credential_key="PROBE_ANTHROPIC_KEY"),
+        )
+        state.runtime.providers.add(provider)
+        _use_real_credentials(
+            monkeypatch,
+            state,
+            provider,
+            process_env={"PROBE_ANTHROPIC_KEY": "sk-ant-probe-secret"},
+        )
+        route = respx.get("https://api.anthropic.test/v1/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "claude-probe"}]})
+        )
+
+        response = await _probe(state, "anthropic-probe", "anthropic-probe:api-key")
+
+        assert response["ok"] is True, response
+        request = route.calls.last.request
+        assert request.url.params["limit"] == "1000"
+        assert request.headers["anthropic-version"] == "2023-06-01"
+        assert request.headers["x-api-key"] == "sk-ant-probe-secret"
+        saved = DebugTraceStore(tmp_path, trace_limit=50).get_trace(response["result"]["trace_id"])
+        assert saved["request"]["headers"]["x-api-key"] == "[REDACTED]"
+        assert "sk-ant-probe-secret" not in json.dumps(saved)
+
+    @pytest.mark.asyncio
+    async def test_rejects_connection_without_effective_endpoint(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A Connection with neither its own nor a Provider endpoint cannot be probed."""
+        state = _make_debug_state(tmp_path, debug_enabled=True)
+        provider = _make_probe_provider(provider_id="no-catalog", models_endpoint=None)
+        state.runtime.providers.add(provider)
+        _use_real_credentials(monkeypatch, state, provider)
+
+        response = await _probe(state, "no-catalog", "no-catalog:api-key")
+
+        assert response["ok"] is False
+        assert response["error"]["code"] == RPC_ERROR_DOMAIN
 
 
 # ---------------------------------------------------------------------------
