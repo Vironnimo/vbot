@@ -44,6 +44,12 @@ function pressKey(target, key, options = {}) {
   return event;
 }
 
+async function flushMicrotasks() {
+  for (let index = 0; index < 3; index += 1) {
+    await Promise.resolve();
+  }
+}
+
 function button(label, parent = document.body) {
   const element = document.createElement('button');
   element.type = 'button';
@@ -818,6 +824,46 @@ describe('floatingHoverCard action', () => {
       expect(card.dataset.floatingOpen).toBe('true');
 
       card.dispatchEvent(new Event('pointerleave'));
+      vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
+      expect(card.dataset.floatingOpen).toBe('false');
+    });
+
+    it('returns keyboard focus to the anchor when a focused card control disables itself', async () => {
+      control.focus();
+      pressKey(control, 'Tab');
+      expect(document.activeElement).toBe(copy);
+
+      // Browsers drop focus to <body> once the focused control is disabled.
+      copy.disabled = true;
+      copy.blur();
+      await flushMicrotasks();
+
+      expect(document.activeElement).toBe(control);
+      vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS * 2);
+      expect(card.dataset.floatingOpen).toBe('true');
+      pressKey(window, 'Escape');
+      expect(card.dataset.floatingOpen).toBe('false');
+    });
+
+    it('recovers focus when the focused card control is removed without a focus event', async () => {
+      control.focus();
+      pressKey(control, 'Tab');
+
+      copy.remove();
+      await flushMicrotasks();
+
+      expect(document.activeElement).toBe(control);
+      expect(card.dataset.floatingOpen).toBe('true');
+    });
+
+    it('leaves focus alone when an enabled card control loses it', async () => {
+      control.focus();
+      pressKey(control, 'Tab');
+
+      copy.blur();
+      await flushMicrotasks();
+
+      expect(document.activeElement).toBe(document.body);
       vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
       expect(card.dataset.floatingOpen).toBe('false');
     });
