@@ -45,7 +45,7 @@ from core.prompts.pinned_context import (
 )
 from core.providers.accounts import ConnectionRef
 from core.providers.adapter import estimate_wire_request_input_tokens
-from core.sessions import ChatSession, SessionAddress
+from core.sessions import ChatSession
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -118,17 +118,6 @@ class ChatCompactionHost:
         )
 
         return await _CHAT_TRANSFORM_WORKERS.run(function, *args, **kwargs)
-
-    async def record_run_kind(self, run: Run) -> None:
-        await self.run_transform(
-            self.sessions.record_run_kind,
-            SessionAddress(
-                project_id=run.project_id,
-                agent_id=run.agent_id,
-                session_id=run.session_id,
-            ),
-            run.run_kind,
-        )
 
     def resolve_summary_adapter(
         self,

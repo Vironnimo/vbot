@@ -593,6 +593,13 @@ class SessionStore:
 
         self._execute_write(_store_runs.recover_interrupted_runs)
 
+    def record_run_kind(self, address: SessionAddress, run_kind: str) -> None:
+        from core.sessions import _store_runs
+
+        self._execute_write(
+            lambda connection: _store_runs.record_run_kind(connection, address, run_kind)
+        )
+
     def record_run_start(self, address: SessionAddress, *, run_id: str) -> None:
         return self._execute_write(
             lambda connection: _store_owned.record_run_start(connection, address, run_id=run_id)

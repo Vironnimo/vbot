@@ -6,9 +6,17 @@ import sqlite3
 from datetime import UTC, datetime
 
 from core.chat.errors import ChatSessionError
+from core.runs import RunKind
 from core.sessions import _store_codec, _store_mutations, _store_owned, _store_values
 from core.sessions._io import _encode_chat_history_cursor
-from core.sessions._types import JsonObject, SessionAddress, SessionRunCompletion
+from core.sessions._types import (
+    SESSION_RUN_KINDS_META_KEY,
+    JsonObject,
+    SessionAddress,
+    SessionRunCompletion,
+)
+
+_RUN_KIND_VALUES = frozenset(kind.value for kind in RunKind)
 
 
 def start_run(
@@ -29,6 +37,24 @@ def start_run(
         "WHERE session_key=? AND run_id=? AND status='running'",
         (work_id, run_kind, int(contributes_to_activity), started_at, state["session_key"], run_id),
     )
+    record_run_kind(connection, address, run_kind)
+
+
+def record_run_kind(connection: sqlite3.Connection, address: SessionAddress, run_kind: str) -> None:
+    """Add *run_kind* to the Session's listed Run kinds; a known kind is a no-op."""
+    if run_kind not in _RUN_KIND_VALUES:
+        raise ChatSessionError(f"unknown run kind: {run_kind}")
+
+    def update(metadata: JsonObject) -> None:
+        values = metadata.get(SESSION_RUN_KINDS_META_KEY, [])
+        if not isinstance(values, list) or not all(
+            isinstance(value, str) and value in _RUN_KIND_VALUES for value in values
+        ):
+            raise ChatSessionError("session run_kinds metadata is invalid")
+        if run_kind not in values:
+            metadata[SESSION_RUN_KINDS_META_KEY] = [*values, run_kind]
+
+    _store_mutations.mutate_metadata(connection, address, update)
 
 
 def start_tool(

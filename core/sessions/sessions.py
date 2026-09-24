@@ -36,7 +36,6 @@ from core.sessions._types import (
     PROMPT_CACHE_AFFINITY_META_KEY,
     SESSION_AUTO_TITLE_INITIALIZED_KEY,
     SESSION_AUTO_TITLE_KEY,
-    SESSION_RUN_KINDS_META_KEY,
     SESSION_TERMINAL_RUN_STATUSES,
     SESSION_TITLE_KEY,
     DeliveryReceipt,
@@ -242,20 +241,10 @@ class ChatSessionManager:
         return value
 
     def record_run_kind(self, address: SessionAddress, run_kind: RunKind) -> None:
+        """Classify a Session before its first Run starts; ``start_run`` records it too."""
         if not isinstance(run_kind, RunKind):
             raise ChatSessionError("run kind must be a RunKind")
-
-        def update(metadata: JsonObject) -> None:
-            values = metadata.get(SESSION_RUN_KINDS_META_KEY, [])
-            if not isinstance(values, list) or not all(
-                isinstance(value, str) and value in {kind.value for kind in RunKind}
-                for value in values
-            ):
-                raise ChatSessionError("session run_kinds metadata is invalid")
-            if run_kind.value not in values:
-                metadata[SESSION_RUN_KINDS_META_KEY] = [*values, run_kind.value]
-
-        self._store.mutate_metadata(address, update)
+        self._store.record_run_kind(address, run_kind.value)
 
     def recover_interrupted_runs(self) -> None:
         self._store.recover_interrupted_runs()

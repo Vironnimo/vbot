@@ -165,11 +165,6 @@ class RunExecution:
                 input_id=run.execution_input_id,
             )
         session = (await self._dependencies.sessions.get_async(session_address)).for_run(run.id)
-        await _CHAT_TRANSFORM_WORKERS.run(
-            self._dependencies.sessions.record_run_kind,
-            session_address,
-            run.run_kind,
-        )
         async with self._dependencies.sessions.write_lock(session_address):
             session_snapshot = await _SessionSnapshot.load(session)
             if request.edit_message_id is not None:
