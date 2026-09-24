@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -18,10 +19,13 @@ from core.recall import (
     RecallSearchError,
     VectorRecallBackend,
 )
+from core.recall.passages import build_session_passages
 from core.sessions import ChatSessionManager, SessionAddress
 from tests.core.recall.vector_helpers import (
+    _passage_rows,
     _StubEmbeddings,
     backend,
+    forbid_event_loop_calls,
     request,
     timestamp,
 )
@@ -143,6 +147,163 @@ async def test_vector_backend_drops_indexed_session_when_canonical_file_removed(
     data = await recall.search_page(request(query="carrot", limit=2))
 
     assert "carrots" not in [match.session_id for match in data.hits]
+    assert set(recall.store.list_indexed_sessions("coder")) == {"fruit"}
+
+
+async def test_vector_backend_filtered_search_prunes_deleted_sessions_of_whole_scope(
+    tmp_path: Path,
+) -> None:
+    """Pruning follows the complete live scope, not the Session filter of the request."""
+
+    sessions = ChatSessionManager(tmp_path)
+    for session_id, text in (("carrots", "I bought some carrots"), ("fruit", "Fruit is tasty")):
+        sessions.create("coder", session_id=session_id).append(
+            ChatMessage.user(text, timestamp=timestamp(1))
+        )
+    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+    await recall.search_page(request(query="carrot"))
+
+    sessions.delete(SessionAddress(project_id=None, agent_id="coder", session_id="carrots"))
+    await recall.search_page(dataclasses.replace(request(query="fruit"), session_id="fruit"))
+
+    assert set(recall.store.list_indexed_sessions("coder")) == {"fruit"}
+    assert _passage_rows(recall.store.path, "coder", "carrots") == {}
+
+
+async def test_vector_backend_history_edit_replaces_changed_and_vanished_passages(
+    tmp_path: Path,
+) -> None:
+    """An edited history drops Passages of the removed turns and indexes the replacement."""
+
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="edited")
+    session.append(ChatMessage.user("I love bananas and fruit " * 80, timestamp=timestamp(1)))
+    target = ChatMessage.user("My car broke down " * 80, timestamp=timestamp(2))
+    session.append(target)
+    session.append(ChatMessage.user("car repair advice " * 150, timestamp=timestamp(3)))
+    embeddings = _StubEmbeddings()
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    await recall.search_page(request(query="car"))
+    old_passages = build_session_passages(session.load_active())
+
+    session.append_many(
+        [
+            ChatMessage.history_edit(target.id, timestamp=timestamp(4)),
+            ChatMessage.user("I bought some carrots", timestamp=timestamp(4)),
+        ]
+    )
+    documents_before = len(embeddings.document_inputs)
+    page = await recall.search_page(request(query="car", limit=10))
+
+    new_passages = build_session_passages(session.load_active())
+    rows = _passage_rows(recall.store.path, "coder", "edited")
+    assert sorted(rows.values()) == sorted(passage.text for passage in new_passages)
+    assert not any("broke down" in text or "repair" in text for text in rows.values())
+    assert all("broke down" not in hit.text and "repair" not in hit.text for hit in page.hits)
+    embedded = embeddings.document_inputs[documents_before:]
+    assert sorted(embedded) == sorted(
+        {passage.text for passage in new_passages if passage not in old_passages}
+        - {passage.text for passage in old_passages}
+    )
+    assert len(embedded) < len(new_passages)
+
+
+async def test_vector_backend_fork_reuses_stored_vectors(tmp_path: Path) -> None:
+    """A forked Session repeats indexed Passage texts, so no document is embedded again."""
+
+    sessions = ChatSessionManager(tmp_path)
+    source = sessions.create("coder", session_id="source")
+    for day in range(1, 4):
+        source.append(ChatMessage.user(f"fruit story {day} " * 120, timestamp=timestamp(day)))
+    embeddings = _StubEmbeddings()
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    await recall.search_page(request(query="fruit"))
+    documents_before = len(embeddings.document_inputs)
+
+    fork = await sessions.fork(source.address)
+    page = await recall.search_page(request(query="fruit", limit=20))
+
+    assert embeddings.document_inputs[documents_before:] == []
+    assert sorted(_passage_rows(recall.store.path, "coder", fork.id).values()) == sorted(
+        _passage_rows(recall.store.path, "coder", "source").values()
+    )
+    assert fork.id in {hit.session_id for hit in page.hits}
+
+
+async def test_vector_backend_reconciles_excluded_session_once_it_is_included(
+    tmp_path: Path,
+) -> None:
+    """An excluded Session is not embedded while excluded and catches up when included."""
+
+    sessions = ChatSessionManager(tmp_path)
+    current = sessions.create("coder", session_id="current")
+    current.append(ChatMessage.user("I love bananas and fruit", timestamp=timestamp(1)))
+    sessions.create("coder", session_id="other").append(
+        ChatMessage.user("I bought some carrots", timestamp=timestamp(2))
+    )
+    embeddings = _StubEmbeddings()
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    excluding = dataclasses.replace(request(query="fruit"), excluded_session_ids=("current",))
+
+    first = await recall.search_page(excluding)
+    current.append(ChatMessage.user("more fruit talk", timestamp=timestamp(3)))
+    documents_before = len(embeddings.document_inputs)
+    second = await recall.search_page(excluding)
+
+    assert set(recall.store.list_indexed_sessions("coder")) == {"other"}
+    assert embeddings.document_inputs[documents_before:] == []
+    assert "current" not in {hit.session_id for hit in (*first.hits, *second.hits)}
+
+    included = await recall.search_page(request(query="fruit"))
+
+    assert set(recall.store.list_indexed_sessions("coder")) == {"current", "other"}
+    assert included.hits[0].session_id == "current"
+    assert "more fruit talk" in included.hits[0].text
+
+
+async def test_vector_backend_does_not_reread_session_without_passages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Session that yields no Passages is stamped and not reloaded while unchanged."""
+
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="inert").append(
+        ChatMessage.user("I bought some carrots", timestamp=timestamp(1))
+    )
+    builds: list[int] = []
+
+    def no_passages(messages: list[ChatMessage]) -> list[object]:
+        builds.append(len(messages))
+        return []
+
+    monkeypatch.setattr("core.recall.vector.build_session_passages", no_passages)
+    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+
+    await recall.search_page(request(query="carrot"))
+    await recall.search_page(request(query="carrot"))
+
+    assert builds == [1]
+    assert set(recall.store.list_indexed_sessions("coder")) == {"inert"}
+
+
+async def test_vector_search_keeps_session_and_store_reads_off_the_event_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="fruit")
+    session.append(ChatMessage.user("I love bananas and fruit", timestamp=timestamp(1)))
+    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+    calls = forbid_event_loop_calls(monkeypatch, sessions._store, recall.store)
+
+    await recall.search_page(request(query="fruit"))
+    await asyncio.to_thread(session.append, ChatMessage.user("more fruit", timestamp=timestamp(2)))
+    page = await recall.search_page(request(query="fruit"))
+
+    assert page.hits
+    assert "list_history_revisions" in calls
+    assert "knn_search" in calls
 
 
 async def test_vector_backend_reports_unavailable_when_no_embedding_binding(

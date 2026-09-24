@@ -27,7 +27,6 @@ from core.recall.recall import (
 from core.recall.sqlite_fts import SqliteFtsRecallBackend
 from core.recall.vector import VectorRecallBackend
 from core.recall.vector_store import (
-    ChunkVectorRecord,
     VectorHeader,
     VectorStore,
     VectorStoreError,
@@ -56,7 +55,6 @@ __all__ = [
     "RecallSearchPage",
     "RecallSearchRequest",
     "SupportsSessionRemoval",
-    "ChunkVectorRecord",
     "SqliteFtsRecallBackend",
     "VectorHeader",
     "VectorRecallBackend",
