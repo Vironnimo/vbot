@@ -26,9 +26,9 @@ _TOOL_PREFIX = "tool."
 # Digest key -> server histogram name (see the Performance domain's metric catalog).
 DIGEST_METRICS: dict[str, str] = {
     "event_loop_lag_ms": "event_loop.lag",
-    "sqlite_write_ms": "sqlite.write",
-    "sqlite_write_wait_ms": "sqlite.write_wait",
-    "sqlite_read_ms": "sqlite.read",
+    "sqlite_write_ms": "sqlite.sessions.write",
+    "sqlite_write_wait_ms": "sqlite.sessions.write_wait",
+    "sqlite_read_ms": "sqlite.sessions.read",
     "chat_run_ms": "chat.run",
     "chat_request_build_ms": "chat.request_build",
     "provider_first_token_ms": "provider.first_token",

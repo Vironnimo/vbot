@@ -105,7 +105,7 @@ AREA_HELP = {
     "agent": "Inspect and manage agent configs",
     "project": "Inspect and manage projects and their scanned teams",
     "session": "Inspect and manage agent chat sessions",
-    "session-store": "Inspect, snapshot, verify, and recover the SQLite Session store",
+    "data-store": "Inspect, snapshot, verify, and recover the canonical SQLite databases",
     "channel": "Inspect and manage channel configs",
     "tool": "Inspect public tool catalog",
     "prompt": "Inspect and manage System Prompt blocks",
@@ -168,18 +168,18 @@ SESSION_HELP = {
 }
 
 
-SESSION_STORE_HELP = {
-    "status": "Show current SQLite Session-store health and recovery state",
-    "snapshot": "Manage verified SQLite Session snapshots",
-    "incident": "Manage durable Session-store recovery incidents",
+DATA_STORE_HELP = {
+    "status": "Show database health, data snapshots, and recovery incidents",
+    "snapshot": "Manage verified data snapshots of every canonical database",
+    "incident": "Manage durable database recovery incidents",
 }
 
 
-SESSION_STORE_SNAPSHOT_HELP = {
-    "list": "List verified Session-store snapshots",
-    "create": "Create a verified Session-store snapshot through the running server",
-    "verify": "Verify one Session-store snapshot",
-    "restore": "Restore one verified Session-store snapshot",
+DATA_STORE_SNAPSHOT_HELP = {
+    "list": "List verified data snapshots",
+    "create": "Create a verified data snapshot through the running server",
+    "verify": "Verify every database in one data snapshot",
+    "restore": "Restore databases from one verified data snapshot",
 }
 
 

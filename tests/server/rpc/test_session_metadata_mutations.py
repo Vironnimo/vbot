@@ -11,8 +11,8 @@ import pytest
 
 from core.agents import AgentNotFoundError
 from core.channels import ChannelConfig
+from core.database import write_bootstrap_marker
 from core.sessions import ChatSessionManager, SessionAddress
-from core.sessions.format import write_bootstrap_marker
 from server.events import ServerEventBus
 from server.rpc.errors import RpcError
 from server.rpc.session_methods import _link_session_to_channel, _set_session_compaction_policy

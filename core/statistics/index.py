@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
+from core.database import required_journal_mode
 from core.sessions import (
     FORK_SOURCE_META_KEY,
     ChatSession,
@@ -31,7 +32,6 @@ from core.sessions import (
     SessionReadBatch,
     SessionReadCursor,
 )
-from core.sessions.schema import required_journal_mode
 from core.statistics._projection import ProjectedRows
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger

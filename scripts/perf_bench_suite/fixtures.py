@@ -25,11 +25,11 @@ from typing import Any
 import httpx
 
 from core.chat.messages import ChatMessage, ToolCall
+from core.database import write_bootstrap_marker
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.sessions import ChatSession, ChatSessionManager
-from core.sessions.format import write_bootstrap_marker
 from core.tools import tool_success
 from scripts.perf_bench_suite.runner import BenchContext
 

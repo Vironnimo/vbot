@@ -137,22 +137,27 @@ def test_parse_args_supports_server_command_options() -> None:
     assert args.data_dir == "dev-data"
 
 
-def test_parse_args_supports_session_store_operations() -> None:
-    status = cli_main.parse_args(["session-store", "status", "--data-dir", "dev-data"])
-    restore = cli_main.parse_args(["session-store", "snapshot", "restore", "snapshot-1", "--yes"])
-    incident = cli_main.parse_args(["session-store", "incident", "acknowledge", "incident-1"])
+def test_parse_args_supports_data_store_operations() -> None:
+    status = cli_main.parse_args(["data-store", "status", "--data-dir", "dev-data"])
+    restore = cli_main.parse_args(["data-store", "snapshot", "restore", "snapshot-1", "--yes"])
+    partial = cli_main.parse_args(
+        ["data-store", "snapshot", "restore", "snapshot-1", "--database", "sessions", "--yes"]
+    )
+    incident = cli_main.parse_args(["data-store", "incident", "acknowledge", "incident-1"])
 
     assert (status.area, status.command, status.data_dir) == (
-        "session-store",
+        "data-store",
         "status",
         "dev-data",
     )
-    assert (restore.command, restore.snapshot_command, restore.snapshot_id, restore.yes) == (
-        "snapshot",
-        "restore",
-        "snapshot-1",
-        True,
-    )
+    assert (
+        restore.command,
+        restore.snapshot_command,
+        restore.snapshot_id,
+        restore.yes,
+        restore.database,
+    ) == ("snapshot", "restore", "snapshot-1", True, [])
+    assert partial.database == ["sessions"]
     assert (incident.command, incident.incident_command, incident.incident_id) == (
         "incident",
         "acknowledge",

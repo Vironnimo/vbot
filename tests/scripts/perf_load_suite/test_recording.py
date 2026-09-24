@@ -47,8 +47,8 @@ STOP_RESULT = {
     "summary": {
         "metrics": {
             "event_loop.lag": _metric(1.0, 12.0, 80.0, 50.0),
-            "sqlite.write": _metric(0.5, 9.0, 20.0, 400.0),
-            "sqlite.write_wait": _metric(0.2, 15.0, 25.0, 60.0),
+            "sqlite.sessions.write": _metric(0.5, 9.0, 20.0, 400.0),
+            "sqlite.sessions.write_wait": _metric(0.2, 15.0, 25.0, 60.0),
             "chat.request_build": _metric(3.0, 30.0, 45.0, 900.0),
             "tool.read": _metric(2.0, 6.0, 7.0, 25.0, count=4),
             "tool.bash": _metric(600.0, 650.0, 700.0, 800.0, count=2),

@@ -7,7 +7,7 @@ import pytest
 from core.agents import (
     AgentStore,
 )
-from core.sessions.format import write_bootstrap_marker
+from core.database import write_bootstrap_marker
 
 # The agent domain seeds only SOUL.md; USER.md/MEMORY.md are the memory system's and
 # are created lazily on first write, never by workspace seeding.

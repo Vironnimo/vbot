@@ -22,9 +22,9 @@ from core.channels.telegram import (
 )
 from core.chat import ReplySurface
 from core.chat.commands import CommandOutcome, CommandUnavailability, PreparedCommand
+from core.database import write_bootstrap_marker
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run, WaitingWorkAdmission
 from core.sessions import ChatSessionManager
-from core.sessions.format import write_bootstrap_marker
 
 from .engine_test_support import QUEUE_DRAIN_TIMEOUT_SECONDS, MemoryChannelAccessRegistry
 
@@ -271,7 +271,7 @@ def make_adapter(
     else:
         monkeypatch.delenv("TELEGRAM_BOT_TOKEN_TG_ASSISTANT", raising=False)
 
-    if not (tmp_path / "session-store.json").exists():
+    if not (tmp_path / "data-store.json").exists():
         write_bootstrap_marker(tmp_path)
     chat_sessions = ChatSessionManager(tmp_path)
     trigger_mock = trigger_run or AsyncMock()

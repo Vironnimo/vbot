@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from core.database import required_journal_mode
 from core.recall.canonical import (
     CanonicalSessionRecallBackend,
     RecallScope,
@@ -31,7 +32,6 @@ from core.recall.recall import (
     RecallSearchRequest,
 )
 from core.sessions import SessionNotFoundError
-from core.sessions.schema import required_journal_mode
 
 _INDEX_DIR_NAME = "recall"
 _INDEX_FILE_NAME = "session_index.sqlite"

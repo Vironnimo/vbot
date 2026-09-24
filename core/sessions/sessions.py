@@ -12,10 +12,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from core.chat.errors import ChatSessionError
 from core.runs import RunExecutionOwner, RunKind
-from core.sessions._io import (
-    _run_session_io,
-    _SessionWriteLock,
-)
+from core.sessions._io import _SessionWriteLock
 from core.sessions._metadata import (
     _append_run_kind,
     _completion_activity_payload,
@@ -61,6 +58,7 @@ from core.settings import is_valid_project_id
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
+    from core.database import Database
     from core.runs import Run
 
 
@@ -84,32 +82,10 @@ class ChatSessionManager:
         if self._owns_store:
             self._store.close()
 
-    def backup_snapshot(
-        self,
-        destination: Path,
-        *,
-        cancel_event: threading.Event | None = None,
-    ) -> bool:
-        """Write one consistent database copy for the snapshot engine."""
-        return self._store.backup(destination, cancel_event=cancel_event)
-
-    def create_snapshot(self, *, reason: str) -> Path | None:
-        """Create one explicit verified snapshot."""
-        from core.sessions.format import read_session_store_marker
-        from core.sessions.snapshots import create_snapshot
-
-        marker = read_session_store_marker(self.data_dir)
-        database_id = None if marker is None else str(marker["database_id"])
-        return create_snapshot(
-            self.data_dir,
-            self._store.path,
-            self.backup_snapshot,
-            database_id=database_id,
-            reason=reason,
-        )
-
-    def status_projection(self) -> JsonObject:
-        return self._store.status_projection()
+    @property
+    def database(self) -> Database:
+        """The Session database handle, for data snapshots and data-store status."""
+        return self._store.database
 
     def add_title_changed_callback(
         self, callback: Callable[[SessionAddress], None]
@@ -154,7 +130,7 @@ class ChatSessionManager:
     async def create_async(
         self, agent_id: str, session_id: str | None = None, project_id: str | None = None
     ) -> ChatSession:
-        return await _run_session_io(self.create, agent_id, session_id, project_id)
+        return await self._store.run_async(self.create, agent_id, session_id, project_id)
 
     def exists(self, address: SessionAddress) -> bool:
         _validate_session_id(address.session_id)
@@ -170,7 +146,7 @@ class ChatSessionManager:
         return ChatSession(self._store, address)
 
     async def get_async(self, address: SessionAddress) -> ChatSession:
-        return await _run_session_io(self.get, address)
+        return await self._store.run_async(self.get, address)
 
     def get_or_create(self, address: SessionAddress) -> ChatSession:
         """Return the live Session, creating it when missing (existing ones cost a read)."""
@@ -197,7 +173,7 @@ class ChatSessionManager:
         return self._store.ensure_metadata(address, mutation, create_missing=create_missing)
 
     async def get_metadata_async(self, address: SessionAddress) -> JsonObject:
-        return await _run_session_io(self.get_metadata, address)
+        return await self._store.run_async(self.get_metadata, address)
 
     def descriptor_sources(
         self, addresses: Sequence[SessionAddress]
@@ -229,7 +205,7 @@ class ChatSessionManager:
         return self._store.metadata_value(address, key)
 
     async def metadata_value_async(self, address: SessionAddress, key: str) -> Any:
-        return await _run_session_io(self.metadata_value, address, key)
+        return await self._store.run_async(self.metadata_value, address, key)
 
     def prompt_cache_affinity_id(self, address: SessionAddress) -> str:
         value = self._store.metadata_value(address, PROMPT_CACHE_AFFINITY_META_KEY)
@@ -261,7 +237,7 @@ class ChatSessionManager:
         address = SessionAddress(
             project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
         )
-        await _run_session_io(
+        await self._store.run_async(
             lambda: self._store.start_run(
                 address,
                 run_id=run.id,
@@ -286,7 +262,7 @@ class ChatSessionManager:
             completion_reason=run.cancel_reason,
             contributes_to_activity=run.contributes_to_agent_activity,
         )
-        return await _run_session_io(self._store.finish_run, address, completion)
+        return await self._store.run_async(self._store.finish_run, address, completion)
 
     def record_terminal_run(
         self, address: SessionAddress, run_id: str, status: str, timestamp: str
@@ -325,7 +301,7 @@ class ChatSessionManager:
     async def mark_terminal_run_read_async(
         self, address: SessionAddress, run_id: str
     ) -> JsonObject:
-        return await _run_session_io(self.mark_terminal_run_read, address, run_id)
+        return await self._store.run_async(self.mark_terminal_run_read, address, run_id)
 
     def set_title(self, address: SessionAddress, title: str) -> str | None:
         normalized = _normalize_session_title(title)
@@ -338,7 +314,7 @@ class ChatSessionManager:
         return normalized
 
     async def set_title_async(self, address: SessionAddress, title: str) -> str | None:
-        return await _run_session_io(self.set_title, address, title)
+        return await self._store.run_async(self.set_title, address, title)
 
     def set_auto_title(
         self, address: SessionAddress, title: str, *, initialized: bool = True
@@ -508,7 +484,7 @@ class ChatSessionManager:
 
     async def delete_temporary_group(self, *, owner_name: str, group_id: str) -> int:
         """Delete bound participant Sessions after their owner has drained execution."""
-        return await _run_session_io(
+        return await self._store.run_async(
             lambda: self._store.delete_temporary_group(owner_name=owner_name, group_id=group_id)
         )
 
@@ -520,7 +496,7 @@ class ChatSessionManager:
         after: str = "",
         limit: int = 100,
     ) -> builtins.list[TemporarySessionBinding]:
-        return await _run_session_io(
+        return await self._store.run_async(
             lambda: self._store.temporary_bindings(
                 owner_name=owner_name, group_id=group_id, after=after, limit=limit
             )
@@ -533,7 +509,7 @@ class ChatSessionManager:
     async def set_temporary_group_title_async(
         self, *, owner_name: str, group_id: str, title: str
     ) -> None:
-        await _run_session_io(
+        await self._store.run_async(
             lambda: self.set_temporary_group_title(
                 owner_name=owner_name, group_id=group_id, title=title
             )
@@ -543,7 +519,7 @@ class ChatSessionManager:
         self, *, owner_name: str, group_ids: Sequence[str]
     ) -> dict[str, str]:
         """Return stored display titles for this owner's groups, keyed by group id."""
-        return await _run_session_io(
+        return await self._store.run_async(
             lambda: self._store.temporary_group_titles(owner_name=owner_name, group_ids=group_ids)
         )
 
@@ -572,7 +548,7 @@ class ChatSessionManager:
         group_id: str | None = None,
         metadata_keys: Sequence[str] = (),
     ) -> builtins.list[OwnedSessionSummary]:
-        return await _run_session_io(
+        return await self._store.run_async(
             lambda: self.list_owned_session_summaries(
                 owner_name=owner_name, group_id=group_id, metadata_keys=metadata_keys
             )
@@ -592,7 +568,7 @@ class ChatSessionManager:
         continuation_records: Sequence[JsonObject] = (),
         since: SessionReadCursor | None = None,
     ) -> SessionReadBatch | None:
-        return await _run_session_io(
+        return await self._store.run_async(
             lambda: self.append_messages_with_receipts(
                 address,
                 generation_id=generation_id,
@@ -642,7 +618,7 @@ class ChatSessionManager:
         owner_name: str,
         receipt_id: str,
     ) -> DeliveryReceipt | None:
-        return await _run_session_io(
+        return await self._store.run_async(
             lambda: self._store.delivery_receipt(
                 address,
                 generation_id=generation_id,
@@ -659,7 +635,7 @@ class ChatSessionManager:
         owner: RunExecutionOwner,
         input_id: str | None = None,
     ) -> None:
-        await _run_session_io(
+        await self._store.run_async(
             lambda: self._store.record_run_owner(
                 address, run_id=run_id, owner=owner, input_id=input_id
             )
@@ -667,7 +643,7 @@ class ChatSessionManager:
 
     async def record_run_start_async(self, address: SessionAddress, *, run_id: str) -> None:
         """Persist one normal Run admission boundary before it appends output."""
-        await _run_session_io(lambda: self._store.record_run_start(address, run_id=run_id))
+        await self._store.run_async(lambda: self._store.record_run_start(address, run_id=run_id))
 
     def owned_runs(
         self,
@@ -690,7 +666,7 @@ class ChatSessionManager:
         self, *, owner_name: str, group_id: str, run_ids: Sequence[str]
     ) -> dict[str, OwnedRunRecord]:
         """Read exact Run ids' execution records in one owner group (absent ids omitted)."""
-        return await _run_session_io(
+        return await self._store.run_async(
             lambda: self._store.owned_runs_by_id(
                 owner_name=owner_name, group_id=group_id, run_ids=run_ids
             )
@@ -700,11 +676,11 @@ class ChatSessionManager:
         self, address: SessionAddress, input_id: str
     ) -> OwnedRunRecord | None:
         """Read the execution record admitted for one input of a live Session."""
-        return await _run_session_io(self._store.owned_run_by_input, address, input_id)
+        return await self._store.run_async(self._store.owned_run_by_input, address, input_id)
 
     async def tool_result_persisted_async(self, address: SessionAddress, tool_call_id: str) -> bool:
         """Report in one indexed probe whether a live Session holds a Tool call's result."""
-        return await _run_session_io(self._store.tool_result_persisted, address, tool_call_id)
+        return await self._store.run_async(self._store.tool_result_persisted, address, tool_call_id)
 
     def run_start_boundaries(
         self, addresses: Sequence[SessionAddress]
@@ -734,7 +710,7 @@ class ChatSessionManager:
         _validate_session_id(source.session_id)
         _validate_session_id(target.session_id)
         async with self.write_lock(source):
-            return await _run_session_io(self._move, source, target, strip_meta_keys)
+            return await self._store.run_async(self._move, source, target, strip_meta_keys)
 
     def _move(
         self, source: SessionAddress, target: SessionAddress, strip_meta_keys: frozenset[str]
@@ -759,7 +735,7 @@ class ChatSessionManager:
         """Copy a Session in one write; ``title``/``run_kind`` label the copy in it."""
         _validate_session_id(source.session_id)
         async with self.write_lock(source):
-            fork = await _run_session_io(
+            fork = await self._store.run_async(
                 self._fork,
                 source,
                 target_agent_id or source.agent_id,
@@ -832,7 +808,7 @@ class ChatSessionManager:
 
     async def archive(self, address: SessionAddress) -> None:
         async with self.write_lock(address):
-            await _run_session_io(self._store.archive, address)
+            await self._store.run_async(self._store.archive, address)
 
     def restore(self, address: SessionAddress) -> None:
         self._store.restore(address)

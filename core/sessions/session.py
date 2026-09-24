@@ -9,9 +9,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from core.chat.errors import ChatSessionError
-from core.sessions._io import (
-    _run_session_io,
-)
 from core.sessions._metadata import _decode_chat_history_cursor, _new_prompt_cache_affinity_id
 from core.sessions._types import (
     PROMPT_CACHE_AFFINITY_META_KEY,
@@ -143,7 +140,7 @@ class ChatSession:
         since: SessionReadCursor,
         metadata_mutation: Callable[[JsonObject], None] | None = None,
     ) -> tuple[SessionReadBatch, str] | None:
-        return await _run_session_io(
+        return await self._store.run_async(
             lambda: self.commit_compaction_checkpoint(
                 checkpoint, since=since, metadata_mutation=metadata_mutation
             )
@@ -164,7 +161,7 @@ class ChatSession:
                 self._buffers.activated_skill_cache_loaded = False
 
     async def append_async(self, message: ChatMessage) -> None:
-        await _run_session_io(self.append, message)
+        await self._store.run_async(self.append, message)
 
     async def append_many_async(
         self,
@@ -176,7 +173,7 @@ class ChatSession:
     ) -> SessionReadBatch | None:
         if not messages:
             return None
-        return await _run_session_io(
+        return await self._store.run_async(
             lambda: self.append_many(
                 list(messages),
                 continuation_records=list(continuation_records),
@@ -193,20 +190,20 @@ class ChatSession:
 
     async def append_continuation_records_async(self, records: list[JsonObject]) -> None:
         if records:
-            await _run_session_io(self.append_continuation_records, list(records))
+            await self._store.run_async(self.append_continuation_records, list(records))
 
     def load_continuation(self) -> SessionContinuationState | None:
         """Return the current Continuation state folded from its records."""
         return self._store.continuation(self.address)
 
     async def load_continuation_async(self) -> SessionContinuationState | None:
-        return await _run_session_io(self.load_continuation)
+        return await self._store.run_async(self.load_continuation)
 
     def clear_continuation(self) -> None:
         self._store.clear_continuation(self.address)
 
     async def clear_continuation_async(self) -> None:
-        await _run_session_io(self.clear_continuation)
+        await self._store.run_async(self.clear_continuation)
 
     def begin_defer_notes(self) -> None:
         with self._buffers.lock:
@@ -241,7 +238,7 @@ class ChatSession:
             self.append(note)
 
     async def add_note_async(self, content: str) -> None:
-        await _run_session_io(self.add_note, content)
+        await self._store.run_async(self.add_note, content)
 
     def drain_pending_notes(self) -> list[ChatMessage]:
         with self._buffers.lock:
@@ -297,7 +294,7 @@ class ChatSession:
         return self._store.active_messages(self.address)
 
     async def load_active_async(self) -> list[ChatMessage]:
-        return await _run_session_io(self.load_active)
+        return await self._store.run_async(self.load_active)
 
     def active_user_message_count(self, *, limit: int = 2) -> int:
         return self._store.active_user_message_count(self.address, limit=limit)
@@ -306,7 +303,7 @@ class ChatSession:
         return self._store.latest_note(self.address, content_prefix=content_prefix)
 
     async def latest_note_async(self, content_prefix: str) -> ChatMessage | None:
-        return await _run_session_io(self.latest_note, content_prefix)
+        return await self._store.run_async(self.latest_note, content_prefix)
 
     def read_chat_history_snapshot(
         self,
@@ -363,7 +360,7 @@ class ChatSession:
         )
 
     async def status_snapshot_async(self) -> SessionStatusSnapshot:
-        return await _run_session_io(self.status_snapshot)
+        return await self._store.run_async(self.status_snapshot)
 
     def resolve_history_snapshot(
         self,
@@ -485,7 +482,7 @@ class ChatSession:
         return self._store.reflection_runs(self.address)
 
     async def load_run_messages_async(self, run_id: str) -> list[ChatMessage]:
-        return await _run_session_io(self._store.run_messages, self.address, run_id)
+        return await self._store.run_async(self._store.run_messages, self.address, run_id)
 
     def find_run_summary(
         self,
@@ -520,7 +517,7 @@ class ChatSession:
         work_id: str | None = None,
         require_latest: bool = False,
     ) -> SessionRunResult | None:
-        return await _run_session_io(
+        return await self._store.run_async(
             lambda: self.load_run_result(
                 run_id=run_id, work_id=work_id, require_latest=require_latest
             )
@@ -532,7 +529,7 @@ class ChatSession:
     async def load_since_async(
         self, cursor: SessionReadCursor | None = None
     ) -> SessionReadBatch | None:
-        return await _run_session_io(self.load_since, cursor)
+        return await self._store.run_async(self.load_since, cursor)
 
     def delete(self) -> None:
         self._store.delete(self.address)

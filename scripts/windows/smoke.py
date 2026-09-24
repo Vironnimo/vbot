@@ -129,8 +129,9 @@ def _write_failure_evidence(temporary: Path, evidence: Path, transcript: list[st
         (root / "operations", "operations"),
         (root / "logs", "application-logs"),
         (data / "settings.json", "data/settings.json"),
-        (data / "session-store.json", "data/session-store.json"),
-        (data / "session-recovery.json", "data/session-recovery.json"),
+        (data / "data-store.json", "data/data-store.json"),
+        (data / "data-maintenance.json", "data/data-maintenance.json"),
+        (data / "incidents", "data/incidents"),
         (data / "logs", "data/logs"),
     ):
         _copy_evidence_entry(source, evidence / relative)

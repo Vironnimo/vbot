@@ -21,6 +21,7 @@ from core.automation import BootstrapService, CronService, ReflectionService, Tr
 from core.calendar import CalendarService
 from core.channels import ChannelService
 from core.chat import ChatLoop, CommandDispatcher
+from core.database import Database
 from core.extensions import (
     ExtensionRegistry,
     InteractionEvent,
@@ -995,6 +996,17 @@ class Runtime:
     @property
     def extensions(self) -> ExtensionRegistry | None:
         return self._extensions
+
+    def canonical_databases(self) -> tuple[Database, ...]:
+        """Every canonical database this Runtime has open.
+
+        Data snapshots copy these through their open handles and data-store
+        status reads their owner health; registered databases that are not
+        open here are read from their files.
+        """
+        if self._chat_sessions is None:
+            return ()
+        return (self._chat_sessions.database,)
 
     chat_sessions: _StartedService[ChatSessionManager] = _StartedService(
         lambda runtime: runtime._chat_sessions, "Chat session service not available"
