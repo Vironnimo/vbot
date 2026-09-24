@@ -33,9 +33,17 @@ class ReplayEventStream(Generic[EventT]):
     """Own retained replay, live fan-out, and bounded subscriber queues.
 
     The event's shape and terminal semantics stay with the consuming domain.
-    This owner only requires a monotonically increasing sequence extractor and,
-    optionally, a terminal-event predicate. A lagging subscriber is removed and
-    woken with an internal sentinel so its async iterator closes without leaking.
+    This owner only requires a contiguous sequence extractor (each publish is
+    exactly one greater than the previous) and, optionally, a terminal-event
+    predicate. A lagging subscriber is removed and woken with an internal
+    sentinel so its async iterator closes without leaking.
+
+    The first event a subscription yields may start beyond the requested cursor
+    when older events already left retention; accessors treat it as the replay
+    head. After that head, a subscription never skips a sequence: if the next
+    event it could deliver is no longer contiguous because the missing events
+    fell out of retention while the subscriber lagged, it is evicted exactly
+    like a subscriber whose live queue overflowed, so the accessor reconnects.
     """
 
     def __init__(
@@ -101,14 +109,24 @@ class ReplayEventStream(Generic[EventT]):
         """Replay newer retained events, then optionally stream live events."""
 
         subscriber: _Subscriber[EventT] | None = None
+        head_yielded = False
+
+        def skips_events(sequence: int) -> bool:
+            return head_yielded and sequence > after_sequence + 1
+
         try:
             # Historical replay happens before live registration so a slow
             # consumer cannot fill its live queue (and get evicted) while
             # walking a large retained window. Events published during that
             # walk stay in retention and are picked up by catch-up below.
             async for event in self._iter_retained(after_sequence=after_sequence):
+                sequence = self._sequence_of(event)
+                if skips_events(sequence):
+                    self._report_lagged()
+                    return
                 yield event
-                after_sequence = self._sequence_of(event)
+                head_yielded = True
+                after_sequence = sequence
                 if self._is_terminal(event):
                     return
 
@@ -120,15 +138,21 @@ class ReplayEventStream(Generic[EventT]):
 
             # Catch up anything published during historical replay or between
             # registration and the live wait. Dropped full-queue publishes
-            # during this phase are safe: retention still holds them.
+            # during this phase are safe while retention still holds them; a
+            # sequence gap proves they fell out and evicts the subscriber.
             while True:
                 progressed = False
                 async for event in self._iter_retained(
                     after_sequence=after_sequence,
                     subscriber=subscriber,
                 ):
+                    sequence = self._sequence_of(event)
+                    if skips_events(sequence):
+                        self._evict_lagging_subscriber(subscriber)
+                        return
                     yield event
-                    after_sequence = self._sequence_of(event)
+                    head_yielded = True
+                    after_sequence = sequence
                     progressed = True
                     if self._is_terminal(event):
                         return
@@ -138,7 +162,11 @@ class ReplayEventStream(Generic[EventT]):
                     sequence = self._sequence_of(event)
                     if sequence <= after_sequence:
                         continue
+                    if skips_events(sequence):
+                        self._evict_lagging_subscriber(subscriber)
+                        return
                     yield event
+                    head_yielded = True
                     after_sequence = sequence
                     progressed = True
                     if self._is_terminal(event):
@@ -160,7 +188,11 @@ class ReplayEventStream(Generic[EventT]):
                 sequence = self._sequence_of(event)
                 if sequence <= after_sequence:
                     continue
+                if skips_events(sequence):
+                    self._evict_lagging_subscriber(subscriber)
+                    return
                 yield event
+                head_yielded = True
                 after_sequence = sequence
                 if self._is_terminal(event):
                     return
@@ -226,6 +258,9 @@ class ReplayEventStream(Generic[EventT]):
         _drain_queue(subscriber.queue)
         subscriber.queued_bytes = 0
         subscriber.queue.put_nowait(_LAGGED_SUBSCRIBER)
+        self._report_lagged()
+
+    def _report_lagged(self) -> None:
         if self._on_lagged is not None:
             self._on_lagged()
 
