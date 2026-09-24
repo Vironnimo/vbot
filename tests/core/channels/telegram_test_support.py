@@ -26,7 +26,7 @@ from core.runs import ASSISTANT_OUTPUT_EVENT, Run, WaitingWorkAdmission
 from core.sessions import ChatSessionManager
 from core.sessions.format import write_bootstrap_marker
 
-from .engine_test_support import MemoryChannelAccessRegistry
+from .engine_test_support import QUEUE_DRAIN_TIMEOUT_SECONDS, MemoryChannelAccessRegistry
 
 CHANNEL_REPLY_SURFACE = ReplySurface.channel(
     platform="telegram",
@@ -348,9 +348,7 @@ async def drain_chat_queue(adapter: TelegramChannelAdapter, chat_id: int) -> Non
     if queue is None:
         await asyncio.sleep(0)
         return
-    # Generous timeout: under xdist load a worker's first lazy import of the real
-    # telegram package can eat well over a second before the queue drains.
-    await asyncio.wait_for(queue.join(), timeout=5)
+    await asyncio.wait_for(queue.join(), timeout=QUEUE_DRAIN_TIMEOUT_SECONDS)
 
 
 def install_fake_telegram_media(monkeypatch: pytest.MonkeyPatch) -> None:

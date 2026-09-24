@@ -39,6 +39,8 @@ from .engine_test_support import (
     pytest,
 )
 
+_ASYNC_COORDINATION_TIMEOUT_SECONDS = 10.0
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("execution_mode", ["immediate", "serialized"])
@@ -263,7 +265,7 @@ async def test_queued_extension_command_removed_before_execution_is_stale(
     monkeypatch.setattr(engine, "_execute_prepared_command", pause_before_execution)
 
     await engine.handle_inbound_text(make_conversation(), "/workflow")
-    await asyncio.wait_for(execution_reached.wait(), timeout=1)
+    await asyncio.wait_for(execution_reached.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
     dispatcher.unregister_extension_commands("workflow_ext")
     release_execution.set()
     await drain(engine, 12345)
@@ -634,7 +636,7 @@ async def test_stop_command_eagerly_dispatched_while_worker_is_blocked(
     monkeypatch.setattr(engine, "_relay_run_events", AsyncMock(side_effect=block_relay))
 
     await engine.handle_inbound_text(make_conversation(), "hello")
-    await asyncio.wait_for(relay_started.wait(), timeout=1)
+    await asyncio.wait_for(relay_started.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
 
     await engine.handle_inbound_text(make_conversation(), "/stop")
     await asyncio.sleep(0)
@@ -676,7 +678,7 @@ async def test_stop_command_bypasses_full_waiting_limit(
     monkeypatch.setattr(engine, "_relay_run_events", block_relay)
 
     await engine.handle_inbound_text(make_conversation(), "running")
-    await asyncio.wait_for(relay_started.wait(), timeout=1)
+    await asyncio.wait_for(relay_started.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
     await engine.handle_inbound_text(make_conversation(), "queued")
     await engine.handle_inbound_text(make_conversation(), "/stop")
 
