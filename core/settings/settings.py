@@ -102,6 +102,8 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
     }
 )
 OPENROUTER_ROUTING_MODES = frozenset({"automatic", "allowed", "ordered"})
+OPENROUTER_ROUTING_FIELDS = frozenset({"default", "models"})
+OPENROUTER_ROUTING_POLICY_FIELDS = frozenset({"mode", "providers", "blocked", "allow_fallbacks"})
 OPENROUTER_PROVIDER_SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*$")
 OPENROUTER_PROVIDER_SLUG_MAX_LENGTH = 128
 OPENROUTER_MODEL_ID_MAX_LENGTH = 256
@@ -330,7 +332,7 @@ def parse_openrouter_routing(value: Any) -> JsonObject:
     path = "params.providers.openrouter.routing"
     if not isinstance(value, Mapping):
         raise SettingsValidationError(f"{path} must be an object")
-    unsupported_fields = sorted(set(value) - {"default", "models"})
+    unsupported_fields = sorted(set(value) - OPENROUTER_ROUTING_FIELDS)
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported {path} settings: {', '.join(unsupported_fields)}"
@@ -376,7 +378,7 @@ def parse_openrouter_routing(value: Any) -> JsonObject:
 def _parse_openrouter_routing_policy(value: Any, *, path: str) -> JsonObject:
     if not isinstance(value, Mapping):
         raise SettingsValidationError(f"{path} must be an object")
-    unsupported_fields = sorted(set(value) - {"mode", "providers", "blocked", "allow_fallbacks"})
+    unsupported_fields = sorted(set(value) - OPENROUTER_ROUTING_POLICY_FIELDS)
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported {path} settings: {', '.join(unsupported_fields)}"

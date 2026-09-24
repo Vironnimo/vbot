@@ -468,6 +468,7 @@ def test_validate_settings_file_accepts_known_settings(tmp_path: Path) -> None:
     settings_path.write_text(
         json.dumps(
             {
+                "format_version": 1,
                 "server_port": 8500,
                 "appearance": {
                     "language": "en",
@@ -564,6 +565,7 @@ def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:
     settings_path.write_text(
         json.dumps(
             {
+                "format_version": 1,
                 "server_port": 70000,
                 "skill_directories": ["relative/path"],
                 "attachment_max_size_bytes": 0,
@@ -598,9 +600,9 @@ def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:
         ("error", "$.compaction.trigger.threshold", "must be in (0, 1]"),
         ("error", "$.compaction.strategy.tail_tokens", "must be a positive integer"),
         (
-            "error",
+            "warning",
             "$.defaults.agent.unknown",
-            "unsupported defaults.agent setting: unknown",
+            "unknown defaults.agent setting: unknown",
         ),
         ("error", "$.defaults.agent.temperature", "must be a number"),
         (
@@ -619,7 +621,7 @@ def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:
 def test_validate_settings_file_reports_invalid_chat_width(tmp_path: Path) -> None:
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(
-        json.dumps({"appearance": {"language": "en", "chat_width": "huge"}}),
+        json.dumps({"format_version": 1, "appearance": {"language": "en", "chat_width": "huge"}}),
         encoding="utf-8",
     )
 
@@ -638,7 +640,9 @@ def test_validate_settings_file_reports_invalid_chat_width(tmp_path: Path) -> No
 def test_validate_settings_file_reports_invalid_chat_working_mode(tmp_path: Path) -> None:
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(
-        json.dumps({"appearance": {"language": "en", "chat_working_mode": "dense"}}),
+        json.dumps(
+            {"format_version": 1, "appearance": {"language": "en", "chat_working_mode": "dense"}}
+        ),
         encoding="utf-8",
     )
 
@@ -656,7 +660,9 @@ def test_validate_settings_file_reports_invalid_chat_working_mode(tmp_path: Path
 
 def test_validate_settings_file_reports_invalid_recall_backend(tmp_path: Path) -> None:
     settings_path = tmp_path / "settings.json"
-    settings_path.write_text(json.dumps({"recall": {"backend": "SQLite FTS"}}), encoding="utf-8")
+    settings_path.write_text(
+        json.dumps({"format_version": 1, "recall": {"backend": "SQLite FTS"}}), encoding="utf-8"
+    )
 
     report = validate_settings_file(settings_path)
 
@@ -668,7 +674,7 @@ def test_validate_settings_file_reports_invalid_recall_backend(tmp_path: Path) -
 
 def test_validate_settings_file_rejects_non_object_extensions(tmp_path: Path) -> None:
     settings_path = tmp_path / "settings.json"
-    settings_path.write_text(json.dumps({"extensions": []}), encoding="utf-8")
+    settings_path.write_text(json.dumps({"format_version": 1, "extensions": []}), encoding="utf-8")
 
     report = validate_settings_file(settings_path)
 
@@ -681,11 +687,12 @@ def test_validate_settings_file_reports_invalid_extensions_fields(tmp_path: Path
     settings_path.write_text(
         json.dumps(
             {
+                "format_version": 1,
                 "extensions": {
                     "disabled": ["ok", "", 5],
                     "config": {"good": {}, "bad": ["x"]},
                     "weird": True,
-                }
+                },
             }
         ),
         encoding="utf-8",
@@ -704,7 +711,9 @@ def test_validate_settings_file_reports_invalid_extensions_fields(tmp_path: Path
 
 def test_validate_settings_file_rejects_non_list_disabled_extensions(tmp_path: Path) -> None:
     settings_path = tmp_path / "settings.json"
-    settings_path.write_text(json.dumps({"extensions": {"disabled": "solo"}}), encoding="utf-8")
+    settings_path.write_text(
+        json.dumps({"format_version": 1, "extensions": {"disabled": "solo"}}), encoding="utf-8"
+    )
 
     report = validate_settings_file(settings_path)
 

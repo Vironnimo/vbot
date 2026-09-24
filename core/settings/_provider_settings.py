@@ -29,6 +29,11 @@ CUSTOM_PROVIDER_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 CUSTOM_PROVIDER_CONNECTION_ID = "default"
 
 
+CUSTOM_PROVIDER_FIELDS = frozenset(
+    {"name", "adapter", "base_url", "auth", "models_endpoint", "defaults", "models"}
+)
+
+
 CUSTOM_PROVIDER_MODEL_FIELDS = frozenset(
     {
         "name",
@@ -182,18 +187,7 @@ def normalize_custom_provider_settings(
     path = f"settings.providers.custom.{provider_id}"
     if not isinstance(provider, Mapping):
         raise StorageError(f"Expected {path} to be an object")
-    unsupported = sorted(
-        set(provider)
-        - {
-            "name",
-            "adapter",
-            "base_url",
-            "auth",
-            "models_endpoint",
-            "defaults",
-            "models",
-        }
-    )
+    unsupported = sorted(set(provider) - CUSTOM_PROVIDER_FIELDS)
     if unsupported:
         raise StorageError(f"Unsupported {path} fields: {', '.join(unsupported)}")
 

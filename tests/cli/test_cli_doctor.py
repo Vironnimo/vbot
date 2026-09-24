@@ -55,7 +55,9 @@ def test_doctor_settings_reports_missing_file_as_ok(tmp_path: Path) -> None:
 
 
 def test_doctor_settings_reports_valid_file(tmp_path: Path) -> None:
-    (tmp_path / "settings.json").write_text(json.dumps({"server_port": 8500}), encoding="utf-8")
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
+    )
 
     result = doctor_management.doctor_settings(tmp_path)
 
@@ -70,7 +72,7 @@ def test_doctor_settings_reports_valid_file(tmp_path: Path) -> None:
 
 
 def test_doctor_warning_is_visible_even_when_configuration_is_usable(tmp_path):
-    (tmp_path / "settings.json").write_text('{"typo": true}', encoding="utf-8")
+    (tmp_path / "settings.json").write_text('{"format_version": 1, "typo": true}', encoding="utf-8")
     result = doctor_management.doctor_settings(tmp_path)
     assert result.ok
     assert result.message.splitlines()[-1].startswith("[WARN]")
@@ -79,7 +81,7 @@ def test_doctor_warning_is_visible_even_when_configuration_is_usable(tmp_path):
 
 def test_doctor_settings_reports_errors_and_warnings(tmp_path: Path) -> None:
     (tmp_path / "settings.json").write_text(
-        json.dumps({"server_port": 0, "typo": True}), encoding="utf-8"
+        json.dumps({"format_version": 1, "server_port": 0, "typo": True}), encoding="utf-8"
     )
 
     result = doctor_management.doctor_settings(tmp_path)
@@ -95,7 +97,9 @@ def test_doctor_settings_reports_errors_and_warnings(tmp_path: Path) -> None:
 
 
 def test_doctor_config_reports_all_config_files(tmp_path: Path) -> None:
-    (tmp_path / "settings.json").write_text(json.dumps({"server_port": 8500}), encoding="utf-8")
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
+    )
     agent_dir = tmp_path / "agents" / "broken"
     agent_dir.mkdir(parents=True)
     agent_dir.joinpath("agent.json").write_text(
