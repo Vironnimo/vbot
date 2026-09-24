@@ -13,6 +13,7 @@ import {
   TASK_MODEL_ROWS,
   applyOptionDefaults,
   createTaskModelUpdatePayload,
+  isOptionFieldHidden,
   normalizeOptionSchema,
   normalizeTargets,
   normalizeTaskModelSettings,
@@ -294,6 +295,7 @@ describe('select choices narrowed by another option', () => {
             terra: ['', 'none', 'low', 'high'],
             astra: ['', 'none', 'medium', 'max'],
             luna: ['medium', 'max'],
+            '': [],
           },
         },
       },
@@ -316,6 +318,7 @@ describe('select choices narrowed by another option', () => {
         terra: ['', 'none', 'low', 'high'],
         astra: ['', 'none', 'medium', 'max'],
         luna: ['medium', 'max'],
+        '': [],
       },
     });
     expect(backendField.optionsBy).toBeNull();
@@ -345,6 +348,27 @@ describe('select choices narrowed by another option', () => {
     expect(visibleFieldOptions(backendField, fields, {})).toBe(
       backendField.options,
     );
+  });
+
+  it('hides a field whose entry for the referenced value is an empty list', () => {
+    const none = { backend_model: '', backend_thinking_effort: 'high' };
+
+    expect(isOptionFieldHidden(effortField, fields, none)).toBe(true);
+    expect(shownValues(none)).toEqual([]);
+    expect(isOptionFieldHidden(effortField, fields, {})).toBe(false);
+    expect(
+      isOptionFieldHidden(effortField, fields, { backend_model: 'unlisted' }),
+    ).toBe(false);
+    expect(isOptionFieldHidden(backendField, fields, none)).toBe(false);
+    // The hidden field keeps its stored value; the server ignores it.
+    expect(reconcileDependentOptions(fields, none, 'backend_model')).toBe(none);
+    expect(
+      reconcileDependentOptions(
+        fields,
+        { ...none, backend_model: 'astra' },
+        'backend_model',
+      ),
+    ).toEqual({ backend_model: 'astra', backend_thinking_effort: '' });
   });
 
   it('keeps a value that stays visible after the referenced option changes', () => {

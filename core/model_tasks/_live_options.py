@@ -4,9 +4,11 @@ The fields render from the ``live_voice`` facts in
 ``capabilities.task_options``. A ``model``-typed ``backend_model`` parameter
 offers the tool-capable chat Models of the same Provider that the target's
 Connection allows; the Live runtime re-checks the configured backend with
-:func:`live_backend_candidates` when a call starts. The backend's reasoning
-effort accompanies that field and narrows its visible choices to each
-candidate's published reasoning ladder.
+:func:`live_backend_candidates` when a call starts. A spec with
+``"allow_none": true`` also offers ``""`` (no backend model: the voice Model
+calls the Live app Tools itself) and makes the field optional. The backend's
+reasoning effort accompanies that field, narrows its visible choices to each
+candidate's published reasoning ladder, and is hidden without a backend.
 """
 
 from __future__ import annotations
@@ -36,6 +38,10 @@ _MODEL_DEFAULT_EFFORT_LABEL = "Model default"
 # Efforts that stay available for every published ladder: the Model default
 # and reasoning off. The Agent editor offers the same set.
 _ALWAYS_ALLOWED_EFFORTS = (_MODEL_DEFAULT_EFFORT, "none")
+
+# ``backend_model`` value for "no backend model" on targets that allow it.
+NO_BACKEND_MODEL = ""
+_NO_BACKEND_MODEL_LABEL = "None (the voice model uses vBot directly)"
 
 
 class ModelCatalog(Protocol):
@@ -92,8 +98,9 @@ def _live_voice_fields(
             if models is not None
             else ()
         )
-        fields.append(_backend_model_field(backend_spec, candidates))
-        fields.append(_backend_thinking_effort_field(candidates))
+        allow_none = backend_spec.get("allow_none") is True
+        fields.append(_backend_model_field(backend_spec, candidates, allow_none=allow_none))
+        fields.append(_backend_thinking_effort_field(candidates, allow_none=allow_none))
     return tuple(fields)
 
 
@@ -119,22 +126,29 @@ def _voice_field(spec: Any) -> TaskModelOptionField | None:
 def _backend_model_field(
     spec: Mapping[str, Any],
     candidates: tuple[Model, ...],
+    *,
+    allow_none: bool,
 ) -> TaskModelOptionField:
-    values = tuple(candidate.model_id for candidate in candidates)
+    choices = tuple(
+        TaskModelOptionChoice(value=candidate.model_id, label=candidate.name)
+        for candidate in candidates
+    )
+    if allow_none:
+        choices = (
+            TaskModelOptionChoice(value=NO_BACKEND_MODEL, label=_NO_BACKEND_MODEL_LABEL),
+            *choices,
+        )
     return TaskModelOptionField(
         name="backend_model",
         type="select",
         label="Backend model",
-        default=_declared_default(spec, values),
-        required=True,
+        default=_declared_default(spec, tuple(choice.value for choice in choices)),
+        required=not allow_none,
         description=(
             "Model that answers requests and operates vBot during a live call. "
             "Only tool-capable Models of the same Provider on this Connection are offered."
         ),
-        options=tuple(
-            TaskModelOptionChoice(value=candidate.model_id, label=candidate.name)
-            for candidate in candidates
-        ),
+        options=choices,
     )
 
 
@@ -150,9 +164,14 @@ def backend_thinking_efforts() -> tuple[str, ...]:
     return (_MODEL_DEFAULT_EFFORT, *THINKING_EFFORT_ORDER)
 
 
-def _backend_thinking_effort_field(candidates: tuple[Model, ...]) -> TaskModelOptionField:
+def _backend_thinking_effort_field(
+    candidates: tuple[Model, ...], *, allow_none: bool
+) -> TaskModelOptionField:
     efforts = backend_thinking_efforts()
     allowed_by_backend: dict[str, tuple[str, ...]] = {}
+    if allow_none:
+        # Without a backend model there is nothing to reason; hide the field.
+        allowed_by_backend[NO_BACKEND_MODEL] = ()
     for candidate in candidates:
         # Without a published ladder the Adapter applies a Provider-specific
         # floor that the UI cannot see, so every effort stays visible.

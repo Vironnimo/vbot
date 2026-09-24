@@ -134,7 +134,7 @@ unloads permit retry, and unmount clears polling. Coverage:
 
 The task Model editor displays schema defaults without inserting them into stored option drafts and submits only changed bindings. Each configured row with stored options offers Reset options, including when those options are absent from the live schema; it clears the options while preserving the target. Coverage: `SettingsSpecializedModelsPanel.test.js` exercises unrelated stale bindings, displayed defaults, and reset after schema drift.
 
-Select choices with an empty value (for example "Provider default" or "Model default") are real, selectable choices. A select carrying `options_by` shows only the choices its referenced field's current value allows, and changing that field moves a now-hidden value as the contract in `model_tasks.md` -> Conventions requires; the renderer knows no field names. Pure helpers `visibleFieldOptions` / `reconcileDependentOptions` live in `taskModelSettings.js` (`taskModelSettings.test.js`); mounted coverage in `SettingsSpecializedModelsPanel.test.js`.
+Select choices with an empty value (for example "Provider default" or "Model default") are real, selectable choices. A select carrying `options_by` shows only the choices its referenced field's current value allows, is not rendered at all when that value's entry is an empty list (the stored value stays in the binding), and changing that field moves a now-hidden value as the contract in `model_tasks.md` -> Conventions requires; the renderer knows no field names. Pure helpers `visibleFieldOptions` / `isOptionFieldHidden` / `reconcileDependentOptions` live in `taskModelSettings.js` (`taskModelSettings.test.js`); mounted coverage in `SettingsSpecializedModelsPanel.test.js`.
 
 
 ## Channel connection setup

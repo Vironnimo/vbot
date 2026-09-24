@@ -173,8 +173,10 @@ class TaskModelOptionsBy:
 
     ``values`` maps a value of the referenced ``field`` to the choice values
     shown for it; a referenced value without an entry keeps every choice
-    visible. The narrowing is a render hint only: validation still accepts
-    every choice of the select.
+    visible, and an entry with an empty list hides the whole field because
+    the referenced value makes it irrelevant (its stored value is kept, and
+    the runtime ignores it). The narrowing is a render hint only: validation
+    still accepts every choice of the select.
     """
 
     field: str
