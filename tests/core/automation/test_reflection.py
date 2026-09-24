@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -65,6 +66,7 @@ class _FakeSessions:
         self.titles: list[tuple[str, str]] = []
         self.forks: list[dict[str, Any]] = []
         self.fork_counter = 0
+        self.mutation_threads: list[int] = []
 
     def get_metadata(self, address: SessionAddress) -> dict[str, Any]:
         return dict(self.metadata.get(address.session_id, {}))
@@ -73,6 +75,7 @@ class _FakeSessions:
         self.metadata[address.session_id] = dict(data)
 
     def mutate_metadata(self, address: SessionAddress, mutation: Any) -> dict[str, Any]:
+        self.mutation_threads.append(threading.get_ident())
         metadata = self.get_metadata(address)
         mutation(metadata)
         self.set_metadata(address, metadata)
@@ -172,6 +175,15 @@ async def _drain(service: ReflectionService) -> None:
         await asyncio.gather(*list(service._background_tasks))
 
 
+async def _account_during_review(
+    service: ReflectionService, run: _FakeRun, *, outcome: str = "success"
+) -> None:
+    """Account one Run end while an earlier review of the same Agent still runs."""
+    running = set(service._background_tasks)
+    service.notify_run_end(cast("Any", run), _identity_agent(), internal=False, outcome=outcome)
+    await asyncio.gather(*(service._background_tasks - running))
+
+
 @pytest.mark.asyncio
 async def test_aclose_cancels_and_drains_background_reflection_tasks() -> None:
     service, _sessions, _loop = _make_service()
@@ -198,6 +210,21 @@ async def test_aclose_cancels_and_drains_background_reflection_tasks() -> None:
         outcome="success",
     )
     assert service._background_tasks == set()
+
+
+@pytest.mark.asyncio
+async def test_run_end_accounting_writes_metadata_off_the_event_loop() -> None:
+    service, sessions, _loop = _make_service()
+
+    service.notify_run_end(
+        cast("Any", _FakeRun()), _identity_agent(), internal=False, outcome="success"
+    )
+    await _drain(service)
+
+    # The Session write may wait for a busy writer, so it must not block the loop.
+    assert _counters(sessions)["turns_since_memory_review"] == 1
+    assert sessions.mutation_threads
+    assert threading.get_ident() not in sessions.mutation_threads
 
 
 # --- notify_run_end inline gates ---------------------------------------------
@@ -655,10 +682,7 @@ async def test_successful_review_preserves_activity_recorded_while_it_runs() -> 
     )
     await loop.run_started.wait()
 
-    service.notify_run_end(
-        cast("Any", _FakeRun()), _identity_agent(), internal=False, outcome="success"
-    )
-    await asyncio.sleep(0)
+    await _account_during_review(service, _FakeRun())
     assert _counters(sessions)["turns_since_memory_review"] == 2
 
     loop.wait_gate.set()
@@ -678,10 +702,7 @@ async def test_manual_reset_during_review_preserves_activity_after_reset() -> No
     await loop.run_started.wait()
 
     service.reset_counters("main", "s1")
-    service.notify_run_end(
-        cast("Any", _FakeRun()), _identity_agent(), internal=False, outcome="success"
-    )
-    await asyncio.sleep(0)
+    await _account_during_review(service, _FakeRun())
     assert _counters(sessions)["turns_since_memory_review"] == 1
 
     loop.wait_gate.set()
@@ -712,21 +733,9 @@ async def test_tool_reset_during_review_preserves_activity_after_reset(
     )
     await loop.run_started.wait()
 
-    service.notify_run_end(
-        cast("Any", _FakeRun(tool_call_names={tool_name})),
-        _identity_agent(),
-        internal=False,
-        outcome="failed",
-    )
-    await asyncio.sleep(0)
+    await _account_during_review(service, _FakeRun(tool_call_names={tool_name}), outcome="failed")
     assert _counters(sessions)[counter] == 0
-    service.notify_run_end(
-        cast("Any", _FakeRun(iteration_count=1)),
-        _identity_agent(),
-        internal=False,
-        outcome="success",
-    )
-    await asyncio.sleep(0)
+    await _account_during_review(service, _FakeRun(iteration_count=1))
     assert _counters(sessions)[counter] == 1
 
     loop.wait_gate.set()

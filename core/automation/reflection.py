@@ -18,7 +18,8 @@ The reflection service owns two halves of one capability:
 
 The chat loop notifies this service at run end through the small
 ``ReflectionNotifier`` protocol it owns; everything with I/O happens in a
-background task so run teardown is never delayed.
+background task so run teardown is never delayed, and its blocking Settings
+reads and metadata writes run on reflection workers off the Event Loop.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS, SessionAddress
 from core.subagents.subagents import SUBAGENT_SESSION_METADATA_FLAG
 from core.tools.availability import MEMORY_TOOL_NAME, SKILL_MANAGE_TOOL_NAME, memory_tool_enabled
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.chat import ReplySurface
@@ -41,6 +43,9 @@ if TYPE_CHECKING:
     from core.runtime.interfaces import RuntimeServices
 
 ReflectionScope = Literal["memory", "skill", "combined"]
+
+# Run-end accounting waits for the Session writer, so it never runs on the loop.
+_REFLECTION_WORKERS = BoundedWorkerPool(name="reflection", max_workers=2)
 
 REFLECT_FRAGMENT_NAMES: dict[ReflectionScope, str] = {
     "memory": "reflect-memory.md",
@@ -85,6 +90,18 @@ class ReflectionResult:
 
     session_id: str
     summary: str
+
+
+@dataclass(frozen=True)
+class _AdvancedCounters:
+    """One Session's counters after a Run end, and which reviews are now due."""
+
+    reviews_enabled: bool
+    turns: int
+    iterations: int
+    generation: int
+    memory_due: bool
+    skill_due: bool
 
 
 class ReflectionUnavailableError(RuntimeError):
@@ -171,11 +188,81 @@ class ReflectionService:
         skill_manage_called: bool,
         count_run: bool,
     ) -> None:
+        counters = await _REFLECTION_WORKERS.run(
+            self._advance_counters,
+            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
+            iteration_count=iteration_count,
+            memory_tool_called=memory_tool_called,
+            skill_manage_called=skill_manage_called,
+            count_run=count_run,
+        )
+        if counters is None:
+            return
+        # One review at a time per agent: a due Session while a review is already
+        # running keeps its counters and re-checks on its next Run end.
+        should_review = (
+            counters.memory_due or counters.skill_due
+        ) and agent_id not in self._agents_in_review
+        if not counters.reviews_enabled or not count_run or not should_review:
+            return
+
+        due = "+".join(
+            name
+            for name, is_due in (("memory", counters.memory_due), ("skill", counters.skill_due))
+            if is_due
+        )
+        self._agents_in_review.add(agent_id)
+        try:
+            _LOGGER.info(
+                "Reflection review triggered (agent=%s session=%s due=%s)",
+                agent_id,
+                session_id,
+                due,
+            )
+            result = await self.run_review(
+                agent_id,
+                session_id,
+                project_id=project_id,
+                review_scope=_review_scope(counters.memory_due, counters.skill_due),
+            )
+            await _REFLECTION_WORKERS.run(
+                self._consume_reviewed_counters,
+                agent_id,
+                session_id,
+                project_id=project_id,
+                counter_generation=counters.generation,
+                reviewed_turns=counters.turns if counters.memory_due else 0,
+                reviewed_iterations=counters.iterations if counters.skill_due else 0,
+            )
+            _LOGGER.info(
+                "Reflection review completed (agent=%s fork=%s): %s",
+                agent_id,
+                result.session_id,
+                _log_excerpt(result.summary) or "no summary",
+            )
+        except Exception:
+            _LOGGER.warning(
+                "Reflection review failed (agent=%s session=%s)",
+                agent_id,
+                session_id,
+                exc_info=True,
+            )
+        finally:
+            self._agents_in_review.discard(agent_id)
+
+    def _advance_counters(
+        self,
+        address: SessionAddress,
+        *,
+        iteration_count: int,
+        memory_tool_called: bool,
+        skill_manage_called: bool,
+        count_run: bool,
+    ) -> _AdvancedCounters | None:
+        """Count one finished Run; ``None`` when the Session keeps no counters."""
         settings = self._runtime.storage.load_reflection_settings()
         if not settings["enabled"] and not memory_tool_called and not skill_manage_called:
-            return
-        sessions = self._runtime.chat_sessions
-        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+            return None
         state: dict[str, Any] = {"skip": False}
 
         def update(metadata: dict[str, Any]) -> None:
@@ -216,60 +303,17 @@ class ReflectionService:
                 COUNTER_GENERATION_KEY: counter_generation,
             }
 
-        sessions.mutate_metadata(address, update)
+        self._runtime.chat_sessions.mutate_metadata(address, update)
         if state["skip"]:
-            return
-        turns = int(state["turns"])
-        iterations = int(state["iterations"])
-        counter_generation = int(state["counter_generation"])
-        memory_due = bool(state["memory_due"])
-        skill_due = bool(state["skill_due"])
-        # One review at a time per agent: a due Session while a review is already
-        # running keeps its counters and re-checks on its next Run end.
-        should_review = (memory_due or skill_due) and agent_id not in self._agents_in_review
-        if not settings["enabled"] or not count_run or not should_review:
-            return
-
-        due = "+".join(
-            name for name, is_due in (("memory", memory_due), ("skill", skill_due)) if is_due
+            return None
+        return _AdvancedCounters(
+            reviews_enabled=bool(settings["enabled"]),
+            turns=int(state["turns"]),
+            iterations=int(state["iterations"]),
+            generation=int(state["counter_generation"]),
+            memory_due=bool(state["memory_due"]),
+            skill_due=bool(state["skill_due"]),
         )
-        self._agents_in_review.add(agent_id)
-        try:
-            _LOGGER.info(
-                "Reflection review triggered (agent=%s session=%s due=%s)",
-                agent_id,
-                session_id,
-                due,
-            )
-            result = await self.run_review(
-                agent_id,
-                session_id,
-                project_id=project_id,
-                review_scope=_review_scope(memory_due, skill_due),
-            )
-            self._consume_reviewed_counters(
-                agent_id,
-                session_id,
-                project_id=project_id,
-                counter_generation=counter_generation,
-                reviewed_turns=turns if memory_due else 0,
-                reviewed_iterations=iterations if skill_due else 0,
-            )
-            _LOGGER.info(
-                "Reflection review completed (agent=%s fork=%s): %s",
-                agent_id,
-                result.session_id,
-                _log_excerpt(result.summary) or "no summary",
-            )
-        except Exception:
-            _LOGGER.warning(
-                "Reflection review failed (agent=%s session=%s)",
-                agent_id,
-                session_id,
-                exc_info=True,
-            )
-        finally:
-            self._agents_in_review.discard(agent_id)
 
     def _consume_reviewed_counters(
         self,
