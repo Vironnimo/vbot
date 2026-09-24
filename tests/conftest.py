@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterator
+from dataclasses import dataclass
 
 import pytest
 
@@ -16,20 +18,66 @@ def _remove_inherited_vbot_run_context(monkeypatch: pytest.MonkeyPatch) -> None:
             monkeypatch.delenv(name)
 
 
+_VBOT_LOGGER_NAMESPACE = "vbot"
+
+
+@dataclass(frozen=True)
+class _LoggerState:
+    level: int
+    propagate: bool
+    disabled: bool
+    handlers: tuple[logging.Handler, ...]
+
+    @classmethod
+    def capture(cls, logger: logging.Logger) -> _LoggerState:
+        return cls(
+            level=logger.level,
+            propagate=logger.propagate,
+            disabled=logger.disabled,
+            handlers=tuple(logger.handlers),
+        )
+
+    def apply(self, logger: logging.Logger) -> None:
+        logger.setLevel(self.level)
+        logger.propagate = self.propagate
+        logger.disabled = self.disabled
+        logger.handlers = list(self.handlers)
+
+
+_PRISTINE_LOGGER_STATE = _LoggerState(
+    level=logging.NOTSET, propagate=True, disabled=False, handlers=()
+)
+
+
+def _vbot_loggers() -> dict[str, logging.Logger]:
+    return {
+        name: logger
+        for name, logger in list(logging.Logger.manager.loggerDict.items())
+        if isinstance(logger, logging.Logger)
+        and (name == _VBOT_LOGGER_NAMESPACE or name.startswith(f"{_VBOT_LOGGER_NAMESPACE}."))
+    }
+
+
 @pytest.fixture(autouse=True)
-def _restore_vbot_logger_propagation() -> object:
-    """Keep the ``vbot`` logger's propagation isolated across tests.
+def _isolate_vbot_loggers() -> Iterator[None]:
+    """Keep ``vbot`` logger configuration isolated across tests.
 
-    ``LogManager._ensure_configured`` sets ``logging.getLogger("vbot").propagate
-    = False`` — correct in production so vBot logs don't double-emit through the
-    root logger. But any test that builds a ``Runtime``/``LogManager`` without
-    calling ``close()`` leaks that flag process-wide. After that, ``caplog`` —
-    whose capture handler lives on the root logger — can no longer see ``vbot.*``
-    records, so later caplog-based tests under that namespace silently fail.
+    ``LogManager`` configures the ``vbot`` namespace for production: it sets the
+    configured level (``INFO`` by default) on ``vbot`` and on every child logger
+    it hands out, disables ``vbot`` propagation, and attaches its handlers.
+    ``LogManager.close()`` detaches handlers and restores propagation but keeps
+    the levels, and tests that build a ``Runtime`` without closing it leak all
+    of it process-wide. A leaked ``vbot`` level lets later ``caplog`` tests
+    capture records their default ``WARNING`` threshold should filter; leaked
+    propagation hides ``vbot.*`` records from ``caplog`` entirely, and leaked
+    handlers keep writing into earlier tests' log files and streams.
 
-    Save and restore the flag around every test so order can't break capture.
+    Snapshot level, propagation, ``disabled`` and handlers of every existing
+    ``vbot``/``vbot.*`` logger before each test and restore them afterwards.
+    Loggers first created during the test return to the pristine default state
+    because the ``logging`` module cannot forget a created logger.
     """
-    vbot_logger = logging.getLogger("vbot")
-    previous_propagate = vbot_logger.propagate
+    snapshot = {name: _LoggerState.capture(logger) for name, logger in _vbot_loggers().items()}
     yield
-    vbot_logger.propagate = previous_propagate
+    for name, logger in _vbot_loggers().items():
+        snapshot.get(name, _PRISTINE_LOGGER_STATE).apply(logger)
