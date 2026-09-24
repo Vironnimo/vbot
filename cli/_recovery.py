@@ -71,6 +71,13 @@ _CODE_GUIDANCE = {
     "current status or list stored recordings.",
 }
 
+# Names both lists without parsing the address: 'agent list' holds only Identity Agents.
+_AGENT_NOT_FOUND_EXPLANATION = (
+    "The Agent was not found. 'vbot agent list' shows Identity Agents; for a Project "
+    "Team member addressed as agent@project, 'vbot project show <project>' shows that "
+    "Project's Team. Reuse an exact id from the matching list."
+)
+
 
 def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) -> RecoveryGuidance:
     """Choose valid read/help commands from known context, without inferring rollback."""
@@ -83,7 +90,9 @@ def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) ->
     )
     area = args.area
     inspection = _inspection(args)
-    if code and code.endswith("_not_found"):
+    if code == "agent_not_found":
+        explanation = _AGENT_NOT_FOUND_EXPLANATION
+    elif code and code.endswith("_not_found"):
         explanation = (
             "The requested resource was not found. Read the current list and reuse "
             "an exact id; an omitted row in a paginated list does not prove absence."

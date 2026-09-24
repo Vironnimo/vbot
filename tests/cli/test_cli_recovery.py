@@ -193,6 +193,23 @@ def test_not_found_codes_inspect_the_missing_resource_list(tmp_path, tokens, cod
     assert followup.host == "192.0.2.8"
 
 
+def test_agent_not_found_names_identity_and_team_lists_without_parsing_the_address(tmp_path):
+    # 'agent list' holds only Identity Agents; Team members live under 'project show'.
+    result = CommandResult(
+        False,
+        "test sentinel",
+        instance(tmp_path),
+        failure=RpcFailure("session.list", "responded", "agent_not_found"),
+    )
+    bare = recovery_guidance(parse_args(["session", "list", "Coder"]), result)
+    qualified = recovery_guidance(parse_args(["session", "list", "builder@vbot"]), result)
+
+    assert "vbot agent list" in bare.explanation
+    assert "vbot project show" in bare.explanation
+    assert qualified.explanation == bare.explanation
+    assert qualified.commands[0][1:3] == ("agent", "list")
+
+
 @pytest.mark.parametrize("mode", ["auto", "plain", "human"])
 def test_real_rpc_error_keeps_stdout_and_adds_recovery_in_every_mode(
     tmp_path, monkeypatch, capsys, mode
