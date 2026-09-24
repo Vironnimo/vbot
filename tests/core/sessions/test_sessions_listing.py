@@ -411,6 +411,25 @@ def test_session_list_cursor_is_stable_when_a_newer_session_is_inserted(manager)
     assert [summary["id"] for summary in second.sessions] == ["existing-1", "existing-0"]
 
 
+def test_newest_session_counts_every_run_kind_but_no_extension_session(manager) -> None:
+    assert manager.newest_session_id("coder") is None
+    for index, session_id in enumerate(("older", "reflection")):
+        address = _address("coder", session_id)
+        manager._store.create(address, created_at=f"2026-08-01T00:0{index}:00+00:00")
+    manager.record_run_kind(_address("coder", "reflection"), RunKind.MEMORY_REFLECTION)
+    manager.create_bound_temporary_session(
+        _address("coder", "participant"),
+        owner_name="swarm",
+        group_id="swr_group",
+        participant_id="prt_peer",
+        config={},
+    )
+
+    # The Extension-owned Session is the newest row, yet only listable ones count.
+    assert manager.newest_session_id("coder") == "reflection"
+    assert manager.newest_session_id("other") is None
+
+
 def test_session_list_filters_execution_categories_in_sql(manager) -> None:
     metadata_by_session = {
         "ordinary": {"run_kinds": ["user"]},

@@ -79,7 +79,7 @@ def test_concurrent_updates_and_current_session_repairs_do_not_lose_state(
         following.result(timeout=5)
 
     if repair:
-        sessions = store._session_manager().list_with_metadata("coder")
+        sessions = store._session_manager().list_summaries("coder")
         assert [session["id"] for session in sessions] == [store.get("coder").current_session_id]
     else:
         persisted = store.get("coder")
@@ -99,7 +99,7 @@ def test_failed_current_session_reset_removes_new_session(
     with pytest.raises(OSError, match="config unavailable"):
         store.reset_current_after_session_removed("coder", agent.current_session_id)
 
-    assert store._session_manager().list_with_metadata("coder") == []
+    assert store._session_manager().list_summaries("coder") == []
 
 
 def test_roster_verifies_every_current_session_in_one_read(

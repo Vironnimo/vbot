@@ -898,9 +898,13 @@ class SessionStore:
                 exclude_owner_managed=exclude_owner_managed,
             )
 
-    def list_state_rows(self, project_id: str | None, agent_id: str) -> list[sqlite3.Row]:
+    def list_agent_ids(
+        self, project_id: str | None, *, exclude_owner_managed: bool = False
+    ) -> list[str]:
         with self._runtime.read_ctx() as connection:
-            return _store_queries.list_state_rows(connection, project_id, agent_id)
+            return _store_queries.list_agent_ids(
+                connection, project_id, exclude_owner_managed=exclude_owner_managed
+            )
 
     def list_summary_rows_for_scope(
         self,
@@ -913,10 +917,6 @@ class SessionStore:
             return _store_queries.list_summary_rows_for_scope(
                 connection, project_id, agent_id, metadata_keys=metadata_keys
             )
-
-    @staticmethod
-    def metadata_from_state(state: Any) -> JsonObject:
-        return _store_values._session_metadata_from_state(state)
 
     def list_summary_rows(
         self,

@@ -97,13 +97,13 @@ async def test_foreground_result_keeps_handle_and_child_unread_until_parent_pers
     await asyncio.sleep(0)
     assert tracker.owned_entry("parent", "parent-session", None, work_id) is not None
     assert f"subagent:parent-run:{work_id}" in trigger_service.completion_deliveries
-    assert runtime.chat_sessions.list_with_metadata("worker")[0]["has_unread_completion"] is True
+    assert runtime.chat_sessions.list_summaries("worker")[0]["has_unread_completion"] is True
 
     persisted_callbacks[0]()
 
     assert tracker.owned_entry("parent", "parent-session", None, work_id) is None
     assert f"subagent:parent-run:{work_id}" not in trigger_service.completion_deliveries
-    assert runtime.chat_sessions.list_with_metadata("worker")[0]["has_unread_completion"] is False
+    assert runtime.chat_sessions.list_summaries("worker")[0]["has_unread_completion"] is False
 
 
 async def test_executor_base_exception_reaches_subagent_completion_watcher(monkeypatch) -> None:
@@ -357,13 +357,13 @@ async def test_status_result_keeps_handle_and_child_unread_until_parent_persiste
     manager.parent_run.request_cancel(reason="user")
     assert tracker.owned_entry("parent", "parent-session", None, "sub_child") is not None
     assert "subagent:parent-run:sub_child" in trigger_service.completion_deliveries
-    assert runtime.chat_sessions.list_with_metadata("worker")[0]["has_unread_completion"] is True
+    assert runtime.chat_sessions.list_summaries("worker")[0]["has_unread_completion"] is True
 
     persisted_callbacks[0]()
 
     assert tracker.owned_entry("parent", "parent-session", None, "sub_child") is None
     assert "subagent:parent-run:sub_child" not in trigger_service.completion_deliveries
-    assert runtime.chat_sessions.list_with_metadata("worker")[0]["has_unread_completion"] is False
+    assert runtime.chat_sessions.list_summaries("worker")[0]["has_unread_completion"] is False
 
     if all_entries:
         empty = await _handle_subagent_result(context, {}, runtime=runtime, batch_tracker=tracker)

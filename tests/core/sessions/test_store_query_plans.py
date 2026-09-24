@@ -221,6 +221,20 @@ def test_existing_addresses_probe_the_live_address_index_in_one_statement(histor
     assert any("sessions_one_live_address" in detail for detail in details), details
 
 
+def test_session_owning_agents_read_distinct_ids_from_the_live_address_index(history) -> None:
+    _address, _anchor, connection = history
+    recorder, statements = _recording(connection)
+    agent_ids = _store_queries.list_agent_ids(recorder, "project", exclude_owner_managed=True)
+    assert agent_ids == ["agent"]
+    details = [
+        str(plan[3])
+        for sql, params in statements
+        for plan in connection.execute("EXPLAIN QUERY PLAN " + sql, params)
+    ]
+    assert not [detail for detail in details if detail.startswith("SCAN sessions")], details
+    assert not [detail for detail in details if "TEMP B-TREE" in detail], details
+
+
 def test_delta_read_uses_one_indexed_read_from_the_anchor(history) -> None:
     address, _anchor, connection = history
     state = _store_values._require_live(connection, address)

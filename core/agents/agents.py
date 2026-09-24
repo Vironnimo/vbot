@@ -839,13 +839,10 @@ class AgentStore:
             if agent.current_session_id != removed_session_id:
                 return _apply_defaults(agent, self._agent_defaults())
 
-            remaining = self._session_manager().list_with_metadata(agent_id)
+            newest_session_id = self._session_manager().newest_session_id(agent_id)
             created_session = None
-            if remaining:
-                newest: dict[str, Any] = max(
-                    remaining, key=lambda session: session["last_active_at"]
-                )
-                landing_session_id = newest["id"]
+            if newest_session_id is not None:
+                landing_session_id = newest_session_id
             else:
                 created_session = self._session_manager().create(agent_id)
                 landing_session_id = created_session.id
