@@ -813,8 +813,9 @@ class SessionStore:
             return _store_history.bookend_timestamps(connection, address)
 
     def current_skill_activation_messages(self, address: SessionAddress) -> list[ChatMessage]:
-        with self._runtime.read_ctx() as connection:
-            return _store_history.current_skill_activation_messages(connection, address)
+        return self._read_decoded(
+            lambda connection: _store_history.current_skill_activation_messages(connection, address)
+        )
 
     def list_addresses(
         self,

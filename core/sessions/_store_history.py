@@ -262,7 +262,7 @@ def _context_usage_rows_from_connection(
 
 def current_skill_activation_messages(
     connection: sqlite3.Connection, address: SessionAddress
-) -> list[ChatMessage]:
+) -> Callable[[], list[ChatMessage]]:
     """Load the active Skill activation candidates the current context can still see.
 
     Candidates are ``[skill-context]`` Notes and ``skill`` Tool Results after the
@@ -293,7 +293,7 @@ def current_skill_activation_messages(
             SKILL_TOOL_MESSAGE_NAME,
         ),
     ).fetchall()
-    return [_store_codec.message_from_row(row) for row in rows]
+    return lambda: [_store_codec.message_from_row(row) for row in rows]
 
 
 def _history_record_filter(
