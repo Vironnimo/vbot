@@ -376,6 +376,15 @@ async def test_async_work_runs_on_the_database_worker_pool(data_dir: Path) -> No
         database.close()
 
 
+@pytest.mark.asyncio
+async def test_async_work_on_a_closed_database_is_unavailable(data_dir: Path) -> None:
+    database = _open(data_dir)
+    database.close()
+
+    with pytest.raises(DatabaseUnavailableError):
+        await database.read_async(lambda connection: connection.execute("SELECT 1").fetchone())
+
+
 def _filled_database(path: Path) -> None:
     # Many small rows give the copy many progress-handler polls.
     with closing(sqlite3.connect(path)) as connection:

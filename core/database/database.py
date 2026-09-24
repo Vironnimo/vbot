@@ -137,8 +137,19 @@ class Database:
     async def run_async(
         self, function: Callable[..., _Result], *arguments: Any, **keyword_arguments: Any
     ) -> _Result:
-        """Run blocking work that uses this database on its bounded worker pool."""
-        return await self._workers.run(function, *arguments, **keyword_arguments)
+        """Run blocking work that uses this database on its bounded worker pool.
+
+        A closed database raises :class:`DatabaseUnavailableError`, including when
+        ``close()`` shut the pool down while this call waited for admission.
+        """
+        if self.is_closed():
+            raise DatabaseUnavailableError(f"{self.name} is closed")
+        try:
+            return await self._workers.run(function, *arguments, **keyword_arguments)
+        except RuntimeError as exc:
+            if self.is_closed():
+                raise DatabaseUnavailableError(f"{self.name} is closed") from exc
+            raise
 
     async def read_async(self, operation: Callable[[sqlite3.Connection], _Result]) -> _Result:
         return await self.run_async(self._read_operation, operation)
