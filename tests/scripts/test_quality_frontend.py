@@ -18,6 +18,14 @@ def _load_quality_frontend_module():
     return module
 
 
+GUARD_NOTE_PREFIX = "repo-wide guard tests added: "
+
+
+def _with_guards(module, targets: list[str]) -> list[str]:
+    """Return *targets* followed by every repo-wide guard test, as source scopes select."""
+    return [*targets, *module._guard_test_targets()]
+
+
 def test_parse_vitest_counts_strips_ansi_color_codes():
     module = _load_quality_frontend_module()
     output = (
@@ -56,16 +64,20 @@ def test_translate_to_vitest_targets_resolves_named_mirror_test():
     # A component whose mirror was split resolves to every owned suite.
     targets, notes = module.translate_to_vitest_targets(["src/components/SettingsView.svelte"])
 
-    assert targets == [
-        "src/components/__tests__/SettingsView.test.appearance.test.js",
-        "src/components/__tests__/SettingsView.test.behavior.test.js",
-        "src/components/__tests__/SettingsView.test.channels.test.js",
-        "src/components/__tests__/SettingsView.test.provider-refresh.test.js",
-        "src/components/__tests__/SettingsView.test.providers.test.js",
-        "src/components/__tests__/SettingsView.test.specialized-models.test.js",
-        "src/components/__tests__/SettingsView.test.subagents-and-voice.test.js",
-    ]
-    assert notes == []
+    assert targets == _with_guards(
+        module,
+        [
+            "src/components/__tests__/SettingsView.test.appearance.test.js",
+            "src/components/__tests__/SettingsView.test.behavior.test.js",
+            "src/components/__tests__/SettingsView.test.channels.test.js",
+            "src/components/__tests__/SettingsView.test.provider-refresh.test.js",
+            "src/components/__tests__/SettingsView.test.providers.test.js",
+            "src/components/__tests__/SettingsView.test.specialized-models.test.js",
+            "src/components/__tests__/SettingsView.test.subagents-and-voice.test.js",
+        ],
+    )
+    assert len(notes) == 1
+    assert notes[0].startswith(GUARD_NOTE_PREFIX)
 
 
 def test_translate_to_vitest_targets_resolves_split_lib_mirror_tests():
@@ -73,12 +85,15 @@ def test_translate_to_vitest_targets_resolves_split_lib_mirror_tests():
 
     targets, notes = module.translate_to_vitest_targets(["src/lib/settingsView.js"])
 
-    assert targets == [
-        "src/lib/__tests__/settingsView.test.integration.test.js",
-        "src/lib/__tests__/settingsView.test.normalization.test.js",
-        "src/lib/__tests__/settingsView.test.providers.test.js",
-    ]
-    assert notes == []
+    assert targets == _with_guards(
+        module,
+        [
+            "src/lib/__tests__/settingsView.test.integration.test.js",
+            "src/lib/__tests__/settingsView.test.normalization.test.js",
+            "src/lib/__tests__/settingsView.test.providers.test.js",
+        ],
+    )
+    assert [note.startswith(GUARD_NOTE_PREFIX) for note in notes] == [True]
 
 
 def test_translate_to_vitest_targets_finds_test_one_level_up():
@@ -90,8 +105,10 @@ def test_translate_to_vitest_targets_finds_test_one_level_up():
         ["src/components/settings/SettingsProvidersPanel.svelte"]
     )
 
-    assert targets == ["src/components/__tests__/SettingsProvidersPanel.test.js"]
-    assert notes == []
+    assert targets == _with_guards(
+        module, ["src/components/__tests__/SettingsProvidersPanel.test.js"]
+    )
+    assert [note.startswith(GUARD_NOTE_PREFIX) for note in notes] == [True]
 
 
 def test_translate_to_vitest_targets_maps_testless_dir_to_ancestor():
@@ -101,10 +118,11 @@ def test_translate_to_vitest_targets_maps_testless_dir_to_ancestor():
     # level up, so scoping the directory runs the component suite and notes why.
     targets, notes = module.translate_to_vitest_targets(["src/components/settings"])
 
-    assert targets == ["src/components"]
-    assert len(notes) == 1
+    assert targets == _with_guards(module, ["src/components"])
+    assert len(notes) == 2
     assert "src/components/settings" in notes[0]
     assert "src/components" in notes[0]
+    assert notes[1].startswith(GUARD_NOTE_PREFIX)
 
 
 def test_translate_to_vitest_targets_falls_back_for_untested_source_file():
@@ -116,9 +134,10 @@ def test_translate_to_vitest_targets_falls_back_for_untested_source_file():
         ["src/components/agents/AgentEditor.svelte"]
     )
 
-    assert targets == ["src/components"]
-    assert len(notes) == 1
+    assert targets == _with_guards(module, ["src/components"])
+    assert len(notes) == 2
     assert "src/components/agents/AgentEditor.svelte" in notes[0]
+    assert notes[1].startswith(GUARD_NOTE_PREFIX)
 
 
 def test_translate_to_vitest_targets_keeps_dir_with_colocated_tests():
@@ -126,8 +145,124 @@ def test_translate_to_vitest_targets_keeps_dir_with_colocated_tests():
 
     targets, notes = module.translate_to_vitest_targets(["src/lib"])
 
+    # src/lib already contains the guard tests, so none is added twice.
     assert targets == ["src/lib"]
     assert notes == []
+
+
+def test_guard_test_targets_discover_repo_wide_guards():
+    module = _load_quality_frontend_module()
+
+    guards = module._guard_test_targets()
+
+    assert {
+        "src/lib/__tests__/i18nPlaceholders.guard.test.js",
+        "src/lib/__tests__/rpcOwnership.guard.test.js",
+        "src/lib/__tests__/uiPrimitives.guard.test.js",
+    } <= set(guards)
+    assert all("/__tests__/" in guard and ".guard.test." in guard for guard in guards)
+
+
+def test_translate_to_vitest_targets_skips_guards_for_test_only_or_outside_inputs():
+    module = _load_quality_frontend_module()
+
+    targets, notes = module.translate_to_vitest_targets(
+        ["src/components/__tests__/SettingsProvidersPanel.test.js", "package.json"]
+    )
+
+    # Neither an explicit test nor a file outside src/ can break a guard scan.
+    assert targets == ["src/components/__tests__/SettingsProvidersPanel.test.js"]
+    assert not any(note.startswith(GUARD_NOTE_PREFIX) for note in notes)
+
+
+def test_translate_to_vitest_targets_adds_only_guards_not_already_covered(tmp_path, monkeypatch):
+    module = _load_quality_frontend_module()
+    webui = tmp_path / "webui"
+    for guard in ("src/lib/__tests__/a.guard.test.js", "src/app/__tests__/b.guard.test.js"):
+        (webui / guard).parent.mkdir(parents=True, exist_ok=True)
+        (webui / guard).write_text("test('guard', () => {})", encoding="utf-8")
+    (webui / "src" / "app" / "view.js").write_text("export {}", encoding="utf-8")
+    monkeypatch.setattr(module, "WEBUI_ROOT", webui)
+    monkeypatch.setattr(module, "SRC_ROOT", webui / "src")
+
+    targets, notes = module.translate_to_vitest_targets(["src/app"])
+
+    assert targets == ["src/app", "src/lib/__tests__/a.guard.test.js"]
+    assert notes == [f"{GUARD_NOTE_PREFIX}src/lib/__tests__/a.guard.test.js"]
+
+
+def test_translate_to_eslint_targets_drops_inputs_without_lintable_files():
+    module = _load_quality_frontend_module()
+
+    lint_paths, notes = module.translate_to_eslint_targets(
+        ["src/styles", "src/styles/app.css", "src/lib", "src/lib/i18n.js"]
+    )
+
+    assert lint_paths == ["src/lib", "src/lib/i18n.js"]
+    assert len(notes) == 2
+    assert notes[0].startswith("src/styles:")
+    assert notes[1].startswith("src/styles/app.css:")
+
+
+def test_translate_to_eslint_targets_ignores_dependency_and_build_folders(tmp_path, monkeypatch):
+    module = _load_quality_frontend_module()
+    webui = tmp_path / "webui"
+    (webui / "src" / "assets" / "node_modules" / "pkg").mkdir(parents=True)
+    (webui / "src" / "assets" / "node_modules" / "pkg" / "index.js").write_text("", "utf-8")
+    (webui / "src" / "assets" / "logo.svg").write_text("<svg/>", encoding="utf-8")
+    monkeypatch.setattr(module, "WEBUI_ROOT", webui)
+
+    lint_paths, notes = module.translate_to_eslint_targets(["src/assets"])
+
+    assert lint_paths == []
+    assert len(notes) == 1
+
+
+def _run_main_capturing(module, monkeypatch, argv):
+    commands: list[list[str]] = []
+    monkeypatch.setattr(module.shutil, "which", lambda name: name)
+    monkeypatch.setattr(module.sys, "argv", ["quality-frontend.py", *argv])
+    monkeypatch.setattr(module, "snapshot_target_files", lambda *args: {})
+
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
+        commands.append(cmd)
+        stdout = "Tests  1 passed (1)\n" if cmd[1] == "vitest" else ""
+        return module.subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    return commands
+
+
+@pytest.mark.parametrize("check", [False, True])
+def test_main_skips_eslint_when_scope_has_nothing_lintable(monkeypatch, capsys, check):
+    module = _load_quality_frontend_module()
+    argv = ["--check", "webui/src/styles"] if check else ["webui/src/styles"]
+    commands = _run_main_capturing(module, monkeypatch, argv)
+
+    assert module.main() == 0
+
+    output = capsys.readouterr().out
+    assert not any(cmd[1] == "eslint" for cmd in commands)
+    eslint_lines = [line for line in output.splitlines() if line.startswith("eslint")]
+    assert len(eslint_lines) == (1 if check else 2)
+    assert all("NO FILES" in line and "PASS" not in line for line in eslint_lines)
+    assert "note: src/styles: no ESLint-lintable files" in output
+    assert ["npx", "prettier", "--check" if check else "--write", "src/styles"] in commands
+
+
+def test_main_lints_only_lintable_scope_inputs(monkeypatch, capsys):
+    module = _load_quality_frontend_module()
+    commands = _run_main_capturing(
+        module, monkeypatch, ["--check", "webui/src/styles", "webui/src/lib/i18n.js"]
+    )
+
+    assert module.main() == 0
+
+    output = capsys.readouterr().out
+    assert ["npx", "eslint", "src/lib/i18n.js"] in commands
+    assert ["npx", "prettier", "--check", "src/styles", "src/lib/i18n.js"] in commands
+    assert "eslint        .... PASS" in output
+    assert "note: src/styles: no ESLint-lintable files" in output
 
 
 def test_translate_to_vitest_targets_notes_file_without_any_tests():
@@ -160,8 +295,9 @@ def test_translate_to_vitest_targets_maps_bundled_extension_page_sources_to_buil
         ["../resources/extensions/example/ui/Page.svelte"]
     )
 
-    assert targets == ["scripts/__tests__/build-extension-pages.test.js"]
-    assert notes == []
+    # uiPrimitives also scans bundled Extension UI, so page sources run the guards.
+    assert targets == _with_guards(module, ["scripts/__tests__/build-extension-pages.test.js"])
+    assert [note.startswith(GUARD_NOTE_PREFIX) for note in notes] == [True]
 
 
 def test_translate_to_vitest_targets_includes_a_page_rendered_test_before_build_smoke(
@@ -297,7 +433,8 @@ def test_main_runs_vitest_with_default_reporter(monkeypatch, capsys):
 
     assert module.main() == 0
 
-    capsys.readouterr()
+    output = capsys.readouterr().out
+    assert f"note: {GUARD_NOTE_PREFIX}" in output
     vitest_command = next(cmd for cmd in commands if cmd[1] == "vitest")
     assert vitest_command[:5] == [
         "npx",
@@ -306,12 +443,15 @@ def test_main_runs_vitest_with_default_reporter(monkeypatch, capsys):
         "--reporter=default",
         "--passWithNoTests",
     ]
-    assert vitest_command[5:] == [
-        "src/components/__tests__/AgentsView.test.creation-and-layout.test.js",
-        "src/components/__tests__/AgentsView.test.identity-and-access.test.js",
-        "src/components/__tests__/AgentsView.test.models-and-catalog.test.js",
-        "src/components/__tests__/AgentsView.test.persistence.test.js",
-    ]
+    assert vitest_command[5:] == _with_guards(
+        module,
+        [
+            "src/components/__tests__/AgentsView.test.creation-and-layout.test.js",
+            "src/components/__tests__/AgentsView.test.identity-and-access.test.js",
+            "src/components/__tests__/AgentsView.test.models-and-catalog.test.js",
+            "src/components/__tests__/AgentsView.test.persistence.test.js",
+        ],
+    )
 
 
 def test_help_exits_successfully_without_frontend_prerequisites(monkeypatch):
@@ -542,11 +682,14 @@ def test_build_selection_preserves_scope_and_fix_mode(monkeypatch, check, scoped
         assert lint[2:] == ["--config", "webui/eslint.config.js", *expected_lint]
     vitest = next(cmd for cmd in commands if cmd[1] == "vitest")
     assert vitest[5:] == (
-        [
-            "src/lib/__tests__/settingsView.test.integration.test.js",
-            "src/lib/__tests__/settingsView.test.normalization.test.js",
-            "src/lib/__tests__/settingsView.test.providers.test.js",
-        ]
+        _with_guards(
+            module,
+            [
+                "src/lib/__tests__/settingsView.test.integration.test.js",
+                "src/lib/__tests__/settingsView.test.normalization.test.js",
+                "src/lib/__tests__/settingsView.test.providers.test.js",
+            ],
+        )
         if scoped
         else ["src/", "scripts/"]
     )

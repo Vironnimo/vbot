@@ -17,6 +17,19 @@ from scripts import _worktree_ports as worktree_ports
 from tests.scripts.worktree_helpers import MODULE_PATH, PROJECT_ROOT, _load_worktree_module
 
 
+def _patch_create_environment(monkeypatch, module, tmp_path: Path) -> None:
+    """Point ``cmd_create`` at *tmp_path* so it never touches the real repository.
+
+    ``PROJECT_ROOT`` also locates the Git common dir that holds the port
+    allocation lock, so it is redirected along with the worktree and home dirs.
+    """
+    monkeypatch.setattr(module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
+    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
+    monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+
+
 def test_worktree_source_uses_canonical_initializer_without_local_template() -> None:
     source = MODULE_PATH.read_text(encoding="utf-8")
 
@@ -141,10 +154,7 @@ def test_cmd_create_runs_npm_install_then_build(tmp_path, monkeypatch):
     worktree_path = worktrees_dir / name
     webui_path = worktree_path / "webui"
 
-    monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
-    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
-    monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
-    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    _patch_create_environment(monkeypatch, module, tmp_path)
 
     commands: list[tuple[list[str], Path | None]] = []
 
@@ -164,6 +174,8 @@ def test_cmd_create_runs_npm_install_then_build(tmp_path, monkeypatch):
         (["npm", "run", "build"], webui_path),
     ]
     assert not (worktree_path / ".vorch" / "WORKTREE.md").exists()
+    # The port allocation lock lands in the scratch repository, not the real one.
+    assert (tmp_path / ".git" / module.PORT_ALLOCATION_LOCK_NAME).is_file()
 
 
 @pytest.mark.parametrize(
@@ -180,10 +192,7 @@ def test_cmd_create_reports_branch_in_output(
     worktree_path = worktrees_dir / name
     webui_path = worktree_path / "webui"
 
-    monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
-    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
-    monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
-    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    _patch_create_environment(monkeypatch, module, tmp_path)
 
     def fake_run_command(command, *, cwd=None):
         if command[:3] == ["git", "rev-parse", "--verify"]:
@@ -209,10 +218,7 @@ def test_cmd_create_initializes_canonical_data_dir_without_agent(tmp_path, monke
     webui_path = worktree_path / "webui"
     data_dir = tmp_path / "home" / f".vbot-{name}"
 
-    monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
-    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
-    monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
-    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    _patch_create_environment(monkeypatch, module, tmp_path)
 
     def fake_run_command(command, *, cwd=None):
         if command[:3] == ["git", "worktree", "add"]:
@@ -255,10 +261,7 @@ def test_cmd_create_holds_port_lock_until_marker_and_settings_are_durable(tmp_pa
     data_dir = tmp_path / "home" / f".vbot-{name}"
     observed = []
 
-    monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
-    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
-    monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
-    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    _patch_create_environment(monkeypatch, module, tmp_path)
 
     @contextmanager
     def recording_lock():
@@ -314,6 +317,38 @@ def test_seed_worktree_settings_preserves_existing_user_values(tmp_path):
     assert settings["providers"]["custom"]["fake"]["base_url"] == ("http://127.0.0.1:18422/v1")
 
 
+def test_seed_worktree_settings_reads_fixture_from_running_checkout(tmp_path, monkeypatch):
+    module = _load_worktree_module()
+    fixture_relative = Path("tests") / "e2e" / "fake-provider-settings.json"
+    fixture = json.loads((PROJECT_ROOT / fixture_relative).read_text(encoding="utf-8"))
+
+    def write_checkout(root: Path, model: str) -> None:
+        variant = json.loads(json.dumps(fixture))
+        variant["defaults"]["agent"]["model"] = model
+        (root / fixture_relative).parent.mkdir(parents=True)
+        (root / fixture_relative).write_text(json.dumps(variant), encoding="utf-8")
+
+    # A worktree runs its own script while PROJECT_ROOT names the main repository.
+    script_checkout = tmp_path / "worktree-checkout"
+    main_repository = tmp_path / "main-repository"
+    write_checkout(script_checkout, "fake/from-running-checkout::default")
+    write_checkout(main_repository, "fake/from-main-repository::default")
+    monkeypatch.setattr(module, "__file__", str(script_checkout / "scripts" / "worktree.py"))
+    monkeypatch.setattr(module, "PROJECT_ROOT", main_repository)
+    settings_path = tmp_path / "data" / "settings.json"
+
+    module.seed_worktree_settings(settings_path, server_port=8422)
+
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert settings["defaults"]["agent"]["model"] == "fake/from-running-checkout::default"
+
+
+def test_script_checkout_root_is_the_checkout_holding_the_script():
+    module = _load_worktree_module()
+
+    assert module._script_checkout_root() == PROJECT_ROOT
+
+
 def test_cmd_create_cleans_up_worktree_data_dir_and_branch_after_build_failure(
     tmp_path, monkeypatch
 ):
@@ -325,10 +360,7 @@ def test_cmd_create_cleans_up_worktree_data_dir_and_branch_after_build_failure(
     webui_path = worktree_path / "webui"
     data_dir = tmp_path / "home" / f".vbot-{name}"
 
-    monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
-    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
-    monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
-    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    _patch_create_environment(monkeypatch, module, tmp_path)
 
     commands = []
 
@@ -369,10 +401,7 @@ def test_cmd_create_preserves_preexisting_data_dir_after_build_failure(tmp_path,
     data_dir = tmp_path / "home" / f".vbot-{name}"
     data_dir.mkdir(parents=True)
 
-    monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
-    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
-    monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
-    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+    _patch_create_environment(monkeypatch, module, tmp_path)
 
     commands = []
 
