@@ -14,6 +14,7 @@ from core.providers.adapter import ProviderAdapter
 from core.runtime import Runtime
 from core.sessions._metadata import _decode_chat_history_cursor
 from core.sessions.format import write_bootstrap_marker
+from core.settings.normalizers import normalize_compaction_settings
 from core.utils.config import Config
 from server.app import create_app
 
@@ -89,6 +90,7 @@ def test_bootstrap_agent_and_current_history(tmp_path: Path) -> None:
             "has_more": False,
             "background_bash_statuses": {},
             "reflection_runs": [],
+            "compaction_policy": normalize_compaction_settings(None),
             "session_usage": {
                 "measured_turns": 0,
                 "estimated_turns": 0,

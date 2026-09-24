@@ -23,7 +23,7 @@ The Engine records successful Model-backed work as `usage.model_call = {model, u
 
 ## Policy Resolution
 
-Resolved per compaction decision: Session override -> Agent effective (incl. Project member override) -> global settings. Absence inherits dynamically - global changes affect existing Sessions without rewrites; a Policy change triggers nothing itself and never reprocesses hidden history.
+Resolved per compaction decision: Session override -> Agent effective (incl. Project member override) -> global settings. Absence inherits dynamically - global changes affect existing Sessions without rewrites; a Policy change triggers nothing itself and never reprocesses hidden history. `compaction.py::effective_compaction_policy()` implements this chain for Run coordination and `chat.history`, which returns the Session's normalized effective Policy as `compaction_policy` on current (non-`before`) reads so accessors can relate Current Context Usage to the automatic trigger (`tests/server/test_rpc_chat_history.py`). `session.list`, `session.set_compaction_policy` and the Agent payload still inline the same chain.
 
 ## Cross-Domain Contracts
 

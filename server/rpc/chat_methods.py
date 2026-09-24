@@ -16,7 +16,8 @@ from core.chat import (
 )
 from core.chat.content_blocks import ContentBlock
 from core.chat.file_mentions import expand_file_mentions, resolve_mention_root
-from core.projects import format_agent_address
+from core.compaction import COMPACTION_POLICY_META_KEY, effective_compaction_policy
+from core.projects import AgentResolutionError, format_agent_address
 from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run, RunCancelledError
 from core.sessions import (
     SessionAddress,
@@ -142,6 +143,11 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
             SessionAddress(project_id=project_id, agent_id=agent_id, session_id=active_session_id),
         )
         reflection_runs = await _reflection_runs(state, session) if before is None else None
+        compaction_policy = (
+            await _CHAT_RPC_WORKERS.run(_session_compaction_policy, state, session.address)
+            if before is None
+            else None
+        )
         while True:
             active_run_object = _state_chat_runs(state).active_run(
                 agent_id=agent_id,
@@ -206,6 +212,8 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         response["next_before"] = projection.before_cursor
     if reflection_runs is not None:
         response["reflection_runs"] = reflection_runs
+    if compaction_policy is not None:
+        response["compaction_policy"] = compaction_policy
     context_usage = (
         active_run_object.terminal_payload_extras.get("context_usage")
         if active_run_object is not None
@@ -218,6 +226,32 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     if active_run is not None:
         response["active_run"] = active_run
     return response
+
+
+def _session_compaction_policy(state: Any, address: SessionAddress) -> JsonObject | None:
+    """Return the Session's effective Compaction Policy (Session -> Agent -> global).
+
+    Accessors use it to relate Current Context Usage to automatic Compaction.
+    A Session whose Agent no longer resolves through the ordinary addressing
+    (a removed Team member, a temporary Session) stays readable; its Policy is
+    reported as unknown by omitting the field.
+    """
+    metadata = state.runtime.chat_sessions.get_metadata(address)
+    try:
+        agent = state.runtime.agent_resolver.resolve_agent(address.project_id, address.agent_id)
+    except AgentResolutionError as exc:
+        _LOGGER.debug(
+            "Compaction Policy unavailable for history (agent=%s session=%s): %s",
+            format_agent_address(address.agent_id, address.project_id),
+            address.session_id,
+            exc,
+        )
+        return None
+    return effective_compaction_policy(
+        metadata.get(COMPACTION_POLICY_META_KEY),
+        getattr(agent, "compaction_policy", None),
+        state.runtime.storage.load_compaction_settings,
+    )
 
 
 async def _reflection_runs(state: Any, session: Any) -> list[JsonObject]:
