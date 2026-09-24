@@ -18,6 +18,7 @@ from core.sessions._io import (
     _SessionWriteLock,
 )
 from core.sessions._metadata import (
+    _append_run_kind,
     _completion_activity_from_state,
     _completion_activity_payload,
     _decode_state_object,
@@ -36,7 +37,6 @@ from core.sessions._types import (
     PROMPT_CACHE_AFFINITY_META_KEY,
     SESSION_AUTO_TITLE_INITIALIZED_KEY,
     SESSION_AUTO_TITLE_KEY,
-    SESSION_RUN_KINDS_META_KEY,
     SESSION_TERMINAL_RUN_STATUSES,
     SESSION_TITLE_KEY,
     DeliveryReceipt,
@@ -241,8 +241,12 @@ class ChatSessionManager:
     async def set_metadata_async(self, address: SessionAddress, data: JsonObject) -> None:
         await _run_session_io(self.set_metadata, address, data)
 
+    def metadata_value(self, address: SessionAddress, key: str) -> Any:
+        """Read one metadata value (``None`` when absent) without decoding the rest."""
+        return self._store.metadata_value(address, key)
+
     def prompt_cache_affinity_id(self, address: SessionAddress) -> str:
-        value = self._store.prompt_cache_affinity_value(address)
+        value = self._store.metadata_value(address, PROMPT_CACHE_AFFINITY_META_KEY)
         if value is None:
             return _default_prompt_cache_affinity_id(address)
         if not _is_prompt_cache_affinity_id(value):
@@ -259,9 +263,10 @@ class ChatSessionManager:
         return value
 
     def record_run_kind(self, address: SessionAddress, run_kind: RunKind) -> None:
+        """Classify a Session before its first Run starts; ``start_run`` records it too."""
         if not isinstance(run_kind, RunKind):
             raise ChatSessionError("run kind must be a RunKind")
-        self._store.mutate_metadata(address, lambda metadata: _append_run_kind(metadata, run_kind))
+        self._store.record_run_kind(address, run_kind.value)
 
     def recover_interrupted_runs(self) -> None:
         self._store.recover_interrupted_runs()
@@ -1025,7 +1030,7 @@ class ChatSessionManager:
             if title is not None:
                 _set_title(metadata, normalized_title)
             if run_kind is not None:
-                _append_run_kind(metadata, run_kind)
+                _append_run_kind(metadata, run_kind.value)
 
         target = self._store.fork(
             source,
@@ -1115,16 +1120,6 @@ def _set_title(metadata: JsonObject, normalized: str | None) -> None:
         metadata.pop(SESSION_TITLE_KEY, None)
     else:
         metadata[SESSION_TITLE_KEY] = normalized
-
-
-def _append_run_kind(metadata: JsonObject, run_kind: RunKind) -> None:
-    values = metadata.get(SESSION_RUN_KINDS_META_KEY, [])
-    if not isinstance(values, list) or not all(
-        isinstance(value, str) and value in {kind.value for kind in RunKind} for value in values
-    ):
-        raise ChatSessionError("session run_kinds metadata is invalid")
-    if run_kind.value not in values:
-        metadata[SESSION_RUN_KINDS_META_KEY] = [*values, run_kind.value]
 
 
 def _owned_run_record(row: Any) -> OwnedRunRecord:

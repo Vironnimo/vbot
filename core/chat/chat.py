@@ -354,7 +354,7 @@ class ChatLoop:
             ),
         )
 
-    def build_queue_update(
+    async def build_queue_update(
         self,
         agent_id: str,
         session_id: str,
@@ -364,10 +364,10 @@ class ChatLoop:
         project_id: str | None = None,
     ) -> tuple[str, RunExecutor, str]:
         """Build replacement data for a queued run without mutating queue state."""
-        agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
+        agent = await self._dependencies.agent_resolver.resolve_agent_async(project_id, agent_id)
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
         _ensure_provider_exists(self._dependencies.providers, provider_id)
-        session = self._get_session(
+        session = await self._get_session_async(
             agent_id, session_id, create_missing=False, project_id=project_id
         )
         executor = queued_item.executor
@@ -610,28 +610,6 @@ class ChatLoop:
             raise ChatError(
                 "This Session is managed by an Extension. Use that Extension to resume it."
             )
-
-    def _get_session(
-        self,
-        agent_id: str,
-        session_id: str | None,
-        *,
-        create_missing: bool,
-        project_id: str | None = None,
-    ) -> ChatSession:
-        session_manager = self._dependencies.sessions
-        if session_id is None:
-            if not create_missing:
-                raise ChatSessionError("session id is required")
-            return session_manager.create(agent_id, project_id=project_id)
-        try:
-            return session_manager.get(
-                SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
-            )
-        except ChatSessionError:
-            if not create_missing:
-                raise
-            return session_manager.create(agent_id, session_id=session_id, project_id=project_id)
 
     async def _get_session_async(
         self,

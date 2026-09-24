@@ -284,10 +284,10 @@ class SessionStore:
     def metadata(self, address: SessionAddress) -> JsonObject:
         return _store_values._session_metadata_from_state(self.state(address))
 
-    def prompt_cache_affinity_value(self, address: SessionAddress) -> Any:
-        """Return the stored affinity value, or ``None`` when the Session has none."""
+    def metadata_value(self, address: SessionAddress, key: str) -> Any:
+        """Return one metadata value, or ``None`` when the Session has none."""
         with self._runtime.read_ctx() as connection:
-            return _store_queries.prompt_cache_affinity_value(connection, address)
+            return _store_queries.metadata_value(connection, address, key)
 
     def descriptor_source(
         self, address: SessionAddress
@@ -379,15 +379,30 @@ class SessionStore:
         assistant_message_id: str | None = None,
         continuation_records: Sequence[JsonObject] = (),
         since: SessionReadCursor | None = None,
+        metadata_mutation: Callable[[JsonObject], None] | None = None,
+        require_current: bool = False,
     ) -> SessionReadBatch | None:
         """Append Messages plus any Continuation records in one transaction.
 
         With *since*, the same transaction also selects every record after that
         cursor (this append and any concurrent writer's), so the caller needs no
         follow-up read. ``None`` then means the cursor cannot be continued.
+
+        *metadata_mutation* changes Session metadata in the same transaction, so
+        the Messages and the metadata they depend on commit or roll back together.
+        With *require_current*, the transaction writes nothing and returns
+        ``None`` unless *since* still names the Session's newest record.
         """
+        if require_current and since is None:
+            raise ValueError("require_current needs the cursor to verify")
 
         def _fn(connection: sqlite3.Connection) -> _HistoryDelta:
+            if (
+                require_current
+                and since is not None
+                and not _store_history.cursor_is_current(connection, address, since)
+            ):
+                return None
             _store_mutations.append_messages(
                 connection,
                 address,
@@ -395,6 +410,8 @@ class SessionStore:
                 run_id=run_id,
                 assistant_message_id=assistant_message_id,
             )
+            if metadata_mutation is not None:
+                _store_mutations.mutate_metadata(connection, address, metadata_mutation)
             return self._journal_and_select(connection, address, continuation_records, since)
 
         delta = self._execute_write(_fn, patience_s=TRANSCRIPT_WRITE_PATIENCE_S)
@@ -411,27 +428,6 @@ class SessionStore:
         if since is None:
             return None
         return _store_history.message_rows_since(connection, address, since)
-
-    def start_tool(
-        self,
-        address: SessionAddress,
-        run_id: str,
-        assistant_id: str,
-        call_id: str,
-        started_at: str,
-    ) -> None:
-        from core.sessions import _store_runs
-
-        self._execute_write(
-            lambda connection: _store_runs.start_tool(
-                connection,
-                address,
-                run_id,
-                assistant_id,
-                call_id,
-                started_at,
-            )
-        )
 
     def create_bound_temporary_session(
         self,
@@ -606,6 +602,13 @@ class SessionStore:
         from core.sessions import _store_runs
 
         self._execute_write(_store_runs.recover_interrupted_runs)
+
+    def record_run_kind(self, address: SessionAddress, run_kind: str) -> None:
+        from core.sessions import _store_runs
+
+        self._execute_write(
+            lambda connection: _store_runs.record_run_kind(connection, address, run_kind)
+        )
 
     def record_run_start(self, address: SessionAddress, *, run_id: str) -> None:
         return self._execute_write(
