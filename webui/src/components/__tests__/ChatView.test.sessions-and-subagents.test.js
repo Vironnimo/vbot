@@ -203,6 +203,56 @@ describe('ChatView', () => {
     ).toHaveLength(1);
   });
 
+  it('blocks sending while New session is pending so no message reaches the Session being left', async () => {
+    const baseRpc = createChatRpcMock({
+      sessionMessages: { 'created-alpha': [] },
+    });
+    let resolveCreate = null;
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'session.create') {
+        return new Promise((resolve) => {
+          resolveCreate = () => resolve(baseRpc(method, params));
+        });
+      }
+      return baseRpc(method, params);
+    });
+
+    suite.chatViewTest.mount({ target: document.body });
+    flushSync();
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+    expect(document.querySelector('.msg-input').disabled).toBe(false);
+
+    findNewSessionButton().click();
+    await waitForCondition(() => resolveCreate !== null, 100);
+    const pendingInput = document.querySelector('.msg-input');
+    expect(pendingInput.disabled).toBe(true);
+    sendComposerMessage('Sent during the switch');
+    pendingInput.dispatchEvent(
+      new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }),
+    );
+    flushSync();
+
+    resolveCreate();
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'chat.history' && params?.session_id === 'created-alpha',
+        ),
+      100,
+    );
+    await waitForCondition(
+      () => document.querySelector('.msg-input').disabled === false,
+      100,
+    );
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'chat.stream'),
+    ).toHaveLength(0);
+  });
+
   it('starts a Run in a new Session while the previous Session Run remains active', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({

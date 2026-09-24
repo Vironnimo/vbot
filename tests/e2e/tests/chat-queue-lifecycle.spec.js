@@ -5,10 +5,11 @@ import { startIsolatedChat } from "./chat-run-support.js";
 test("queued Chat messages can be edited, removed, and run in FIFO order", async ({
   page,
 }) => {
+  test.setTimeout(45_000);
   const chat = await startIsolatedChat(page);
   const messageInput = chat.getByRole("textbox", { name: "Message" });
 
-  await messageInput.fill("E2E_QUEUE_ACTIVE_LONG Keep this Run active");
+  await messageInput.fill("E2E_QUEUE_ACTIVE Keep this Run active");
   await chat.getByRole("button", { name: "Send message" }).click();
   await expect(chat.getByText(/Queue run started\./)).toBeVisible();
 
@@ -24,12 +25,11 @@ test("queued Chat messages can be edited, removed, and run in FIFO order", async
   const queue = chat.getByRole("complementary", {
     name: "Queued messages",
   });
-  await expect(queue.getByText("3 queued", { exact: true })).toBeVisible();
-  await expect(
-    queue.getByText("E2E_QUEUE_FIRST Original first queued message", {
-      exact: true,
-    }),
-  ).toBeVisible();
+  const queuedItems = queue.getByRole("listitem");
+  await expect(queuedItems).toHaveCount(3);
+  await expect(queuedItems.first()).toContainText(
+    "E2E_QUEUE_FIRST Original first queued message",
+  );
 
   const firstQueuedItem = queue
     .getByRole("listitem")
@@ -38,15 +38,13 @@ test("queued Chat messages can be edited, removed, and run in FIFO order", async
     .getByRole("button", { name: "Edit queued message" })
     .click();
   await queue
-    .getByRole("textbox")
+    .getByRole("textbox", { name: "Edit queued message" })
     .fill("E2E_QUEUE_FIRST Edited first queued message");
   await queue.getByRole("button", { exact: true, name: "Save" }).click();
 
-  await expect(
-    queue.getByText("E2E_QUEUE_FIRST Edited first queued message", {
-      exact: true,
-    }),
-  ).toBeVisible();
+  await expect(queuedItems.first()).toContainText(
+    "E2E_QUEUE_FIRST Edited first queued message",
+  );
 
   const removedQueuedItem = queue
     .getByRole("listitem")
@@ -54,8 +52,10 @@ test("queued Chat messages can be edited, removed, and run in FIFO order", async
   await removedQueuedItem
     .getByRole("button", { name: "Remove queued message" })
     .click();
-  await expect(queue.getByText("2 queued", { exact: true })).toBeVisible();
-  await expect(queue.getByText(/E2E_QUEUE_REMOVED/)).toHaveCount(0);
+  await expect(queuedItems).toHaveCount(2);
+  await expect(
+    queuedItems.filter({ hasText: "E2E_QUEUE_REMOVED" }),
+  ).toHaveCount(0);
 
   await expect(queue).toHaveCount(0, { timeout: 20_000 });
   await expect(

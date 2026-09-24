@@ -213,6 +213,16 @@ export function createChatController({
     return loadHistoryForSession(agent.id, agent.current_session_id);
   }
 
+  // A selection adopted without navigation still shows its current History.
+  // While the mount's roster load is pending, that load reads the History
+  // itself; a Chat mounted hidden has already finished it for another Agent.
+  async function loadAdoptedSelectionHistory() {
+    if (initialHistoryPending || !shouldLoadCurrentHistory()) {
+      return false;
+    }
+    return loadCurrentHistory();
+  }
+
   function beginHistoryRequest(sessionState) {
     const version = (historyLoadVersions.get(sessionState.key) ?? 0) + 1;
     historyLoadVersions.set(sessionState.key, version);
@@ -1044,6 +1054,7 @@ export function createChatController({
     startFromServerState,
     listFiles: (agentAddress) => operations.listFiles(agentAddress),
     listSessions: (...args) => operations.listSessions(...args),
+    loadAdoptedSelectionHistory,
     loadAgents,
     loadCommands,
     loadCurrentHistory,

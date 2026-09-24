@@ -5,6 +5,7 @@ import { expect, request as playwrightRequest, test } from "@playwright/test";
 
 import { environment } from "../environment.js";
 import { sendChatMessage, startIsolatedChat } from "./chat-run-support.js";
+import { rpc } from "./rpc-support.js";
 
 const PROVIDER_ID = "e2e-custom";
 const PROVIDER_NAME = "E2E Dynamic Provider";
@@ -15,20 +16,6 @@ const UPDATED_MODEL_NAME = "E2E Live Model Updated";
 const MODEL_TARGET = `${PROVIDER_ID}/${MODEL_ID}::default`;
 const API_KEY = "e2e-secret-key-9412";
 const CLEANUP_RECONCILIATION_ATTEMPTS = 2;
-
-async function rpc(request, method, params = {}) {
-  const response = await request.post("/api/rpc", {
-    data: { method, params },
-    // Browser interactions can outlive Uvicorn's idle keep-alive window between
-    // direct RPC checks, so do not let Playwright race a stale pooled socket.
-    headers: { Connection: "close" },
-  });
-  const payload = await response.json();
-  if (!response.ok() || payload?.ok !== true) {
-    throw new Error(`RPC ${method} failed: ${JSON.stringify(payload)}`);
-  }
-  return payload.result;
-}
 
 async function reconcileProviderCleanup() {
   for (
@@ -73,15 +60,9 @@ async function openProviders(page) {
   await page.goto("/#settings");
   const settings = page.getByRole("region", { name: "Settings" });
   await settings
-    .getByRole("button", { exact: true, name: "Connections" })
+    .getByRole("navigation", { name: "Settings sections" })
+    .getByRole("button", { exact: true, name: "Providers" })
     .click();
-  const providersToggle = settings.getByRole("button", {
-    exact: true,
-    name: "Providers",
-  });
-  if ((await providersToggle.getAttribute("aria-expanded")) !== "true") {
-    await providersToggle.click();
-  }
   return settings.getByRole("region", { name: "Providers" });
 }
 

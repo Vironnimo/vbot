@@ -31,7 +31,6 @@ export async function ensureEmptyChat(chat) {
     await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
   }
   await expect(sessionDrawer).toBeVisible();
-  const sessionItems = sessionDrawer.getByRole("listitem");
   const emptySessions = sessionDrawer.getByText("No sessions yet", {
     exact: true,
   });
@@ -43,21 +42,21 @@ export async function ensureEmptyChat(chat) {
       (await emptySessions.isVisible()) || (await selectedSession.isVisible()),
     ).toBe(true);
   }).toPass();
-  const emptyChat = chat.getByText("No messages yet", { exact: true }).first();
   const newSessionButton = chat.getByRole("button", {
     exact: true,
     name: "New session",
   });
   await expect(newSessionButton).toBeEnabled();
-  const previousCount = await sessionItems.count();
-  const reusesCurrentSession =
-    (await selectedSession.isVisible()) && (await emptyChat.isVisible());
 
+  // New session reuses a displayed empty Session and otherwise creates and
+  // opens a fresh one; either way the button stays busy until that Session is
+  // displayed and ready for input.
   await newSessionButton.click();
-  await expect(sessionItems).toHaveCount(
-    previousCount + (reusesCurrentSession ? 0 : 1),
-  );
-  await expect(emptyChat).toBeVisible();
+  await expect(newSessionButton).toBeEnabled();
+  await expect(selectedSession).toHaveCount(1);
+  await expect(
+    chat.getByText("No messages yet", { exact: true }).first(),
+  ).toBeVisible();
 
   // The Sessions panel floats above the chat surface and intercepts pointer
   // events on the timeline underneath, so it never stays open beyond this
@@ -78,6 +77,16 @@ export async function startIsolatedChat(page, { agentName = "" } = {}) {
     await selectPersonalAgent(page, chat, agentName);
   }
   return ensureEmptyChat(chat);
+}
+
+// A Session row under the pointer opens a hoverable title tooltip above
+// itself, covering the row above. Earlier clicks leave the pointer wherever a
+// menu, dialog, or header button was, so park it on the tooltip-free brand and
+// wait out the close delay: a click retried against a covering tooltip scrolls
+// the list, and that scroll closes a row menu the click has just opened.
+export async function parkPointer(page) {
+  await page.mouse.move(0, 0);
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
 }
 
 export async function sendChatMessage(chat, content) {

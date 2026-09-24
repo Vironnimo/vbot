@@ -27,13 +27,33 @@ async function removeProject(page) {
     .getByRole("button", { name: new RegExp(`^${PROJECT_NAME}(?:\\s|$)`) });
   await expect(projectButton).toBeVisible();
   await projectButton.click();
-  await projects.getByRole("tab", { name: "Overview", exact: true }).click();
-  await projects.getByRole("button", { exact: true, name: "Remove" }).click();
-  await page
-    .getByRole("dialog")
+  const repository = projects.getByRole("region", { name: "Repository" });
+  await repository.getByText("Repository management", { exact: true }).click();
+  await repository.getByRole("button", { exact: true, name: "Remove" }).click();
+  const removeDialog = page.getByRole("dialog");
+  await expect(
+    removeDialog.getByRole("heading", { name: "Remove project" }),
+  ).toBeVisible();
+  await expect(removeDialog).toContainText(PROJECT_NAME);
+  await removeDialog
     .getByRole("button", { exact: true, name: "Remove" })
     .click();
   await expect(projects.getByText(/^Project removed\./)).toBeVisible();
+  await expect(
+    projects.getByText("No projects yet", { exact: true }),
+  ).toBeVisible();
+}
+
+function teamMember(projects, agentId) {
+  return projects
+    .getByRole("region", { name: "Team" })
+    .getByTestId(`project-team-member-${agentId}`);
+}
+
+function projectSkill(projects, skillName) {
+  return projects
+    .getByRole("region", { name: "Skills" })
+    .getByRole("checkbox", { exact: true, name: `Toggle skill ${skillName}` });
 }
 
 async function selectProjectOption(page, projectPicker, optionName) {
@@ -81,7 +101,7 @@ test("a Project keeps Source Formats isolated from scan through Provider context
     const projectList = projects.getByRole("complementary", {
       name: "Projects",
     });
-    await projectList.getByRole("button", { exact: true, name: "Add" }).click();
+    await projectList.getByRole("button", { name: "Add project" }).click();
 
     const addDialog = page.getByRole("dialog", { name: "Add project" });
     await addDialog
@@ -109,22 +129,13 @@ test("a Project keeps Source Formats isolated from scan through Provider context
       projects.getByText("Project added.", { exact: true }),
     ).toBeVisible();
     projectCreated = true;
-    await projects.getByRole("tab", { name: "Team", exact: true }).click();
     await expect(
-      projects.getByTestId("project-team-member-open-e2e-worker"),
+      projects.getByRole("heading", { level: 2, name: PROJECT_NAME }),
     ).toBeVisible();
-    await expect(
-      projects.getByTestId("project-team-member-claude-e2e-reviewer"),
-    ).toHaveCount(0);
-    await projects
-      .getByRole("tab", { name: "Tools & Skills", exact: true })
-      .click();
-    await expect(
-      projects.getByText("open-e2e-skill", { exact: true }),
-    ).toBeVisible();
-    await expect(
-      projects.getByText("claude-e2e-skill", { exact: true }),
-    ).toHaveCount(0);
+    await expect(teamMember(projects, "open-e2e-worker")).toBeVisible();
+    await expect(teamMember(projects, "claude-e2e-reviewer")).toHaveCount(0);
+    await expect(projectSkill(projects, "open-e2e-skill")).toBeChecked();
+    await expect(projectSkill(projects, "claude-e2e-skill")).toHaveCount(0);
 
     let chat = await startProjectChat(page, "open-e2e-worker");
     await sendChatMessage(
@@ -138,36 +149,23 @@ test("a Project keeps Source Formats isolated from scan through Provider context
     ).toBeVisible();
 
     await page.goto("/#projects");
-    await projects.getByRole("tab", { name: "Overview", exact: true }).click();
-    const sourceFormat = projects.getByRole("button", {
-      exact: true,
-      name: "Source format",
-    });
+    await projects
+      .getByRole("complementary", { name: "Projects" })
+      .getByRole("button", { name: new RegExp(`^${PROJECT_NAME}(?:\\s|$)`) })
+      .click();
+    const sourceFormat = projects
+      .getByRole("region", { name: "Repository" })
+      .getByRole("button", { exact: true, name: "Source format" });
     await sourceFormat.click();
     await page
       .getByRole("option", { exact: true, name: "Claude Code" })
       .click();
-    await projects.getByRole("button", { name: "Save changes" }).click();
-    await expect(
-      page.getByText("Project updated.", { exact: true }),
-    ).toBeVisible();
+    await expect(sourceFormat).toContainText("Claude Code");
 
-    await projects.getByRole("tab", { name: "Team", exact: true }).click();
-    await expect(
-      projects.getByTestId("project-team-member-claude-e2e-reviewer"),
-    ).toBeVisible();
-    await expect(
-      projects.getByTestId("project-team-member-open-e2e-worker"),
-    ).toHaveCount(0);
-    await projects
-      .getByRole("tab", { name: "Tools & Skills", exact: true })
-      .click();
-    await expect(
-      projects.getByText("claude-e2e-skill", { exact: true }),
-    ).toBeVisible();
-    await expect(
-      projects.getByText("open-e2e-skill", { exact: true }),
-    ).toHaveCount(0);
+    await expect(teamMember(projects, "claude-e2e-reviewer")).toBeVisible();
+    await expect(teamMember(projects, "open-e2e-worker")).toHaveCount(0);
+    await expect(projectSkill(projects, "claude-e2e-skill")).toBeChecked();
+    await expect(projectSkill(projects, "open-e2e-skill")).toHaveCount(0);
 
     chat = await startProjectChat(page, "claude-e2e-reviewer");
     await sendChatMessage(
