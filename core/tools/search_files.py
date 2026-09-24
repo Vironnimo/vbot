@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import itertools
 import os
 import re
 import tempfile
@@ -240,10 +241,6 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
             )
         with tempfile.TemporaryDirectory(prefix="vbot-search-") as temporary:
             scratch = Path(temporary)
-            if action == "content":
-                empty = scratch / "empty"
-                empty.touch()
-                validate_patterns(binary, patterns, options, context, budget, empty)
             selection = FileSelection(
                 scratch / "selection.sqlite", roots, cwd, options, budget, warnings
             )
@@ -261,20 +258,29 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
                         if page.more:
                             break
                 else:
-                    render_events(
-                        content_events(
-                            binary,
-                            selection.entries(action=action),
-                            patterns,
+                    entries = selection.entries(action=action)
+                    first = next(entries, None)
+                    if first is None:
+                        # The native search reports invalid patterns and options;
+                        # without candidates it never runs, so check them alone.
+                        empty = scratch / "empty"
+                        empty.touch()
+                        validate_patterns(binary, patterns, options, context, budget, empty)
+                    else:
+                        render_events(
+                            content_events(
+                                binary,
+                                itertools.chain([first], entries),
+                                patterns,
+                                options,
+                                context,
+                                budget,
+                                offset + limit,
+                            ),
+                            page,
                             options,
-                            context,
-                            budget,
-                            offset + limit,
-                        ),
-                        page,
-                        options,
-                        cwd,
-                    )
+                            cwd,
+                        )
                 if options.enabled("debug"):
                     warnings.append(
                         f"Inspected {selection.observed} entries; "

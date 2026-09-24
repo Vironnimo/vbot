@@ -175,17 +175,19 @@ class LoopMonitor:
             self._sample_injected()
 
     def _sample_process(self, process: psutil.Process) -> None:
+        # Only per-process queries run here, on the loop. The OS thread count
+        # would need a system-wide process scan on Windows (milliseconds, holding
+        # the GIL); the Python thread count covers vBot's own pools and threads.
         try:
             with process.oneshot():
                 cpu_percent = process.cpu_percent(None)
                 rss_mb = process.memory_info().rss / _MEGABYTE
-                threads = process.num_threads()
         except psutil.Error:
             self._sampler_failed("process")
             return
         self._record_gauge("process.cpu_percent", round(cpu_percent, 1))
         self._record_gauge("process.rss_mb", round(rss_mb, 1))
-        self._record_gauge("process.threads", threads)
+        self._record_gauge("process.python_threads", threading.active_count())
         self._record_gauge("asyncio.tasks", len(asyncio.all_tasks()))
 
     def _sample_injected(self) -> None:

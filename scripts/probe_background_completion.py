@@ -102,6 +102,15 @@ class _ProbeAgentResolver:
             raise ValueError("background completion probe received an unexpected Agent target")
         return self._agent
 
+    async def resolve_agent_async(
+        self,
+        project_id: str | None,
+        agent_id: str,
+        *,
+        run_overrides: Any | None = None,
+    ) -> Agent:
+        return self.resolve_agent(project_id, agent_id, run_overrides=run_overrides)
+
 
 class _EmptyProjects:
     def get(self, project_id: str) -> Any:

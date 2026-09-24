@@ -1,8 +1,8 @@
 """Hybrid Recall backend combining Passage FTS and Vector rankings.
 
-Search runs both arms concurrently and applies Reciprocal Rank Fusion with
-adaptive candidate depth. It preserves multiple Passages per Session and reports
-one-arm degradation explicitly.
+Search prepares both arms concurrently once, then applies Reciprocal Rank Fusion
+with adaptive candidate depth over their rankings. It preserves multiple Passages
+per Session and reports one-arm degradation explicitly.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import hashlib
+from typing import Protocol
 
 from core.recall.canonical import (
     CanonicalSessionRecallBackend,
@@ -65,20 +66,26 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
 
     async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
         depth = max(_RRF_INITIAL_DEPTH, request.offset + request.limit + 1)
+        # Each arm reconciles its index, and the semantic arm embeds the query,
+        # once per search; adaptive depth growth reruns only the rankings.
+        arm_request = dataclasses.replace(request, offset=0, limit=depth, snapshot_id=None)
+        literal_prepared, semantic_prepared = await asyncio.gather(
+            self._fts.prepare_passage_search(arm_request),
+            self._vector.prepare_search(arm_request),
+            return_exceptions=True,
+        )
+        literal_arm = None if isinstance(literal_prepared, BaseException) else literal_prepared
+        semantic_arm = None if isinstance(semantic_prepared, BaseException) else semantic_prepared
+        if literal_arm is None and semantic_arm is None:
+            raise _hybrid_unavailable()
         literal_page: RecallSearchPage | None = None
         semantic_page: RecallSearchPage | None = None
         fused: list[RecallSearchHit] = []
 
         while True:
-            arm_request = dataclasses.replace(
-                request,
-                offset=0,
-                limit=depth,
-                snapshot_id=None,
-            )
             literal_result, semantic_result = await asyncio.gather(
-                self._fts.search_passages(arm_request),
-                self._vector.search_page(arm_request),
+                _arm_page(literal_arm, depth),
+                _arm_page(semantic_arm, depth),
                 return_exceptions=True,
             )
             literal_page = literal_result if isinstance(literal_result, RecallSearchPage) else None
@@ -86,10 +93,12 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
                 semantic_result if isinstance(semantic_result, RecallSearchPage) else None
             )
             if literal_page is None and semantic_page is None:
-                raise RecallSearchError(
-                    "hybrid_unavailable",
-                    "Both literal and semantic retrieval are unavailable.",
-                )
+                raise _hybrid_unavailable()
+            # An arm whose ranking failed stays out for the rest of this search.
+            if literal_page is None:
+                literal_arm = None
+            if semantic_page is None:
+                semantic_arm = None
             fused = _fuse_rrf(literal_page, semantic_page)
             if _rrf_page_is_stable(
                 fused,
@@ -147,6 +156,25 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
             self._fts.remove_session(agent_id, session_id, project_id),
             self._vector.remove_session(agent_id, session_id, project_id),
         )
+
+
+class _PreparedArm(Protocol):
+    """One retrieval arm whose freshness work is done; it only ranks."""
+
+    async def page(self, offset: int, limit: int) -> RecallSearchPage: ...
+
+
+async def _arm_page(arm: _PreparedArm | None, depth: int) -> RecallSearchPage | None:
+    if arm is None:
+        return None
+    return await arm.page(0, depth)
+
+
+def _hybrid_unavailable() -> RecallSearchError:
+    return RecallSearchError(
+        "hybrid_unavailable",
+        "Both literal and semantic retrieval are unavailable.",
+    )
 
 
 def _fuse_rrf(

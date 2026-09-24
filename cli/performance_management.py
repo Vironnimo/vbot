@@ -21,7 +21,7 @@ _KEY_GAUGES = (
     "event_loop.utilization",
     "process.cpu_percent",
     "process.rss_mb",
-    "process.threads",
+    "process.python_threads",
     "asyncio.tasks",
     "runs.active",
     "runs.queued",

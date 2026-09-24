@@ -62,7 +62,9 @@ class FirstUseFixture:
         runtime = SimpleNamespace(
             agents=SimpleNamespace(list=lambda: list(self.agents.values())),
             projects=SimpleNamespace(list=lambda: []),
-            agent_resolver=SimpleNamespace(resolve_agent=self.resolve_agent),
+            agent_resolver=SimpleNamespace(
+                resolve_agent=self.resolve_agent, resolve_agent_async=self.resolve_agent_async
+            ),
             chat_sessions=self.sessions,
             chat_run_manager=self.runs,
             storage=SimpleNamespace(
@@ -108,6 +110,9 @@ class FirstUseFixture:
         if project_id is not None or agent_id not in self.agents:
             raise ResolutionAgentNotFoundError(f"Agent not found: {agent_id}")
         return self.agents[agent_id]
+
+    async def resolve_agent_async(self, project_id, agent_id, *, run_overrides=None):
+        return self.resolve_agent(project_id, agent_id, run_overrides=run_overrides)
 
     def child_loop(self, *, nesting_depth):
         fixture = self

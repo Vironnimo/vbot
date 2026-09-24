@@ -1,4 +1,4 @@
-"""Canonical Continuation records and operation materialization."""
+"""Continuation state: fold Chat's records transactionally, read one typed state."""
 
 from __future__ import annotations
 
@@ -7,18 +7,29 @@ import sqlite3
 from collections.abc import Sequence
 
 from core.chat.errors import ChatSessionError
-from core.sessions import _store_continuation, _store_values
-from core.sessions._types import JsonObject, SessionAddress
+from core.sessions import _store_values
+from core.sessions._types import (
+    JsonObject,
+    SessionAddress,
+    SessionContinuationOperation,
+    SessionContinuationState,
+    SessionContinuationStep,
+)
 
 _CONTINUATION_RECORD_VERSION = 1
-_CONTINUATION_SYNTHETIC_TIMESTAMP = "1970-01-01T00:00:00+00:00"
 
 
 def _continuation_step(record: JsonObject) -> int:
+    """Return the Run-local Model step; Chat numbers a Run's first step 1."""
     value = record.get("step")
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ChatSessionError("continuation record step must be a non-negative integer")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ChatSessionError("continuation record step must be a positive integer")
     return value
+
+
+def _optional_text(record: JsonObject, key: str) -> str | None:
+    value = record.get(key)
+    return value if isinstance(value, str) else None
 
 
 def _next_continuation_ordinal(connection: sqlite3.Connection, table: str, session_key: int) -> int:
@@ -138,72 +149,60 @@ def _apply_continuation_record(
     if record_type in {"stream_delta", "stream_attempt_discarded", "assistant_boundary"}:
         run_id = _continuation_string(record, "run_id")
         step = _continuation_step(record)
-        existing = connection.execute(
-            """
-            SELECT reasoning, content, assistant_message_id, interrupted
-            FROM continuation_steps WHERE session_key = ? AND run_id = ? AND step = ?
-            """,
-            (session_key, run_id, step),
-        ).fetchone()
         if record_type == "stream_attempt_discarded":
             connection.execute(
                 "DELETE FROM continuation_steps WHERE session_key = ? AND run_id = ? AND step = ?",
                 (session_key, run_id, step),
             )
             return
-        reasoning = "" if existing is None else str(existing["reasoning"])
-        content = "" if existing is None else str(existing["content"])
-        assistant_message_id = None if existing is None else existing["assistant_message_id"]
-        interrupted = False if existing is None else bool(existing["interrupted"])
         if record_type == "stream_delta":
-            if isinstance(record.get("reasoning_delta"), str):
-                reasoning += str(record["reasoning_delta"])
-            if isinstance(record.get("content_delta"), str):
-                content += str(record["content_delta"])
-        else:
-            if isinstance(record.get("reasoning"), str):
-                reasoning = str(record["reasoning"])
-            if isinstance(record.get("content"), str):
-                content = str(record["content"])
-            value = record.get("message_id")
-            assistant_message_id = value if isinstance(value, str) else None
-            interrupted = record.get("interrupted") is True
-        if existing is None:
+            # Append in SQL: a long step never round-trips its accumulated text.
             connection.execute(
                 """
                 INSERT INTO continuation_steps (
-                    session_key, run_id, step, ordinal, reasoning, content,
-                    assistant_message_id, interrupted
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    session_key, run_id, step, ordinal, reasoning, content
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (session_key, run_id, step) DO UPDATE SET
+                    reasoning = reasoning || excluded.reasoning,
+                    content = content || excluded.content
                 """,
                 (
                     session_key,
                     run_id,
                     step,
                     _next_continuation_ordinal(connection, "continuation_steps", session_key),
-                    reasoning,
-                    content,
-                    assistant_message_id,
-                    int(interrupted),
+                    _optional_text(record, "reasoning_delta") or "",
+                    _optional_text(record, "content_delta") or "",
                 ),
             )
-        else:
-            connection.execute(
-                """
-                UPDATE continuation_steps
-                SET reasoning = ?, content = ?, assistant_message_id = ?, interrupted = ?
-                WHERE session_key = ? AND run_id = ? AND step = ?
-                """,
-                (
-                    reasoning,
-                    content,
-                    assistant_message_id,
-                    int(interrupted),
-                    session_key,
-                    run_id,
-                    step,
-                ),
-            )
+            return
+        reasoning = _optional_text(record, "reasoning")
+        content = _optional_text(record, "content")
+        connection.execute(
+            """
+            INSERT INTO continuation_steps (
+                session_key, run_id, step, ordinal, reasoning, content,
+                assistant_message_id, interrupted
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (session_key, run_id, step) DO UPDATE SET
+                reasoning = COALESCE(?, reasoning),
+                content = COALESCE(?, content),
+                assistant_message_id = excluded.assistant_message_id,
+                interrupted = excluded.interrupted
+            """,
+            (
+                session_key,
+                run_id,
+                step,
+                _next_continuation_ordinal(connection, "continuation_steps", session_key),
+                reasoning or "",
+                content or "",
+                _optional_text(record, "message_id"),
+                int(record.get("interrupted") is True),
+                reasoning,
+                content,
+            ),
+        )
         if record_type == "assistant_boundary" and isinstance(record.get("tool_calls"), list):
             for tool_call in record["tool_calls"]:
                 if not isinstance(tool_call, dict):
@@ -267,79 +266,58 @@ def _apply_continuation_record(
         connection.execute("DELETE FROM continuations WHERE session_key = ?", (session_key,))
 
 
-def _continuation_records(connection: sqlite3.Connection, session_key: int) -> list[JsonObject]:
+def _continuation_state(
+    connection: sqlite3.Connection, session_key: int
+) -> SessionContinuationState | None:
     continuation = connection.execute(
         "SELECT * FROM continuations WHERE session_key = ?", (session_key,)
     ).fetchone()
     if continuation is None:
-        return []
-    requests = connection.execute(
-        "SELECT request_json FROM continuation_requests WHERE session_key = ? ORDER BY ordinal",
-        (session_key,),
-    ).fetchall()
-    base: JsonObject = {
-        "version": _CONTINUATION_RECORD_VERSION,
-        "type": "run_started",
-        "run_id": str(continuation["latest_run_id"]),
-        "timestamp": _CONTINUATION_SYNTHETIC_TIMESTAMP,
-        "checkpoint_id": str(continuation["checkpoint_id"]),
-        "origin_run_id": str(continuation["origin_run_id"]),
-    }
-    records: list[JsonObject] = []
-    if requests:
-        for request in requests:
-            records.append({**base, "request": json.loads(str(request[0]))})
-    else:
-        records.append(base)
-    for step in connection.execute(
-        "SELECT * FROM continuation_steps WHERE session_key = ? ORDER BY ordinal",
-        (session_key,),
-    ):
-        records.append(
-            {
-                "version": _CONTINUATION_RECORD_VERSION,
-                "type": "assistant_boundary",
-                "run_id": str(step["run_id"]),
-                "timestamp": _CONTINUATION_SYNTHETIC_TIMESTAMP,
-                "step": int(step["step"]),
-                "message_id": step["assistant_message_id"],
-                "reasoning": str(step["reasoning"]),
-                "content": str(step["content"]),
-                "interrupted": bool(step["interrupted"]),
-            }
+        return None
+    requests = tuple(
+        json.loads(str(row[0]))
+        for row in connection.execute(
+            "SELECT request_json FROM continuation_requests WHERE session_key = ? ORDER BY ordinal",
+            (session_key,),
         )
-    for operation in connection.execute(
-        "SELECT * FROM continuation_operations WHERE session_key = ? ORDER BY ordinal",
-        (session_key,),
-    ):
-        common: JsonObject = {
-            "version": _CONTINUATION_RECORD_VERSION,
-            "run_id": str(operation["run_id"]),
-            "timestamp": _CONTINUATION_SYNTHETIC_TIMESTAMP,
-            "tool_call_id": str(operation["tool_call_id"]),
-            "name": str(operation["name"]),
-        }
-        records.append({**common, "type": "tool_started"})
-        if operation["status"] == "completed":
-            records.append({**common, "type": "tool_result", "ok": bool(operation["ok"])})
-    if not bool(continuation["active"]):
-        records.append(
-            {
-                "version": _CONTINUATION_RECORD_VERSION,
-                "type": "run_interrupted",
-                "run_id": str(continuation["latest_run_id"]),
-                "timestamp": _CONTINUATION_SYNTHETIC_TIMESTAMP,
-                "cause": str(continuation["cause"]),
-            }
+    )
+    steps = tuple(
+        SessionContinuationStep(
+            run_id=str(row["run_id"]),
+            step=int(row["step"]),
+            reasoning=str(row["reasoning"]),
+            content=str(row["content"]),
+            assistant_message_id=row["assistant_message_id"],
+            interrupted=bool(row["interrupted"]),
         )
-    return records
-
-
-def continuation_from_connection(
-    connection: sqlite3.Connection, session_key: int
-) -> list[JsonObject]:
-    """Project normalized current continuation state through the legacy-shaped facade."""
-    return _store_continuation._continuation_records(connection, session_key)
+        for row in connection.execute(
+            "SELECT * FROM continuation_steps WHERE session_key = ? ORDER BY ordinal",
+            (session_key,),
+        )
+    )
+    operations = tuple(
+        SessionContinuationOperation(
+            tool_call_id=str(row["tool_call_id"]),
+            name=str(row["name"]),
+            run_id=str(row["run_id"]),
+            completed=row["status"] == "completed",
+            ok=None if row["status"] != "completed" else bool(row["ok"]),
+        )
+        for row in connection.execute(
+            "SELECT * FROM continuation_operations WHERE session_key = ? ORDER BY ordinal",
+            (session_key,),
+        )
+    )
+    return SessionContinuationState(
+        checkpoint_id=str(continuation["checkpoint_id"]),
+        origin_run_id=str(continuation["origin_run_id"]),
+        latest_run_id=str(continuation["latest_run_id"]),
+        cause=None if continuation["cause"] is None else str(continuation["cause"]),
+        active=bool(continuation["active"]),
+        requests=requests,
+        steps=steps,
+        operations=operations,
+    )
 
 
 def _continuation_string(record: JsonObject, key: str) -> str:
@@ -349,9 +327,12 @@ def _continuation_string(record: JsonObject, key: str) -> str:
     return value
 
 
-def continuation(connection: sqlite3.Connection, address: SessionAddress) -> list[JsonObject]:
+def continuation(
+    connection: sqlite3.Connection, address: SessionAddress
+) -> SessionContinuationState | None:
+    """Return the Session's current Continuation state, or ``None`` without one."""
     state = _store_values._require_live(connection, address)
-    return _store_continuation._continuation_records(connection, int(state["session_key"]))
+    return _continuation_state(connection, int(state["session_key"]))
 
 
 def append_continuation(
@@ -368,7 +349,7 @@ def append_continuation(
         state = _store_values._require_live(connection, address)
         session_key = int(state["session_key"])
         for record in records:
-            _store_continuation._apply_continuation_record(connection, session_key, record)
+            _apply_continuation_record(connection, session_key, record)
         _store_values._touch_state(connection, int(state["session_key"]))
 
     _fn(connection)

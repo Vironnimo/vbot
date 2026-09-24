@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,8 +11,11 @@ from pathlib import Path
 import pytest
 import sqlite_vec  # type: ignore[import-untyped]
 
+from core.recall.passages import Passage
 from core.recall.vector_store import (
-    ChunkVectorRecord,
+    RefreshPlan,
+    SessionPassages,
+    StoredPassage,
     VectorHeader,
     VectorStore,
     VectorStoreError,
@@ -19,6 +23,144 @@ from core.recall.vector_store import (
 from core.sessions.schema import JOURNAL_MODE_DELETE
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
+HEADER = VectorHeader(provider_id="p", model_id="m", dimension=3)
+VECTORS: dict[str, list[float]] = {
+    "alpha": [1.0, 0.0, 0.0],
+    "beta": [0.0, 1.0, 0.0],
+    "gamma": [0.0, 0.0, 1.0],
+    "delta": [0.7, 0.7, 0.0],
+    "beta grown": [0.1, 0.9, 0.0],
+}
+
+
+def _passage(
+    text: str,
+    *,
+    passage_id: str | None = None,
+    start_message_id: str = "m1",
+    end_message_id: str = "m1",
+    timestamp: str = "2026-05-01T12:00:00+00:00",
+) -> Passage:
+    return Passage(
+        passage_id=passage_id or f"id-{text}",
+        text=text,
+        start_message_id=start_message_id,
+        end_message_id=end_message_id,
+        start_timestamp=timestamp,
+        end_timestamp=timestamp,
+        start_role="user",
+        end_role="user",
+        start_offset=0,
+        end_offset=len(text),
+    )
+
+
+def _plan(
+    store: VectorStore,
+    sessions: Mapping[str, Sequence[Passage]],
+    *,
+    header: VectorHeader = HEADER,
+    agent_id: str = "coder",
+    project_id: str = "",
+    revision: int = 1,
+    pruned: Sequence[str] = (),
+) -> RefreshPlan:
+    indexed = store.list_indexed_sessions(agent_id, project_id)
+    return store.plan_refresh(
+        agent_id,
+        project_id,
+        header=header,
+        sessions=[
+            SessionPassages(
+                session_id=session_id,
+                version=("generation", revision),
+                previous_version=indexed.get(session_id),
+                passages=tuple(passages),
+            )
+            for session_id, passages in sessions.items()
+        ],
+        pruned_session_ids=pruned,
+    )
+
+
+def _refresh(
+    store: VectorStore,
+    sessions: Mapping[str, Sequence[Passage]],
+    *,
+    header: VectorHeader = HEADER,
+    agent_id: str = "coder",
+    project_id: str = "",
+    revision: int = 1,
+    pruned: Sequence[str] = (),
+    vectors: Mapping[str, list[float]] = VECTORS,
+) -> RefreshPlan:
+    """Plan and apply one refresh, embedding each requested text from *vectors*."""
+
+    plan = _plan(
+        store,
+        sessions,
+        header=header,
+        agent_id=agent_id,
+        project_id=project_id,
+        revision=revision,
+        pruned=pruned,
+    )
+    store.apply_refresh(plan, [vectors[text] for text in plan.texts_to_embed])
+    return plan
+
+
+def _rows(store: VectorStore, session_id: str, *, project_id: str = "") -> list[tuple[int, str]]:
+    """Return ``(rowid, text)`` for one Session's rows that have a vector."""
+
+    connection = sqlite3.connect(store.path)
+    try:
+        connection.enable_load_extension(True)
+        sqlite_vec.load(connection)
+        rows = connection.execute(
+            """
+            SELECT p.rowid, p.text FROM passages AS p
+            JOIN session_vectors AS v ON v.rowid = p.rowid
+            WHERE p.project_id = ? AND p.agent_id = 'coder' AND p.session_id = ?
+            ORDER BY p.rowid
+            """,
+            (project_id, session_id),
+        ).fetchall()
+    finally:
+        connection.close()
+    return [(int(rowid), str(text)) for rowid, text in rows]
+
+
+def _vec0_row_count(path: Path) -> int:
+    connection = sqlite3.connect(path)
+    try:
+        connection.enable_load_extension(True)
+        sqlite_vec.load(connection)
+        row = connection.execute("SELECT COUNT(*) FROM session_vectors").fetchone()
+    finally:
+        connection.close()
+    return int(row[0])
+
+
+def _nearest(
+    store: VectorStore,
+    query: list[float],
+    *,
+    header: VectorHeader = HEADER,
+    limit: int = 10,
+    **filters: object,
+) -> list[tuple[StoredPassage, float]]:
+    return store.knn_search(
+        header=header,
+        query_vector=query,
+        limit=limit,
+        **filters,  # type: ignore[arg-type]
+    )
+
+
+# ---------------------------------------------------------------------------
+# File, journal, header and schema lifecycle
+# ---------------------------------------------------------------------------
 
 
 def test_vector_store_uses_required_rollback_journal(
@@ -49,619 +191,389 @@ def test_vector_store_reset_removes_rollback_journal(tmp_path: Path) -> None:
     assert rollback_journal.exists() is False
 
 
-def _record(
-    session_id: str,
-    *,
-    agent_id: str = "coder",
-    history_revision: int = 1,
-    anchor: str = "m1",
-    snippet: str | None = None,
-    chunk_index: int = 0,
-    start_message_id: str = "m1",
-    end_message_id: str = "m1",
-) -> ChunkVectorRecord:
-    return ChunkVectorRecord(
-        session_id=session_id,
-        agent_id=agent_id,
-        started_at=datetime(2026, 5, 1, 12, tzinfo=UTC).isoformat(),
-        history_revision=history_revision,
-        anchor_message_id=anchor,
-        snippet=snippet if snippet is not None else f"snippet for {session_id}",
-        chunk_index=chunk_index,
-        start_message_id=start_message_id,
-        end_message_id=end_message_id,
-    )
-
-
-def _upsert_one(
-    store: VectorStore,
-    *,
-    header: VectorHeader,
-    record: ChunkVectorRecord,
-    vector: list[float],
-) -> None:
-    """Seed a single chunk; production indexing batches via ``upsert_many_chunks``."""
-    store.upsert_many_chunks(header=header, records=[(record, vector)])
-
-
-def test_vector_store_creates_index_file_under_recall_dir(tmp_path: Path) -> None:
+def test_vector_store_fresh_file_is_empty(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
-    header = VectorHeader(provider_id="openrouter", model_id="model-a", dimension=4)
-    _upsert_one(
-        store,
-        header=header,
-        record=_record("sess-1"),
-        vector=[0.1, 0.2, 0.3, 0.4],
-    )
 
-    assert store.path == tmp_path / "recall" / "session_passage_vectors.sqlite"
-    assert store.path.is_file()
+    assert store.read_header() is None
+    assert store.list_indexed_sessions("coder") == {}
+    store.delete_session("coder", "", "never-indexed")  # must not raise
 
 
-def test_vector_store_pins_provider_model_and_dimension_in_header(tmp_path: Path) -> None:
+def test_vector_store_first_refresh_creates_file_header_and_vec0_table(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
     header = VectorHeader(
         provider_id="openrouter",
         model_id="model-a",
-        dimension=4,
+        dimension=3,
         space_fingerprint="space-a",
-        index_policy="passage-v1",
+        index_policy="passage-v2",
         response_model_id="served/model-a-202607",
     )
-    _upsert_one(store, header=header, record=_record("sess-1"), vector=[0.1, 0.2, 0.3, 0.4])
 
-    stored = store.read_header()
-    assert stored is not None
-    assert stored.provider_id == "openrouter"
-    assert stored.model_id == "model-a"
-    assert stored.dimension == 4
-    assert stored.space_fingerprint == "space-a"
-    assert stored.index_policy == "passage-v1"
-    assert stored.response_model_id == "served/model-a-202607"
+    _refresh(store, {"s1": [_passage("alpha")]}, header=header)
+
+    assert store.path == tmp_path / "recall" / "session_passage_vectors.sqlite"
+    assert store.path.is_file()
+    assert store.read_header() == header
+    assert _vec0_row_count(store.path) == 1
 
 
-def test_vector_store_creates_vec0_table_lazily_on_first_insert(tmp_path: Path) -> None:
+def test_vector_store_refresh_requires_resolved_dimension(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
-    assert store.read_header() is None
-
-    _upsert_one(
-        store,
-        header=VectorHeader(provider_id="p", model_id="m", dimension=3),
-        record=_record("s1"),
-        vector=[0.1, 0.2, 0.3],
-    )
-
-    # After the first insert the vec0 table must exist with the observed dim.
-    with sqlite3.connect(store.path) as conn:
-        rows = list(
-            conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='session_vectors'"
-            )
-        )
-    assert len(rows) == 1
-
-
-def test_vector_store_drops_and_rebuilds_on_model_change(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    header_a = VectorHeader(provider_id="openrouter", model_id="model-a", dimension=4)
-    header_b = VectorHeader(provider_id="openrouter", model_id="model-b", dimension=4)
-    _upsert_one(store, header=header_a, record=_record("a-1"), vector=[0.1, 0.2, 0.3, 0.4])
-    _upsert_one(store, header=header_a, record=_record("a-2"), vector=[0.2, 0.3, 0.4, 0.5])
-    assert set(store.list_indexed_sessions("coder")) == {"a-1", "a-2"}
-
-    _upsert_one(store, header=header_b, record=_record("b-1"), vector=[0.9, 0.8, 0.7, 0.6])
-
-    indexed = store.list_indexed_sessions("coder")
-    assert set(indexed) == {"b-1"}
-    stored = store.read_header()
-    assert stored is not None
-    assert stored.model_id == "model-b"
-
-
-def test_vector_store_drops_and_rebuilds_on_provider_change(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    _upsert_one(
-        store,
-        header=VectorHeader(provider_id="openrouter", model_id="m", dimension=4),
-        record=_record("s1"),
-        vector=[0.1, 0.2, 0.3, 0.4],
-    )
-    _upsert_one(
-        store,
-        header=VectorHeader(provider_id="openai", model_id="m", dimension=4),
-        record=_record("s2"),
-        vector=[0.5, 0.6, 0.7, 0.8],
-    )
-
-    stored = store.read_header()
-    assert stored is not None
-    assert stored.provider_id == "openai"
-    assert set(store.list_indexed_sessions("coder")) == {"s2"}
-
-
-def test_vector_store_drops_and_rebuilds_on_response_model_change(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    header_a = VectorHeader(
-        provider_id="openrouter",
-        model_id="router/alias",
-        dimension=4,
-        response_model_id="served/model-a",
-    )
-    header_b = VectorHeader(
-        provider_id="openrouter",
-        model_id="router/alias",
-        dimension=4,
-        response_model_id="served/model-b",
-    )
-    _upsert_one(store, header=header_a, record=_record("a"), vector=[0.1, 0.2, 0.3, 0.4])
-    _upsert_one(store, header=header_b, record=_record("b"), vector=[0.4, 0.3, 0.2, 0.1])
-
-    assert set(store.list_indexed_sessions("coder")) == {"b"}
-    assert store.read_header() == header_b
-
-
-def test_vector_store_rebuilds_on_schema_version_mismatch(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    _upsert_one(
-        store,
-        header=VectorHeader(provider_id="p", model_id="m", dimension=4),
-        record=_record("s1"),
-        vector=[0.1, 0.2, 0.3, 0.4],
-    )
-
-    # Bump the schema version to simulate an old index.
-    with sqlite3.connect(store.path) as conn:
-        conn.execute("PRAGMA user_version = 999")
-        conn.commit()
-
-    _upsert_one(
-        store,
-        header=VectorHeader(provider_id="p", model_id="m", dimension=4),
-        record=_record("s2"),
-        vector=[0.4, 0.5, 0.6, 0.7],
-    )
-
-    # The first session is gone — the index was wiped and rebuilt.
-    assert set(store.list_indexed_sessions("coder")) == {"s2"}
-
-
-def test_vector_store_rejects_vector_with_wrong_dimension(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    _upsert_one(
-        store,
-        header=VectorHeader(provider_id="p", model_id="m", dimension=4),
-        record=_record("s1"),
-        vector=[0.1, 0.2, 0.3, 0.4],
-    )
 
     with pytest.raises(VectorStoreError):
-        _upsert_one(
-            store,
-            header=VectorHeader(provider_id="p", model_id="m", dimension=4),
-            record=_record("s2"),
-            vector=[0.1, 0.2, 0.3, 0.4, 0.5],
-        )
+        _plan(store, {"s1": [_passage("alpha")]}, header=replace(HEADER, dimension=0))
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        replace(HEADER, provider_id="other"),
+        replace(HEADER, model_id="other"),
+        replace(HEADER, response_model_id="served/other"),
+        replace(HEADER, space_fingerprint="other-space"),
+        replace(HEADER, index_policy="other-policy"),
+        replace(HEADER, dimension=4),
+    ],
+)
+def test_vector_store_refuses_refresh_in_another_embedding_space(
+    tmp_path: Path, changed: VectorHeader
+) -> None:
+    """Vectors of one embedding space never mix with another; the caller resets first."""
+
+    store = VectorStore(tmp_path)
+    _refresh(store, {"s1": [_passage("alpha")]})
+
+    with pytest.raises(VectorStoreError):
+        _plan(store, {"s2": [_passage("beta")]}, header=changed)
+
+    assert store.read_header() == HEADER
+    assert set(store.list_indexed_sessions("coder")) == {"s1"}
+
+
+def test_vector_store_apply_rejects_plan_whose_store_changed_space(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    stale = _plan(store, {"s1": [_passage("alpha")]})
+    other = replace(HEADER, model_id="other")
+    _refresh(store, {"s2": [_passage("beta")]}, header=other)
+
+    with pytest.raises(VectorStoreError, match="header changed"):
+        store.apply_refresh(stale, [VECTORS["alpha"]])
+
+    assert store.read_header() == other
+
+
+def test_vector_store_apply_rejects_plan_whose_store_was_discarded(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    _refresh(store, {"s1": [_passage("alpha")]})
+    stale = _plan(store, {"s2": [_passage("beta")]})
+    store.reset_index()
+
+    with pytest.raises(VectorStoreError, match="discarded"):
+        store.apply_refresh(stale, [VECTORS["beta"]])
+
+
+def test_vector_store_rejects_populated_file_of_another_schema_version(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    _refresh(store, {"s1": [_passage("alpha")]})
+    connection = sqlite3.connect(store.path)
+    try:
+        connection.execute("PRAGMA user_version = 999")
+    finally:
+        connection.close()
+
+    with pytest.raises(VectorStoreError):
+        store.read_header()
+    with pytest.raises(VectorStoreError):
+        store.list_indexed_sessions("coder")
+    store.delete_session("coder", "", "s1")  # tolerated; the next search rebuilds
+
+    store.reset_index()
+    _refresh(store, {"s2": [_passage("beta")]})
+    assert set(store.list_indexed_sessions("coder")) == {"s2"}
+
+
+def test_vector_store_rejects_vectors_that_do_not_fit_the_plan(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    _refresh(store, {"s1": [_passage("alpha")]})
+    plan = _plan(store, {"s2": [_passage("beta")]})
+
+    with pytest.raises(VectorStoreError):
+        store.apply_refresh(plan, [[0.1, 0.2, 0.3, 0.4]])
+    with pytest.raises(VectorStoreError):
+        store.apply_refresh(plan, [])
 
     assert set(store.list_indexed_sessions("coder")) == {"s1"}
 
 
-def test_vector_store_knn_header_mismatch_is_read_only(tmp_path: Path) -> None:
+# ---------------------------------------------------------------------------
+# Incremental refresh
+# ---------------------------------------------------------------------------
+
+
+def test_vector_store_refresh_keeps_unchanged_rows_and_embeds_only_new_texts(
+    tmp_path: Path,
+) -> None:
     store = VectorStore(tmp_path)
-    original = VectorHeader(
-        provider_id="p",
-        model_id="m",
-        dimension=3,
-        space_fingerprint="space-a",
-        index_policy="passage-v1",
-    )
-    _upsert_one(store, header=original, record=_record("s1"), vector=[1.0, 0.0, 0.0])
+    alpha = _passage("alpha")
+    first = _refresh(store, {"s1": [alpha, _passage("beta", passage_id="tail")]})
+    assert first.texts_to_embed == ("alpha", "beta")
+    [(alpha_rowid, _alpha), _beta] = _rows(store, "s1")
 
-    incompatible = VectorHeader(
-        provider_id="p",
-        model_id="m",
-        dimension=4,
-        space_fingerprint="space-a",
-        index_policy="passage-v1",
-    )
-    with pytest.raises(VectorStoreError):
-        store.knn_search(
-            header=incompatible,
-            query_vector=[1.0, 0.0, 0.0, 0.0],
-            limit=1,
-        )
-
-    assert store.read_header() == original
-    assert store.knn_search(
-        header=original,
-        query_vector=[1.0, 0.0, 0.0],
-        limit=1,
+    # The tail Passage keeps its id but grows; a new Passage follows it.
+    second = _refresh(
+        store,
+        {"s1": [alpha, _passage("beta grown", passage_id="tail"), _passage("gamma")]},
+        revision=2,
     )
 
+    assert second.texts_to_embed == ("beta grown", "gamma")
+    rows = _rows(store, "s1")
+    assert (alpha_rowid, "alpha") in rows
+    assert sorted(text for _rowid, text in rows) == ["alpha", "beta grown", "gamma"]
+    assert store.list_indexed_sessions("coder") == {"s1": ("generation", 2)}
 
-def test_vector_store_rebuilds_when_space_fingerprint_changes(tmp_path: Path) -> None:
+
+def test_vector_store_refresh_replaces_rows_whose_boundaries_moved(tmp_path: Path) -> None:
+    """Same id and text with other boundary metadata is a different row."""
+
     store = VectorStore(tmp_path)
-    first = VectorHeader(
-        provider_id="p",
-        model_id="m",
-        dimension=2,
-        space_fingerprint="connection-a-options-a",
-        index_policy="passage-v1",
-    )
-    second = VectorHeader(
-        provider_id="p",
-        model_id="m",
-        dimension=2,
-        space_fingerprint="connection-b-options-b",
-        index_policy="passage-v1",
-    )
-    _upsert_one(store, header=first, record=_record("old"), vector=[1.0, 0.0])
+    _refresh(store, {"s1": [_passage("alpha", end_message_id="m1")]})
 
-    _upsert_one(store, header=second, record=_record("new"), vector=[0.0, 1.0])
+    plan = _refresh(store, {"s1": [_passage("alpha", end_message_id="m2")]}, revision=2)
 
-    assert store.read_header() == second
-    assert set(store.list_indexed_sessions("coder")) == {"new"}
+    # The row is rewritten, but its text keeps the stored vector.
+    assert plan.texts_to_embed == ()
+    [(_rowid, text)] = _rows(store, "s1")
+    assert text == "alpha"
+    [(passage, _distance)] = _nearest(store, VECTORS["alpha"])
+    assert passage.end_message_id == "m2"
 
 
-def test_vector_store_knn_search_returns_nearest_by_cosine(tmp_path: Path) -> None:
+def test_vector_store_refresh_removes_vanished_passages(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
-    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
-    _upsert_one(store, header=header, record=_record("near"), vector=[1.0, 0.0, 0.0])
-    _upsert_one(store, header=header, record=_record("mid"), vector=[0.7, 0.7, 0.0])
-    _upsert_one(store, header=header, record=_record("far"), vector=[0.0, 0.0, 1.0])
+    _refresh(store, {"s1": [_passage("alpha"), _passage("beta"), _passage("gamma")]})
 
-    results = store.knn_search(header=header, query_vector=[1.0, 0.0, 0.0], limit=3)
-    assert [rowid for rowid, _ in results] == [1, 2, 3]
+    plan = _refresh(store, {"s1": [_passage("alpha")]}, revision=2)
+
+    assert plan.texts_to_embed == ()
+    assert [text for _rowid, text in _rows(store, "s1")] == ["alpha"]
+    assert _vec0_row_count(store.path) == 1
+
+
+def test_vector_store_refresh_reuses_vectors_across_sessions(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    _refresh(store, {"s1": [_passage("alpha"), _passage("beta")]})
+
+    plan = _refresh(store, {"s2": [_passage("alpha", passage_id="fork-id")]})
+
+    assert plan.texts_to_embed == ()
+    nearest = _nearest(store, VECTORS["alpha"], limit=2)
+    assert [(passage.session_id, passage.text) for passage, _ in nearest] == [
+        ("s1", "alpha"),
+        ("s2", "alpha"),
+    ]
+    assert nearest[1][1] == pytest.approx(0.0, abs=1e-5)
+
+
+def test_vector_store_refresh_embeds_each_distinct_text_once(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+
+    plan = _refresh(
+        store,
+        {
+            "s1": [_passage("alpha", passage_id="a1"), _passage("alpha", passage_id="a2")],
+            "s2": [_passage("alpha", passage_id="a3")],
+        },
+    )
+
+    assert plan.texts_to_embed == ("alpha",)
+    assert len(_rows(store, "s1")) == 2
+    assert len(_rows(store, "s2")) == 1
+
+
+def test_vector_store_refresh_matches_duplicate_rows_as_a_multiset(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    duplicate = _passage("alpha")
+    _refresh(store, {"s1": [duplicate, duplicate]})
+    [first, second] = _rows(store, "s1")
+
+    _refresh(store, {"s1": [duplicate]}, revision=2)
+
+    remaining = _rows(store, "s1")
+    assert len(remaining) == 1
+    assert remaining[0] in (first, second)
+
+
+def test_vector_store_stamps_session_without_passages(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    _refresh(store, {"s1": [_passage("alpha")], "empty": []})
+
+    assert store.list_indexed_sessions("coder") == {
+        "s1": ("generation", 1),
+        "empty": ("generation", 1),
+    }
+
+    _refresh(store, {"s1": []}, revision=2)
+
+    assert _rows(store, "s1") == []
+    assert store.list_indexed_sessions("coder")["s1"] == ("generation", 2)
+
+
+def test_vector_store_skips_session_refreshed_by_another_writer(tmp_path: Path) -> None:
+    """A plan applies only on top of the stamp it was planned against."""
+
+    store = VectorStore(tmp_path)
+    _refresh(store, {"s1": [_passage("alpha")]})
+    stale = _plan(store, {"s1": [_passage("beta")]}, revision=2)
+    _refresh(store, {"s1": [_passage("gamma")]}, revision=3)
+
+    store.apply_refresh(stale, [VECTORS["beta"]])
+
+    assert [text for _rowid, text in _rows(store, "s1")] == ["gamma"]
+    assert store.list_indexed_sessions("coder") == {"s1": ("generation", 3)}
+
+
+def test_vector_store_empty_plan_writes_nothing(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    _refresh(store, {"s1": [_passage("alpha")]})
+    modified = store.path.stat().st_mtime_ns
+
+    plan = _plan(store, {})
+    assert plan.is_empty
+    store.apply_refresh(plan)
+
+    assert store.path.stat().st_mtime_ns == modified
+
+
+def test_vector_store_prunes_named_sessions(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    _refresh(store, {"keep": [_passage("alpha")], "drop": [_passage("beta")]})
+
+    _refresh(store, {}, pruned=["drop"])
+
+    assert set(store.list_indexed_sessions("coder")) == {"keep"}
+    assert _rows(store, "drop") == []
+    assert _vec0_row_count(store.path) == 1
+
+
+def test_vector_store_delete_session_removes_rows_and_stamp(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    _refresh(store, {"s1": [_passage("alpha")], "s2": [_passage("beta")]})
+
+    store.delete_session("coder", "", "s1")
+
+    assert set(store.list_indexed_sessions("coder")) == {"s2"}
+    assert _rows(store, "s1") == []
+
+
+# ---------------------------------------------------------------------------
+# KNN
+# ---------------------------------------------------------------------------
+
+
+def test_vector_store_knn_search_returns_nearest_passages_by_cosine(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    _refresh(
+        store,
+        {
+            "near": [_passage("alpha", start_message_id="n1", end_message_id="n2")],
+            "mid": [_passage("delta")],
+            "far": [_passage("gamma")],
+        },
+    )
+
+    results = _nearest(store, [1.0, 0.0, 0.0], limit=3)
+
+    assert [passage.session_id for passage, _ in results] == ["near", "mid", "far"]
+    assert results[0][0] == StoredPassage(
+        session_id="near",
+        passage_id="id-alpha",
+        text="alpha",
+        start_message_id="n1",
+        end_message_id="n2",
+        start_timestamp="2026-05-01T12:00:00+00:00",
+        end_timestamp="2026-05-01T12:00:00+00:00",
+        start_role="user",
+        end_role="user",
+    )
     assert results[0][1] == pytest.approx(0.0, abs=1e-5)
     assert results[-1][1] > results[0][1]
 
 
-def test_vector_store_knn_search_excludes_sessions_before_ranking(tmp_path: Path) -> None:
+def test_vector_store_knn_header_mismatch_is_read_only(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
-    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
-    _upsert_one(store, header=header, record=_record("excluded"), vector=[1.0, 0.0, 0.0])
-    _upsert_one(store, header=header, record=_record("included"), vector=[0.8, 0.2, 0.0])
+    _refresh(store, {"s1": [_passage("alpha")]})
 
-    results = store.knn_search(
-        header=header,
-        query_vector=[1.0, 0.0, 0.0],
-        limit=1,
-        excluded_session_ids=("excluded",),
+    with pytest.raises(VectorStoreError):
+        _nearest(store, [1.0, 0.0, 0.0, 0.0], header=replace(HEADER, dimension=4))
+    with pytest.raises(VectorStoreError):
+        _nearest(store, [1.0, 0.0, 0.0], header=replace(HEADER, model_id="other"))
+
+    assert store.read_header() == HEADER
+    assert _nearest(store, [1.0, 0.0, 0.0])
+
+
+def test_vector_store_knn_search_applies_session_filters_before_ranking(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    _refresh(
+        store,
+        {"excluded": [_passage("alpha")], "included": [_passage("delta")], "other": []},
     )
-    records = store.get_chunks_by_rowids(rowid for rowid, _distance in results)
 
-    assert [records[rowid].session_id for rowid, _distance in results] == ["included"]
+    excluded = _nearest(store, [1.0, 0.0, 0.0], limit=1, excluded_session_ids=("excluded",))
+    selected = _nearest(store, [1.0, 0.0, 0.0], limit=1, session_id="included")
+
+    assert [passage.session_id for passage, _ in excluded] == ["included"]
+    assert [passage.session_id for passage, _ in selected] == ["included"]
+    assert (
+        _nearest(store, [1.0, 0.0, 0.0], session_id="included", excluded_session_ids=("included",))
+        == []
+    )
 
 
-def test_vector_store_get_chunks_by_rowids_round_trip(tmp_path: Path) -> None:
+@pytest.mark.parametrize("excluded_count", [8, 40])
+def test_vector_store_knn_search_excludes_many_sessions_without_starving(
+    tmp_path: Path, excluded_count: int
+) -> None:
+    """Exclusions run inside KNN, even beyond the constraints one vec0 query accepts."""
+
     store = VectorStore(tmp_path)
-    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
-    _upsert_one(store, header=header, record=_record("a"), vector=[1.0, 0.0, 0.0])
-    _upsert_one(store, header=header, record=_record("b"), vector=[0.0, 1.0, 0.0])
+    excluded_ids = [f"hidden-{index}" for index in range(excluded_count)]
+    _refresh(
+        store,
+        {
+            **{
+                session_id: [_passage("alpha", passage_id=session_id)]
+                for session_id in excluded_ids
+            },
+            "visible": [_passage("delta")],
+            "far": [_passage("gamma")],
+        },
+    )
 
-    records = store.get_chunks_by_rowids([1, 2])
-    assert set(records) == {1, 2}
-    assert {record.session_id for record in records.values()} == {"a", "b"}
-
-    # New fields round-trip from the chunk row.
-    record_a = records[1]
-    assert record_a.chunk_index == 0
-    assert record_a.start_message_id == "m1"
-    assert record_a.end_message_id == "m1"
-
-
-def test_vector_store_bulk_upsert_writes_all_records(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
-    records = [(_record(f"s{i}"), [float(i), 0.0, 0.0]) for i in range(5)]
-    written = store.upsert_many_chunks(header=header, records=records)
-    assert written == 5
-    assert len(store.list_indexed_sessions("coder")) == 5
-
-
-def test_vector_store_list_indexed_sessions_reports_history_revision(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    header = VectorHeader(provider_id="p", model_id="m", dimension=2)
-    record = ChunkVectorRecord(
-        session_id="s1",
+    results = _nearest(
+        store,
+        [1.0, 0.0, 0.0],
+        limit=2,
         agent_id="coder",
-        started_at=datetime(2026, 5, 1, tzinfo=UTC).isoformat(),
-        history_revision=12345,
-        anchor_message_id="m1",
-        snippet="snippet",
-        chunk_index=0,
-        start_message_id="m1",
-        end_message_id="m1",
-    )
-    _upsert_one(store, header=header, record=record, vector=[0.1, 0.2])
-
-    indexed = store.list_indexed_sessions("coder")
-    assert indexed == {"s1": ("", 12345)}
-
-
-def test_vector_store_drop_indexed_sessions_removes_only_listed(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    header = VectorHeader(provider_id="p", model_id="m", dimension=2)
-    for sid in ("keep-1", "drop-1", "keep-2", "drop-2"):
-        _upsert_one(store, header=header, record=_record(sid), vector=[0.1, 0.2])
-
-    removed = store.drop_indexed_sessions("coder", "", ["drop-1", "drop-2"])
-    assert removed == 2
-    assert set(store.list_indexed_sessions("coder")) == {"keep-1", "keep-2"}
-
-
-def test_vector_store_returns_empty_when_chunk_table_missing(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    # Brand-new database: no chunk table yet, no header.
-    assert store.list_indexed_sessions("coder") == {}
-    assert store.get_chunks_by_rowids([1, 2]) == {}
-    assert store.read_header() is None
-
-
-def test_vector_store_delete_session_is_noop_when_chunk_table_missing(tmp_path: Path) -> None:
-    # Regression: on a fresh index the chunk table does not exist yet. The
-    # vector backend deletes empty sessions during eager backfill before any
-    # upsert creates the schema; that must not raise ``no such table: chunks``.
-    store = VectorStore(tmp_path)
-    store.delete_session("coder", "", "never-indexed")  # must not raise
-
-
-def test_vector_store_drop_indexed_sessions_is_noop_when_chunk_table_missing(
-    tmp_path: Path,
-) -> None:
-    store = VectorStore(tmp_path)
-    assert store.drop_indexed_sessions("coder", "", ["a", "b"]) == 0  # must not raise
-
-
-# ---------------------------------------------------------------------------
-# Chunk-keyed schema tests (Phase 1 of the per-session chunking plan)
-# ---------------------------------------------------------------------------
-
-
-def _chunk_record(
-    session_id: str,
-    chunk_index: int,
-    *,
-    agent_id: str = "coder",
-    project_id: str = "",
-    history_revision: int = 1,
-    anchor: str = "m1",
-    start_message_id: str = "m1",
-    end_message_id: str = "m1",
-) -> ChunkVectorRecord:
-    """Helper for chunk-keyed tests: builds a record with chunk_index/anchor boundaries."""
-
-    return ChunkVectorRecord(
-        session_id=session_id,
-        agent_id=agent_id,
-        project_id=project_id,
-        started_at=datetime(2026, 5, 1, 12, tzinfo=UTC).isoformat(),
-        history_revision=history_revision,
-        anchor_message_id=anchor,
-        snippet=f"snippet {session_id}#{chunk_index}",
-        chunk_index=chunk_index,
-        start_message_id=start_message_id,
-        end_message_id=end_message_id,
+        excluded_session_ids=excluded_ids,
+        since=datetime(2026, 1, 1, tzinfo=UTC),
+        until=datetime(2026, 12, 31, tzinfo=UTC),
     )
 
-
-def _vec0_row_count(path: Path) -> int:
-    """Count vec0 rows on a freshly opened connection with the extension loaded.
-
-    ``vec0`` is a virtual table provided by the ``sqlite-vec`` extension;
-    a bare ``sqlite3.connect`` does not know how to read it. This helper
-    loads the extension, then runs a plain ``COUNT(*)`` against the vec0
-    table — equivalent to the number of indexed vectors on disk.
-    """
-
-    connection = sqlite3.connect(path)
-    try:
-        connection.enable_load_extension(True)
-        sqlite_vec.load(connection)
-        row = connection.execute("SELECT COUNT(*) FROM session_vectors").fetchone()
-    finally:
-        connection.close()
-    return int(row[0])
+    assert [passage.session_id for passage, _ in results] == ["visible", "far"]
 
 
-def test_vector_store_multi_chunk_upsert_writes_all_rows_without_clobber(
+def test_vector_store_time_filters_keep_passages_with_invalid_timestamps(
     tmp_path: Path,
 ) -> None:
     store = VectorStore(tmp_path)
-    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
+    _refresh(store, {"malformed-time": [_passage("alpha", timestamp="not-a-timestamp")]})
 
-    # Same session, three distinct chunks.
-    records = [
-        (
-            _chunk_record("s1", 0, anchor="m1", start_message_id="m1", end_message_id="m2"),
-            [1.0, 0.0, 0.0],
-        ),
-        (
-            _chunk_record("s1", 1, anchor="m3", start_message_id="m3", end_message_id="m4"),
-            [0.0, 1.0, 0.0],
-        ),
-        (
-            _chunk_record("s1", 2, anchor="m5", start_message_id="m5", end_message_id="m6"),
-            [0.0, 0.0, 1.0],
-        ),
-    ]
-
-    written = store.upsert_many_chunks(header=header, records=records)
-
-    assert written == 3
-
-    with sqlite3.connect(store.path) as conn:
-        # The vec0 table holds one row per chunk; sqlite-vec's introspection
-        # counts via ``vec0_row_count`` style queries, but a simple COUNT
-        # against the metadata table mirrors it (both tables share rowids).
-        chunk_rows = list(
-            conn.execute(
-                "SELECT chunk_index FROM chunks WHERE agent_id = ? AND session_id = ? "
-                "ORDER BY chunk_index",
-                ("coder", "s1"),
-            )
-        )
-        assert len(chunk_rows) == 3
-        assert [int(row[0]) for row in chunk_rows] == [0, 1, 2]
-        assert _vec0_row_count(store.path) == 3
-
-
-def test_vector_store_reupsert_session_replaces_all_chunks(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
-
-    initial = [
-        (_chunk_record("s1", 0), [1.0, 0.0, 0.0]),
-        (_chunk_record("s1", 1), [0.0, 1.0, 0.0]),
-    ]
-    assert store.upsert_many_chunks(header=header, records=initial) == 2
-
-    # Re-upsert with a different chunk count — all of the previous chunks
-    # must be gone, replaced by the new set (delete-each-session-once
-    # must not clobber chunks that haven't been re-inserted yet).
-    replacement = [
-        (
-            _chunk_record("s1", 0, anchor="a1", start_message_id="a1", end_message_id="a2"),
-            [0.9, 0.1, 0.0],
-        ),
-        (
-            _chunk_record("s1", 1, anchor="a3", start_message_id="a3", end_message_id="a4"),
-            [0.1, 0.9, 0.0],
-        ),
-        (
-            _chunk_record("s1", 2, anchor="a5", start_message_id="a5", end_message_id="a6"),
-            [0.0, 0.9, 0.1],
-        ),
-    ]
-    assert store.upsert_many_chunks(header=header, records=replacement) == 3
-
-    with sqlite3.connect(store.path) as conn:
-        rows = list(
-            conn.execute(
-                "SELECT chunk_index FROM chunks WHERE agent_id = ? AND session_id = ? "
-                "ORDER BY chunk_index",
-                ("coder", "s1"),
-            )
-        )
-        assert [int(row[0]) for row in rows] == [0, 1, 2]
-        assert _vec0_row_count(store.path) == 3
-
-
-def test_vector_store_list_indexed_sessions_dedups_to_one_per_session(
-    tmp_path: Path,
-) -> None:
-    store = VectorStore(tmp_path)
-    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
-
-    records: list[tuple[ChunkVectorRecord, list[float]]] = []
-    # Three chunks for s1, two for s2.
-    for session_id, chunk_count, history_revision in (
-        ("s1", 3, 100),
-        ("s2", 2, 200),
-    ):
-        for idx in range(chunk_count):
-            records.append(
-                (
-                    _chunk_record(
-                        session_id,
-                        idx,
-                        history_revision=history_revision,
-                    ),
-                    [0.0, 0.0, 0.0],
-                )
-            )
-    store.upsert_many_chunks(header=header, records=records)
-
-    indexed = store.list_indexed_sessions("coder")
-    assert set(indexed) == {"s1", "s2"}
-    assert indexed["s1"] == ("", 100)
-    assert indexed["s2"] == ("", 200)
-
-
-def test_vector_store_get_chunks_by_rowids_returns_new_fields(tmp_path: Path) -> None:
-    store = VectorStore(tmp_path)
-    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
-
-    records = [
-        (
-            _chunk_record(
-                "s1",
-                0,
-                anchor="m1",
-                start_message_id="m1",
-                end_message_id="m2",
-            ),
-            [1.0, 0.0, 0.0],
-        ),
-        (
-            _chunk_record(
-                "s1",
-                1,
-                anchor="m3",
-                start_message_id="m3",
-                end_message_id="m4",
-            ),
-            [0.0, 1.0, 0.0],
-        ),
-    ]
-    store.upsert_many_chunks(header=header, records=records)
-
-    hydrated = store.get_chunks_by_rowids([1, 2])
-    assert set(hydrated) == {1, 2}
-
-    by_chunk_index = {record.chunk_index: record for record in hydrated.values()}
-    chunk_0 = by_chunk_index[0]
-    assert chunk_0.start_message_id == "m1"
-    assert chunk_0.end_message_id == "m2"
-    assert chunk_0.snippet == "snippet s1#0"
-    assert chunk_0.anchor_message_id == "m1"
-    chunk_1 = by_chunk_index[1]
-    assert chunk_1.start_message_id == "m3"
-    assert chunk_1.end_message_id == "m4"
-    assert chunk_1.snippet == "snippet s1#1"
-    assert chunk_1.anchor_message_id == "m3"
-
-
-def test_vector_store_knn_search_returns_nearest_chunk_across_sessions(
-    tmp_path: Path,
-) -> None:
-    store = VectorStore(tmp_path)
-    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
-
-    # s1 has a chunk near the query, s2 only has a far one.
-    records = [
-        (_chunk_record("s1", 0), [1.0, 0.0, 0.0]),  # nearest
-        (_chunk_record("s1", 1), [0.0, 0.0, 1.0]),  # far
-        (_chunk_record("s2", 0), [0.5, 0.5, 0.0]),  # mid
-    ]
-    store.upsert_many_chunks(header=header, records=records)
-
-    results = store.knn_search(header=header, query_vector=[1.0, 0.0, 0.0], limit=3)
-
-    nearest_rowid, nearest_distance = results[0]
-    assert nearest_distance == pytest.approx(0.0, abs=1e-5)
-
-    hydrated = store.get_chunks_by_rowids([rowid for rowid, _ in results])
-    nearest = hydrated[nearest_rowid]
-    assert nearest.session_id == "s1"
-    assert nearest.chunk_index == 0
-
-
-def test_vector_store_time_filters_keep_chunks_with_invalid_timestamps(
-    tmp_path: Path,
-) -> None:
-    store = VectorStore(tmp_path)
-    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
-    malformed = replace(
-        _chunk_record("malformed-time", 0),
-        started_at="not-a-timestamp",
-        start_timestamp="not-a-timestamp",
-        end_timestamp="not-a-timestamp",
-    )
-    store.upsert_many_chunks(header=header, records=[(malformed, [1.0, 0.0, 0.0])])
-
-    results = store.knn_search(
-        header=header,
-        query_vector=[1.0, 0.0, 0.0],
+    results = _nearest(
+        store,
+        [1.0, 0.0, 0.0],
         limit=1,
         agent_id="coder",
         since=datetime(2026, 1, 1, tzinfo=UTC),
@@ -671,89 +583,62 @@ def test_vector_store_time_filters_keep_chunks_with_invalid_timestamps(
     assert len(results) == 1
 
 
-# ---------------------------------------------------------------------------
-# Project-scoped chunk keys — same UUID across scopes must not collide
-# ---------------------------------------------------------------------------
-
-
-def test_vector_store_same_uuid_in_two_scopes_are_distinct_chunks(tmp_path: Path) -> None:
-    """A global and a project session with the same UUID index as separate rows.
-
-    The chunk key is ``(project_id, agent_id, session_id, chunk_index)``, so the
-    project-scoped chunk must not overwrite the global one (or vice versa).
-    """
-
+def test_vector_store_time_filters_exclude_passages_outside_the_period(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
-    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
+    _refresh(
+        store,
+        {
+            "old": [_passage("alpha", timestamp="2026-01-01T00:00:00+00:00")],
+            "new": [_passage("delta", timestamp="2026-06-01T00:00:00+00:00")],
+        },
+    )
 
-    records = [
-        (_chunk_record("shared", 0, project_id="", anchor="g1"), [1.0, 0.0, 0.0]),
-        (_chunk_record("shared", 0, project_id="proj", anchor="p1"), [0.0, 1.0, 0.0]),
-    ]
-    store.upsert_many_chunks(header=header, records=records)
+    results = _nearest(
+        store, [1.0, 0.0, 0.0], agent_id="coder", since=datetime(2026, 3, 1, tzinfo=UTC)
+    )
 
-    # Both scopes keep their own freshness entry for the same UUID.
-    assert set(store.list_indexed_sessions("coder", "")) == {"shared"}
-    assert set(store.list_indexed_sessions("coder", "proj")) == {"shared"}
-    # Two rows on disk — no overwrite.
-    assert _vec0_row_count(store.path) == 2
+    assert [passage.session_id for passage, _ in results] == ["new"]
 
 
-def test_vector_store_reupsert_one_scope_leaves_other_scope_intact(tmp_path: Path) -> None:
-    """Re-indexing the project scope of a shared UUID must not wipe the global scope."""
+# ---------------------------------------------------------------------------
+# Scope isolation — the same Session UUID in two scopes never collides
+# ---------------------------------------------------------------------------
 
+
+def test_vector_store_same_uuid_in_two_scopes_are_distinct(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
-    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
-
-    store.upsert_many_chunks(
-        header=header,
-        records=[(_chunk_record("shared", 0, project_id="", anchor="g1"), [1.0, 0.0, 0.0])],
-    )
-    store.upsert_many_chunks(
-        header=header,
-        records=[(_chunk_record("shared", 0, project_id="proj", anchor="p1"), [0.0, 1.0, 0.0])],
-    )
-
-    # Re-upsert only the project scope — the delete-once wipe is scoped to it.
-    store.upsert_many_chunks(
-        header=header,
-        records=[(_chunk_record("shared", 0, project_id="proj", anchor="p2"), [0.0, 0.0, 1.0])],
-    )
+    _refresh(store, {"shared": [_passage("alpha")]}, project_id="")
+    _refresh(store, {"shared": [_passage("beta")]}, project_id="proj")
 
     assert set(store.list_indexed_sessions("coder", "")) == {"shared"}
     assert set(store.list_indexed_sessions("coder", "proj")) == {"shared"}
     assert _vec0_row_count(store.path) == 2
+    global_hits = _nearest(store, [1.0, 0.0, 0.0], agent_id="coder", project_id="")
+    project_hits = _nearest(store, [1.0, 0.0, 0.0], agent_id="coder", project_id="proj")
+    assert [passage.text for passage, _ in global_hits] == ["alpha"]
+    assert [passage.text for passage, _ in project_hits] == ["beta"]
 
 
-def test_vector_store_drop_indexed_sessions_only_affects_named_scope(tmp_path: Path) -> None:
-    """Dropping a session in one scope leaves the same-UUID session in another scope."""
-
+def test_vector_store_refresh_of_one_scope_leaves_other_scope_intact(tmp_path: Path) -> None:
     store = VectorStore(tmp_path)
-    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
-    store.upsert_many_chunks(
-        header=header,
-        records=[
-            (_chunk_record("shared", 0, project_id=""), [1.0, 0.0, 0.0]),
-            (_chunk_record("shared", 0, project_id="proj"), [0.0, 1.0, 0.0]),
-        ],
-    )
+    _refresh(store, {"shared": [_passage("alpha")]}, project_id="")
+    _refresh(store, {"shared": [_passage("beta")]}, project_id="proj")
 
-    removed = store.drop_indexed_sessions("coder", "proj", ["shared"])
+    _refresh(store, {"shared": [_passage("gamma")]}, project_id="proj", revision=2)
+    _refresh(store, {}, project_id="proj", pruned=["other"])
 
-    assert removed == 1
+    assert [text for _rowid, text in _rows(store, "shared", project_id="")] == ["alpha"]
+    assert [text for _rowid, text in _rows(store, "shared", project_id="proj")] == ["gamma"]
+
+
+def test_vector_store_prune_and_delete_affect_only_the_named_scope(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    _refresh(store, {"shared": [_passage("alpha")]}, project_id="")
+    _refresh(store, {"shared": [_passage("beta")], "other": []}, project_id="proj")
+
+    _refresh(store, {}, project_id="proj", pruned=["shared"])
+    store.delete_session("coder", "proj", "other")
+
     assert set(store.list_indexed_sessions("coder", "")) == {"shared"}
     assert store.list_indexed_sessions("coder", "proj") == {}
-
-
-def test_vector_store_get_chunks_by_rowids_returns_project_id(tmp_path: Path) -> None:
-    """The hydrated chunk record carries its ``project_id`` scope key."""
-
-    store = VectorStore(tmp_path)
-    header = VectorHeader(provider_id="p", model_id="m", dimension=3)
-    store.upsert_many_chunks(
-        header=header,
-        records=[(_chunk_record("s1", 0, project_id="proj"), [1.0, 0.0, 0.0])],
-    )
-
-    hydrated = store.get_chunks_by_rowids([1])
-    assert hydrated[1].project_id == "proj"
+    assert [text for _rowid, text in _rows(store, "shared", project_id="")] == ["alpha"]

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
 import sqlite_vec  # type: ignore[import-untyped]
 
 from core.model_tasks import (
@@ -59,6 +63,24 @@ class _StubEmbeddings:
         self.embed_calls: list[list[str]] = []
         self.embed_purposes: list[str | None] = []
         self.resolve_calls = 0
+
+    def inputs(self, purpose: str) -> list[str]:
+        """Every text embedded for *purpose*, in call order."""
+
+        return [
+            text
+            for texts, call_purpose in zip(self.embed_calls, self.embed_purposes, strict=True)
+            if call_purpose == purpose
+            for text in texts
+        ]
+
+    @property
+    def document_inputs(self) -> list[str]:
+        return self.inputs("document")
+
+    @property
+    def query_inputs(self) -> list[str]:
+        return self.inputs("query")
 
     def resolve_space(self) -> EmbeddingSpaceIdentity:
         self.resolve_calls += 1
@@ -118,21 +140,69 @@ def backend(
     )
 
 
-# Chunking policy — build_session_passages
-# Chunked indexing + search integration
-def _count_vec_rows(store_path: Path, agent_id: str, session_id: str) -> int:
-    """Open the on-disk store and count vec0 rows for one session via the chunks table."""
-
+def _connect_store(store_path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(store_path)
+    connection.row_factory = sqlite3.Row
+    connection.enable_load_extension(True)
+    sqlite_vec.load(connection)
+    connection.enable_load_extension(False)
+    return connection
+
+
+def _passage_rows(store_path: Path, agent_id: str, session_id: str) -> dict[int, str]:
+    """Return ``{rowid: text}`` for one Session's Passages that have a vector."""
+
+    connection = _connect_store(store_path)
     try:
-        connection.row_factory = sqlite3.Row
-        connection.enable_load_extension(True)
-        sqlite_vec.load(connection)
-        connection.enable_load_extension(False)
-        row = connection.execute(
-            "SELECT COUNT(*) AS c FROM chunks WHERE agent_id = ? AND session_id = ?",
+        rows = connection.execute(
+            """
+            SELECT p.rowid, p.text FROM passages AS p
+            JOIN session_vectors AS v ON v.rowid = p.rowid
+            WHERE p.agent_id = ? AND p.session_id = ?
+            ORDER BY p.rowid
+            """,
             (agent_id, session_id),
-        ).fetchone()
-        return int(row["c"])
+        ).fetchall()
+        return {int(row[0]): str(row[1]) for row in rows}
     finally:
         connection.close()
+
+
+def _count_vec_rows(store_path: Path, agent_id: str, session_id: str) -> int:
+    """Count one Session's indexed Passages that have a vector."""
+
+    return len(_passage_rows(store_path, agent_id, session_id))
+
+
+def forbid_event_loop_calls(monkeypatch: pytest.MonkeyPatch, *targets: object) -> list[str]:
+    """Fail any synchronous public method of *targets* that runs on the event loop.
+
+    Returns the names of the guarded methods called off the loop, in order.
+    """
+
+    calls: list[str] = []
+    for target in targets:
+        for name in dir(target):
+            if name.startswith("_"):
+                continue
+            method = getattr(target, name)
+            if not inspect.ismethod(method) or inspect.iscoroutinefunction(method):
+                continue
+            monkeypatch.setattr(target, name, _off_loop(name, method, calls))
+    return calls
+
+
+def _off_loop(
+    name: str,
+    method: Callable[..., Any],
+    calls: list[str],
+) -> Callable[..., Any]:
+    def guarded(*args: Any, **kwargs: Any) -> Any:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            calls.append(name)
+            return method(*args, **kwargs)
+        raise AssertionError(f"{name} ran synchronously on the event loop")
+
+    return guarded
