@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 import sqlite3
 
 import pytest
@@ -17,8 +18,10 @@ from core.chat.output_files import AssistantFileReference
 from core.sessions import (
     FORK_SOURCE_META_KEY,
     PROMPT_CACHE_AFFINITY_META_KEY,
+    ChatSession,
 )
 from core.sessions import _store_values as store_values
+from core.sessions.history import skill_tool_activation
 from tests.core.sessions.sessions_test_support import (
     _address,
     _continuation_start,
@@ -119,6 +122,54 @@ def test_continuation_steps_start_at_one_and_a_rejected_record_rolls_back_its_ap
     state = session.load_continuation()
     assert state is not None
     assert state.steps == ()
+
+
+def test_skill_activation_cache_follows_checkpoints_and_history_edits(manager, monkeypatch) -> None:
+    session = manager.create("coder", session_id="skill-cache")
+    session.append(ChatMessage.user("start"))
+    session.activate_skill_context("alpha", {"activation_content": "ALPHA"})
+    skill_result = ChatMessage.tool(
+        tool_call_id="skill-1",
+        name="skill",
+        content=json.dumps(
+            {"ok": True, "data": {"status": "loaded", "name": "gamma", "content": "GAMMA"}}
+        ),
+    )
+    session.start_run("run-1").append_many(
+        [
+            ChatMessage.assistant(
+                model="test",
+                content=None,
+                tool_calls=[ToolCall(id="skill-1", name="skill", arguments={"name": "gamma"})],
+            ),
+            skill_result,
+        ]
+    )
+    gamma = skill_tool_activation(skill_result)
+    assert gamma is not None
+    edited = ChatMessage.user("edited away")
+    session.append(edited)
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="checkpoint", projection=[], compacted_token_count=1
+    )
+
+    def no_full_load(_self):
+        raise AssertionError("the Skill cache must not load the full history")
+
+    monkeypatch.setattr(ChatSession, "load", no_full_load)
+    session.append_many([checkpoint])
+    assert session.activated_skill_contents() == {}
+    session.activate_skill_context("beta", {"activation_content": "BETA"})
+    assert session.activated_skill_contents() == {"beta": "BETA"}
+    assert manager.get(session.address).activated_skill_contents() == {"beta": "BETA"}
+
+    # The edit deactivates the checkpoint and the later activation; the
+    # activations before the edited message become current again.
+    session.append_many([ChatMessage.history_edit(edited.id), ChatMessage.user("replacement")])
+
+    expected = {"alpha": "ALPHA", gamma[0]: gamma[1]}
+    assert session.activated_skill_contents() == expected
+    assert manager.get(session.address).activated_skill_contents() == expected
 
 
 def test_fork_copies_history_but_not_activity_or_continuation(manager) -> None:
