@@ -71,8 +71,8 @@ class _FakeSessions:
     def get_metadata(self, address: SessionAddress) -> dict[str, Any]:
         return dict(self.metadata.get(address.session_id, {}))
 
-    async def get_metadata_async(self, address: SessionAddress) -> dict[str, Any]:
-        return self.get_metadata(address)
+    async def metadata_value_async(self, address: SessionAddress, key: str) -> Any:
+        return self.get_metadata(address).get(key)
 
     def set_metadata(self, address: SessionAddress, data: dict[str, Any]) -> None:
         self.metadata[address.session_id] = dict(data)

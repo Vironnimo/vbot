@@ -280,8 +280,8 @@ def _make_reflect_state(
             title_log.append(("fork-1", title))
         return SimpleNamespace(id="fork-1")
 
-    async def get_metadata_async(address: SessionAddress) -> dict[str, Any]:
-        return {}
+    async def metadata_value_async(address: SessionAddress, key: str) -> Any:
+        return None
 
     def mutate_metadata(address: SessionAddress, mutation: Any) -> dict[str, Any]:
         metadata: dict[str, Any] = {}
@@ -292,7 +292,7 @@ def _make_reflect_state(
     chat_sessions = SimpleNamespace(
         fork=fork,
         get_metadata=lambda address: {},
-        get_metadata_async=get_metadata_async,
+        metadata_value_async=metadata_value_async,
         set_metadata=lambda address, data: metadata_log.append((address.session_id, data)),
         mutate_metadata=mutate_metadata,
     )
