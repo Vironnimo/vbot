@@ -17,6 +17,7 @@ class FakeBridge:
         self.states: list[str] = []
         self.errors: list[str | None] = []
         self.active_microphone: dict[str, object] | None = None
+        self.live_requests: list[tuple[str, str]] = []
 
     def publish_state(self, state: str, error_code: str | None = None) -> None:
         self.states.append(state)
@@ -24,6 +25,9 @@ class FakeBridge:
 
     def publish_runtime_details(self, *, active_microphone: dict[str, object] | None) -> None:
         self.active_microphone = active_microphone
+
+    def request_live_voice(self, action: str, source: str) -> None:
+        self.live_requests.append((action, source))
 
 
 class FakeSounddeviceBuffer:

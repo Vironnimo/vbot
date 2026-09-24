@@ -7,6 +7,7 @@ from statistics import median
 from typing import TYPE_CHECKING, Any, Protocol, cast
 from urllib.parse import urlsplit
 
+from desktop.settings import WAKEWORD_MODEL_ACTIONS
 from desktop.wakeword.engine import (
     MAX_ACTIVE_WAKEWORD_MODELS,
     MAX_CUSTOM_WAKEWORD_MODEL_BYTES,
@@ -68,6 +69,12 @@ _WAKEWORD_STATE_MICROPHONE_DISCONNECTED = "microphone_disconnected"
 
 _WAKEWORD_STATE_ERROR = "error"
 
+# Voice stays enabled but the worker is stopped and the microphone closed while
+# a Live voice call owns the microphone.
+_WAKEWORD_STATE_PAUSED = "paused"
+
+_PAUSE_REASON_LIVE_VOICE = "live_voice"
+
 _WAKEWORD_STATES_WITH_REASON = frozenset(
     [_WAKEWORD_STATE_MICROPHONE_DISCONNECTED, _WAKEWORD_STATE_ERROR]
 )
@@ -87,6 +94,7 @@ _VALID_STATES = frozenset(
         _WAKEWORD_STATE_TRANSCRIPTION_FAILED,
         _WAKEWORD_STATE_MICROPHONE_DISCONNECTED,
         _WAKEWORD_STATE_ERROR,
+        _WAKEWORD_STATE_PAUSED,
     ]
 )
 
@@ -314,3 +322,19 @@ def _validated_model_sensitivities(value: Any) -> dict[str, float]:
             raise WakewordModelError("Wakeword model ids must be non-empty strings")
         sensitivities[model_id.strip()] = _validated_config_value("sensitivity", sensitivity)
     return sensitivities
+
+
+def _validated_model_actions(value: Any) -> dict[str, str]:
+    """Validate keyed per-model detection actions from JavaScript."""
+    if not isinstance(value, dict):
+        raise ValueError("Voice model actions must be an object")
+    actions: dict[str, str] = {}
+    for model_id, action in value.items():
+        if not isinstance(model_id, str) or not model_id.strip():
+            raise WakewordModelError("Wakeword model ids must be non-empty strings")
+        if action not in WAKEWORD_MODEL_ACTIONS:
+            raise ValueError(
+                "Voice model action must be one of: " + ", ".join(WAKEWORD_MODEL_ACTIONS)
+            )
+        actions[model_id.strip()] = action
+    return actions

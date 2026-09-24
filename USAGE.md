@@ -218,7 +218,7 @@ vbot update --no-restart       # prepare a candidate without changing the active
 vbot update activate OPERATION_ID
 ```
 
-Official updates verify the signed package, preserve the selected shape and server target, prepare local changes and Extension dependencies, wait for accepted work to finish, and create a Session snapshot. They then verify the candidate before activating it and verify normal startup. Previous code remains available for recovery; vBot never automatically restores an old data snapshot over newer data. If recovery cannot establish a safe result, the operation reports that it needs attention. An open Desktop window can continue using its previous version until reopened.
+Official updates verify the signed package, preserve the selected shape and server target, prepare local changes and Extension dependencies, wait for accepted work to finish, and create a data snapshot of every canonical database. They then verify the candidate before activating it and verify normal startup. Previous code remains available for recovery; vBot never automatically restores an old data snapshot over newer data. If recovery cannot establish a safe result, the operation reports that it needs attention. An open Desktop window can continue using its previous version until reopened.
 
 When called through Bash in a vBot Run, the command saves its operation before returning and automatically arranges a continuation in the same Session. The updater waits for the whole Tool batch to enter Session history, registers that continuation, and cancels and drains only the exact originating Run before draining other accepted work. The continuation checks the saved result; acceptance alone is not update success. Do not create an additional Bootstrap for this packaged update path.
 
@@ -226,7 +226,7 @@ When called through Bash in a vBot Run, the command saves its operation before r
 
 Close every vBot Desktop window on Windows before updating a source installation. The source updater reports each phase, including elapsed time during long steps. Its final summary distinguishes a verified server restart from a pending or skipped restart; failure details include recovery guidance. Output remains plain text when redirected, and `NO_COLOR=1` disables terminal color.
 
-The updater preserves the recorded install shape, Python interpreter, dependency groups, source track, server target, and WebUI policy. Release installations move to the newest release with a matching WebUI asset; development installations update `main` and rebuild when needed. Before replacing current-format code, the updater creates or verifies a compatible Session snapshot; runtime data under `~/.vbot` or the configured data directory is not otherwise modified.
+The updater preserves the recorded install shape, Python interpreter, dependency groups, source track, server target, and WebUI policy. Release installations move to the newest release with a matching WebUI asset; development installations update `main` and rebuild when needed. Before replacing current-format code, the updater creates and verifies a data snapshot of every canonical database; runtime data under `~/.vbot` or the configured data directory is not otherwise modified.
 
 Use an explicit policy when the tracked checkout contains local changes or when the server should not restart. `--stash` and `--discard` apply only to source installations:
 
@@ -451,22 +451,23 @@ Current application code reads only the canonical paths. Convert every older dat
 
 The structural converter defaults to a read-only preflight, rejects symlinks, special files, unknown legacy temporary categories, and every matching destination, and never overwrites data. Apply moves regular leaf files atomically within the data root and is resumable after interruption. Retired `temp/skill-drafts/` content is preserved in place but ignored by current vBot; remove it manually only after confirming it contains nothing you want to recover. Previously persisted absolute paths in old Session text are not rewritten.
 
-### Session-store maintenance and legacy conversion
+### Data-store maintenance and legacy conversion
 
-The canonical Session store is `<data-dir>/sessions.db`, authorized by `<data-dir>/session-store.json`; FTS, Recall, Vector, Statistics, snapshots, and quarantine bundles are derived or recovery data and never replace canonical history. Runtime refuses an existing root without a valid marker and never searches legacy files to guess how to initialize it.
+The canonical databases, such as the Session database `<data-dir>/sessions.db`, are authorized by `<data-dir>/data-store.json`, which records each database's identity and format generation. FTS, Recall, Vector, Statistics, data snapshots under `snapshots/`, and quarantine bundles under `quarantine/` are derived or recovery data and never replace canonical history. Runtime refuses an existing root without a valid marker and never searches legacy files to guess how to initialize it. A damaged or missing canonical database is restored automatically from the newest verified data snapshot; the damaged files move to quarantine and a recovery incident under `incidents/` records the possible loss interval.
 
-Inspect a current-format store and its recovery state through the live server or the local offline commands:
+Inspect the canonical databases and their recovery state through the live server or the local offline commands:
 
 ```bash
-vbot session-store status
-vbot session-store snapshot list
-vbot session-store snapshot create --reason manual
-vbot session-store snapshot verify <snapshot-id>
-vbot session-store incident acknowledge <incident-id>
-vbot session-store snapshot restore <snapshot-id> --yes
+vbot data-store status
+vbot data-store snapshot list
+vbot data-store snapshot create --reason manual
+vbot data-store snapshot verify <snapshot-id>
+vbot data-store incident acknowledge <incident-id>
+vbot data-store snapshot restore <snapshot-id> --yes
+vbot data-store snapshot restore <snapshot-id> --database sessions --yes
 ```
 
-`status` reports safe operational metadata, FTS state, verified snapshots, and any unacknowledged recovery incident without returning Session content. Snapshot creation is an explicit current-format backup. A recovery incident remains visible until the exact incident is acknowledged; acknowledgement does not delete snapshots or quarantine evidence. Offline restore requires `--yes`, proves the exact target server is stopped, and must be rehearsed on a copied data directory first.
+`status` reports safe operational metadata per database, including the Session search index state, verified data snapshots, and every unacknowledged recovery incident without returning Session content. Snapshot creation is an explicit backup of every canonical database. A recovery incident remains visible until the exact incident is acknowledged; acknowledgement does not delete snapshots or quarantine evidence. Offline restore requires `--yes`, proves the exact target server is stopped, restores every database in the snapshot or only those named with `--database`, and must be rehearsed on a copied data directory first. An interrupted restore keeps the server from starting until a restore is repeated and completes.
 
 The Session database stores Runs, Messages, Tool invocations/results and checkpoints relationally.
 
@@ -1087,7 +1088,7 @@ vbot provider connect openai
 
 The last command starts OpenAI Subscription sign-in. OAuth commands select the only OAuth Connection automatically; when there are multiple candidates, specify `--connection` using an id from the displayed list. `vbot provider list --details` preserves all Connection and Account fields; `provider status <provider-id>` narrows those details to one Provider. The Provider overview distinguishes configured, disabled, missing-credential and local reachability states; configured does not establish live upstream access.
 
-Installed commands use `vbot`. From a source checkout, `python cli/main.py` and `python -m cli.main` expose the same parser. Most management commands call the running server through RPC and accept `--host`, `--port`, and `--data-dir` on the leaf command. Server lifecycle, home, desktop, update, uninstall, autostart, doctor, and `session-store` offline maintenance include local work and do not merely proxy management RPC.
+Installed commands use `vbot`. From a source checkout, `python cli/main.py` and `python -m cli.main` expose the same parser. Most management commands call the running server through RPC and accept `--host`, `--port`, and `--data-dir` on the leaf command. Server lifecycle, home, desktop, update, uninstall, autostart, doctor, and `data-store` offline maintenance include local work and do not merely proxy management RPC.
 
 | Area | Commands |
 |---|---|
@@ -1098,7 +1099,7 @@ Installed commands use `vbot`. From a source checkout, `python cli/main.py` and 
 | Agents | `agent list`, `agent show`, `agent create`, `agent update`, `agent rename`, `agent reorder`, `agent delete` |
 | Projects | `project add`, `project list`, `project show`, `project set`, `project override set`, `project override clear`, `project detect`, `project remove` |
 | Sessions | `session list`, `session create`, `session fork`, `session rename`, `session policy set`, `session delete`, `session channel link` |
-| Session store | `session-store status`, `session-store snapshot list|create|verify|restore`, `session-store incident acknowledge` |
+| Data store | `data-store status`, `data-store snapshot list|create|verify|restore`, `data-store incident acknowledge` |
 | Channels | `channel add`, `channel list`, `channel update`, `channel token set`, `channel enable`, `channel disable`, `channel status`, `channel identity`, `channel access`, `channel admin grant`, `channel admin revoke`, `channel whatsapp setup/status/pair`, `channel remove` |
 | Tools and Skills | `tool list`, `skill list`, `skill inventory`, `skill inspect`, `skill install`, `skill read`, `skill enable`, `skill disable`, `skill share`, `skill unshare`, `skill create`, `skill update`, `skill delete`, `skill file write`, `skill file remove` |
 | Memory | `memory list`, `memory add`, `memory replace`, `memory remove` |
@@ -1135,7 +1136,7 @@ Run `vbot <area> --help` and `vbot <area> <command> --help` for every flag and p
 
 The server exposes one JSON RPC endpoint, per-Run SSE, app-wide WebSocket events, Log streaming, attachments, speech, images, and health. The server has no built-in authentication; treat access as host-level code-execution authority.
 
-Session-store operations exposed through RPC are `session_store.status`, `session_store.snapshot_create`, and `session_store.incident_acknowledge`. They return safe health and recovery metadata, publish `resource_changed` with kind `session_store` after successful snapshot or acknowledgement mutations, and never include Session content. Offline snapshot listing, verification, and restore stay in the CLI because they must inspect and control the exact local target.
+Data-store operations exposed through RPC are `data_store.status`, `data_store.snapshot_create`, and `data_store.incident_acknowledge`. They return safe health and recovery metadata, publish `resource_changed` with kind `data_store` after successful snapshot or acknowledgement mutations, and never include Session content. Offline snapshot listing, verification, and restore stay in the CLI because they must inspect and control the exact local target.
 
 ### RPC envelope
 
@@ -1323,6 +1324,6 @@ publish them or migrate an existing source installation.
 - Attachment, speech, and image artifacts are durable. Attachments currently have no garbage collector or reference counting, including attachments promoted from images read from disk.
 - Complete Bash process output under `temp/bash/` is retained for 72 hours after completion; Sub-Agent activity files under `temp/subagents/` are retained for 24 hours. These temporary files supplement canonical Session history.
 - Recall indexes are derived and disposable; deleting `<data-dir>/recall/` does not delete canonical Sessions.
-- A current-format Session recovery incident stays visible until explicit acknowledgement. Preserve its quarantine bundle and verified snapshots; never delete evidence as part of acknowledgement.
-- Update protection creates a compatible Session snapshot before replacing current-format code.
+- A database recovery incident stays visible until explicit acknowledgement. Preserve its quarantine bundle and verified snapshots; never delete evidence as part of acknowledgement.
+- Update protection creates a verified data snapshot of every canonical database before replacing current-format code.
 - The Desktop wakeword listener is independent of Chat text-to-speech playback, so speaker output can trigger a sensitive wakeword Model. Choose device placement and sensitivity accordingly.

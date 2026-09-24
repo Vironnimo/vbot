@@ -66,7 +66,7 @@ def test_nested_commands_and_legacy_spellings_preserve_every_argument(area, lega
         [],
         ["agent"],
         ["provider", "custom"],
-        ["session-store", "snapshot"],
+        ["data-store", "snapshot"],
         ["help", "skill", "file"],
     ],
 )
@@ -81,7 +81,7 @@ AREAS = [
     ("agent", ["list"]),
     ("project", ["list"]),
     ("session", ["list", "a"]),
-    ("session-store", ["status"]),
+    ("data-store", ["status"]),
     ("channel", ["list"]),
     ("tool", ["list"]),
     ("prompt", ["list"]),

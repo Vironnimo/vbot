@@ -17,6 +17,7 @@ from core.chat import (
     ChatSessionManager,
     CommandDispatcher,
 )
+from core.database import write_bootstrap_marker
 from core.memory import MemoryService
 from core.providers.accounts import (
     DEFAULT_ACCOUNT_ID,
@@ -28,7 +29,6 @@ from core.providers.accounts import (
 )
 from core.runs import ChatRunManager, RunKind
 from core.runtime.runtime import Runtime
-from core.sessions.format import write_bootstrap_marker
 from core.tools import FileReadState, ToolRegistry
 from core.utils.errors import ConfigError
 from server.events import ServerEventBus
@@ -295,7 +295,7 @@ class StubRuntime:
         self.agent_resolver = StubAgentResolver(self.agents)
         self.projects = StubProjects()
         tmp_path.mkdir(parents=True, exist_ok=True)
-        marker = tmp_path / "session-store.json"
+        marker = tmp_path / "data-store.json"
         if not marker.exists():
             write_bootstrap_marker(tmp_path)
         self.chat_sessions = ChatSessionManager(tmp_path)

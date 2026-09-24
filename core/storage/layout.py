@@ -44,6 +44,10 @@ DATA_DIRECTORY_RELATIVE_PATHS = (
 
 ENVIRONMENT_TEMPLATE_RELATIVE_PATH = Path("data-dir/.env.example")
 SETTINGS_FILE_NAME = "settings.json"
+# An empty Settings document in the current Settings format. Kept literal so this
+# module stays importable without the Settings domain (setup runs it as a script);
+# a test pins it to ``core.settings.SETTINGS_FORMAT``.
+INITIAL_SETTINGS_DOCUMENT = '{\n  "format_version": 1\n}\n'
 ENVIRONMENT_FILE_NAME = ".env"
 
 
@@ -190,9 +194,9 @@ class DataDirectoryLayout:
         return self.root / "sessions.db"
 
     @property
-    def session_store_marker_path(self) -> Path:
-        """Current-format marker authorizing the SQLite Session store."""
-        return self.root / "session-store.json"
+    def data_store_marker_path(self) -> Path:
+        """Current-format marker authorizing the canonical SQLite databases."""
+        return self.root / "data-store.json"
 
     @property
     def directories(self) -> tuple[Path, ...]:
@@ -202,34 +206,21 @@ class DataDirectoryLayout:
 def _write_bootstrap_marker_fallback(data_dir: Path) -> None:
     """Fallback bootstrap marker writer for ``python core/storage/layout.py``.
 
-    The canonical writer lives in :mod:`core.sessions.format` and is imported
+    The canonical writer lives in :mod:`core.database.marker` and is imported
     at call time. When the storage layout is executed as a standalone script
     (``python core/storage/layout.py``) the ``core`` package is not on
     ``sys.path`` and that import fails. This fallback writes the same JSON
-    shape directly so the CLI test and manual invocations still produce a
-    current-format data directory without requiring the test harness to set
-    ``PYTHONPATH``.
+    shape directly (an empty database list authorizes creating every
+    canonical database) so manual invocations still produce a current-format
+    data directory without requiring ``PYTHONPATH``.
     """
 
     import json as _json
     import os as _os
     import uuid as _uuid
 
-    # Keep in sync with ``core.sessions.schema.SCHEMA_VERSION``; try to
-    # import it dynamically so the fallback does not drift.
-    try:
-        from core.sessions.schema import SCHEMA_VERSION as _sv  # type: ignore  # noqa: N811
-
-        _schema_version = int(_sv)
-    except Exception:
-        _schema_version = 1
-    payload = {
-        "format_version": 1,
-        "state": "bootstrap",
-        "database_id": _uuid.uuid4().hex,
-        "schema_version": _schema_version,
-    }
-    target = Path(data_dir) / "session-store.json"
+    payload = {"format_version": 1, "databases": {}}
+    target = Path(data_dir) / "data-store.json"
     text = _json.dumps(payload, indent=2, sort_keys=True) + "\n"
     tmp = target.with_name(f".{target.name}.{_uuid.uuid4().hex}.tmp")
     try:
@@ -303,16 +294,17 @@ def initialize_data_directory(
         # authorization. An existing root, including one another process
         # created concurrently, never manufactures authorization here.
         # Import at call time: storage is at the bottom of the import graph
-        # (models.database imports this module), so no Session import may run
-        # at module level here. The fallback handles ``python core/storage/
-        # layout.py`` invocations where ``core`` is not on ``sys.path``.
+        # (models.database imports this module), so no database-kernel import
+        # may run at module level here. The fallback handles ``python
+        # core/storage/layout.py`` invocations where ``core`` is not on
+        # ``sys.path``.
         try:
-            from core.sessions.format import write_bootstrap_marker  # type: ignore
-
-            write_bootstrap_marker(layout.root)
-        except Exception:
+            from core.database.marker import write_bootstrap_marker
+        except ImportError:
             _write_bootstrap_marker_fallback(layout.root)
-        created_files.append(layout.session_store_marker_path)
+        else:
+            write_bootstrap_marker(layout.root)
+        created_files.append(layout.data_store_marker_path)
     elif not layout.root.is_dir():
         raise NotADirectoryError(f"Data-directory path is not a directory: {layout.root}")
 
@@ -344,7 +336,7 @@ def initialize_data_directory(
 
     try:
         with layout.settings_file.open("x", encoding="utf-8", newline="\n") as settings_file:
-            settings_file.write("{}\n")
+            settings_file.write(INITIAL_SETTINGS_DOCUMENT)
         created_files.append(layout.settings_file)
     except FileExistsError:
         pass

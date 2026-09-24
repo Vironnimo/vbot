@@ -132,7 +132,9 @@ def test_channel_service_start_tolerates_corrupt_config(tmp_path: Path) -> None:
     broken_dir = tmp_path / "channels" / "tg-broken"
     broken_dir.mkdir(parents=True)
     broken_dir.joinpath("channel.json").write_text(
-        json.dumps({**make_config("tg-broken").to_dict(), "enabled": "not-a-bool"}),
+        json.dumps(
+            {"format_version": 1, **make_config("tg-broken").to_dict(), "enabled": "not-a-bool"}
+        ),
         encoding="utf-8",
     )
     service = make_service(tmp_path)

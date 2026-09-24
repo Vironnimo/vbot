@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from core.sessions.format import write_bootstrap_marker
+from core.database import write_bootstrap_marker
 from core.utils.config import Config
 
 

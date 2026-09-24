@@ -5,7 +5,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from core.settings import validate_data_dir_config, validate_settings_data
+import pytest
+
+from core.settings import (
+    SettingsValidationError,
+    load_runtime_settings_json,
+    validate_data_dir_config,
+    validate_settings_data,
+    validate_settings_document,
+)
 
 
 def test_validate_data_dir_config_delegates_project_files(tmp_path: Path) -> None:
@@ -14,9 +22,11 @@ def test_validate_data_dir_config_delegates_project_files(tmp_path: Path) -> Non
     (project_dir / "project.json").write_text(
         json.dumps(
             {
+                "format_version": 1,
                 "project_id": "vbot",
                 "display_name": "vBot",
                 "cwd": "/srv/repos/vbot",
+                "allowed_tools": [],
                 "created_at": "2026-06-18T10:00:00Z",
                 "updated_at": "2026-06-18T10:00:00Z",
             }
@@ -35,7 +45,7 @@ def test_validate_data_dir_config_delegates_agent_order_file(tmp_path: Path) -> 
     order_path = tmp_path / "agents" / "order.json"
     order_path.parent.mkdir(parents=True)
     order_path.write_text(
-        json.dumps({"revision": 1, "agent_ids": ["main", "main"]}),
+        json.dumps({"format_version": 1, "revision": 1, "agent_ids": ["main", "main"]}),
         encoding="utf-8",
     )
 
@@ -50,13 +60,64 @@ def test_validate_data_dir_config_delegates_agent_order_file(tmp_path: Path) -> 
 def test_validate_data_dir_config_delegates_bootstrap_jobs(tmp_path: Path) -> None:
     jobs_path = tmp_path / "bootstrap" / "jobs.json"
     jobs_path.parent.mkdir(parents=True)
-    jobs_path.write_text('[{"mode": "sometimes"}]', encoding="utf-8")
+    jobs_path.write_text('{"format_version": 1, "jobs": [{"mode": "sometimes"}]}', encoding="utf-8")
 
     reports = validate_data_dir_config(tmp_path)
 
     bootstrap_reports = [report for report in reports if report.file_path == jobs_path]
     assert len(bootstrap_reports) == 1
     assert bootstrap_reports[0].ok is False
+
+
+# Every durable JSON document the doctor covers, in its pre-Generation-1 form and
+# in a minimal current form.
+_DATA_DIR_DOCUMENTS: dict[str, tuple[str, dict[str, object]]] = {
+    "settings.json": ("{}", {}),
+    "agents/order.json": ("{}", {"revision": 1, "agent_ids": []}),
+    "agents/main/prompts/layout.json": ("[]", {"entries": []}),
+    "prompts/layout.json": ("[]", {"entries": []}),
+    "cron/jobs.json": ("[]", {"jobs": []}),
+    "bootstrap/jobs.json": ("[]", {"jobs": []}),
+    "calendar/events.json": ("[]", {"events": []}),
+    "calendar/actions.json": (
+        '{"actions": [], "executions": {}}',
+        {"actions": [], "executions": {}},
+    ),
+    "skills/policy.json": ('{"version": 2}', {}),
+    "terminals/launch-history.json": ('{"version": 1, "entries": []}', {"entries": []}),
+    "terminals/groups.json": ('{"version": 1, "groups": []}', {"groups": []}),
+    "oauth/github-copilot-oauth.json": ('{"access_token": "token"}', {"access_token": "token"}),
+    "mcp/connections.json": ("[]", {"connections": []}),
+}
+
+
+def _write_data_dir_documents(root: Path, *, current: bool) -> None:
+    for relative_path, (legacy, fields) in _DATA_DIR_DOCUMENTS.items():
+        path = root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        text = json.dumps({"format_version": 1, **fields}) if current else legacy
+        path.write_text(text, encoding="utf-8")
+
+
+def test_validate_data_dir_config_covers_every_json_document(tmp_path: Path) -> None:
+    _write_data_dir_documents(tmp_path, current=True)
+
+    reports = validate_data_dir_config(tmp_path)
+
+    reported = {report.file_path.relative_to(tmp_path).as_posix() for report in reports}
+    assert reported == set(_DATA_DIR_DOCUMENTS)
+    assert [
+        (report.file_path, report.diagnostics) for report in reports if report.diagnostics
+    ] == []
+
+
+def test_validate_data_dir_config_refuses_documents_before_generation_1(tmp_path: Path) -> None:
+    _write_data_dir_documents(tmp_path, current=False)
+
+    reports = validate_data_dir_config(tmp_path)
+
+    assert len(reports) == len(_DATA_DIR_DOCUMENTS)
+    assert [report.file_path for report in reports if report.ok] == []
 
 
 def test_validate_data_dir_config_reports_non_utf8_json_without_raising(tmp_path: Path) -> None:
@@ -160,3 +221,68 @@ def test_removed_live_voice_section_is_an_unknown_key() -> None:
     diagnostics = validate_settings_data({"live_voice": {"enabled": True}})
 
     assert [(item.path, item.severity) for item in diagnostics] == [("$.live_voice", "warning")]
+
+
+@pytest.mark.parametrize(
+    ("document", "message"),
+    [
+        ({"keep_awake": True}, "is required"),
+        ({"format_version": 2, "keep_awake": True}, "written by a newer vBot"),
+    ],
+)
+def test_settings_document_requires_the_current_format_version(
+    document: dict[str, object], message: str
+) -> None:
+    diagnostics = validate_settings_document(document)
+
+    assert [(item.severity, item.path) for item in diagnostics] == [("error", "$.format_version")]
+    assert message in diagnostics[0].message
+
+
+def test_runtime_settings_refuse_a_newer_format_version(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"format_version": 2, "keep_awake": True}), encoding="utf-8")
+
+    with pytest.raises(SettingsValidationError, match="written by a newer vBot"):
+        load_runtime_settings_json(path)
+
+
+def test_runtime_settings_leave_out_unknown_fields_and_the_version(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "future": True,
+                "web_fetch": {"provider": "direct", "future_mode": "x"},
+                "model_tasks": {"future_task": {"target": "a/b::c"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings, ignored = load_runtime_settings_json(path)
+
+    assert settings == {"web_fetch": {"provider": "direct"}, "model_tasks": {}}
+    assert ignored == ()
+
+
+def test_unknown_fields_below_strict_sections_are_warnings() -> None:
+    diagnostics = validate_settings_data(
+        {
+            "web_fetch": {"provider": "direct", "future_mode": "x"},
+            "model_tasks": {"future_task": {"target": "a/b::c"}},
+            "defaults": {"future_section": {}, "agent": {"future_default": 1}},
+            "providers": {
+                "openrouter": {"routing": {"default": {"mode": "automatic", "future": 1}}}
+            },
+        }
+    )
+
+    assert sorted((item.severity, item.path) for item in diagnostics) == [
+        ("warning", "$.defaults.agent.future_default"),
+        ("warning", "$.defaults.future_section"),
+        ("warning", "$.model_tasks.future_task"),
+        ("warning", "$.providers.openrouter.routing.default.future"),
+        ("warning", "$.web_fetch.future_mode"),
+    ]

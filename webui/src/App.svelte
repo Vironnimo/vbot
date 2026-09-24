@@ -119,8 +119,8 @@
   } from '$lib/appController.js';
   import {
     debugStatus,
-    acknowledgeSessionStoreIncident,
-    getSessionStoreStatus,
+    acknowledgeDataStoreIncident,
+    getDataStoreStatus,
     showProject,
   } from '$lib/api.js';
   import {
@@ -218,7 +218,7 @@
   let projectsRefreshToken = $derived(appControllerState.projectsRefreshToken);
   let sessionsRefreshToken = $derived(appControllerState.sessionsRefreshToken);
   let sessionInvalidations = $derived(appControllerState.sessionInvalidations);
-  let sessionStoreIncident = $derived(appControllerState.sessionStoreIncident);
+  let dataStoreIncident = $derived(appControllerState.dataStoreIncident);
   let commandsRefreshToken = $derived(appControllerState.commandsRefreshToken);
   let queueInvalidation = $derived(appControllerState.queueInvalidation);
   let sessionDeletion = $derived(appControllerState.sessionDeletion);
@@ -432,37 +432,34 @@
       appController.navigateToSubAgent(targetOrAgentId, maybeSessionId),
     );
 
-  const loadSessionStoreStatus = async () => {
+  const loadDataStoreStatus = async () => {
     try {
-      const result = await getSessionStoreStatus();
-      appControllerState.sessionStoreHealth = result ?? null;
-      appControllerState.sessionStoreIncident = result?.incident ?? null;
+      const result = await getDataStoreStatus();
+      appControllerState.dataStoreHealth = result ?? null;
+      appControllerState.dataStoreIncident = result?.incidents?.[0] ?? null;
     } catch {
       // Preserve the last durable incident projection during a transient RPC failure.
     }
   };
 
-  const acknowledgeSessionStoreRecovery = async () => {
-    const incidentId = sessionStoreIncident?.incident_id;
+  const acknowledgeDataStoreRecovery = async () => {
+    const incidentId = dataStoreIncident?.incident_id;
     if (!incidentId) {
       return;
     }
     try {
-      const result = await acknowledgeSessionStoreIncident(incidentId);
-      appControllerState.sessionStoreHealth = result ?? null;
-      appControllerState.sessionStoreIncident = result?.incident ?? null;
+      const result = await acknowledgeDataStoreIncident(incidentId);
+      appControllerState.dataStoreHealth = result ?? null;
+      appControllerState.dataStoreIncident = result?.incidents?.[0] ?? null;
     } catch (error) {
       desktop.showToast({
         title: t(
-          'sessionStore.acknowledgeFailedTitle',
+          'dataStore.acknowledgeFailedTitle',
           'Recovery notice still needs attention',
         ),
         message:
           error?.message ??
-          t(
-            'sessionStore.acknowledgeFailed',
-            'Refresh the status and try again.',
-          ),
+          t('dataStore.acknowledgeFailed', 'Refresh the status and try again.'),
         variant: 'error',
       });
     }
@@ -534,7 +531,7 @@
     onAgentIdChanged: selection.remapIdentityAgentId,
     onReloadAgents: selection.reloadAgentsFromServer,
     onReloadExtensionPages: extensions.loadExtensionPages,
-    onLoadSessionStoreStatus: loadSessionStoreStatus,
+    onLoadDataStoreStatus: loadDataStoreStatus,
     onSetOnboardingAside: setup.dismissOnboarding,
   });
 
@@ -668,35 +665,30 @@
     <LiveVoice
       configured={Boolean(setup.settings?.model_tasks?.live_voice?.target)}
       uiActions={liveUiActions}
-      wakewordEnabled={desktop.wakewordStatus.enabled}
       {serverUnavailable}
       onToast={desktop.showToast}
     />
   {/snippet}
-  {#if sessionStoreIncident}
-    <Banner variant="error" role="alert" class="app-session-store-incident">
-      <div class="app-session-store-incident__copy">
-        <strong
-          >{t(
-            'sessionStore.recoveredTitle',
-            'Session storage recovered',
-          )}</strong
-        >
+  {#if dataStoreIncident}
+    <Banner variant="error" role="alert" class="app-data-store-incident">
+      <div class="app-data-store-incident__copy">
+        <strong>{t('dataStore.recoveredTitle', 'Data recovered')}</strong>
         <span>
           {t(
-            'sessionStore.recoveredMessage',
-            'The current Session database was restored from a verified snapshot. Recent changes may be missing.',
+            'dataStore.recoveredMessage',
+            'A damaged database was restored from a verified data snapshot. Recent changes may be missing.',
           )}
         </span>
-        <span class="app-session-store-incident__meta">
-          {t('sessionStore.snapshot', 'Snapshot')}: {sessionStoreIncident.restored_snapshot_id}
-          · {t('sessionStore.possibleLoss', 'Possible loss')}: {sessionStoreIncident
+        <span class="app-data-store-incident__meta">
+          {t('dataStore.database', 'Database')}: {dataStoreIncident.database}
+          · {t('dataStore.snapshot', 'Snapshot')}: {dataStoreIncident.restored_snapshot_id}
+          · {t('dataStore.possibleLoss', 'Possible loss')}: {dataStoreIncident
             .possible_loss_interval?.start}
-          → {sessionStoreIncident.possible_loss_interval?.end}
+          → {dataStoreIncident.possible_loss_interval?.end}
         </span>
       </div>
-      <Button variant="secondary" onClick={acknowledgeSessionStoreRecovery}>
-        {t('sessionStore.acknowledge', 'Acknowledge')}
+      <Button variant="secondary" onClick={acknowledgeDataStoreRecovery}>
+        {t('dataStore.acknowledge', 'Acknowledge')}
       </Button>
     </Banner>
   {/if}
@@ -938,7 +930,7 @@
     background: var(--surface);
   }
 
-  :global(.app-session-store-incident) {
+  :global(.app-data-store-incident) {
     position: sticky;
     top: 0;
     z-index: 4;
@@ -951,18 +943,18 @@
     box-shadow: 0 8px 24px rgb(20 20 18 / 8%);
   }
 
-  .app-session-store-incident__copy {
+  .app-data-store-incident__copy {
     display: grid;
     gap: 2px;
     min-width: 0;
   }
 
-  .app-session-store-incident__copy span {
+  .app-data-store-incident__copy span {
     color: var(--text-med);
     font-size: var(--fs-body-sm);
   }
 
-  .app-session-store-incident__meta {
+  .app-data-store-incident__meta {
     overflow-wrap: anywhere;
     font-size: var(--fs-caption) !important;
   }
@@ -987,7 +979,7 @@
       padding: 8px 14px;
     }
 
-    :global(.app-session-store-incident) {
+    :global(.app-data-store-incident) {
       align-items: stretch;
       padding: 10px 14px;
     }

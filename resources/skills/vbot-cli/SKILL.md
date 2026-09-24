@@ -39,7 +39,7 @@ For a focused question about a past conversation, use `session_search` and answe
 | Pinned Memory for an Identity Agent | `references/memory.md` |
 | Logs, Provider traces, Session usage statistics and server performance | `references/diagnostics.md` |
 | Server start/stop/restart, update, uninstall, Autostart, Desktop, Doctor | `references/server.md` |
-| Session-store health, snapshots and recovery | `references/session-store.md` |
+| Database health, data snapshots and recovery | `references/data-store.md` |
 | Filesystem investigation, data location, backups or manual repair | `references/system-layout.md` |
 
 `vbot tool list` lists registered public Tools. An Agent's actual access also depends on its Tool policy, Project ceiling and runtime conditions; inspect its configuration before changing permissions.
@@ -54,7 +54,7 @@ Read a template with the `skill` Tool using `name: "vbot-cli"` and its relative 
 
 Management commands need a running server. Append `--host <host> --port <port>` after the command when selecting an explicit target, and repeat them on follow-up calls. `--data-dir <path>` selects the CLI's local instance configuration; it does not redirect RPC state on an already selected server. Read `references/server.md` for defaults and command-specific exceptions.
 
-`home`, `server`, `desktop`, `update`, `uninstall`, `autostart`, and `doctor` operate locally; Session-store commands have both local and RPC operations. Run lifecycle work on the server machine. Do not interpret local filesystem reports as evidence about a remote server.
+`home`, `server`, `desktop`, `update`, `uninstall`, `autostart`, and `doctor` operate locally; `data-store` commands have both local and RPC operations. Run lifecycle work on the server machine. Do not interpret local filesystem reports as evidence about a remote server.
 
 `vbot home` reports `vbot_root` (code and bundled resources) and local `data_dir` (instance state). A Project's `cwd` is its external working directory. An Identity Agent's Workspace holds SOUL and Memory and may be elsewhere. A Session holds conversation history; a Run is active work inside it. These roles remain distinct even when paths happen to match. Use `agent show` and `project show` to resolve them.
 

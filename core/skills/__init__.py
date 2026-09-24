@@ -9,10 +9,11 @@ from core.skills.authoring import (
     normalize_skill_file_path,
 )
 from core.skills.policy import (
-    POLICY_SCHEMA_VERSION,
+    POLICY_FORMAT_VERSION,
     SkillPolicy,
     SkillPolicyError,
     SkillPolicyService,
+    validate_skill_policy_file,
 )
 from core.skills.requirements import SkillAvailability, SkillRequirements
 from core.skills.skill_validator import FRONT_MATTER_DELIMITER
@@ -36,7 +37,7 @@ from core.skills.skills import (
 __all__ = [
     "SKILL_ARCHIVE_MAX_BYTES",
     "FRONT_MATTER_DELIMITER",
-    "POLICY_SCHEMA_VERSION",
+    "POLICY_FORMAT_VERSION",
     "SKILL_ORIGIN_AGENT",
     "SKILL_ORIGIN_BUNDLED",
     "SKILL_ORIGIN_GLOBAL",
@@ -49,6 +50,7 @@ __all__ = [
     "SkillPolicy",
     "SkillPolicyError",
     "SkillPolicyService",
+    "validate_skill_policy_file",
     "SkillRegistry",
     "SkillRequirements",
     "SkillWriteResult",

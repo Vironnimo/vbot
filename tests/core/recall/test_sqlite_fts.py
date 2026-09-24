@@ -12,6 +12,7 @@ import pytest
 
 from core.chat import ChatMessage, ToolCall
 from core.chat.content_blocks import FileBlock, TextBlock
+from core.database import JOURNAL_MODE_DELETE
 from core.recall import (
     RecallBackendContext,
     RecallOrder,
@@ -20,7 +21,6 @@ from core.recall import (
 )
 from core.recall.canonical import CANONICAL_FALLBACK_PARTIAL_REASON
 from core.sessions import ChatSession, ChatSessionManager
-from core.sessions.schema import JOURNAL_MODE_DELETE
 from tests.core.sessions.history_fixtures import append_tool_fixture
 
 pytestmark = pytest.mark.asyncio

@@ -1,124 +1,54 @@
-"""Opening-time schema and normalized metadata reconciliation."""
+"""The Session database declaration handed to the shared database kernel."""
 
 from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
 
-from core.sessions import (
-    _store_fts,
-    _store_values,
+from core.database import CANONICAL, DatabaseHealth, DatabaseSpec, SnapshotFacts
+from core.sessions import _store_fts
+from core.sessions.schema import APPLICATION_ID, DATABASE_NAME, FORMAT_GENERATION, SCHEMA_SQL
+
+# Owner facts every data snapshot records for the Session member and
+# re-verifies on its copy: entry counts and revision watermarks.
+_SNAPSHOT_FACTS = SnapshotFacts(
+    {
+        "session_count": "SELECT COUNT(*) FROM sessions",
+        "message_count": "SELECT COUNT(*) FROM messages",
+        "latest_history_revision": "SELECT COALESCE(MAX(history_revision), 0) FROM sessions",
+        "latest_state_revision": "SELECT COALESCE(MAX(state_revision), 0) FROM sessions",
+    }
 )
-from core.sessions.errors import (
-    SessionStoreCorruptError,
-    SessionStoreSchemaMismatchError,
-)
-from core.sessions.schema import (
-    APPLICATION_ID,
-    DATABASE_ID_META_KEY,
-    SCHEMA_CONVERSION_FLOOR,
-    SCHEMA_VERSION,
-    reconcile_schema,
-)
 
 
-def _reconcile_open_database(
-    connection: sqlite3.Connection, path: Path, *, expected_database_id: str | None
-) -> None:
-    if expected_database_id is not None:
-        _verify_database_identity(connection, path, expected_database_id)
-    version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-    if version != 0 and version < SCHEMA_CONVERSION_FLOOR:
-        raise SessionStoreSchemaMismatchError(
-            f"Unsupported Session database schema {version}; expected {SCHEMA_VERSION}"
-        )
-    applied = reconcile_schema(connection)
-    if applied:
-        _store_values._LOGGER.info(
-            "Reconciled Session database schema at %s: %s",
-            path,
-            "; ".join(applied),
-        )
-    _reconcile_session_metadata_projection(connection, path)
-    _store_fts._ensure_fts_schema(connection)
-    _verify_connection(connection, path)
+def session_database_spec(path: Path) -> DatabaseSpec:
+    """Declare the canonical Session database at ``path`` (``<data-dir>/sessions.db``)."""
+    return DatabaseSpec(
+        name=DATABASE_NAME,
+        path=Path(path),
+        profile=CANONICAL,
+        application_id=APPLICATION_ID,
+        format_generation=FORMAT_GENERATION,
+        schema_sql=SCHEMA_SQL,
+        after_open=_store_fts._ensure_fts_schema,
+        snapshot_facts=_SNAPSHOT_FACTS,
+        health=_session_health,
+    )
 
 
-def _reconcile_session_metadata_projection(connection: sqlite3.Connection, path: Path) -> None:
-    row = connection.execute(
-        "SELECT value FROM store_meta WHERE key = ?",
-        (_store_values._SESSION_METADATA_PROJECTION_VERSION_KEY,),
-    ).fetchone()
-    if row is not None and str(row[0]) == _store_values._SESSION_METADATA_PROJECTION_VERSION:
-        return
-    connection.execute("BEGIN IMMEDIATE")
-    try:
-        rows = connection.execute("SELECT * FROM sessions ORDER BY session_key").fetchall()
-        for state in rows:
-            metadata = _store_values._session_metadata_from_state(state)
-            residual_payload, projection = _store_values._session_metadata_storage(metadata)
-            connection.execute(
-                "UPDATE sessions SET active_sort = "
-                "COALESCE(julianday(COALESCE(last_message_at, created_at)), 0.0), "
-                "metadata_json = ?, "
-                + ", ".join(
-                    f"{column} = ?" for column in _store_values._SESSION_METADATA_PROJECTION_COLUMNS
-                )
-                + " WHERE session_key = ?",
-                (residual_payload, *projection, state["session_key"]),
-            )
-        connection.execute(
-            "INSERT OR REPLACE INTO store_meta (key, value) VALUES (?, ?)",
-            (
-                _store_values._SESSION_METADATA_PROJECTION_VERSION_KEY,
-                _store_values._SESSION_METADATA_PROJECTION_VERSION,
-            ),
-        )
-        connection.execute("COMMIT")
-    except BaseException:
-        if connection.in_transaction:
-            connection.execute("ROLLBACK")
-        raise
-    if rows:
-        _store_values._LOGGER.info(
-            "Reconciled normalized Session metadata projections at %s (sessions=%s)",
-            path,
-            len(rows),
-        )
-
-
-def _verify_connection(connection: sqlite3.Connection, path: Path) -> None:
-    version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-    if version != SCHEMA_VERSION:
-        raise SessionStoreSchemaMismatchError(
-            f"unsupported Session database version {version} at {path}"
-        )
-    application_id = int(connection.execute("PRAGMA application_id").fetchone()[0])
-    if application_id != APPLICATION_ID:
-        raise SessionStoreCorruptError(f"not a vBot Session database: {path}")
-    try:
-        for table in (
-            "store_meta",
-            "sessions",
-            "messages",
-            "assistant_messages",
-            "tool_calls",
-            "history_records",
-            "runs",
-            "continuations",
-        ):
-            connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
-    except sqlite3.DatabaseError as exc:
-        raise SessionStoreCorruptError(
-            f"Session database structure is unreadable at {path}"
-        ) from exc
-
-
-def _verify_database_identity(connection: sqlite3.Connection, path: Path, database_id: str) -> None:
-    row = connection.execute(
-        "SELECT value FROM store_meta WHERE key = ?", (DATABASE_ID_META_KEY,)
-    ).fetchone()
-    if row is None or str(row[0]) != database_id:
-        raise SessionStoreCorruptError(
-            f"Session database identity does not match the store marker at {path}"
-        )
+def _session_health(connection: sqlite3.Connection) -> DatabaseHealth:
+    """Report the derived search index; canonical rows are verified by the kernel."""
+    fts = _store_fts._fts_health_from_connection(connection, verify_coverage=True)
+    return DatabaseHealth(
+        "healthy" if fts.available else "degraded",
+        None if fts.available else f"Session search: {fts.reason}",
+        {
+            "fts": {
+                "state": fts.state,
+                "reason": fts.reason,
+                "generation": fts.generation,
+                "target_high_water": fts.target_high_water,
+                "completed_high_water": fts.completed_high_water,
+            }
+        },
+    )

@@ -14,12 +14,12 @@ from core.agents.temporary import (
     TemporaryAgentRegistry,
     TemporaryExecutionGroups,
 )
+from core.database import write_bootstrap_marker
 from core.extensions import ExtensionRegistrationIdentity
 from core.runs import ChatRunManager, RunAdmissionBlockedError, RunExecutionOwner
 from core.runtime import runtime as runtime_module
 from core.runtime.runtime import Runtime
 from core.sessions import ChatSessionManager, SessionAddress
-from core.sessions.format import write_bootstrap_marker
 from core.tools.availability import ToolAccess
 from core.utils.config import Config
 from tests.core.runtime.runtime_extensions_test_support import (

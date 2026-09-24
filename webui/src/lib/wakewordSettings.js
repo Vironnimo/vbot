@@ -10,6 +10,9 @@ const VOICE_SETTINGS_DEFAULTS = Object.freeze({
   microphone: null,
   active_model_ids: DEFAULT_ACTIVE_MODEL_IDS,
   model_sensitivities: Object.freeze({}),
+  // What a detection of each model does: 'command' records a spoken command,
+  // 'live_voice' starts Live voice. Missing entries mean 'command'.
+  model_actions: Object.freeze({}),
   target_agent_id: null,
   session_behavior: 'active',
   liveState: 'off',
@@ -139,6 +142,7 @@ export function createVoiceSettingsState() {
     ...VOICE_SETTINGS_DEFAULTS,
     active_model_ids: [...DEFAULT_ACTIVE_MODEL_IDS],
     model_sensitivities: {},
+    model_actions: {},
     calibration: normalizeCalibration(),
   };
 }
@@ -160,6 +164,9 @@ export function applyWakewordStatus(state, status) {
     model_sensitivities: hasKey(status, 'model_sensitivities')
       ? { ...status.model_sensitivities }
       : state.model_sensitivities,
+    model_actions: hasKey(status, 'model_actions')
+      ? { ...status.model_actions }
+      : state.model_actions,
     target_agent_id: hasKey(status, 'target_agent_id')
       ? status.target_agent_id
       : state.target_agent_id,
@@ -246,6 +253,7 @@ export function snapshotVoiceSettings(state) {
     ...state,
     active_model_ids: [...state.active_model_ids],
     model_sensitivities: { ...state.model_sensitivities },
+    model_actions: { ...state.model_actions },
     microphone: state.microphone ? { ...state.microphone } : null,
     activeMicrophone: state.activeMicrophone
       ? { ...state.activeMicrophone }
@@ -264,14 +272,16 @@ function editableVoiceSettings(state) {
 
 function sameSetting(key, left, right) {
   if (key === 'active_model_ids') return sameArray(left, right);
-  if (key === 'model_sensitivities') return sameObject(left, right);
+  if (key === 'model_sensitivities' || key === 'model_actions')
+    return sameObject(left, right);
   if (key === 'microphone') return sameMicrophoneSetting(left, right);
   return left === right;
 }
 
 function cloneSetting(key, value) {
   if (key === 'active_model_ids') return [...value];
-  if (key === 'model_sensitivities') return { ...value };
+  if (key === 'model_sensitivities' || key === 'model_actions')
+    return { ...value };
   if (key === 'microphone') return value ? { ...value } : null;
   return value;
 }

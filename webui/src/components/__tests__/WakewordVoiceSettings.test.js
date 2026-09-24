@@ -673,6 +673,54 @@ describe('WakewordVoiceSettings', () => {
     expect(desktopBridge.setWakewordConfig).not.toHaveBeenCalled();
   });
 
+  it('lets each active phrase start Live voice instead of a command', async () => {
+    desktopBridge.getWakewordStatus.mockResolvedValue({
+      ...baseStatus(),
+      model_actions: {
+        'builtin/okay_nabu': 'command',
+        'builtin/hey_nabu': 'command',
+      },
+    });
+    await mountPanel({ liveWakewordAvailable: true });
+
+    const trigger = buttonByLabel('When Hey Nabu is heard');
+    expect(trigger.textContent).toContain('Send command');
+    trigger.click();
+    flushSync();
+    buttonByText('Start Live voice').click();
+    await settle();
+
+    expect(desktopBridge.setWakewordConfig).toHaveBeenCalledWith({
+      model_actions: {
+        'builtin/okay_nabu': 'command',
+        'builtin/hey_nabu': 'live_voice',
+      },
+    });
+    expect(buttonByLabel('When Hey Nabu is heard').textContent).toContain(
+      'Start Live voice',
+    );
+  });
+
+  it('offers phrase actions only when the Desktop supports Live voice', async () => {
+    await mountPanel();
+
+    expect(buttonByLabel('When Hey Nabu is heard')).toBeNull();
+  });
+
+  it('shows a paused status while Live voice holds the microphone', async () => {
+    desktopBridge.getWakewordStatus.mockResolvedValue({
+      ...baseStatus(),
+      enabled: true,
+      state: 'paused',
+      pause_reason: 'live_voice',
+    });
+    await mountPanel();
+
+    expect(document.querySelector('.voice-state-label').textContent).toBe(
+      'Paused during Live voice',
+    );
+  });
+
   it('leaves Live voice to its Task Model instead of a visibility switch', async () => {
     desktopBridge.isDesktop.mockReturnValue(false);
     await mountPanel({ settings: {} });

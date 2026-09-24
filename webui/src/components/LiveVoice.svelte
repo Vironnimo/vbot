@@ -4,8 +4,8 @@
   import { t } from '$lib/i18n.js';
   import {
     isDesktopAccessor,
-    waitForDesktopBridge,
-    getWakewordStatus,
+    createDesktopLiveVoiceLease,
+    onDesktopLiveRequest,
   } from '$lib/desktopBridge.js';
   import { createLiveVoice, createLiveVoiceState } from '$lib/liveVoice.js';
 
@@ -13,12 +13,10 @@
     configured = false,
     uiActions = {},
     serverUnavailable = false,
-    wakewordEnabled = false,
     onToast = () => {},
   } = $props();
 
   let voice = $state(createLiveVoiceState());
-  let preparing = $state(false);
   let controller;
   let audioElement;
 
@@ -108,15 +106,10 @@
         'live.error.mediaMismatch',
         'The Live voice Model changed while starting. Start again.',
       ),
-    wakeword_active: () =>
+    desktop_restart_required: () =>
       t(
-        'live.error.wakeword',
-        'Turn off wakeword Voice in Settings before starting Live voice.',
-      ),
-    desktop_unavailable: () =>
-      t(
-        'live.error.desktop',
-        'The Desktop app did not respond. Restart it and try again.',
+        'live.error.desktopRestart',
+        'Restart the vBot Desktop app to use the microphone with this server.',
       ),
     ui_action_failed: () =>
       t(
@@ -148,24 +141,38 @@
   }
 
   onMount(() => {
+    // In the Desktop app, wakeword listening pauses while a call holds the
+    // microphone, and a wakeword model or the global shortcut can start Live.
+    const desktop = isDesktopAccessor();
     controller = createLiveVoice({
       state: voice,
       audio: audioElement,
       uiActions,
       onNotice: showNotice,
+      microphoneLease: desktop ? createDesktopLiveVoiceLease() : null,
     });
-    return () => controller.destroy();
+    const stopDesktopRequests = desktop
+      ? onDesktopLiveRequest(handleDesktopRequest)
+      : () => {};
+    return () => {
+      stopDesktopRequests();
+      controller.destroy();
+    };
   });
 
-  // Desktop wakeword Voice and Live voice share the microphone.
-  $effect(() => {
-    if (wakewordEnabled)
-      untrack(() => {
-        if (voice.phase === 'off') return;
-        controller?.stop();
-        showNotice({ code: 'wakeword_active' });
-      });
-  });
+  // `start` (wakeword) starts a call when none runs; `toggle` (shortcut) also
+  // stops a running one.
+  function handleDesktopRequest({ action }) {
+    if (serverUnavailable) return false;
+    if (!configured) {
+      showNotice({ code: 'not_configured' });
+      return true;
+    }
+    if (voice.phase === 'off') void startVoice();
+    else if (action === 'toggle' && voice.phase !== 'closing')
+      controller.stop();
+    return true;
+  }
 
   $effect(() => {
     if (serverUnavailable || !configured)
@@ -175,32 +182,8 @@
   });
 
   async function startVoice() {
-    if (!configured || serverUnavailable || preparing) return;
-    if (wakewordEnabled) {
-      showNotice({ code: 'wakeword_active' });
-      return;
-    }
-    if (isDesktopAccessor()) {
-      preparing = true;
-      try {
-        if (!(await waitForDesktopBridge())) {
-          showNotice({ code: 'desktop_unavailable' });
-          return;
-        }
-        if ((await getWakewordStatus())?.enabled) {
-          showNotice({ code: 'wakeword_active' });
-          return;
-        }
-      } catch {
-        showNotice({ code: 'desktop_unavailable' });
-        return;
-      } finally {
-        preparing = false;
-      }
-    }
-    // Settings or the connection may have changed during the Desktop check.
-    if (configured && !serverUnavailable && !wakewordEnabled)
-      await controller.start();
+    if (!configured || serverUnavailable) return;
+    await controller.start();
   }
 
   const toggleLabel = $derived(
@@ -227,9 +210,7 @@
       class:live-voice__toggle--active={running}
       aria-label={toggleLabel}
       use:tooltip={toggleLabel}
-      disabled={voice.phase === 'closing' ||
-        preparing ||
-        (!running && serverUnavailable)}
+      disabled={voice.phase === 'closing' || (!running && serverUnavailable)}
       onclick={() => (running ? controller.stop() : startVoice())}
     >
       <svg viewBox="0 0 16 16" aria-hidden="true">

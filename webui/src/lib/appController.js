@@ -32,7 +32,7 @@ import {
   RESOURCE_TOKEN_SESSIONS,
   RESOURCE_TOKEN_SKILLS,
   RESOURCE_TOKEN_TERMINALS,
-  RESOURCE_KIND_SESSION_STORE,
+  RESOURCE_KIND_DATA_STORE,
   tokenKeysForKind,
 } from './resourceInvalidation.js';
 import { appendSessionInvalidation } from './sessionInvalidation.js';
@@ -152,8 +152,8 @@ export function createAppControllerState(activeViewId) {
     // Full Session-list refresh, bumped only when continuity is uncertain
     // (replay gap or server restart).
     sessionsRefreshToken: 0,
-    sessionStoreHealth: null,
-    sessionStoreIncident: null,
+    dataStoreHealth: null,
+    dataStoreIncident: null,
     settingsPanelTarget: '',
     settingsPanelTargetRequestId: 0,
     skillsRefreshToken: 0,
@@ -176,7 +176,7 @@ export function createAppController({
   onAgentIdChanged = () => {},
   onReloadAgents,
   onReloadExtensionPages = async () => {},
-  onLoadSessionStoreStatus = async () => {},
+  onLoadDataStoreStatus = async () => {},
   onSetOnboardingAside,
   browserHistory = globalThis.history,
   browserWindow = globalThis.window,
@@ -548,7 +548,7 @@ export function createAppController({
       state.activeRuns = Array.isArray(event.active_runs)
         ? event.active_runs
         : [];
-      const refreshOwners = [onLoadSessionStoreStatus, onReloadExtensionPages];
+      const refreshOwners = [onLoadDataStoreStatus, onReloadExtensionPages];
       if (
         event.replay_status === CONNECTION_REPLAY_STATUS_GAP ||
         event.replay_status === CONNECTION_REPLAY_STATUS_EPOCH_CHANGED
@@ -596,8 +596,8 @@ export function createAppController({
     if (kind === 'extensions') {
       await onReloadExtensionPages();
     }
-    if (kind === RESOURCE_KIND_SESSION_STORE) {
-      await onLoadSessionStoreStatus();
+    if (kind === RESOURCE_KIND_DATA_STORE) {
+      await onLoadDataStoreStatus();
     }
     if (kind === 'agents') {
       const scope = event.payload?.scope ?? {};

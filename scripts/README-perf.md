@@ -21,7 +21,7 @@ What is measured:
 
 - **Event Loop health:** `event_loop.lag` (how late a 100 ms timer wakes up; Windows timer granularity adds a 0–16 ms baseline, so judge by p99), `event_loop.utilization` (CPU share of the loop thread), and **stalls**: a watchdog thread notices when the loop has not ticked for more than 250 ms and samples the loop thread's Python stack, so each stall comes with the code location that blocked it.
 - **Worker pools:** `worker_pool.<name>.wait` (queueing for a slot) and `.run`, plus `.active`/`.waiting` gauges for every named `BoundedWorkerPool`.
-- **SQLite:** `sqlite.write` (one write transaction including commit/fsync), `sqlite.write_wait` (waiting for the single writer), `sqlite.read`.
+- **SQLite:** per database (`sessions`, ...): `sqlite.<database>.write` (one write transaction including commit/fsync), `sqlite.<database>.write_wait` (waiting for that database's single writer), `sqlite.<database>.read`. The load-suite digest and report use the `sqlite.sessions.*` series.
 - **Chat per Model step:** `chat.request_build`, `provider.first_token`, `provider.response`, `chat.persist`, `chat.tool_round`, `tool.<name>`, `chat.compaction`, `chat.run`.
 - **RPC:** `rpc.<method>` per registered method.
 - **Process:** `process.cpu_percent`, `process.rss_mb`, `process.python_threads`, `asyncio.tasks`, `runs.active`, `runs.queued`.

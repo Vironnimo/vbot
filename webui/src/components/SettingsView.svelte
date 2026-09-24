@@ -3,6 +3,7 @@
 
   import WakewordVoiceSettings from './WakewordVoiceSettings.svelte';
   import DesktopConnectionSettings from './settings/DesktopConnectionSettings.svelte';
+  import DesktopLiveVoiceShortcut from './settings/DesktopLiveVoiceShortcut.svelte';
   import SettingsAppearancePanel from './settings/SettingsAppearancePanel.svelte';
   import SettingsChannelsPanel from './settings/SettingsChannelsPanel.svelte';
   import SettingsDebugPanel from './settings/SettingsDebugPanel.svelte';
@@ -67,6 +68,11 @@
     ['voice_controls', 'settings.sections.voiceControls', 'Voice controls'],
     ['speech_models', 'settings.sections.speechModels', 'Speech models'],
     ['live_voice_model', 'settings.sections.liveVoice', 'Live voice'],
+    [
+      'live_voice_shortcut',
+      'settings.sections.liveVoiceShortcut',
+      'Live voice shortcut',
+    ],
     ['recall', 'settings.sections.recall', 'Conversation search'],
     [
       'embedding_model',
@@ -127,7 +133,12 @@
           'settings.pages.voiceDescription',
           'Speaking, listening, live conversations, and voice activation.',
         ),
-      sections: ['speech_models', 'live_voice_model', 'voice_controls'],
+      sections: [
+        'speech_models',
+        'live_voice_model',
+        ...(desktopCapabilities?.liveHotkey ? ['live_voice_shortcut'] : []),
+        'voice_controls',
+      ],
     },
     {
       id: 'memory',
@@ -560,6 +571,7 @@
       {agents}
       {settings}
       wakewordAvailable={desktopCapabilities?.wakeword === true}
+      liveWakewordAvailable={desktopCapabilities?.liveWakeword === true}
       onCommit={commitSettings}
       {onToast}
       onError={(message) => reportSettingsError(message)}
@@ -618,6 +630,8 @@
     />
   {:else if panelId === 'desktop_connection'}
     <DesktopConnectionSettings {onToast} />
+  {:else if panelId === 'live_voice_shortcut'}
+    <DesktopLiveVoiceShortcut {onToast} />
   {/if}
 {/snippet}
 

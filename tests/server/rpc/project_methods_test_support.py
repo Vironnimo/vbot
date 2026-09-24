@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from core.agents.agents import AgentStore
+from core.database import write_bootstrap_marker
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.projects.resolver import (
     AgentResolver,
@@ -16,7 +17,6 @@ from core.projects.scanners.opencode import OPENCODE_AGENTS_SUBPATH
 from core.projects.store import ProjectStore
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
-from core.sessions.format import write_bootstrap_marker
 
 
 # ---------------------------------------------------------------------------

@@ -139,11 +139,14 @@ export function createLiveVoiceState() {
 // `terminalView({op, terminal_id?, group_id?}, guard)`. `guard.isCurrent()`
 // turns false once the requesting call stops. `onNotice({code, severity})`
 // reports errors ('error'/'warn') and call endings the user did not request
-// ('info').
+// ('info'). An optional `microphoneLease` ({acquire, release}) is taken before
+// the microphone opens and released with it; `acquire()` resolves a notice code
+// that ends the start, or null to continue.
 export function createLiveVoice({
   state,
   api = defaultApi,
   mediaDevices = globalThis.navigator?.mediaDevices,
+  microphoneLease = null,
   createPeer = () => new RTCPeerConnection(),
   audio = null,
   createAudio = createRelayAudio,
@@ -193,6 +196,10 @@ export function createLiveVoice({
     stopTracks(call.microphone);
     call.microphone = null;
     releaseRelayAudio(call);
+    if (call.leased) {
+      call.leased = false;
+      microphoneLease.release();
+    }
     if (call.playing && audio) {
       audio.pause?.();
       audio.srcObject = null;
@@ -644,6 +651,7 @@ export function createLiveVoice({
       reachedLive: false,
       announcedActive: false,
       playing: false,
+      leased: false,
     };
     current = call;
     Object.assign(state, createLiveVoiceState(), { phase: 'connecting' });
@@ -653,6 +661,15 @@ export function createLiveVoice({
       if (!isCurrent(call)) return;
       checkStatus(status);
 
+      if (microphoneLease) {
+        const blocked = await microphoneLease.acquire();
+        if (!isCurrent(call)) {
+          if (!blocked) microphoneLease.release();
+          return;
+        }
+        if (blocked) throw failure(blocked);
+        call.leased = true;
+      }
       const microphone = await openMicrophone();
       if (!isCurrent(call)) {
         stopTracks(microphone);

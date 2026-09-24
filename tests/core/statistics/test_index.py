@@ -13,9 +13,9 @@ from typing import cast
 import pytest
 
 from core.chat.messages import ChatMessage, ToolCall
+from core.database import JOURNAL_MODE_DELETE
 from core.models.pricing import TokenPricing
 from core.sessions import ChatSession, ChatSessionManager, SessionAddress
-from core.sessions.schema import JOURNAL_MODE_DELETE
 from core.statistics import AgentDirectory, StatisticsService
 from core.statistics.index import (
     SESSION_FACT_TABLES,
