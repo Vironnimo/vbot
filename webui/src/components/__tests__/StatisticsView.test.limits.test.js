@@ -149,7 +149,7 @@ describe('StatisticsView', () => {
         return Promise.resolve(makeRunActivityReport());
       }
       if (method === 'provider.usage_history.clear') {
-        return Promise.resolve({ deleted_samples: 2, deleted_files: 1 });
+        return Promise.resolve({ deleted_samples: 2 });
       }
       return Promise.resolve(makeReport());
     });

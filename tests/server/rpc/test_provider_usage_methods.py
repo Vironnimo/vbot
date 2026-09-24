@@ -306,8 +306,8 @@ async def test_provider_usage_history_clear_is_explicit(history_state: SimpleNam
     result = await _provider_usage_history_clear(history_state, {})
     repeated = await _provider_usage_history_clear(history_state, {})
 
-    assert result == {"deleted_samples": 1, "deleted_files": 1}
-    assert repeated == {"deleted_samples": 0, "deleted_files": 0}
+    assert result == {"deleted_samples": 1}
+    assert repeated == {"deleted_samples": 0}
     assert (await _provider_usage_history(history_state, {}))["samples"] == []
 
 
