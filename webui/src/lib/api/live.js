@@ -9,10 +9,11 @@ import {
 } from './transport.js';
 import { isPlainObject } from '../values.js';
 
-// Live voice call transport. The server owns the provider call; the page only
-// exchanges its WebRTC offer/answer, receives call updates on the owner socket
-// and answers UI requests.
+// Live voice call transport. The server owns the provider call; the page
+// exchanges its WebRTC offer/answer or relays PCM audio over the owner socket,
+// receives call updates there and answers UI requests.
 const LIVE_WEBSOCKET_ENDPOINT = '/ws/live';
+const LIVE_MEDIA_KINDS = new Set(['webrtc', 'relay']);
 // Server close codes of the owner socket, named by what the caller should do:
 // `lagged` and any other close (`lost`) may reattach; the rest end the call.
 const LIVE_SOCKET_CLOSE_OUTCOMES = new Map([
@@ -28,13 +29,23 @@ export function getLiveVoiceStatus(options = {}) {
   return rpc('live.status', {}, options);
 }
 
-export function startLiveCall(sdp, options = {}) {
+// `media` is the kind the page prepared: `webrtc` with its SDP offer, or
+// `relay` (audio over the owner socket, no offer).
+export function startLiveCall({ media, sdp } = {}, options = {}) {
+  if (!LIVE_MEDIA_KINDS.has(media)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Live media must be webrtc or relay',
+      { method: 'live.start' },
+    );
+  }
+  if (media === 'relay') return rpc('live.start', { media }, options);
   requireNonEmptyString(
     sdp,
     'SDP offer must be a non-empty string',
     'live.start',
   );
-  return rpc('live.start', { sdp }, options);
+  return rpc('live.start', { media, sdp }, options);
 }
 
 export function stopLiveCall(callId, options = {}) {
@@ -83,9 +94,11 @@ export function sendLiveUiResult(callId, requestId, outcome, options = {}) {
   );
 }
 
-// Receive-only owner socket for one Live call. Frames are JSON objects; a
-// malformed frame reaches `onError` without closing the socket. `onClose`
-// receives the close event and its outcome: `ended` (after the `closed` frame),
+// Owner socket for one Live call. Text frames are JSON objects for `onEvent`;
+// a malformed frame reaches `onError` without closing the socket. Binary
+// frames are relay audio for `onAudio` (an ArrayBuffer), and `sendAudio`
+// sends microphone audio while the socket is open. `onClose` receives the
+// close event and its outcome: `ended` (after the `closed` frame),
 // `unknown_call`, `replaced` (a newer owner socket took over; do not reattach),
 // `lagged` (the socket fell behind; reattach) or `lost`.
 export function openLiveCallSocket(callId, handlers = {}, options = {}) {
@@ -100,6 +113,8 @@ export function openLiveCallSocket(callId, handlers = {}, options = {}) {
   const socket = new WebSocketClass(
     buildWebSocketUrlWithParams(path, options.baseUrl),
   );
+  socket.binaryType = 'arraybuffer';
+  const openState = WebSocketClass.OPEN ?? 1;
   const cleanupCallbacks = [];
   let closed = false;
 
@@ -122,6 +137,10 @@ export function openLiveCallSocket(callId, handlers = {}, options = {}) {
     );
   }
   listen('message', (event) => {
+    if (event.data instanceof ArrayBuffer) {
+      handlers.onAudio?.(event.data, event);
+      return;
+    }
     let frame;
     try {
       frame = JSON.parse(event.data);
@@ -157,5 +176,12 @@ export function openLiveCallSocket(callId, handlers = {}, options = {}) {
     socket.close(code, reason);
   };
 
-  return { close, socket };
+  // Audio is live data: nothing is queued while the socket is not open.
+  const sendAudio = (data) => {
+    if (closed || socket.readyState !== openState) return false;
+    socket.send(data);
+    return true;
+  };
+
+  return { close, sendAudio, socket };
 }

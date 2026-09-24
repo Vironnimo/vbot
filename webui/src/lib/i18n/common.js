@@ -38,6 +38,10 @@ export default Object.freeze({
     'Live voice stopped because of a problem. Start again to continue.',
   'live.error.playback':
     'Audio playback was blocked. Allow audio for this app and start Live again.',
+  'live.error.audioUnsupported':
+    'This browser cannot play Live voice audio for this Model. Use a current browser and start again.',
+  'live.error.mediaMismatch':
+    'The Live voice Model changed while starting. Start again.',
   'live.error.wakeword':
     'Turn off wakeword Voice in Settings before starting Live voice.',
   'live.error.desktop':
