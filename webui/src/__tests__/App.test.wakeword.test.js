@@ -59,6 +59,31 @@ describe('App Desktop Wakeword feedback', () => {
     expect(getStatus).toHaveBeenCalled();
   });
 
+  it('ends a wakeword pause a previous page left behind once the bridge is found', async () => {
+    const setLiveVoiceActive = vi.fn().mockResolvedValue({ active: false });
+    window.pywebview = {
+      api: {
+        getDesktopCapabilities: vi.fn().mockResolvedValue({
+          wakeword: true,
+          liveWakeword: true,
+        }),
+        getWakewordStatus: vi.fn().mockResolvedValue({
+          enabled: true,
+          state: 'paused',
+          events: [],
+        }),
+        setLiveVoiceActive,
+      },
+    };
+
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(setLiveVoiceActive).toHaveBeenCalledExactlyOnceWith(false);
+    });
+  });
+
   it('shows a sticky global Toast when Wakeword activation lacks STT', async () => {
     vi.useFakeTimers();
     const status = {

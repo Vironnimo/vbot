@@ -279,3 +279,41 @@ describe('voiceSettingsDirty and snapshotVoiceSettings', () => {
     expect(snapshot.model_sensitivities).toEqual({});
   });
 });
+
+describe('per-model wakeword actions', () => {
+  it('hydrates, compares, and clones model actions by value', () => {
+    const state = applyWakewordStatus(createVoiceSettingsState(), {
+      model_actions: {
+        'builtin/okay_nabu': 'command',
+        'builtin/hey_nabu': 'live_voice',
+      },
+    });
+    const lastSaved = snapshotVoiceSettings(state);
+
+    state.model_actions = { ...state.model_actions };
+    expect(voiceSettingsDirty(state, lastSaved)).toBe(false);
+
+    state.model_actions['builtin/okay_nabu'] = 'live_voice';
+    expect(lastSaved.model_actions['builtin/okay_nabu']).toBe('command');
+    const payload = buildVoiceSettingsPayload(state, lastSaved);
+    expect(payload).toEqual({
+      model_actions: {
+        'builtin/okay_nabu': 'live_voice',
+        'builtin/hey_nabu': 'live_voice',
+      },
+    });
+    expect(payload.model_actions).not.toBe(state.model_actions);
+  });
+
+  it('keeps model actions when a status omits them', () => {
+    const state = {
+      ...createVoiceSettingsState(),
+      model_actions: { 'builtin/hey_nabu': 'live_voice' },
+    };
+
+    expect(applyWakewordStatus(state, { enabled: true }).model_actions).toEqual(
+      { 'builtin/hey_nabu': 'live_voice' },
+    );
+    expect(applyRuntimeStatus(state, { model_actions: {} })).toBe(state);
+  });
+});

@@ -13,6 +13,7 @@ from typing import Any, cast
 
 import httpx
 
+from desktop.settings import WAKEWORD_ACTION_COMMAND, WAKEWORD_ACTION_LIVE_VOICE
 from desktop.wakeword._audio_capture import (
     CapturedAudioFrame,
     CaptureFormat,
@@ -318,6 +319,15 @@ class WakewordWorker:
                     )
                     if not self._publish_state_if_running("wakeword_detected"):
                         break
+                    if self._detection_action(match.model_id) == WAKEWORD_ACTION_LIVE_VOICE:
+                        # The page owns Live voice: ask it to start a call and keep
+                        # listening. The engine re-arms only once scores fall
+                        # below threshold, and the call pauses this worker.
+                        detection_pre_roll.clear()
+                        self._request_live_voice()
+                        if not self._publish_state_if_running("listening"):
+                            break
+                        continue
                     try:
                         outcome = self._handle_detection(tuple(detection_pre_roll))
                     except MicrophoneCaptureError:
@@ -521,6 +531,20 @@ class WakewordWorker:
         except Exception:
             logger.warning("Failed to read wakeword settings", exc_info=True)
             return {}
+
+    def _detection_action(self, model_id: str) -> str:
+        """Return what a detection of ``model_id`` does (default: send a command)."""
+        actions = self._read_config().get("model_actions")
+        action = actions.get(model_id) if isinstance(actions, dict) else None
+        return action if isinstance(action, str) else WAKEWORD_ACTION_COMMAND
+
+    def _request_live_voice(self) -> None:
+        """Hand a Live voice start to the page without waiting for it."""
+        logger.info("Wakeword requests Live voice")
+        try:
+            self._bridge.request_live_voice("start", "wakeword")
+        except Exception:
+            logger.warning("Live voice request could not be sent to the page", exc_info=True)
 
     def _target_agent_available(self, agent_id: str) -> bool:
         """Verify the server-specific target exists before opening the microphone."""

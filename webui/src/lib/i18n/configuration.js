@@ -29,6 +29,31 @@ export default Object.freeze({
   'settings.sections.voiceControls': 'Voice controls',
   'settings.sections.speechModels': 'Speech models',
   'settings.sections.liveVoice': 'Live voice',
+  'settings.sections.liveVoiceShortcut': 'Live voice shortcut',
+  'settings.liveShortcut.enabled': 'Global shortcut',
+  'settings.liveShortcut.enabledAria': 'Enable the Live voice shortcut',
+  'settings.liveShortcut.description':
+    'Start or stop Live voice with a key combination, even while another app is in front.',
+  'settings.liveShortcut.combination': 'Key combination',
+  'settings.liveShortcut.combinationDescription':
+    'Combine a letter, digit, function key, or Space with Ctrl, Alt, Shift, or Win. F13 to F24 also work alone.',
+  'settings.liveShortcut.captureHint':
+    'Press the new key combination. Escape cancels.',
+  'settings.liveShortcut.capturing': 'Press keys…',
+  'settings.liveShortcut.capturingAria': 'Recording a new key combination',
+  'settings.liveShortcut.changeAria':
+    'Change the key combination, currently {combination}',
+  'settings.liveShortcut.space': 'Space',
+  'settings.liveShortcut.loadError':
+    'The Desktop app did not return the shortcut settings.',
+  'settings.liveShortcut.unsupported':
+    'Global shortcuts are available in the vBot Desktop app on Windows.',
+  'settings.liveShortcut.error.inUse':
+    'Another app already uses this key combination. Choose a different one.',
+  'settings.liveShortcut.error.invalid':
+    'This key combination cannot be used. Combine a letter, digit, function key, or Space with Ctrl, Alt, Shift, or Win.',
+  'settings.liveShortcut.error.failed':
+    'Windows could not register the shortcut. Choose another key combination or restart the Desktop app.',
   'settings.sections.recall': 'Conversation search',
   'settings.sections.mediaModels': 'Images, video & music',
   'settings.sections.evaluation': 'Evaluation',
@@ -841,6 +866,10 @@ export default Object.freeze({
   'settings.voice.deleteSuccess': 'Wakeword model removed.',
   'settings.voice.microphone': 'Microphone',
   'settings.voice.sensitivity': 'Sensitivity',
+  'settings.voice.modelAction': 'When heard',
+  'settings.voice.modelActionAria': 'When {name} is heard',
+  'settings.voice.modelActionCommand': 'Send command',
+  'settings.voice.modelActionLiveVoice': 'Start Live voice',
   'settings.voice.targetAgent': 'Personal Agent',
   'settings.voice.targetAgentDescription':
     'The Personal Agent that receives spoken commands on this server. Project Agents and other servers use separate routing.',

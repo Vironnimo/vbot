@@ -193,6 +193,9 @@ def test_wakeword_and_connection_methods_share_one_bridge(tmp_path: Path) -> Non
         "wakeword": True,
         "serverSelection": True,
         "contextMenu": True,
+        "liveWakeword": True,
+        "liveHotkey": False,
+        "secureOrigins": [],
     }
     bridge.connect("pi.lan", 9000)
     assert controller.prepare_calls == [("pi.lan", 9000)]
