@@ -524,26 +524,6 @@ class ProcessManager:
         if notification_task is not None and not notification_task.done():
             notification_task.cancel()
 
-    def cancel_scope(self, scope_key: str) -> None:
-        """Kill active processes in a run scope synchronously.
-
-        Prefer :meth:`cancel_scope_async` on the event loop - the Windows
-        tree-kill can block for seconds. This variant is for shutdown paths.
-        """
-        if not scope_key:
-            return
-
-        self._closed_scopes.add(scope_key)
-        failures: list[ProcessTerminationError] = []
-        for tracked in list(self._processes.values()):
-            if tracked.scope_key == scope_key and tracked.status == "running":
-                try:
-                    self._kill_process_now(tracked)
-                except ProcessTerminationError as error:
-                    failures.append(error)
-        if failures:
-            raise failures[0]
-
     async def sweep_finished(self) -> None:
         """Remove finished processes older than the configured TTL."""
         expires_before = _utc_now() - self._finished_process_ttl
@@ -900,7 +880,13 @@ class ProcessManager:
         )
 
     async def close_execution_group(self, extension: str, group_id: str, epoch: str) -> None:
-        """Close process admission and drain exactly this execution group's resources."""
+        """Close process admission and drain exactly this execution group's resources.
+
+        Callers close a group only after every Run of the group has settled.
+        Admission stays closed while pending launches drain and owned processes
+        are killed; a launch racing the drain is rejected or killed. After a
+        completed drain the admission marker is released.
+        """
         key = (extension, group_id, epoch)
         self._closed_execution_groups.add(key)
         pending = [
@@ -925,6 +911,11 @@ class ProcessManager:
                     failures.append(error)
                 if watcher is not None:
                     await asyncio.gather(watcher, return_exceptions=True)
+        # The group owner settles every Run of the group before closing its
+        # resources, and each epoch key is used only once. With the launches
+        # drained above, no launch for this key can arrive any more, so the
+        # closed marker is released instead of accumulating for the server life.
+        self._closed_execution_groups.discard(key)
         if failures:
             raise failures[0]
 
@@ -948,6 +939,17 @@ class ProcessManager:
                     failures.append(error)
         if failures:
             raise failures[0]
+
+    def release_scope(self, scope_key: str) -> None:
+        """Forget a settled Run scope's closed-admission marker.
+
+        Cancelling a scope keeps rejecting launches for it, so a Tool call
+        racing the cancellation cannot start an unowned process. Call this only
+        once the Run is terminal and all of its Tool tasks and cancellation
+        callbacks have settled: no launch for the scope can arrive any more,
+        and keeping the marker would only grow memory for the server lifetime.
+        """
+        self._closed_scopes.discard(scope_key)
 
     @staticmethod
     def _kill_process_tree(proc: Process, *, targets: list[Any] | None = None) -> None:

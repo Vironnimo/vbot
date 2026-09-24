@@ -23,4 +23,4 @@ Reports current or targeted agent/session/runtime status through the same status
 
 - The `/status` command and status tool share the same status text builder. `/status` always reports the current Session; the tool may target another Session.
 - Active Run timestamps render in the status text; an idle Session renders placeholders.
-- Expected target lookup problems are represented as tool failure envelopes (`agent_not_found`, `session_not_found`, or `invalid_arguments`) instead of an `unknown` status.
+- Expected target lookup problems are represented as tool failure envelopes (`agent_not_found`, `project_not_found`, `agent_unavailable`, `session_not_found`, or `invalid_arguments`) instead of an `unknown` status. Only a missing Agent or Project reports a not-found code; an Agent that exists but cannot run (for example, no usable Model) reports `agent_unavailable` (`retryable: false`) with the resolver's reason and tells the Agent to report it to the user.

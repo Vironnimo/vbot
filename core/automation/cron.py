@@ -46,6 +46,10 @@ from core.automation._cron_jobs import (
     CronRunOutcome,
     CronServiceError,
     CronStorageError,
+    CronTargetAgentNotFoundError,
+    CronTargetError,
+    CronTargetProjectNotFoundError,
+    CronTargetUnavailableError,
     ParsedSchedule,
     ScheduleType,
     _as_utc,
@@ -53,6 +57,7 @@ from core.automation._cron_jobs import (
     _load_cron_jobs_payload,
     _parse_iso_datetime,
     _resolve_timezone,
+    _target_validation_error,
     _truncate_error,
     _validate_cron_job_data,
     load_validated_cron_jobs_json,
@@ -72,6 +77,10 @@ __all__ = [
     "CronRunOutcome",
     "CronServiceError",
     "CronStorageError",
+    "CronTargetAgentNotFoundError",
+    "CronTargetError",
+    "CronTargetProjectNotFoundError",
+    "CronTargetUnavailableError",
     "MAX_ACTIVE_CRON_JOBS",
     "MAX_CONCURRENT_CRON_RUNS",
     "MAX_CONSECUTIVE_CRON_FAILURES",
@@ -1021,8 +1030,7 @@ class CronService:
             try:
                 self._agent_resolver.resolve_agent(job.project_id, job.agent_id)
             except Exception as error:
-                target = f"{job.agent_id}@{job.project_id}" if job.project_id else job.agent_id
-                raise CronJobValidationError(f"Cron target does not exist: {target}") from error
+                raise _target_validation_error(job, error) from error
         if (
             job.session_id is not None
             and self._sessions is not None

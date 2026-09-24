@@ -26,7 +26,11 @@ from core.models import Capabilities, Model, ModelQuery, ReasoningCapabilities
 from core.models.models import ModelRegistry
 from core.projects import ProjectNotFoundError
 from core.projects.paths import cwd_identity_key
-from core.projects.resolver import AgentResolutionError, ConfigAgent
+from core.projects.resolver import (
+    AgentResolutionError,
+    ConfigAgent,
+    ResolutionAgentNotFoundError,
+)
 from core.settings import AgentDefaults, bake_agent_defaults
 from core.tools.availability import ToolAccess
 from server.rpc import (
@@ -299,11 +303,11 @@ class StubAgentResolver:
     """Resolver seam the chat loop calls; identity path delegates to ``StubAgents``.
 
     ``project_id=None`` returns the same agent ``StubAgents.get`` would (byte-for-byte
-    today's identity path); an unknown agent surfaces as :class:`AgentResolutionError`,
-    matching the real resolver's failure surface. A set ``project_id`` returns a
-    :class:`ConfigAgent` registered via :meth:`register_project_agent`, mirroring the
-    real resolver's config path; an unknown project/agent raises
-    :class:`AgentResolutionError`.
+    today's identity path); an unknown agent surfaces as
+    :class:`ResolutionAgentNotFoundError`, matching the real resolver's failure
+    surface. A set ``project_id`` returns a :class:`ConfigAgent` registered via
+    :meth:`register_project_agent`, mirroring the real resolver's config path; an
+    unregistered Team member raises :class:`ResolutionAgentNotFoundError`.
     """
 
     def __init__(self, agents: StubAgents) -> None:
@@ -318,11 +322,11 @@ class StubAgentResolver:
             try:
                 return self._agents.get(agent_id)
             except KeyError as error:
-                raise AgentResolutionError(str(error)) from error
+                raise ResolutionAgentNotFoundError(str(error)) from error
         try:
             return self._project_agents[(project_id, agent_id)]
         except KeyError as error:
-            raise AgentResolutionError(
+            raise ResolutionAgentNotFoundError(
                 f"agent '{agent_id}' is not on project '{project_id}' team"
             ) from error
 
@@ -338,7 +342,7 @@ class StubAgentResolver:
         try:
             raw = self._agents.get_raw(agent_id)
         except KeyError as error:
-            raise AgentResolutionError(str(error)) from error
+            raise ResolutionAgentNotFoundError(str(error)) from error
         defaults = (
             self._agents._defaults_provider() if self._agents._defaults_provider is not None else {}
         )

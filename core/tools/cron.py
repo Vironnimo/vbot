@@ -9,8 +9,12 @@ from core.automation.cron import (
     CronJobNotFoundError,
     CronJobValidationError,
     CronServiceError,
+    CronTargetAgentNotFoundError,
+    CronTargetError,
+    CronTargetProjectNotFoundError,
+    CronTargetUnavailableError,
 )
-from core.projects import format_agent_address, parse_agent_address
+from core.projects import InvalidAgentAddressError, format_agent_address, parse_agent_address
 from core.tools._argument_repair import normalize_call_arguments
 from core.tools.arguments import optional_string, required_string
 from core.tools.contracts import ToolContractError, compile_tool_contract
@@ -64,6 +68,14 @@ _ACTION_RECOMMENDATIONS = {
     "enable": 'Use {"action":"enable","id":"<job-id>"}',
     "disable": 'Use {"action":"disable","id":"<job-id>"}',
 }
+# Target failures get target guidance; the call-shape examples above are about the
+# schedule and the other fields and would not fix a target.
+_TARGET_ADDRESS_RECOMMENDATION = (
+    'Set "target" to an existing Agent id, or to agent@project for a member of a Project Team'
+)
+_TARGET_UNAVAILABLE_RECOMMENDATION = (
+    'Choose another "target", or tell the user that the target Agent cannot run and why'
+)
 _PAST_ONCE_RECOMMENDATIONS = {
     "create": 'For example use "schedule":"in 30m" or a later ISO timestamp',
     "update": (
@@ -243,6 +255,10 @@ def _handle_cron_tool(
         if action == "enable":
             return _handle_enable(cron_service, operation_arguments)
         return _handle_disable(cron_service, operation_arguments)
+    except (CronTargetError, InvalidAgentAddressError) as error:
+        # Checked before ValueError: missing-target errors are also resolver
+        # ValueErrors, and a malformed target address is one too.
+        return _target_failure(error)
     except ValueError as error:
         return tool_failure(
             "invalid_arguments",
@@ -275,6 +291,22 @@ def _handle_cron_tool(
             f"{error}. Do not repeat the same call unchanged",
             retryable=False,
         )
+
+
+def _target_failure(error: CronTargetError | InvalidAgentAddressError) -> JsonObject:
+    """Report a target failure with its precise code and target guidance."""
+    recommendation = _TARGET_ADDRESS_RECOMMENDATION
+    if isinstance(error, CronTargetAgentNotFoundError):
+        code = "agent_not_found"
+    elif isinstance(error, CronTargetProjectNotFoundError):
+        code = "project_not_found"
+    elif isinstance(error, CronTargetUnavailableError):
+        code = "agent_unavailable"
+        recommendation = _TARGET_UNAVAILABLE_RECOMMENDATION
+    else:
+        # A malformed address names no target that could be looked up.
+        code = "invalid_arguments"
+    return tool_failure(code, f"{str(error).rstrip('. ')}. {recommendation}", retryable=False)
 
 
 def _handle_create(

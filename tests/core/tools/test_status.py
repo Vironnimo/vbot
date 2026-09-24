@@ -28,7 +28,14 @@ from core.chat.status_report import (
     status_session_facts,
 )
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
-from core.projects import AgentResolutionError, AgentResolver, ConfigAgent, ProjectStore
+from core.projects import (
+    AgentResolutionError,
+    AgentResolver,
+    ConfigAgent,
+    ProjectStore,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
+)
 from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager, SessionAddress
 from core.tools import ToolAccess, ToolContext, ToolRegistry, tool_failure
@@ -115,9 +122,12 @@ class _StubResolver:
         return self._agent
 
 
-class _NotFoundResolver:
+class _RaisingResolver:
+    def __init__(self, error: AgentResolutionError) -> None:
+        self._error = error
+
     def resolve_agent(self, _project_id: str | None, _agent_id: str) -> Agent:
-        raise AgentResolutionError("Agent not found")
+        raise self._error
 
 
 class _StubSession:
@@ -253,22 +263,38 @@ def test_status_tool_returns_text_with_full_deps(tmp_path: Path) -> None:
     assert data["session_id"] == "session-one"
 
 
-def test_status_tool_returns_failure_when_agent_not_found(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("resolver_error", "expected_code"),
+    [
+        (ResolutionAgentNotFoundError("Agent not found: coder"), "agent_not_found"),
+        (ResolutionProjectNotFoundError("Project not found: vbot"), "project_not_found"),
+        (AgentResolutionError("agent 'coder' has no usable model"), "agent_unavailable"),
+    ],
+)
+def test_status_tool_reports_why_the_target_agent_cannot_be_resolved(
+    tmp_path: Path, resolver_error: AgentResolutionError, expected_code: str
+) -> None:
+    # Only a missing Agent or Project is "not found"; an Agent that exists but
+    # cannot run reports the resolver's reason instead.
     registry = ToolRegistry()
     register_status_tool(
         registry,
-        cast(AgentResolver, _NotFoundResolver()),
+        cast(AgentResolver, _RaisingResolver(resolver_error)),
         cast(ChatSessionManager, _StubSessions([])),
         cast(ModelRegistry, _StubModels(_make_model())),
         ChatRunManager(),
         None,
     )
 
-    result = asyncio.run(_dispatch(registry, tmp_path))
+    result = asyncio.run(_dispatch(registry, tmp_path, project_id="vbot"))
 
     assert result["ok"] is False
-    error = cast(dict[str, str], result["error"])
-    assert error["code"] == "agent_not_found"
+    error = cast(dict[str, object], result["error"])
+    assert error["code"] == expected_code
+    if expected_code == "agent_unavailable":
+        assert error["retryable"] is False
+        assert "agent 'coder' has no usable model" in cast(str, error["message"])
+        assert "coder@vbot" in cast(str, error["message"])
 
 
 def test_status_tool_returns_failure_when_session_not_found(tmp_path: Path) -> None:

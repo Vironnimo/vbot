@@ -212,6 +212,12 @@ class OwnedRunInspection:
 
 
 class ExecutionResources(Protocol):
+    """Group-owned resources closed after every Run of the group has settled.
+
+    Because no owned Run can start more work by then, a resource may release
+    its per-group admission state once its own drain completes.
+    """
+
     async def close_execution_group(self, extension: str, group_id: str, epoch: str) -> None: ...
     def has_execution_work(self, owner: RunExecutionOwner) -> bool: ...
 
@@ -567,6 +573,7 @@ class TemporaryExecutionGroups:
                 )
         runs = [run for run in self._manager.active_runs() if matches(run.execution_owner)]
         await asyncio.gather(*(self._manager.cancel(run.id, reason=reason) for run in runs))
+        # Owned Runs are terminal here; resources rely on this ordering.
         await asyncio.gather(
             *(resource.close_execution_group(*key) for resource in self._resources)
         )

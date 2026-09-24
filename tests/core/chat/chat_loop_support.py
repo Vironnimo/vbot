@@ -478,12 +478,13 @@ class StubSkills:
 class StubProcessManager:
     def __init__(self) -> None:
         self.cancelled_scopes: list[str] = []
-
-    def cancel_scope(self, run_id: str) -> None:
-        self.cancelled_scopes.append(run_id)
+        self.released_scopes: list[str] = []
 
     async def cancel_scope_async(self, run_id: str) -> None:
         self.cancelled_scopes.append(run_id)
+
+    def release_scope(self, run_id: str) -> None:
+        self.released_scopes.append(run_id)
 
 
 class StubRuntime:

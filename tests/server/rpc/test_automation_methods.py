@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
 
 import pytest
 
-from core.automation.cron import CronJobValidationError, CronServiceError
+from core.automation.cron import CronServiceError
+from core.projects import (
+    AgentResolutionError,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
+)
 from server.rpc.methods import dispatch_rpc
+from tests.core.automation.cron_test_support import make_service
 
 
 def _state_with_cron_service(
@@ -633,19 +640,44 @@ async def test_cron_create_wraps_expected_domain_errors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cron_create_rejects_unknown_agent() -> None:
-    cron_service = Mock()
-    cron_service.create_job.side_effect = CronJobValidationError(
-        "Cron target does not exist: missing"
-    )
-    state = _state_with_cron_service(cron_service)
+@pytest.mark.parametrize(
+    ("address", "resolver_error", "expected_code"),
+    [
+        ("missing", ResolutionAgentNotFoundError("Agent not found: missing"), "agent_not_found"),
+        (
+            "ghost@vbot",
+            ResolutionAgentNotFoundError("agent 'ghost' is not on project 'vbot' team"),
+            "agent_not_found",
+        ),
+        (
+            "ghost@vbot",
+            ResolutionProjectNotFoundError("Project not found: vbot"),
+            "project_not_found",
+        ),
+        (
+            "stranded@vbot",
+            AgentResolutionError("agent 'stranded' has no usable model"),
+            "domain_error",
+        ),
+    ],
+)
+async def test_cron_target_resolution_failure_maps_to_precise_code(
+    tmp_path: Path, address: str, resolver_error: AgentResolutionError, expected_code: str
+) -> None:
+    # A real CronService validates the target through the resolver: a missing
+    # Agent or Project keeps its not-found code, a target that exists but cannot
+    # run stays a domain error.
+    resolver = Mock()
+    resolver.resolve_agent.side_effect = resolver_error
+    cron_service, _trigger_service = make_service(tmp_path, agent_resolver=resolver)
+    state = _state_with_cron_service(cron_service, resolver=resolver)
 
     response = await dispatch_rpc(
         state,
         {
             "method": "cron.create",
             "params": {
-                "agent_id": "missing",
+                "agent_id": address,
                 "name": "Status check",
                 "prompt": "Run status check",
                 "schedule_type": "cron",
@@ -655,34 +687,6 @@ async def test_cron_create_rejects_unknown_agent() -> None:
     )
 
     assert response["ok"] is False
-    assert response["error"]["code"] == "domain_error"
-    assert "missing" in response["error"]["message"]
-    cron_service.create_job.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_cron_create_rejects_unknown_project_target() -> None:
-    cron_service = Mock()
-    cron_service.create_job.side_effect = CronJobValidationError(
-        "Cron target does not exist: ghost@vbot"
-    )
-    state = _state_with_cron_service(cron_service)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "cron.create",
-            "params": {
-                "agent_id": "ghost@vbot",
-                "name": "Status check",
-                "prompt": "Run status check",
-                "schedule_type": "cron",
-                "cron_expression": "*/5 * * * *",
-            },
-        },
-    )
-
-    assert response["ok"] is False
-    assert response["error"]["code"] == "domain_error"
-    assert "ghost@vbot" in response["error"]["message"]
-    cron_service.create_job.assert_called_once()
+    assert response["error"]["code"] == expected_code
+    resolver.resolve_agent.assert_called_once()
+    assert cron_service.list_jobs() == []

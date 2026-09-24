@@ -38,9 +38,11 @@ from core.projects._runtime_agent import (
     ConfigAgent,
     GlobalAgentDefaultsProvider,
     ProjectSkillNamesProvider,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
     RuntimeAgent,
 )
-from core.projects.projects import ProjectError
+from core.projects.projects import ProjectError, ProjectNotFoundError
 from core.projects.scan_report import FindingType, ScanFinding
 from core.projects.scanners.base import (
     DetectorRegistration,
@@ -75,6 +77,8 @@ __all__ = [
     "ModelProbe",
     "ProjectSkillNamesProvider",
     "ProviderProbe",
+    "ResolutionAgentNotFoundError",
+    "ResolutionProjectNotFoundError",
     "RuntimeAgent",
     "build_agent_resolver",
     "effective_project_allowed_skills",
@@ -101,6 +105,15 @@ def _bad_model_finding(member: ScannedAgent) -> ScanFinding:
         agent_id=member.agent_id,
         source_path=member.source_path,
     )
+
+
+def _identity_resolution_error(error: Exception) -> AgentResolutionError:
+    """Wrap an Identity Agent store failure, keeping a missing Agent precise."""
+    from core.agents.agents import AgentNotFoundError
+
+    if isinstance(error, AgentNotFoundError):
+        return ResolutionAgentNotFoundError(str(error))
+    return AgentResolutionError(str(error))
 
 
 def _orphan_finding(agent_id: str, detail: str) -> ScanFinding:
@@ -162,9 +175,11 @@ class AgentResolver:
         project's Team scan plus the resolved model. Optional Run overrides are
         applied only to the returned immutable runtime view after normal
         resolution; they never mutate either source configuration. Raises
-        :class:`AgentResolutionError` for an unknown project/agent or a config
-        agent whose model chain fell through, and
-        :class:`ModelConfigurationError` for an unusable explicit Run Model.
+        :class:`ResolutionProjectNotFoundError` / :class:`ResolutionAgentNotFoundError`
+        (both :class:`AgentResolutionError`) for an unknown project/agent, a plain
+        :class:`AgentResolutionError` for a config agent whose model chain fell
+        through, and :class:`ModelConfigurationError` for an unusable explicit Run
+        Model.
         """
         if project_id is None:
             agent: RuntimeAgent = self._resolve_identity_agent(agent_id)
@@ -267,13 +282,15 @@ class AgentResolver:
         try:
             return self._agents.get(agent_id)
         except AgentError as error:
-            raise AgentResolutionError(str(error)) from error
+            raise _identity_resolution_error(error) from error
 
     def _resolve_config_agent(self, project_id: str, agent_id: str) -> ConfigAgent:
         project = self._load_project(project_id)
         team = self._project_team(project)
         if agent_id not in {member.agent_id for member in team}:
-            raise AgentResolutionError(f"agent '{agent_id}' is not on project '{project_id}' team")
+            raise ResolutionAgentNotFoundError(
+                f"agent '{agent_id}' is not on project '{project_id}' team"
+            )
 
         # Single-agent config freshness: re-read the agent's source file now so a
         # repo edit between the open-time scan and this run takes effect. The
@@ -358,7 +375,7 @@ class AgentResolver:
         try:
             raw = self._agents.get_raw(agent_id)
         except AgentError as error:
-            raise AgentResolutionError(str(error)) from error
+            raise _identity_resolution_error(error) from error
         defaults = AgentDefaults.from_dict(self._global_agent_defaults())
         return {
             "model": _identity_string_source(raw.model, defaults.model),
@@ -375,7 +392,9 @@ class AgentResolver:
         project = self._load_project(project_id)
         team = self._project_team(project)
         if agent_id not in {member.agent_id for member in team}:
-            raise AgentResolutionError(f"agent '{agent_id}' is not on project '{project_id}' team")
+            raise ResolutionAgentNotFoundError(
+                f"agent '{agent_id}' is not on project '{project_id}' team"
+            )
         scanned = self._read_agent_fresh(project, agent_id)
         global_defaults = AgentDefaults.from_dict(self._global_agent_defaults())
         return self._config_effective_from_scanned(project, scanned, global_defaults)
@@ -484,10 +503,10 @@ class AgentResolver:
         return self.rescan_project(project).team
 
     def _load_project(self, project_id: str) -> Project:
-        from core.projects.projects import ProjectError
-
         try:
             return self._projects.get(project_id)
+        except ProjectNotFoundError as error:
+            raise ResolutionProjectNotFoundError(str(error)) from error
         except ProjectError as error:
             raise AgentResolutionError(str(error)) from error
 
@@ -507,7 +526,7 @@ class AgentResolver:
         for member in fresh.team:
             if member.agent_id == agent_id:
                 return member
-        raise AgentResolutionError(
+        raise ResolutionAgentNotFoundError(
             f"agent '{agent_id}' is no longer present in project '{project.project_id}'"
         )
 

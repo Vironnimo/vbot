@@ -19,6 +19,8 @@ from core.projects import (
     ProjectAlreadyExistsError,
     ProjectError,
     ProjectNotFoundError,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
 )
 from core.runs import ActiveRunError, RunCancelledError, RunError, RunNotFoundError
 from core.sessions import (
@@ -80,7 +82,9 @@ def _map_expected_error(error: Exception) -> RpcError:
         return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
     if isinstance(error, SessionStoreUnavailableError):
         return RpcError(RPC_ERROR_DOMAIN, str(error))
-    if isinstance(error, ProjectNotFoundError):
+    # Agent resolution keeps a missing Project or Agent precise, so a missing
+    # address reports the same not-found code as a direct store lookup.
+    if isinstance(error, (ProjectNotFoundError, ResolutionProjectNotFoundError)):
         return RpcError(RPC_ERROR_PROJECT_NOT_FOUND, str(error))
     if isinstance(error, ProjectAlreadyExistsError):
         return RpcError(RPC_ERROR_PROJECT_ALREADY_EXISTS, str(error))
@@ -88,7 +92,7 @@ def _map_expected_error(error: Exception) -> RpcError:
         return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
     if isinstance(error, TaskModelValidationError):
         return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
-    if isinstance(error, AgentNotFoundError):
+    if isinstance(error, (AgentNotFoundError, ResolutionAgentNotFoundError)):
         return RpcError(RPC_ERROR_AGENT_NOT_FOUND, str(error))
     if isinstance(error, AgentOrderConflictError):
         return RpcError(RPC_ERROR_AGENT_ORDER_CONFLICT, str(error))
