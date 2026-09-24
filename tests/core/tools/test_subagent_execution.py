@@ -483,6 +483,24 @@ async def test_subagent_tool_foreground_waits_for_full_result(tmp_path: Path) ->
     assert tracker.spawn_count((context.agent_id, context.session_id, context.run_id)) == 0
 
 
+@pytest.mark.parametrize(
+    ("settings", "expected"),
+    [
+        ({"subagent_timeout_minutes": 17}, 17),
+        ({}, subagent_constants.DEFAULT_SUBAGENT_TIMEOUT_MINUTES),
+    ],
+)
+async def test_foreground_timeout_minutes_reports_the_enforced_bound(
+    tmp_path: Path,
+    settings: dict[str, Any],
+    expected: int,
+) -> None:
+    runtime = make_runtime(tmp_path, FakeRunManager(), settings)
+    coordinator = subagent_module.SubAgentCoordinator(runtime, RecordingTriggerService())
+
+    assert coordinator.foreground_timeout_minutes() == expected
+
+
 async def test_subagent_tool_foreground_timeout_completes_tracker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
