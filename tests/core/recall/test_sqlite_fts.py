@@ -18,7 +18,7 @@ from core.recall import (
     SqliteFtsRecallBackend,
 )
 from core.recall.canonical import CANONICAL_FALLBACK_PARTIAL_REASON
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSession, ChatSessionManager
 from core.sessions.schema import JOURNAL_MODE_DELETE
 from tests.core.sessions.history_fixtures import append_tool_fixture
 
@@ -582,3 +582,95 @@ async def test_time_ordered_pages_return_the_newest_or_oldest_matches(tmp_path: 
         assert newest_page.has_more and oldest_page.has_more
     finally:
         sessions.close()
+
+
+def _stored_passages(recall: SqliteFtsRecallBackend) -> dict[str, int]:
+    with sqlite3.connect(recall.index_path) as connection:
+        for table in ("passages_fts", "passages_fts_tokens"):
+            # rank=1 compares every indexed row with its external content.
+            connection.execute(f"INSERT INTO {table}({table}, rank) VALUES('integrity-check', 1)")
+        return {
+            str(passage_id): int(row_id)
+            for row_id, passage_id in connection.execute("SELECT row_id, passage_id FROM passages")
+        }
+
+
+async def test_passage_index_rewrites_only_changed_passages(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="growing")
+    session.append_many(
+        [
+            ChatMessage.user(f"needle part {index} " + "x" * 1000, timestamp=timestamp(index + 1))
+            for index in range(4)
+        ]
+    )
+    recall = backend(tmp_path, sessions)
+    await recall.search_passages(passage_request("needle"))
+    before = _stored_passages(recall)
+
+    session.append(ChatMessage.user("needle tail " + "y" * 1000, timestamp=timestamp(9)))
+    page = await recall.search_passages(passage_request("tail"))
+    after = _stored_passages(recall)
+
+    kept = before.keys() & after.keys()
+    assert kept
+    assert all(before[passage_id] == after[passage_id] for passage_id in kept)
+    assert after.keys() - before.keys()
+    assert page.hits and {hit.session_id for hit in page.hits} == {"growing"}
+    with sqlite3.connect(recall.index_path) as connection:
+        stamp = connection.execute(
+            "SELECT generation_id, history_revision FROM indexed_sessions"
+        ).fetchall()
+    version = sessions.history_version(session.address)
+    assert stamp == [(version[0], version[1])]
+
+
+async def test_short_term_passages_use_the_token_index_without_loading_histories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    for index in range(30):
+        sessions.create("coder", session_id=f"noise-{index}").append(
+            ChatMessage.user("c c c", timestamp=timestamp(1))
+        )
+    for index in range(12):
+        sessions.create("coder", session_id=f"csharp-{index}").append(
+            ChatMessage.user(
+                f"We compared C# generics with Java, part {index}", timestamp=timestamp(2)
+            )
+        )
+    recall = backend(tmp_path, sessions)
+    await recall.search_passages(passage_request("generics"))
+
+    def reject_load(*_args: object) -> None:
+        raise AssertionError("an indexed short-term search must not load Session histories")
+
+    for method in ("load", "load_active", "load_since"):
+        monkeypatch.setattr(ChatSession, method, reject_load)
+    first = await recall.search_passages(passage_request("C#", limit=10))
+    second = await recall.search_passages(replace(passage_request("C#", limit=10), offset=10))
+
+    assert first.ranking == "bm25_token"
+    assert (len(first.hits), first.has_more) == (10, True)
+    assert (len(second.hits), second.has_more) == (2, False)
+    assert {hit.session_id for hit in first.hits + second.hits} == {
+        f"csharp-{index}" for index in range(12)
+    }
+
+
+async def test_passage_index_that_cannot_be_rebuilt_fails_the_search(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="broken").append(
+        ChatMessage.user("needle", timestamp=timestamp(1))
+    )
+    recall = backend(tmp_path, sessions)
+
+    def broken(*_args: object) -> None:
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    monkeypatch.setattr(recall, "_sync_passage_index", broken)
+
+    with pytest.raises(sqlite3.DatabaseError):
+        await recall.search_passages(passage_request("needle"))
