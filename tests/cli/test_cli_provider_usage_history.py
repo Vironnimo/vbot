@@ -107,7 +107,7 @@ def test_provider_usage_history_clear_posts_clear_rpc(
         calls.append(json)
         return httpx.Response(
             200,
-            json={"ok": True, "result": {"deleted_samples": 12, "deleted_files": 1}},
+            json={"ok": True, "result": {"deleted_samples": 12}},
         )
 
     monkeypatch.setattr(provider_management.httpx, "post", fake_post)

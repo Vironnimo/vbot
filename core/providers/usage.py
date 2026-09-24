@@ -276,7 +276,7 @@ class ProviderUsageService:
         """Explicitly delete all durable automatic usage samples."""
 
         if self._history is None:
-            return UsageHistoryClearResult(deleted_samples=0, deleted_files=0)
+            return UsageHistoryClearResult(deleted_samples=0)
         return await self._history.clear()
 
     async def collect_history_sample(self) -> bool:

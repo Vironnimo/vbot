@@ -260,8 +260,8 @@ async def test_clear_deletes_every_sample_and_reports_the_counts(
     cleared = await store.clear()
     cleared_again = await store.clear()
 
-    assert cleared.to_dict() == {"deleted_samples": 2, "deleted_files": 1}
-    assert cleared_again.to_dict() == {"deleted_samples": 0, "deleted_files": 0}
+    assert cleared.to_dict() == {"deleted_samples": 2}
+    assert cleared_again.to_dict() == {"deleted_samples": 0}
     assert _row_counts(store) == (0, 0, 0)
     assert await store.samples() == []
     assert await store.latest_sampled_at() is None

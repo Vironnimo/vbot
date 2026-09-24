@@ -161,21 +161,12 @@ class UsageHistoryReport:
 
 @dataclass(frozen=True)
 class UsageHistoryClearResult:
-    """Outcome of an explicit full history deletion.
-
-    ``deleted_files`` is kept for accessors of the file-based history: it is 1
-    when the clear removed samples from the history database and 0 when the
-    history was already empty. The database file itself always remains.
-    """
+    """Outcome of an explicit full history deletion."""
 
     deleted_samples: int
-    deleted_files: int
 
     def to_dict(self) -> dict[str, int]:
-        return {
-            "deleted_samples": self.deleted_samples,
-            "deleted_files": self.deleted_files,
-        }
+        return {"deleted_samples": self.deleted_samples}
 
 
 def usage_history_sample(sampled_at: str, providers: Sequence[Any]) -> UsageHistorySample:
@@ -266,10 +257,7 @@ class ProviderUsageHistoryStore:
         """Delete every sample in one transaction after an explicit caller confirmation."""
         deleted_samples = await self._database.write_async(_delete_all)
         _LOGGER.info("Provider usage history cleared (samples=%s)", deleted_samples)
-        return UsageHistoryClearResult(
-            deleted_samples=deleted_samples,
-            deleted_files=1 if deleted_samples else 0,
-        )
+        return UsageHistoryClearResult(deleted_samples=deleted_samples)
 
     def _read_samples(
         self, since: datetime | None, until: datetime | None
