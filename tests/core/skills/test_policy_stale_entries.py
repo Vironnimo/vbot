@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from core.skills.policy import POLICY_SCHEMA_VERSION, SkillPolicy, SkillPolicyService
+from core.skills.policy import POLICY_FORMAT_VERSION, SkillPolicy, SkillPolicyService
 from core.skills.skills import find_skill_package_dir
 from core.storage.storage import StorageManager
 
@@ -23,7 +23,7 @@ class TestStaleEntries:
         policy_file = tmp_path / "data" / "skills" / "policy.json"
         policy_file.parent.mkdir(parents=True)
         document = {
-            "version": POLICY_SCHEMA_VERSION,
+            "format_version": POLICY_FORMAT_VERSION,
             "disabled": [],
             "shared": {
                 "ghost-agent": {"deploy": ["two"]},
