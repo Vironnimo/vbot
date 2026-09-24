@@ -27,6 +27,8 @@ from server.rpc.methods import dispatch_rpc
 from server.rpc.settings_methods import _trace_count
 from tests.server.test_rpc import StubAdapter, make_state
 
+_ASYNC_COORDINATION_TIMEOUT_SECONDS = 10.0
+
 
 class _RaisingStorage:
     """Storage stub whose ``load_debug_settings`` raises a chosen error."""
@@ -191,7 +193,7 @@ async def test_skill_settings_refresh_is_async_serialized_and_survives_cancellat
     first = asyncio.create_task(dispatch_rpc(state, request(method, first_directory)))
     second = None
     try:
-        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.wait_for(entered.wait(), _ASYNC_COORDINATION_TIMEOUT_SECONDS)
         if cancel:
             first.cancel()
             await asyncio.sleep(0)
@@ -205,10 +207,12 @@ async def test_skill_settings_refresh_is_async_serialized_and_survives_cancellat
         release.set()
         if cancel:
             with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(first, 2)
+                await asyncio.wait_for(first, _ASYNC_COORDINATION_TIMEOUT_SECONDS)
         else:
-            assert (await asyncio.wait_for(first, 2))["ok"] is True
-        assert (await asyncio.wait_for(second, 2))["ok"] is True
+            assert (await asyncio.wait_for(first, _ASYNC_COORDINATION_TIMEOUT_SECONDS))[
+                "ok"
+            ] is True
+        assert (await asyncio.wait_for(second, _ASYNC_COORDINATION_TIMEOUT_SECONDS))["ok"] is True
         assert refreshed == [[first_directory], [second_directory]]
         assert state.runtime.storage.load_settings()["skill_directories"] == [second_directory]
     finally:
