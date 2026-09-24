@@ -135,17 +135,6 @@
   line-height: 1.5;
   font-weight: 400;
 }
-.settings-editor-body .s-list-head {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-}
-.settings-editor-body .s-list-head-info {
-  color: var(--text-med);
-}
-.settings-editor-body .s-list-head-actions {
-  flex-wrap: wrap;
-}
 .s-task-model-advanced {
   grid-column: 1 / -1;
 }

@@ -1,12 +1,10 @@
+/* The debug capture warning continues the debug toggle row inside its group:
+   an amber marker and prose, no box of its own. */
 .s-debug-warning {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  margin-top: 20px;
-  padding: 12px 14px;
-  border: 1px solid color-mix(in srgb, var(--amber) 25%, transparent);
-  border-radius: var(--r-md);
-  background: color-mix(in srgb, var(--amber) 6%, transparent);
+  gap: 8px;
+  max-width: 66ch;
   color: var(--text-med);
   font-size: var(--fs-body-sm);
   line-height: 1.5;
@@ -14,7 +12,7 @@
 
 .s-debug-warning-icon {
   flex-shrink: 0;
-  margin-top: 1px;
+  margin-top: 2px;
   color: var(--amber);
 }
 
@@ -33,34 +31,124 @@
   min-width: 84px;
 }
 
-.s-channel-form {
-  margin: 14px 0 20px;
-  padding: 14px;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-lg);
-  background: var(--surface-2);
+/* --- Channels panel --- */
+
+/* The Channel form is its own group while creating a Channel and continues
+   the edited Channel's row while editing one. */
+.s-channel-form-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.s-channel-form-error {
-  margin-bottom: 12px;
-}
-
-.s-channel-form-header {
-  margin-bottom: 12px;
+.s-channel-form.s-group > .s-channel-form-body {
+  padding: 16px 18px 18px;
 }
 
 .s-channel-form-title {
   margin: 0;
   color: var(--text-hi);
-  font-size: var(--fs-heading-sm);
-  font-weight: 600;
-  line-height: 1.3;
+  font: 600 var(--fs-body-md) / 1.4 var(--font-ui);
 }
 
 .s-channel-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.s-channel-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* Channel rows: identity and settings summary on the left, status chips
+   above the row actions on the right; setup, the edit form, group access and
+   denied chats continue below inside the same row. */
+.s-channel-head {
+  align-items: flex-start;
+}
+
+.s-channel-controls {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.s-channel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 0 18px 16px;
+}
+
+.s-channel-access,
+.s-channel-denied {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.s-channel-access-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.s-channel-part-title {
+  color: var(--text-med);
+  font-size: var(--fs-label-sm);
+  font-weight: 600;
+}
+
+/* A seen group is an inset inside the Channel row, not a nested card. */
+.s-channel-access-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.s-channel-access-group-title,
+.s-channel-access-name {
+  color: var(--text-hi);
+  font-size: var(--fs-body-sm);
+  font-weight: 600;
+}
+
+.s-channel-access-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.s-channel-access-participant {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.s-channel-access-name {
+  overflow-wrap: anywhere;
+}
+
+.s-channel-denied-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.s-channel-denied-info {
+  font-size: var(--fs-body-sm);
+  overflow-wrap: anywhere;
 }
 
 /* A selected target's options, reset action and local setup continue its
@@ -87,137 +175,6 @@
   gap: 12px;
 }
 
-.s-channel-form-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 14px;
-}
-
-/* Channel and Extension entries are flat rows divided by hairlines, matching
-   the Provider list on the same page. */
-.s-channel-list {
-  display: flex;
-  flex-direction: column;
-  margin-top: 4px;
-}
-
-.s-channel-card {
-  padding: 14px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.s-channel-card:last-child {
-  border-bottom: 0;
-}
-
-.s-channel-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.s-channel-controls {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 10px;
-  min-width: fit-content;
-}
-
-.s-channel-chips {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.s-row-actions--channel {
-  justify-content: flex-end;
-  flex-wrap: wrap;
-}
-
-.s-channel-access {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.s-channel-access-heading,
-.s-channel-access-group {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.s-channel-access-group {
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: transparent;
-}
-
-.s-channel-access-group-title,
-.s-channel-access-name {
-  font-size: var(--fs-body-sm);
-  font-weight: 600;
-}
-
-.s-channel-access-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 12px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-}
-
-.s-channel-access-participant {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.s-channel-access-name {
-  overflow-wrap: anywhere;
-}
-
-.s-row-actions--channel-access {
-  justify-content: flex-end;
-  flex-wrap: wrap;
-}
-
-.s-channel-denied {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.s-channel-denied-title {
-  font-size: var(--fs-label-sm);
-  color: var(--text-lo);
-}
-
-.s-channel-denied-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.s-channel-denied-info {
-  font-size: var(--fs-body-sm);
-  overflow-wrap: anywhere;
-}
-
 /* --- Extensions panel --- */
 
 /* The "Waiting for: …" tail of the waiting hint gets its own visual beat so
@@ -233,26 +190,10 @@
   color: var(--text-lo);
 }
 
-.s-ext-list {
-  display: flex;
-  flex-direction: column;
-  margin-top: 4px;
-}
-
-.s-ext-card {
-  padding: 14px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.s-ext-card:last-child {
-  border-bottom: 0;
-}
-
+/* Extension rows carry several description lines, so their end controls
+   sit on the first line instead of the vertical centre. */
 .s-ext-head {
-  display: flex;
   align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
 }
 
 .s-ext-head .s-row-info {
@@ -299,19 +240,6 @@
 
 .s-ext-warning {
   color: var(--amber);
-}
-
-.s-ext-controls {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: fit-content;
-}
-
-.s-ext-card .s-disclosure-sub {
-  gap: var(--space-md);
-  margin: var(--space-md) 0 0 6px;
-  padding: 2px 0 2px var(--space-lg);
 }
 
 .s-ext-schema {

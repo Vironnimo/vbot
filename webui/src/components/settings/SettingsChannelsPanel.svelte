@@ -490,252 +490,275 @@
   }
 </script>
 
-<div class="s-list-head">
-  <span class="s-list-head-info">
-    {#if !channelPanelState.loading}
-      {t('settings.channels.count', '{count} configured', {
-        count: channelPanelState.channels.length,
-      })}
-    {/if}
-  </span>
-  <div class="s-list-head-actions">
-    <Button
-      variant="primary"
-      disabled={channelPanelBusy}
-      onClick={startCreateChannel}
-    >
-      {t('settings.channels.add', 'Add channel')}
-    </Button>
-  </div>
-</div>
+{#snippet addChannelButton()}
+  <Button
+    variant="secondary"
+    disabled={channelPanelBusy}
+    onClick={startCreateChannel}
+  >
+    {t('settings.channels.add', 'Add channel')}
+  </Button>
+{/snippet}
 
-{#if channelFormVisible}
-  <form class="s-channel-form" onsubmit={submitChannelForm}>
-    {#if channelFormError}
-      <Banner variant="error" class="s-channel-form-error"
-        >{channelFormError}</Banner
-      >
-    {/if}
+<!-- One form serves both modes: creating renders it as its own group above
+     the list, editing renders it inside the edited Channel's row. -->
+{#snippet channelForm()}
+  <form
+    class="s-channel-form"
+    class:s-group={channelFormMode === CHANNEL_FORM_MODE_CREATE}
+    onsubmit={submitChannelForm}
+  >
+    <div class="s-channel-form-body">
+      {#if channelFormError}
+        <Banner variant="error">{channelFormError}</Banner>
+      {/if}
 
-    <div class="s-channel-form-header">
       <h3 class="s-channel-form-title">
         {channelFormMode === CHANNEL_FORM_MODE_CREATE
           ? t('settings.channels.add', 'Add channel')
           : t('common.edit', 'Edit')}
       </h3>
-    </div>
 
-    <div class="s-channel-form-grid">
-      <FormField
-        controlId="channel-id-input"
-        required
-        label={t('sessions.link_channel_id', 'Channel ID')}
-        help={t(
-          'settings.channels.idHelp',
-          'A name you choose for this channel. It cannot be changed after creation.',
-        )}
-      >
-        <TextField
-          id="channel-id-input"
-          value={channelFormValues.id}
-          required
-          disabled={channelBusy || channelFormMode === CHANNEL_FORM_MODE_EDIT}
-          onInput={(next) => setChannelFormField('id', next)}
-        />
-      </FormField>
-
-      <FormField
-        controlId="channel-platform-select"
-        label={t('settings.channels.platform', 'Platform')}
-      >
-        <Dropdown
-          id="channel-platform-select"
-          value={channelFormValues.platform}
-          options={channelPlatformOptions}
-          ariaLabel={t('settings.channels.platform', 'Platform')}
-          disabled={channelBusy && channelFormMode === CHANNEL_FORM_MODE_CREATE}
-          triggerClass="settings-view__dropdown"
-          listClass="settings-view__thinking-list"
-          onValueChange={(value) => setChannelFormField('platform', value)}
-        />
-      </FormField>
-
-      <FormField
-        controlId="channel-agent-select"
-        label={t('settings.channels.agent', 'Agent')}
-      >
-        <Dropdown
-          id="channel-agent-select"
-          value={channelFormValues.agent_id}
-          options={channelAgentOptions}
-          placeholder={channelAgents.length > 0
-            ? t('settings.channels.agent.placeholder', 'Select agent')
-            : t('settings.channels.agent.none', 'No agents available')}
-          ariaLabel={t('settings.channels.agent', 'Agent')}
-          disabled={channelAgents.length === 0}
-          triggerClass="settings-view__dropdown"
-          listClass="settings-view__thinking-list"
-          onValueChange={(value) => setChannelFormField('agent_id', value)}
-        />
-      </FormField>
-
-      <FormField controlId="channel-dm-scope-select">
-        {#snippet labelContent()}
-          {t('settings.channels.dm_scope', 'DM scope')}
-          <InfoHint
-            text={t(
-              'settings.channels.dm_scope.help',
-              'How direct messages are grouped into chat sessions:\n\nMain — all DMs share one session. Per peer — one session per person. Per conversation — one session per chat. Per account, channel & peer — one session per chat and person.\n\nGroup chats always share one session per group, regardless of this setting.',
-            )}
-          />
-        {/snippet}
-        <Dropdown
-          id="channel-dm-scope-select"
-          value={channelFormValues.dm_scope}
-          options={channelDmScopeOptions}
-          ariaLabel={t('settings.channels.dm_scope', 'DM scope')}
-          disabled={channelBusy && channelFormMode === CHANNEL_FORM_MODE_CREATE}
-          triggerClass="settings-view__dropdown"
-          listClass="settings-view__thinking-list"
-          onValueChange={(value) => setChannelFormField('dm_scope', value)}
-        />
-      </FormField>
-
-      {#if channelFormValues.platform !== 'whatsapp'}
+      <div class="s-channel-form-grid">
         <FormField
-          controlId="channel-token-env-input"
+          controlId="channel-id-input"
           required
-          label={t('settings.channels.token_env_var', 'Token env var')}
+          label={t('sessions.link_channel_id', 'Channel ID')}
           help={t(
-            'settings.channels.token_env_var.help',
-            'Name of the environment variable that holds the bot token. Set the variable itself in the .env file in the vBot data directory — only the name goes here.',
+            'settings.channels.idHelp',
+            'A name you choose for this channel. It cannot be changed after creation.',
           )}
         >
           <TextField
-            id="channel-token-env-input"
-            code
-            value={channelFormValues.token_env_var}
+            id="channel-id-input"
+            value={channelFormValues.id}
             required
+            disabled={channelBusy || channelFormMode === CHANNEL_FORM_MODE_EDIT}
+            onInput={(next) => setChannelFormField('id', next)}
+          />
+        </FormField>
+
+        <FormField
+          controlId="channel-platform-select"
+          label={t('settings.channels.platform', 'Platform')}
+        >
+          <Dropdown
+            id="channel-platform-select"
+            value={channelFormValues.platform}
+            options={channelPlatformOptions}
+            ariaLabel={t('settings.channels.platform', 'Platform')}
             disabled={channelBusy &&
               channelFormMode === CHANNEL_FORM_MODE_CREATE}
-            onInput={(next) => setChannelFormField('token_env_var', next)}
+            triggerClass="settings-view__dropdown"
+            listClass="settings-view__thinking-list"
+            onValueChange={(value) => setChannelFormField('platform', value)}
           />
         </FormField>
-      {/if}
-      {#if channelFormValues.platform === 'slack'}
-        <FormField
-          controlId="channel-app-token-env-input"
-          label={t(
-            'settings.channels.app_token_env',
-            'App token environment variable',
-          )}
-          help={t(
-            'settings.channels.app_token_help',
-            'Slack needs a second token for Socket Mode. Enter the name of the variable holding the xapp token with connections:write permission.',
-          )}
-        >
-          <TextField
-            id="channel-app-token-env-input"
-            code
-            required
-            value={channelFormValues.app_token_env_var}
-            onInput={(next) => setChannelFormField('app_token_env_var', next)}
-          />
-        </FormField>
-      {/if}
-      {#if channelFormValues.platform === 'mattermost'}
-        <FormField
-          controlId="channel-server-url-input"
-          label={t('settings.channels.server_url', 'Mattermost server URL')}
-        >
-          <TextField
-            id="channel-server-url-input"
-            code
-            required
-            placeholder="https://chat.example.org"
-            value={channelFormValues.server_url}
-            onInput={(next) => setChannelFormField('server_url', next)}
-          />
-        </FormField>
-      {/if}
 
-      <FormField controlId="channel-allowed-chat-ids-input" full>
-        {#snippet labelContent()}
-          {t('settings.channels.allowed_chat_ids', 'Allowed chat IDs')}
-          <InfoHint
-            text={t(
-              'settings.channels.allowed_chat_ids.help',
-              'Comma-separated chat IDs allowed to talk to this channel. An empty list allows nobody. Messages from chats not on the list are rejected and appear on the channel card below with a one-click Allow.',
+        <FormField
+          controlId="channel-agent-select"
+          label={t('settings.channels.agent', 'Agent')}
+        >
+          <Dropdown
+            id="channel-agent-select"
+            value={channelFormValues.agent_id}
+            options={channelAgentOptions}
+            placeholder={channelAgents.length > 0
+              ? t('settings.channels.agent.placeholder', 'Select agent')
+              : t('settings.channels.agent.none', 'No agents available')}
+            ariaLabel={t('settings.channels.agent', 'Agent')}
+            disabled={channelAgents.length === 0}
+            triggerClass="settings-view__dropdown"
+            listClass="settings-view__thinking-list"
+            onValueChange={(value) => setChannelFormField('agent_id', value)}
+          />
+        </FormField>
+
+        <FormField controlId="channel-dm-scope-select">
+          {#snippet labelContent()}
+            {t('settings.channels.dm_scope', 'DM scope')}
+            <InfoHint
+              text={t(
+                'settings.channels.dm_scope.help',
+                'How direct messages are grouped into chat sessions:\n\nMain — all DMs share one session. Per peer — one session per person. Per conversation — one session per chat. Per account, channel & peer — one session per chat and person.\n\nGroup chats always share one session per group, regardless of this setting.',
+              )}
+            />
+          {/snippet}
+          <Dropdown
+            id="channel-dm-scope-select"
+            value={channelFormValues.dm_scope}
+            options={channelDmScopeOptions}
+            ariaLabel={t('settings.channels.dm_scope', 'DM scope')}
+            disabled={channelBusy &&
+              channelFormMode === CHANNEL_FORM_MODE_CREATE}
+            triggerClass="settings-view__dropdown"
+            listClass="settings-view__thinking-list"
+            onValueChange={(value) => setChannelFormField('dm_scope', value)}
+          />
+        </FormField>
+
+        {#if channelFormValues.platform !== 'whatsapp'}
+          <FormField
+            controlId="channel-token-env-input"
+            required
+            label={t('settings.channels.token_env_var', 'Token env var')}
+            help={t(
+              'settings.channels.token_env_var.help',
+              'Name of the environment variable that holds the bot token. Set the variable itself in the .env file in the vBot data directory — only the name goes here.',
             )}
-          />
-        {/snippet}
-        <TextField
-          id="channel-allowed-chat-ids-input"
-          code
-          value={channelFormValues.allowed_chat_ids}
-          disabled={channelBusy && channelFormMode === CHANNEL_FORM_MODE_CREATE}
-          placeholder={t(
-            'settings.channels.allowed_chat_ids.placeholder',
-            '12345, -1009876543210',
-          )}
-          onInput={(next) => setChannelFormField('allowed_chat_ids', next)}
-        />
-      </FormField>
-    </div>
+          >
+            <TextField
+              id="channel-token-env-input"
+              code
+              value={channelFormValues.token_env_var}
+              required
+              disabled={channelBusy &&
+                channelFormMode === CHANNEL_FORM_MODE_CREATE}
+              onInput={(next) => setChannelFormField('token_env_var', next)}
+            />
+          </FormField>
+        {/if}
+        {#if channelFormValues.platform === 'slack'}
+          <FormField
+            controlId="channel-app-token-env-input"
+            label={t(
+              'settings.channels.app_token_env',
+              'App token environment variable',
+            )}
+            help={t(
+              'settings.channels.app_token_help',
+              'Slack needs a second token for Socket Mode. Enter the name of the variable holding the xapp token with connections:write permission.',
+            )}
+          >
+            <TextField
+              id="channel-app-token-env-input"
+              code
+              required
+              value={channelFormValues.app_token_env_var}
+              onInput={(next) => setChannelFormField('app_token_env_var', next)}
+            />
+          </FormField>
+        {/if}
+        {#if channelFormValues.platform === 'mattermost'}
+          <FormField
+            controlId="channel-server-url-input"
+            label={t('settings.channels.server_url', 'Mattermost server URL')}
+          >
+            <TextField
+              id="channel-server-url-input"
+              code
+              required
+              placeholder="https://chat.example.org"
+              value={channelFormValues.server_url}
+              onInput={(next) => setChannelFormField('server_url', next)}
+            />
+          </FormField>
+        {/if}
 
-    <div class="s-channel-form-actions">
-      <Button variant="secondary" onClick={cancelChannelForm}>
-        {t('common.cancel', 'Cancel')}
-      </Button>
-      <Button
-        variant={channelFormMode === CHANNEL_FORM_MODE_CREATE
-          ? 'primary'
-          : 'tertiary'}
-        type="submit"
-        disabled={channelBusy && channelFormMode === CHANNEL_FORM_MODE_CREATE}
-      >
-        {channelBusy
-          ? t('common.saving', 'Saving…')
-          : channelFormMode === CHANNEL_FORM_MODE_CREATE
-            ? t('common.create', 'Create')
-            : t('common.save', 'Save')}
-      </Button>
+        <FormField controlId="channel-allowed-chat-ids-input" full>
+          {#snippet labelContent()}
+            {t('settings.channels.allowed_chat_ids', 'Allowed chat IDs')}
+            <InfoHint
+              text={t(
+                'settings.channels.allowed_chat_ids.help',
+                'Comma-separated chat IDs allowed to talk to this channel. An empty list allows nobody. Messages from chats not on the list are rejected and appear on the channel card below with a one-click Allow.',
+              )}
+            />
+          {/snippet}
+          <TextField
+            id="channel-allowed-chat-ids-input"
+            code
+            value={channelFormValues.allowed_chat_ids}
+            disabled={channelBusy &&
+              channelFormMode === CHANNEL_FORM_MODE_CREATE}
+            placeholder={t(
+              'settings.channels.allowed_chat_ids.placeholder',
+              '12345, -1009876543210',
+            )}
+            onInput={(next) => setChannelFormField('allowed_chat_ids', next)}
+          />
+        </FormField>
+      </div>
+
+      <div class="s-channel-form-actions">
+        <Button variant="secondary" onClick={cancelChannelForm}>
+          {t('common.cancel', 'Cancel')}
+        </Button>
+        <Button
+          variant={channelFormMode === CHANNEL_FORM_MODE_CREATE
+            ? 'primary'
+            : 'tertiary'}
+          type="submit"
+          disabled={channelBusy && channelFormMode === CHANNEL_FORM_MODE_CREATE}
+        >
+          {channelBusy
+            ? t('common.saving', 'Saving…')
+            : channelFormMode === CHANNEL_FORM_MODE_CREATE
+              ? t('common.create', 'Create')
+              : t('common.save', 'Save')}
+        </Button>
+      </div>
     </div>
   </form>
-{/if}
+{/snippet}
 
-{#if channelPanelState.loading}
+<!-- Reloads keep an already listed Channel on screen (an open edit form lives
+     inside its row); only the first load shows the loading state. -->
+{#if channelPanelState.loading && channelPanelState.channels.length === 0}
   <Banner variant="neutral">
     {t('common.loading', 'Loading…')}
   </Banner>
-{:else if channelPanelState.error}
-  <Banner variant="error" role="alert">
-    <span>{channelPanelState.error}</span>
-    <Button
-      variant="secondary"
-      disabled={channelPanelBusy}
-      onClick={loadChannelsPanel}
-    >
-      {t('common.retry', 'Retry')}
-    </Button>
-  </Banner>
-{:else if channelPanelState.channels.length === 0}
-  <EmptyState
-    density="compact"
-    description={t('settings.channels.empty', 'No channels configured.')}
-  />
 {:else}
-  <div class="s-channel-list">
+  {#if channelPanelState.error}
+    <Banner variant="error" role="alert">
+      <span>{channelPanelState.error}</span>
+      <Button
+        variant="secondary"
+        disabled={channelPanelBusy}
+        onClick={loadChannelsPanel}
+      >
+        {t('common.retry', 'Retry')}
+      </Button>
+    </Banner>
+  {/if}
+
+  {#if !channelPanelState.error && channelPanelState.channels.length === 0}
+    {#if !(channelFormVisible && channelFormMode === CHANNEL_FORM_MODE_CREATE)}
+      <EmptyState
+        density="compact"
+        description={t('settings.channels.empty', 'No channels configured.')}
+      >
+        {#snippet actions()}
+          {@render addChannelButton()}
+        {/snippet}
+      </EmptyState>
+    {/if}
+  {:else}
+    <div class="s-group-toolbar s-list-toolbar">
+      {#if channelPanelState.channels.length > 0}
+        <span class="s-group-toolbar__meta">
+          {t('settings.channels.count', '{count} configured', {
+            count: channelPanelState.channels.length,
+          })}
+        </span>
+      {/if}
+      <div class="s-group-toolbar__actions s-list-toolbar__end">
+        {@render addChannelButton()}
+      </div>
+    </div>
+  {/if}
+{/if}
+
+{#if channelFormVisible && channelFormMode === CHANNEL_FORM_MODE_CREATE}
+  {@render channelForm()}
+{/if}
+
+{#if channelPanelState.channels.length > 0}
+  <div class="s-group s-channel-list">
     {#each channelPanelState.channels as channel (channel.id)}
       {@const rowBusy = channelBusy || channelActionChannelId === channel.id}
-      <div class="s-channel-card">
-        {#if channel.failure_reason}<Banner variant="error"
-            >{channel.failure_reason}</Banner
-          >{/if}
-        {#if channel.platform === 'whatsapp'}
-          <WhatsAppSetup channelId={channel.id} onChanged={loadChannelsPanel} />
-        {/if}
-        <div class="s-channel-head">
+      <div class="s-channel-card s-entity">
+        <div class="s-channel-head s-entity__head">
           <div class="s-row-info">
             <div class="s-row-label">{channel.id}</div>
             <div class="s-row-desc">
@@ -758,7 +781,7 @@
           </div>
 
           <div class="s-channel-controls">
-            <div class="s-channel-chips">
+            <div class="s-entity__end">
               <StatusChip variant={channelEnabledChipVariant(channel.enabled)}>
                 {channelEnabledLabel(channel.enabled)}
               </StatusChip>
@@ -767,7 +790,7 @@
               </StatusChip>
             </div>
 
-            <div class="s-row-actions s-row-actions--channel">
+            <div class="s-entity__end">
               <Button
                 variant="secondary"
                 disabled={rowBusy}
@@ -795,7 +818,7 @@
                   : t('settings.channels.enable', 'Enable')}
               </Button>
               <Button
-                variant="secondary"
+                variant="danger"
                 disabled={rowBusy}
                 ariaLabel={t(
                   'settings.channels.delete',
@@ -812,142 +835,164 @@
           </div>
         </div>
 
-        <div class="s-channel-access">
-          <div class="s-channel-access-heading">
-            <div class="s-channel-denied-title">
-              {t('settings.channels.access.title', 'Group access')}
-            </div>
-            <div class="s-row-desc">
-              {t('settings.channels.access.identity', 'Own identity')}:
-              {channel.access?.self_user_id ??
-                t('settings.channels.access.identityUnset', 'Not set')}
-            </div>
-          </div>
+        <div class="s-channel-body">
+          {#if channel.failure_reason}<Banner variant="error"
+              >{channel.failure_reason}</Banner
+            >{/if}
+          {#if channel.platform === 'whatsapp'}
+            <WhatsAppSetup
+              channelId={channel.id}
+              onChanged={loadChannelsPanel}
+            />
+          {/if}
 
-          {#if !channel.access?.groups?.length}
-            <div class="s-row-desc">
-              {t(
-                'settings.channels.access.empty',
-                'No group participants have been seen yet.',
-              )}
-            </div>
-          {:else}
-            {#each channel.access.groups as group (group.access_scope_id)}
-              <div class="s-channel-access-group">
-                <div class="s-channel-access-group-title">
-                  {t('settings.channels.access.group', 'Group')} · ID {group.access_scope_id}
-                </div>
+          {#if channelFormVisible && channelFormMode === CHANNEL_FORM_MODE_EDIT && channelFormValues.id === channel.id}
+            {@render channelForm()}
+          {/if}
 
-                {#if group.participants.length === 0}
-                  <div class="s-row-desc">
-                    {t(
-                      'settings.channels.access.noParticipants',
-                      'No seen participants.',
-                    )}
+          <div class="s-channel-access">
+            <div class="s-channel-access-heading">
+              <div class="s-channel-part-title">
+                {t('settings.channels.access.title', 'Group access')}
+              </div>
+              <div class="s-row-desc">
+                {t('settings.channels.access.identity', 'Own identity')}:
+                {channel.access?.self_user_id ??
+                  t('settings.channels.access.identityUnset', 'Not set')}
+              </div>
+            </div>
+
+            {#if !channel.access?.groups?.length}
+              <div class="s-row-desc">
+                {t(
+                  'settings.channels.access.empty',
+                  'No group participants have been seen yet.',
+                )}
+              </div>
+            {:else}
+              {#each channel.access.groups as group (group.access_scope_id)}
+                <div class="s-channel-access-group">
+                  <div class="s-channel-access-group-title">
+                    {t('settings.channels.access.group', 'Group')} · ID {group.access_scope_id}
                   </div>
-                {:else}
-                  {#each group.participants as participant (participant.user_id)}
-                    {@const isOwnIdentity =
-                      participant.user_id === channel.access.self_user_id}
-                    <div class="s-channel-access-row">
-                      <div class="s-channel-access-participant">
-                        <span class="s-channel-access-name">
-                          {participant.display_name}
-                        </span>
-                        <span class="s-row-desc">ID {participant.user_id}</span>
-                      </div>
-                      <StatusChip
-                        variant={participant.role === 'admin'
-                          ? 'success'
-                          : 'info'}
-                      >
-                        {participant.role === 'admin'
-                          ? t('settings.channels.access.admin', 'Admin')
-                          : t('settings.channels.access.member', 'Member')}
-                      </StatusChip>
-                      <div class="s-row-actions s-row-actions--channel-access">
-                        <Button
-                          variant="secondary"
-                          disabled={rowBusy || isOwnIdentity}
-                          ariaLabel={t(
-                            'settings.channels.access.thisIsMeAria',
-                            'Use {name} as own identity',
-                            { name: participant.display_name },
-                          )}
-                          onClick={() => setOwnIdentity(channel, participant)}
-                        >
-                          {isOwnIdentity
-                            ? t('settings.channels.access.me', 'Me')
-                            : t(
-                                'settings.channels.access.thisIsMe',
-                                'This is me',
-                              )}
-                        </Button>
-                        <Button
-                          variant="secondary"
-                          disabled={rowBusy || isOwnIdentity}
-                          ariaLabel={participant.role === 'admin'
-                            ? t(
-                                'settings.channels.access.makeMemberAria',
-                                'Make {name} a member',
-                                { name: participant.display_name },
-                              )
-                            : t(
-                                'settings.channels.access.makeAdminAria',
-                                'Make {name} an admin',
-                                { name: participant.display_name },
-                              )}
-                          onClick={() =>
-                            toggleParticipantRole(channel, group, participant)}
+
+                  {#if group.participants.length === 0}
+                    <div class="s-row-desc">
+                      {t(
+                        'settings.channels.access.noParticipants',
+                        'No seen participants.',
+                      )}
+                    </div>
+                  {:else}
+                    {#each group.participants as participant (participant.user_id)}
+                      {@const isOwnIdentity =
+                        participant.user_id === channel.access.self_user_id}
+                      <div class="s-channel-access-row">
+                        <div class="s-channel-access-participant">
+                          <span class="s-channel-access-name">
+                            {participant.display_name}
+                          </span>
+                          <span class="s-row-desc"
+                            >ID {participant.user_id}</span
+                          >
+                        </div>
+                        <StatusChip
+                          variant={participant.role === 'admin'
+                            ? 'success'
+                            : 'info'}
                         >
                           {participant.role === 'admin'
-                            ? t(
-                                'settings.channels.access.makeMember',
-                                'Make member',
-                              )
-                            : t(
-                                'settings.channels.access.makeAdmin',
-                                'Make admin',
+                            ? t('settings.channels.access.admin', 'Admin')
+                            : t('settings.channels.access.member', 'Member')}
+                        </StatusChip>
+                        <div class="s-entity__end">
+                          <Button
+                            variant="secondary"
+                            disabled={rowBusy || isOwnIdentity}
+                            ariaLabel={t(
+                              'settings.channels.access.thisIsMeAria',
+                              'Use {name} as own identity',
+                              { name: participant.display_name },
+                            )}
+                            onClick={() => setOwnIdentity(channel, participant)}
+                          >
+                            {isOwnIdentity
+                              ? t('settings.channels.access.me', 'Me')
+                              : t(
+                                  'settings.channels.access.thisIsMe',
+                                  'This is me',
+                                )}
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            disabled={rowBusy || isOwnIdentity}
+                            ariaLabel={participant.role === 'admin'
+                              ? t(
+                                  'settings.channels.access.makeMemberAria',
+                                  'Make {name} a member',
+                                  { name: participant.display_name },
+                                )
+                              : t(
+                                  'settings.channels.access.makeAdminAria',
+                                  'Make {name} an admin',
+                                  { name: participant.display_name },
+                                )}
+                            onClick={() =>
+                              toggleParticipantRole(
+                                channel,
+                                group,
+                                participant,
                               )}
-                        </Button>
+                          >
+                            {participant.role === 'admin'
+                              ? t(
+                                  'settings.channels.access.makeMember',
+                                  'Make member',
+                                )
+                              : t(
+                                  'settings.channels.access.makeAdmin',
+                                  'Make admin',
+                                )}
+                          </Button>
+                        </div>
                       </div>
-                    </div>
-                  {/each}
-                {/if}
+                    {/each}
+                  {/if}
+                </div>
+              {/each}
+            {/if}
+          </div>
+
+          {#if channel.denied_chats?.length}
+            <div class="s-channel-denied">
+              <div class="s-channel-part-title">
+                {t(
+                  'settings.channels.denied.title',
+                  'Recent requests from chats not on the allowlist',
+                )}
               </div>
-            {/each}
+              {#each channel.denied_chats as deniedChat (deniedChat.chat_id)}
+                <div class="s-channel-denied-row">
+                  <span class="s-channel-denied-info">
+                    {deniedChatLabel(deniedChat)}
+                  </span>
+                  <Button
+                    variant="secondary"
+                    disabled={rowBusy}
+                    ariaLabel={t(
+                      'settings.channels.denied.allowAria',
+                      'Allow chat {id}',
+                      { id: deniedChat.chat_id },
+                    )}
+                    onClick={() => allowDeniedChat(channel, deniedChat.chat_id)}
+                  >
+                    {t('settings.channels.denied.allow', 'Allow')}
+                  </Button>
+                </div>
+              {/each}
+            </div>
           {/if}
         </div>
-
-        {#if channel.denied_chats?.length}
-          <div class="s-channel-denied">
-            <div class="s-channel-denied-title">
-              {t(
-                'settings.channels.denied.title',
-                'Recent requests from chats not on the allowlist',
-              )}
-            </div>
-            {#each channel.denied_chats as deniedChat (deniedChat.chat_id)}
-              <div class="s-channel-denied-row">
-                <span class="s-channel-denied-info">
-                  {deniedChatLabel(deniedChat)}
-                </span>
-                <Button
-                  variant="secondary"
-                  disabled={rowBusy}
-                  ariaLabel={t(
-                    'settings.channels.denied.allowAria',
-                    'Allow chat {id}',
-                    { id: deniedChat.chat_id },
-                  )}
-                  onClick={() => allowDeniedChat(channel, deniedChat.chat_id)}
-                >
-                  {t('settings.channels.denied.allow', 'Allow')}
-                </Button>
-              </div>
-            {/each}
-          </div>
-        {/if}
       </div>
     {/each}
   </div>

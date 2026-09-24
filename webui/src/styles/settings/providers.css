@@ -1,17 +1,22 @@
+/* Provider list: one `.s-group` with one entity row per Provider. The row
+   head toggles its details; the details drawer opens inside the same row,
+   indented under the name, so everything about a Provider stays between the
+   same two group hairlines. */
+.s-provider-head--toggle {
+  cursor: pointer;
+}
+
 .s-provider-connections {
   display: flex;
   flex-direction: column;
+  gap: 14px;
 }
 
 .s-provider-connection-row {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  border-top: 1px solid var(--border);
-}
-
-.s-provider-connection-row:first-child {
-  border-top: 0;
+  gap: 8px;
 }
 
 .s-provider-connection-head {
@@ -19,7 +24,6 @@
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding: 10px 0;
 }
 
 .s-provider-connection-label {
@@ -28,22 +32,32 @@
   font-weight: 500;
 }
 
-/* Disclosure: a 28px chevron square whose chevron rotates open, and an
-   indented sub-block carried by a 2px rail — the same visual language as
-   expanded tool calls in chat. The sub stays in the DOM while collapsed
-   (hidden attribute) so settings search still matches its text. Provider rows
-   also toggle from anywhere on their head; this button is the keyboard and
+/* Entity disclosure: a quiet 28px icon button at the end of an entity row
+   carrying the shared `.disclosure-chevron`, and the drawer it opens inside
+   the same row. The drawer stays in the DOM while collapsed (hidden
+   attribute) so settings search still matches its text. Provider rows also
+   toggle from anywhere on their head; the button is the keyboard and
    screen-reader control. */
 .s-disclosure-btn.btn-tertiary.btn-icon {
   width: 28px;
   height: 28px;
   min-height: 28px;
-  border: 1px solid var(--border-2);
-  color: var(--text-med);
-  transition:
-    border-color 120ms ease,
-    color 120ms ease,
-    background 120ms ease;
+  color: var(--text-lo);
+}
+
+.s-disclosure-btn .disclosure-chevron {
+  margin: 0 0 0 -2px;
+  color: inherit;
+}
+
+.s-disclosure-btn .disclosure-chevron--open {
+  margin: 0 0 3px;
+}
+
+.s-disclosure-btn.btn-tertiary.btn-icon:hover,
+.s-provider-head--toggle:hover .s-disclosure-btn.btn-tertiary.btn-icon {
+  color: var(--text-hi);
+  background: var(--surface-3);
 }
 
 .s-disclosure-spacer {
@@ -51,42 +65,11 @@
   flex-shrink: 0;
 }
 
-.s-disclosure-btn.btn-tertiary.btn-icon:hover {
-  border-color: var(--text-faint);
-  color: var(--text-hi);
-  background: var(--surface-3);
-}
-
-.s-disclosure-btn svg {
-  transition: transform 150ms ease;
-}
-
-.s-disclosure-btn[aria-expanded='true'] svg {
-  transform: rotate(90deg);
-}
-
-.s-provider-head--toggle {
-  cursor: pointer;
-}
-
-.s-provider-head--toggle:hover .s-disclosure-btn.btn-tertiary.btn-icon {
-  border-color: var(--text-faint);
-  color: var(--text-hi);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .s-disclosure-btn svg {
-    transition: none;
-  }
-}
-
 .s-disclosure-sub {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin: 0 0 12px 6px;
-  padding: 2px 0 2px 16px;
-  border-left: 2px solid var(--border-2);
+  gap: 16px;
+  padding: 2px 18px 18px 34px;
 }
 
 .s-disclosure-sub[hidden] {
@@ -98,7 +81,7 @@
   flex-direction: column;
   gap: 8px;
   margin: 0;
-  padding: 0 0 10px;
+  padding: 0;
   list-style: none;
 }
 
@@ -134,10 +117,14 @@
   display: inline-flex;
 }
 
-.s-connection-add-account {
+/* Actions that act on the Provider or connection above them (add an
+   account, add a connection, edit a custom Provider) sit left-aligned under
+   it. */
+.s-provider-inline-actions {
   display: flex;
-  justify-content: flex-start;
-  padding-bottom: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
 .s-provider-local-context {
@@ -145,16 +132,12 @@
   flex-direction: column;
   align-items: stretch;
   gap: 8px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
 }
 
 .openrouter-routing {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
 }
 
 .openrouter-routing .form-field {
@@ -167,9 +150,6 @@
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding: 10px 0;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
 }
 
 .openrouter-routing__disabled {
@@ -198,8 +178,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
+  padding: 4px 4px 4px 10px;
   border-radius: var(--r-md);
   background: var(--surface-2);
 }
@@ -227,8 +206,6 @@
 .openrouter-routing__save-row {
   display: flex;
   justify-content: flex-end;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
 }
 
 .s-local-context-row {
@@ -268,14 +245,6 @@
   font-size: var(--fs-label-sm);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-
-.s-inline-waiting {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-med);
-  font-size: var(--fs-body-sm);
 }
 
 .s-inline-spinner {
@@ -380,40 +349,6 @@
   to {
     transform: rotate(360deg);
   }
-}
-
-/* List header row: section content that owns primary actions anchors them in
-   one row — a muted summary on the left, actions pinned right — instead of
-   floating buttons between the section header and the list. */
-.s-list-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 14px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.s-list-head-info {
-  color: var(--text-lo);
-  font-size: var(--fs-body-sm);
-}
-
-.s-list-head-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-}
-
-.s-list-head-actions > button {
-  white-space: nowrap;
-}
-
-.s-provider-add-connection {
-  display: flex;
-  justify-content: flex-start;
 }
 
 .provider-connect-modal {

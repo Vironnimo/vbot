@@ -1,8 +1,16 @@
+/* The MCP connection manager is a sub-topic after the Extension list: a
+   sub-heading with its add action, then one group of connection rows. */
 .mcp-panel {
   display: grid;
-  gap: 14px;
-  padding-top: 20px;
-  border-top: 1px solid var(--border);
+  gap: 12px;
+  min-width: 0;
+}
+.mcp-subhead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px 12px;
 }
 .mcp-heading,
 .mcp-identity,
@@ -31,19 +39,22 @@
   color: var(--text-med);
   font-size: var(--fs-body-sm);
 }
-.mcp-connections,
 .mcp-editor,
 .mcp-group {
   display: grid;
   gap: 14px;
   min-width: 0;
 }
-.mcp-connection {
-  padding: 14px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  min-width: 0;
+.mcp-connection__head {
+  align-items: flex-start;
+}
+.mcp-connection__head p {
+  margin: 3px 0 0;
+}
+.mcp-connection__body {
+  display: grid;
+  gap: 10px;
+  padding: 0 18px 14px;
 }
 /* The connection id and its command or URL are code values. */
 .mcp-identity strong,
@@ -60,7 +71,10 @@
 }
 .mcp-actions {
   flex-wrap: wrap;
-  margin-top: 14px;
+  gap: 8px;
+}
+.mcp-actions > .mcp-actions__remove {
+  margin-left: auto;
 }
 .mcp-grid {
   display: grid;
@@ -130,6 +144,9 @@
   font-variant-numeric: tabular-nums;
 }
 @media (max-width: 640px) {
+  .mcp-connection__body {
+    padding: 0 14px 14px;
+  }
   .mcp-capability-search {
     grid-template-columns: minmax(0, 1fr) auto;
   }

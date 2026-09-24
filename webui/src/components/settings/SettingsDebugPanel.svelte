@@ -137,104 +137,106 @@
   }
 </script>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('debug.enabled', 'Enable debug mode')}
+<!-- The capture warning continues the toggle row it explains. -->
+<div class="s-group">
+  <div class="s-row s-row--compact">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('debug.enabled', 'Enable debug mode')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'debug.enabledDescription',
+          'Capture provider requests and responses for inspection.',
+        )}
+      </div>
     </div>
-    <div class="s-row-desc">
-      {t(
-        'debug.enabledDescription',
-        'Capture provider requests and responses for inspection.',
-      )}
-    </div>
-  </div>
-  <div class="s-row-control">
-    <Toggle
-      checked={debugSettings.enabled === true}
-      ariaLabel={t('debug.enabled', 'Enable debug mode')}
-      onChange={(next) => {
-        debugSettings = {
-          ...debugSettings,
-          enabled: next,
-        };
-        onError('');
-      }}
-    />
-  </div>
-</div>
-
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('debug.traceLimit', 'Trace limit')}
-    </div>
-    <div class="s-row-desc">
-      {t(
-        'debug.traceLimitDescription',
-        'Maximum number of traces to keep. Older traces are removed when the limit is reached.',
-      )}
-    </div>
-  </div>
-  <div class="s-row-control s-row-control--number">
-    <TextField
-      id="settings-debug-trace-limit"
-      type="number"
-      min="1"
-      max="500"
-      step="1"
-      value={debugSettings.trace_limit}
-      ariaLabel={t('debug.traceLimit', 'Trace limit')}
-      onInput={(next) => {
-        const rawValue = next;
-        if (rawValue === '') {
+    <div class="s-row-control">
+      <Toggle
+        checked={debugSettings.enabled === true}
+        ariaLabel={t('debug.enabled', 'Enable debug mode')}
+        onChange={(next) => {
           debugSettings = {
             ...debugSettings,
-            trace_limit: rawValue,
+            enabled: next,
           };
           onError('');
-          return;
-        }
-        const numberValue = Number(rawValue);
-        if (
-          Number.isInteger(numberValue) &&
-          numberValue >= 1 &&
-          numberValue <= 500
-        ) {
-          debugSettings = {
-            ...debugSettings,
-            trace_limit: numberValue,
-          };
-          onError('');
-        }
-      }}
-    />
+        }}
+      />
+    </div>
   </div>
-</div>
+  <div class="s-group__block s-group__block--attached s-debug-warning">
+    <div class="s-debug-warning-icon" aria-hidden="true">
+      <svg
+        viewBox="0 0 16 16"
+        width="14"
+        height="14"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M8 2L1 14h14L8 2z" />
+        <path d="M8 7v2" />
+        <circle cx="8" cy="11.5" r="0.5" fill="currentColor" stroke="none" />
+      </svg>
+    </div>
+    <p class="s-debug-warning-text">
+      {t(
+        'debug.localWarning',
+        'Debug traces are stored locally. Provider requests and responses are captured in full, including raw prompt content sent to models. Secret values like API keys and tokens are automatically redacted.',
+      )}
+    </p>
+  </div>
 
-<div class="s-debug-warning">
-  <div class="s-debug-warning-icon" aria-hidden="true">
-    <svg
-      viewBox="0 0 16 16"
-      width="14"
-      height="14"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.5"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      <path d="M8 2L1 14h14L8 2z" />
-      <path d="M8 7v2" />
-      <circle cx="8" cy="11.5" r="0.5" fill="currentColor" stroke="none" />
-    </svg>
+  <div class="s-row s-row--compact">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('debug.traceLimit', 'Trace limit')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'debug.traceLimitDescription',
+          'Maximum number of traces to keep. Older traces are removed when the limit is reached.',
+        )}
+      </div>
+    </div>
+    <div class="s-row-control s-row-control--number">
+      <TextField
+        id="settings-debug-trace-limit"
+        type="number"
+        min="1"
+        max="500"
+        step="1"
+        value={debugSettings.trace_limit}
+        ariaLabel={t('debug.traceLimit', 'Trace limit')}
+        onInput={(next) => {
+          const rawValue = next;
+          if (rawValue === '') {
+            debugSettings = {
+              ...debugSettings,
+              trace_limit: rawValue,
+            };
+            onError('');
+            return;
+          }
+          const numberValue = Number(rawValue);
+          if (
+            Number.isInteger(numberValue) &&
+            numberValue >= 1 &&
+            numberValue <= 500
+          ) {
+            debugSettings = {
+              ...debugSettings,
+              trace_limit: numberValue,
+            };
+            onError('');
+          }
+        }}
+      />
+    </div>
   </div>
-  <p class="s-debug-warning-text">
-    {t(
-      'debug.localWarning',
-      'Debug traces are stored locally. Provider requests and responses are captured in full, including raw prompt content sent to models. Secret values like API keys and tokens are automatically redacted.',
-    )}
-  </p>
 </div>
 
 <div class="s-footer">

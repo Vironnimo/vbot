@@ -1,7 +1,9 @@
+/* The Voice controls section: one group per topic (Live voice, transcription
+   audio, wakeword listening), spaced like the section body. */
 .voice-settings {
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 12px;
 }
 
 /* Live state dot */
@@ -82,17 +84,10 @@
   color: var(--text-lo);
 }
 
-.voice-settings .voice-microphone-control,
-.voice-settings .voice-model-control,
-.voice-settings .voice-calibration-control,
-.voice-settings .voice-settings .voice-microphone-dropdown.dropdown {
-  min-width: 300px;
-}
-
-/* In a stacked row the control owns the full content width, so the narrow
-     right-floating column and its dead gutter go away. */
-.voice-settings .s-row--stacked .voice-model-control,
-.voice-settings .s-row--stacked .voice-calibration-control {
+/* In a stacked row the control owns the full content width and starts at
+   its left edge. */
+.voice-settings .s-group > .s-row--stacked > .voice-model-control,
+.voice-settings .s-group > .s-row--stacked > .voice-calibration-control {
   width: 100%;
   min-width: 0;
   margin-left: 0;
@@ -111,19 +106,16 @@
   align-items: start;
   gap: 10px;
 }
+/* Phrase choices are insets inside the wakeword group, not nested cards.
+   The toggle carries the on-state; an active phrase only lifts one surface
+   step. */
 .voice-settings .voice-model-card {
   padding: 10px 12px;
-  border: 1px solid var(--border);
   border-radius: var(--r-md);
   background: var(--surface-2);
-  transition:
-    border-color 140ms ease,
-    background 140ms ease;
+  transition: background 140ms ease;
 }
-/* The card's toggle carries the on-state; an active card only lifts one
-   surface step. */
 .voice-settings .voice-model-card--active {
-  border-color: var(--border-2);
   background: var(--surface-3);
 }
 .voice-settings .voice-model-card__header,
@@ -195,13 +187,13 @@
   flex: 1;
   max-width: 62ch;
 }
+/* The running calibration is an inset inside its row. */
 .voice-settings .voice-calibration-panel {
   display: flex;
   flex-direction: column;
   gap: 16px;
   padding: 16px;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-lg);
+  border-radius: var(--r-md);
   background: var(--surface-2);
 }
 .voice-settings .voice-calibration-header,
@@ -286,16 +278,13 @@
   flex-direction: column;
   gap: 6px;
   padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  border-radius: var(--r-sm);
   background: var(--bg);
 }
-/* The Model to speak now is the active item: an accent rail marks it. */
+/* The Model to speak now is the active item: an accent rail marks it; a
+   finished Model is marked by its check. */
 .voice-settings .voice-calibration-model--target {
-  border-left: 2px solid var(--accent);
-}
-.voice-settings .voice-calibration-model--complete {
-  border-color: color-mix(in srgb, var(--green) 45%, var(--border));
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 .voice-settings .voice-calibration-model__header {
   gap: 12px;
@@ -426,24 +415,6 @@
   gap: 8px;
 }
 
-/* Privacy note */
-.voice-settings .voice-privacy-note {
-  margin-top: 16px;
-  padding: 12px 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface-2);
-  font-size: var(--fs-body-sm);
-  color: var(--text-med);
-  line-height: 1.5;
-}
-.voice-settings .voice-privacy-note p {
-  margin: 8px 0 0;
-}
-
-.voice-settings .voice-attention-banner {
-  margin: 8px 0 12px;
-}
 .voice-settings .voice-attention-copy {
   color: var(--text-hi);
 }
@@ -457,18 +428,16 @@
   white-space: nowrap;
 }
 
-.voice-settings .voice-save-state {
-  min-height: 20px;
-  padding: 10px 0 0;
+/* The section's save state, placed on its heading line as the body's
+   `.s-footer`. */
+.voice-save-state {
   color: var(--text-lo);
   font-size: var(--fs-body-sm);
-  text-align: right;
 }
 
-/* Mock-mode warning */
+/* Mock-mode warning, continuing the Wakeword listening row. */
 .voice-settings .voice-mock-warning {
-  margin: 8px 0 12px;
-  padding: 12px 16px;
+  padding: 10px 14px;
   border: 1px solid color-mix(in srgb, var(--amber) 22%, transparent);
   border-radius: var(--r-md);
   background: color-mix(in srgb, var(--amber) 12%, transparent);
