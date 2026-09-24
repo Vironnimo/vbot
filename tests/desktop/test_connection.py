@@ -389,6 +389,22 @@ def test_connect_notifies_active_server_listener_with_base_url(tmp_path: Path) -
     assert urls == ["http://pi.lan:9000/"]
 
 
+def test_active_server_url_follows_successful_connections_only(tmp_path: Path) -> None:
+    results = [PROBE_WEBUI_AVAILABLE, PROBE_SERVER_UNREACHABLE]
+    controller = desktop_connection.ConnectionController(
+        settings_file=tmp_path / "settings.json",
+        window=FakeWindow(),
+        probe=lambda target: DesktopProbeResult(status=results.pop(0), target=target),
+    )
+    assert controller.active_server_url() is None
+
+    controller.prepare_connect("pi.lan", 9000)
+    controller.prepare_connect("nas.lan", 8420)
+
+    # A failed attempt shows the connection screen; the last served origin stays.
+    assert controller.active_server_url() == "http://pi.lan:9000/"
+
+
 def test_connect_failure_does_not_notify_active_server_listener(tmp_path: Path) -> None:
     urls: list[str] = []
     controller = desktop_connection.ConnectionController(

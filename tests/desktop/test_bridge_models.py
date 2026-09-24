@@ -250,3 +250,72 @@ def test_worker_factory_model_error_becomes_actionable_status(tmp_path: Path) ->
     status = bridge.getWakewordStatus()
     assert status["state"] == "error"
     assert status["error_code"] == "wakeword_model_unavailable"
+
+
+def test_model_actions_are_validated_persisted_and_reported_per_active_model(
+    tmp_path: Path,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file)
+    bridge = DesktopBridge(settings_path=settings_file)
+
+    bridge.setWakewordConfig({"model_actions": {DEFAULT_WAKEWORD_MODEL_IDS[1]: "live_voice"}})
+
+    assert bridge.getWakewordStatus()["model_actions"] == {
+        DEFAULT_WAKEWORD_MODEL_IDS[0]: "command",
+        DEFAULT_WAKEWORD_MODEL_IDS[1]: "live_voice",
+    }
+    assert bridge.worker_config()["model_actions"][DEFAULT_WAKEWORD_MODEL_IDS[1]] == "live_voice"
+    stored = json.loads(settings_file.read_text(encoding="utf-8"))["wakeword"]
+    assert stored["model_actions"] == {DEFAULT_WAKEWORD_MODEL_IDS[1]: "live_voice"}
+
+    # An inactive model keeps its stored action for when it returns.
+    bridge.setWakewordConfig({"active_model_ids": [DEFAULT_WAKEWORD_MODEL_IDS[0]]})
+    assert bridge.getWakewordStatus()["model_actions"] == {
+        DEFAULT_WAKEWORD_MODEL_IDS[0]: "command",
+        DEFAULT_WAKEWORD_MODEL_IDS[1]: "live_voice",
+    }
+
+
+@pytest.mark.parametrize(
+    ("actions", "error"),
+    [
+        ({DEFAULT_WAKEWORD_MODEL_IDS[0]: "record"}, ValueError),
+        ({"": "command"}, WakewordModelError),
+        (["live_voice"], ValueError),
+        ({"custom/missing": "live_voice"}, WakewordModelError),
+    ],
+)
+def test_invalid_model_actions_are_rejected_without_persisting(
+    tmp_path: Path, actions: object, error: type[Exception]
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file)
+    bridge = DesktopBridge(settings_path=settings_file)
+
+    with pytest.raises(error):
+        bridge.setWakewordConfig({"model_actions": actions})
+
+    stored = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert "model_actions" not in stored.get("wakeword", {})
+
+
+def test_deleting_a_model_forgets_its_action(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file)
+    monkeypatch.setattr(engine_module, "_validate_custom_model", lambda _path: None)
+    bridge = DesktopBridge(settings_path=settings_file)
+    bridge.setWakewordConfig({"active_model_ids": [DEFAULT_WAKEWORD_MODEL_IDS[0]]})
+    imported = bridge.importWakewordModel(
+        "hey_computer.tflite",
+        base64.b64encode(b"tflite-model").decode("ascii"),
+    )
+    bridge.setWakewordConfig({"model_actions": {imported["id"]: "live_voice"}})
+    bridge.setWakewordConfig({"active_model_ids": [DEFAULT_WAKEWORD_MODEL_IDS[0]]})
+
+    bridge.deleteWakewordModel(imported["id"])
+
+    stored = json.loads(settings_file.read_text(encoding="utf-8"))["wakeword"]
+    assert imported["id"] not in stored["model_actions"]
