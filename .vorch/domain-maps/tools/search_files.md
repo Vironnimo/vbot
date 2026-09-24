@@ -69,6 +69,9 @@ applicable `.gitignore` files, `.ignore`, `.rgignore`, then extra ignore files.
 Nearest repository boundaries include worktree pointer files and common excludes.
 Controls can disable sources individually; unreadable rules never silently widen
 the scope. Positive vBot filters narrow selection and cannot override ignores.
+Compiled ignore files and Git `core.excludesFile` lookups are shared across calls
+while the file's stat stamp (mtime, size, inode) is unchanged; files modified in the
+last 3 seconds are always reread, so edits apply to the next call.
 
 Name globs are case-insensitive unless explicitly changed. Bare `-g '*.py'` filters
 basenames at any depth; globs containing `/` are root-relative, so `-g './*.py'`
