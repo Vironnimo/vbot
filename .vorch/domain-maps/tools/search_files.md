@@ -69,6 +69,9 @@ applicable `.gitignore` files, `.ignore`, `.rgignore`, then extra ignore files.
 Nearest repository boundaries include worktree pointer files and common excludes.
 Controls can disable sources individually; unreadable rules never silently widen
 the scope. Positive vBot filters narrow selection and cannot override ignores.
+Compiled ignore files and Git `core.excludesFile` lookups are shared across calls
+while the file's stat stamp (mtime, size, inode) is unchanged; files modified in the
+last 3 seconds are always reread, so edits apply to the next call.
 
 Name globs are case-insensitive unless explicitly changed. Bare `-g '*.py'` filters
 basenames at any depth; globs containing `/` are root-relative, so `-g './*.py'`
@@ -85,7 +88,8 @@ Windows junctions count as links (`is_link_entry`), like ripgrep's own walker
 Default content ordering is path ascending; path discovery uses newest modification
 first, with path tie-breaks. Explicit sorts cover path, modified, accessed, created,
 and unsorted discovery; unsupported creation timestamps reject. A call-scoped
-SQLite spool keeps union, deduplication, and sorting off unbounded Python lists.
+SQLite spool keeps union, deduplication, and sorting off unbounded Python lists;
+it is discarded with the call, so it runs without fsync or an on-disk journal.
 
 ## Results and Resource Bounds
 
@@ -118,12 +122,15 @@ context omission is explicit and never prevents continuation progress.
 The shared 30-second SearchBudget polls traversal and native output, including
 silent children. User cancellation kills the child and returns cancelled_by_user;
 timeouts, Run cancellation, and unreadable entries make results incomplete with
-bounded warnings. Regex errors fail even when selection is empty. Native exit 1
+bounded warnings. Regex errors fail even when selection is empty: the native content
+run reports pattern and option errors itself, and a separate native check against an
+empty file runs only when no candidate file was selected. Native exit 1
 means no match; native diagnostics cannot become a successful empty search.
 Invalid-regex diagnostics suggest `-F` only as an explicit caller correction;
 the Tool never changes regex semantics automatically. A child that exits before
 process monitoring attaches still has its output, diagnostics and exit code drained
-through the original process handle; memory monitoring remains active when available.
+through the original process handle; memory monitoring remains active when available
+and polls the child every 50 ms rather than per output record.
 
 Independent bounds cover 50 KiB content output, 8 MiB native protocol records,
 bounded pipe queues/stderr, 512 MiB child RSS, candidate storage (128 MiB), one
