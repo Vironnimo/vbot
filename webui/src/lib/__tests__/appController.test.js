@@ -212,6 +212,51 @@ describe('App controller', () => {
     expect(actions.onReloadAgents).toHaveBeenCalledOnce();
   });
 
+  it('turns a sessions deletion event into a Session deletion for Chat', async () => {
+    const { controller, state } = setup();
+    const deletionEvent = (scope) => ({
+      type: 'resource_changed',
+      payload: { kind: 'sessions', scope },
+    });
+
+    // A plain list change (create/rename) names no deleted Session.
+    await controller.handleServerEvent(deletionEvent({ agent_id: 'alpha' }));
+    expect(state.sessionsRefreshToken).toBe(1);
+    expect(state.sessionDeletion).toBeNull();
+
+    await controller.handleServerEvent(
+      deletionEvent({
+        agent_id: 'builder',
+        project_id: 'vbot',
+        deleted_session_id: 'session-one',
+        next_session_id: 'session-two',
+      }),
+    );
+    expect(state.sessionsRefreshToken).toBe(2);
+    expect(state.sessionDeletion).toEqual({
+      agentAddress: 'builder@vbot',
+      deletedSessionId: 'session-one',
+      nextSessionId: 'session-two',
+    });
+
+    // Each event is a fresh deletion, even for the same identity Session.
+    const identityScope = {
+      agent_id: 'alpha',
+      project_id: null,
+      deleted_session_id: 'session-three',
+      next_session_id: 'session-four',
+    };
+    await controller.handleServerEvent(deletionEvent(identityScope));
+    const first = state.sessionDeletion;
+    await controller.handleServerEvent(deletionEvent(identityScope));
+    expect(first).toEqual({
+      agentAddress: 'alpha',
+      deletedSessionId: 'session-three',
+      nextSessionId: 'session-four',
+    });
+    expect(state.sessionDeletion).not.toBe(first);
+  });
+
   it('keeps the active Run list current beyond the bounded event window', async () => {
     const { controller, state } = setup();
     const lifecycle = (type, runId, extra = {}) => ({

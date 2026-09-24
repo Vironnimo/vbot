@@ -188,8 +188,19 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     # Same emit point as session.create/rename: other windows on this agent
-    # refresh their list (and the current marking), scoped to the agent.
-    publish_resource_changed(state, RESOURCE_KIND_SESSIONS, scope={"agent_id": agent_id})
+    # refresh their list (and the current marking), scoped to the agent. The
+    # scope also names the archived Session and its landing so windows still
+    # displaying or holding it release it and follow, like the deleting window.
+    publish_resource_changed(
+        state,
+        RESOURCE_KIND_SESSIONS,
+        scope={
+            "agent_id": agent_id,
+            "project_id": project_id,
+            "deleted_session_id": session_id,
+            "next_session_id": next_session_id,
+        },
+    )
     # Re-aiming the identity current pointer is an agent-config change, so refresh
     # agent state in other windows (the current marking + return-to-current path).
     if deleting_current:

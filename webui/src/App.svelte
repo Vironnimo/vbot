@@ -221,6 +221,7 @@
   let sessionStoreIncident = $derived(appControllerState.sessionStoreIncident);
   let commandsRefreshToken = $derived(appControllerState.commandsRefreshToken);
   let queueInvalidation = $derived(appControllerState.queueInvalidation);
+  let sessionDeletion = $derived(appControllerState.sessionDeletion);
   let clientsRefreshToken = $derived(appControllerState.clientsRefreshToken);
   let channelsRefreshToken = $derived(appControllerState.channelsRefreshToken);
   let cronRefreshToken = $derived(appControllerState.cronRefreshToken);
@@ -722,6 +723,7 @@
         {sessionsRefreshToken}
         {commandsRefreshToken}
         {queueInvalidation}
+        {sessionDeletion}
         hasConnectedProvider={setup.settings === null
           ? null
           : setup.operational}
