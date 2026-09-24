@@ -34,7 +34,7 @@ Trace files and the index use atomic replacement; store mutations serialize acro
 
 ### Redaction
 
-Applied before disk, **structured only** - on header and query-parameter *names*, never body content: names matching exactly `authorization`/`x-api-key` (lower-cased) or containing a whole split-on-dash/underscore/dot word from `{token, secret, key, password, credential}` redact to `[REDACTED]` (`x-api-key`, `x_token_header`, `api-secret`, and `auth.token` match; `donkey` does not). There is **no** cookie rule - cookies capture raw unless named into a match. Bodies stay verbatim (the UI warns they persist locally in full); `redact_json_body` remains exported for other uses but the capture path does not apply it. Header keys record as httpx lower-cases them.
+Applied before disk, **structured only** - on request and response header and query-parameter *names*, never body content: names matching exactly `authorization`/`x-api-key` (lower-cased) or containing a whole split-on-dash/underscore/dot word from the credential words `{token, secret, key, password, credential}` or the identifying words `{account, organization, cookie}` redact to `[REDACTED]` (`x-api-key`, `x_token_header`, `api-secret`, `auth.token`, `chatgpt-account-id`, `openai-organization`, `cookie`, `set-cookie`, and an `account_id` query parameter match; `donkey` and `accounting` do not). The identifying words keep Provider Account ids and session cookies out of traces. The Provider capture path and `model_probe` share these helpers. Bodies stay verbatim (the UI warns they persist locally in full); `redact_json_body` remains exported for other uses but the capture path does not apply it. Header keys record as httpx lower-cases them.
 
 ## Interfaces
 

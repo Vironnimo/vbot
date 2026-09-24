@@ -6,6 +6,8 @@ partial-word exclusion, case-insensitive matching, and free-text
 pass-through.
 """
 
+import pytest
+
 from core.debug.redaction import redact_headers, redact_json_body, redact_url
 
 _REDACTED = "[REDACTED]"
@@ -69,6 +71,30 @@ def test_redacts_header_containing_sensitive_word_credential():
     headers = {"x-credential-id": "abc"}
     result = redact_headers(headers)
     assert result["x-credential-id"] == _REDACTED
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "chatgpt-account-id",
+        "ChatGPT-Account-Id",
+        "openai-organization",
+        "cookie",
+        "Set-Cookie",
+    ],
+)
+def test_redacts_identifying_headers(name: str):
+    """Account ids, organization ids, and cookies never reach a trace verbatim."""
+    headers = {name: "identifying-value", "Content-Type": "application/json"}
+    result = redact_headers(headers)
+    assert result == {name: _REDACTED, "Content-Type": "application/json"}
+
+
+def test_does_not_redact_identifying_word_prefix():
+    """'accounting' contains 'account' only as a fragment, not a whole word."""
+    headers = {"x-accounting-mode": "safe"}
+    result = redact_headers(headers)
+    assert result["x-accounting-mode"] == "safe"
 
 
 def test_does_not_redact_partial_word_match_donkey():
@@ -194,6 +220,13 @@ def test_redact_url_redacts_case_insensitive_param_name():
     url = "http://example.com/api?TOKEN=abc"
     result = redact_url(url)
     assert "abc" not in result
+
+
+def test_redact_url_redacts_account_id_param():
+    """An account_id query parameter is identifying and redacted."""
+    result = redact_url("https://example.com/api?account_id=acct-123&limit=10")
+    assert "acct-123" not in result
+    assert "limit=10" in result
 
 
 def test_redact_url_redacts_dot_delimited_param_name():
