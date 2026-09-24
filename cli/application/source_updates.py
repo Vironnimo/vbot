@@ -357,7 +357,9 @@ def prepare_update(
         and development_state(install) is None
     ):
         report("Verifying the installed version")
-        validate_release(install.version(), shape=install.install_shape)
+        validate_release(
+            install.version(), shape=install.install_shape, remove_bytecode_caches=True
+        )
         _require_head(checkout, revision)
         _require_clean(checkout)
         return install.version().name

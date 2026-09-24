@@ -117,7 +117,9 @@ def prepare(install: Installation, *, source: Path | None = None) -> Path:
             raise ApplicationError(
                 "Local customization requires Git. Install Git, then repeat vbot customize prepare"
             )
-        manifest = validate_release(install.version(), shape=install.install_shape)
+        manifest = validate_release(
+            install.version(), shape=install.install_shape, remove_bytecode_caches=True
+        )
         revision = manifest.get("revision")
         if (
             not isinstance(revision, str)
@@ -296,7 +298,7 @@ def _candidate(
     from cli.application.payload import copy_application
 
     base = install.version(base_version)
-    old = validate_release(base, shape=install.install_shape)
+    old = validate_release(base, shape=install.install_shape, remove_bytecode_caches=True)
     candidate_id = new_id("local")
     candidate = install.version(candidate_id)
     candidate.mkdir(parents=True)
@@ -471,7 +473,7 @@ def activation_archive(install: Installation) -> Path:
                 "Source changed after validation. Run vbot customize check again"
             )
         candidate = install.version(state["candidate_version"])
-        validate_release(candidate, shape=install.install_shape)
+        validate_release(candidate, shape=install.install_shape, remove_bytecode_caches=True)
         archive = contained(install.root, f"development/{candidate.name}.zip")
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
             for path in candidate.rglob("*"):
@@ -498,7 +500,9 @@ def carry_forward(install: Installation, candidate_version: str) -> str:
         "Local customization commits changed after the last check; "
         "run vbot customize check before updating",
     )
-    release = validate_release(install.version(candidate_version), shape=install.install_shape)
+    release = validate_release(
+        install.version(candidate_version), shape=install.install_shape, remove_bytecode_caches=True
+    )
     revision = release.get("revision")
     if not isinstance(revision, str) or len(revision) != 40:
         raise ApplicationError("New release has no exact source revision for local changes")
@@ -617,7 +621,9 @@ def run_test_instance(install: Installation, *, port: int = 0) -> None:
         "Source revision changed after validation. Run vbot customize check again",
     )
     candidate = safe_id(state["candidate_version"])
-    validate_release(install.version(candidate), shape=install.install_shape)
+    validate_release(
+        install.version(candidate), shape=install.install_shape, remove_bytecode_caches=True
+    )
     with socket.socket() as reservation:
         reservation.bind(("127.0.0.1", port))
         selected_port = reservation.getsockname()[1]

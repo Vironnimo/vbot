@@ -546,6 +546,8 @@ def reset_removal(install: Installation) -> dict[str, Any]:
                 raise ApplicationError("The uninstaller is still running")
         except psutil.NoSuchProcess:
             pass
-        validate_release(install.version(), shape=install.install_shape)
+        validate_release(
+            install.version(), shape=install.install_shape, remove_bytecode_caches=True
+        )
         path.unlink()
     return {"ok": True, "changed": True, "removal_pending": False}
