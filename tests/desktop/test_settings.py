@@ -732,3 +732,119 @@ def test_parallel_section_writes_share_one_transaction_lock(
     stored = json.loads(settings_file.read_text(encoding="utf-8"))
     assert stored["servers"] == [{"host": "new.lan", "port": 9000}]
     assert stored["wakeword"] == {"enabled": True}
+
+
+def test_read_wakeword_settings_keeps_only_valid_model_actions(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps(
+            {
+                "wakeword": {
+                    "model_actions": {
+                        " builtin/hey_nabu ": "live_voice",
+                        "builtin/okay_nabu": "command",
+                        "bad-action": "record",
+                        "": "live_voice",
+                        "bad-type": 1,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = desktop_settings.read_wakeword_settings(settings_file)
+
+    assert config["model_actions"] == {
+        "builtin/hey_nabu": "live_voice",
+        "builtin/okay_nabu": "command",
+    }
+
+
+def test_read_wakeword_settings_defaults_malformed_model_actions(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps({"wakeword": {"model_actions": ["live_voice"]}}),
+        encoding="utf-8",
+    )
+
+    assert desktop_settings.read_wakeword_settings(settings_file)["model_actions"] == {}
+
+
+# -- Live voice hotkey ---------------------------------------------------------
+
+
+def test_read_live_hotkey_settings_defaults_to_disabled_ctrl_alt_space(tmp_path: Path) -> None:
+    settings = desktop_settings.read_live_hotkey_settings(tmp_path / "missing.json")
+
+    assert settings == {
+        "enabled": False,
+        "ctrl": True,
+        "alt": True,
+        "shift": False,
+        "win": False,
+        "key": "Space",
+    }
+
+
+def test_read_live_hotkey_settings_falls_back_per_malformed_field(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps(
+            {
+                "live_voice": {
+                    "hotkey": {
+                        "enabled": True,
+                        "ctrl": "yes",
+                        "alt": False,
+                        "shift": True,
+                        "key": " KeyL ",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = desktop_settings.read_live_hotkey_settings(settings_file)
+
+    assert settings == {
+        "enabled": True,
+        "ctrl": True,
+        "alt": False,
+        "shift": True,
+        "win": False,
+        "key": "KeyL",
+    }
+
+
+@pytest.mark.parametrize("live_voice", [None, [], {"hotkey": "Ctrl+Alt+Space"}])
+def test_read_live_hotkey_settings_defaults_malformed_sections(
+    tmp_path: Path, live_voice: object
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps({"live_voice": live_voice}), encoding="utf-8")
+
+    settings = desktop_settings.read_live_hotkey_settings(settings_file)
+
+    assert settings == desktop_settings.DEFAULT_LIVE_HOTKEY_SETTINGS
+
+
+def test_write_live_hotkey_settings_preserves_other_sections(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps(
+            {
+                "servers": [{"host": "a.lan", "port": 8420}],
+                "live_voice": {"future": {"kept": True}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    hotkey = {**desktop_settings.DEFAULT_LIVE_HOTKEY_SETTINGS, "enabled": True, "key": "F13"}
+
+    desktop_settings.write_live_hotkey_settings(hotkey, settings_file)
+
+    stored = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert stored["servers"] == [{"host": "a.lan", "port": 8420}]
+    assert stored["live_voice"] == {"future": {"kept": True}, "hotkey": hotkey}

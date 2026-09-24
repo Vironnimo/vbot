@@ -11,13 +11,15 @@ The on-disk schema is::
       "servers": [{"host": "...", "port": 8420, "label": "..."}],
       "last_used": {"host": "...", "port": 8420},
       "window": {"width": 1280, "height": 800},
-      "wakeword": {...}
+      "wakeword": {...},
+      "live_voice": {"hotkey": {...}}
     }
 
 ``servers`` is the list of remembered targets, ``last_used`` points at the
 target to auto-connect on launch (a ``{host, port}`` reference, not an index, so
-it survives list reordering), and ``wakeword`` holds the local voice pipeline
-configuration. Reads tolerate a malformed file by returning defaults; writes
+it survives list reordering), ``wakeword`` holds the local voice pipeline
+configuration, and ``live_voice`` holds the Desktop-only Live voice start
+preferences (the global hotkey). Reads tolerate a malformed file by returning defaults; writes
 preserve unrelated top-level keys so one concern never clobbers another.
 """
 
@@ -43,7 +45,13 @@ SERVERS_KEY = "servers"
 LAST_USED_KEY = "last_used"
 WINDOW_KEY = "window"
 WAKEWORD_KEY = "wakeword"
+LIVE_VOICE_KEY = "live_voice"
 DEFAULT_WAKEWORD_MODEL_IDS = ("builtin/okay_nabu", "builtin/hey_nabu")
+# What a detection of one wakeword model does. A missing per-model entry means
+# the default: record and send a spoken command.
+WAKEWORD_ACTION_COMMAND = "command"
+WAKEWORD_ACTION_LIVE_VOICE = "live_voice"
+WAKEWORD_MODEL_ACTIONS = (WAKEWORD_ACTION_COMMAND, WAKEWORD_ACTION_LIVE_VOICE)
 # Read and write both retry a few times on transient I/O errors (e.g. a
 # Windows file lock from antivirus or another accessor) before giving up.
 _IO_RETRY_ATTEMPTS = 3
@@ -64,11 +72,27 @@ DEFAULT_WAKEWORD_SETTINGS: dict[str, Any] = {
     "active_model_ids": list(DEFAULT_WAKEWORD_MODEL_IDS),
     # Sensitivity is calibrated and preserved independently per installed model.
     "model_sensitivities": {},
+    # Per-model detection action; only non-default (``live_voice``) entries
+    # matter, a missing entry means ``command``.
+    "model_actions": {},
     # Agent/session routing is server-specific. A Desktop can switch between
     # unrelated vBot servers, where the same bare agent id may name a different
     # identity. Keeping the target beside the server URL prevents commands from
     # silently crossing that boundary after a switch.
     "server_profiles": {},
+}
+
+# The global Live voice hotkey is stored as the browser ``KeyboardEvent.code``
+# plus modifier flags, so the WebUI can capture and show it without a platform
+# key-name table. Which combinations are registrable is owned by
+# ``desktop.hotkey``; this store only guarantees the field shapes.
+DEFAULT_LIVE_HOTKEY_SETTINGS: dict[str, Any] = {
+    "enabled": False,
+    "ctrl": True,
+    "alt": True,
+    "shift": False,
+    "win": False,
+    "key": "Space",
 }
 
 
@@ -299,6 +323,7 @@ def read_wakeword_settings(path: Path | None = None) -> dict[str, Any]:
     merged["model_sensitivities"] = _normalize_model_sensitivities(
         merged.get("model_sensitivities")
     )
+    merged["model_actions"] = _normalize_model_actions(merged.get("model_actions"))
     merged["server_profiles"] = _normalize_server_profiles(merged.get("server_profiles"))
     return merged
 
@@ -307,6 +332,41 @@ def write_wakeword_settings(wakeword_config: dict[str, Any], path: Path | None =
     """Merge wakeword config into full Desktop settings and persist atomically."""
 
     _write_section(WAKEWORD_KEY, wakeword_config, path)
+
+
+def read_live_hotkey_settings(path: Path | None = None) -> dict[str, Any]:
+    """Return the stored Live voice hotkey preference merged with defaults.
+
+    Each malformed field falls back to its default independently, so one bad
+    hand edit never discards the rest of the preference.
+    """
+
+    full = read_settings(path)
+    live_voice = full.get(LIVE_VOICE_KEY)
+    hotkey = live_voice.get("hotkey") if isinstance(live_voice, dict) else None
+    if not isinstance(hotkey, dict):
+        hotkey = {}
+    normalized = dict(DEFAULT_LIVE_HOTKEY_SETTINGS)
+    for flag in ("enabled", "ctrl", "alt", "shift", "win"):
+        if isinstance(hotkey.get(flag), bool):
+            normalized[flag] = hotkey[flag]
+    key = hotkey.get("key")
+    if isinstance(key, str) and key.strip():
+        normalized["key"] = key.strip()
+    return normalized
+
+
+def write_live_hotkey_settings(hotkey: dict[str, Any], path: Path | None = None) -> None:
+    """Persist the Live voice hotkey preference, preserving other settings keys."""
+
+    resolved_path = _resolve_settings_path(path)
+    with _settings_lock(resolved_path):
+        full = _read_settings_unlocked(resolved_path)
+        live_voice = full.get(LIVE_VOICE_KEY)
+        section = dict(live_voice) if isinstance(live_voice, dict) else {}
+        section["hotkey"] = dict(hotkey)
+        full[LIVE_VOICE_KEY] = section
+        _write_settings_unlocked(full, resolved_path)
 
 
 def _write_section(key: str, value: Any, path: Path | None) -> None:
@@ -414,6 +474,22 @@ def _normalize_model_sensitivities(value: Any) -> dict[str, float]:
             continue
         if _MIN_WAKEWORD_SENSITIVITY <= sensitivity <= _MAX_WAKEWORD_SENSITIVITY:
             normalized[model_id.strip()] = float(sensitivity)
+    return normalized
+
+
+def _normalize_model_actions(value: Any) -> dict[str, str]:
+    """Drop malformed persisted per-model wakeword action entries."""
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for model_id, action in value.items():
+        if (
+            isinstance(model_id, str)
+            and model_id.strip()
+            and isinstance(action, str)
+            and action in WAKEWORD_MODEL_ACTIONS
+        ):
+            normalized[model_id.strip()] = action
     return normalized
 
 

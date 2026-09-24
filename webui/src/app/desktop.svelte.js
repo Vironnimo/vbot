@@ -7,6 +7,7 @@ import {
   isDesktopAccessor,
   getDesktopCapabilities,
   onWakewordStatusChange,
+  syncDesktopLiveVoiceActive,
   waitForDesktopBridge,
 } from '$lib/desktopBridge.js';
 import { t } from '$lib/i18n.js';
@@ -236,6 +237,11 @@ export function createAppDesktop(context) {
         const caps = await getDesktopCapabilities();
         if (cancelled) return;
         desktopCapabilities = caps;
+        if (caps?.liveWakeword) {
+          // A new page holds no Live voice call yet: this ends a wakeword
+          // pause a replaced or crashed page may have left behind.
+          void syncDesktopLiveVoiceActive().catch(() => {});
+        }
         if (caps?.wakeword && !cleanupWakewordPoll) {
           cleanupWakewordPoll = onWakewordStatusChange((status) => {
             applyDesktopWakewordStatus(status);
@@ -255,6 +261,9 @@ export function createAppDesktop(context) {
         wakeword: false,
         serverSelection: false,
         contextMenu: false,
+        liveWakeword: false,
+        liveHotkey: false,
+        secureOrigins: [],
       };
     }
 

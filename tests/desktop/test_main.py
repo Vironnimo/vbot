@@ -15,6 +15,8 @@ import httpx
 import pytest
 
 from desktop import connection as desktop_connection
+from desktop import hotkey as desktop_hotkey
+from desktop import live_requests as desktop_live_requests
 from desktop import main as desktop_main
 from desktop.main import DesktopProbeResult, DesktopTarget
 
@@ -25,13 +27,91 @@ class _FixedUuid:
     hex = _TEST_DESKTOP_SESSION_ID
 
 
-@pytest.fixture(autouse=True)
-def _use_stable_desktop_session_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep Desktop navigation expectations deterministic outside the UUID-specific tests."""
+class FakeDesktopInstance:
+    """Single-instance guard double owned by the launch under test."""
 
+    def __init__(self) -> None:
+        self.on_activate: Callable[[], None] | None = None
+        self.closed = False
+
+    def listen(self, on_activate: Callable[[], None]) -> None:
+        self.on_activate = on_activate
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeLiveHotkey:
+    """Live hotkey double: tests must never register a real global hotkey."""
+
+    supported = True
+
+    def __init__(self, events: list[str], *, settings_path: Any, on_press: Callable[[], None]):
+        self.events = events
+        self.settings_path = settings_path
+        self.on_press = on_press
+
+    def start(self) -> None:
+        self.events.append("hotkey.start")
+
+    def stop(self) -> None:
+        self.events.append("hotkey.stop")
+
+    def status(self) -> dict[str, Any]:
+        return {"supported": True, "enabled": False, "hotkey": {}, "error_code": None}
+
+    def update(self, _changes: Any) -> dict[str, Any]:
+        return self.status()
+
+
+class LaunchSeams:
+    """Records the Windows-native launch glue instead of touching the host."""
+
+    def __init__(self) -> None:
+        self.instance: FakeDesktopInstance | None = FakeDesktopInstance()
+        self.claimed: list[Path] = []
+        self.browser_origins: list[tuple[str, ...]] = []
+        self.secure_origin_targets: list[list[tuple[str, int]]] = []
+        self.microphone_origin: Callable[[], str | None] | None = None
+        self.events: list[str] = []
+        self.hotkeys: list[FakeLiveHotkey] = []
+
+    def hotkey(self, **kwargs: Any) -> FakeLiveHotkey:
+        hotkey = FakeLiveHotkey(self.events, **kwargs)
+        self.hotkeys.append(hotkey)
+        return hotkey
+
+    def claim(self, config_directory: Path) -> FakeDesktopInstance | None:
+        self.claimed.append(config_directory)
+        return self.instance
+
+    def secure_origins(self, targets: Any) -> tuple[str, ...]:
+        targets = list(targets)
+        self.secure_origin_targets.append(targets)
+        return tuple(f"http://{host}:{port}" for host, port in targets)
+
+    def apply(self, origins: Any) -> None:
+        self.events.append("apply_browser_arguments")
+        self.browser_origins.append(tuple(origins))
+
+    def allow_microphone(self, _window: Any, origin: Callable[[], str | None]) -> None:
+        self.microphone_origin = origin
+
+
+@pytest.fixture(autouse=True)
+def launch_seams(monkeypatch: pytest.MonkeyPatch) -> LaunchSeams:
+    """Keep Desktop navigation expectations deterministic and the host untouched."""
+
+    seams = LaunchSeams()
     monkeypatch.setattr(desktop_connection, "uuid4", lambda: _FixedUuid())
     monkeypatch.setattr(desktop_main._windows, "primary_scale", lambda: 1.0)
     monkeypatch.setattr(desktop_main._windows, "bind_window_dpi", lambda *_: None)
+    monkeypatch.setattr(desktop_main._windows, "claim_desktop_instance", seams.claim)
+    monkeypatch.setattr(desktop_main._windows, "webview_secure_origins", seams.secure_origins)
+    monkeypatch.setattr(desktop_main._windows, "apply_browser_arguments", seams.apply)
+    monkeypatch.setattr(desktop_main._windows, "allow_server_microphone", seams.allow_microphone)
+    monkeypatch.setattr(desktop_hotkey, "LiveHotkeyController", seams.hotkey)
+    return seams
 
 
 @dataclass
@@ -74,12 +154,25 @@ class FakeWindow:
         self.width = 1280
         self.height = 800
         self.events = FakeWindowEvents()
+        self.focus_calls: list[str] = []
 
     def load_url(self, url: str) -> None:
         self.loaded_urls.append(url)
 
     def load_html(self, content: str) -> None:
         self.loaded_html.append(content)
+
+    def evaluate_js(self, _script: str) -> bool:
+        return True
+
+    def maximize(self) -> None:
+        self.focus_calls.append("maximize")
+
+    def restore(self) -> None:
+        self.focus_calls.append("restore")
+
+    def show(self) -> None:
+        self.focus_calls.append("show")
 
 
 class FakeEvent:
@@ -99,8 +192,12 @@ class FakeEvent:
 
 class FakeWindowEvents:
     def __init__(self) -> None:
+        self.before_show = FakeEvent()
         self.shown = FakeEvent()
         self.closing = FakeEvent()
+        self.minimized = FakeEvent()
+        self.maximized = FakeEvent()
+        self.restored = FakeEvent()
 
 
 @dataclass
@@ -144,6 +241,7 @@ class FakeWebview:
         self.screens = [FakeScreen()]
         self.start_calls: list[dict[str, Any]] = []
         self.start_func: Callable[[], Any] | None = None
+        self.launch_events: list[str] | None = None
 
     def create_window(self, title: str, **kwargs: Any) -> FakeWindow:
         self.created_windows.append((title, kwargs))
@@ -154,6 +252,8 @@ class FakeWebview:
     def start(self, func: Callable[[], Any] | None = None, **kwargs: Any) -> None:
         self.start_calls.append(kwargs)
         self.start_func = func
+        if self.launch_events is not None:
+            self.launch_events.append("webview.start")
         if func is not None:
             func()
         self.window.events.shown.emit()
@@ -267,7 +367,7 @@ def test_desktop_main_logs_normal_shutdown(
 ) -> None:
     monkeypatch.setattr(desktop_main, "configure_desktop_logging", lambda: None)
     monkeypatch.setattr(desktop_main, "close_desktop_logging", lambda _handler: None)
-    monkeypatch.setattr(desktop_main, "launch_desktop", lambda _argv: None)
+    monkeypatch.setattr(desktop_main, "launch_desktop", lambda _argv: True)
 
     with caplog.at_level("INFO", logger="vbot.desktop"):
         desktop_main.main([])
@@ -278,6 +378,20 @@ def test_desktop_main_logs_normal_shutdown(
         if record.name == "vbot.desktop" and record.levelno == logging.INFO
     ]
     assert len(records) == 1
+
+
+def test_desktop_main_does_not_report_a_shutdown_when_another_desktop_was_focused(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(desktop_main, "configure_desktop_logging", lambda: None)
+    monkeypatch.setattr(desktop_main, "close_desktop_logging", lambda _handler: None)
+    monkeypatch.setattr(desktop_main, "launch_desktop", lambda _argv: False)
+
+    with caplog.at_level("INFO", logger="vbot.desktop"):
+        desktop_main.main([])
+
+    assert [record for record in caplog.records if record.name == "vbot.desktop"] == []
 
 
 # -- Probe classification ----------------------------------------------------
@@ -893,7 +1007,9 @@ def test_launch_does_not_start_worker_when_gui_fails_before_window_is_shown(
 
     # Pin the worker factory to a recording worker via the public factory hook
     # rather than the real audio stack, so the test stays headless.
-    def fake_bridge(args: Any, settings: Any, controller: Any, server_url: str) -> Any:
+    def fake_bridge(
+        args: Any, settings: Any, controller: Any, server_url: str, **_kwargs: Any
+    ) -> Any:
         from desktop.wakeword.bridge import DesktopBridge
 
         def create_worker(_bridge: DesktopBridge) -> RecordingWorker:
@@ -942,7 +1058,9 @@ def test_launch_starts_enabled_voice_only_after_window_is_shown(
         def is_running(self) -> bool:
             return True
 
-    def fake_bridge(args: Any, settings: Any, controller: Any, server_url: str) -> Any:
+    def fake_bridge(
+        args: Any, settings: Any, controller: Any, server_url: str, **_kwargs: Any
+    ) -> Any:
         from desktop.wakeword.bridge import DesktopBridge
 
         return DesktopBridge(
@@ -1016,3 +1134,237 @@ def test_enabled_voice_probes_dependencies_only_after_window_exists(
     bridge = fake_webview.created_windows[0][1]["js_api"]
     assert bridge.getWakewordStatus()["mode"] == "unavailable"
     assert bridge.getWakewordStatus()["error_code"] == "voice_stack_unavailable"
+
+
+# -- Single instance, browser arguments, and Live voice integration ----------
+
+
+def _available(target: DesktopTarget) -> DesktopProbeResult:
+    return DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target)
+
+
+def test_second_launch_focuses_the_running_desktop_without_a_window(
+    tmp_path: Path,
+    launch_seams: LaunchSeams,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    launch_seams.instance = None
+    fake_webview = FakeWebview()
+
+    with caplog.at_level("INFO", logger="vbot.desktop"):
+        opened = desktop_main.launch_desktop(
+            ["--host", "pi.lan", "--port", "9000"],
+            settings_file=tmp_path / "settings.json",
+            probe=_available,
+            webview_module=fake_webview,
+            app_icon_path=tmp_path / "missing-icon.png",
+        )
+
+    assert opened is False
+    assert launch_seams.claimed == [tmp_path]
+    assert fake_webview.created_windows == []
+    assert fake_webview.start_calls == []
+    assert launch_seams.browser_origins == []
+    assert not (tmp_path / "settings.json").exists()
+    assert "ignored the requested target pi.lan:9000" in caplog.text
+
+
+def test_launch_owns_the_instance_until_the_window_closes(
+    tmp_path: Path,
+    launch_seams: LaunchSeams,
+) -> None:
+    fake_webview = FakeWebview()
+
+    opened = desktop_main.launch_desktop(
+        [],
+        settings_file=tmp_path / "settings.json",
+        probe=_available,
+        webview_module=fake_webview,
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    instance = launch_seams.instance
+    assert opened is True
+    assert instance is not None
+    assert instance.closed is True
+    # A second launch asks this window to come to the front.
+    assert instance.on_activate is not None
+    instance.on_activate()
+    assert fake_webview.window.focus_calls == ["show"]
+
+
+def test_launch_closes_the_instance_when_the_gui_loop_fails(
+    tmp_path: Path,
+    launch_seams: LaunchSeams,
+) -> None:
+    class StartRaisesWebview(FakeWebview):
+        def start(self, func: Callable[[], Any] | None = None, **kwargs: Any) -> None:
+            raise RuntimeError("gui loop crashed")
+
+    with pytest.raises(RuntimeError, match="gui loop crashed"):
+        desktop_main.launch_desktop(
+            [],
+            settings_file=tmp_path / "settings.json",
+            probe=_available,
+            webview_module=StartRaisesWebview(),
+            app_icon_path=tmp_path / "missing-icon.png",
+        )
+
+    assert launch_seams.instance is not None
+    assert launch_seams.instance.closed is True
+    assert launch_seams.events == ["apply_browser_arguments", "hotkey.stop"]
+
+
+def test_launch_makes_every_known_server_a_secure_origin_before_webview_starts(
+    tmp_path: Path,
+    launch_seams: LaunchSeams,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_servers(settings_file, [{"host": "a.lan", "port": 8420}])
+    fake_webview = FakeWebview()
+    fake_webview.launch_events = launch_seams.events
+
+    desktop_main.launch_desktop(
+        ["--host", "pi.lan", "--port", "9000"],
+        settings_file=settings_file,
+        probe=_available,
+        webview_module=fake_webview,
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    assert launch_seams.secure_origin_targets == [[("a.lan", 8420), ("pi.lan", 9000)]]
+    assert launch_seams.browser_origins == [("http://a.lan:8420", "http://pi.lan:9000")]
+    assert launch_seams.events[:2] == ["apply_browser_arguments", "webview.start"]
+    bridge = fake_webview.created_windows[0][1]["js_api"]
+    assert bridge.getDesktopCapabilities()["secureOrigins"] == [
+        "http://a.lan:8420",
+        "http://pi.lan:9000",
+    ]
+
+
+def test_microphone_permission_follows_the_connected_server(
+    tmp_path: Path,
+    launch_seams: LaunchSeams,
+) -> None:
+    fake_webview = FakeWebview()
+
+    desktop_main.launch_desktop(
+        ["--host", "pi.lan", "--port", "9000"],
+        settings_file=tmp_path / "settings.json",
+        probe=_available,
+        webview_module=fake_webview,
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    assert launch_seams.microphone_origin is not None
+    assert launch_seams.microphone_origin() == "http://pi.lan:9000"
+
+
+def test_microphone_permission_has_no_origin_before_a_server_connects(
+    tmp_path: Path,
+    launch_seams: LaunchSeams,
+) -> None:
+    desktop_main.launch_desktop(
+        [],
+        settings_file=tmp_path / "settings.json",
+        probe=_available,
+        webview_module=FakeWebview(),
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    # First run shows the connection screen: nothing may use the microphone yet.
+    assert launch_seams.microphone_origin is not None
+    assert launch_seams.microphone_origin() is None
+
+
+def test_live_hotkey_runs_only_while_the_window_is_shown(
+    tmp_path: Path,
+    launch_seams: LaunchSeams,
+) -> None:
+    fake_webview = FakeWebview()
+    fake_webview.launch_events = launch_seams.events
+
+    desktop_main.launch_desktop(
+        [],
+        settings_file=tmp_path / "settings.json",
+        probe=_available,
+        webview_module=fake_webview,
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    assert launch_seams.events == [
+        "apply_browser_arguments",
+        "webview.start",
+        "hotkey.start",
+        "hotkey.stop",
+    ]
+    assert launch_seams.hotkeys[0].settings_path == tmp_path / "settings.json"
+    bridge = fake_webview.created_windows[0][1]["js_api"]
+    assert bridge.getDesktopCapabilities()["liveHotkey"] is True
+
+
+def test_hands_free_requests_reach_the_window_page_until_it_closes(
+    tmp_path: Path,
+    launch_seams: LaunchSeams,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dispatchers: list[RecordingDispatcher] = []
+
+    class RecordingDispatcher:
+        def __init__(self) -> None:
+            self.window: Any = None
+            self.requests: list[tuple[str, str]] = []
+            self.closed = False
+            dispatchers.append(self)
+
+        def attach_window(self, window: Any) -> None:
+            self.window = window
+
+        def request(self, action: str, source: str) -> None:
+            self.requests.append((action, source))
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(desktop_live_requests, "LiveRequestDispatcher", RecordingDispatcher)
+    fake_webview = FakeWebview()
+
+    desktop_main.launch_desktop(
+        [],
+        settings_file=tmp_path / "settings.json",
+        probe=_available,
+        webview_module=fake_webview,
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    dispatcher = dispatchers[0]
+    assert dispatcher.window is fake_webview.window
+    assert dispatcher.closed is True
+    launch_seams.hotkeys[0].on_press()
+    bridge = fake_webview.created_windows[0][1]["js_api"]
+    bridge.request_live_voice("start", "wakeword")
+    assert dispatcher.requests == [("toggle", "hotkey"), ("start", "wakeword")]
+
+
+@pytest.mark.parametrize(
+    ("window_events", "expected_calls"),
+    [
+        ([], ["show"]),
+        (["minimized"], ["restore", "show"]),
+        (["maximized", "minimized"], ["maximize", "show"]),
+        (["maximized", "minimized", "restored"], ["show"]),
+        (["minimized", "maximized"], ["show"]),
+    ],
+)
+def test_window_focus_restores_a_minimized_window_to_its_previous_size(
+    window_events: list[str],
+    expected_calls: list[str],
+) -> None:
+    window = FakeWindow()
+    focus = desktop_main._WindowFocus(window)
+
+    for name in window_events:
+        getattr(window.events, name).emit()
+    focus.bring_to_front()
+
+    assert window.focus_calls == expected_calls

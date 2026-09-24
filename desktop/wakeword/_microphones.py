@@ -17,6 +17,11 @@ from desktop.wakeword._worker_constants import (
     logger,
 )
 
+# WDM-KS opens kernel-streaming capture exclusively and can block every other
+# client, including a Live voice call's microphone in the WebView. The shared
+# mode host APIs (WASAPI, MME, DirectSound) expose the same hardware.
+_EXCLUSIVE_HOST_APIS = frozenset({"Windows WDM-KS"})
+
 
 def _host_api_name(sd: Any, info: Any) -> str:
     """Return a stable host-API label for one sounddevice descriptor."""
@@ -31,6 +36,14 @@ def _host_api_name(sd: Any, info: Any) -> str:
     return str(name) if name else str(host_api_index)
 
 
+def _is_shared_input(sd: Any, info: Any) -> bool:
+    """Return whether a device captures audio without locking out other clients."""
+    return (
+        int(info.get("max_input_channels", 0)) > 0
+        and _host_api_name(sd, info) not in _EXCLUSIVE_HOST_APIS
+    )
+
+
 def _candidate_device_indices(sd: Any, requested_device: dict[str, Any] | None) -> list[int]:
     """Return requested/default/fallback input devices in safe preference order."""
     devices = sd.query_devices()
@@ -41,7 +54,7 @@ def _candidate_device_indices(sd: Any, requested_device: dict[str, Any] | None) 
         matches = [
             index
             for index, info in enumerate(devices)
-            if int(info.get("max_input_channels", 0)) > 0
+            if _is_shared_input(sd, info)
             and str(info.get("name", f"Device {index}")) == requested_name
             and _host_api_name(sd, info) == requested_host_api
         ]
@@ -60,10 +73,12 @@ def _candidate_device_indices(sd: Any, requested_device: dict[str, Any] | None) 
         host_default = host_api.get("default_input_device", -1)
         if isinstance(host_default, int) and host_default >= 0:
             candidates.append(host_default)
-    candidates.extend(
-        index for index, info in enumerate(devices) if int(info.get("max_input_channels", 0)) > 0
-    )
-    return list(dict.fromkeys(candidates))
+    candidates.extend(range(len(devices)))
+    return [
+        index
+        for index in dict.fromkeys(candidates)
+        if 0 <= index < len(devices) and _is_shared_input(sd, devices[index])
+    ]
 
 
 def _capture_format_for_device(sd: Any, device: int) -> CaptureFormat | None:
@@ -120,7 +135,7 @@ def list_microphones() -> list[dict[str, Any]]:
     try:
         with _AUDIO_BACKEND_LOCK:
             for i, info in enumerate(sd.query_devices()):
-                if int(info.get("max_input_channels", 0)) > 0:
+                if _is_shared_input(sd, info):
                     capture_format = _capture_format_for_device(sd, i)
                     devices.append(
                         {

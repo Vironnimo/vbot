@@ -44,6 +44,16 @@
   const MAX_CUSTOM_WAKEWORD_MODEL_BYTES = 20 * 1024 * 1024;
   const VOICE_STATUS_RETRY_MS = 3000;
   const UNAVAILABLE_MICROPHONE_VALUE = '__configured_unavailable__';
+  const MODEL_ACTION_OPTIONS = Object.freeze([
+    {
+      value: 'command',
+      label: t('settings.voice.modelActionCommand', 'Send command'),
+    },
+    {
+      value: 'live_voice',
+      label: t('settings.voice.modelActionLiveVoice', 'Start Live voice'),
+    },
+  ]);
   const SESSION_BEHAVIOR_OPTIONS = Object.freeze([
     {
       value: 'active',
@@ -59,6 +69,7 @@
     agents = [],
     settings = null,
     wakewordAvailable = true,
+    liveWakewordAvailable = false,
     onCommit = () => {},
     onToast = () => {},
     onError = () => {},
@@ -519,6 +530,14 @@
     }
   }
 
+  function handleModelActionChange(modelId, action) {
+    voiceState = {
+      ...voiceState,
+      model_actions: { ...voiceState.model_actions, [modelId]: action },
+    };
+    void saveConfig();
+  }
+
   function handleSensitivityChange() {
     if (!calibrationSessionActive) {
       void saveConfig();
@@ -778,6 +797,29 @@
                         )}</span
                       >
                     </div>
+                    {#if liveWakewordAvailable}
+                      <div class="voice-model-card__action">
+                        <span aria-hidden="true">
+                          {t('settings.voice.modelAction', 'When heard')}
+                        </span>
+                        <Dropdown
+                          value={voiceState.model_actions[model.id] ??
+                            'command'}
+                          options={MODEL_ACTION_OPTIONS}
+                          ariaLabel={t(
+                            'settings.voice.modelActionAria',
+                            'When {name} is heard',
+                            { name: model.label },
+                          )}
+                          onValueChange={(value) =>
+                            handleModelActionChange(model.id, value)}
+                          disabled={!loaded ||
+                            modelActionBusy ||
+                            enableActionBusy ||
+                            calibrationSessionActive}
+                        />
+                      </div>
+                    {/if}
                   </div>
                 {/if}
                 {#if model.removable && !active}

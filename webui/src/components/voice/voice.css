@@ -160,6 +160,16 @@
   justify-content: flex-end;
   padding-top: 8px;
 }
+.voice-settings .voice-model-card__action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 8px;
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+}
 .voice-settings .voice-model-actions {
   display: flex;
   align-items: center;

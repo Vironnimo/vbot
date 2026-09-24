@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import html
 import logging
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -294,6 +295,10 @@ class ConnectionController:
         # voice worker follows the window's active server (wired to the bridge in
         # the launcher — the controller stays decoupled from the voice stack).
         self._active_server_listener: Callable[[str], None] | None = None
+        # The server the window was last sent to. Read from the GUI thread
+        # (WebView2 permission requests), so it has its own short lock.
+        self._active_server_lock = threading.Lock()
+        self._active_server_url: str | None = None
 
     def attach_window(self, window: WindowProtocol) -> None:
         """Bind the live pywebview window the controller navigates."""
@@ -304,6 +309,12 @@ class ConnectionController:
         """Register a callback invoked with the base URL on each successful connect."""
 
         self._active_server_listener = listener
+
+    def active_server_url(self) -> str | None:
+        """Return the base URL of the last successfully prepared connection."""
+
+        with self._active_server_lock:
+            return self._active_server_url
 
     # -- Remembered-servers surface (delegates to the module operations) -----
 
@@ -369,6 +380,8 @@ class ConnectionController:
             self.add_server(target.host, target.port, label)
             select_server(target.host, target.port, settings_file=self._settings_file)
             logger.info("Desktop connecting to %s:%s", target.host, target.port)
+            with self._active_server_lock:
+                self._active_server_url = target.url
             self._notify_active_server(target.url)
             return PreparedConnection(
                 result=result,
