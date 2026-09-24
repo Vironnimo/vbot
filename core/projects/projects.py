@@ -20,6 +20,7 @@ import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import cache
 from pathlib import Path
 from typing import Any, cast
 
@@ -37,8 +38,19 @@ from core.config_validation import (
     validate_optional_allowed_string,
     validate_optional_string,
     validate_optional_string_list,
+    validate_required_fields,
     validate_string,
     warn_unknown_keys,
+)
+from core.json_documents import (
+    JsonDocumentFormat,
+    JsonShape,
+    json_document,
+    json_map,
+    json_object,
+    strip_unknown_fields,
+    validate_format_version,
+    warn_unknown_fields,
 )
 from core.projects.paths import normalize_cwd
 from core.settings import (
@@ -51,6 +63,7 @@ from core.settings import (
     validate_thinking_effort,
 )
 from core.settings.validation import (
+    COMPACTION_POLICY_SHAPE,
     validate_optional_compaction_policy,
     validate_temperature_diagnostic,
     validate_thinking_effort_diagnostic,
@@ -128,6 +141,34 @@ _PROJECT_CONFIG_FIELDS = frozenset(
         "updated_at",
     }
 )
+PROJECT_FORMAT_VERSION = 1
+
+
+@cache
+def project_shape() -> JsonShape:
+    """Return the modeled fields of ``project.json``.
+
+    Built on first use because the Tools-owned ``tool_access`` fields are imported
+    lazily (see :func:`_normalize_tool_access_policy`).
+    """
+    from core.tools.availability import TOOL_ACCESS_FIELDS
+
+    return json_document(
+        _PROJECT_CONFIG_FIELDS,
+        {
+            "overrides": json_map(
+                json_object(
+                    OVERRIDE_FIELDS,
+                    {
+                        "compaction_policy": COMPACTION_POLICY_SHAPE,
+                        "tool_access": json_object(TOOL_ACCESS_FIELDS),
+                    },
+                )
+            )
+        },
+    )
+
+
 # The tool-neutral project-instruction convention (the agents.md standard). Seeded
 # as the first ``auto_load`` entry when a project is created
 # (:func:`seed_default_auto_load`, used by ``ProjectStore.create``), then treated
@@ -174,23 +215,26 @@ def validate_project_file(project_path: str | Path) -> JsonValidationReport:
 
 
 def load_validated_project_json(project_path: str | Path) -> JsonObject:
-    """Load one schema-valid ``project.json`` mapping."""
+    """Load the modeled fields of one schema-valid ``project.json``.
+
+    Unknown fields are left out; the Project writer merges them back from disk.
+    """
     try:
-        return cast(
-            "JsonObject",
-            load_validated_json_file(project_path, validate_project_data, missing_ok=False),
-        )
+        data = load_validated_json_file(project_path, validate_project_data, missing_ok=False)
     except JsonConfigValidationError as error:
         raise ProjectError(str(error)) from error
+    return cast("JsonObject", strip_unknown_fields(data, project_shape()))
 
 
 def validate_project_data(data: Any) -> list[JsonDiagnostic]:
-    """Validate a decoded raw ``project.json`` mapping."""
+    """Validate a decoded raw ``project.json`` document."""
     diagnostics: list[JsonDiagnostic] = []
     if not isinstance(data, dict):
         return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
+    if not validate_format_version(diagnostics, data, PROJECT_FORMAT_VERSION):
+        return diagnostics
 
-    warn_unknown_keys(diagnostics, "$", data, _PROJECT_CONFIG_FIELDS, "project field")
+    warn_unknown_keys(diagnostics, "$", data, project_shape().fields, "project field")
     _validate_project_config_id(diagnostics, data.get("project_id"))
     validate_optional_string(diagnostics, "$.display_name", data.get("display_name"))
     # A moved repository remains a valid re-point candidate, so the file rule
@@ -214,6 +258,7 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
         frozenset(PROJECT_SOURCE_FORMATS),
     )
     _validate_auto_load_list(diagnostics, "$.auto_load", data.get("auto_load"))
+    validate_required_fields(diagnostics, "$", data, frozenset({"allowed_tools"}))
     validate_optional_string_list(diagnostics, "$.allowed_tools", data.get("allowed_tools"))
     if isinstance(data.get("allowed_tools"), list):
         for index, tool_name in enumerate(data["allowed_tools"]):
@@ -284,14 +329,11 @@ def _validate_one_override_schema(
     if not isinstance(override, Mapping):
         add_error(diagnostics, path, "must be an object")
         return
-    for field_name in sorted(set(override) - OVERRIDE_FIELDS):
-        add_error(
-            diagnostics,
-            child_path(path, field_name),
-            f"unknown override field: {field_name}",
-        )
     if not override:
         add_error(diagnostics, path, "must set at least one field")
+    override_shape = _override_shape()
+    warn_unknown_fields(diagnostics, path, override, override_shape, label="override field")
+    override = cast("Mapping[str, Any]", strip_unknown_fields(dict(override), override_shape))
     if "model" in override and (
         not isinstance(override["model"], str) or not override["model"].strip()
     ):
@@ -328,17 +370,20 @@ def _validate_override_ceiling_diagnostics(
     overrides: Any,
     allowed_tools: Any,
 ) -> None:
-    if not isinstance(overrides, Mapping):
+    if not isinstance(overrides, Mapping) or not isinstance(allowed_tools, list):
         return
-    ceiling = set(
-        allowed_tools if isinstance(allowed_tools, list) else PROJECT_DEFAULT_ALLOWED_TOOLS
-    )
+    ceiling = set(allowed_tools)
+    tool_access_shape = _override_shape().nested["tool_access"]
     for agent_id, override in overrides.items():
         if not isinstance(agent_id, str) or not isinstance(override, Mapping):
             continue
         raw_policy = override.get("tool_access")
         try:
-            policy = _normalize_tool_access_policy(raw_policy) if raw_policy is not None else None
+            policy = (
+                _normalize_tool_access_policy(strip_unknown_fields(raw_policy, tool_access_shape))
+                if raw_policy is not None
+                else None
+            )
         except ValueError:
             continue
         if policy is None:
@@ -530,18 +575,11 @@ def _normalize_project_display_name(project_id: str, value: Any) -> str:
 
 
 def _allowed_tools_from_data(value: Any) -> list[str]:
-    """Return the persisted Tool Whitelist, defaulting a missing field to the base list.
+    """Return the persisted Tool Whitelist; an explicit empty list means every Tool off.
 
-    An absent field (old ``project.json``) and any non-list value fall back to
-    :data:`PROJECT_DEFAULT_ALLOWED_TOOLS` (decision 10), while an explicit empty
-    list is preserved as "every tool off" — the ``isinstance`` check is what keeps
-    ``[]`` distinct from absent (a plain ``or`` would collapse both to the base
-    list). Validation runs before this, so a malformed value is already rejected;
-    the defensive fallback only matters for a direct :func:`project_from_dict`.
+    ``allowed_tools`` is required in ``project.json`` and validated before this.
     """
-    if isinstance(value, list):
-        return list(value)
-    return list(PROJECT_DEFAULT_ALLOWED_TOOLS)
+    return list(cast("list[str]", value))
 
 
 def _normalize_cwd(cwd: str | os.PathLike[str]) -> Any:
@@ -758,19 +796,37 @@ def _overrides_from_data(value: Any) -> dict[str, dict[str, Any]]:
 
     The Projects-owned schema validator runs before this, so a malformed value is
     already rejected; this only copies each override object. A missing field defaults
-    to an empty map.
+    to an empty map. An override that set only fields this vBot does not know is
+    empty after loading and is left out.
     """
     if not isinstance(value, dict):
         return {}
     return {
         agent_id: dict(cast("dict[str, Any]", override))
         for agent_id, override in value.items()
-        if isinstance(override, dict)
+        if isinstance(override, dict) and override
     }
 
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _override_shape() -> JsonShape:
+    overrides = project_shape().nested["overrides"]
+    assert overrides.values is not None
+    return overrides.values
+
+
+@cache
+def project_format() -> JsonDocumentFormat:
+    """Return how ``project.json`` is versioned, preserved, and guarded."""
+    return JsonDocumentFormat(
+        name="Project config",
+        version=PROJECT_FORMAT_VERSION,
+        shape=project_shape(),
+        validate=validate_project_data,
+    )
 
 
 def _normalize_tool_access_policy(value: Any) -> Any:

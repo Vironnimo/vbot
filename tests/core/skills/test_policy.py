@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from core.skills.policy import (
-    POLICY_SCHEMA_VERSION,
+    POLICY_FORMAT_VERSION,
     SkillPolicy,
     SkillPolicyError,
     SkillPolicyService,
@@ -36,7 +36,7 @@ class TestLoad:
         path.write_text(
             json.dumps(
                 {
-                    "version": POLICY_SCHEMA_VERSION,
+                    "format_version": POLICY_FORMAT_VERSION,
                     "disabled": ["deploy"],
                     "shared": {"main": {"deploy": ["two"], "review": ["two", "three"]}},
                 }
@@ -68,22 +68,32 @@ class TestLoad:
         assert service.validation_diagnostics()
         assert any("Cannot read skill policy" in message for message in caplog.messages)
 
-    def test_unsupported_version_is_invalid(self, storage: StorageManager) -> None:
+    @pytest.mark.parametrize(
+        ("document", "message"),
+        [
+            ({"version": 2, "disabled": []}, "persistence Generation 1"),
+            ({"format_version": 2, "disabled": []}, "written by a newer vBot"),
+        ],
+    )
+    def test_unsupported_version_is_invalid(
+        self, storage: StorageManager, document: dict[str, object], message: str
+    ) -> None:
         path = policy_path(storage)
         path.parent.mkdir(parents=True)
-        path.write_text(json.dumps({"version": 1, "disabled": []}), encoding="utf-8")
+        path.write_text(json.dumps(document), encoding="utf-8")
         service = SkillPolicyService(storage)
 
         policy = service.load()
 
         assert policy == SkillPolicy()
-        assert any("must be 2" in message for message in service.validation_diagnostics())
+        diagnostics = service.validation_diagnostics()
+        assert any(message in item for item in diagnostics)
 
     def test_unknown_keys_warn_but_still_load(self, storage: StorageManager) -> None:
         path = policy_path(storage)
         path.parent.mkdir(parents=True)
         path.write_text(
-            json.dumps({"version": POLICY_SCHEMA_VERSION, "legacy_flag": True}),
+            json.dumps({"format_version": POLICY_FORMAT_VERSION, "legacy_flag": True}),
             encoding="utf-8",
         )
         service = SkillPolicyService(storage)
@@ -99,7 +109,7 @@ class TestLoad:
         path.write_text(
             json.dumps(
                 {
-                    "version": POLICY_SCHEMA_VERSION,
+                    "format_version": POLICY_FORMAT_VERSION,
                     "disabled": ["bad name!", "good-name"],
                     "shared": {"owner": {"also bad!": ["two"]}},
                 }
@@ -122,7 +132,7 @@ class TestLoad:
         path.write_text(
             json.dumps(
                 {
-                    "version": POLICY_SCHEMA_VERSION,
+                    "format_version": POLICY_FORMAT_VERSION,
                     "disabled": ["deploy"],
                     "shared": {"owner": {"deploy": [42]}},
                 }
@@ -140,7 +150,9 @@ class TestLoad:
 
 class TestMutations:
     @pytest.mark.parametrize("operation", ["disable", "share"])
-    @pytest.mark.parametrize("original", [b"{broken", b'{"version": 999}', b'{"version":"\xff"}'])
+    @pytest.mark.parametrize(
+        "original", [b"{broken", b'{"format_version": 999}', b'{"format_version":"\xff"}']
+    )
     def test_mutation_preserves_invalid_existing_policy(
         self, storage: StorageManager, operation: str, original: bytes
     ) -> None:
@@ -184,7 +196,7 @@ class TestMutations:
 
         document = json.loads(policy_path(storage).read_text(encoding="utf-8"))
         assert document == {
-            "version": POLICY_SCHEMA_VERSION,
+            "format_version": POLICY_FORMAT_VERSION,
             "disabled": ["deploy"],
             "shared": {},
         }
@@ -195,6 +207,21 @@ class TestMutations:
         document = json.loads(policy_path(storage).read_text(encoding="utf-8"))
         assert document["disabled"] == []
         assert service.load() == SkillPolicy()
+
+    def test_mutation_keeps_unknown_fields_of_the_file(self, storage: StorageManager) -> None:
+        path = policy_path(storage)
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps({"format_version": POLICY_FORMAT_VERSION, "future": {"kept": True}}),
+            encoding="utf-8",
+        )
+        service = SkillPolicyService(storage)
+
+        service.set_disabled("deploy", disabled=True)
+
+        document = json.loads(path.read_text(encoding="utf-8"))
+        assert document["future"] == {"kept": True}
+        assert document["disabled"] == ["deploy"]
 
     def test_set_disabled_preserves_shared_state(self, storage: StorageManager) -> None:
         service = SkillPolicyService(storage)
@@ -233,7 +260,7 @@ class TestMutations:
         def fail_write(*args: object, **kwargs: object) -> None:
             raise OSError("disk full")
 
-        monkeypatch.setattr("core.skills.policy.atomic_write_text", fail_write)
+        monkeypatch.setattr("core.json_documents.atomic_write_text", fail_write)
 
         with pytest.raises(SkillPolicyError):
             service.set_disabled("deploy", disabled=True)

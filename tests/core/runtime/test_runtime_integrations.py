@@ -47,7 +47,7 @@ def test_runtime_selects_sqlite_recall_backend_from_settings(config: Config) -> 
     config.data_dir.mkdir(parents=True, exist_ok=True)
     _authorize_session_store(config.data_dir)
     config.data_dir.joinpath("settings.json").write_text(
-        json.dumps({"recall": {"backend": "sqlite_fts"}}),
+        json.dumps({"format_version": 1, "recall": {"backend": "sqlite_fts"}}),
         encoding="utf-8",
     )
     runtime = Runtime(config)
@@ -62,7 +62,7 @@ def test_runtime_unknown_recall_backend_falls_back_to_sqlite_fts(config: Config)
     config.data_dir.mkdir(parents=True, exist_ok=True)
     _authorize_session_store(config.data_dir)
     config.data_dir.joinpath("settings.json").write_text(
-        json.dumps({"recall": {"backend": "team_backend"}}),
+        json.dumps({"format_version": 1, "recall": {"backend": "team_backend"}}),
         encoding="utf-8",
     )
     runtime = Runtime(config)
@@ -80,7 +80,7 @@ def test_runtime_failing_recall_backend_factory_falls_back_to_sqlite_fts(
     config.data_dir.mkdir(parents=True, exist_ok=True)
     _authorize_session_store(config.data_dir)
     config.data_dir.joinpath("settings.json").write_text(
-        json.dumps({"recall": {"backend": "broken_backend"}}),
+        json.dumps({"format_version": 1, "recall": {"backend": "broken_backend"}}),
         encoding="utf-8",
     )
     registry = RecallBackendRegistry()
@@ -199,6 +199,7 @@ async def test_runtime_start_does_not_crash_when_channel_adapter_cannot_start(
         "\n".join(
             (
                 "{",
+                '  "format_version": 1,',
                 '  "id": "tg-assistant",',
                 '  "platform": "telegram",',
                 '  "agent_id": "assistant",',
@@ -237,6 +238,7 @@ async def test_runtime_start_does_not_crash_when_channel_agent_is_missing(
         "\n".join(
             (
                 "{",
+                '  "format_version": 1,',
                 '  "id": "tg-assistant",',
                 '  "platform": "telegram",',
                 '  "agent_id": "missing-agent",',
@@ -283,6 +285,7 @@ async def test_runtime_start_registers_channel_send_when_enabled_channel_starts(
         "\n".join(
             (
                 "{",
+                '  "format_version": 1,',
                 '  "id": "tg-assistant",',
                 '  "platform": "telegram",',
                 '  "agent_id": "assistant",',
@@ -327,6 +330,7 @@ def test_runtime_registers_channel_send_for_enabled_channel_without_running_adap
         "\n".join(
             (
                 "{",
+                '  "format_version": 1,',
                 '  "id": "tg-assistant",',
                 '  "platform": "telegram",',
                 '  "agent_id": "assistant",',

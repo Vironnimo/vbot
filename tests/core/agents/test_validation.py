@@ -7,6 +7,7 @@ from core.agents import validate_agent_data
 
 def _valid_agent_data() -> dict[str, object]:
     return {
+        "format_version": 1,
         "id": "coder",
         "name": "Coder",
         "model": "",
@@ -43,11 +44,12 @@ def test_validate_agent_data_accepts_missing_tool_settings() -> None:
 
 
 def test_validate_agent_data_requires_only_id() -> None:
-    assert _diagnostics({"id": "minimal"}) == []
+    assert _diagnostics({"format_version": 1, "id": "minimal"}) == []
 
 
 def test_validate_agent_data_treats_null_optional_fields_as_missing() -> None:
     data = dict.fromkeys(_valid_agent_data())
+    data["format_version"] = 1
     data["id"] = "minimal"
     data["workspace"] = None
     data["root_project_id"] = None
@@ -59,7 +61,7 @@ def test_validate_agent_data_treats_null_optional_fields_as_missing() -> None:
 
 
 def test_validate_agent_data_rejects_missing_id_once() -> None:
-    assert _diagnostics({}) == [
+    assert _diagnostics({"format_version": 1}) == [
         (
             "error",
             "$.id",

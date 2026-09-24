@@ -72,7 +72,9 @@ class TestValidateLocalModels:
     def test_valid_section_has_no_errors(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps({"local_models": {"context_windows": {"ollama/m": 16384}}}),
+            json.dumps(
+                {"format_version": 1, "local_models": {"context_windows": {"ollama/m": 16384}}}
+            ),
             encoding="utf-8",
         )
 
@@ -83,13 +85,17 @@ class TestValidateLocalModels:
 
     def test_omitting_section_is_valid(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
-        settings_path.write_text(json.dumps({"server_port": 8500}), encoding="utf-8")
+        settings_path.write_text(
+            json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
+        )
 
         assert validate_settings_file(settings_path).ok is True
 
     def test_section_not_an_object(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
-        settings_path.write_text(json.dumps({"local_models": []}), encoding="utf-8")
+        settings_path.write_text(
+            json.dumps({"format_version": 1, "local_models": []}), encoding="utf-8"
+        )
 
         report = validate_settings_file(settings_path)
 
@@ -101,7 +107,8 @@ class TestValidateLocalModels:
     def test_context_windows_not_an_object(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps({"local_models": {"context_windows": 42}}), encoding="utf-8"
+            json.dumps({"format_version": 1, "local_models": {"context_windows": 42}}),
+            encoding="utf-8",
         )
 
         report = validate_settings_file(settings_path)
@@ -114,7 +121,12 @@ class TestValidateLocalModels:
     def test_bad_key_and_bad_value_are_errors(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps({"local_models": {"context_windows": {"no-slash": 4096, "ollama/m": 0}}}),
+            json.dumps(
+                {
+                    "format_version": 1,
+                    "local_models": {"context_windows": {"no-slash": 4096, "ollama/m": 0}},
+                }
+            ),
             encoding="utf-8",
         )
 
@@ -136,7 +148,7 @@ class TestValidateLocalModels:
     def test_unknown_field_warns(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps({"local_models": {"context_windows": {}, "extra": 1}}),
+            json.dumps({"format_version": 1, "local_models": {"context_windows": {}, "extra": 1}}),
             encoding="utf-8",
         )
 

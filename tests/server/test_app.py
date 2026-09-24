@@ -348,7 +348,9 @@ def test_create_app_derives_server_bind_from_settings_file(tmp_path: Path) -> No
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     write_bootstrap_marker(data_dir)
-    (data_dir / "settings.json").write_text('{"server_port": 8500}', encoding="utf-8")
+    (data_dir / "settings.json").write_text(
+        '{"format_version": 1, "server_port": 8500}', encoding="utf-8"
+    )
     app = create_app(runtime=Runtime(Config(data_dir=data_dir)))
 
     with TestClient(app):

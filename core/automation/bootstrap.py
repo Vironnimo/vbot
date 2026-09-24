@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,7 +13,6 @@ from core.config_validation import (
     JsonDiagnostic,
     JsonValidationReport,
     add_error,
-    error_diagnostic,
     load_validated_json_file,
     validate_allowed_string,
     validate_json_file,
@@ -23,10 +21,18 @@ from core.config_validation import (
     validate_optional_string,
     warn_unknown_keys,
 )
+from core.json_documents import (
+    JsonDocumentFormat,
+    JsonDocumentWriteError,
+    json_document,
+    json_list,
+    json_object,
+    validate_collection_root,
+    write_json_document,
+)
 from core.runs import RunKind, RunStatus
 from core.sessions import SessionAddress
 from core.settings import is_valid_agent_id, is_valid_project_id
-from core.utils.atomic import atomic_write_text
 from core.utils.errors import VBotError
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
@@ -62,6 +68,10 @@ _JOB_FIELDS = _MUTABLE_FIELDS | {
     "last_outcome",
     "last_error",
 }
+
+BOOTSTRAP_JOBS_FORMAT_VERSION = 1
+BOOTSTRAP_JOB_SHAPE = json_object(_JOB_FIELDS)
+BOOTSTRAP_JOBS_SHAPE = json_document({"jobs"}, {"jobs": json_list(BOOTSTRAP_JOB_SHAPE, key="id")})
 
 _LOGGER = get_logger("automation.bootstrap")
 
@@ -154,21 +164,47 @@ def validate_bootstrap_jobs_file(jobs_path: str | Path) -> JsonValidationReport:
 
 
 def validate_bootstrap_jobs_data(data: Any) -> list[JsonDiagnostic]:
-    """Validate a decoded Bootstrap job array."""
-    if not isinstance(data, list):
-        return [error_diagnostic("$", f"Expected a JSON array, got {type(data).__name__}")]
+    """Validate a decoded raw ``bootstrap/jobs.json`` document."""
     diagnostics: list[JsonDiagnostic] = []
-    for index, item in enumerate(data):
-        _validate_job_data(diagnostics, index, item)
+    entries = _validate_root(diagnostics, data)
+    for index, item in enumerate(entries or []):
+        _validate_job_data(diagnostics, f"$.jobs[{index}]", item)
     return diagnostics
 
 
-def _validate_job_data(diagnostics: list[JsonDiagnostic], index: int, item: Any) -> None:
-    path = f"$[{index}]"
+def _validate_root(diagnostics: list[JsonDiagnostic], data: Any) -> list[Any] | None:
+    return validate_collection_root(
+        diagnostics,
+        data,
+        version=BOOTSTRAP_JOBS_FORMAT_VERSION,
+        shape=BOOTSTRAP_JOBS_SHAPE,
+        collection="jobs",
+        label="Bootstrap jobs field",
+    )
+
+
+def _root_diagnostics(data: Any) -> list[JsonDiagnostic]:
+    diagnostics: list[JsonDiagnostic] = []
+    _validate_root(diagnostics, data)
+    return diagnostics
+
+
+# A Bootstrap job file keeps invalid entries verbatim, so only an unreadable
+# document root refuses a write.
+BOOTSTRAP_JOBS_FORMAT = JsonDocumentFormat(
+    name="Bootstrap jobs",
+    version=BOOTSTRAP_JOBS_FORMAT_VERSION,
+    shape=BOOTSTRAP_JOBS_SHAPE,
+    validate=_root_diagnostics,
+    sort_keys=True,
+)
+
+
+def _validate_job_data(diagnostics: list[JsonDiagnostic], path: str, item: Any) -> None:
     if not isinstance(item, dict):
         add_error(diagnostics, path, "Expected a JSON object")
         return
-    warn_unknown_keys(diagnostics, path, item, _JOB_FIELDS, "Bootstrap job field")
+    warn_unknown_keys(diagnostics, path, item, BOOTSTRAP_JOB_SHAPE.fields, "Bootstrap job field")
     for field in ("id", "agent_id", "name", "prompt", "created_at", "armed_after_startup_id"):
         validate_non_empty_string(diagnostics, f"{path}.{field}", item.get(field), required=True)
     agent_id = item.get("agent_id")
@@ -198,24 +234,12 @@ def _validate_job_data(diagnostics: list[JsonDiagnostic], index: int, item: Any)
 
 
 def _load_payload(path: Path) -> list[Any]:
+    """Load the job entries without letting one bad job reject its siblings."""
     try:
-        return cast(
-            "list[Any]",
-            load_validated_json_file(
-                path,
-                lambda data: (
-                    []
-                    if isinstance(data, list)
-                    else [
-                        error_diagnostic("$", f"Expected a JSON array, got {type(data).__name__}")
-                    ]
-                ),
-                missing_ok=True,
-                missing_default=[],
-            ),
-        )
+        data = load_validated_json_file(path, _root_diagnostics, missing_ok=True)
     except JsonConfigValidationError as error:
         raise BootstrapStorageError(str(error)) from error
+    return [] if data is None else list(cast("dict[str, list[Any]]", data)["jobs"])
 
 
 class BootstrapService:
@@ -611,36 +635,40 @@ class BootstrapService:
         self._invalid_entries = []
         for index, item in enumerate(raw):
             diagnostics: list[JsonDiagnostic] = []
-            _validate_job_data(diagnostics, index, item)
+            _validate_job_data(diagnostics, f"$.jobs[{index}]", item)
             errors = [item for item in diagnostics if item.severity == "error"]
             if errors or not isinstance(item, dict):
                 self._invalid_entries.append(item)
-                _LOGGER.warning("Skipping invalid Bootstrap job at $[%d]", index)
+                _LOGGER.warning("Skipping invalid Bootstrap job at $.jobs[%d]", index)
                 continue
             try:
                 job = BootstrapJob.from_dict(item)
                 self._validate_job(job, validate_references=False)
             except (BootstrapJobValidationError, TypeError, ValueError) as error:
                 self._invalid_entries.append(item)
-                _LOGGER.warning("Skipping invalid Bootstrap job at $[%d]: %s", index, error)
+                _LOGGER.warning("Skipping invalid Bootstrap job at $.jobs[%d]: %s", index, error)
                 continue
             if job.id in jobs:
                 self._invalid_entries.append(item)
-                _LOGGER.warning("Skipping duplicate Bootstrap job id at $[%d]: %s", index, job.id)
+                _LOGGER.warning(
+                    "Skipping duplicate Bootstrap job id at $.jobs[%d]: %s", index, job.id
+                )
                 continue
             jobs[job.id] = job
         return jobs
 
     def _save(self) -> None:
-        self._jobs_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = [
+        """Write the jobs, invalid entries verbatim, and unknown fields back.
+
+        A file that no longer loads is never overwritten.
+        """
+        jobs = [
             job.to_dict() for job in sorted(self._jobs.values(), key=lambda item: item.created_at)
         ] + list(self._invalid_entries)
         try:
-            atomic_write_text(
-                self._jobs_path,
-                json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            )
+            write_json_document(self._jobs_path, {"jobs": jobs}, BOOTSTRAP_JOBS_FORMAT)
+        except JsonDocumentWriteError as error:
+            raise BootstrapStorageError(str(error)) from error
         except OSError as error:
             raise BootstrapStorageError(f"Cannot write {self._jobs_path}: {error}") from error
 

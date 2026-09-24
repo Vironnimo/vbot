@@ -60,7 +60,9 @@ def test_resolve_port_priority_explicit_then_environment_then_settings(
     monkeypatch,
 ) -> None:
     settings_path = tmp_path / "settings.json"
-    settings_path.write_text(json.dumps({"server_port": 8500}), encoding="utf-8")
+    settings_path.write_text(
+        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
+    )
     monkeypatch.setenv("VBOT_SERVER_PORT", "8600")
     config = Config(data_dir=tmp_path)
 
@@ -71,7 +73,9 @@ def test_resolve_port_priority_explicit_then_environment_then_settings(
 def test_resolve_port_uses_settings_then_default(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
     settings_path = tmp_path / "settings.json"
-    settings_path.write_text(json.dumps({"server_port": 8500}), encoding="utf-8")
+    settings_path.write_text(
+        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
+    )
 
     assert resolve_port(Config(data_dir=tmp_path)) == 8500
     assert resolve_port(Config(data_dir=tmp_path / "missing")) == DEFAULT_PORT
@@ -89,7 +93,7 @@ def test_resolve_port_keeps_valid_port_next_to_invalid_settings(
 ) -> None:
     monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
     (tmp_path / "settings.json").write_text(
-        json.dumps({"server_port": 8500, "debug": {"enabled": "yes"}}),
+        json.dumps({"format_version": 1, "server_port": 8500, "debug": {"enabled": "yes"}}),
         encoding="utf-8",
     )
 
@@ -115,14 +119,18 @@ def test_resolve_port_accepts_port_keys_from_settings(
     monkeypatch.setenv("PORT", "8600")
     monkeypatch.setenv("SERVER_PORT", "8800")
     settings_path = tmp_path / "settings.json"
-    settings_path.write_text(json.dumps({"SERVER_PORT": 8700}), encoding="utf-8")
+    settings_path.write_text(
+        json.dumps({"format_version": 1, "SERVER_PORT": 8700}), encoding="utf-8"
+    )
 
     assert resolve_port(Config(data_dir=tmp_path)) == 8700
 
 
 def test_resolve_server_bind_tracks_host_port_and_source(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
-    (tmp_path / "settings.json").write_text(json.dumps({"server_port": 8500}), encoding="utf-8")
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
+    )
 
     assert resolve_server_bind(Config(data_dir=tmp_path), host="0.0.0.0") == {
         "listen_host": "0.0.0.0",
@@ -136,7 +144,9 @@ def test_resolve_server_bind_uses_explicit_port_before_environment_and_settings(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("VBOT_SERVER_PORT", "8600")
-    (tmp_path / "settings.json").write_text(json.dumps({"server_port": 8500}), encoding="utf-8")
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
+    )
 
     assert resolve_server_bind(Config(data_dir=tmp_path), host="127.0.0.1", explicit_port=8700) == {
         "listen_host": "127.0.0.1",

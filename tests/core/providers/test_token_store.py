@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -9,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from core.providers.token_store import OAuthToken, TokenStore
+from core.providers.token_store import OAuthToken, OAuthTokenFileError, TokenStore
 from core.storage.layout import DataDirectoryLayout
 
 
@@ -31,6 +32,56 @@ def test_token_store_save_load_round_trip(tmp_path: Path) -> None:
 
     # Assert
     assert loaded == token
+
+
+def test_token_store_writes_a_versioned_document_and_keeps_unknown_fields(
+    tmp_path: Path,
+) -> None:
+    store = TokenStore(tmp_path)
+    token_path = tmp_path / "oauth" / "github-copilot-oauth.json"
+    store.save("github-copilot", "oauth", OAuthToken(access_token="first"))
+    document = json.loads(token_path.read_text(encoding="utf-8"))
+    assert document["format_version"] == 1
+    document["issuer"] = "kept"
+    token_path.write_text(json.dumps(document), encoding="utf-8")
+
+    store.save("github-copilot", "oauth", OAuthToken(access_token="second"))
+
+    rewritten = json.loads(token_path.read_text(encoding="utf-8"))
+    assert rewritten["access_token"] == "second"
+    assert rewritten["issuer"] == "kept"
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        "not json",
+        '{"access_token": "legacy"}',
+        '{"format_version": 2, "access_token": "newer"}',
+        '{"format_version": 1, "access_token": ""}',
+    ],
+)
+def test_token_file_that_fails_to_load_is_guarded_but_can_be_deleted(
+    tmp_path: Path, stored: str
+) -> None:
+    store = TokenStore(tmp_path)
+    token_path = tmp_path / "oauth" / "github-copilot-oauth.json"
+    token_path.parent.mkdir(parents=True)
+    token_path.write_text(stored, encoding="utf-8")
+
+    with pytest.raises(OAuthTokenFileError, match="Disconnecting the Provider account"):
+        store.load("github-copilot", "oauth")
+    assert store.has_valid_token("github-copilot", "oauth") is False
+    with pytest.raises(OAuthTokenFileError, match="Refusing to overwrite OAuth token"):
+        store.save("github-copilot", "oauth", OAuthToken(access_token="fresh"))
+    assert token_path.read_text(encoding="utf-8") == stored
+    assert store.exists("github-copilot", "oauth") is True
+
+    store.delete("github-copilot", "oauth")
+
+    assert store.exists("github-copilot", "oauth") is False
+    store.save("github-copilot", "oauth", OAuthToken(access_token="fresh"))
+    assert store.load("github-copilot", "oauth") == OAuthToken(access_token="fresh")
 
 
 def test_token_store_save_uses_atomic_directory_for_atomic_write(tmp_path: Path) -> None:

@@ -159,4 +159,5 @@ Playwright `tests/e2e/` is excluded from both quality gates; release CI requires
 Only strategic decisions or global constraints an Agent might otherwise misread belong here.
 
 - **Platforms:** vBot targets Windows and Linux, with Windows currently prioritized. Keep shared components portable and platform-specific integration isolated. Server and accessors may run on the same machine or separate hosts.
+- **Durable JSON documents:** every JSON document an owner persists in the data directory follows the Generation 1 contract in `settings.md` -> JSON Document Contract (`format_version`, unknown fields kept, no overwrite after a failed load); a new document joins that contract and the `doctor config` table.
 - **Kernel-to-Model notifications:** Only sanctioned channels from `model-communication.md`: persisted notes rendered as System Reminders, System Prompt blocks, Tool definitions/results. Every domain (including Extensions, Channels, Tools, automation) must use these; never invent a channel.

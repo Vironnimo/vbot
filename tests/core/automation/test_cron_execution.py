@@ -141,7 +141,7 @@ async def test_unexpected_scheduler_task_failure_restarts_active_recurring_job(
         await asyncio.wait_for(restarted.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
 
     recovered = service.get_job(job.id)
-    persisted = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
+    persisted = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))["jobs"]
     assert recovered.status == "active"
     assert recovered.last_outcome == "failed"
     assert recovered.last_error == "scheduler invariant failed"
@@ -534,8 +534,8 @@ def test_start_completes_claimed_once_job_without_refiring(
     updated = restarted_service.get_job(job.id)
     assert updated.status == "completed"
     assert updated.last_fired_at is not None
-    persisted_jobs = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
-    assert persisted_jobs[0]["status"] == "completed"
+    persisted = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
+    assert persisted["jobs"][0]["status"] == "completed"
     assert not cron_claims.path_for(restarted_service._once_fire_claims_dir, job.id).exists()
 
 
@@ -561,7 +561,7 @@ def test_start_holds_only_the_once_job_with_an_unreadable_fire_claim(
     )
     jobs_path = tmp_path / "cron" / "jobs.json"
     persisted = json.loads(jobs_path.read_text(encoding="utf-8"))
-    for item in persisted:
+    for item in persisted["jobs"]:
         if item["id"] == once.id:  # Its time passed while vBot was offline.
             item["run_at"] = (datetime.now(UTC) - timedelta(minutes=15)).isoformat()
     jobs_path.write_text(json.dumps(persisted), encoding="utf-8")
@@ -622,7 +622,7 @@ def test_start_keeps_cron_available_when_reconciliation_save_fails(
     restarted_trigger_service.trigger_run.assert_not_called()
     monkeypatch.setattr(restarted_service, "_save_jobs", real_save)
     restarted_service.update_job(recurring.id, prompt="Saved later")
-    persisted = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
+    persisted = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))["jobs"]
     assert {job["id"]: job["status"] for job in persisted}[claimed.id] == "completed"
 
 

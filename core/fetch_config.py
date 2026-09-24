@@ -6,6 +6,7 @@ from typing import Any
 WEB_FETCH_PROVIDERS = ("direct", "firecrawl", "tavily", "exa", "parallel")
 WEB_FETCH_MODES = ("fallback", "prefer")
 DEFAULT_WEB_FETCH_SETTINGS = {"provider": "direct", "mode": "fallback"}
+WEB_FETCH_FIELDS = frozenset({"provider", "mode"})
 WEB_FETCH_CREDENTIALS = {
     "firecrawl": "FIRECRAWL_API_KEY",
     "tavily": "TAVILY_API_KEY",
@@ -24,7 +25,7 @@ def parse_web_fetch_settings(value: Any, *, partial: bool = False) -> dict[str, 
     """Validate the small selection contract without importing persistence."""
     if not isinstance(value, Mapping):
         raise ValueError("web_fetch must be an object")
-    if unknown := set(value) - {"provider", "mode"}:
+    if unknown := set(value) - WEB_FETCH_FIELDS:
         raise ValueError("Unsupported web_fetch settings: " + ", ".join(sorted(unknown)))
     result = {} if partial else dict(DEFAULT_WEB_FETCH_SETTINGS)
     for key, allowed in (("provider", WEB_FETCH_PROVIDERS), ("mode", WEB_FETCH_MODES)):

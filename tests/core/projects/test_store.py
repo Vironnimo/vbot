@@ -276,23 +276,68 @@ def test_update_round_trips_whitelist_fields(data_dir: Path, repo: Path) -> None
     assert reloaded.skills_project_disabled == ["debugging"]
 
 
-def test_load_falls_back_to_base_tools_for_old_config(data_dir: Path, repo: Path) -> None:
-    # An old project.json missing the whitelist fields loads at the base defaults,
-    # without any migration step.
+def test_load_requires_the_tool_whitelist_but_defaults_skill_lists(
+    data_dir: Path, repo: Path
+) -> None:
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)
     config_path = data_dir / "projects" / "vbot" / "project.json"
     payload = json.loads(config_path.read_text("utf-8"))
-    del payload["allowed_tools"]
     del payload["skills_bundled_enabled"]
     del payload["skills_project_disabled"]
     config_path.write_text(json.dumps(payload), encoding="utf-8")
 
     reloaded = store.get("vbot")
 
-    assert reloaded.allowed_tools == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
     assert reloaded.skills_bundled_enabled == []
     assert reloaded.skills_project_disabled == []
+    del payload["allowed_tools"]
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ProjectError, match=r"\$\.allowed_tools: is required"):
+        store.get("vbot")
+
+
+def test_project_update_keeps_unknown_fields_on_disk(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+    config_path = data_dir / "projects" / "vbot" / "project.json"
+    payload = json.loads(config_path.read_text("utf-8"))
+    payload["future_field"] = [1, 2]
+    payload["overrides"] = {
+        "builder": {"model": "openai/gpt-5", "future_override": True},
+        "future_only": {"future": 1},
+    }
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = store.get("vbot")
+    store.set_override("vbot", "builder", "temperature", 0.5)
+
+    assert loaded.overrides == {"builder": {"model": "openai/gpt-5"}}
+    rewritten = json.loads(config_path.read_text("utf-8"))
+    assert rewritten["format_version"] == 1
+    assert rewritten["future_field"] == [1, 2]
+    assert rewritten["overrides"]["builder"] == {
+        "model": "openai/gpt-5",
+        "temperature": 0.5,
+        "future_override": True,
+    }
+    # An override with no known field is not modeled, so an update drops it.
+    assert "future_only" not in rewritten["overrides"]
+
+
+def test_project_written_by_a_newer_vbot_is_never_overwritten(data_dir: Path, repo: Path) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+    config_path = data_dir / "projects" / "vbot" / "project.json"
+    payload = json.loads(config_path.read_text("utf-8"))
+    payload["format_version"] = 2
+    original = json.dumps(payload)
+    config_path.write_text(original, encoding="utf-8")
+
+    with pytest.raises(ProjectError, match="written by a newer vBot"):
+        store.set_override("vbot", "builder", "model", "openai/gpt-5")
+
+    assert config_path.read_text(encoding="utf-8") == original
 
 
 def test_set_override_persists_one_entry(data_dir: Path, repo: Path) -> None:
@@ -486,7 +531,9 @@ def test_get_defaults_optional_metadata_in_minimal_config(data_dir: Path, repo: 
     config_path = data_dir / "projects" / "vbot" / "project.json"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
-        json.dumps({"project_id": "vbot", "cwd": str(repo)}),
+        json.dumps(
+            {"format_version": 1, "project_id": "vbot", "cwd": str(repo), "allowed_tools": []}
+        ),
         encoding="utf-8",
     )
     store = ProjectStore(data_dir)
@@ -502,7 +549,9 @@ def test_get_defaults_optional_metadata_in_minimal_config(data_dir: Path, repo: 
 def test_exists_returns_false_for_invalid_project_config(data_dir: Path) -> None:
     config_path = data_dir / "projects" / "broken" / "project.json"
     config_path.parent.mkdir(parents=True)
-    config_path.write_text(json.dumps({"project_id": "broken"}), encoding="utf-8")
+    config_path.write_text(
+        json.dumps({"format_version": 1, "project_id": "broken"}), encoding="utf-8"
+    )
 
     assert ProjectStore(data_dir).exists("broken") is False
 

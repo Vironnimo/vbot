@@ -22,7 +22,6 @@ The duplicate-cwd guard lives here: two projects may not point at the same repo
 from __future__ import annotations
 
 import builtins
-import json
 import os
 import shutil
 import tempfile
@@ -32,6 +31,7 @@ from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, Any
 
+from core.json_documents import JsonDocumentWriteError, write_json_document
 from core.projects.paths import cwd_identity_key
 from core.projects.projects import (
     Project,
@@ -40,6 +40,7 @@ from core.projects.projects import (
     ProjectNotFoundError,
     build_project,
     load_validated_project_json,
+    project_format,
     project_from_dict,
     seed_default_auto_load,
 )
@@ -48,7 +49,6 @@ from core.settings import (
     PROJECT_ID_PATTERN,
     is_valid_agent_id,
 )
-from core.utils.atomic import atomic_write_text
 from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
 
@@ -509,9 +509,10 @@ class ProjectStore:
 
     def _write_project(self, project: Project) -> None:
         config_path = self._config_path(project.project_id)
-        atomic_write_text(
-            config_path, json.dumps(project.to_dict(), ensure_ascii=False, indent=2) + "\n"
-        )
+        try:
+            write_json_document(config_path, project.to_dict(), project_format())
+        except JsonDocumentWriteError as error:
+            raise ProjectError(str(error)) from error
 
     def _read_project(self, config_path: Path) -> Project:
         data = load_validated_project_json(config_path)

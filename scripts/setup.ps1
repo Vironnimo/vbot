@@ -321,6 +321,7 @@ function Initialize-DataDirectory {
     Assert-ValidSettingsJson $settingsPath
     if ($settingsWasMissing) {
         $settings = [ordered]@{
+            format_version = 1
             server_port = $ResolvedPort
             defaults = [ordered]@{
                 agent = [ordered]@{

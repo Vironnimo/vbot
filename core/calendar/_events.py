@@ -14,16 +14,23 @@ from core.calendar.errors import (
     CalendarStorageError,
     CalendarValidationError,
 )
+from core.calendar.recurrence import RRULE_FIELDS
 from core.config_validation import (
     JsonConfigValidationError,
     JsonDiagnostic,
     JsonValidationReport,
     add_error,
-    error_diagnostic,
     load_validated_json_file,
     validate_json_file,
     validate_non_empty_string,
-    warn_unknown_keys,
+)
+from core.json_documents import (
+    JsonDocumentFormat,
+    json_document,
+    json_list,
+    json_object,
+    validate_collection_root,
+    warn_unknown_fields,
 )
 
 MAX_CALENDAR_EVENTS = 2000
@@ -84,6 +91,17 @@ _EVENT_FIELDS = frozenset(
         "created_at",
         "updated_at",
     )
+)
+
+
+CALENDAR_EVENTS_FORMAT_VERSION = 1
+
+
+CALENDAR_EVENT_SHAPE = json_object(_EVENT_FIELDS, {"rrule": json_object(RRULE_FIELDS)})
+
+
+CALENDAR_EVENTS_SHAPE = json_document(
+    {"events"}, {"events": json_list(CALENDAR_EVENT_SHAPE, key="id")}
 )
 
 
@@ -205,21 +223,49 @@ def validate_calendar_events_file(events_path: str | Path) -> JsonValidationRepo
 
 
 def validate_calendar_events_data(data: Any) -> list[JsonDiagnostic]:
-    """Validate a decoded raw ``calendar/events.json`` array."""
+    """Validate a decoded raw ``calendar/events.json`` document."""
     diagnostics: list[JsonDiagnostic] = []
-    if not isinstance(data, list):
-        return [error_diagnostic("$", f"Expected a JSON array, got {type(data).__name__}")]
-    for index, item in enumerate(data):
-        _validate_event_data(diagnostics, index, item)
+    entries = _validate_events_root(diagnostics, data)
+    for index, item in enumerate(entries or []):
+        _validate_event_data(diagnostics, f"$.events[{index}]", item)
     return diagnostics
 
 
-def _validate_event_data(diagnostics: list[JsonDiagnostic], index: int, item: Any) -> None:
-    item_path = f"$[{index}]"
+def _validate_events_root(diagnostics: list[JsonDiagnostic], data: Any) -> list[Any] | None:
+    return validate_collection_root(
+        diagnostics,
+        data,
+        version=CALENDAR_EVENTS_FORMAT_VERSION,
+        shape=CALENDAR_EVENTS_SHAPE,
+        collection="events",
+        label="calendar events field",
+    )
+
+
+def _events_root_diagnostics(data: Any) -> list[JsonDiagnostic]:
+    diagnostics: list[JsonDiagnostic] = []
+    _validate_events_root(diagnostics, data)
+    return diagnostics
+
+
+# The event file keeps invalid entries verbatim, so only an unreadable document
+# root refuses a write.
+CALENDAR_EVENTS_FORMAT = JsonDocumentFormat(
+    name="Calendar events",
+    version=CALENDAR_EVENTS_FORMAT_VERSION,
+    shape=CALENDAR_EVENTS_SHAPE,
+    validate=_events_root_diagnostics,
+    sort_keys=True,
+)
+
+
+def _validate_event_data(diagnostics: list[JsonDiagnostic], item_path: str, item: Any) -> None:
     if not isinstance(item, dict):
         add_error(diagnostics, item_path, "Expected a JSON object")
         return
-    warn_unknown_keys(diagnostics, item_path, item, _EVENT_FIELDS, "calendar event field")
+    warn_unknown_fields(
+        diagnostics, item_path, item, CALENDAR_EVENT_SHAPE, label="calendar event field"
+    )
     validate_non_empty_string(diagnostics, f"{item_path}.id", item.get("id"), required=True)
     validate_non_empty_string(diagnostics, f"{item_path}.title", item.get("title"), required=True)
     for field_name in ("notes", "start_utc", "start_local", "tz_name", "start_date"):
@@ -330,22 +376,9 @@ def _is_valid_duration_days(value: object) -> bool:
 
 
 def _load_events_payload(events_path: str | Path) -> list[Any]:
-    """Load the JSON array without letting one bad event reject its siblings."""
+    """Load the event entries without letting one bad event reject its siblings."""
     try:
-        return cast(
-            "list[Any]",
-            load_validated_json_file(
-                events_path,
-                _validate_events_container,
-                missing_ok=True,
-                missing_default=[],
-            ),
-        )
+        data = load_validated_json_file(events_path, _events_root_diagnostics, missing_ok=True)
     except JsonConfigValidationError as error:
         raise CalendarStorageError(str(error)) from error
-
-
-def _validate_events_container(data: Any) -> list[JsonDiagnostic]:
-    if isinstance(data, list):
-        return []
-    return [error_diagnostic("$", f"Expected a JSON array, got {type(data).__name__}")]
+    return [] if data is None else list(cast("dict[str, list[Any]]", data)["events"])

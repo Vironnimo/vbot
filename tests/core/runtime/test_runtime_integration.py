@@ -890,7 +890,7 @@ def _write_settings(config: Config, payload: dict[str, object]) -> None:
     config.data_dir.mkdir(parents=True, exist_ok=True)
     _authorize_session_store(config.data_dir)
     config.data_dir.joinpath("settings.json").write_text(
-        json.dumps(payload),
+        json.dumps({"format_version": 1, **payload}),
         encoding="utf-8",
     )
 

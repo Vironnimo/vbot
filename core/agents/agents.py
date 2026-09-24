@@ -3,25 +3,29 @@
 from __future__ import annotations
 
 import builtins
-import json
 import shutil
 import tempfile
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from copy import deepcopy
-from dataclasses import asdict, replace
+from dataclasses import replace
 from pathlib import Path
 from threading import RLock
 from typing import Any
 
 from core.agents import _workspace as workspace_ops
 from core.agents._config import (
+    AGENT_FORMAT,
+    AGENT_ORDER_FORMAT,
+    AGENT_ORDER_SHAPE,
     DEFAULT_ALLOWED_ITEMS,
     DEFAULT_FALLBACK_MODELS,
     DEFAULT_MODEL,
     DEFAULT_TEMPERATURE,
     DEFAULT_THINKING_EFFORT,
+    _agent_document,
     _agent_from_dict,
+    _agent_order_document,
     _apply_agent_order,
     _apply_defaults,
     _normalize_agent_name,
@@ -75,6 +79,11 @@ from core.config_validation import (
     JsonConfigValidationError,
     load_validated_json_file,
 )
+from core.json_documents import (
+    JsonDocumentWriteError,
+    strip_unknown_fields,
+    write_json_document,
+)
 from core.memory import (
     DEFAULT_MEMORY_PROMPT_MODE,
     MemoryPromptMode,
@@ -88,7 +97,6 @@ from core.settings.normalizers import normalize_compaction_policy
 from core.tools.availability import (
     ToolAccess,
 )
-from core.utils.atomic import atomic_write_text
 from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
 
@@ -910,19 +918,14 @@ class AgentStore:
 
     def _write_agent(self, agent: Agent) -> None:
         with self._write_lock:
-            agent_path = self._agent_path(agent.id)
-            persisted = asdict(agent)
-            persisted["tool_access"] = agent.tool_access.to_dict()
-            if not persisted["tools"]:
-                persisted.pop("tools")
-            persisted["workspace"] = _workspace_for_storage(
-                agent.workspace,
-                data_dir=self._data_dir,
+            persisted = _agent_document(
+                agent,
+                workspace=_workspace_for_storage(agent.workspace, data_dir=self._data_dir),
             )
-            atomic_write_text(
-                agent_path,
-                json.dumps(persisted, ensure_ascii=False, indent=2) + "\n",
-            )
+            try:
+                write_json_document(self._agent_path(agent.id), persisted, AGENT_FORMAT)
+            except JsonDocumentWriteError as error:
+                raise AgentError(str(error)) from error
 
     def _load_agent_order(self) -> _AgentOrderDocument | None:
         order_path = self._agent_order_path()
@@ -943,21 +946,20 @@ class AgentStore:
         self._reported_order_error = None
         if data is None:
             return None
+        data = strip_unknown_fields(data, AGENT_ORDER_SHAPE)
         return _AgentOrderDocument(
             agent_ids=tuple(data["agent_ids"]),
             revision=data["revision"],
         )
 
     def _write_agent_order(self, order: _AgentOrderDocument) -> None:
-        payload = {
-            "revision": order.revision,
-            "agent_ids": list(order.agent_ids),
-        }
         with self._write_lock:
-            atomic_write_text(
-                self._agent_order_path(),
-                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            )
+            try:
+                write_json_document(
+                    self._agent_order_path(), _agent_order_document(order), AGENT_ORDER_FORMAT
+                )
+            except JsonDocumentWriteError as error:
+                raise AgentError(str(error)) from error
         self._reported_order_error = None
 
     def _restore_agent_order(self, order: _AgentOrderDocument | None) -> None:

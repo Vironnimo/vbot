@@ -45,7 +45,7 @@ def test_impossible_cron_is_rejected_before_mutation(tmp_path, expression):
             agent_id="main", prompt="test", schedule_type="cron", cron_expression=expression
         )
     assert service.list_jobs() == []
-    assert json.loads((tmp_path / "cron" / "jobs.json").read_text()) == []
+    assert json.loads((tmp_path / "cron" / "jobs.json").read_text())["jobs"] == []
     job = service.create_job(
         agent_id="main", prompt="test", schedule_type="cron", cron_expression="0 0 29 2 *"
     )
@@ -65,8 +65,9 @@ def test_impossible_stored_cron_is_skipped_without_breaking_siblings(tmp_path):
     )
     path = tmp_path / "cron" / "jobs.json"
     stored = json.loads(path.read_text())
-    invalid = {**stored[0], "id": "broken", "cron_expression": "0 0 30 2 *"}
-    path.write_text(json.dumps([*stored, invalid]))
+    invalid = {**stored["jobs"][0], "id": "broken", "cron_expression": "0 0 30 2 *"}
+    stored["jobs"].append(invalid)
+    path.write_text(json.dumps(stored))
     reloaded, _ = make_service(tmp_path, tz="Europe/Berlin")
     assert [item.id for item in reloaded.list_jobs()] == [job.id]
     assert reloaded.next_fire_at(reloaded.get_job(job.id)) is not None
@@ -74,7 +75,7 @@ def test_impossible_stored_cron_is_skipped_without_breaking_siblings(tmp_path):
         datetime(2026, 9, 10, tzinfo=UTC), datetime(2026, 9, 11, tzinfo=UTC)
     )
     reloaded.update_job(job.id, name="changed")
-    assert invalid in json.loads(path.read_text())
+    assert invalid in json.loads(path.read_text())["jobs"]
 
 
 def test_cron_service_crud_operations(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -271,7 +272,7 @@ def test_jobs_json_is_created_on_demand(tmp_path: Path) -> None:
     # Assert
     assert jobs == []
     assert jobs_path.exists()
-    assert json.loads(jobs_path.read_text(encoding="utf-8")) == []
+    assert json.loads(jobs_path.read_text(encoding="utf-8")) == {"format_version": 1, "jobs": []}
 
 
 @pytest.mark.parametrize("terminal_status", ["completed", "missed"])
@@ -322,12 +323,18 @@ def test_invalid_job_is_skipped_and_preserved_when_valid_jobs_change(
     valid_job = {
         "id": "job-one",
         "agent_id": "agent-one",
+        "name": "Still runs",
         "prompt": "Still runs",
         "schedule_type": "cron",
         "cron_expression": "0 9 * * *",
     }
     invalid_job = {"id": "broken", "schedule_type": "daily"}
-    jobs_path.write_text(json.dumps([valid_job, invalid_job]), encoding="utf-8")
+    unnamed_job = {**valid_job, "id": "unnamed"}
+    del unnamed_job["name"]
+    jobs_path.write_text(
+        json.dumps({"format_version": 1, "jobs": [valid_job, invalid_job, unnamed_job]}),
+        encoding="utf-8",
+    )
     service, _trigger_service = make_service(tmp_path)
 
     with caplog.at_level(logging.WARNING):
@@ -343,9 +350,10 @@ def test_invalid_job_is_skipped_and_preserved_when_valid_jobs_change(
     assert loaded[0].status == "active"
     assert loaded[0].created_at
     assert caplog.records
-    persisted = json.loads(jobs_path.read_text(encoding="utf-8"))
+    persisted = json.loads(jobs_path.read_text(encoding="utf-8"))["jobs"]
     assert invalid_job in persisted
-    assert len(persisted) == 3
+    assert unnamed_job in persisted
+    assert len(persisted) == 4
 
 
 def test_malformed_jobs_file_disables_cron_without_overwriting_it(
@@ -371,38 +379,80 @@ def test_malformed_jobs_file_disables_cron_without_overwriting_it(
     assert jobs_path.read_text(encoding="utf-8") == "{"
 
 
-def test_legacy_timezone_is_ignored_and_removed_on_next_save(tmp_path: Path) -> None:
+def test_unknown_fields_are_kept_when_jobs_are_saved(tmp_path: Path) -> None:
     jobs_path = tmp_path / "cron" / "jobs.json"
     jobs_path.parent.mkdir(parents=True)
     jobs_path.write_text(
         json.dumps(
-            [
-                {
-                    "id": "legacy-job",
-                    "agent_id": "agent-one",
-                    "prompt": "Legacy schedule",
-                    "schedule_type": "cron",
-                    "cron_expression": "0 9 * * *",
-                    "timezone": "Europe/Paris",
-                }
-            ]
+            {
+                "format_version": 1,
+                "future_setting": {"kept": True},
+                "jobs": [
+                    {
+                        "id": "job-one",
+                        "agent_id": "agent-one",
+                        "name": "Morning",
+                        "prompt": "Morning schedule",
+                        "schedule_type": "cron",
+                        "cron_expression": "0 9 * * *",
+                        "timezone": "Europe/Paris",
+                    }
+                ],
+            }
         ),
         encoding="utf-8",
     )
     service, _trigger_service = make_service(tmp_path)
 
     loaded = service.list_jobs()
-    service.update_job("legacy-job", prompt="Migrated schedule")
+    service.update_job("job-one", prompt="Changed schedule")
 
-    assert [job.id for job in loaded] == ["legacy-job"]
-    assert loaded[0].name == "Legacy schedule"
+    assert [job.id for job in loaded] == ["job-one"]
     assert not hasattr(loaded[0], "timezone")
     persisted = json.loads(jobs_path.read_text(encoding="utf-8"))
-    assert persisted[0]["name"] == "Legacy schedule"
-    assert "timezone" not in persisted[0]
+    assert persisted["format_version"] == 1
+    assert persisted["future_setting"] == {"kept": True}
+    assert persisted["jobs"][0]["prompt"] == "Changed schedule"
+    assert persisted["jobs"][0]["timezone"] == "Europe/Paris"
 
 
-def test_create_derives_name_for_internal_legacy_callers(tmp_path: Path) -> None:
+def test_jobs_written_by_a_newer_vbot_are_never_overwritten(tmp_path: Path) -> None:
+    jobs_path = tmp_path / "cron" / "jobs.json"
+    jobs_path.parent.mkdir(parents=True)
+    original = json.dumps({"format_version": 2, "jobs": []})
+    jobs_path.write_text(original, encoding="utf-8")
+    service, _trigger_service = make_service(tmp_path)
+
+    assert service.list_jobs() == []
+    with pytest.raises(CronStorageError, match="written by a newer vBot"):
+        service.create_job(
+            agent_id="agent-one",
+            prompt="Must not overwrite",
+            schedule_type="cron",
+            cron_expression="0 9 * * *",
+        )
+
+    assert jobs_path.read_text(encoding="utf-8") == original
+
+
+def test_save_refuses_a_jobs_file_that_stopped_loading(tmp_path: Path) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Loaded before the file broke",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+    )
+    jobs_path = tmp_path / "cron" / "jobs.json"
+    jobs_path.write_text("[]", encoding="utf-8")
+
+    with pytest.raises(CronStorageError, match="Refusing to overwrite Cron jobs"):
+        service.update_job(job.id, prompt="Must not overwrite")
+
+    assert jobs_path.read_text(encoding="utf-8") == "[]"
+
+
+def test_create_derives_name_when_none_is_given(tmp_path: Path) -> None:
     service, _trigger_service = make_service(tmp_path)
 
     created = service.create_job(
@@ -414,7 +464,7 @@ def test_create_derives_name_for_internal_legacy_callers(tmp_path: Path) -> None
 
     assert created.name == "Review the weekly reports"
     persisted = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
-    assert persisted[0]["name"] == "Review the weekly reports"
+    assert persisted["jobs"][0]["name"] == "Review the weekly reports"
 
 
 def test_explicit_empty_name_is_rejected(tmp_path: Path) -> None:
@@ -688,18 +738,22 @@ def test_jobs_json_schema_accepts_optional_project_id(tmp_path: Path) -> None:
     jobs_path.parent.mkdir(parents=True)
     jobs_path.write_text(
         json.dumps(
-            [
-                {
-                    "id": "job-one",
-                    "agent_id": "builder",
-                    "prompt": "Prompt",
-                    "schedule_type": "cron",
-                    "cron_expression": "* * * * *",
-                    "status": "active",
-                    "created_at": datetime.now(UTC).isoformat(),
-                    "project_id": "vbot",
-                }
-            ]
+            {
+                "format_version": 1,
+                "jobs": [
+                    {
+                        "id": "job-one",
+                        "agent_id": "builder",
+                        "name": "Prompt",
+                        "prompt": "Prompt",
+                        "schedule_type": "cron",
+                        "cron_expression": "* * * * *",
+                        "status": "active",
+                        "created_at": datetime.now(UTC).isoformat(),
+                        "project_id": "vbot",
+                    }
+                ],
+            }
         ),
         encoding="utf-8",
     )

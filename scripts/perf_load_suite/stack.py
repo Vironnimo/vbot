@@ -103,6 +103,7 @@ def child_environment(source: dict[str, str] | None = None) -> dict[str, str]:
 def provider_settings(provider_base_url: str) -> dict[str, Any]:
     """``settings.json`` registering the fake Provider as the default Agent Model."""
     return {
+        "format_version": 1,
         "defaults": {"agent": {"model": AGENT_MODEL}},
         "providers": {
             "connections": {f"{FAKE_PROVIDER_ID}:default": True},

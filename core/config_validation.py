@@ -68,6 +68,20 @@ def validate_json_file(
     return _load_and_validate_json_file(Path(file_path), validator, missing_ok=missing_ok).report
 
 
+def read_json_file(
+    file_path: str | Path,
+    validator: JsonValidator,
+    *,
+    missing_ok: bool,
+) -> tuple[JsonValidationReport, Any]:
+    """Decode and validate one JSON file, returning its report and decoded value.
+
+    The value is ``None`` when the file is missing or cannot be decoded.
+    """
+    document = _load_and_validate_json_file(Path(file_path), validator, missing_ok=missing_ok)
+    return document.report, document.data
+
+
 def load_validated_json_file(
     file_path: str | Path,
     validator: JsonValidator,
