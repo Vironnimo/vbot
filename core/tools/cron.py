@@ -9,8 +9,10 @@ from core.automation.cron import (
     CronJobNotFoundError,
     CronJobValidationError,
     CronServiceError,
+    CronTargetError,
+    CronTargetUnavailableError,
 )
-from core.projects import format_agent_address, parse_agent_address
+from core.projects import InvalidAgentAddressError, format_agent_address, parse_agent_address
 from core.tools._argument_repair import normalize_call_arguments
 from core.tools.arguments import optional_string, required_string
 from core.tools.contracts import ToolContractError, compile_tool_contract
@@ -64,6 +66,14 @@ _ACTION_RECOMMENDATIONS = {
     "enable": 'Use {"action":"enable","id":"<job-id>"}',
     "disable": 'Use {"action":"disable","id":"<job-id>"}',
 }
+# Target failures get target guidance; the call-shape examples above are about the
+# schedule and the other fields and would not fix a target.
+_TARGET_ADDRESS_RECOMMENDATION = (
+    'Set "target" to an existing Agent id, or to agent@project for a member of a Project Team'
+)
+_TARGET_UNAVAILABLE_RECOMMENDATION = (
+    'Choose another "target", or tell the user that the target Agent cannot run and why'
+)
 _PAST_ONCE_RECOMMENDATIONS = {
     "create": 'For example use "schedule":"in 30m" or a later ISO timestamp',
     "update": (
@@ -243,6 +253,19 @@ def _handle_cron_tool(
         if action == "enable":
             return _handle_enable(cron_service, operation_arguments)
         return _handle_disable(cron_service, operation_arguments)
+    except (CronTargetError, InvalidAgentAddressError) as error:
+        # Checked before ValueError: missing-target errors are also resolver
+        # ValueErrors, and a malformed target address is one too.
+        recommendation = (
+            _TARGET_UNAVAILABLE_RECOMMENDATION
+            if isinstance(error, CronTargetUnavailableError)
+            else _TARGET_ADDRESS_RECOMMENDATION
+        )
+        return tool_failure(
+            "invalid_arguments",
+            f"{str(error).rstrip('. ')}. {recommendation}",
+            retryable=False,
+        )
     except ValueError as error:
         return tool_failure(
             "invalid_arguments",

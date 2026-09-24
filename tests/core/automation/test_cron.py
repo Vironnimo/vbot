@@ -21,6 +21,7 @@ from core.automation.cron import (
     CronStorageError,
     CronTargetAgentNotFoundError,
     CronTargetProjectNotFoundError,
+    CronTargetUnavailableError,
 )
 from core.projects import (
     AgentResolutionError,
@@ -626,6 +627,7 @@ def test_target_that_cannot_run_keeps_the_resolver_reason(tmp_path: Path, operat
         else:
             service.update_job(job.id, project_id="vbot")
 
+    assert isinstance(raised.value, CronTargetUnavailableError)
     assert not isinstance(
         raised.value, (ResolutionAgentNotFoundError, ResolutionProjectNotFoundError)
     )
