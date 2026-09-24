@@ -85,7 +85,7 @@
   let dragging = $state(false);
   let stacked = $derived(width > 0 && width < 760);
   let minimum = $derived(
-    stacked || !width ? 25 : Math.min(45, (340 / (width - 9)) * 100),
+    stacked || !width ? 25 : Math.min(45, (340 / (width - 1)) * 100),
   );
   let effectiveRatio = $derived(
     Math.max(minimum, Math.min(100 - minimum, ratio)),
@@ -696,7 +696,7 @@
     container-type: inline-size;
   }
   .split .chat-workspace__pane:first-child {
-    flex: 0 0 calc(var(--pane-ratio) - 4.5px);
+    flex: 0 0 calc(var(--pane-ratio) - 0.5px);
   }
   .chat-workspace__menu {
     position: fixed;
@@ -740,27 +740,44 @@
     width: 100%;
     min-width: 0;
   }
+  /* A hairline between the areas. The invisible grab zone stays 9px wide and
+     extends mainly into the second area, because the first area's scrollbar
+     sits flush against the line. The grip appears only on hover, keyboard
+     focus, or while dragging. */
   .chat-workspace__divider {
     position: relative;
     z-index: 5;
-    flex: 0 0 9px;
+    flex: 0 0 1px;
     cursor: col-resize;
     touch-action: none;
-    background: var(--secondary-surface);
-    border-inline: 1px solid var(--border);
-    outline-offset: -2px;
+    background: var(--border);
+  }
+  .chat-workspace__divider::before {
+    content: '';
+    position: absolute;
+    inset-block: 0;
+    inset-inline: -2px -6px;
+  }
+  .chat-workspace__divider:focus-visible {
+    outline: none;
+    background: var(--accent);
   }
   .chat-workspace__divider span {
     position: absolute;
     width: 3px;
     height: 32px;
-    left: 2px;
+    left: -1px;
     top: calc(50% - 16px);
     border-radius: 2px;
-    background: var(--border-2);
-  }
-  .chat-workspace__divider:hover span {
     background: var(--text-lo);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease;
+  }
+  .chat-workspace__divider:hover span,
+  .chat-workspace__divider:focus-visible span,
+  .dragging .chat-workspace__divider span {
+    opacity: 1;
   }
   .chat-workspace__divider:focus-visible span,
   .dragging .chat-workspace__divider span {
@@ -777,14 +794,21 @@
   }
   .stacked .chat-workspace__divider {
     cursor: row-resize;
-    border-inline: 0;
-    border-block: 1px solid var(--border);
+  }
+  .stacked .chat-workspace__divider::before {
+    inset-inline: 0;
+    inset-block: -4px;
   }
   .stacked .chat-workspace__divider span {
     height: 3px;
     width: 32px;
-    top: 2px;
+    top: -1px;
     left: calc(50% - 16px);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .chat-workspace__divider span {
+      transition: none;
+    }
   }
   @container (max-width: 560px) {
     .chat-workspace__body :global(.chat-header) {
