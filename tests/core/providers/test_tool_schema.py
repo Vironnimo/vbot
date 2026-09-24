@@ -73,3 +73,19 @@ def test_omit_strict_profile_preserves_schema_and_emits_no_internal_fields() -> 
 
     assert rendered == [_tool("read")]
     assert rendered[0]["parameters"] is not _SCHEMA
+
+
+@pytest.mark.parametrize("profile", ("explicit_non_strict", "omit_strict"))
+@pytest.mark.parametrize("nested", (False, True))
+def test_rendered_schema_is_independent_of_the_source_definition(
+    profile: str, nested: bool
+) -> None:
+    source = _tool("read")
+    if nested:
+        source = {"function": source}
+
+    [rendered] = render_tool_definitions([source], profile=profile)  # type: ignore[arg-type]
+    rendered["parameters"]["properties"]["path"]["type"] = "integer"
+    rendered["parameters"]["required"].append("limit")
+
+    assert source == ({"function": _tool("read")} if nested else _tool("read"))

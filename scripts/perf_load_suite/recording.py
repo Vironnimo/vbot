@@ -42,7 +42,7 @@ DIGEST_GAUGES: dict[str, str] = {
     "event_loop_utilization_max": "event_loop.utilization",
     "process_cpu_percent_max": "process.cpu_percent",
     "process_rss_mb_max": "process.rss_mb",
-    "process_threads_max": "process.threads",
+    "process_python_threads_max": "process.python_threads",
     "asyncio_tasks_max": "asyncio.tasks",
     "runs_active_max": "runs.active",
     "runs_queued_max": "runs.queued",

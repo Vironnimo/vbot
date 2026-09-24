@@ -390,3 +390,48 @@ def test_removal_cannot_project_nonempty_request_to_zero_tokens():
     assert projected["tokens"] > 0
     assert projected["estimated"] is True
     assert "provider_input_tokens" not in projected
+
+
+class _CountingAdapter:
+    def __init__(self) -> None:
+        self.estimates = 0
+
+    def estimate_request_input_tokens(self, messages, *, model_id, tools=None):
+        self.estimates += 1
+        return estimate_request_input_tokens(messages, tools)[0]
+
+
+def test_identical_requests_are_estimated_once_and_changes_estimate_afresh():
+    """A Step projects, observes and re-projects one request with one estimate."""
+    accounting = RequestContextUsage()
+    adapter = _CountingAdapter()
+    args = {"adapter": adapter, "model_id": "model", "tools": [], "scope": "epoch"}
+    request = [{"role": "system", "content": "rules"}, {"role": "user", "content": "task"}]
+
+    before = accounting.project(request, **args)
+    accounting.observe({"input_tokens": 5_000}, request, **args)
+    continuation = [*request, {"role": "assistant", "content": "done"}]
+    accounting.project(continuation, **args)
+    accounting.project([dict(message) for message in continuation], **args)
+
+    assert before == {"tokens": estimate_request_input_tokens(request)[0], "estimated": True}
+    assert accounting.project(request, **args)["tokens"] == 5_000
+    assert adapter.estimates == 2
+    edited = [*request, {"role": "assistant", "content": "edited"}]
+    accounting.project(edited, **args)
+    accounting.project(request, **{**args, "tools": [{"function": {"name": "read"}}]})
+    assert adapter.estimates == 4
+
+
+def test_estimate_memo_is_bounded_and_retains_only_digests():
+    accounting = RequestContextUsage()
+    args = {"adapter": _CountingAdapter(), "model_id": "model", "tools": [], "scope": "epoch"}
+    for index in range(10):
+        accounting.project([{"role": "user", "content": f"private {index}"}], **args)
+
+    memo = accounting._estimates
+    assert len(memo) == 4
+    assert all(
+        len(key) == len(request_hash) == 64 and isinstance(count, int)
+        for (key, request_hash), count in memo.items()
+    )
