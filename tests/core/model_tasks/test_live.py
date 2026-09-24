@@ -417,7 +417,7 @@ async def test_invalid_offers_are_rejected_before_resolution(offer: str):
             options={
                 "voice": "cove",
                 "backend_model": "gpt-5.6-terra",
-                "backend_thinking_effort": None,
+                "backend_thinking_effort": 3,
             }
         ),
     ],
@@ -426,7 +426,7 @@ async def test_invalid_offers_are_rejected_before_resolution(offer: str):
         "unsupported-provider",
         "backend-not-candidate",
         "unknown-effort",
-        "null-effort",
+        "non-string-effort",
     ],
 )
 async def test_unusable_configuration_is_not_configured(model_tasks, candidates):
@@ -487,10 +487,11 @@ async def test_start_call_opens_the_bound_target_and_returns_a_running_call(
     ("stored", "sent"),
     [
         ({}, "low"),
+        ({"backend_thinking_effort": None}, "low"),
         ({"backend_thinking_effort": ""}, None),
         ({"backend_thinking_effort": "high"}, "high"),
     ],
-    ids=["saved-before-the-option", "model-default", "configured"],
+    ids=["saved-before-the-option", "unset", "model-default", "configured"],
 )
 async def test_the_backend_uses_the_configured_reasoning_effort(
     stored: dict[str, Any],
