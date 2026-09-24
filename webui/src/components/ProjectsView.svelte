@@ -230,7 +230,7 @@
             title={t('projects.emptyTitle', 'No projects yet')}
             description={t(
               'projects.emptySubtitle',
-              'Choose Add to connect your first repository.',
+              'Choose Add project (+) to connect your first repository.',
             )}
           />
         {:else}
