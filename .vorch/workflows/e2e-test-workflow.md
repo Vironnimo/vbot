@@ -8,6 +8,12 @@ The suite lives in `tests/e2e/` as its own Node package and exercises the built 
 
 The suite is expected to be green. Report failures accurately, and do not fix, skip, delete, or rebaseline failing tests unless the user explicitly asks to stabilize or update the E2E suite. An E2E failure blocks a Release but does not broaden unrelated task scope.
 
+## What Belongs in the Suite
+
+A spec earns its place by proving a user journey across the browser, the server, and the fake Provider that the Python and Vitest suites cannot: live streaming and Run reattachment, several clients on one Session, real PTY terminals, uploads and served media, persistence across reloads, Scheduled Runs that actually fire, and configuration that must reach the Provider request. Tool semantics, form validation, and component interaction belong in the lower-level suites; an E2E spec that only repeats them adds runtime and locator maintenance without new evidence.
+
+Drive the journey under test through the browser. Prerequisites that another spec already covers through the UI, such as creating an Agent, go through RPC with `tests/rpc-support.js`, and cleanup runs in `finally` so a failed assertion does not leak state into later specs. Worktree live-testing environments run the same `fake-provider.js`, so a scenario may deliberately serve manual testing, such as the website preview demo; any other scenario is removed together with its last spec.
+
 ## Prerequisites
 
 For a local agent run, start from the repository root. The current Python environment, `webui/node_modules/`, `tests/e2e/node_modules/`, and the Playwright Chromium browser must already be available. Do not install missing dependencies or browsers as part of a local E2E run; report the missing prerequisite as blocked. The GitHub workflow is the clean-run exception: it deliberately installs the locked npm dependencies, Chromium, and required Linux libraries on its disposable runner before executing the suite.
