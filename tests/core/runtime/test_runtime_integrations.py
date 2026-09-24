@@ -199,6 +199,7 @@ async def test_runtime_start_does_not_crash_when_channel_adapter_cannot_start(
         "\n".join(
             (
                 "{",
+                '  "format_version": 1,',
                 '  "id": "tg-assistant",',
                 '  "platform": "telegram",',
                 '  "agent_id": "assistant",',
@@ -237,6 +238,7 @@ async def test_runtime_start_does_not_crash_when_channel_agent_is_missing(
         "\n".join(
             (
                 "{",
+                '  "format_version": 1,',
                 '  "id": "tg-assistant",',
                 '  "platform": "telegram",',
                 '  "agent_id": "missing-agent",',
@@ -283,6 +285,7 @@ async def test_runtime_start_registers_channel_send_when_enabled_channel_starts(
         "\n".join(
             (
                 "{",
+                '  "format_version": 1,',
                 '  "id": "tg-assistant",',
                 '  "platform": "telegram",',
                 '  "agent_id": "assistant",',
@@ -327,6 +330,7 @@ def test_runtime_registers_channel_send_for_enabled_channel_without_running_adap
         "\n".join(
             (
                 "{",
+                '  "format_version": 1,',
                 '  "id": "tg-assistant",',
                 '  "platform": "telegram",',
                 '  "agent_id": "assistant",',

@@ -21,6 +21,7 @@ from core.chat.messages import GroupRole
 from core.config_validation import (
     JsonObject,
 )
+from core.json_documents import JsonDocumentWriteError, write_json_document
 from core.utils.atomic import atomic_write_text
 from core.utils.logging import get_logger
 
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
     pass
 
 from core.channels.config import (
+    CHANNEL_FORMAT,
     ChannelConfig,
     ChannelConfigError,
     ChannelError,
@@ -102,18 +104,20 @@ class ChannelStorage:
         return sorted(configs, key=lambda config: config.id)
 
     def save(self, config: ChannelConfig) -> None:
-        """Persist one channel config using atomic replace."""
+        """Persist one channel config using atomic replace.
+
+        Unknown fields of the file on disk are kept; a file that fails to load
+        is never overwritten.
+        """
         if not isinstance(config, ChannelConfig):
             raise ChannelConfigError("config must be a ChannelConfig instance")
         config.validate()
 
-        channel_dir = self._channel_dir(config.id)
-        config_path = channel_dir / _CHANNEL_CONFIG_FILENAME
-        serialized = (
-            json.dumps(config.to_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-        )
+        config_path = self._channel_dir(config.id) / _CHANNEL_CONFIG_FILENAME
         try:
-            atomic_write_text(config_path, serialized)
+            write_json_document(config_path, config.to_dict(), CHANNEL_FORMAT)
+        except JsonDocumentWriteError as error:
+            raise ChannelConfigError(str(error)) from error
         except OSError as error:
             raise ChannelError(f"Cannot write {config_path}: {error}") from error
 
