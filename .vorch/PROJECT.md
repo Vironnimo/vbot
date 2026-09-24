@@ -29,7 +29,7 @@ Large source files are an independent maintenance problem: they increase the con
 
 **Flow:** Accessors -> HTTP/WS/SSE -> server RPC handlers -> core (Providers, Models, Tools, Agents) -> external APIs. Agentic-only; no separate non-agentic streaming path.
 
-The optional voice companion uses direct browser-to-OpenAI WebRTC media, initialized by server RPC with the existing OpenAI API-key Connection. App actions use existing Chat/Terminal operations; see `model_tasks/live.md` for details and secure-context limits.
+Live voice is the `live_voice` Task Model: the server owns the provider call, delegated reasoning, and app operations; the accessor holds only WebRTC media to the provider and answers UI requests. See `model_tasks/live.md` for details and secure-context limits.
 
 **Persistence:** Canonical Session history: normalized columns in `<data-dir>/sessions.db` (SQLite `STRICT`, WAL where safe - packaged Windows runtimes pin a WAL-safe SQLite - `synchronous=FULL`; `session-store.json` authorizes creation). External-content FTS indexes searchable Messages; a second trigram index excludes Tool-role bulk. No mirrored search-text table. Verified `session-snapshots/` under the data directory provide auto-restore; only explicit operator, update, or converter workflows create them. Normal Runtime startup/operation never copies the database. `session-recovery.json` records incidents.
 
