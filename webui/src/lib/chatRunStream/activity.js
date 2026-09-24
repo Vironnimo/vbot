@@ -1,4 +1,4 @@
-import { formatAgentAddress } from '../agentAddress.js';
+import { formatAgentAddress, qualifyAgentAddress } from '../agentAddress.js';
 import { ensureSessionState } from '../chatState.js';
 import { isReflectionRunKind } from '../chatTimelinePresentation.js';
 import { isPlainObject } from '../values.js';
@@ -9,17 +9,12 @@ const REFLECTION_TERMINAL_STATUSES = {
   run_cancelled: 'cancelled',
   run_interrupted: 'interrupted',
 };
-// Run-event status keys use the child's bare agent id. Live `/ws` events
-// arrive re-addressed to the full `agent@projekt` form (the session-STATE key),
-// while SSE-delivered run events stay bare — stripping the project suffix makes
-// both transports write the same key. Session ids are globally unique, so a
-// bare key cannot collide across projects; an identity id has no `@` and
-// passes unchanged.
-function bareAgentIdForStatusKey(agentId) {
-  const value = typeof agentId === 'string' ? agentId : '';
-  const separatorIndex = value.indexOf('@');
-  return separatorIndex === -1 ? value : value.slice(0, separatorIndex);
-}
+// Session-scoped Sub-Agent status keys (`session:`, `sessionStarted:`,
+// `sessionDuration:`, `sessionTool:`) name the child by its outside address:
+// `agent@projekt` for a Project child, the bare id for an Identity child. That
+// is the address Sub-Agent rows read (`subAgentTargetAddress`) and session
+// state is keyed by. Every writer — Run events, connection snapshots, explicit
+// status changes, and inspection (`chatState/childTasks.js`) — uses it.
 export function createRunActivityProjection({
   chatState,
   updateSubAgentRunStatuses,
@@ -27,7 +22,9 @@ export function createRunActivityProjection({
   function trackSubAgentRunStatus(event) {
     const updates = {};
     trackExplicitSubAgentStatus(event, updates);
-    const statusAgentId = bareAgentIdForStatusKey(event.agent_id);
+    // Run events are addressed at ingestion for both transports.
+    const statusAddress =
+      typeof event.agent_id === 'string' ? event.agent_id.trim() : '';
 
     // The most recent tool call a run made, so a running sub-agent row can
     // show live activity instead of its frozen prompt preview. Recorded for
@@ -38,8 +35,8 @@ export function createRunActivityProjection({
       if (event.run_id) {
         updates[`runTool:${event.run_id}`] = toolName;
       }
-      if (statusAgentId && event.session_id) {
-        updates[`sessionTool:${statusAgentId}::${event.session_id}`] = toolName;
+      if (statusAddress && event.session_id) {
+        updates[`sessionTool:${statusAddress}::${event.session_id}`] = toolName;
       }
     }
 
@@ -48,21 +45,21 @@ export function createRunActivityProjection({
       if (event.run_id) {
         updates[`run:${event.run_id}`] = status;
       }
-      if (statusAgentId && event.session_id) {
-        updates[`session:${statusAgentId}::${event.session_id}`] = status;
+      if (statusAddress && event.session_id) {
+        updates[`session:${statusAddress}::${event.session_id}`] = status;
       }
 
       // A reused child session must not surface the previous run's last tool
       // on run-id-less rows, so a fresh run clears the session-scoped name.
-      if (event.type === 'run_started' && statusAgentId && event.session_id) {
-        updates[`sessionTool:${statusAgentId}::${event.session_id}`] = '';
+      if (event.type === 'run_started' && statusAddress && event.session_id) {
+        updates[`sessionTool:${statusAddress}::${event.session_id}`] = '';
       }
       if (event.type === 'run_started' && event.timestamp) {
         if (event.run_id) {
           updates[`runStarted:${event.run_id}`] = event.timestamp;
         }
-        if (statusAgentId && event.session_id) {
-          updates[`sessionStarted:${statusAgentId}::${event.session_id}`] =
+        if (statusAddress && event.session_id) {
+          updates[`sessionStarted:${statusAddress}::${event.session_id}`] =
             event.timestamp;
         }
       }
@@ -90,8 +87,8 @@ export function createRunActivityProjection({
         if (event.run_id) {
           updates[`runDuration:${event.run_id}`] = durationMs;
         }
-        if (statusAgentId && event.session_id) {
-          updates[`sessionDuration:${statusAgentId}::${event.session_id}`] =
+        if (statusAddress && event.session_id) {
+          updates[`sessionDuration:${statusAddress}::${event.session_id}`] =
             durationMs;
         }
       }
@@ -107,27 +104,17 @@ export function createRunActivityProjection({
       return;
     }
     const data = event.payload?.data;
-    const childAgentId =
-      typeof data?.agent_id === 'string' ? data.agent_id.trim() : '';
+    // The event names the child by its bare id beside `project_id`.
+    const childAddress = qualifyAgentAddress(data?.agent_id, data?.project_id);
     const childSessionId =
       typeof data?.session_id === 'string' ? data.session_id.trim() : '';
     const childStatus =
       typeof data?.status === 'string' ? data.status.trim() : '';
-    if (!childAgentId || !childSessionId || !childStatus) {
+    if (!childAddress || !childSessionId || !childStatus) {
       return;
     }
 
-    const childProjectId =
-      typeof data?.project_id === 'string' ? data.project_id.trim() : '';
-    const childAddresses = new Set([
-      bareAgentIdForStatusKey(childAgentId),
-      formatAgentAddress(childAgentId, childProjectId),
-    ]);
-    for (const childAddress of childAddresses) {
-      if (childAddress) {
-        updates[`session:${childAddress}::${childSessionId}`] = childStatus;
-      }
-    }
+    updates[`session:${childAddress}::${childSessionId}`] = childStatus;
 
     const childRunId =
       typeof data?.run_id === 'string' ? data.run_id.trim() : '';
@@ -140,12 +127,8 @@ export function createRunActivityProjection({
       if (childRunId) {
         updates[`runStarted:${childRunId}`] = childStartedAt;
       }
-      for (const childAddress of childAddresses) {
-        if (childAddress) {
-          updates[`sessionStarted:${childAddress}::${childSessionId}`] =
-            childStartedAt;
-        }
-      }
+      updates[`sessionStarted:${childAddress}::${childSessionId}`] =
+        childStartedAt;
     }
     const queueItemId =
       typeof data?.queue_item_id === 'string' ? data.queue_item_id.trim() : '';
@@ -234,15 +217,17 @@ export function createRunActivityProjection({
         subAgentUpdates[`runStarted:${activeRun.run_id}`] =
           activeRun.started_at;
       }
-      // Status keys stay bare (the snapshot's agent_id already is) so they meet
-      // the descriptor-derived reads; only session STATE below keys by address.
-      if (activeRun.agent_id && activeRun.session_id) {
-        subAgentUpdates[
-          `session:${activeRun.agent_id}::${activeRun.session_id}`
-        ] = 'running';
+      // The snapshot names the Run's Agent by its bare id beside `project_id`.
+      const address = qualifyAgentAddress(
+        activeRun.agent_id,
+        activeRun.project_id,
+      );
+      if (address && activeRun.session_id) {
+        subAgentUpdates[`session:${address}::${activeRun.session_id}`] =
+          'running';
         if (activeRun.started_at) {
           subAgentUpdates[
-            `sessionStarted:${activeRun.agent_id}::${activeRun.session_id}`
+            `sessionStarted:${address}::${activeRun.session_id}`
           ] = activeRun.started_at;
         }
       }

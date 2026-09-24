@@ -1,8 +1,4 @@
-import {
-  formatAgentAddress,
-  parseAgentAddress,
-  qualifyAgentAddress,
-} from '../agentAddress.js';
+import { qualifyAgentAddress } from '../agentAddress.js';
 import {
   mergeBoundedEntries,
   replaceActiveSubAgentStatuses,
@@ -92,25 +88,6 @@ export function createChatChildTasks({
     return 'completed';
   }
 
-  function subAgentStatusAddresses(agentId, inspection) {
-    const addresses = new Set();
-    const requested = trimmedString(agentId);
-    if (requested) {
-      addresses.add(requested);
-      const parsed = parseAgentAddress(requested);
-      if (parsed.agentId) {
-        addresses.add(parsed.agentId);
-      }
-    }
-    const inspectedAgentId = trimmedString(inspection?.agent_id);
-    const inspectedProjectId = trimmedString(inspection?.project_id);
-    if (inspectedAgentId) {
-      addresses.add(inspectedAgentId);
-      addresses.add(formatAgentAddress(inspectedAgentId, inspectedProjectId));
-    }
-    return [...addresses].filter(Boolean);
-  }
-
   function applySubAgentInspection(
     { agentId, sessionId, runId = '', queueItemId = '', workId = '' },
     inspection,
@@ -130,30 +107,27 @@ export function createChatChildTasks({
         updates[`queueRun:${queueItemId}`] = inspectedRunId;
       }
     }
-    if (!inspectedRunId && !queueItemId) {
-      for (const address of subAgentStatusAddresses(agentId, inspection)) {
-        updates[`session:${address}::${sessionId}`] = status;
-      }
+    // Session-scoped keys use the requesting row's address — the child's
+    // outside address the row itself reads (`chatRunStream/activity.js`).
+    const address = trimmedString(agentId);
+    if (!inspectedRunId && !queueItemId && address) {
+      updates[`session:${address}::${sessionId}`] = status;
     }
 
     const durationMs = inspection?.timing?.duration_ms;
     if (Number.isFinite(durationMs) && durationMs >= 0) {
       if (inspectedRunId) {
         updates[`runDuration:${inspectedRunId}`] = durationMs;
-      } else {
-        for (const address of subAgentStatusAddresses(agentId, inspection)) {
-          updates[`sessionDuration:${address}::${sessionId}`] = durationMs;
-        }
+      } else if (address) {
+        updates[`sessionDuration:${address}::${sessionId}`] = durationMs;
       }
     }
     const toolName = trimmedString(inspection?.tool_name);
     if (toolName) {
       if (inspectedRunId) {
         updates[`runTool:${inspectedRunId}`] = toolName;
-      } else {
-        for (const address of subAgentStatusAddresses(agentId, inspection)) {
-          updates[`sessionTool:${address}::${sessionId}`] = toolName;
-        }
+      } else if (address) {
+        updates[`sessionTool:${address}::${sessionId}`] = toolName;
       }
     }
     if (Object.keys(updates).length > 0) {

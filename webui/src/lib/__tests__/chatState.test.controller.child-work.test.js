@@ -63,6 +63,66 @@ describe('chat controller', () => {
     });
   });
 
+  it('keys a run-less Project child inspection by the address the row reads', async () => {
+    const inspectSubAgentWork = vi.fn().mockResolvedValue({
+      id: 'sub-project-work',
+      agent_id: 'worker',
+      project_id: 'project-one',
+      session_id: 'child-session',
+      run_id: null,
+      status: 'completed',
+      result: 'Project child result',
+      timing: { duration_ms: 4200 },
+      tool_name: 'read',
+    });
+    const { chatState, controller } = setup({
+      operationOverrides: { inspectSubAgentWork },
+    });
+    const tool = {
+      type: 'tool_call',
+      name: 'subagent',
+      status: 'success',
+      arguments: {
+        action: 'run',
+        agent_id: 'worker',
+        content: 'Inspect the project',
+        background: true,
+      },
+      result: {
+        ok: true,
+        data: {
+          id: 'sub-project-work',
+          agent_id: 'worker@project-one',
+          project_id: 'project-one',
+          session_id: 'child-session',
+          status: 'running',
+          delivery: 'automatic',
+        },
+      },
+    };
+
+    controller.reconcileSubAgentRows(
+      [{ type: 'assistant_run', items: [tool] }],
+      { projectId: 'project-one' },
+    );
+    await vi.waitFor(() =>
+      expect(chatState.subAgentStatuses).toMatchObject({
+        'session:worker@project-one::child-session': 'completed',
+      }),
+    );
+
+    expect(inspectSubAgentWork).toHaveBeenCalledWith({
+      id: 'sub-project-work',
+      agent_id: 'worker@project-one',
+      session_id: 'child-session',
+    });
+    expect(chatState.subAgentStatuses).toEqual({
+      'session:worker@project-one::child-session': 'completed',
+      'sessionDuration:worker@project-one::child-session': 4200,
+      'sessionTool:worker@project-one::child-session': 'read',
+    });
+  });
+
   it('settles a live Subagent row after inspection discovers its child Run', async () => {
     const inspectSubAgentWork = vi
       .fn()
