@@ -668,6 +668,57 @@ describe('floatingHoverCard action', () => {
     expect(card.dataset.floatingOpen).toBe('true');
   });
 
+  it('stays anchored above while its content grows and stops observing once hidden', () => {
+    const observers = [];
+    class FakeResizeObserver {
+      constructor(callback) {
+        this.callback = callback;
+        this.observed = [];
+        this.disconnected = false;
+        observers.push(this);
+      }
+      observe(target) {
+        this.observed.push(target);
+      }
+      disconnect() {
+        this.disconnected = true;
+      }
+    }
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    try {
+      let height = 100;
+      Object.defineProperty(card, 'offsetHeight', { get: () => height });
+      anchor.getBoundingClientRect = () => ({
+        top: 500,
+        bottom: 520,
+        left: 500,
+        right: 540,
+        width: 40,
+        height: 20,
+      });
+      window.innerHeight = 800;
+      window.innerWidth = 1200;
+      action = floatingHoverCard(card);
+
+      open();
+      expect(card.style.top).toBe('394px');
+      expect(observers).toHaveLength(1);
+      expect(observers[0].observed).toEqual([card]);
+
+      // A row appears while the card is open: it must grow upward, not over
+      // the anchor.
+      height = 160;
+      observers[0].callback([]);
+      expect(card.style.top).toBe('334px');
+
+      pressKey(window, 'Escape');
+      expect(card.dataset.floatingOpen).toBe('false');
+      expect(observers[0].disconnected).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('keeps decorative previews out of the accessibility tree', () => {
     action = floatingHoverCard(card, { accessible: false });
 
