@@ -486,9 +486,10 @@ def test_client_list_empty_before_any_window_connects(tmp_path: Path) -> None:
 def test_server_event_contract_allows_app_error_events() -> None:
     bus = ServerEventBus()
 
-    event = bus.publish(APP_ERROR_EVENT, {"message": "Background task failed"})
+    bus.publish(APP_ERROR_EVENT, {"message": "Background task failed"})
 
     assert APP_ERROR_EVENT in ALLOWED_SERVER_EVENT_TYPES
+    event = bus.events[-1]
     assert event["type"] == APP_ERROR_EVENT
     assert event["payload"] == {"message": "Background task failed"}
 
