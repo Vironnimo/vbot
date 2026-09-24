@@ -639,3 +639,81 @@ it('keeps repeated Provider Tool ids separate by their persisted Assistant ident
   expect(tools.map((tool) => tool.result)).toEqual(['first', 'second']);
   expect(new Set(tools.map((tool) => tool.id)).size).toBe(2);
 });
+
+it('keeps a Tool row id from its first live event through History rebuild', () => {
+  const state = ensureSessionState(createChatState(), 'agent', 'session');
+  const result = {
+    ok: true,
+    data: { artifact: { kind: 'speech', url: '/a' } },
+  };
+  const toolCall = { id: 'call', name: 'text_to_speech', arguments: {} };
+  const append = (sequence, type, payload) =>
+    appendRunEvent(state, { type, run_id: 'run', sequence, payload });
+  const assistantRun = () =>
+    visibleTimelineItemsForRender(state).find(
+      (item) => item.type === 'assistant_run',
+    );
+  const toolIds = () => assistantRun().tools.map((tool) => tool.id);
+  startRun(state, { run_id: 'run', status: 'running' });
+  append(1, 'user_message_persisted', {
+    message: { id: 'user', role: 'user', content: 'Speak' },
+  });
+  // The streamed Tool preview creates the row before the stable events.
+  append(2, 'tool_call_delta', {
+    tool_call_id: 'call',
+    name_delta: 'text_to_speech',
+  });
+  append(3, 'assistant_output', {
+    message: { id: 'call-step', role: 'assistant', tool_calls: [toolCall] },
+  });
+  append(4, 'tool_call_started', {
+    assistant_message_id: 'call-step',
+    tool_call: toolCall,
+  });
+  append(5, 'tool_call_result', {
+    assistant_message_id: 'call-step',
+    tool_call: toolCall,
+    result,
+  });
+  const liveRun = assistantRun();
+  const liveToolIds = toolIds();
+
+  append(6, 'assistant_output', {
+    message: { id: 'answer', role: 'assistant', content: 'Spoken.' },
+  });
+  append(7, 'run_completed', { status: 'completed' });
+  expect(state.streamingRunEvents).toEqual([]);
+  expect(toolIds()).toEqual(liveToolIds);
+  const completedRun = assistantRun();
+
+  loadHistory(
+    state,
+    [
+      { id: 'user', role: 'user', content: 'Speak' },
+      { id: 'call-step', role: 'assistant', tool_calls: [toolCall] },
+      {
+        id: 'tool',
+        role: 'tool',
+        tool_call_id: 'call',
+        name: 'text_to_speech',
+        content: JSON.stringify(result),
+      },
+      { id: 'answer', role: 'assistant', content: 'Spoken.' },
+    ].map((message, index) => ({
+      ...message,
+      history_run_id: 'run',
+      history_sequence: index + 1,
+    })),
+    { runs: [{ run_id: 'run', complete: true }] },
+  );
+  const historyRun = assistantRun();
+
+  expect(state.runEvents).toEqual([]);
+  expect(historyRun.source).toBe('history');
+  expect(historyRun.tools[0].result).toBe(JSON.stringify(result));
+  expect(historyRun.id).toBe(liveRun.id);
+  expect(toolIds()).toEqual(liveToolIds);
+  expect(historyRun.items.map((child) => child.id)).toEqual(
+    completedRun.items.map((child) => child.id),
+  );
+});

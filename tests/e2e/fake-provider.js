@@ -20,23 +20,17 @@ function writeJson(response, statusCode, body, headers = {}) {
   response.end(JSON.stringify(body));
 }
 
-function tinyWav() {
-  const sampleRate = 8_000;
-  const samples = 800;
-  const bytes = Buffer.alloc(44 + samples * 2);
-  bytes.write("RIFF", 0);
-  bytes.writeUInt32LE(bytes.length - 8, 4);
-  bytes.write("WAVE", 8);
-  bytes.write("fmt ", 12);
-  bytes.writeUInt32LE(16, 16);
-  bytes.writeUInt16LE(1, 20);
-  bytes.writeUInt16LE(1, 22);
-  bytes.writeUInt32LE(sampleRate, 24);
-  bytes.writeUInt32LE(sampleRate * 2, 28);
-  bytes.writeUInt16LE(2, 32);
-  bytes.writeUInt16LE(16, 34);
-  bytes.write("data", 36);
-  bytes.writeUInt32LE(samples * 2, 40);
+function tinyMp3() {
+  // Silent MPEG-1 Layer III frames (128 kbit/s, 44.1 kHz, mono, no CRC):
+  // each frame is its 4-byte header followed by zeroed side information and
+  // main data, which decodes as silence.
+  const frameHeader = 0xff_fb_90_c0;
+  const frameLength = 417;
+  const frames = 8;
+  const bytes = Buffer.alloc(frameLength * frames);
+  for (let frame = 0; frame < frames; frame += 1) {
+    bytes.writeUInt32BE(frameHeader, frame * frameLength);
+  }
   return bytes;
 }
 
@@ -894,7 +888,7 @@ async function handleSpeech(request, response) {
   if (
     body?.model !== "e2e-tts" ||
     body?.input !== "E2E synthesized speech" ||
-    body?.response_format !== "wav"
+    body?.response_format !== "mp3"
   ) {
     writeJson(response, 400, {
       error: {
@@ -904,10 +898,10 @@ async function handleSpeech(request, response) {
     });
     return;
   }
-  const audio = tinyWav();
+  const audio = tinyMp3();
   response.writeHead(200, {
     "content-length": String(audio.length),
-    "content-type": "audio/wav",
+    "content-type": "audio/mpeg",
     "x-generation-id": "speech-e2e",
   });
   response.end(audio);
@@ -928,8 +922,7 @@ async function handleImageGeneration(request, response) {
   }
   if (
     body?.model !== "e2e-image" ||
-    body?.prompt !== "A deterministic blue square on a white background" ||
-    body?.response_format !== "b64_json"
+    body?.prompt !== "A deterministic blue square on a white background"
   ) {
     writeJson(response, 400, {
       error: {
