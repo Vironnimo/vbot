@@ -271,9 +271,15 @@ class LiveVoiceService:
 
 
 def _backend_thinking_effort(options: JsonObject) -> str | None:
-    """Return the configured backend effort; ``None`` leaves it to the Model."""
+    """Return the configured backend effort; ``None`` leaves it to the Model.
 
-    effort = options.get("backend_thinking_effort", BACKEND_THINKING_EFFORT_DEFAULT)
+    A missing or null option is unset, like save validation treats it, and
+    uses the default; ``""`` explicitly selects the Model default.
+    """
+
+    effort = options.get("backend_thinking_effort")
+    if effort is None:
+        effort = BACKEND_THINKING_EFFORT_DEFAULT
     if not isinstance(effort, str) or effort not in backend_thinking_efforts():
         raise LiveStartRejected(
             "not_configured", "The Live voice backend reasoning effort is not valid"
