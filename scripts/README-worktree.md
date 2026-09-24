@@ -368,7 +368,7 @@ This is the machine-readable marker used by config and cleanup logic.
 
 ### `~/.vbot-<name>/settings.json`
 
-This contains the dedicated `server_port`, the keyless `providers.custom.fake` endpoint, manual fake Models for chat/fallback/image/speech, and the corresponding default/task-model bindings. Existing user values in a reused data directory are preserved; missing fixture values are filled.
+This contains the dedicated `server_port`, the keyless `providers.custom.fake` endpoint, manual fake Models for chat/fallback/image/speech, and the corresponding default/task-model bindings. Existing user values in a reused data directory are preserved; missing fixture values are filled. The fixture is `tests/e2e/fake-provider-settings.json` from the checkout that runs `worktree.py` (like the data-directory layout and seed resources), not from the main repository, so a branch that changes it seeds its own version.
 
 ### `~/.vbot-<name>/.env` and canonical directories
 
