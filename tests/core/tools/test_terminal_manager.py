@@ -67,15 +67,8 @@ async def test_execution_group_stop_keeps_unrelated_terminal_after_attachment_tr
     await manager.close_execution_group("fixture", "group", "epoch")
     assert not owned.adapter.is_alive()
     assert unrelated.adapter.is_alive()
-    with pytest.raises(TerminalClosedError):
-        await manager.spawn(
-            owner(),
-            ["fake"],
-            cwd=tmp_path,
-            env=None,
-            origin_run_id="late",
-            execution_owner=execution,
-        )
+    # The settled group's admission marker does not outlive its drain.
+    assert manager._closed_execution_groups == set()
 
 
 @pytest.mark.asyncio
@@ -109,10 +102,21 @@ async def test_execution_group_stop_drains_pending_terminal_launch(tmp_path, mon
         close = asyncio.create_task(manager.close_execution_group("fixture", "group", "epoch"))
         await asyncio.sleep(0)
         assert not close.done()
+        # A launch racing the drain is rejected while admission is closed.
+        with pytest.raises(TerminalClosedError):
+            await manager.spawn(
+                owner(),
+                ["fake"],
+                cwd=tmp_path,
+                env=None,
+                origin_run_id="late",
+                execution_owner=execution,
+            )
         release.set()
         session = await launch
         await close
         assert not session.adapter.is_alive()
+        assert manager._closed_execution_groups == set()
     finally:
         release.set()
         await asyncio.gather(launch, return_exceptions=True)

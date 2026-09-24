@@ -750,7 +750,13 @@ class TerminalManager:
         )
 
     async def close_execution_group(self, extension: str, group_id: str, epoch: str) -> None:
-        """Drain exact execution-owned terminals without changing attachment authority."""
+        """Drain exact execution-owned terminals without changing attachment authority.
+
+        Callers close a group only after every Run of the group has settled.
+        Admission stays closed while pending launches drain and owned terminals
+        are terminated; a launch racing the drain is rejected. After the drain
+        the admission marker is released.
+        """
         key = (extension, group_id, epoch)
         self._closed_execution_groups.add(key)
         pending = [
@@ -771,9 +777,16 @@ class TerminalManager:
             )
             == key
         ]
-        await asyncio.gather(
-            *(self._terminate_session(session, suppress_attention=True) for session in sessions)
-        )
+        try:
+            await asyncio.gather(
+                *(self._terminate_session(session, suppress_attention=True) for session in sessions)
+            )
+        finally:
+            # The group owner settles every Run of the group before closing its
+            # resources, and each epoch key is used only once. With the launches
+            # drained above, no launch for this key can arrive any more, so the
+            # closed marker is released instead of accumulating for the server life.
+            self._closed_execution_groups.discard(key)
 
     async def close_scope(self, owner: TerminalOwner) -> None:
         """Apply Terminal lifecycle and attachment cleanup for a removed Session."""
