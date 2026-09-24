@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from cli.application.packages import digest, validate_release
+from cli.application.runtime_sqlite import RuntimeSQLiteError, provision_runtime_sqlite
 from cli.application.state import (
     ApplicationError,
     Installation,
@@ -316,6 +317,12 @@ def _candidate(
             candidate / "runtime",
             ignore=None if reuse_runtime else shutil.ignore_patterns("site-packages"),
         )
+        try:
+            provision_runtime_sqlite(candidate / "runtime", source)
+        except (OSError, RuntimeSQLiteError) as error:
+            raise ApplicationError(
+                f"The runtime SQLite library could not be prepared: {error}"
+            ) from error
         if build_inputs is not None and previous_inputs.get("web") == build_inputs["web"]:
             copy_application(source, candidate / "app", install.install_shape, assets=base / "app")
         else:

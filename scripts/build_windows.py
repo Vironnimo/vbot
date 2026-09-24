@@ -27,6 +27,7 @@ from cli.application.payload import (
     copy_application,
     native_source_digest,
 )
+from cli.application.runtime_sqlite import RuntimeSQLiteError, provision_runtime_sqlite
 from core.utils.processes import subprocess_creation_flags
 
 __all__ = ["APP_FILES", "BuildError", "app_paths", "copy_application"]
@@ -94,6 +95,10 @@ def copy_runtime(
         raise BuildError("runtime must include venv and ensurepip for customization")
     if not (destination / RUNTIME_DLL).is_file():
         raise BuildError("runtime must be CPython 3.13 x64")
+    try:
+        provision_runtime_sqlite(destination, app_source)
+    except (OSError, RuntimeSQLiteError) as error:
+        raise BuildError(f"runtime SQLite provisioning failed: {error}") from error
     site = _site_packages(destination)
     source_site = _site_packages(source)
     has_packages = source_site.is_dir() and any(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import io
 import json
 import shutil
 import subprocess
@@ -227,6 +228,40 @@ def test_runtime_omits_root_python_alias_links(tmp_path: Path) -> None:
     assert not (destination / "python3.exe").exists()
     assert not (destination / "python3.13.exe").exists()
     assert all((runtime / alias).is_symlink() for alias in ("python3.exe", "python3.13.exe"))
+
+
+def test_runtime_copy_installs_the_pinned_sqlite_without_touching_the_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = _runtime(tmp_path)
+    (runtime / "DLLs").mkdir()
+    (runtime / "DLLs" / "sqlite3.dll").write_bytes(b"cpython sqlite")
+    source = _source(tmp_path)
+    pinned = b"pinned sqlite"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as bundle:
+        bundle.writestr("sqlite3.dll", pinned)
+    archive = buffer.getvalue()
+    (source / "scripts/windows/sqlite.lock.json").write_text(
+        json.dumps(
+            {
+                "version": "3.53.4",
+                "url": "https://sqlite.org/fixture.zip",
+                "archive_sha3_256": hashlib.sha3_256(archive).hexdigest(),
+                "library_sha256": hashlib.sha256(pinned).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("cli.application.runtime_sqlite._download", lambda _url: archive)
+
+    destination = tmp_path / "copy"
+    build_windows.copy_runtime(
+        runtime, destination, provision=False, app_source=source, shape="server"
+    )
+
+    assert (destination / "DLLs" / "sqlite3.dll").read_bytes() == pinned
+    assert (runtime / "DLLs" / "sqlite3.dll").read_bytes() == b"cpython sqlite"
 
 
 @pytest.mark.parametrize("relative", ("unrelated.exe", "Lib/python3.exe"))
