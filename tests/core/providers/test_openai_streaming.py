@@ -103,11 +103,10 @@ async def test_codex_stream_rebuilds_headers_per_connect_attempt() -> None:
 async def test_closing_partial_codex_sse_stream_closes_response(
     conversation_id: str | None,
 ) -> None:
-    async def lines() -> AsyncIterator[str]:
-        yield 'data: {"type":"response.output_text.delta","delta":"partial"}'
-        yield ""
+    async def body() -> AsyncIterator[bytes]:
+        yield b'data: {"type":"response.output_text.delta","delta":"partial"}\n\n'
 
-    response = SimpleNamespace(aiter_lines=lines, aclose=AsyncMock())
+    response = SimpleNamespace(aiter_bytes=body, aclose=AsyncMock())
     adapter = OpenAIAdapter(
         _subscription_config(),
         _jwt_with_account("acct_openai"),

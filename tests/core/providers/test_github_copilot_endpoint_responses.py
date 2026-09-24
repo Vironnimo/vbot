@@ -61,6 +61,40 @@ async def test_stream_responses_yields_normalized_deltas(
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_stream_responses_keeps_raw_unicode_line_separators_in_json_strings(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    # Node/Go gateways emit U+2028/U+2029/NEL unescaped inside JSON strings.
+    text = "one two three\x85four"
+    delta = json.dumps({"type": "response.output_text.delta", "delta": text}, ensure_ascii=False)
+    completed = '{"type":"response.completed","response":{"status":"completed"}}'
+    body = f"event: response.output_text.delta\r\ndata: {delta}\r\n\r\ndata: {completed}\r\n\r\n"
+    encoded = body.encode()
+    crlf_split = encoded.index(b"\r\n\r\n") + 1  # CR and LF arrive in separate chunks
+
+    async def chunks():
+        yield encoded[:crlf_split]
+        yield encoded[crlf_split:]
+
+    respx.post(RESPONSES_URL).mock(
+        return_value=httpx.Response(
+            200, content=chunks(), headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    deltas = [
+        delta
+        async for delta in metadata_copilot_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5-mini")
+    ]
+
+    assert deltas == [
+        {"type": "content_delta", "text": text},
+        {"type": "finish", "reason": "stop"},
+    ]
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_stream_responses_rebuilds_headers_per_connect_attempt() -> None:
     """A retried Copilot stream connect re-consults the token getter (token refresh)."""
     token_getter = _RotatingTokenGetter(["stale-token", "fresh-token"])

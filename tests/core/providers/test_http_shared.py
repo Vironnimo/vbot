@@ -29,10 +29,13 @@ from core.providers._http_shared import (
     decode_response_json,
     execute_with_sampling_fallback,
     format_http_error_detail,
+    iter_sse_events,
+    iter_stream_lines,
     parse_sse_json_data,
     post_json_with_retry,
     provider_chat_timeout,
     provider_streaming_timeout,
+    split_stream_lines,
     unsupported_sampling_parameter,
     wrap_network_error,
 )
@@ -776,3 +779,53 @@ def test_empty_timeout_retains_diagnostic_type(error_type):
     error = wrap_network_error(error_type(""))
     assert isinstance(error, ProviderTimeoutError)
     assert error_type.__name__ in str(error)
+
+
+def _chunked_response(*chunks: bytes) -> httpx.Response:
+    async def body():
+        for chunk in chunks:
+            yield chunk
+
+    return httpx.Response(200, content=body())
+
+
+# JSON permits these unescaped inside strings; httpx's line decoder and
+# ``str.splitlines`` treat them as line breaks.
+_UNICODE_SEPARATORS = "  \x85\x0b\x0c\x1c\x1d\x1e"
+
+
+def test_split_stream_lines_breaks_only_at_cr_lf_and_crlf() -> None:
+    text = f"a{_UNICODE_SEPARATORS}b\r\nc\rd\n\ne"
+
+    assert split_stream_lines(text) == [f"a{_UNICODE_SEPARATORS}b", "c", "d", "", "e"]
+    assert split_stream_lines("x\n") == ["x"]
+    assert split_stream_lines("") == []
+
+
+@pytest.mark.asyncio
+async def test_iter_stream_lines_joins_crlf_and_utf8_split_across_chunks() -> None:
+    encoded = f'data: {{"text":"a{_UNICODE_SEPARATORS}b"}}'.encode()
+    split_at = encoded.index(" ".encode()) + 1  # inside the 3-byte sequence
+    response = _chunked_response(
+        encoded[:split_at], encoded[split_at:] + b"\r", b"\n\r", b"\ndata: 2\n"
+    )
+
+    lines = [line async for line in iter_stream_lines(response)]
+
+    assert lines == [f'data: {{"text":"a{_UNICODE_SEPARATORS}b"}}', "", "data: 2"]
+
+
+@pytest.mark.asyncio
+async def test_iter_sse_events_keeps_unicode_line_separators_inside_json_data() -> None:
+    payload = json.dumps({"delta": f"one{_UNICODE_SEPARATORS}two"}, ensure_ascii=False)
+    response = _chunked_response(
+        f"data: {payload}\r".encode(), b"\n\r\n", b": keepalive\n", b"data: [DONE]\n\n"
+    )
+
+    events = [event async for event in iter_sse_events(response)]
+
+    assert [event.comment for event in events] == [None, "keepalive", None]
+    assert parse_sse_json_data(events[0].data or "", context="test") == {
+        "delta": f"one{_UNICODE_SEPARATORS}two"
+    }
+    assert events[2].data == "[DONE]"

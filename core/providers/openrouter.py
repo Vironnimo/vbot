@@ -28,6 +28,7 @@ from core.providers._http_shared import (
     build_streaming_request,
     classify_http_status,
     decode_response_json,
+    iter_stream_lines,
     wrap_network_error,
 )
 from core.providers._openrouter_catalog import (
@@ -396,7 +397,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         event_lines: list[str] = []
         seen_finish_delta = False
         try:
-            async for line in response.aiter_lines():
+            async for line in iter_stream_lines(response):
                 if line:
                     event_lines.append(line)
                     continue

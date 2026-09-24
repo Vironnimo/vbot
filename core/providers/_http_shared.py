@@ -8,7 +8,9 @@ exceptions.
 
 from __future__ import annotations
 
+import codecs
 import json
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from logging import Logger
@@ -474,17 +476,86 @@ async def post_json_with_retry(
     return await retry_async(_do_request)
 
 
+# SSE (WHATWG HTML event-stream grammar) and NDJSON end lines only with CRLF,
+# LF, or CR. ``str.splitlines`` and httpx's ``aiter_lines`` additionally split
+# on U+000B/U+000C/U+001C-U+001E/U+0085/U+2028/U+2029, which JSON permits
+# unescaped inside strings, so they would cut one valid data line in two.
+_STREAM_LINE_BREAK = re.compile(r"\r\n|\r|\n")
+
+
+class _StreamLineDecoder:
+    """Incrementally split decoded text at CR, LF, and CRLF only.
+
+    A CR ending one chunk terminates its line immediately; a LF beginning the
+    next chunk is then the second half of that CRLF, not an extra empty line.
+    Like ``str.splitlines``, a final terminator yields no trailing empty line.
+    """
+
+    def __init__(self) -> None:
+        self._partial: list[str] = []
+        self._pending_crlf = False
+
+    def decode(self, text: str) -> list[str]:
+        if self._pending_crlf and text.startswith("\n"):
+            text = text[1:]
+        if not text:
+            return []
+        self._pending_crlf = text.endswith("\r")
+        parts = _STREAM_LINE_BREAK.split(text)
+        if len(parts) == 1:
+            self._partial.append(parts[0])
+            return []
+        lines = ["".join(self._partial) + parts[0], *parts[1:-1]]
+        self._partial = [parts[-1]] if parts[-1] else []
+        return lines
+
+    def flush(self) -> list[str]:
+        remainder = "".join(self._partial)
+        self._partial = []
+        self._pending_crlf = False
+        return [remainder] if remainder else []
+
+
+def split_stream_lines(text: str) -> list[str]:
+    """Split complete stream text at CR, LF, and CRLF only (see ``iter_stream_lines``)."""
+
+    decoder = _StreamLineDecoder()
+    return [*decoder.decode(text), *decoder.flush()]
+
+
+async def iter_stream_lines(response: httpx.Response) -> AsyncIterator[str]:
+    """Yield the lines of a streamed UTF-8 SSE or NDJSON response body.
+
+    Every Provider stream reads lines through this iterator rather than
+    ``httpx.Response.aiter_lines()``: it decodes UTF-8 incrementally across
+    chunk boundaries and splits only at CR, LF, or CRLF (including a CRLF split
+    across chunks), so Unicode line separators inside JSON strings remain part
+    of their data line.
+    """
+
+    text_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    line_decoder = _StreamLineDecoder()
+    async for chunk in response.aiter_bytes():
+        for line in line_decoder.decode(text_decoder.decode(chunk)):
+            yield line
+    for line in line_decoder.decode(text_decoder.decode(b"", final=True)):
+        yield line
+    for line in line_decoder.flush():
+        yield line
+
+
 async def iter_sse_events(response: httpx.Response) -> AsyncIterator[SSEEvent]:
     """Yield framed Server-Sent Event data payloads and transport comments.
 
-    SSE events may contain multiple ``data:`` lines. HTTPX yields individual
-    lines, so adapters should consume framed events instead of parsing every
-    line as complete JSON. Comments are yielded immediately without disturbing
-    an in-progress multi-line data event; an Adapter may translate them into a
-    Provider heartbeat when the concrete wire uses comments as keepalives.
+    SSE events may contain multiple ``data:`` lines. The shared line iterator
+    yields individual lines, so adapters should consume framed events instead
+    of parsing every line as complete JSON. Comments are yielded immediately
+    without disturbing an in-progress multi-line data event; an Adapter may
+    translate them into a Provider heartbeat when the concrete wire uses
+    comments as keepalives.
     """
     data_parts: list[str] = []
-    async for line in response.aiter_lines():
+    async for line in iter_stream_lines(response):
         if line == "":
             if data_parts:
                 yield SSEEvent(data="\n".join(data_parts))

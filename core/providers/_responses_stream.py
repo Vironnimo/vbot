@@ -7,6 +7,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from core.providers._http_shared import split_stream_lines
 from core.providers._responses_output import (
     _assistant_phase_from_output,
     _extract_output_text_parts,
@@ -164,8 +165,7 @@ def _iter_sse_events(lines: Iterable[str]) -> Iterator[tuple[str, Mapping[str, A
     event_name = ""
     data_parts: list[str] = []
     for raw_chunk in lines:
-        for raw_line in raw_chunk.splitlines():
-            line = raw_line.rstrip("\r\n")
+        for line in split_stream_lines(raw_chunk):
             if not line:
                 yield from _flush_sse_event(event_name, data_parts)
                 event_name = ""

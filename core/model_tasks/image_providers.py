@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from core.model_tasks.image_types import ImageGenerationResult, ImageInput, JsonObject
-from core.providers._http_shared import parse_sse_json_data
+from core.providers._http_shared import parse_sse_json_data, split_stream_lines
 from core.providers.errors import ProviderAuthError, ProviderError
 from core.providers.openai import (
     CODEX_EXTRA_HEADERS,
@@ -601,8 +601,7 @@ def _parse_openai_codex_image_response(
 
 def _iter_sse_data_from_text(body: str):
     data_parts: list[str] = []
-    for raw_line in body.splitlines():
-        line = raw_line.rstrip("\r")
+    for line in split_stream_lines(body):
         if line == "":
             if data_parts:
                 yield "\n".join(data_parts)
