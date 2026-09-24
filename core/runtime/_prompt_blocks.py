@@ -34,7 +34,9 @@ class _StorageBlockBackend(Protocol):
         """Return a block's saved override text in a scope (``None`` when absent)."""
         ...
 
-    def write_block_layout(self, scope: str | None, entries: Sequence[LayoutEntry]) -> Path:
+    def write_block_layout(
+        self, scope: str | None, entries: Sequence[LayoutEntry], *, reset: bool = False
+    ) -> Path:
         """Atomically write a scope's ordered block layout."""
         ...
 
@@ -87,8 +89,10 @@ class _StorageManagerBlockStore:
     def read_block_override(self, scope_key: str, block_id: str) -> str | None:
         return self._storage.read_block_override(self._to_store_scope(scope_key), block_id)
 
-    def write_layout(self, scope_key: str, entries: Sequence[LayoutEntry]) -> None:
-        self._storage.write_block_layout(self._to_store_scope(scope_key), entries)
+    def write_layout(
+        self, scope_key: str, entries: Sequence[LayoutEntry], *, reset: bool = False
+    ) -> None:
+        self._storage.write_block_layout(self._to_store_scope(scope_key), entries, reset=reset)
 
     def prune_layout(
         self, scope_key: str, entries: Sequence[LayoutEntry], known_ids: frozenset[str]

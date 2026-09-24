@@ -718,10 +718,19 @@ class StorageManager:
 
         return self._prompt_blocks.read_layout(scope)
 
-    def write_block_layout(self, scope: str | None, entries: Sequence[LayoutEntry]) -> Path:
-        """Atomically write a scope's ordered block layout."""
+    def write_block_layout(
+        self,
+        scope: str | None,
+        entries: Sequence[LayoutEntry],
+        *,
+        reset: bool = False,
+    ) -> Path:
+        """Atomically write a scope's ordered block layout.
 
-        return self._prompt_blocks.write_layout(scope, entries)
+        ``reset`` replaces a layout file that fails to load instead of refusing.
+        """
+
+        return self._prompt_blocks.write_layout(scope, entries, reset=reset)
 
     def prune_block_layout(
         self,
