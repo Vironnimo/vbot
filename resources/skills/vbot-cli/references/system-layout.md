@@ -57,6 +57,7 @@ Some directories are created only when their owning feature first writes data.
 | `recall/` | Derived lexical/vector Session recall indexes | Use recall behavior and rebuild mechanisms; canonical history remains in Sessions |
 | `logs/` | Daily server/kernel application logs | `vbot log list/read` |
 | `artifacts/debug/` | Debug trace index and redacted raw Provider traffic under `traces/` | `vbot debug status/traces/trace/clear` |
+| `artifacts/performance/` | Performance recordings: a timeline trace plus a summary per recording; the newest 20 are kept | `vbot performance recordings/record`; do not hand-edit |
 | `oauth/` | Sensitive OAuth token state | Provider connect/status/disconnect commands; never print or copy tokens into chat |
 | `extensions/` | User-installed single-file or package Extensions and optional bundled Extension Skills | `vbot extensions list/reload/enable/disable`; additional configured roots may live elsewhere |
 | `archive/` | System-owned archived Agent, Project, and Session trees created by destructive lifecycle operations | Inspect only to understand or recover an archived resource; do not treat it as active state |

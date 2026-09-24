@@ -37,7 +37,7 @@ For a focused question about a past conversation, use `session_search` and answe
 | Runs after startup, including restart continuation | `references/bootstrap.md` |
 | Install a Skill from a link, archive or folder; inspect, author, share or disable Skills | `references/skills.md` |
 | Pinned Memory for an Identity Agent | `references/memory.md` |
-| Logs, Provider traces and Session usage statistics | `references/diagnostics.md` |
+| Logs, Provider traces, Session usage statistics and server performance | `references/diagnostics.md` |
 | Server start/stop/restart, update, uninstall, Autostart, Desktop, Doctor | `references/server.md` |
 | Session-store health, snapshots and recovery | `references/session-store.md` |
 | Filesystem investigation, data location, backups or manual repair | `references/system-layout.md` |
