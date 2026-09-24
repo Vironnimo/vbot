@@ -82,6 +82,68 @@ describe('App controller', () => {
     );
   });
 
+  it('resolves a startup Extension page link after the page catalog loads', () => {
+    const knownViewIds = ['chat', 'settings'];
+    const { browserHistory, browserWindow, controller, state } = setup({
+      knownViewIds: () => knownViewIds,
+    });
+    // A reload restores the entry's view even without a hash.
+    browserWindow.location.hash = '';
+    browserHistory.state = {
+      marker: 'vbot.navigation',
+      view: 'extension:fixture:main',
+      session: null,
+      selection: null,
+    };
+
+    controller.initializeNavigationHistory();
+    expect(state.activeViewId).toBe('chat');
+    expect(browserHistory.replaceState).not.toHaveBeenCalled();
+
+    knownViewIds.push('extension:fixture:main');
+    expect(controller.resolvePendingExtensionView()).toBe(true);
+    expect(state.activeViewId).toBe('extension:fixture:main');
+    expect(browserHistory.replaceState).toHaveBeenCalledWith(
+      expect.objectContaining({ view: 'extension:fixture:main' }),
+      '',
+      '#extension:fixture:main',
+    );
+    expect(browserHistory.pushState).not.toHaveBeenCalled();
+    // One-shot: later catalog refreshes leave navigation alone.
+    expect(controller.resolvePendingExtensionView()).toBe(false);
+  });
+
+  it('drops a startup Extension page link the page catalog does not contain', () => {
+    const { browserHistory, browserWindow, controller, state } = setup();
+    browserWindow.location.hash = '#extension:missing:page';
+
+    controller.initializeNavigationHistory();
+    expect(controller.resolvePendingExtensionView()).toBe(false);
+
+    expect(state.activeViewId).toBe('chat');
+    expect(browserHistory.replaceState).toHaveBeenCalledWith(
+      expect.objectContaining({ view: 'chat' }),
+      '',
+      '#chat',
+    );
+  });
+
+  it('forgets a startup Extension page link once the user navigates', () => {
+    const knownViewIds = ['chat', 'settings'];
+    const { browserHistory, browserWindow, controller, state } = setup({
+      knownViewIds: () => knownViewIds,
+    });
+    browserWindow.location.hash = '#extension:fixture:main';
+
+    controller.initializeNavigationHistory();
+    controller.selectView('settings');
+    knownViewIds.push('extension:fixture:main');
+
+    expect(controller.resolvePendingExtensionView()).toBe(false);
+    expect(state.activeViewId).toBe('settings');
+    expect(browserHistory.replaceState).not.toHaveBeenCalled();
+  });
+
   it('marks direct Sub-Agent link navigation for live-tail scrolling only', () => {
     const { browserHistory, controller, state } = setup();
 

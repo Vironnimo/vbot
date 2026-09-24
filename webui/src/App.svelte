@@ -169,6 +169,8 @@
     get selectView() {
       return selectView;
     },
+    // A startup link to an Extension page resolves once its route is known.
+    onPagesLoaded: () => appController?.resolvePendingExtensionView(),
   });
 
   const visibleNavigationItems = $derived(
