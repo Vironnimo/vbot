@@ -52,15 +52,22 @@ CANONICAL_FALLBACK_PARTIAL_REASON = (
     "Search could not check all eligible Messages. Results are incomplete. Narrow period or "
     "session_id; an empty result does not establish that no matching text exists."
 )
-FTS_FALLBACK_REASON = (
-    "Keyword search used a fallback scan with substring matching and newest-first order. "
-    "Relevance ranking was unavailable."
-)
-FTS_PARTIAL_FALLBACK_REASON = (
-    "Keyword search used a fallback scan and could not check all eligible Messages. "
-    "Results are incomplete and newest-first. Narrow period or session_id; an empty result "
-    "does not establish that no matching text exists."
-)
+
+
+def _fts_fallback_reason(order: RecallOrder, *, complete: bool) -> str:
+    """Explain a scan that replaced the keyword index, naming the order it used."""
+
+    scan_order = "oldest-first" if order == "oldest" else "newest-first"
+    if not complete:
+        return (
+            "Keyword search used a fallback scan and could not check all eligible Messages. "
+            f"Results are incomplete and {scan_order}. Narrow period or session_id; an empty "
+            "result does not establish that no matching text exists."
+        )
+    reason = f"Keyword search used a fallback scan with substring matching and {scan_order} order."
+    if order == "relevance":
+        reason += " Relevance ranking was unavailable."
+    return reason
 
 
 def _session_address(request: Any, session_id: str) -> SessionAddress:
@@ -178,9 +185,7 @@ class CanonicalSessionRecallBackend:
             total_candidate_sessions=len(scope.candidates),
             degraded=fts_failed or not result.complete,
             degradation_reason=(
-                FTS_PARTIAL_FALLBACK_REASON
-                if fts_failed and not result.complete
-                else FTS_FALLBACK_REASON
+                _fts_fallback_reason(request.order, complete=result.complete)
                 if fts_failed
                 else CANONICAL_FALLBACK_PARTIAL_REASON
                 if not result.complete
