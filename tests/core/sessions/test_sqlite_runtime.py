@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from pathlib import Path
 
 import pytest
 
+from core.performance import PerformanceService
+from core.performance.performance import reset_for_tests
 from core.sessions import sqlite_runtime
 from core.sessions.errors import SessionStoreUnavailableError
 from core.sessions.sqlite_runtime import (
@@ -215,3 +218,40 @@ def test_readonly_connections_escape_special_path_characters(tmp_path: Path) -> 
         if reader is not None:
             runtime._close_reader(reader)
         runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_transactions_are_measured_on_the_sqlite_track(tmp_path: Path) -> None:
+    reset_for_tests()
+    performance = PerformanceService(tmp_path / "performance")
+    runtime = _runtime(tmp_path)
+    attempts = 0
+
+    def write(connection: sqlite3.Connection) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise sqlite3.OperationalError("database is locked")
+        connection.execute("CREATE TABLE measured_probe (value TEXT NOT NULL)")
+
+    try:
+        performance.start_recording()
+        runtime.execute_write(write, patience_s=1.0)
+        with runtime.read_ctx() as connection:
+            connection.execute("SELECT COUNT(*) FROM measured_probe").fetchone()
+        result = await performance.stop_recording()
+        metrics = (await performance.snapshot())["metrics"]
+    finally:
+        runtime.close()
+        await performance.aclose()
+        reset_for_tests()
+
+    # The busy attempt is measured as well; it spent real time inside the transaction.
+    assert metrics["sqlite.write"]["count"] == 2
+    assert metrics["sqlite.write_wait"]["count"] == 2
+    assert metrics["sqlite.read"]["count"] == 1
+    events = json.loads(Path(result["trace_path"]).read_text("utf-8"))["traceEvents"]
+    tracks = {e["pid"]: e["args"]["name"] for e in events if e["name"] == "process_name"}
+    spans = [(tracks[e["pid"]], e["name"], e["cat"]) for e in events if e["ph"] == "X"]
+    assert spans.count(("sqlite", "write", "sqlite")) == 2
+    assert ("sqlite", "read", "sqlite") in spans
