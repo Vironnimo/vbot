@@ -692,11 +692,12 @@ class CompactionRunCoordinator:
         project_id: str | None,
     ) -> CompactionSettings:
         """Resolve Session override → Agent default → global Compaction Policy."""
-        metadata = self._host.sessions.get_metadata(
-            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+        session_policy = self._host.sessions.metadata_value(
+            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
+            COMPACTION_POLICY_META_KEY,
         )
         raw_settings = effective_compaction_policy(
-            metadata.get(COMPACTION_POLICY_META_KEY),
+            session_policy,
             getattr(agent, "compaction_policy", None),
             self._host.storage.load_compaction_settings,
         )

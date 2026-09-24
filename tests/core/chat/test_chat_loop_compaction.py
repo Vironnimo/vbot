@@ -387,3 +387,30 @@ async def test_automatic_compaction_boundaries_never_reload_complete_history(
     assert complete_reads == [None]
     active = session.load_active()
     assert persisted_roles(active).count("compaction_checkpoint") == 3
+
+
+@pytest.mark.asyncio
+async def test_session_compaction_policy_override_governs_automatic_compaction(
+    tmp_path: Path,
+) -> None:
+    runtime = _auto_compacting_runtime(tmp_path, StubAdapter([{"content": "done"}]))
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Earlier context"))
+    runtime.chat_sessions.mutate_metadata(
+        session.address,
+        lambda metadata: metadata.__setitem__(
+            "compaction_policy",
+            {
+                "enabled": False,
+                "trigger": {"type": "context_ratio", "threshold": 0.8},
+                "strategy": {"type": "summary_tail", "tail_tokens": 15_000},
+            },
+        ),
+    )
+    service = _RecordingCompactionService()
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+
+    await (await loop.start_run("coder", "Go", session_id="session-one")).wait()
+
+    assert service.should_auto_calls == []
+    assert service.compacted_contents == []
