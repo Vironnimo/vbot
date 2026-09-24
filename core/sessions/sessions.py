@@ -164,6 +164,13 @@ class ChatSessionManager:
     async def exists_async(self, address: SessionAddress) -> bool:
         return await _run_session_io(self.exists, address)
 
+    def existing_addresses(self, addresses: Sequence[SessionAddress]) -> set[SessionAddress]:
+        """Return which *addresses* name live Sessions, in one set-oriented read.
+
+        An address whose id no Session could carry is simply absent from the result.
+        """
+        return self._store.existing_addresses(addresses) if addresses else set()
+
     def get(self, address: SessionAddress) -> ChatSession:
         _validate_session_id(address.session_id)
         self._store.state(address)

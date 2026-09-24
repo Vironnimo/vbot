@@ -33,6 +33,29 @@ def exists(
     )
 
 
+# Three bound values per address keep one batch well below SQLite's variable limit.
+_EXISTING_ADDRESS_BATCH_SIZE = 300
+
+
+def existing_addresses(
+    connection: sqlite3.Connection, addresses: Sequence[SessionAddress]
+) -> set[SessionAddress]:
+    """Return the live subset of *addresses*, one indexed statement per batch."""
+    wanted = list(dict.fromkeys(addresses))
+    found: set[SessionAddress] = set()
+    for start in range(0, len(wanted), _EXISTING_ADDRESS_BATCH_SIZE):
+        batch = wanted[start : start + _EXISTING_ADDRESS_BATCH_SIZE]
+        rows = connection.execute(
+            "SELECT project_id, agent_id, session_id FROM sessions WHERE status = 'live' "
+            "AND (project_id, agent_id, session_id) IN (VALUES "
+            + ", ".join("(?, ?, ?)" for _ in batch)
+            + ")",
+            [value for address in batch for value in _store_values._scope(address)],
+        ).fetchall()
+        found.update(_store_values._address(row) for row in rows)
+    return found
+
+
 def state(
     connection: sqlite3.Connection, address: SessionAddress, *, include_archived: bool = False
 ) -> sqlite3.Row:

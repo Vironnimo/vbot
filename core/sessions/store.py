@@ -277,6 +277,10 @@ class SessionStore:
         with self._runtime.read_ctx() as connection:
             return _store_queries.exists(connection, address, include_archived=include_archived)
 
+    def existing_addresses(self, addresses: Sequence[SessionAddress]) -> set[SessionAddress]:
+        with self._runtime.read_ctx() as connection:
+            return _store_queries.existing_addresses(connection, addresses)
+
     def state(self, address: SessionAddress, *, include_archived: bool = False) -> sqlite3.Row:
         with self._runtime.read_ctx() as connection:
             return _store_queries.state(connection, address, include_archived=include_archived)
