@@ -9,6 +9,7 @@ from typing import Any
 from core.providers._chat_completions_constants import (
     _OPENAI_STREAM_REASONING_DETAILS_STATE_KEY,
     _OPENAI_TOOL_CALL_INDEX_IDS_STATE_KEY,
+    _OPENAI_TOOL_CALL_NAMES_STATE_KEY,
 )
 from core.providers._chat_completions_wire import (
     _extract_openai_reasoning,
@@ -152,6 +153,7 @@ def _normalize_openai_tool_call_deltas(
             name_delta = ""
         if not isinstance(arguments_delta, str):
             arguments_delta = ""
+        name_delta = _unseen_tool_name_suffix(tool_call_index, name_delta, normalization_state)
         normalized_delta: dict[str, Any] = {
             "type": "tool_call_delta",
             "slot": tool_call_index,
@@ -162,6 +164,32 @@ def _normalize_openai_tool_call_deltas(
             normalized_delta["id"] = provider_id
         normalized_deltas.append(normalized_delta)
     return normalized_deltas
+
+
+def _unseen_tool_name_suffix(
+    slot: int,
+    name_delta: str,
+    normalization_state: dict[str, Any] | None,
+) -> str:
+    """Return only the unseen part of a streamed Tool name for one slot.
+
+    OpenAI sends ``function.name`` once per Call, but a compatible server may
+    repeat the whole name on later fragments of the same Call. A name fragment
+    that starts with everything already emitted for the slot is such a
+    snapshot. Arguments get no such treatment: they are true deltas whose
+    repeated bytes are meaningful, and Chat appends every emitted delta
+    verbatim. Requires per-stream ``normalization_state``.
+    """
+
+    if not name_delta or normalization_state is None:
+        return name_delta
+    names = normalization_state.setdefault(_OPENAI_TOOL_CALL_NAMES_STATE_KEY, {})
+    emitted = names.get(slot, "")
+    if emitted and name_delta.startswith(emitted):
+        names[slot] = name_delta
+        return name_delta[len(emitted) :]
+    names[slot] = emitted + name_delta
+    return name_delta
 
 
 def _openai_tool_call_index(raw_tool_call: dict[str, Any], position: int) -> int:

@@ -38,46 +38,52 @@ async def test_suppresses_parsed_tool_arguments_until_finalization() -> None:
     ]
 
 
-async def test_cumulative_tool_argument_fragments_emit_only_missing_suffix_and_finalize() -> None:
+async def test_prefix_repeating_tool_argument_deltas_are_appended_verbatim() -> None:
+    # Adapters reconcile wire snapshots; a delta that starts with everything
+    # accumulated so far is still new content.
     accumulator = StreamingAccumulator()
+    fragments = ['{"value":', '{"value":', "1}}"]
 
-    first_delta = accumulator.add_delta(
-        {
-            "type": "tool_call_delta",
-            "id": "call_abc",
-            "name_delta": "write",
-            "arguments_delta": '{"path":"',
-        }
-    )[0]
-    second_delta = accumulator.add_delta(
-        {
-            "type": "tool_call_delta",
-            "id": "call_abc",
-            "arguments_delta": '{"path":"notes.md"}',
-        }
-    )[0]
-    duplicate_delta = accumulator.add_delta(
-        {
-            "type": "tool_call_delta",
-            "id": "call_abc",
-            "arguments_delta": '{"path":"notes.md"}',
-        }
-    )
+    visible = [
+        accumulator.add_delta(
+            {
+                "type": "tool_call_delta",
+                "id": "call_abc",
+                "name_delta": "write" if index == 0 else "",
+                "arguments_delta": fragment,
+            }
+        )[0]
+        for index, fragment in enumerate(fragments)
+    ]
 
     fields = accumulator.finalize_assistant_fields()
-    assert first_delta.payload == {
-        "tool_call_id": "call_abc",
-        "name_delta": "write",
-        "arguments_delta": '{"path":"',
-    }
-    assert second_delta.payload == {
-        "tool_call_id": "call_abc",
-        "arguments_delta": 'notes.md"}',
-    }
-    assert duplicate_delta == []
+    assert [delta.payload["arguments_delta"] for delta in visible] == fragments
     assert fields.tool_calls == [
-        {"id": "call_abc", "name": "write", "arguments": {"path": "notes.md"}}
+        {"id": "call_abc", "name": "write", "arguments": {"value": {"value": 1}}}
     ]
+
+
+async def test_identical_second_argument_value_becomes_sibling_call() -> None:
+    accumulator = StreamingAccumulator()
+
+    for index in range(2):
+        accumulator.add_delta(
+            {
+                "type": "tool_call_delta",
+                "id": "call_abc",
+                "name_delta": "write" if index == 0 else "",
+                "arguments_delta": '{"path":"notes.md"}',
+            }
+        )
+
+    fields = accumulator.finalize_assistant_fields()
+    assert fields.tool_calls is not None
+    assert [call["arguments"] for call in fields.tool_calls] == [
+        {"path": "notes.md"},
+        {"path": "notes.md"},
+    ]
+    assert fields.tool_calls[0]["id"] == "call_abc"
+    assert all("rejection" not in call for call in fields.tool_calls)
 
 
 async def test_tool_argument_merge_keeps_non_tail_repeated_text() -> None:

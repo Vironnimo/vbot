@@ -20,6 +20,8 @@ _OPENAI_STREAM_REASONING_DETAILS_STATE_KEY = "openai_reasoning_details"
 
 _OPENAI_TOOL_CALL_INDEX_IDS_STATE_KEY = "openai_tool_call_index_ids"
 
+_OPENAI_TOOL_CALL_NAMES_STATE_KEY = "openai_tool_call_names"
+
 REASONING_RESPONSE_FIELD_METADATA_KEY = "reasoning_response_field"
 
 OPENAI_TOOL_FINISH_REASONS = {"tool_calls", "function_call"}
