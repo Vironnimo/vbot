@@ -28,6 +28,8 @@ Schema (Generation 1, `core/providers/usage_history.py`): `usage_samples` (AUTOI
 
 All store I/O runs on the database's worker pool, off the Event Loop; the sampler's `DatabaseError` and invalid-sample failures log a warning and skip that attempt. `provider.usage_history` accepts an inclusive optional `{since?, until?}` ISO-8601 window and returns samples oldest first. `provider.usage_history.clear` deletes every sample in one transaction and returns `{deleted_samples, deleted_files}`; `deleted_files` is a legacy field that is 1 when the clear removed samples and 0 when the history was already empty - the database file itself always remains. The WebUI places an explicit confirmation in front of that destructive RPC; the CLI is `provider history list|clear --yes`.
 
+The pre-Generation-1 monthly JSONL files under `statistics/provider-usage/` are converted offline by `scripts/converters/persistence_generation_1/provider_usage.py` (invalid lines and unreadable files are skipped and reported; every file is retired). vBot itself never reads them.
+
 ## Concurrency, cache, and failures
 
 Fetchers fan out concurrently. Each has a bounded timeout and fails open into its own snapshot: timeout, HTTP status, unsupported/invalid shape, or generic unavailable. One Provider cannot fail siblings.
@@ -54,7 +56,7 @@ OpenAI and Ollama Cloud are live-verified as documented in their maps. Ollama Cl
 
 - Service lifecycle, cache, Connection selection and fetchers: `core/providers/usage.py`
 - Report shapes and probe contracts: internal `core/providers/_usage_types.py`; Provider response parsing: `_usage_parsers.py`. Existing public imports remain available from `usage.py`.
-- Durable schema, validation, `provider-usage.db` store and deletion: `core/providers/usage_history.py`
+- Durable schema, validation, `provider-usage.db` store and deletion: `core/providers/usage_history.py`; offline JSONL conversion: `scripts/converters/persistence_generation_1/provider_usage.py`
 - RPC validation/projection: `server/rpc/provider_usage_methods.py`
 - WebUI polling/presentation: `webui/src/components/statistics/ProviderLimits.svelte`, `webui/src/components/statistics/LimitHistory.svelte`, `webui/src/lib/statisticsView.js`
-- Focused coverage: `tests/core/providers/test_usage.py` (service), `test_usage_parsing.py`, `test_usage_durable_history.py` (sampling), `test_usage_history.py` (storage), `tests/core/runtime/test_runtime_provider_usage.py`, `tests/server/rpc/test_provider_usage_methods.py`, and Statistics WebUI tests
+- Focused coverage: `tests/core/providers/test_usage.py` (service), `test_usage_parsing.py`, `test_usage_durable_history.py` (sampling), `test_usage_history.py` (storage), `tests/core/runtime/test_runtime_provider_usage.py`, `tests/server/rpc/test_provider_usage_methods.py`, `tests/scripts/converters/persistence_generation_1/test_provider_usage.py`, and Statistics WebUI tests
