@@ -140,6 +140,28 @@ async def test_continuation_requires_active_request_and_target() -> None:
         )
 
 
+@pytest.mark.asyncio
+async def test_continuation_counts_only_content_after_the_previous_checkpoint() -> None:
+    later = [user("u2", "later request " * 50), assistant("a2", "later answer " * 50)]
+    prior = checkpoint([], count=1_000)
+
+    result = await CompactionService().compact(
+        [user("u1", "old request"), prior, *later],
+        session_address=SessionAddress(project_id=None, agent_id="coder", session_id="session"),
+        prompt_cache_affinity_id="test-affinity",
+        summary_adapter=StubAdapter("must not be used"),
+        summary_model_id="openai/summary",
+        storage=StubStorage(),
+        settings=CompactionSettings(strategy="continuation"),
+        request_messages=provider_request(later),
+        active_adapter=StubAdapter("NEXT CHECKPOINT"),
+        active_model_id="openai/active",
+    )
+
+    assert result.usage is not None
+    assert result.usage["compacted_token_count"] == 1_000 + _tail_token_span(later)
+
+
 def test_continuation_needs_new_context_since_the_latest_checkpoint() -> None:
     service = CompactionService()
     settings = CompactionSettings(strategy="continuation")

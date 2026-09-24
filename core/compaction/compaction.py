@@ -282,9 +282,17 @@ class ContinuationStrategy:
         return CompactionPlan(
             model_messages=tuple(model_messages),
             model_target="active",
+            # Like Summary+Tail, count only newly compacted content: the previous
+            # checkpoint notes are already included in the cumulative count.
             compacted_token_count=(
                 context.previous_compacted_token_count
-                + _estimate_token_span(list(context.messages))
+                + _estimate_token_span(
+                    [
+                        message
+                        for message in context.messages
+                        if not _is_compaction_checkpoint_note(message)
+                    ]
+                )
             ),
         )
 
