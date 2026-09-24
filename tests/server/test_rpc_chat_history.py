@@ -478,3 +478,82 @@ async def test_chat_history_incremental_projection_and_edit_reset(tmp_path: Path
     assert reset["history_reset"] is True
     assert [message["id"] for message in reset["messages"]] == [replacement.id]
     assert reset["messages"][0]["history_sequence"] == 3
+
+
+@pytest.mark.asyncio
+async def test_chat_history_reports_the_session_effective_compaction_policy(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    sessions = state.runtime.chat_sessions
+    session = sessions.create("coder", session_id="policy-session")
+    session.append(ChatMessage.user("Hello"))
+
+    async def history(**params: Any) -> dict[str, Any]:
+        response = await dispatch_rpc(
+            state,
+            {
+                "method": "chat.history",
+                "params": {"agent_id": "coder", "session_id": session.id, **params},
+            },
+        )
+        assert response["ok"] is True
+        result: dict[str, Any] = response["result"]
+        return result
+
+    inherited = await history()
+    assert inherited["compaction_policy"]["enabled"] is True
+    assert inherited["compaction_policy"]["trigger"] == {
+        "type": "context_ratio",
+        "threshold": 0.8,
+    }
+
+    agent_policy = {
+        "enabled": False,
+        "trigger": {"type": "context_ratio", "threshold": 0.6},
+        "strategy": {"type": "continuation"},
+    }
+    state.runtime.agents.update("coder", compaction_policy=agent_policy)
+    assert (await history())["compaction_policy"]["enabled"] is False
+
+    session_policy = {
+        "enabled": True,
+        "trigger": {"type": "input_tokens", "tokens": 50_000},
+        "strategy": {"type": "continuation"},
+    }
+    sessions.mutate_metadata(
+        session.address,
+        lambda metadata: metadata.__setitem__("compaction_policy", session_policy),
+    )
+    current = await history()
+    assert current["compaction_policy"]["enabled"] is True
+    assert current["compaction_policy"]["trigger"] == {
+        "type": "input_tokens",
+        "tokens": 50_000,
+    }
+
+    older = await history(before=current["messages"][0]["id"])
+    assert "compaction_policy" not in older
+
+
+@pytest.mark.asyncio
+async def test_chat_history_omits_the_policy_when_the_agent_no_longer_resolves(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    session = state.runtime.chat_sessions.create(
+        "former", project_id="vbot", session_id="orphaned-session"
+    )
+    session.append(ChatMessage.user("Hello"))
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.history",
+            "params": {"agent_id": "former@vbot", "session_id": session.id},
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["messages"]
+    assert "compaction_policy" not in response["result"]

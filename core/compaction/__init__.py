@@ -15,6 +15,7 @@ from core.compaction.compaction import (
     ContinuationStrategy,
     InputTokensTrigger,
     SummarizationStrategy,
+    effective_compaction_policy,
     find_tail_boundary,
     is_compacted_tool_result_content,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "MIN_AUTO_COMPACTION_RECLAIM_TOKENS",
     "SummarizationStrategy",
     "TOOL_RESULT_COMPACTED_FIELD",
+    "effective_compaction_policy",
     "find_tail_boundary",
     "is_compacted_tool_result_content",
 ]

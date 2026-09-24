@@ -31,6 +31,7 @@ from core.chat.wire_shaping import (
 from core.models.pricing import TokenPricing, price_usage
 from core.providers.adapter import TERMINAL_OUTCOME_STOP, estimate_wire_request_input_tokens
 from core.sessions import SessionAddress, current_skill_activation_contents, skill_tool_activation
+from core.settings.normalizers import normalize_compaction_policy
 from core.utils.errors import VBotError
 from core.utils.tokens import estimate_message_tokens, estimate_request_input_tokens
 from core.utils.workers import BoundedWorkerPool
@@ -77,6 +78,27 @@ _COMPACTION_WORKERS = BoundedWorkerPool(
 
 ModelTarget = Literal["active", "summary"]
 RequestTokenEstimator = Callable[[Sequence[Mapping[str, Any]]], int]
+
+
+def effective_compaction_policy(
+    session_policy: Any,
+    agent_policy: Any,
+    load_global_policy: Callable[[], Any],
+) -> dict[str, Any]:
+    """Resolve Session override -> Agent effective -> global Compaction Policy.
+
+    ``agent_policy`` is the resolved Agent's own override (including a Project
+    member override); ``load_global_policy`` is called only when neither
+    override applies. The result is one complete normalized Policy.
+    """
+    return normalize_compaction_policy(
+        session_policy
+        if isinstance(session_policy, dict)
+        else agent_policy
+        if isinstance(agent_policy, dict)
+        else load_global_policy(),
+        use_defaults=True,
+    )
 
 
 @dataclass(frozen=True)
