@@ -18,10 +18,12 @@ import pytest
 
 from core.chat.messages import ChatMessage, ToolCall
 from core.sessions import (
+    _store_history,
     _store_queries,
     _store_search,
+    _store_values,
 )
-from core.sessions._types import SessionAddress
+from core.sessions._types import SessionAddress, SessionReadCursor
 from tests.core.sessions.sessions_test_support import manager as manager
 
 _BRANCH_NODES = {"COMPOUND QUERY", "LEFT-MOST SUBQUERY", "UNION ALL"}
@@ -176,6 +178,83 @@ def test_time_filtered_search_reads_messages_through_the_instant_index(history) 
         for row in connection.execute("EXPLAIN QUERY PLAN " + sql, params)
     ]
     assert any("messages_by_session_instant (session_key=? AND <expr>>?)" in plan for plan in plans)
+
+
+def test_recall_context_reads_its_anchor_by_session_index(history) -> None:
+    address, anchor, connection = history
+    recorder, statements = _recording(connection)
+    context = _store_history.recall_context(recorder, address, anchor)
+    assert [item["role"] for item in context] == ["user"]
+    _assert_indexed(connection, statements)
+
+
+def test_delta_read_uses_one_indexed_read_from_the_anchor(history) -> None:
+    address, _anchor, connection = history
+    state = _store_values._require_live(connection, address)
+    count = int(state["message_count"])
+    full = _store_history.message_rows_since(connection, address, None)
+    assert full is not None
+    rows = full[0]
+    recorder, statements = _recording(connection)
+    cursor = SessionReadCursor(
+        str(state["generation_id"]), 0, count - 1, count - 1, rows[count - 2]["message_id"]
+    )
+    delta = _store_history.message_rows_since(recorder, address, cursor)
+    assert delta is not None
+    assert [int(row["seq"]) for row in delta[0]] == [count - 1]
+    assert sum("history_records" in sql for sql, _params in statements) == 1
+    _assert_indexed(connection, statements)
+
+
+def test_current_delta_cursor_reads_only_the_session_row(history) -> None:
+    address, _anchor, connection = history
+    full = _store_history.message_rows_since(connection, address, None)
+    assert full is not None
+    current = full[1]
+    recorder, statements = _recording(connection)
+    assert _store_history.message_rows_since(recorder, address, current) == ([], current)
+    assert [sql for sql, _params in statements if "history_records" in sql] == []
+
+
+def test_page_query_orders_narrow_keys_by_session_index(history) -> None:
+    address, _anchor, connection = history
+    state = _store_values._require_live(connection, address)
+    recorder, statements = _recording(connection)
+    rows, has_more, _editable, _floor = _store_history._active_message_page_from_connection(
+        recorder,
+        state,
+        limit=2,
+        before_message_id=None,
+        before_sequence=None,
+        expected_generation_id=None,
+        excluded_roles=("note", "history_edit"),
+        complete_run_segment=True,
+    )
+    assert rows and has_more
+    _assert_indexed(connection, statements)
+
+
+@pytest.mark.parametrize("complete_run_segment", [True, False])
+def test_chat_history_snapshot_reads_by_session_index(history, complete_run_segment) -> None:
+    address, _anchor, connection = history
+    recorder, statements = _recording(connection)
+    snapshot = _store_history.chat_history_snapshot(
+        recorder,
+        address,
+        limit=6,
+        before_message_id=None,
+        before_sequence=None,
+        expected_generation_id=None,
+        excluded_roles=("note", "history_edit"),
+        complete_run_segment=complete_run_segment,
+        background_roles=("tool",),
+        background_tool_names=("read",),
+        after=None,
+    )()
+    assert [(run["run_id"], run["complete"]) for run in snapshot.runs] == [
+        ("run-two", complete_run_segment)
+    ]
+    _assert_indexed(connection, statements)
 
 
 def test_session_catalog_reads_scope_history_by_session_index(history) -> None:

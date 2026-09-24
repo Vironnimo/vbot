@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Sequence
 
@@ -45,9 +46,7 @@ def appended_rows(
     return rows, through
 
 
-def record_run_ids(
-    connection: sqlite3.Connection, state: sqlite3.Row, rows: Sequence[sqlite3.Row]
-) -> tuple[str | None, ...]:
+def record_run_ids(rows: Sequence[sqlite3.Row]) -> tuple[str | None, ...]:
     """Run membership is written with each entity, never reconstructed."""
     return tuple(row["owner_run_id"] for row in rows)
 
@@ -60,22 +59,24 @@ def page_runs(
     through: int,
     incremental: bool,
 ) -> tuple[JsonObject, ...]:
-    identities = {row["owner_run_id"] for row in rows if row["owner_run_id"] is not None}
+    """Describe the page's Runs in start order and whether the page holds each one whole."""
+    identities = sorted({row["owner_run_id"] for row in rows if row["owner_run_id"] is not None})
     if not identities:
         return ()
     floor = min(int(row["seq"]) for row in rows)
+    runs = connection.execute(
+        "SELECT run_id,status,start_sequence,terminal_sequence FROM runs "
+        "WHERE session_key=? AND run_id IN (SELECT value FROM json_each(?)) "
+        "ORDER BY start_sequence,run_key",
+        (state["session_key"], json.dumps(identities)),
+    ).fetchall()
+    assert len(runs) == len(identities)
     result = []
-    for run_id in identities:
-        run = connection.execute(
-            "SELECT run_id,status,start_sequence,terminal_sequence FROM runs "
-            "WHERE session_key=? AND run_id=?",
-            (state["session_key"], run_id),
-        ).fetchone()
-        assert run is not None
+    for run in runs:
         terminal = run["terminal_sequence"]
         result.append(
             {
-                "run_id": run_id,
+                "run_id": run["run_id"],
                 "status": run["status"],
                 "start_sequence": run["start_sequence"],
                 "terminal_sequence": terminal,
@@ -84,11 +85,12 @@ def page_runs(
                 and (
                     incremental
                     or int(run["start_sequence"]) >= floor
+                    # Only a Run that starts below the page can have records before it.
                     or not connection.execute(
                         "SELECT 1 FROM history_records WHERE session_key=? "
                         "AND owner_run_id=? AND active=1 AND seq<? "
                         "AND role NOT IN ('system','note','history_edit') LIMIT 1",
-                        (state["session_key"], run_id, floor),
+                        (state["session_key"], run["run_id"], floor),
                     ).fetchone()
                 ),
             }
