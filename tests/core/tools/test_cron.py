@@ -575,20 +575,23 @@ def test_past_one_time_schedule_is_rejected_with_future_time_guidance(tmp_path: 
 
 @pytest.mark.parametrize("action", ["create", "update"])
 @pytest.mark.parametrize(
-    ("resolver_error", "reason", "recommendation"),
+    ("resolver_error", "code", "reason", "recommendation"),
     [
         (
             ResolutionAgentNotFoundError("agent 'ghost' is not on project 'vbot' team"),
+            "agent_not_found",
             None,
             cron_tool_module._TARGET_ADDRESS_RECOMMENDATION,
         ),
         (
             ResolutionProjectNotFoundError("Project not found: vbot"),
+            "project_not_found",
             None,
             cron_tool_module._TARGET_ADDRESS_RECOMMENDATION,
         ),
         (
             AgentResolutionError("agent 'ghost' has no usable model"),
+            "agent_unavailable",
             "agent 'ghost' has no usable model",
             cron_tool_module._TARGET_UNAVAILABLE_RECOMMENDATION,
         ),
@@ -598,6 +601,7 @@ def test_unresolvable_target_gets_target_guidance_instead_of_schedule_examples(
     tmp_path: Path,
     action: str,
     resolver_error: AgentResolutionError,
+    code: str,
     reason: str | None,
     recommendation: str,
 ) -> None:
@@ -623,7 +627,7 @@ def test_unresolvable_target_gets_target_guidance_instead_of_schedule_examples(
 
     assert result["ok"] is False
     error = cast(dict[str, Any], result["error"])
-    assert error["code"] == "invalid_arguments"
+    assert error["code"] == code
     assert error["retryable"] is False
     assert error["message"].endswith(recommendation)
     assert cron_tool_module._ACTION_RECOMMENDATIONS[action] not in error["message"]
@@ -652,7 +656,9 @@ def test_malformed_target_gets_target_guidance(tmp_path: Path) -> None:
     )
 
     error = cast(dict[str, Any], result["error"])
+    # A malformed address names no target, so it is an argument error.
     assert error["code"] == "invalid_arguments"
+    assert error["retryable"] is False
     assert error["message"].endswith(cron_tool_module._TARGET_ADDRESS_RECOMMENDATION)
     assert cron_service.list_jobs() == []
 

@@ -9,7 +9,9 @@ from core.automation.cron import (
     CronJobNotFoundError,
     CronJobValidationError,
     CronServiceError,
+    CronTargetAgentNotFoundError,
     CronTargetError,
+    CronTargetProjectNotFoundError,
     CronTargetUnavailableError,
 )
 from core.projects import InvalidAgentAddressError, format_agent_address, parse_agent_address
@@ -256,16 +258,7 @@ def _handle_cron_tool(
     except (CronTargetError, InvalidAgentAddressError) as error:
         # Checked before ValueError: missing-target errors are also resolver
         # ValueErrors, and a malformed target address is one too.
-        recommendation = (
-            _TARGET_UNAVAILABLE_RECOMMENDATION
-            if isinstance(error, CronTargetUnavailableError)
-            else _TARGET_ADDRESS_RECOMMENDATION
-        )
-        return tool_failure(
-            "invalid_arguments",
-            f"{str(error).rstrip('. ')}. {recommendation}",
-            retryable=False,
-        )
+        return _target_failure(error)
     except ValueError as error:
         return tool_failure(
             "invalid_arguments",
@@ -298,6 +291,22 @@ def _handle_cron_tool(
             f"{error}. Do not repeat the same call unchanged",
             retryable=False,
         )
+
+
+def _target_failure(error: CronTargetError | InvalidAgentAddressError) -> JsonObject:
+    """Report a target failure with its precise code and target guidance."""
+    recommendation = _TARGET_ADDRESS_RECOMMENDATION
+    if isinstance(error, CronTargetAgentNotFoundError):
+        code = "agent_not_found"
+    elif isinstance(error, CronTargetProjectNotFoundError):
+        code = "project_not_found"
+    elif isinstance(error, CronTargetUnavailableError):
+        code = "agent_unavailable"
+        recommendation = _TARGET_UNAVAILABLE_RECOMMENDATION
+    else:
+        # A malformed address names no target that could be looked up.
+        code = "invalid_arguments"
+    return tool_failure(code, f"{str(error).rstrip('. ')}. {recommendation}", retryable=False)
 
 
 def _handle_create(
