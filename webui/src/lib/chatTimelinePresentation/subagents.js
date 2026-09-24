@@ -8,7 +8,7 @@ import {
   toolArguments,
 } from './toolFacts.js';
 import { formatDurationMs, elapsedSinceTimestamp } from './time.js';
-import { formatAgentAddress } from '$lib/agentAddress.js';
+import { qualifyAgentAddress } from '$lib/agentAddress.js';
 import { isTextContentBlock } from './messages.js';
 
 const MAX_SUBAGENT_PREVIEW_LENGTH = 96;
@@ -165,13 +165,15 @@ export const subAgentAgentId = (tool) => {
   return subAgentTargetAddress(tool) || t('common.unknown', 'Unknown');
 };
 
+// The child's outside address. Current results carry `agent@projekt` in
+// `agent_id`; historical results and live start events carry the bare id
+// beside `project_id`. Both yield the same address.
 const subAgentTargetAddress = (tool) => {
   const args = subAgentArguments(tool);
   const data = subAgentResultData(tool);
-  const dataAgentId = trimmedString(data.agent_id);
-  if (dataAgentId) {
-    const projectId = trimmedString(data.project_id);
-    return projectId ? formatAgentAddress(dataAgentId, projectId) : dataAgentId;
+  const dataAddress = qualifyAgentAddress(data.agent_id, data.project_id);
+  if (dataAddress) {
+    return dataAddress;
   }
   return trimmedString(args.agent_id);
 };

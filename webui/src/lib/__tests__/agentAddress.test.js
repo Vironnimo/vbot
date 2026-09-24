@@ -4,6 +4,7 @@ import {
   AGENT_ADDRESS_SEPARATOR,
   formatAgentAddress,
   parseAgentAddress,
+  qualifyAgentAddress,
 } from '../agentAddress.js';
 
 describe('agentAddress seam', () => {
@@ -30,6 +31,21 @@ describe('agentAddress seam', () => {
     it('coerces a non-string agent id to an empty bare id', () => {
       expect(formatAgentAddress(undefined, null)).toBe('');
       expect(formatAgentAddress(null, 'vbot')).toBe('@vbot');
+    });
+  });
+
+  describe('qualifyAgentAddress', () => {
+    it('qualifies a bare id with its project exactly once', () => {
+      expect(qualifyAgentAddress('builder', 'vbot')).toBe('builder@vbot');
+      expect(qualifyAgentAddress('builder@vbot', 'vbot')).toBe('builder@vbot');
+      expect(qualifyAgentAddress(' builder@vbot ', null)).toBe('builder@vbot');
+    });
+
+    it('keeps an identity id bare and tolerates missing values', () => {
+      expect(qualifyAgentAddress('builder', null)).toBe('builder');
+      expect(qualifyAgentAddress('builder', '  ')).toBe('builder');
+      expect(qualifyAgentAddress('', 'vbot')).toBe('');
+      expect(qualifyAgentAddress(undefined, 'vbot')).toBe('');
     });
   });
 

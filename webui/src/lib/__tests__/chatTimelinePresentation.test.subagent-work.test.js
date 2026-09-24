@@ -5,6 +5,7 @@ import {
   isBackgroundSubAgentSpawn,
   isSubAgentSpawnTool,
   resolveSubAgentCancelPlan,
+  subAgentAgentId,
   subAgentDisplayResult,
   subAgentDotStatus,
   subAgentEffectiveRunId,
@@ -184,6 +185,55 @@ describe('chatTimelinePresentation', () => {
       sessionId: 'session-child',
     });
   });
+
+  it.each([
+    ['a current result with the qualified agent_id', 'worker@vbot', false],
+    ['a historical result with a bare agent_id', 'worker', false],
+    ['a current result merged over the live start event', 'worker@vbot', true],
+  ])(
+    'addresses a Project child exactly once from %s',
+    (_label, resultAgentId, withLiveStart) => {
+      const tool = runningSubAgentTool({
+        subAgentSession: withLiveStart
+          ? {
+              id: 'sub_child',
+              agent_id: 'worker',
+              project_id: 'vbot',
+              session_id: 'session-child',
+              status: 'running',
+              delivery: 'automatic',
+            }
+          : undefined,
+        result: {
+          ok: true,
+          error: null,
+          data: {
+            id: 'sub_child',
+            agent_id: resultAgentId,
+            project_id: 'vbot',
+            session_id: 'session-child',
+            status: 'running',
+            delivery: 'automatic',
+          },
+          artifacts: [],
+        },
+      });
+
+      expect(subAgentNavigationTarget(tool)).toEqual({
+        agentId: 'worker@vbot',
+        sessionId: 'session-child',
+      });
+      expect(subAgentAgentId(tool)).toBe('worker@vbot');
+      expect(
+        subAgentLastToolName(tool, {
+          'sessionTool:worker@vbot::session-child': 'read',
+        }),
+      ).toBe('read');
+      expect(
+        subAgentDisplayResult(tool, { loading: false, result: 'done' }).data,
+      ).toMatchObject({ agent_id: 'worker@vbot', project_id: 'vbot' });
+    },
+  );
 
   it('resolves the effective run id from the descriptor or controller mappings', () => {
     expect(subAgentEffectiveRunId(runningSubAgentTool())).toBe('run-child');
