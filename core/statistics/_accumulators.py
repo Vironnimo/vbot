@@ -84,5 +84,7 @@ class _ToolAcc:
     successes: int = 0
     failures: int = 0
     duration_total_ms: int = 0
-    duration_samples: list[int] = field(default_factory=list)
+    duration_count: int = 0
+    p95_duration_ms: float | None = None
+    # Insertion order is first-failure order, which breaks top-code ties.
     error_codes: Counter[str] = field(default_factory=Counter)

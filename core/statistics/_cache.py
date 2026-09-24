@@ -2,21 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
 
-from core.chat.messages import ChatMessage
-from core.statistics._measurements import (
-    _max_timestamp,
-    _provider_model_key,
-    _read_usage,
-    _UsageFacts,
-)
+from core.statistics._units import UnitScan, max_timestamp_sql
 from core.statistics.report import (
     CacheBreakIncident,
     SessionCacheUsage,
 )
-from core.statistics.timestamps import parse_timestamp
 
 # Prompt-cache-break heuristic (best-effort, derived — the cache-side sibling of
 # ``derived_fallback_runs``). A measured turn is evaluated against its
@@ -46,116 +38,151 @@ MIN_CACHE_SESSION_TURNS = 2
 """A session needs two cache-reporting turns before its hit rate means anything."""
 
 
+_MICROSECONDS_PER_SECOND = 1_000_000
+
+
 @dataclass
-class _PreviousCacheTurn:
-    """The break heuristic's expectation baseline: the last measured turn."""
+class CacheFacts:
+    """Cache accounting of one report scan, before top-N selection."""
 
-    input_tokens: int
-    timestamp: datetime | None
-    model_key: str
-    has_cache_data: bool
+    sessions: list[SessionCacheUsage] = field(default_factory=list)
+    evaluated_turns: int = 0
+    suspected_turns: int = 0
+    incidents: list[CacheBreakIncident] = field(default_factory=list)
 
 
-class _SessionCacheTracker:
-    """Per-session prompt-cache accumulation and break detection.
+def load_cache_facts(scan: UnitScan, *, top_incidents: int) -> CacheFacts:
+    """Walk each unit's in-window turns in order and apply the cache heuristics.
 
-    Walks one session's in-window messages in order. Cache totals cover only
-    measured turns that reported cache fields; the break heuristic compares
-    each such turn's cache read against the previous turn's prompt size and
-    skips every turn with a legitimate reason for a miss — first turn,
-    compaction checkpoint, agent takeover, model switch, expired-cache idle
-    gap, or a previous prompt below provider minimum cacheable sizes.
+    Only measured Assistant turns set an expectation baseline; a Compaction
+    checkpoint, an Agent takeover, a turn without Usage or an estimated turn
+    clears it. A cache-reporting turn is evaluated against the immediately
+    preceding measured turn when that turn also reported cache fields, used the
+    same Model, sent a prompt of at least the minimum cacheable size and ran
+    within the cache lifetime; a read below the break ratio of the previous
+    prompt is a suspected break.
     """
-
-    def __init__(self, *, agent_id: str, session_id: str) -> None:
-        self._agent_id = agent_id
-        self._session_id = session_id
-        self.cache_turns = 0
-        self.input_tokens = 0
-        self.cache_read_tokens = 0
-        self.cache_write_tokens = 0
-        self.evaluated_turns = 0
-        self.incidents: list[CacheBreakIncident] = []
-        self._last_activity: str | None = None
-        self._previous: _PreviousCacheTurn | None = None
-
-    def observe(self, message: ChatMessage) -> None:
-        if message.role in ("compaction_checkpoint", "agent_takeover"):
-            # Both legitimately rebuild the prompt prefix — no expectation
-            # carries across the boundary.
-            self._previous = None
-            return
-        if message.role != "assistant":
-            return
-        facts = _read_usage(message.usage)
-        if message.usage is None or facts.estimated:
-            # Estimated turns give no reliable expectation baseline.
-            self._previous = None
-            return
-
-        timestamp = parse_timestamp(message.timestamp)
-        model_key = _provider_model_key(message.model)
-        if facts.has_cache_data:
-            self.cache_turns += 1
-            self.input_tokens += facts.input_tokens
-            self.cache_read_tokens += facts.cache_read
-            self.cache_write_tokens += facts.cache_write
-            self._last_activity = _max_timestamp(self._last_activity, message.timestamp)
-            self._evaluate_break(facts, timestamp, model_key, message.timestamp)
-        self._previous = _PreviousCacheTurn(
-            input_tokens=facts.input_tokens,
-            timestamp=timestamp,
-            model_key=model_key,
-            has_cache_data=facts.has_cache_data,
+    connection = scan.connection
+    connection.execute("DROP TABLE IF EXISTS temp.cache_turns")
+    scan.execute(
+        f"""
+        CREATE TEMP TABLE cache_turns AS
+        WITH stream AS (
+            SELECT u.unit, r.seq, r.timestamp, r.instant, c.model_key, c.has_cache,
+                COALESCE(c.input_tokens, 0) AS input_tokens,
+                COALESCE(c.cache_read_tokens, 0) AS cache_read_tokens,
+                COALESCE(c.cache_write_tokens, 0) AS cache_write_tokens,
+                (r.role = 'assistant' AND c.has_usage = 1
+                    AND c.input_estimated = 0 AND c.output_estimated = 0) AS measured
+            FROM {scan.source("stat_records", "r")}
+            LEFT JOIN stat_calls c
+                ON c.session_key = r.session_key AND c.seq = r.seq AND c.kind = 0
+            WHERE {scan.where("r")}
+                AND r.role IN ('assistant', 'compaction_checkpoint', 'agent_takeover')
+        ),
+        turns AS (
+            SELECT *,
+                LAG(measured) OVER turn_order AS previous_measured,
+                LAG(has_cache) OVER turn_order AS previous_has_cache,
+                LAG(model_key) OVER turn_order AS previous_model_key,
+                LAG(input_tokens) OVER turn_order AS previous_input_tokens,
+                LAG(instant) OVER turn_order AS previous_instant
+            FROM stream
+            WINDOW turn_order AS (PARTITION BY unit ORDER BY seq)
+        ),
+        judged AS (
+            SELECT *, COALESCE(
+                previous_measured = 1
+                AND previous_has_cache = 1
+                AND previous_model_key = model_key
+                AND previous_input_tokens >= {CACHE_BREAK_MIN_PREVIOUS_INPUT_TOKENS}
+                AND instant IS NOT NULL AND previous_instant IS NOT NULL
+                AND instant - previous_instant
+                    BETWEEN 0 AND {CACHE_BREAK_MAX_GAP_SECONDS * _MICROSECONDS_PER_SECOND},
+                0
+            ) AS evaluated
+            FROM turns
+            WHERE measured = 1 AND has_cache = 1
         )
-
-    def _evaluate_break(
-        self,
-        facts: _UsageFacts,
-        timestamp: datetime | None,
-        model_key: str,
-        raw_timestamp: str,
-    ) -> None:
-        previous = self._previous
-        if (
-            previous is None
-            or not previous.has_cache_data
-            or previous.model_key != model_key
-            or previous.input_tokens < CACHE_BREAK_MIN_PREVIOUS_INPUT_TOKENS
-            or not _within_cache_gap(previous.timestamp, timestamp)
-        ):
-            return
-        self.evaluated_turns += 1
-        if facts.cache_read < previous.input_tokens * CACHE_BREAK_READ_RATIO:
-            self.incidents.append(
-                CacheBreakIncident(
-                    agent_id=self._agent_id,
-                    session_id=self._session_id,
-                    timestamp=raw_timestamp,
-                    model=model_key,
-                    previous_input_tokens=previous.input_tokens,
-                    cache_read_tokens=facts.cache_read,
-                )
+        SELECT unit, seq, timestamp, instant, model_key, input_tokens, cache_read_tokens,
+            cache_write_tokens, previous_input_tokens, evaluated,
+            (evaluated = 1
+                AND cache_read_tokens < previous_input_tokens * {CACHE_BREAK_READ_RATIO}
+            ) AS incident
+        FROM judged
+        """
+    )
+    facts = CacheFacts()
+    units = scan.units
+    last_activity = {
+        int(unit): timestamp
+        for unit, timestamp in connection.execute(
+            f"""
+            SELECT unit, timestamp FROM (
+                SELECT t.unit, t.timestamp, ROW_NUMBER() OVER (
+                    PARTITION BY t.unit ORDER BY {max_timestamp_sql("t")}
+                ) AS position
+                FROM temp.cache_turns t
+            ) WHERE position = 1
+            """
+        )
+    }
+    for (
+        unit,
+        turns,
+        input_tokens,
+        read_tokens,
+        write_tokens,
+        evaluated,
+        incidents,
+    ) in connection.execute(
+        """
+            SELECT unit, COUNT(*), SUM(input_tokens), SUM(cache_read_tokens),
+                SUM(cache_write_tokens), SUM(evaluated), SUM(incident)
+            FROM temp.cache_turns
+            GROUP BY unit
+            ORDER BY unit
+            """
+    ):
+        facts.evaluated_turns += int(evaluated)
+        facts.suspected_turns += int(incidents)
+        if turns < MIN_CACHE_SESSION_TURNS or input_tokens <= 0:
+            continue
+        report_unit = units[unit]
+        facts.sessions.append(
+            SessionCacheUsage(
+                agent_id=report_unit.display_key,
+                session_id=report_unit.session_id,
+                cache_turns=int(turns),
+                input_tokens=int(input_tokens),
+                cache_read_tokens=int(read_tokens),
+                cache_write_tokens=int(write_tokens),
+                hit_rate=read_tokens / input_tokens,
+                last_activity=last_activity.get(int(unit)),
             )
-
-    def session_record(self) -> SessionCacheUsage | None:
-        if self.cache_turns < MIN_CACHE_SESSION_TURNS or self.input_tokens <= 0:
-            return None
-        return SessionCacheUsage(
-            agent_id=self._agent_id,
-            session_id=self._session_id,
-            cache_turns=self.cache_turns,
-            input_tokens=self.input_tokens,
-            cache_read_tokens=self.cache_read_tokens,
-            cache_write_tokens=self.cache_write_tokens,
-            hit_rate=self.cache_read_tokens / self.input_tokens,
-            last_activity=self._last_activity,
         )
-
-
-def _within_cache_gap(previous: datetime | None, current: datetime | None) -> bool:
-    """Whether two turns are close enough for the cache to still be warm."""
-    if previous is None or current is None:
-        return False
-    gap_seconds = (current - previous).total_seconds()
-    return 0 <= gap_seconds <= CACHE_BREAK_MAX_GAP_SECONDS
+    # Largest shortfall first, then Session id and timestamp; equal keys keep
+    # processing order.
+    for unit, timestamp, model_key, previous_input, read_tokens in connection.execute(
+        """
+        SELECT t.unit, t.timestamp, t.model_key, t.previous_input_tokens, t.cache_read_tokens
+        FROM temp.cache_turns t JOIN temp.units u ON u.unit = t.unit
+        WHERE t.incident = 1
+        ORDER BY t.previous_input_tokens - t.cache_read_tokens DESC, u.session_id,
+            t.timestamp, t.unit, t.seq
+        LIMIT ?
+        """,
+        (top_incidents,),
+    ):
+        report_unit = units[unit]
+        facts.incidents.append(
+            CacheBreakIncident(
+                agent_id=report_unit.display_key,
+                session_id=report_unit.session_id,
+                timestamp=timestamp,
+                model=model_key,
+                previous_input_tokens=int(previous_input),
+                cache_read_tokens=int(read_tokens),
+            )
+        )
+    return facts
