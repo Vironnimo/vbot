@@ -48,6 +48,8 @@ export {
   appendRunEvent,
   applyRunControls,
   finishRun,
+  isReleasedRun,
+  releaseFinishedRunEvents,
 } from './chatState/runEvents.js';
 export { highestContiguousRunEventSequence } from './chatState/streamingEvents.js';
 export {

@@ -14,7 +14,9 @@ import {
   applyRunControls,
   ensureSessionState,
   highestContiguousRunEventSequence,
+  isReleasedRun,
   isRunActive,
+  releaseFinishedRunEvents,
   removeQueuedMessage,
   resetStaleRun,
   startRun,
@@ -487,10 +489,14 @@ export function createChatRunStream({
       // the projection stays consistent if the local removal races.
       removeQueuedMessage(sessionState, event.payload.queue_item_id);
     }
-    if (
-      TERMINAL_RUN_EVENTS.has(event.type) &&
-      sessionState.currentRun?.runId === event.run_id
-    ) {
+    const terminal = TERMINAL_RUN_EVENTS.has(event.type);
+    if (!terminal && !isReleasedRun(sessionState, event.run_id)) {
+      return;
+    }
+    const holdsTimeline =
+      sessionState.historyLoaded ||
+      isDisplayedSession(sessionState.agentId, sessionState.sessionId);
+    if (terminal && sessionState.currentRun?.runId === event.run_id) {
       delete orderedRunEventBuffers[sessionState.key];
       clearGapWatchdog(sessionState.key);
       clearTerminalReconciliation(sessionState.key);
@@ -499,12 +505,16 @@ export function createChatRunStream({
       closeRunSubscription(sessionState.key);
       sessionState.streamError = '';
       void syncSessionQueue(sessionState);
-      if (
-        sessionState.historyLoaded ||
-        isDisplayedSession(sessionState.agentId, sessionState.sessionId)
-      ) {
+      if (holdsTimeline) {
         void reconcileRunHistory(sessionState, event.run_id);
       }
+    }
+    // Without a displayed timeline or loaded History, a finished Run's events
+    // have no reader: opening the Session loads canonical History. Release
+    // them (and any late event of a released Run) so a long-lived tab does
+    // not keep every stable event of every background Run.
+    if (!holdsTimeline) {
+      releaseFinishedRunEvents(sessionState, event.run_id);
     }
   }
 

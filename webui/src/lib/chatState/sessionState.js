@@ -124,6 +124,9 @@ export function ensureSessionState(state, agentId, sessionId) {
       streamingRunEvents: [],
       streamingPhase: 0,
       seenStreamingEventKeys: new Set(),
+      // Finished Runs whose live events were released while the Session was
+      // neither displayed nor History-loaded (bounded, newest last).
+      releasedRunIds: [],
       currentRun: null,
       cancellingRunIds: [],
       queue: [],
