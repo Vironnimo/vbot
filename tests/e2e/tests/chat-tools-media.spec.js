@@ -28,8 +28,11 @@ test("speech and image Tools persist and serve fake Provider artifacts", async (
   expect(audioUrl).toMatch(/^\/api\/speech\/artifacts\/[^/?#\s]+$/);
   const audioResponse = await page.request.get(audioUrl);
   expect(audioResponse.ok()).toBe(true);
-  expect(audioResponse.headers()["content-type"]).toContain("audio/wav");
-  expect((await audioResponse.body()).length).toBeGreaterThan(44);
+  expect(audioResponse.headers()["content-type"]).toContain("audio/mpeg");
+  const audioBytes = await audioResponse.body();
+  expect(audioBytes.length).toBeGreaterThan(4);
+  // MPEG-1 Layer III frame sync of the fake Provider's MP3 audio.
+  expect([...audioBytes.subarray(0, 2)]).toEqual([0xff, 0xfb]);
 
   const generation = await expectToolSucceeded(page, chat, "image_generation");
   await openToolRow(generation);
