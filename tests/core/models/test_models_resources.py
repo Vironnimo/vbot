@@ -656,6 +656,31 @@ class TestModelRegistryRealResources:
         assert backend.capabilities.tools is True
         assert backend.allows_connection(connection_id)
 
+    def test_xai_grok_voice_is_a_task_only_live_voice_model_without_a_backend_default(self):
+        """Grok Voice is a live voice Task Model on both xAI Connections.
+
+        It calls the Live app Tools itself, so its backend model defaults to
+        none; tool-capable Grok chat Models remain available as backends.
+        """
+
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        model = registry.get("xai", "grok-voice-think-fast-2.0")
+        assert model.connections == ("api-key", "subscription")
+        assert model.capabilities.task_types == ("live_voice",)
+        assert model.capabilities.tools is False
+        assert model.capabilities.input_modalities == ("audio",)
+        assert model.capabilities.output_modalities == ("audio",)
+        chat_models = registry.query(ModelQuery(provider_id="xai", tasks=("chat",)))
+        assert "grok-voice-think-fast-2.0" not in {chat.model_id for _, chat in chat_models}
+        parameters = model.capabilities.task_options["live_voice"]["parameters"]
+        voices = parameters["voice"]["values"]
+        assert len(voices) == len(set(voices)) == 28
+        assert all(voice == voice.lower() for voice in voices)
+        assert parameters["voice"]["default"] == "eve"
+        assert parameters["backend_model"] == {"type": "model", "default": "", "allow_none": True}
+        assert registry.get("xai", "grok-4.6").capabilities.tools is True
+
     def test_anthropic_opus_4_5_override_pins_budget_control(self):
         """``anthropic.overrides.json`` pins Opus 4.5 to ``budget`` control.
 
