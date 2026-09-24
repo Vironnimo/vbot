@@ -49,6 +49,7 @@ from core.settings import (
     is_valid_agent_id,
 )
 from core.utils.atomic import atomic_write_text
+from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -172,19 +173,19 @@ class ProjectStore:
             return project
 
     def get(self, project_id: str) -> Project:
-        """Load one project anchor by id."""
+        """Load one project anchor by its exact id."""
         with self._write_lock:
-            config_path = self._config_path(project_id)
-            if not config_path.exists():
+            config_path = self._stored_config_path(project_id)
+            if config_path is None:
                 raise ProjectNotFoundError(f"Project not found: {project_id}")
             return self._read_project(config_path)
 
     def exists(self, project_id: str) -> bool:
-        """Return whether a valid Project with this id can be loaded."""
+        """Return whether a valid Project with exactly this id can be loaded."""
         with self._write_lock:
             try:
-                config_path = self._config_path(project_id)
-                if not config_path.exists():
+                config_path = self._stored_config_path(project_id)
+                if config_path is None:
                     return False
                 self._read_project(config_path)
             except (ProjectError, OSError):
@@ -385,8 +386,8 @@ class ProjectStore:
         and Run admission guards belong to the caller. Returns the archive path.
         """
         with self._write_lock:
-            project_dir = self._project_dir(project_id)
-            if not project_dir.exists():
+            project_dir = self._stored_project_dir(project_id)
+            if project_dir is None:
                 raise ProjectNotFoundError(f"Project not found: {project_id}")
 
             archive_dir = self._archive_dir(project_id)
@@ -437,7 +438,7 @@ class ProjectStore:
         report them separately. Returns ids sorted for determinism; an unknown
         Project yields an empty list rather than raising.
         """
-        if not self._project_dir(project_id).exists():
+        if self._stored_project_dir(project_id) is None:
             return []
         addresses = self._session_manager().list_addresses(
             project_id=project_id, exclude_owner_managed=True
@@ -476,6 +477,25 @@ class ProjectStore:
 
     def _config_path(self, project_id: str) -> Path:
         return self._project_dir(project_id) / _PROJECT_CONFIG_FILENAME
+
+    def _stored_project_dir(self, project_id: str) -> Path | None:
+        """Return the Project Anchor stored under exactly ``project_id``, or ``None``.
+
+        Ids are exact on every platform. A case-insensitive filesystem would open
+        the stored ``vbot`` Anchor for ``VBOT``; that different id names no Project.
+        """
+        project_dir = self._project_dir(project_id)
+        if not has_id_entry(project_dir.parent, project_id) or not project_dir.is_dir():
+            return None
+        return project_dir
+
+    def _stored_config_path(self, project_id: str) -> Path | None:
+        """Return ``project.json`` of the Project stored under exactly ``project_id``."""
+        project_dir = self._stored_project_dir(project_id)
+        if project_dir is None:
+            return None
+        config_path = project_dir / _PROJECT_CONFIG_FILENAME
+        return config_path if config_path.is_file() else None
 
     def _archive_dir(self, project_id: str) -> Path:
         return self._data_dir / _ARCHIVE_DIRNAME / _ARCHIVE_PROJECTS_DIRNAME / project_id

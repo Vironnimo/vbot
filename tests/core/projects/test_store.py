@@ -562,6 +562,42 @@ def test_get_raises_for_unknown_project(data_dir: Path) -> None:
         store.get("missing")
 
 
+def test_case_variant_of_a_stored_project_id_is_not_found(data_dir: Path, repo: Path) -> None:
+    # Ids are exact. A case-insensitive filesystem (Windows) opens the stored ``vbot``
+    # Anchor for ``VBOT``; that different id must still name no Project on every
+    # platform, and deleting it must never archive the real Project.
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+
+    with pytest.raises(ProjectNotFoundError):
+        store.get("VBOT")
+    with pytest.raises(ProjectNotFoundError):
+        store.update("VBOT", display_name="Renamed")
+    with pytest.raises(ProjectNotFoundError):
+        store.delete("VBOT")
+
+    assert store.exists("VBOT") is False
+    assert store.session_owning_agents("VBOT") == []
+    assert store.get("vbot").display_name == "vBot"
+    assert [project.project_id for project in store.list()] == ["vbot"]
+
+
+def test_get_reports_a_stored_id_that_disagrees_with_its_anchor(data_dir: Path, repo: Path) -> None:
+    config_path = data_dir / "projects" / "vbot" / "project.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps({"project_id": "other", "cwd": str(repo)}),
+        encoding="utf-8",
+    )
+    store = ProjectStore(data_dir)
+
+    with pytest.raises(ProjectError) as exc_info:
+        store.get("vbot")
+
+    assert not isinstance(exc_info.value, ProjectNotFoundError)
+    assert store.exists("vbot") is False
+
+
 def test_list_returns_projects_sorted_by_id(data_dir: Path, tmp_path: Path) -> None:
     store = ProjectStore(data_dir)
     for name in ["zeta", "alpha", "mid"]:
