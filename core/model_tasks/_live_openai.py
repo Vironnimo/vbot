@@ -253,6 +253,10 @@ class OpenAILiveWire:
     def media(self) -> JsonObject:
         return {"type": MEDIA_WEBRTC, "sdp": self._answer_sdp}
 
+    @property
+    def announces_as_user_input(self) -> bool:
+        return False
+
     async def events(self) -> AsyncIterator[WireEvent]:
         try:
             async for frame in self._socket:

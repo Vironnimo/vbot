@@ -35,7 +35,7 @@ import time
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeGuard
 from urllib.parse import urlencode
 
 import httpx
@@ -237,6 +237,10 @@ class XaiLiveWire:
     @property
     def media(self) -> JsonObject:
         return relay_media()
+
+    @property
+    def announces_as_user_input(self) -> bool:
+        return True
 
     async def events(self) -> AsyncIterator[WireEvent]:
         timer = asyncio.create_task(self._run_timer(), name=f"live-xai-timer:{self._call_id}")
@@ -472,7 +476,11 @@ class _XaiSession:
         return commands
 
     def announce(self, text: str) -> list[JsonObject]:
-        """Add application context the voice model should speak about."""
+        """Add application context the voice model should speak about.
+
+        The voice model does not attend to system messages added during the
+        conversation, so the context arrives as a user text message.
+        """
 
         if not self._started:
             return []
@@ -481,7 +489,7 @@ class _XaiSession:
                 "type": "conversation.item.create",
                 "item": {
                     "type": "message",
-                    "role": "system",
+                    "role": "user",
                     "content": [{"type": "input_text", "text": text}],
                 },
             }
@@ -578,11 +586,7 @@ class _XaiSession:
             self._on_user_transcript(step, event, kind)
         elif kind == "conversation.item.added":
             item = event.get("item")
-            if (
-                isinstance(item, dict)
-                and item.get("type") == "message"
-                and item.get("role") == "user"
-            ):
+            if _is_user_speech(item):
                 self._finish_user_items(step, keep=_text(item.get("id")))
         elif kind == "response.created":
             self._on_response_created(event)
@@ -914,6 +918,16 @@ class _XaiSession:
                 changed = True
         if changed:
             step.events.append(WireUsage(usage=dict(self._usage)))
+
+
+def _is_user_speech(item: Any) -> TypeGuard[JsonObject]:
+    """Whether an added item is user speech rather than vBot's own text message."""
+
+    if not isinstance(item, dict) or item.get("type") != "message" or item.get("role") != "user":
+        return False
+    content = item.get("content")
+    parts = content if isinstance(content, list) else []
+    return not any(isinstance(part, dict) and part.get("type") == "input_text" for part in parts)
 
 
 def _call_output(call_id: str, output: str) -> JsonObject:

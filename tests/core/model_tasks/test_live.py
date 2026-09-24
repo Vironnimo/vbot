@@ -43,7 +43,13 @@ XAI_TARGET = "xai/grok-voice-think-fast-2.0::subscription"
 class FakeWire:
     call_id = "rtc_1"
 
-    def __init__(self, *, confirm_close: bool = True, relay: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        confirm_close: bool = True,
+        relay: bool = False,
+        announces_as_user_input: bool = False,
+    ) -> None:
         self.queue: asyncio.Queue[Any] = asyncio.Queue()
         self.sent: list[tuple[Any, ...]] = []
         self.audio: list[bytes] = []
@@ -51,6 +57,7 @@ class FakeWire:
         self.confirm_close = confirm_close
         self.closed = False
         self.media = relay_media() if relay else {"type": "webrtc", "sdp": "v=0\r\nanswer"}
+        self.announces_as_user_input = announces_as_user_input
 
     def push(self, *events: Any) -> None:
         for event in events:
@@ -269,6 +276,25 @@ async def test_run_notices_are_spoken_once_while_live_and_reach_later_delegation
         '"result_excerpt": "All tests pass.", "excerpt_truncated": false}'
     ]
     assert brain.inputs[0].updates.count("vBot update") == 2
+
+
+@pytest.mark.asyncio
+async def test_run_notices_omit_the_excerpt_where_announcements_count_as_user_input():
+    wire, brain, host = FakeWire(announces_as_user_input=True), FakeBrain(), FakeHost()
+    call = _call(wire, brain, host)
+    wire.push(WireStarted(None))
+    await _until(lambda: any(u.get("phase") == "live" for u in host.updates))
+
+    call.announce_run(_notice("run-1"))
+    await _until(lambda: any(s[0] == "announce" for s in wire.sent))
+    wire.push(WireDelegation("i", "What did coder say?"))
+    await _until(lambda: len(brain.inputs) == 1)
+    await call.close()
+
+    assert [s[1] for s in wire.sent if s[0] == "announce"] == [
+        'vBot update: {"run": "completed", "agent": "coder@web", "session_id": "s-1"}'
+    ]
+    assert '"result_excerpt": "All tests pass."' in brain.inputs[0].updates
 
 
 @pytest.mark.asyncio

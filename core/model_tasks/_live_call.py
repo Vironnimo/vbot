@@ -178,10 +178,12 @@ class LiveCallSession:
         if notice.run_id in self._announced or self._done.is_set() or self._closing:
             return
         self._announced.append(notice.run_id)
-        text = _render_notice(notice)
-        self._updates.append(text)
+        self._updates.append(_render_notice(notice))
         if self._phase != "live":
             return
+        # An excerpt is untrusted Agent output; where announcements count as
+        # user input, the voice model would follow instructions quoted in it.
+        text = _render_notice(notice, excerpt=not self._wire.announces_as_user_input)
         self._spawn(
             self._send_command(lambda: self._wire.announce(text)),
             name=f"live-call-announce:{self.id}",
@@ -489,14 +491,14 @@ class LiveCallSession:
             )
 
 
-def _render_notice(notice: LiveRunNotice) -> str:
-    excerpt = notice.excerpt.strip()
-    truncated = notice.truncated or len(excerpt) > _ANNOUNCEMENT_EXCERPT_CHARS
-    payload = {
+def _render_notice(notice: LiveRunNotice, *, excerpt: bool = True) -> str:
+    payload: JsonObject = {
         "run": notice.kind,
         "agent": notice.agent_id,
         "session_id": notice.session_id,
-        "result_excerpt": excerpt[:_ANNOUNCEMENT_EXCERPT_CHARS],
-        "excerpt_truncated": truncated,
     }
+    if excerpt:
+        text = notice.excerpt.strip()
+        payload["result_excerpt"] = text[:_ANNOUNCEMENT_EXCERPT_CHARS]
+        payload["excerpt_truncated"] = notice.truncated or len(text) > _ANNOUNCEMENT_EXCERPT_CHARS
     return f"{LIVE_UPDATE_PREFIX}: {json.dumps(payload, ensure_ascii=False)}"
