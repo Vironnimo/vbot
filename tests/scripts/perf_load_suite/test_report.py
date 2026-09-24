@@ -34,6 +34,8 @@ def _level(agents, *, ttft_overhead_p50, ok=True, lag_p99=None):
         },
         "server": {
             "event_loop_lag_ms": {"p50": 1.0, "p99": lag_p99, "max": 90.0},
+            "sqlite_write_wait_ms": {"p50": 0.5, "p99": 30.0, "max": 120.0},
+            "tools_ms": {"read": {"count": 2, "p50": 3.0, "p99": 5.0, "max": 5.0}},
             "worker_pools": [
                 {"pool": "sqlite", "wait_count": 4, "wait_p99_ms": 12.0, "wait_max_ms": 20.0}
             ],
@@ -101,7 +103,9 @@ def test_markdown_report_contains_summary_and_level_details():
     markdown = render_markdown(_result([_level(1, ttft_overhead_p50=100.0)]))
 
     assert "| TTFT overhead p50 / p95 ms | 100 / 200 |" in markdown
-    assert "| sqlite | 4 | 12.0 | 20.0 | - | - |" in markdown
+    assert "| sqlite.write_wait p50 / p99 / max ms | 0.50 / 30.0 / 120 |" in markdown
+    assert "| sqlite | 4 | 12.0 | 20.0 | - | - | - |" in markdown
+    assert "| read | 2 | 3.00 | 5.00 | 5.00 |" in markdown
     assert "Worst Event Loop stall: 250 ms" in markdown
     assert "inner\nouter" in markdown
     assert "\n\n\n" not in markdown

@@ -10,6 +10,11 @@ from typing import Any
 RESULT_KIND = "vbot-perf-load"
 RESULT_SCHEMA = 1
 
+
+def _p50_p99_max(prefix: str) -> tuple[str, str, str]:
+    return (f"{prefix}.p50", f"{prefix}.p99", f"{prefix}.max")
+
+
 # (label, dotted paths into one level). Several paths render as "a / b / c".
 TABLE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Runs ok / total", ("client.runs.ok", "client.runs.total")),
@@ -45,12 +50,14 @@ TABLE_ROWS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     ("Event loop utilization max", ("server.event_loop_utilization_max",)),
-    ("sqlite.write p99 / max ms", ("server.sqlite_write_ms.p99", "server.sqlite_write_ms.max")),
-    (
-        "chat.request_build p50 / p99 ms",
-        ("server.chat_request_build_ms.p50", "server.chat_request_build_ms.p99"),
-    ),
     ("Stalls count / worst ms", ("server.stalls.count", "server.stalls.worst.duration_ms")),
+    ("Runs active / queued max", ("server.runs_active_max", "server.runs_queued_max")),
+    ("sqlite.write p50 / p99 / max ms", _p50_p99_max("server.sqlite_write_ms")),
+    ("sqlite.write_wait p50 / p99 / max ms", _p50_p99_max("server.sqlite_write_wait_ms")),
+    ("sqlite.read p50 / p99 / max ms", _p50_p99_max("server.sqlite_read_ms")),
+    ("chat.request_build p50 / p99 / max ms", _p50_p99_max("server.chat_request_build_ms")),
+    ("chat.persist p50 / p99 / max ms", _p50_p99_max("server.chat_persist_ms")),
+    ("chat.tool_round p50 / p99 / max ms", _p50_p99_max("server.chat_tool_round_ms")),
     (
         "Fake Provider CPU avg / max %",
         ("provider_process.tree_cpu_avg", "provider_process.tree_cpu_max"),
@@ -95,8 +102,15 @@ COMPARE_KEYS: tuple[str, ...] = (
     "server.event_loop_lag_ms.max",
     "server.event_loop_utilization_max",
     "server.sqlite_write_ms.p99",
+    "server.sqlite_write_ms.max",
+    "server.sqlite_write_wait_ms.p99",
+    "server.sqlite_read_ms.p99",
     "server.chat_request_build_ms.p50",
     "server.chat_request_build_ms.p99",
+    "server.chat_persist_ms.p50",
+    "server.chat_persist_ms.p99",
+    "server.chat_tool_round_ms.p50",
+    "server.chat_tool_round_ms.p99",
     "server.stalls.count",
     "ui.long_tasks.count",
     "ui.long_tasks.max_ms",
@@ -256,15 +270,35 @@ def _level_details(level: Mapping[str, Any]) -> list[str]:
                 format_value(pool.get("wait_p99_ms")),
                 format_value(pool.get("wait_max_ms")),
                 format_value(pool.get("run_p99_ms")),
+                format_value(pool.get("active_max")),
                 format_value(pool.get("waiting_max")),
             ]
             for pool in pools
         ]
-        lines.extend(
-            _markdown_table(
-                ["Pool", "Waits", "Wait p99 ms", "Wait max ms", "Run p99 ms", "Waiting max"], rows
-            )
-        )
+        header = [
+            "Pool",
+            "Waits",
+            "Wait p99 ms",
+            "Wait max ms",
+            "Run p99 ms",
+            "Active max",
+            "Waiting max",
+        ]
+        lines.extend(_markdown_table(header, rows))
+    tools = server.get("tools_ms") or {}
+    if tools:
+        lines.extend(["", "Tool dispatch measured by the server (`tool.<name>`):", ""])
+        rows = [
+            [
+                name,
+                format_value(values.get("count")),
+                format_value(values.get("p50")),
+                format_value(values.get("p99")),
+                format_value(values.get("max")),
+            ]
+            for name, values in tools.items()
+        ]
+        lines.extend(_markdown_table(["Tool", "Count", "p50 ms", "p99 ms", "Max ms"], rows))
     top = server.get("top_metrics") or []
     if top:
         lines.extend(["", "Server metrics by total time:", ""])

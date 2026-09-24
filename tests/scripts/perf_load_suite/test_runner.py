@@ -44,6 +44,8 @@ def test_history_is_warmed_up_in_bounded_chunks():
         {"turns": 0},
         {"steps": 0},
         {"calls": 99},
+        {"recording_max_seconds": 0},
+        {"recording_max_seconds": 3601},
     ],
 )
 def test_invalid_configuration_is_rejected(fields):

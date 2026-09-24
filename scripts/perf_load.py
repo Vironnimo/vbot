@@ -158,7 +158,8 @@ def build_run_parser() -> argparse.ArgumentParser:
         "--recording-max-seconds",
         type=int,
         default=1800,
-        help="upper bound for the server-side performance recording of one load phase",
+        help="upper bound for the server-side performance recording of one load phase "
+        "(1-3600 seconds)",
     )
     measure.add_argument(
         "--profile",

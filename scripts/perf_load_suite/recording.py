@@ -22,6 +22,31 @@ TOP_WORKER_POOLS = 5
 TOP_METRICS = 15
 STALL_FRAMES = 12
 _WORKER_POOL_PREFIX = "worker_pool."
+_TOOL_PREFIX = "tool."
+# Digest key -> server histogram name (see the Performance domain's metric catalog).
+DIGEST_METRICS: dict[str, str] = {
+    "event_loop_lag_ms": "event_loop.lag",
+    "sqlite_write_ms": "sqlite.write",
+    "sqlite_write_wait_ms": "sqlite.write_wait",
+    "sqlite_read_ms": "sqlite.read",
+    "chat_run_ms": "chat.run",
+    "chat_request_build_ms": "chat.request_build",
+    "provider_first_token_ms": "provider.first_token",
+    "provider_response_ms": "provider.response",
+    "chat_persist_ms": "chat.persist",
+    "chat_tool_round_ms": "chat.tool_round",
+    "chat_compaction_ms": "chat.compaction",
+}
+# Digest key -> server gauge name; a recording reports each gauge's maximum.
+DIGEST_GAUGES: dict[str, str] = {
+    "event_loop_utilization_max": "event_loop.utilization",
+    "process_cpu_percent_max": "process.cpu_percent",
+    "process_rss_mb_max": "process.rss_mb",
+    "process_threads_max": "process.threads",
+    "asyncio_tasks_max": "asyncio.tasks",
+    "runs_active_max": "runs.active",
+    "runs_queued_max": "runs.queued",
+}
 
 
 class RecordingError(RuntimeError):
@@ -98,13 +123,13 @@ def digest_recording(stop_result: Mapping[str, Any]) -> dict[str, Any]:
         "event_count": stop_result.get("event_count"),
         "truncated": stop_result.get("truncated"),
         "stopped_reason": stop_result.get("stopped_reason"),
-        "event_loop_lag_ms": _metric(metrics, "event_loop.lag"),
-        "event_loop_utilization_max": gauges.get("event_loop.utilization"),
-        "process_cpu_percent_max": gauges.get("process.cpu_percent"),
-        "process_rss_mb_max": gauges.get("process.rss_mb"),
-        "runs_active_max": gauges.get("runs.active"),
-        "sqlite_write_ms": _metric(metrics, "sqlite.write"),
-        "chat_request_build_ms": _metric(metrics, "chat.request_build"),
+        **{key: _metric(metrics, name) for key, name in DIGEST_METRICS.items()},
+        **{key: gauges.get(name) for key, name in DIGEST_GAUGES.items()},
+        "tools_ms": {
+            name[len(_TOOL_PREFIX) :]: _metric(metrics, name)
+            for name in sorted(metrics)
+            if name.startswith(_TOOL_PREFIX)
+        },
         "worker_pools": _worker_pools(metrics, gauges),
         "top_metrics": _top_metrics(metrics),
         "stalls": _stalls(stalls),
@@ -144,6 +169,7 @@ def _worker_pools(metrics: Mapping[str, Any], gauges: Mapping[str, Any]) -> list
                 "wait_p99_ms": wait["p99"],
                 "wait_max_ms": wait["max"],
                 "run_p99_ms": run["p99"],
+                "active_max": gauges.get(f"{_WORKER_POOL_PREFIX}{pool}.active"),
                 "waiting_max": gauges.get(f"{_WORKER_POOL_PREFIX}{pool}.waiting"),
             }
         )
