@@ -147,6 +147,38 @@ def test_runtime_resolve_environment_credential_uses_data_dir_fallback(
     runtime.stop()
 
 
+@pytest.mark.parametrize("ignore_case", [True, False])
+def test_runtime_data_dir_fallback_follows_host_name_case_rules(
+    config: Config,
+    monkeypatch: pytest.MonkeyPatch,
+    ignore_case: bool,
+) -> None:
+    # A Skill granting `GitHub_Token` must resolve a `.env` `GITHUB_TOKEN` on
+    # Windows, where its requirement already counts as satisfied.
+    monkeypatch.setattr("core.runtime.runtime._ENVIRONMENT_NAMES_IGNORE_CASE", ignore_case)
+    config.data_dir.mkdir(parents=True, exist_ok=True)
+    _authorize_session_store(config.data_dir)
+    config.data_dir.joinpath(".env").write_text(
+        "GITHUB_TOKEN=fallback-token\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GitHub_Token", raising=False)
+
+    runtime = Runtime(config)
+    runtime.start()
+
+    if ignore_case:
+        assert runtime.resolve_environment_credential("GitHub_Token") == "fallback-token"
+        assert runtime.environment_credential_source("GitHub_Token") == "data_dir"
+    else:
+        assert runtime.resolve_environment_credential("GitHub_Token") == ""
+        assert runtime.environment_credential_source("GitHub_Token") is None
+    assert runtime.resolve_environment_credential("GITHUB_TOKEN") == "fallback-token"
+
+    runtime.stop()
+
+
 @pytest.mark.asyncio
 async def test_runtime_start_does_not_crash_when_channel_adapter_cannot_start(
     config: Config,
