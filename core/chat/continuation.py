@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 from core.chat.wire_shaping import (
     SYSTEM_REMINDER_CLOSE_TAG,
@@ -21,6 +21,9 @@ from core.chat.wire_shaping import (
 from core.providers.errors import NetworkError, ProviderTimeoutError
 from core.sessions import ChatSession
 from core.utils.errors import ProviderError
+
+if TYPE_CHECKING:
+    from core.chat.messages import ChatMessage
 
 JsonObject = dict[str, Any]
 ContinuationCause = Literal[
@@ -43,6 +46,7 @@ _PROMPT_MAX_CHARS = 50_000
 RecordSink = Callable[[list[JsonObject]], None | Awaitable[None]]
 Clock = Callable[[], float]
 Sleeper = Callable[[float], Awaitable[None]]
+_WriteResult = TypeVar("_WriteResult")
 
 
 def _timestamp() -> str:
@@ -181,8 +185,33 @@ def fold_continuation_records(records: list[JsonObject]) -> ContinuationState | 
     return state
 
 
+@dataclass(frozen=True)
+class JournalBoundary:
+    """Journal records that commit inside one canonical Session history write."""
+
+    tracker: ContinuationTracker
+    records: tuple[JsonObject, ...]
+    closes_step: bool = False
+
+    async def commit(
+        self, write: Callable[[list[JsonObject]], Awaitable[_WriteResult]]
+    ) -> _WriteResult:
+        """Run *write* with this boundary's records, pending deltas included.
+
+        *write* must persist the records in the same transaction as its history
+        records, so the journal and canonical history can never disagree about
+        whether the boundary happened.
+        """
+        return await self.tracker._commit_boundary(self, write)
+
+
 class ContinuationTracker:
-    """Append-batched writer for one admitted visible Run."""
+    """Append-batched writer for one admitted visible Run.
+
+    Streaming deltas flush on their own schedule. Stable Assistant and Tool
+    Result boundaries instead ride inside the history write that persists them
+    (:class:`JournalBoundary`), so they cost no separate journal transaction.
+    """
 
     def __init__(
         self,
@@ -256,50 +285,36 @@ class ContinuationTracker:
         if self._periodic_task is None:
             self._periodic_task = asyncio.create_task(self._periodic_flush())
 
-    async def record_assistant_boundary(
-        self,
-        *,
-        message_id: str,
-        reasoning: str | None,
-        content: str | None,
-        interrupted: bool,
-        tool_calls: list[Any] | None = None,
-    ) -> None:
-        await self._flush_boundary(
-            self._record(
-                "assistant_boundary",
-                step=self._step,
-                message_id=message_id,
-                reasoning=reasoning,
-                content=content,
-                interrupted=interrupted,
-                tool_calls=[
-                    {"id": tool_call.id, "name": tool_call.name} for tool_call in (tool_calls or [])
-                ],
-            )
+    def assistant_boundary(self, message: ChatMessage) -> JournalBoundary:
+        """Records for one persisted Assistant *message*, including its Tool Calls.
+
+        Its Calls count as started: the fold treats them exactly like the
+        ``tool_started`` records of older journals.
+        """
+        record = self._record(
+            "assistant_boundary",
+            step=self._step,
+            message_id=message.id,
+            reasoning=message.reasoning,
+            content=message.content if isinstance(message.content, str) else None,
+            interrupted=message.interrupted,
+            tool_calls=[
+                {"id": tool_call.id, "name": tool_call.name}
+                for tool_call in (message.tool_calls or [])
+            ],
         )
         # Every persisted Assistant closes its slot. A later continuation or
         # replayed attempt can neither overwrite nor discard this durable work.
-        self._step += 1
+        return JournalBoundary(self, (record,), closes_step=True)
 
-    async def record_tool_starts(self, tool_calls: list[Any]) -> None:
-        await self._flush_boundary(
-            *[
-                self._record(
-                    "tool_started",
-                    tool_call_id=tool_call.id,
-                    name=tool_call.name,
-                )
-                for tool_call in tool_calls
-            ]
-        )
-
-    async def record_tool_results(self, tool_messages: list[Any]) -> None:
+    def tool_results_boundary(self, tool_messages: list[ChatMessage]) -> JournalBoundary:
+        """Records completing each persisted Tool Result in *tool_messages*."""
         records: list[JsonObject] = []
         for message in tool_messages:
             ok = False
+            content = message.content if isinstance(message.content, str) else ""
             try:
-                payload = json.loads(message.content or "{}")
+                payload = json.loads(content or "{}")
                 ok = isinstance(payload, dict) and payload.get("ok") is True
             except json.JSONDecodeError:
                 pass
@@ -311,7 +326,47 @@ class ContinuationTracker:
                     ok=ok,
                 )
             )
-        await self._flush_boundary(*records)
+        return JournalBoundary(self, tuple(records))
+
+    async def _commit_boundary(
+        self,
+        boundary: JournalBoundary,
+        write: Callable[[list[JsonObject]], Awaitable[_WriteResult]],
+    ) -> _WriteResult:
+        if self._closed:
+            return await write([])
+        cancelled_task = self._periodic_task
+        if cancelled_task is not None:
+            cancelled_task.cancel()
+            self._periodic_task = None
+        async with self._journal_lock:
+            batch: list[JsonObject] = [] if self._started else [self._start_record]
+            pending = (list(self._pending_reasoning), list(self._pending_content))
+            stream_record = self._take_stream_record()
+            if stream_record is not None:
+                batch.append(stream_record)
+            batch.extend(boundary.records)
+            committed = False
+
+            async def tracked_write() -> _WriteResult:
+                nonlocal committed
+                result = await write(batch)
+                committed = True
+                return result
+
+            try:
+                return await self._settle(tracked_write())
+            finally:
+                if committed:
+                    self._started = True
+                    if stream_record is not None:
+                        self._last_periodic_flush = self._clock()
+                    if boundary.closes_step:
+                        self._step += 1
+                else:
+                    # Nothing was persisted: keep the deltas for a later flush.
+                    self._pending_reasoning[:0] = pending[0]
+                    self._pending_content[:0] = pending[1]
 
     def mark_interruption_cause(self, cause: ContinuationCause) -> None:
         self.interruption_cause = cause
@@ -415,13 +470,17 @@ class ContinuationTracker:
         await self._settle_sink(self._sink([self._start_record]))
         self._started = True
 
+    @classmethod
+    async def _settle_sink(cls, result: None | Awaitable[None]) -> None:
+        if inspect.isawaitable(result):
+            await cls._settle(result)
+
     @staticmethod
-    async def _settle_sink(result: None | Awaitable[None]) -> None:
-        if not inspect.isawaitable(result):
-            return
-        task = asyncio.ensure_future(result)
+    async def _settle(work: Awaitable[_WriteResult]) -> _WriteResult:
+        """Await a journal write; cancellation waits for an already-started write."""
+        task = asyncio.ensure_future(work)
         try:
-            await asyncio.shield(task)
+            return await asyncio.shield(task)
         except asyncio.CancelledError:
             try:
                 await task

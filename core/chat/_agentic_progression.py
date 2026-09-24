@@ -7,6 +7,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
@@ -289,8 +290,7 @@ class AgenticProgression:
                         exc_info=True,
                     )
                 finally:
-                    await session.flush_deferred_notes_async()
-                    await context.session_snapshot.refresh(session)
+                    await context.session_snapshot.flush_deferred_notes(session)
                 pending_notes = session.drain_pending_notes()
             if pending_notes:
                 messages.extend(_notes_to_request_messages(pending_notes))
@@ -311,8 +311,7 @@ class AgenticProgression:
                     )
                 finally:
                     async with self._dependencies.sessions.write_lock(session_address):
-                        await session.flush_deferred_notes_async()
-                        await context.session_snapshot.refresh(session)
+                        await context.session_snapshot.flush_deferred_notes(session)
 
             messages_for_request = await _CHAT_TRANSFORM_WORKERS.run(
                 limit_request_images,
@@ -555,11 +554,21 @@ class AgenticProgression:
             ):
                 preserved_cancelled_output = run.cancel_requested and preserve_after_cancel
                 persist_started = time.perf_counter()
+                tracker = context.continuation_tracker
                 await _finish_visible_boundary(
-                    session.append_async(assistant_message), run, preserve_after_cancel
+                    context.session_snapshot.append(
+                        session,
+                        [assistant_message],
+                        journal=(
+                            None
+                            if tracker is None
+                            else tracker.assistant_boundary(assistant_message)
+                        ),
+                    ),
+                    run,
+                    preserve_after_cancel,
                 )
                 session.assistant_message_id = assistant_message.id
-                await context.session_snapshot.refresh(session)
                 record_span(
                     "chat.persist",
                     persist_started,
@@ -580,18 +589,6 @@ class AgenticProgression:
                     },
                     allow_after_cancel=preserved_cancelled_output,
                 )
-                if context.continuation_tracker is not None:
-                    await context.continuation_tracker.record_assistant_boundary(
-                        message_id=assistant_message.id,
-                        reasoning=assistant_message.reasoning,
-                        content=(
-                            assistant_message.content
-                            if isinstance(assistant_message.content, str)
-                            else None
-                        ),
-                        interrupted=assistant_message.interrupted,
-                        tool_calls=assistant_message.tool_calls,
-                    )
                 if not self._streaming:
                     _emit_assistant_events(run, assistant_message)
                 messages.extend(assistant_request_messages)
@@ -681,15 +678,6 @@ class AgenticProgression:
                         terminal_outcome,
                         has_tool_calls=True,
                     )
-                    will_dispatch_tools = (
-                        terminal_outcome == TERMINAL_OUTCOME_TOOL_CALLS
-                        and not finalization_violation
-                        and not tool_limit_reached
-                    )
-                    if not will_dispatch_tools and context.continuation_tracker is not None:
-                        await context.continuation_tracker.record_tool_starts(
-                            assistant_message.tool_calls
-                        )
                     if terminal_outcome == TERMINAL_OUTCOME_TOOL_CALLS:
                         if finalization_violation:
                             tool_messages = _fail_tool_calls_without_dispatch(
@@ -732,7 +720,6 @@ class AgenticProgression:
                                 tool_messages, media_outputs = await _dispatch_tool_calls(
                                     tool_dispatch_context,
                                     assistant_message.tool_calls,
-                                    continuation_tracker=context.continuation_tracker,
                                 )
                     else:
                         failure_code, failure_message = _terminal_tool_failure(terminal_outcome)
@@ -769,38 +756,51 @@ class AgenticProgression:
                     persist_started = time.perf_counter()
                     binding = context.request.temporary_binding
                     extension_registry = self._dependencies.get_extension_registry()
+                    results_journal = (
+                        None
+                        if context.continuation_tracker is None
+                        else context.continuation_tracker.tool_results_boundary(tool_messages)
+                    )
                     if binding is not None and tool_dispatch_context.delivery_receipts:
-                        await self._dependencies.sessions.append_messages_with_receipts_async(
-                            binding.address,
-                            generation_id=binding.generation_id,
-                            owner_name=binding.owner_name,
-                            messages=batch_messages,
-                            run_id=run.id,
-                            assistant_message_id=assistant_message.id,
-                            receipts=[
-                                (
-                                    next(
-                                        index
-                                        for index, message in enumerate(batch_messages)
-                                        if message.role == "tool"
-                                        and message.tool_call_id == tool_call_id
-                                    ),
-                                    receipt_id,
-                                    content_hash,
-                                    effect_kind,
-                                    "tool",
-                                )
-                                for (
-                                    tool_call_id,
-                                    receipt_id,
-                                    content_hash,
-                                    effect_kind,
-                                ) in tool_dispatch_context.delivery_receipts
-                            ],
+                        # The binding addresses this Run's own Session.
+                        owned_receipts = [
+                            (
+                                next(
+                                    index
+                                    for index, message in enumerate(batch_messages)
+                                    if message.role == "tool"
+                                    and message.tool_call_id == tool_call_id
+                                ),
+                                receipt_id,
+                                content_hash,
+                                effect_kind,
+                                "tool",
+                            )
+                            for (
+                                tool_call_id,
+                                receipt_id,
+                                content_hash,
+                                effect_kind,
+                            ) in tool_dispatch_context.delivery_receipts
+                        ]
+                        await context.session_snapshot.commit(
+                            session,
+                            partial(
+                                self._dependencies.sessions.append_messages_with_receipts_async,
+                                binding.address,
+                                generation_id=binding.generation_id,
+                                owner_name=binding.owner_name,
+                                messages=batch_messages,
+                                run_id=run.id,
+                                assistant_message_id=assistant_message.id,
+                                receipts=owned_receipts,
+                            ),
+                            journal=results_journal,
                         )
                     else:
-                        await session.append_many_async(batch_messages)
-                    await context.session_snapshot.refresh(session)
+                        await context.session_snapshot.append(
+                            session, batch_messages, journal=results_journal
+                        )
                     record_span(
                         "chat.persist",
                         persist_started,
@@ -816,8 +816,6 @@ class AgenticProgression:
                             await self._requests._apply_project_skill_context(
                                 context, loaded_project_id
                             )
-                    if context.continuation_tracker is not None:
-                        await context.continuation_tracker.record_tool_results(tool_messages)
                     if terminal_error is not None:
                         raise terminal_error
                     await self._requests._attach_tool_result_content(

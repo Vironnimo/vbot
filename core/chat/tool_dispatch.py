@@ -44,7 +44,6 @@ from core.tools.availability import (
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from core.chat.continuation import ContinuationTracker
     from core.skills.skills import SkillRegistry
 
 _LOGGER = get_logger("chat")
@@ -539,15 +538,11 @@ def _tool_context_schema_fingerprint(registry: Any, context: ToolContext) -> str
 async def _dispatch_tool_calls(
     context: ToolDispatchContext,
     tool_calls: list[ToolCall],
-    *,
-    continuation_tracker: ContinuationTracker | None = None,
 ) -> tuple[list[ChatMessage], list[JsonObject]]:
     run = context.run
     session = context.session
     agent = context.agent
     run.raise_if_cancelled()
-    if continuation_tracker is not None:
-        await continuation_tracker.record_tool_starts(tool_calls)
     emitting_registry = _EmittingToolRegistry(
         context.registry,
         run,

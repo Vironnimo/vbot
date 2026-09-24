@@ -12,6 +12,7 @@ from core.chat import (
 )
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.sessions import ChatSession
+from core.sessions.store import SessionStore
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
     BASH_SUBAGENT_TOOL_DESCRIPTION,
@@ -87,9 +88,11 @@ async def test_sibling_tool_results_use_one_ordered_session_batch(
     batches: list[list[str]] = []
     original_append_many_async = ChatSession.append_many_async
 
-    async def recording_append_many(self: ChatSession, messages: list[ChatMessage]) -> None:
+    async def recording_append_many(
+        self: ChatSession, messages: list[ChatMessage], **options: Any
+    ) -> Any:
         batches.append([message.role for message in messages])
-        await original_append_many_async(self, messages)
+        return await original_append_many_async(self, messages, **options)
 
     monkeypatch.setattr(ChatSession, "append_many_async", recording_append_many)
 
@@ -102,6 +105,48 @@ async def test_sibling_tool_results_use_one_ordered_session_batch(
         "first",
         "second",
     ]
+
+
+@pytest.mark.asyncio
+async def test_tool_cycle_boundaries_need_no_separate_journal_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tools = ToolRegistry()
+    tools.register(
+        "probe",
+        "Return the probe id.",
+        {"type": "object"},
+        lambda context, _arguments: tool_success({"id": context.tool_call_id}),
+    )
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["probe"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "first", "name": "probe", "arguments": {}}],
+            },
+            {"content": "done", "tool_calls": None},
+        ]
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    journal_writes: list[list[str]] = []
+    original_append_continuation = SessionStore.append_continuation
+
+    def recording_append_continuation(
+        self: SessionStore, address: Any, records: list[JsonObject]
+    ) -> None:
+        journal_writes.append([str(record["type"]) for record in records])
+        original_append_continuation(self, address, records)
+
+    monkeypatch.setattr(SessionStore, "append_continuation", recording_append_continuation)
+
+    await build_chat_loop(runtime).send("coder", "probe once", session_id="session-one")
+
+    # Assistant boundaries and Tool Results commit inside their history writes.
+    assert journal_writes == [["run_started"]]
+    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    assert persisted_roles(persisted)[-3:] == ["assistant", "tool", "assistant"]
 
 
 @pytest.mark.asyncio

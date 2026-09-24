@@ -50,6 +50,8 @@ from core.sessions._types import (
     SessionListCursor,
     SessionListFilters,
     SessionListPage,
+    SessionReadBatch,
+    SessionReadCursor,
     SessionRunCompletion,
     TemporarySessionBinding,
 )
@@ -731,8 +733,10 @@ class ChatSessionManager:
         deduplicate_carrier: bool = False,
         run_id: str | None = None,
         assistant_message_id: str | None = None,
-    ) -> None:
-        await _run_session_io(
+        continuation_records: Sequence[JsonObject] = (),
+        since: SessionReadCursor | None = None,
+    ) -> SessionReadBatch | None:
+        return await _run_session_io(
             lambda: self.append_messages_with_receipts(
                 address,
                 generation_id=generation_id,
@@ -742,6 +746,8 @@ class ChatSessionManager:
                 deduplicate_carrier=deduplicate_carrier,
                 run_id=run_id,
                 assistant_message_id=assistant_message_id,
+                continuation_records=continuation_records,
+                since=since,
             )
         )
 
@@ -756,8 +762,11 @@ class ChatSessionManager:
         deduplicate_carrier: bool = False,
         run_id: str | None = None,
         assistant_message_id: str | None = None,
-    ) -> None:
-        self._store.append_messages_with_receipts(
+        continuation_records: Sequence[JsonObject] = (),
+        since: SessionReadCursor | None = None,
+    ) -> SessionReadBatch | None:
+        """Append owned deliveries; see ``SessionStore.append_messages`` for the options."""
+        return self._store.append_messages_with_receipts(
             address,
             generation_id=generation_id,
             owner_name=owner_name,
@@ -766,6 +775,8 @@ class ChatSessionManager:
             deduplicate_carrier=deduplicate_carrier,
             run_id=run_id,
             assistant_message_id=assistant_message_id,
+            continuation_records=continuation_records,
+            since=since,
         )
 
     async def lookup_delivery_receipt(
