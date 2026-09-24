@@ -119,6 +119,13 @@
         }
       }
     },
+    "gpt-6-luna": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "responses"
+        }
+      }
+    },
     "grok-4.7": {
       "metadata": {
         "opencode_go": {
@@ -323,6 +330,16 @@
       "metadata": {
         "opencode_go": {
           "protocol": "anthropic"
+        }
+      }
+    },
+    "space-bunny-free": {
+      "name": "Space Bunny Free",
+      "metadata": {
+        "opencode_go": {
+          "minimum_reasoning_effort": "low",
+          "protocol": "openai",
+          "reasoning_response_field": "reasoning_content"
         }
       }
     }
