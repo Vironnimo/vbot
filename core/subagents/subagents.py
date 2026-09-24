@@ -124,6 +124,10 @@ class SubAgentCoordinator:
         """Return additional targets for the Tool-owned System Prompt block."""
         return build_subagent_prompt_targets(self._runtime, agent, project_id)
 
+    def foreground_timeout_minutes(self) -> int:
+        """Return the configured bound on a nested caller's foreground work, queue included."""
+        return _load_subagent_settings(self._runtime)["subagent_timeout_minutes"]
+
     async def spawn(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         """Handle a public Sub-Agent lifecycle operation."""
         return await _handle_subagent(
