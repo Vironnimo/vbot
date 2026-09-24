@@ -6,6 +6,7 @@ from core.model_tasks import (
     SUPPORTED_TASK_TYPES,
     TASK_IMAGE_GENERATION,
     TASK_IMAGE_UNDERSTANDING,
+    TASK_LIVE_VOICE,
     TASK_SPEECH_TO_TEXT,
     TASK_TEXT_TO_SPEECH,
     LocalTaskTargetDescriptor,
@@ -15,6 +16,7 @@ from core.model_tasks import (
 )
 from tests.core.model_tasks.model_tasks_test_support import (
     _Credentials,
+    _live_voice_registry,
     _model,
     _Models,
     _provider,
@@ -461,3 +463,33 @@ def test_list_targets_query_delegation_does_not_reach_provider_without_match() -
     targets = service.list_targets(TASK_SPEECH_TO_TEXT)
 
     assert targets == []
+
+
+def test_live_voice_targets_are_explicit_and_limited_to_allowed_connections() -> None:
+    providers = _Providers(
+        providers=[
+            _provider(
+                "openai", "OpenAI", [("api-key", "API Key"), ("subscription", "ChatGPT Plus/Pro")]
+            )
+        ]
+    )
+    service = TaskModelService(
+        providers,
+        _live_voice_registry(),
+        _Credentials({"openai:api-key", "openai:subscription"}),
+        _Storage(),
+    )
+
+    targets = service.list_targets(TASK_LIVE_VOICE)
+
+    assert [target.id for target in targets] == [
+        "openai/live-key::api-key",
+        "openai/live-sub::subscription",
+    ]
+    assert all(target.task_types == (TASK_LIVE_VOICE,) for target in targets)
+    # An audio Model is not a live voice target without the explicit tag.
+    audio = _Models(
+        [_model("audio-chat", ("audio_input", "audio_generation"), provider_id="openai")]
+    )
+    audio_service = TaskModelService(providers, audio, _Credentials({"openai:api-key"}), _Storage())
+    assert audio_service.list_targets(TASK_LIVE_VOICE) == []

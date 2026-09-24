@@ -7,12 +7,14 @@ import pytest
 from core.model_tasks import (
     SUPPORTED_TASK_TYPES,
     TASK_IMAGE_GENERATION,
+    TASK_LIVE_VOICE,
     TASK_SPEECH_TO_TEXT,
     TASK_TEXT_TO_SPEECH,
     LocalTaskTargetDescriptor,
     LocalTaskTargetRegistry,
     TaskModelBinding,
     TaskModelOptionField,
+    TaskModelOptionSchema,
     TaskModelService,
     TaskModelValidationError,
     validate_task_type,
@@ -20,6 +22,7 @@ from core.model_tasks import (
 from core.model_tasks import constants as model_task_constants
 from tests.core.model_tasks.model_tasks_test_support import (
     _Credentials,
+    _live_voice_registry,
     _model,
     _Models,
     _provider,
@@ -587,3 +590,80 @@ def test_options_with_defaults_carries_forced_and_escape_hatch_defaults() -> Non
     assert options["response_format"] == "b64_json"
     assert options["size"] == ""
     assert options["extra_options"] == {}
+
+
+# ---------------------------------------------------------------------------
+# Live voice — registry-aware backend Model choices
+# ---------------------------------------------------------------------------
+def _live_voice_service(storage: _Storage | None = None) -> TaskModelService:
+    return TaskModelService(
+        _Providers(
+            providers=[
+                _provider(
+                    "openai",
+                    "OpenAI",
+                    [("api-key", "API Key"), ("subscription", "ChatGPT Plus/Pro")],
+                )
+            ]
+        ),
+        _live_voice_registry(),
+        _Credentials({"openai:api-key", "openai:subscription"}),
+        storage or _Storage(),
+    )
+
+
+def test_live_voice_is_a_supported_binding_type() -> None:
+    assert model_task_constants.TASK_LIVE_VOICE == TASK_LIVE_VOICE == "live_voice"
+    assert TASK_LIVE_VOICE in SUPPORTED_TASK_TYPES
+    assert validate_task_type(TASK_LIVE_VOICE) == TASK_LIVE_VOICE
+
+
+def test_live_voice_options_offer_backend_models_of_the_target_connection() -> None:
+    service = _live_voice_service()
+
+    subscription = service.options(TASK_LIVE_VOICE, "openai/live-sub::subscription")
+    api_key = service.options(TASK_LIVE_VOICE, "openai/live-key::api-key")
+
+    def backend_values(schema: TaskModelOptionSchema) -> list[str]:
+        fields = {field.name: field for field in schema.fields}
+        return [choice.value for choice in fields["backend_model"].options]
+
+    assert backend_values(subscription) == ["astra", "terra"]
+    assert backend_values(api_key) == ["platform", "terra"]
+    assert "extra_options" not in {field.name for field in subscription.fields}
+
+
+def test_live_voice_update_validates_backend_against_the_same_choices() -> None:
+    storage = _Storage()
+    service = _live_voice_service(storage)
+    target = "openai/live-sub::subscription"
+
+    rejected = {"target": target, "options": {"backend_model": "platform"}}
+    with pytest.raises(TaskModelValidationError, match="backend_model"):
+        service.update({TASK_LIVE_VOICE: rejected})
+    assert TASK_LIVE_VOICE not in storage.load_model_task_settings()
+
+    saved = service.update({TASK_LIVE_VOICE: {"target": target, "options": {}}})
+
+    assert saved[TASK_LIVE_VOICE] == {"target": target, "options": {}}
+    binding = service.binding_for(TASK_LIVE_VOICE)
+    assert service.options_with_defaults(binding) == {"voice": "juniper", "backend_model": "terra"}
+
+
+def test_live_voice_patch_sets_and_unsets_backend_model() -> None:
+    target = "openai/live-sub::subscription"
+    storage = _Storage({TASK_LIVE_VOICE: {"target": target, "options": {"voice": "cove"}}})
+    service = _live_voice_service(storage)
+
+    selected = service.patch_options(TASK_LIVE_VOICE, set_values={"backend_model": "astra"})
+    assert selected[TASK_LIVE_VOICE]["options"] == {"voice": "cove", "backend_model": "astra"}
+
+    with pytest.raises(TaskModelValidationError):
+        service.patch_options(TASK_LIVE_VOICE, set_values={"backend_model": "quiet"})
+
+    cleared = service.patch_options(TASK_LIVE_VOICE, unset_names=("backend_model",))
+    assert cleared[TASK_LIVE_VOICE]["options"] == {"voice": "cove"}
+    assert service.options_with_defaults(service.binding_for(TASK_LIVE_VOICE)) == {
+        "voice": "cove",
+        "backend_model": "terra",
+    }

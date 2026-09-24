@@ -1,49 +1,146 @@
+"""Live voice RPCs: status, start/stop and the owner's UI request answers."""
+
+from __future__ import annotations
+
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from typing import Any
 
 import pytest
 
-from core.providers.errors import ProviderAuthError, ProviderOutcomeUnknownError
-from server.rpc.live_methods import _create, _status
+from core.model_tasks.live import LiveStartRejected
+from server.live import LiveRegistryClosedError
+from server.rpc.errors import RpcError
+from server.rpc.live_methods import _start, _status, _stop, _ui_result
 from server.rpc.methods import build_method_handlers
 
+JsonObject = dict[str, Any]
 
-def state(configured=True):
-    return SimpleNamespace(
-        runtime=SimpleNamespace(
-            provider_credentials=SimpleNamespace(is_usable=Mock(return_value=configured))
-        )
+
+class FakeRegistry:
+    def __init__(self) -> None:
+        self.starts: list[tuple[Any, str]] = []
+        self.stops: list[str] = []
+        self.answers: list[tuple[str, str, JsonObject | None, str | None]] = []
+        self.start_error: Exception | None = None
+
+    async def start(self, service: Any, *, offer_sdp: str) -> Any:
+        self.starts.append((service, offer_sdp))
+        if self.start_error is not None:
+            raise self.start_error
+        return SimpleNamespace(id="call-1", media={"type": "webrtc", "sdp": "answer"})
+
+    def stop(self, call_id: str) -> bool:
+        self.stops.append(call_id)
+        return call_id == "call-1"
+
+    def resolve_ui_request(
+        self,
+        call_id: str,
+        request_id: str,
+        *,
+        result: JsonObject | None = None,
+        error: str | None = None,
+    ) -> bool:
+        self.answers.append((call_id, request_id, result, error))
+        return True
+
+
+def state() -> Any:
+    service = SimpleNamespace(
+        status=lambda: {"configured": True, "usable": False, "target": "openai/x::api-key"}
     )
+    return SimpleNamespace(runtime=SimpleNamespace(live_voice=service), live_calls=FakeRegistry())
+
+
+def test_status_reports_the_live_voice_binding() -> None:
+    assert _status(state(), {}) == {
+        "configured": True,
+        "usable": False,
+        "target": "openai/x::api-key",
+    }
+    with pytest.raises(RpcError):
+        _status(state(), {"extra": True})
 
 
 @pytest.mark.asyncio
-async def test_missing_key_prevents_provider_request(monkeypatch):
-    factory = Mock()
-    monkeypatch.setattr("server.rpc.live_methods.LiveClient.from_runtime", factory)
-    assert await _create(state(False), {"sdp": "v=0"}) == {"error": "api_key_required"}
-    factory.assert_not_called()
+async def test_start_passes_the_offer_to_the_registry_with_the_live_voice_service() -> None:
+    current = state()
+    assert await _start(current, {"sdp": "v=0 offer"}) == {
+        "call_id": "call-1",
+        "media": {"type": "webrtc", "sdp": "answer"},
+    }
+    assert current.live_calls.starts == [(current.runtime.live_voice, "v=0 offer")]
 
 
 @pytest.mark.asyncio
+async def test_start_returns_a_rejection_code_as_its_result() -> None:
+    current = state()
+    current.live_calls.start_error = LiveStartRejected("access_denied", "private detail")
+    assert await _start(current, {"sdp": "v=0"}) == {"error": "access_denied"}
+
+
+@pytest.mark.asyncio
+async def test_start_is_refused_while_the_server_shuts_down() -> None:
+    current = state()
+    current.live_calls.start_error = LiveRegistryClosedError()
+    with pytest.raises(RpcError) as exc_info:
+        await _start(current, {"sdp": "v=0"})
+    assert exc_info.value.code == "invalid_request"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("params", [{}, {"sdp": ""}, {"sdp": 1}, {"sdp": "v=0", "model": "x"}])
+async def test_start_rejects_invalid_params(params: JsonObject) -> None:
+    current = state()
+    with pytest.raises(RpcError):
+        await _start(current, params)
+    assert current.live_calls.starts == []
+
+
+def test_stop_reports_whether_a_call_is_stopping() -> None:
+    current = state()
+    assert _stop(current, {"call_id": "call-1"}) == {"stopping": True}
+    assert _stop(current, {"call_id": "other"}) == {"stopping": False}
+    with pytest.raises(RpcError):
+        _stop(current, {})
+
+
+def test_ui_result_forwards_a_result_or_an_error_code() -> None:
+    current = state()
+    ids = {"call_id": "call-1", "request_id": "ui-1"}
+    assert _ui_result(current, {**ids, "result": {"applied": True}}) == {"accepted": True}
+    assert _ui_result(current, {**ids, "error": "unknown_view"}) == {"accepted": True}
+    assert current.live_calls.answers == [
+        ("call-1", "ui-1", {"applied": True}, None),
+        ("call-1", "ui-1", None, "unknown_view"),
+    ]
+
+
 @pytest.mark.parametrize(
-    "error,code",
+    "params",
     [
-        (ProviderAuthError("private"), "access_denied"),
-        (ProviderOutcomeUnknownError("private", operation_key="test"), "outcome_unknown"),
+        {"request_id": "ui-1", "result": {}},
+        {"call_id": "call-1", "result": {}},
+        {"call_id": "call-1", "request_id": "ui-1"},
+        {"call_id": "call-1", "request_id": "ui-1", "result": {}, "error": "x"},
+        {"call_id": "call-1", "request_id": "ui-1", "result": ["applied"]},
+        {"call_id": "call-1", "request_id": "ui-1", "error": ""},
+        {"call_id": "call-1", "request_id": "ui-1", "error": {"code": "x"}},
+        {"call_id": "call-1", "request_id": "ui-1", "error": "x" * 65},
+        {"call_id": "call-1", "request_id": "ui-1", "result": {}, "extra": 1},
     ],
 )
-async def test_provider_failures_do_not_leak_credentials(monkeypatch, error, code):
-    factory = Mock(return_value=SimpleNamespace(create_session=AsyncMock(side_effect=error)))
-    monkeypatch.setattr("server.rpc.live_methods.LiveClient.from_runtime", factory)
-    assert await _create(state(), {"sdp": "v=0"}) == {"error": code}
-
-
-def test_live_methods_use_canonical_registry_and_exact_connection():
+def test_ui_result_rejects_invalid_answers(params: JsonObject) -> None:
     current = state()
-    assert _status(current, {})["configured"] is True
-    current.runtime.provider_credentials.is_usable.assert_called_once_with(
-        "openai", "openai:api-key"
-    )
+    with pytest.raises(RpcError):
+        _ui_result(current, params)
+    assert current.live_calls.answers == []
+
+
+def test_live_methods_are_registered() -> None:
     methods = build_method_handlers()
-    assert methods["live.create"] is _create
     assert methods["live.status"] is _status
+    assert methods["live.start"] is _start
+    assert methods["live.stop"] is _stop
+    assert methods["live.ui_result"] is _ui_result
+    assert "live.create" not in methods

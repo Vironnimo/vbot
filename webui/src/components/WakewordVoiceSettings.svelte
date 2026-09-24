@@ -17,7 +17,6 @@
     createAutosaveParticipant,
     useAutosaveContext,
   } from '$lib/autosave.js';
-  import { setLiveVoiceEnabled } from '$lib/api.js';
   import {
     getWakewordStatus,
     setWakewordEnabled,
@@ -66,21 +65,6 @@
   } = $props();
 
   let voiceState = $state(createVoiceSettingsState());
-  let savingLiveVoice = $state(false);
-  async function changeLiveVoice(enabled) {
-    if (savingLiveVoice) return;
-    savingLiveVoice = true;
-    try {
-      const saved = await setLiveVoiceEnabled(enabled);
-      onCommit(saved);
-    } catch (error) {
-      onError(
-        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-      );
-    } finally {
-      savingLiveVoice = false;
-    }
-  }
   let lastSaved = $state(null);
   let loaded = $state(false);
   let cleanupStatusPoll = null;
@@ -568,28 +552,6 @@
 </script>
 
 <div class="voice-settings">
-  <div class="s-group">
-    <div class="s-row s-row--compact">
-      <div class="s-row-info">
-        <div class="s-row-label">{t('live.settings.label', 'Live voice')}</div>
-        <div class="s-row-desc">
-          {t(
-            'live.settings.description',
-            'Show Start Live in the sidebar. Requires an OpenAI API key with GPT-Live access. OpenAI charges for connected voice time and backend usage.',
-          )}
-        </div>
-      </div>
-      <div class="s-row-control">
-        <Toggle
-          checked={settings?.live_voice?.enabled === true}
-          onChange={changeLiveVoice}
-          disabled={!settings || savingLiveVoice}
-          ariaLabel={t('live.settings.label', 'Live voice')}
-        />
-      </div>
-    </div>
-  </div>
-
   <TranscriptionAudioSettings
     {settings}
     {onCommit}

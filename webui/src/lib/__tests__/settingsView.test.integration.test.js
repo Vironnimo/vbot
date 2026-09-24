@@ -150,7 +150,7 @@ describe('SettingsView', () => {
     ]);
     const expectedSections = {
       general: ['appearance', 'session_titles', 'preferences'],
-      voice: ['speech_models', 'voice_controls'],
+      voice: ['speech_models', 'live_voice_model', 'voice_controls'],
       memory: ['recall', 'embedding_model', 'reflection'],
       tools: [
         'web_search',
@@ -177,6 +177,7 @@ describe('SettingsView', () => {
     for (const [task, pageId] of [
       ['speech_to_text', 'voice'],
       ['text_to_speech', 'voice'],
+      ['live_voice', 'voice'],
       ['text_embedding', 'memory'],
       ['image_generation', 'tools'],
       ['decision', 'tools'],

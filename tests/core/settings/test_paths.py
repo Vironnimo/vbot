@@ -469,26 +469,9 @@ def test_server_timezone_patch_maps_to_flat_raw_key() -> None:
     assert build_effective_settings(updated)["server"]["timezone"] == "Europe/Berlin"
 
 
-def test_live_voice_opt_in_defaults_off_and_round_trips() -> None:
-    assert build_effective_settings({})["live_voice"] == {"enabled": False}
-    assert setting_details({}, "live_voice.enabled")["value"] is False
-    operations = parse_patch_operations(
-        [{"op": "set", "path": "live_voice.enabled", "value": True}]
-    )
-    updated, changed = apply_settings_patch({}, operations)
-    assert updated == {"live_voice": {"enabled": True}}
-    assert changed == ("live_voice.enabled",)
-    assert build_effective_settings(updated)["live_voice"] == {"enabled": True}
-    cleared, _ = apply_settings_patch(
-        updated, parse_patch_operations([{"op": "unset", "path": "live_voice.enabled"}])
-    )
-    assert build_effective_settings(cleared)["live_voice"] == {"enabled": False}
+def test_removed_live_voice_opt_in_is_not_a_settings_path() -> None:
+    """Live voice is configured as a Task Model binding, not a visibility toggle."""
 
-
-@pytest.mark.parametrize("value", ["true", 1, None, {}, []])
-def test_live_voice_opt_in_rejects_non_boolean_values(value: object) -> None:
+    assert "live_voice" not in build_effective_settings({"live_voice": {"enabled": True}})
     with pytest.raises(SettingsPathError):
-        apply_settings_patch(
-            {},
-            parse_patch_operations([{"op": "set", "path": "live_voice.enabled", "value": value}]),
-        )
+        resolve_setting("live_voice.enabled")

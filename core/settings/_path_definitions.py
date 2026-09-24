@@ -110,12 +110,6 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         default=False,
     ),
     _static(
-        "live_voice.enabled",
-        "boolean",
-        "Show the Live voice control in the sidebar.",
-        default=False,
-    ),
-    _static(
         "server.timezone",
         "string",
         "IANA timezone used by Agents, schedules, calendars, and Accessors.",

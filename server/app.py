@@ -38,6 +38,7 @@ from server._app_lifecycle import (
     _fire_extension_startup,
     _initialize_app_state,
     _shutdown_device_flow_engine,
+    _shutdown_live_calls,
     _shutdown_local_catalog_refresh,
     _shutdown_log_viewer,
     _shutdown_model_list_refreshes,
@@ -89,6 +90,7 @@ from server._streams import (
     _unregister_ws_client,
 )
 from server.file_delivery import PREVIEW_URL_PREFIX
+from server.live import LIVE_SOCKET_CLOSE_UNKNOWN_CALL
 from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.methods import dispatch_rpc
 from server.rpc.operations_methods import FILE_PREVIEW_WORKERS
@@ -287,6 +289,7 @@ def create_app(
             yield
         finally:
             server_logger.info("Server application stopping")
+            await _shutdown_live_calls(app.state, server_logger)
             await _shutdown_local_catalog_refresh(
                 getattr(app.state, "local_catalog_refresh_task", None),
                 server_logger,
@@ -776,6 +779,23 @@ def create_app(
             await websocket.close(code=1008, reason=str(exc))
         except WebSocketDisconnect:
             return
+
+    @app.websocket("/ws/live/{call_id}")
+    async def websocket_live(websocket: WebSocket, call_id: str) -> None:
+        await websocket.accept()
+        owner = websocket.app.state.live_calls.attach(call_id)
+        if owner is None:
+            await websocket.close(code=LIVE_SOCKET_CLOSE_UNKNOWN_CALL, reason="Unknown Live call")
+            return
+        try:
+            async with aclosing(owner.frames()) as frames:
+                await _stream_websocket_events(websocket, frames)
+            if owner.finished and owner.close_code is not None:
+                await websocket.close(code=owner.close_code)
+        except WebSocketDisconnect:
+            return
+        finally:
+            owner.detach()
 
     _mount_webui(app)
 
