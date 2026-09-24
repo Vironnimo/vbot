@@ -983,6 +983,62 @@ describe('SettingsSpecializedModelsPanel', () => {
     });
   });
 
+  it('hides a dependent field that the current value makes irrelevant', async () => {
+    const target = 'xai/grok-voice-think-fast-2.0::subscription';
+    getTaskModelOptionsMock.mockResolvedValue({
+      fields: [
+        {
+          name: 'backend_model',
+          type: 'select',
+          label: 'Backend model',
+          default: '',
+          options: [
+            { value: '', label: 'None (the voice model uses vBot directly)' },
+            { value: 'terra', label: 'Terra' },
+          ],
+        },
+        {
+          name: 'backend_thinking_effort',
+          type: 'select',
+          label: 'Backend reasoning',
+          default: 'low',
+          options: ['', 'low', 'high'].map((value) => ({
+            value,
+            label: value || 'Model default',
+          })),
+          options_by: { field: 'backend_model', values: { '': [] } },
+        },
+      ],
+    });
+    mountedComponent = mount(SettingsSpecializedModelsPanel, {
+      target: document.body,
+      props: {
+        taskTypes: ['live_voice'],
+        settings: {
+          model_tasks: {
+            live_voice: {
+              target,
+              options: { backend_thinking_effort: 'high' },
+            },
+          },
+        },
+      },
+    });
+    const backendId = 'task-model-live_voice-backend_model';
+    const effortId = 'task-model-live_voice-backend_thinking_effort';
+    await waitForCondition(() => document.getElementById(backendId));
+
+    expect(document.getElementById(effortId)).toBeNull();
+    document.getElementById(backendId).click();
+    flushSync();
+    [...document.querySelectorAll('[role="option"]')]
+      .find((option) => option.textContent.trim() === 'Terra')
+      .click();
+    flushSync();
+
+    expect(document.getElementById(effortId).textContent.trim()).toBe('high');
+  });
+
   it('auto-saves after a boolean option toggle is flipped', async () => {
     // The boolean option field is the shared Toggle (role="switch"); flipping it
     // must arm the same autosave flow as the other option controls.

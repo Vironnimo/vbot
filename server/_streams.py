@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import aclosing, suppress
 from datetime import UTC, datetime
 from typing import Any
@@ -35,7 +35,14 @@ REPLAY_STATUS_GAP = "gap"
 REPLAY_STATUS_EPOCH_CHANGED = "epoch_changed"
 
 
-async def _stream_websocket_events(websocket: WebSocket, stream: Any) -> None:
+async def _stream_websocket_events(
+    websocket: WebSocket, stream: Any, *, on_binary: Callable[[bytes], None] | None = None
+) -> None:
+    """Push *stream* items to the socket: ``bytes`` as binary frames, others as JSON.
+
+    Inbound binary frames go to *on_binary* when given; every other inbound
+    frame is ignored.
+    """
     stream_iter = stream.__aiter__()
     disconnect_task = asyncio.create_task(websocket.receive())
     # The pending stream read survives across loop iterations: cancelling it to
@@ -61,8 +68,11 @@ async def _stream_websocket_events(websocket: WebSocket, stream: Any) -> None:
                 message = disconnect_task.result()
                 if message.get("type") == "websocket.disconnect":
                     return
-                # Any other inbound frame is ignored; keep listening for the
-                # disconnect without disturbing the pending log read.
+                data = message.get("bytes")
+                if on_binary is not None and isinstance(data, bytes):
+                    on_binary(data)
+                # Keep listening for the disconnect without disturbing the
+                # pending stream read.
                 disconnect_task = asyncio.create_task(websocket.receive())
 
             if event_task in done:
@@ -72,7 +82,10 @@ async def _stream_websocket_events(websocket: WebSocket, stream: Any) -> None:
                     event = completed_event_task.result()
                 except StopAsyncIteration:
                     return
-                await websocket.send_json(event)
+                if isinstance(event, bytes):
+                    await websocket.send_bytes(event)
+                else:
+                    await websocket.send_json(event)
     finally:
         disconnect_task.cancel()
         with suppress(asyncio.CancelledError):

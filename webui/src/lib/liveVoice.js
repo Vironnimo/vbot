@@ -1,10 +1,13 @@
 import * as defaultApi from './api.js';
+import { createRelayAudio, isRelayAudioFormat } from './liveAudio.js';
 import { isPlainObject } from './values.js';
 
 // Live voice accessor controller. The server owns the provider call, delegated
 // reasoning and every data operation; this page owns only the microphone and
-// speaker media (WebRTC directly to the provider), UI requests the server sends
-// over the call's owner socket, and the displayed call state.
+// speaker media, UI requests the server sends over the call's owner socket,
+// and the displayed call state. Media is either WebRTC directly to the
+// provider or PCM relayed through the server on the owner socket; the bound
+// target decides (`live.status` -> `media`).
 
 const STARTUP_TIMEOUT_MS = 45000;
 // Non-trickle ICE: wait for complete gathering, then offer whatever candidates
@@ -36,6 +39,8 @@ const MICROPHONE_CONSTRAINTS = Object.freeze({
     autoGainControl: true,
   },
 });
+const MEDIA_WEBRTC = 'webrtc';
+const MEDIA_RELAY = 'relay';
 
 class LiveVoiceFailure extends Error {
   constructor(code) {
@@ -68,6 +73,32 @@ function boundCaption(text) {
   return text.length > CAPTION_TEXT_LIMIT
     ? text.slice(-CAPTION_TEXT_LIMIT)
     : text;
+}
+
+const mediaKind = (status) =>
+  status?.media === MEDIA_RELAY ? MEDIA_RELAY : MEDIA_WEBRTC;
+
+function checkStatus(status) {
+  if (status?.configured !== true) throw failure('not_configured');
+  if (status.usable !== true) throw failure('not_usable');
+}
+
+// Relay playback is not a WebRTC track, so its echo is cancelled against the
+// device output where the browser supports that ("all", Chrome 141+). Best
+// effort: the regular echo cancellation stays when it is unavailable.
+async function cancelEchoOfAllOutput(microphone) {
+  for (const track of microphone.getAudioTracks?.() ?? []) {
+    const supported = track.getCapabilities?.()?.echoCancellation;
+    if (!Array.isArray(supported) || !supported.includes('all')) continue;
+    try {
+      await track.applyConstraints({
+        ...MICROPHONE_CONSTRAINTS.audio,
+        echoCancellation: 'all',
+      });
+    } catch {
+      // Keep the default echo cancellation.
+    }
+  }
 }
 
 function waitForIceGathering(peer) {
@@ -118,6 +149,7 @@ export function createLiveVoice({
   microphoneLease = null,
   createPeer = () => new RTCPeerConnection(),
   audio = null,
+  createAudio = createRelayAudio,
   uiActions = {},
   onActive = () => {},
   onNotice = () => {},
@@ -154,9 +186,16 @@ export function createLiveVoice({
     );
   }
 
+  function releaseRelayAudio(call) {
+    const relay = call.relay;
+    call.relay = null;
+    relay?.close();
+  }
+
   function releaseMedia(call) {
     stopTracks(call.microphone);
     call.microphone = null;
+    releaseRelayAudio(call);
     if (call.leased) {
       call.leased = false;
       microphoneLease.release();
@@ -168,18 +207,23 @@ export function createLiveVoice({
     call.playing = false;
   }
 
+  function releasePeer(call) {
+    const { channel, peer } = call;
+    call.channel = null;
+    call.peer = null;
+    channel?.close();
+    peer?.close();
+  }
+
   function finish(call) {
     if (!isCurrent(call)) return;
     current = null;
     for (const timer of call.timers) clearTimeout(timer);
     call.timers.clear();
     releaseMedia(call);
-    const { channel, peer, socket } = call;
-    call.channel = null;
-    call.peer = null;
+    releasePeer(call);
+    const { socket } = call;
     call.socket = null;
-    channel?.close();
-    peer?.close();
     socket?.close();
     Object.assign(state, {
       phase: 'off',
@@ -277,6 +321,9 @@ export function createLiveVoice({
           if (!owns()) return;
           call.socketLostAt = null;
           handleFrame(frame, call);
+        },
+        onAudio: (pcm) => {
+          if (owns() && !call.closing) call.relay?.play(pcm);
         },
         onClose: (_event, outcome) => {
           if (owns()) socketLost(call, outcome);
@@ -479,6 +526,10 @@ export function createLiveVoice({
         state.busy = frame.busy === true && !call.closing;
         state.activityLabel = isText(frame.label) ? frame.label : null;
         break;
+      case 'playback_clear':
+        // The user talks over the assistant: drop its queued speech at once.
+        call.relay?.clear();
+        break;
       case 'error':
         applyError(call, frame);
         break;
@@ -508,6 +559,70 @@ export function createLiveVoice({
     }
   }
 
+  // WebRTC media: the offer goes to the server, the provider's answer comes
+  // back with the call.
+  async function requestWebrtcCall(call) {
+    const peer = createPeer();
+    call.peer = peer;
+    wirePeer(call, peer);
+    for (const track of call.microphone.getAudioTracks()) {
+      peer.addTrack(track, call.microphone);
+    }
+    // The provider expects this channel in the offer. Its events duplicate
+    // what the server already receives, so the page ignores them.
+    call.channel = peer.createDataChannel('oai-events');
+    const offer = await peer.createOffer();
+    if (!isCurrent(call)) return null;
+    await peer.setLocalDescription(offer);
+    if (!isCurrent(call)) return null;
+    await waitForIceGathering(peer);
+    if (!isCurrent(call)) return null;
+    return api.startLiveCall({
+      media: MEDIA_WEBRTC,
+      sdp: peer.localDescription.sdp,
+    });
+  }
+
+  async function connectWebrtc(call, media) {
+    if (media?.type !== MEDIA_WEBRTC || !isText(media.sdp))
+      throw failure('connection_failed');
+    await call.peer.setRemoteDescription({ type: 'answer', sdp: media.sdp });
+  }
+
+  // Relay media: capture and playback run before the call exists, so an
+  // unsupported browser or blocked audio fails without a provider call.
+  async function requestRelayCall(call) {
+    await cancelEchoOfAllOutput(call.microphone);
+    if (!isCurrent(call)) return null;
+    let relay;
+    try {
+      relay = await createAudio({
+        microphone: call.microphone,
+        onFrame: (pcm) => sendAudio(call, pcm),
+      });
+    } catch (error) {
+      throw failure(isText(error?.code) ? error.code : 'audio_unsupported');
+    }
+    if (!isCurrent(call)) {
+      relay.close();
+      return null;
+    }
+    call.relay = relay;
+    return api.startLiveCall({ media: MEDIA_RELAY });
+  }
+
+  function connectRelay(_call, media) {
+    if (media?.type !== MEDIA_RELAY || !isRelayAudioFormat(media.audio))
+      throw failure('connection_failed');
+  }
+
+  // Microphone audio flows only while the call is live; the server drops
+  // earlier audio anyway.
+  function sendAudio(call, pcm) {
+    if (!isCurrent(call) || !call.reachedLive || call.closing) return;
+    call.socket?.sendAudio?.(pcm);
+  }
+
   function abandonLateCall(result) {
     if (!isText(result?.call_id)) return;
     Promise.resolve()
@@ -523,6 +638,7 @@ export function createLiveVoice({
       peer: null,
       channel: null,
       socket: null,
+      relay: null,
       timers: new Set(),
       requests: new Set(),
       startupTimer: null,
@@ -541,10 +657,9 @@ export function createLiveVoice({
     Object.assign(state, createLiveVoiceState(), { phase: 'connecting' });
     armStartupTimer(call);
     try {
-      const status = await api.getLiveVoiceStatus();
+      let status = await api.getLiveVoiceStatus();
       if (!isCurrent(call)) return;
-      if (status?.configured !== true) throw failure('not_configured');
-      if (status.usable !== true) throw failure('not_usable');
+      checkStatus(status);
 
       if (microphoneLease) {
         const blocked = await microphoneLease.acquire();
@@ -563,46 +678,45 @@ export function createLiveVoice({
       call.microphone = microphone;
       // The permission prompt is user time; bound only the connection from here.
       armStartupTimer(call);
-
-      const peer = createPeer();
-      call.peer = peer;
-      wirePeer(call, peer);
       for (const track of microphone.getAudioTracks()) {
         track.enabled = !state.muted;
         track.addEventListener('ended', () => {
           if (isCurrent(call) && !call.closing)
             fail(call, 'microphone_unavailable');
         });
-        peer.addTrack(track, microphone);
       }
-      // The provider expects this channel in the offer. Its events duplicate
-      // what the server already receives, so the page ignores them.
-      call.channel = peer.createDataChannel('oai-events');
-      const offer = await peer.createOffer();
-      if (!isCurrent(call)) return;
-      await peer.setLocalDescription(offer);
-      if (!isCurrent(call)) return;
-      await waitForIceGathering(peer);
-      if (!isCurrent(call)) return;
 
-      const result = await api.startLiveCall(peer.localDescription.sdp);
-      if (!isCurrent(call)) {
-        abandonLateCall(result);
+      // The binding may change between status and start; the server then
+      // answers `media_mismatch` and the page retries once with fresh status.
+      for (let attempt = 1; ; attempt += 1) {
+        const media = mediaKind(status);
+        const result = await (media === MEDIA_RELAY
+          ? requestRelayCall(call)
+          : requestWebrtcCall(call));
+        if (!isCurrent(call)) {
+          abandonLateCall(result);
+          return;
+        }
+        if (result?.error === 'media_mismatch' && attempt === 1) {
+          releasePeer(call);
+          releaseRelayAudio(call);
+          status = await api.getLiveVoiceStatus();
+          if (!isCurrent(call)) return;
+          checkStatus(status);
+          continue;
+        }
+        if (result?.error)
+          throw failure(isText(result.error) ? result.error : 'provider_error');
+        if (!isText(result?.call_id)) throw failure('connection_failed');
+        call.callId = result.call_id;
+        state.callId = call.callId;
+        // Attach immediately: the server buffers call updates only briefly.
+        attachSocket(call);
+        await (media === MEDIA_RELAY
+          ? connectRelay(call, result.media)
+          : connectWebrtc(call, result.media));
         return;
       }
-      if (result?.error)
-        throw failure(isText(result.error) ? result.error : 'provider_error');
-      if (!isText(result?.call_id)) throw failure('connection_failed');
-      call.callId = result.call_id;
-      state.callId = call.callId;
-      // Attach immediately: the server buffers call updates only briefly.
-      attachSocket(call);
-      if (result.media?.type !== 'webrtc' || !isText(result.media.sdp))
-        throw failure('connection_failed');
-      await peer.setRemoteDescription({
-        type: 'answer',
-        sdp: result.media.sdp,
-      });
     } catch (error) {
       fail(
         call,

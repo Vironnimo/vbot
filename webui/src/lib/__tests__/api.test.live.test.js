@@ -38,10 +38,17 @@ describe('Live voice RPC wrappers', () => {
       call_id: 'call-1',
       media: { type: 'webrtc', sdp: 'answer' },
     });
-    await startLiveCall('offer', { fetch: started });
+    await startLiveCall({ media: 'webrtc', sdp: 'offer' }, { fetch: started });
     expect(sentEnvelope(started)).toEqual({
       method: 'live.start',
-      params: { sdp: 'offer' },
+      params: { media: 'webrtc', sdp: 'offer' },
+    });
+
+    const relayed = rpcFetch({ call_id: 'call-2', media: { type: 'relay' } });
+    await startLiveCall({ media: 'relay', sdp: 'ignored' }, { fetch: relayed });
+    expect(sentEnvelope(relayed)).toEqual({
+      method: 'live.start',
+      params: { media: 'relay' },
     });
 
     const stopped = rpcFetch({ stopping: true });
@@ -99,10 +106,18 @@ describe('Live voice RPC wrappers', () => {
     );
   });
 
-  it('rejects empty call ids before sending', () => {
-    expect(() => startLiveCall('')).toThrow(
-      expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
-    );
+  it('rejects empty call ids and unknown media before sending', () => {
+    for (const request of [
+      { media: 'webrtc', sdp: '' },
+      { media: 'webrtc' },
+      { media: 'sip' },
+      {},
+      undefined,
+    ]) {
+      expect(() => startLiveCall(request)).toThrow(
+        expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
+      );
+    }
     expect(() => stopLiveCall('')).toThrow(
       expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
     );
@@ -143,6 +158,41 @@ describe('openLiveCallSocket()', () => {
     expect(connection.socket.closeCalls).toHaveLength(1);
     connection.socket.emit('close', {});
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('receives relay audio as binary frames and sends audio only while open', () => {
+    class AudioSocket extends MockWebSocket {
+      static OPEN = 1;
+      constructor(url) {
+        super(url);
+        this.readyState = 0;
+        this.sent = [];
+      }
+      send(data) {
+        this.sent.push(data);
+      }
+    }
+    const onEvent = vi.fn();
+    const onAudio = vi.fn();
+    const connection = openLiveCallSocket(
+      'call-1',
+      { onEvent, onAudio },
+      { WebSocket: AudioSocket, baseUrl: 'https://localhost:8420/' },
+    );
+    expect(connection.socket.binaryType).toBe('arraybuffer');
+
+    const speech = new ArrayBuffer(4);
+    connection.socket.emit('message', { data: speech });
+    expect(onAudio).toHaveBeenCalledExactlyOnceWith(speech, expect.any(Object));
+    expect(onEvent).not.toHaveBeenCalled();
+
+    const frame = new ArrayBuffer(2);
+    expect(connection.sendAudio(frame)).toBe(false);
+    connection.socket.readyState = AudioSocket.OPEN;
+    expect(connection.sendAudio(frame)).toBe(true);
+    connection.close();
+    expect(connection.sendAudio(frame)).toBe(false);
+    expect(connection.socket.sent).toEqual([frame]);
   });
 
   it.each([

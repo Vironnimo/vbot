@@ -789,7 +789,7 @@ def create_app(
             return
         try:
             async with aclosing(owner.frames()) as frames:
-                await _stream_websocket_events(websocket, frames)
+                await _stream_websocket_events(websocket, frames, on_binary=owner.receive_audio)
             if owner.finished and owner.close_code is not None:
                 await websocket.close(code=owner.close_code)
         except WebSocketDisconnect:

@@ -1,10 +1,13 @@
-"""One running Live call: wire events, delegations, announcements, and shutdown.
+"""One running Live call: wire events, delegations, Tool calls, audio, and shutdown.
 
 The call reads the wire's normalized events on one reader task. Every
-delegation runs on its own task (bounded concurrency) so the conversation stays
-live while work runs; results return through the wire in delegation order of
-completion. Commands to the wire are serialized so chunked appends never
-interleave. The call publishes exactly one ``closed`` update when it ends.
+delegation (backend model) or direct Tool call (voice model, no backend model)
+runs on its own task with bounded concurrency so the conversation stays live
+while work runs; results return through the wire in order of completion.
+Commands to the wire are serialized so chunked appends never interleave. Relay
+media flows outside that lock: microphone audio goes through a bounded backlog
+and one pump task, and assistant audio goes straight to the host. The call
+publishes exactly one ``closed`` update when it ends.
 """
 
 from __future__ import annotations
@@ -17,17 +20,22 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from core.model_tasks._live_brain import DelegationInput, LiveBrain
-from core.model_tasks._live_tools import LIVE_UPDATE_PREFIX
+from core.model_tasks._live_tools import LIVE_UPDATE_PREFIX, live_tool_error, live_tool_rejection
 from core.model_tasks._live_wire import (
+    MEDIA_RELAY,
+    RELAY_BYTES_PER_MS,
     JsonObject,
     LiveWire,
+    WireAudio,
     WireCaption,
     WireClosed,
     WireDelegation,
     WireEvent,
+    WirePlaybackClear,
     WireProblem,
     WireSendError,
     WireStarted,
+    WireToolCall,
     WireUsage,
 )
 from core.utils.logging import get_logger
@@ -52,17 +60,23 @@ _ANNOUNCEMENT_EXCERPT_CHARS = 600
 _CAPTION_MAX_CHARS = 1000
 _TEARDOWN_TIMEOUT_SECONDS = 5.0
 _ABORT_CLOSE_TIMEOUT_SECONDS = 1.0
+# Microphone audio waiting for the provider socket; older audio is dropped.
+_AUDIO_BACKLOG_BYTES = 2000 * RELAY_BYTES_PER_MS
 _ROLE_LABELS = {"user": "User", "assistant": "Assistant"}
 
 
 class LiveCallSession:
-    """Implements :class:`core.model_tasks.live.LiveCall` for one joined wire."""
+    """Implements :class:`core.model_tasks.live.LiveCall` for one joined wire.
+
+    Without a *brain* (direct Tools mode) the wire emits app Tool calls
+    instead of delegations.
+    """
 
     def __init__(
         self,
         *,
         wire: LiveWire,
-        brain: LiveBrain,
+        brain: LiveBrain | None,
         host: LiveCallHost,
         target: str,
         start_timeout: float = START_TIMEOUT_SECONDS,
@@ -99,6 +113,11 @@ class LiveCallSession:
         self._announced: deque[str] = deque(maxlen=_ANNOUNCED_RUN_IDS)
         self._usage: JsonObject | None = None
         self._started_at = clock()
+        self._relay = wire.media.get("type") == MEDIA_RELAY
+        self._audio_backlog: deque[bytes] = deque()
+        self._audio_backlog_bytes = 0
+        self._audio_ready = asyncio.Event()
+        self._audio_overflow_logged = False
 
     @property
     def id(self) -> str:
@@ -106,7 +125,7 @@ class LiveCallSession:
 
     @property
     def media(self) -> JsonObject:
-        return {"type": "webrtc", "sdp": self._wire.answer_sdp}
+        return self._wire.media
 
     def start(self) -> None:
         """Begin reading wire events; called once by the service."""
@@ -134,14 +153,37 @@ class LiveCallSession:
     async def abort(self) -> None:
         await self._abort("aborted")
 
+    def push_audio(self, pcm: bytes) -> None:
+        if (
+            not self._relay
+            or not pcm
+            or self._phase != "live"
+            or self._closing
+            or self._done.is_set()
+        ):
+            return
+        self._audio_backlog.append(pcm)
+        self._audio_backlog_bytes += len(pcm)
+        while self._audio_backlog_bytes > _AUDIO_BACKLOG_BYTES and len(self._audio_backlog) > 1:
+            self._audio_backlog_bytes -= len(self._audio_backlog.popleft())
+            if not self._audio_overflow_logged:
+                self._audio_overflow_logged = True
+                _LOGGER.warning(
+                    "Live call microphone audio fell behind; dropping the oldest audio: call_id=%s",
+                    self.id,
+                )
+        self._audio_ready.set()
+
     def announce_run(self, notice: LiveRunNotice) -> None:
         if notice.run_id in self._announced or self._done.is_set() or self._closing:
             return
         self._announced.append(notice.run_id)
-        text = _render_notice(notice)
-        self._updates.append(text)
+        self._updates.append(_render_notice(notice))
         if self._phase != "live":
             return
+        # An excerpt is untrusted Agent output; where announcements count as
+        # user input, the voice model would follow instructions quoted in it.
+        text = _render_notice(notice, excerpt=not self._wire.announces_as_user_input)
         self._spawn(
             self._send_command(lambda: self._wire.announce(text)),
             name=f"live-call-announce:{self.id}",
@@ -177,11 +219,21 @@ class LiveCallSession:
             if self._phase == "connecting":
                 self._set_phase("live")
                 _LOGGER.debug("Live call media connected: call_id=%s", self.id)
+                if self._relay:
+                    self._spawn(self._pump_audio(), name=f"live-call-audio:{self.id}")
+        elif isinstance(event, WireAudio):
+            if self._phase == "live" and not self._closing:
+                self._publish_audio(event.pcm)
+        elif isinstance(event, WirePlaybackClear):
+            self._publish({"type": "playback_clear"})
         elif isinstance(event, WireCaption):
             self._on_caption(event)
         elif isinstance(event, WireDelegation):
             if not self._closing:
                 self._spawn(self._delegate(event), name=f"live-call-delegation:{self.id}")
+        elif isinstance(event, WireToolCall):
+            if not self._closing:
+                self._spawn(self._run_tool(event), name=f"live-call-tool:{self.id}")
         elif isinstance(event, WireUsage):
             self._usage = event.usage
         elif isinstance(event, WireProblem):
@@ -208,6 +260,12 @@ class LiveCallSession:
         )
 
     async def _delegate(self, event: WireDelegation) -> None:
+        if self._brain is None:
+            _LOGGER.warning("Live delegation without a backend model: call_id=%s", self.id)
+            answer = "No backend model is configured, so the request was not started."
+            await self._send_command(lambda: self._wire.deliver_result(event.delegation_id, answer))
+            return
+        brain = self._brain
         async with self._delegation_slots:
             self._set_busy(1)
             try:
@@ -220,7 +278,7 @@ class LiveCallSession:
                 )
                 try:
                     async with asyncio.timeout(self._delegation_timeout):
-                        answer = await self._brain.answer(delegation)
+                        answer = await brain.answer(delegation)
                 except TimeoutError:
                     _LOGGER.warning("Live delegation timed out: call_id=%s", self.id)
                     answer = (
@@ -230,6 +288,62 @@ class LiveCallSession:
             finally:
                 self._set_busy(-1)
         await self._send_command(lambda: self._wire.deliver_result(event.delegation_id, answer))
+
+    async def _run_tool(self, event: WireToolCall) -> None:
+        async with self._delegation_slots:
+            self._set_busy(1)
+            try:
+                result = await self._execute_tool_call(event)
+            finally:
+                self._set_busy(-1)
+        text = json.dumps(result, ensure_ascii=False)
+        await self._send_command(lambda: self._wire.deliver_result(event.call_id, text))
+
+    async def _execute_tool_call(self, event: WireToolCall) -> JsonObject:
+        """Run one direct Tool call once; failures become an error result."""
+
+        rejection = live_tool_rejection(event.name, event.arguments)
+        if rejection is not None:
+            return rejection
+        try:
+            async with asyncio.timeout(self._delegation_timeout):
+                return await self._host.execute_tool(event.name, dict(event.arguments))
+        except TimeoutError:
+            _LOGGER.warning("Live Tool call timed out: call_id=%s tool=%s", self.id, event.name)
+            return live_tool_error(
+                "timeout",
+                "The Tool call took too long and was stopped. It may have completed; "
+                "nothing was retried.",
+            )
+        except Exception as exc:
+            _LOGGER.warning(
+                "Live Tool call failed: call_id=%s tool=%s error_type=%s",
+                self.id,
+                event.name,
+                type(exc).__name__,
+            )
+            return live_tool_error(
+                "tool_failed",
+                "The Tool call failed. It may have partly completed; nothing was retried.",
+            )
+
+    async def _pump_audio(self) -> None:
+        """Forward microphone audio in arrival order until the call ends."""
+
+        while True:
+            await self._audio_ready.wait()
+            self._audio_ready.clear()
+            while self._audio_backlog:
+                pcm = self._audio_backlog.popleft()
+                self._audio_backlog_bytes -= len(pcm)
+                if self._closing:
+                    continue
+                try:
+                    await self._wire.send_audio(pcm)
+                except WireSendError:
+                    self._audio_backlog.clear()
+                    self._audio_backlog_bytes = 0
+                    return
 
     async def _await_user_quiet(self) -> None:
         deadline = self._clock() + self._user_quiet_max_wait
@@ -366,15 +480,25 @@ class LiveCallSession:
                 type(exc).__name__,
             )
 
+    def _publish_audio(self, pcm: bytes) -> None:
+        try:
+            self._host.publish_audio(pcm)
+        except Exception as exc:
+            _LOGGER.warning(
+                "Live call audio delivery failed: call_id=%s error_type=%s",
+                self.id,
+                type(exc).__name__,
+            )
 
-def _render_notice(notice: LiveRunNotice) -> str:
-    excerpt = notice.excerpt.strip()
-    truncated = notice.truncated or len(excerpt) > _ANNOUNCEMENT_EXCERPT_CHARS
-    payload = {
+
+def _render_notice(notice: LiveRunNotice, *, excerpt: bool = True) -> str:
+    payload: JsonObject = {
         "run": notice.kind,
         "agent": notice.agent_id,
         "session_id": notice.session_id,
-        "result_excerpt": excerpt[:_ANNOUNCEMENT_EXCERPT_CHARS],
-        "excerpt_truncated": truncated,
     }
+    if excerpt:
+        text = notice.excerpt.strip()
+        payload["result_excerpt"] = text[:_ANNOUNCEMENT_EXCERPT_CHARS]
+        payload["excerpt_truncated"] = notice.truncated or len(text) > _ANNOUNCEMENT_EXCERPT_CHARS
     return f"{LIVE_UPDATE_PREFIX}: {json.dumps(payload, ensure_ascii=False)}"

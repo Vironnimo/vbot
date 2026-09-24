@@ -34,7 +34,12 @@ function deferred() {
 }
 
 function liveFixture(overrides = {}) {
-  const track = Object.assign(new Events(), { enabled: true, stop: vi.fn() });
+  const track = Object.assign(new Events(), {
+    enabled: true,
+    stop: vi.fn(),
+    getCapabilities: vi.fn(() => ({ echoCancellation: [true, false] })),
+    applyConstraints: vi.fn().mockResolvedValue(undefined),
+  });
   const microphone = {
     getTracks: () => [track],
     getAudioTracks: () => [track],
@@ -65,11 +70,21 @@ function liveFixture(overrides = {}) {
     stopLiveCall: vi.fn().mockResolvedValue({ stopping: true }),
     sendLiveUiResult: vi.fn().mockResolvedValue({ accepted: true }),
     openLiveCallSocket: vi.fn((callId, handlers) => {
-      const socket = { callId, handlers, close: vi.fn() };
+      const socket = { callId, handlers, close: vi.fn(), sendAudio: vi.fn() };
       sockets.push(socket);
       return socket;
     }),
   };
+  const relay = {
+    play: vi.fn(),
+    clear: vi.fn(),
+    close: vi.fn(),
+    onFrame: null,
+  };
+  const createAudio = vi.fn(async ({ onFrame }) => {
+    relay.onFrame = onFrame;
+    return relay;
+  });
   const mediaDevices = { getUserMedia: vi.fn().mockResolvedValue(microphone) };
   const audio = {
     srcObject: null,
@@ -90,6 +105,7 @@ function liveFixture(overrides = {}) {
     mediaDevices,
     createPeer: () => peer,
     audio,
+    createAudio,
     uiActions,
     onNotice,
     onActive,
@@ -108,6 +124,8 @@ function liveFixture(overrides = {}) {
     audio,
     channel,
     controller,
+    createAudio,
+    relay,
     frame,
     goLive,
     mediaDevices,
@@ -162,7 +180,10 @@ describe('Live voice startup', () => {
     expect(f.peer.createDataChannel.mock.invocationCallOrder[0]).toBeLessThan(
       f.peer.createOffer.mock.invocationCallOrder[0],
     );
-    expect(f.api.startLiveCall).toHaveBeenCalledWith('offer-sdp');
+    expect(f.api.startLiveCall).toHaveBeenCalledWith({
+      media: 'webrtc',
+      sdp: 'offer-sdp',
+    });
     expect(f.api.openLiveCallSocket).toHaveBeenCalledWith(
       'call-1',
       expect.any(Object),
@@ -239,7 +260,10 @@ describe('Live voice startup', () => {
     await vi.advanceTimersByTimeAsync(4999);
     expect(f.api.startLiveCall).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    expect(f.api.startLiveCall).toHaveBeenCalledWith('offer-sdp');
+    expect(f.api.startLiveCall).toHaveBeenCalledWith({
+      media: 'webrtc',
+      sdp: 'offer-sdp',
+    });
     expect(f.onNotice).not.toHaveBeenCalled();
   });
 
@@ -324,6 +348,187 @@ describe('Live voice generation guards', () => {
     expect(f.uiActions.context).not.toHaveBeenCalled();
     expect(f.state).toMatchObject({ phase: 'connecting', callId: 'call-2' });
     expect(f.onNotice).not.toHaveBeenCalled();
+  });
+});
+
+describe('Live voice relay media', () => {
+  const RELAY_RESULT = {
+    call_id: 'call-1',
+    media: {
+      type: 'relay',
+      audio: { encoding: 'pcm16', sample_rate: 24000, channels: 1 },
+    },
+  };
+
+  function relayFixture(overrides = {}) {
+    const f = liveFixture(overrides);
+    f.api.getLiveVoiceStatus.mockResolvedValue({
+      configured: true,
+      usable: true,
+      target: 'xai/grok-voice-think-fast-2.0::subscription',
+      media: 'relay',
+    });
+    f.api.startLiveCall.mockResolvedValue(RELAY_RESULT);
+    return f;
+  }
+
+  it('relays audio over the call socket instead of a peer connection', async () => {
+    const f = relayFixture();
+    await f.controller.start();
+
+    expect(f.mediaDevices.getUserMedia).toHaveBeenCalledWith({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    expect(f.createAudio).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ microphone: f.microphone }),
+    );
+    expect(f.createAudio.mock.invocationCallOrder[0]).toBeLessThan(
+      f.api.startLiveCall.mock.invocationCallOrder[0],
+    );
+    expect(f.api.startLiveCall).toHaveBeenCalledExactlyOnceWith({
+      media: 'relay',
+    });
+    expect(f.peer.createOffer).not.toHaveBeenCalled();
+    expect(f.track.applyConstraints).not.toHaveBeenCalled();
+
+    const early = new ArrayBuffer(4);
+    f.relay.onFrame(early);
+    expect(f.socket().sendAudio).not.toHaveBeenCalled();
+    f.frame({ type: 'state', phase: 'live' });
+    const frame = new ArrayBuffer(4);
+    f.relay.onFrame(frame);
+    expect(f.socket().sendAudio).toHaveBeenCalledExactlyOnceWith(frame);
+
+    const speech = new ArrayBuffer(8);
+    f.socket().handlers.onAudio(speech);
+    expect(f.relay.play).toHaveBeenCalledExactlyOnceWith(speech);
+    f.frame({ type: 'playback_clear' });
+    expect(f.relay.clear).toHaveBeenCalledOnce();
+
+    f.controller.stop();
+    expect(f.relay.close).toHaveBeenCalledOnce();
+    f.relay.onFrame(new ArrayBuffer(4));
+    f.socket().handlers.onAudio(new ArrayBuffer(8));
+    expect(f.socket().sendAudio).toHaveBeenCalledOnce();
+    expect(f.relay.play).toHaveBeenCalledOnce();
+    expect(f.onNotice).not.toHaveBeenCalled();
+  });
+
+  it('cancels echo of all device output where the microphone supports it', async () => {
+    const f = relayFixture();
+    f.track.getCapabilities.mockReturnValue({
+      echoCancellation: [true, false, 'all'],
+    });
+    f.track.applyConstraints.mockRejectedValue(new Error('overconstrained'));
+
+    await f.controller.start();
+
+    expect(f.track.applyConstraints).toHaveBeenCalledExactlyOnceWith({
+      echoCancellation: 'all',
+      noiseSuppression: true,
+      autoGainControl: true,
+    });
+    expect(f.api.startLiveCall).toHaveBeenCalledOnce();
+    expect(f.onNotice).not.toHaveBeenCalled();
+  });
+
+  it.each(['audio_unsupported', 'playback_blocked'])(
+    'fails with %s before creating a call when relay audio cannot start',
+    async (code) => {
+      const f = relayFixture();
+      f.createAudio.mockRejectedValue(Object.assign(new Error(code), { code }));
+
+      await f.controller.start();
+
+      expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+        code,
+        severity: 'error',
+      });
+      expect(f.api.startLiveCall).not.toHaveBeenCalled();
+      expect(f.track.stop).toHaveBeenCalledOnce();
+      expect(f.state.phase).toBe('off');
+    },
+  );
+
+  it('releases relay audio created after the user pressed Stop', async () => {
+    const f = relayFixture();
+    const created = deferred();
+    f.createAudio.mockReturnValue(created.promise);
+    const started = f.controller.start();
+    await flush();
+    f.controller.stop();
+    created.resolve(f.relay);
+    await started;
+
+    expect(f.relay.close).toHaveBeenCalledOnce();
+    expect(f.api.startLiveCall).not.toHaveBeenCalled();
+  });
+
+  it('fails a relay call whose media does not match the relay format', async () => {
+    const f = relayFixture();
+    f.api.startLiveCall.mockResolvedValue({
+      call_id: 'call-1',
+      media: { type: 'relay', audio: { encoding: 'opus' } },
+    });
+
+    await f.controller.start();
+
+    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+      code: 'connection_failed',
+      severity: 'error',
+    });
+    expect(f.api.stopLiveCall).toHaveBeenCalledWith('call-1');
+    expect(f.relay.close).toHaveBeenCalledOnce();
+  });
+
+  it('retries once with fresh status when the server needs the other media', async () => {
+    const f = liveFixture();
+    f.api.getLiveVoiceStatus
+      .mockResolvedValueOnce({
+        configured: true,
+        usable: true,
+        media: 'webrtc',
+      })
+      .mockResolvedValueOnce({
+        configured: true,
+        usable: true,
+        media: 'relay',
+      });
+    f.api.startLiveCall
+      .mockResolvedValueOnce({ error: 'media_mismatch' })
+      .mockResolvedValueOnce(RELAY_RESULT);
+
+    await f.controller.start();
+
+    expect(f.api.startLiveCall.mock.calls).toEqual([
+      [{ media: 'webrtc', sdp: 'offer-sdp' }],
+      [{ media: 'relay' }],
+    ]);
+    expect(f.peer.close).toHaveBeenCalledOnce();
+    expect(f.track.stop).not.toHaveBeenCalled();
+    expect(f.createAudio).toHaveBeenCalledOnce();
+    expect(f.socket().callId).toBe('call-1');
+    expect(f.onNotice).not.toHaveBeenCalled();
+  });
+
+  it('reports a media mismatch that persists after the retry', async () => {
+    const f = relayFixture();
+    f.api.startLiveCall.mockResolvedValue({ error: 'media_mismatch' });
+
+    await f.controller.start();
+
+    expect(f.api.startLiveCall).toHaveBeenCalledTimes(2);
+    expect(f.api.getLiveVoiceStatus).toHaveBeenCalledTimes(2);
+    expect(f.relay.close).toHaveBeenCalledTimes(2);
+    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+      code: 'media_mismatch',
+      severity: 'error',
+    });
+    expect(f.state.phase).toBe('off');
   });
 });
 
@@ -920,6 +1125,38 @@ describe('Live voice microphone lease', () => {
     expect(f.mediaDevices.getUserMedia).not.toHaveBeenCalled();
     expect(f.lease.release).toHaveBeenCalledOnce();
     expect(f.onNotice).not.toHaveBeenCalled();
+  });
+
+  it('holds the lease the same way for relayed audio', async () => {
+    const f = leaseFixture();
+    f.api.getLiveVoiceStatus.mockResolvedValue({
+      configured: true,
+      usable: true,
+      media: 'relay',
+    });
+    f.api.startLiveCall.mockResolvedValue({
+      call_id: 'call-1',
+      media: {
+        type: 'relay',
+        audio: { encoding: 'pcm16', sample_rate: 24000, channels: 1 },
+      },
+    });
+    f.createAudio.mockImplementation(async () => {
+      f.events.push('relay audio');
+      return f.relay;
+    });
+    f.relay.close.mockImplementation(() => f.events.push('relay closed'));
+
+    await f.controller.start();
+    expect(f.events).toEqual(['acquire', 'microphone', 'relay audio']);
+    f.controller.stop();
+    expect(f.events).toEqual([
+      'acquire',
+      'microphone',
+      'relay audio',
+      'relay closed',
+      'release',
+    ]);
   });
 
   it('returns the lease when the controller is destroyed', async () => {
