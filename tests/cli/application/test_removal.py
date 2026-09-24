@@ -305,21 +305,23 @@ def test_reset_removal_revalidates_before_clearing_dead_or_reused_owner(
         "psutil",
         SimpleNamespace(Process=process, NoSuchProcess=NoSuchProcessError),
     )
-    validations: list[tuple[Path, str]] = []
+    validations: list[tuple[Path, str, bool]] = []
 
-    def failed_validation(_version: Path, *, shape: str) -> None:
-        validations.append((_version, shape))
+    def failed_validation(_version: Path, *, shape: str, remove_bytecode_caches: bool) -> None:
+        validations.append((_version, shape, remove_bytecode_caches))
         raise ApplicationError("release inventory is incomplete")
 
     monkeypatch.setattr("cli.application.packages.validate_release", failed_validation)
     with pytest.raises(ApplicationError, match="inventory is incomplete"):
         integration.reset_removal(install)
     assert path.exists()
-    assert validations == [(install.version(), "server")]
+    assert validations == [(install.version(), "server", True)]
 
     monkeypatch.setattr(
         "cli.application.packages.validate_release",
-        lambda version, *, shape: validations.append((version, shape)),
+        lambda version, *, shape, remove_bytecode_caches: validations.append(
+            (version, shape, remove_bytecode_caches)
+        ),
     )
     assert integration.reset_removal(install) == {
         "ok": True,
@@ -327,7 +329,7 @@ def test_reset_removal_revalidates_before_clearing_dead_or_reused_owner(
         "removal_pending": False,
     }
     assert not path.exists()
-    assert validations == [(install.version(), "server"), (install.version(), "server")]
+    assert validations == [(install.version(), "server", True)] * 2
 
 
 @pytest.mark.parametrize(
