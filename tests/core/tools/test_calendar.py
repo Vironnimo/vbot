@@ -163,6 +163,30 @@ class TestCreateAction:
         assert stored.duration_days == 3
         assert stored.duration_minutes is None
 
+    def test_single_event_end_matches_listing_across_dst_fall_back(self, tmp_path: Path) -> None:
+        registry, _service = _registry(tmp_path)
+
+        created = _run(
+            registry,
+            tmp_path,
+            {
+                "action": "create",
+                "title": "Night shift",
+                "start": "2026-10-25T01:30:00",
+                "duration": 120,
+            },
+        )
+        listed = _run(registry, tmp_path, {"action": "list", "when": "2026-10-25"})
+        free = _run(
+            registry, tmp_path, {"action": "find_free", "when": "2026-10-25", "duration": 60}
+        )
+
+        # 01:30 CEST plus two real hours is 02:30 CET, not 03:30 wall-clock time.
+        assert created["data"]["event"]["end"] == "2026-10-25T02:30:00"
+        assert listed["data"]["events"][0]["end"] == "2026-10-25T02:30:00"
+        assert listed["data"]["occurrences"][0]["end"] == "2026-10-25T02:30:00"
+        assert free["data"]["slots"][1]["start"] == "2026-10-25T02:30:00"
+
     def test_create_repeating_event_anchors_in_server_zone(self, tmp_path: Path) -> None:
         registry, service = _registry(tmp_path)
 

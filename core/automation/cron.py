@@ -38,6 +38,7 @@ from core.automation._cron_jobs import (
     MIN_INTERVAL_SECONDS,
     TERMINAL_CRON_JOB_STATUSES,
     CronJob,
+    CronJobInPastError,
     CronJobNotFoundError,
     CronJobStatus,
     CronJobValidationError,
@@ -63,6 +64,7 @@ from core.automation._cron_jobs import (
 __all__ = [
     "CRON_EXPRESSION_FIELD_COUNT",
     "CronJob",
+    "CronJobInPastError",
     "CronJobNotFoundError",
     "CronJobStatus",
     "CronJobValidationError",
@@ -185,6 +187,7 @@ class CronService:
             project_id=project_id,
         )
         self._validate_job(job)
+        self._reject_past_once_run(job)
         self._validate_capacity(job)
         self._jobs[job.id] = job
         try:
@@ -339,6 +342,11 @@ class CronService:
             return self._clone_job(job)
 
         self._validate_job(candidate)
+        if {"run_at", "schedule_type"} & set(changed_fields) or (
+            candidate.status == "active" and job.status != "active"
+        ):
+            # Arming a one-time job for an elapsed instant would fire it at once.
+            self._reject_past_once_run(candidate)
         self._validate_capacity(candidate, replacing_id=job_id)
         self._jobs[job_id] = candidate
         try:
@@ -419,56 +427,71 @@ class CronService:
         reference_time = _timing._utc_now()
         needs_save = False
         once_claims_to_remove: list[str] = []
-
-        try:
-            for job in self._jobs.values():
-                if job.status != "active":
-                    continue
-                if job.schedule_type == "once":
-                    claimed_at = _claims.read(self._once_fire_claims_dir, job.id)
-                    if claimed_at is not None:
-                        _LOGGER.warning(
-                            "Marking claimed once job as completed (id=%s claimed_at=%s)",
-                            job.id,
-                            claimed_at,
-                        )
-                        job.status = "completed"
-                        job.last_fired_at = claimed_at
-                        job.last_outcome = "unknown"
-                        job.last_error = "vBot restarted after this once job was claimed"
-                        needs_save = True
-                        once_claims_to_remove.append(job.id)
-                        continue
-                if job.remaining_runs == 0:
-                    job.status = "completed"
-                    if job.last_outcome is None:
-                        job.last_outcome = "unknown"
-                        job.last_error = "vBot restarted after the final Run was admitted"
-                    needs_save = True
-                    continue
-                if job.schedule_type == "once" and self._is_missed_once_job(job, reference_time):
-                    _LOGGER.warning(
-                        "Marking missed once job as missed (id=%s run_at=%s)",
-                        job.id,
-                        job.run_at,
-                    )
-                    job.status = "missed"
-                    job.last_outcome = "missed"
-                    job.last_error = "Scheduled time passed while vBot was offline"
-                    needs_save = True
-                    continue
-
-            if needs_save:
-                self._save_jobs()
-                self._notify_changed()
-                for job_id in once_claims_to_remove:
-                    _claims.remove(self._once_fire_claims_dir, job_id)
-        except CronStorageError as error:
-            self._degrade_invalid_storage(error)
-            return
+        held_job_ids: set[str] = set()
 
         for job in self._jobs.values():
-            if job.status == "active":
+            if job.status != "active":
+                continue
+            if job.schedule_type == "once":
+                try:
+                    claimed_at = _claims.read(self._once_fire_claims_dir, job.id)
+                except CronStorageError as error:
+                    # The job may already have fired. Never fire it from this
+                    # process; the next start re-evaluates a readable claim.
+                    _LOGGER.warning(
+                        "Holding once job with unreadable fire claim (job=%s): %s",
+                        job.id,
+                        error,
+                    )
+                    held_job_ids.add(job.id)
+                    continue
+                if claimed_at is not None:
+                    _LOGGER.warning(
+                        "Marking claimed once job as completed (id=%s claimed_at=%s)",
+                        job.id,
+                        claimed_at,
+                    )
+                    job.status = "completed"
+                    job.last_fired_at = claimed_at
+                    job.last_outcome = "unknown"
+                    job.last_error = "vBot restarted after this once job was claimed"
+                    needs_save = True
+                    once_claims_to_remove.append(job.id)
+                    continue
+            if job.remaining_runs == 0:
+                job.status = "completed"
+                if job.last_outcome is None:
+                    job.last_outcome = "unknown"
+                    job.last_error = "vBot restarted after the final Run was admitted"
+                needs_save = True
+                continue
+            if job.schedule_type == "once" and self._is_missed_once_job(job, reference_time):
+                _LOGGER.warning(
+                    "Marking missed once job as missed (id=%s run_at=%s)",
+                    job.id,
+                    job.run_at,
+                )
+                job.status = "missed"
+                job.last_outcome = "missed"
+                job.last_error = "Scheduled time passed while vBot was offline"
+                needs_save = True
+                continue
+
+        if needs_save:
+            try:
+                self._save_jobs()
+            except CronStorageError as error:
+                # jobs.json was readable; a failed write is not invalid storage.
+                # Reconciled state stays in memory (none of it is scheduled), and
+                # claims remain so the next start reconciles them again.
+                _LOGGER.error("Cron startup reconciliation could not be saved: %s", error)
+            else:
+                for job_id in once_claims_to_remove:
+                    _claims.remove(self._once_fire_claims_dir, job_id)
+            self._notify_changed()
+
+        for job in self._jobs.values():
+            if job.status == "active" and job.id not in held_job_ids:
                 self._start_job_task(job)
 
     def stop(self) -> None:
@@ -1025,6 +1048,22 @@ class CronService:
             raise CronJobValidationError(
                 f"At most {MAX_ACTIVE_CRON_JOBS} cron jobs may be active at once"
             )
+
+    def _reject_past_once_run(self, job: CronJob) -> None:
+        if job.schedule_type != "once":
+            return
+        now = _timing._utc_now()
+        run_at = _schedule._parse_run_at_utc(self._timezone, job)
+        if run_at >= now:
+            return
+
+        def local(value: datetime) -> str:
+            return value.astimezone(self._timezone).replace(tzinfo=None, microsecond=0).isoformat()
+
+        raise CronJobInPastError(
+            f"The one-time schedule {local(run_at)} is in the past: it is now {local(now)} "
+            f"in the configured timezone {self._timezone}. Choose a future time"
+        )
 
     def _is_missed_once_job(self, job: CronJob, reference_time_utc: datetime) -> bool:
         if job.schedule_type != "once":

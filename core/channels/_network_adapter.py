@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 
 from core.attachments import AttachmentStore
+from core.channels._message_chunks import split_message
 from core.channels.adapter import (
     ChannelAccessRegistry,
     ChannelAdapter,
@@ -36,6 +37,8 @@ from core.utils.atomic import atomic_write_text
 from core.utils.retry import retry_async
 from core.utils.workers import BoundedWorkerPool
 
+# Readable per-message size for Slack, Mattermost and WhatsApp (below each wire limit).
+_MESSAGE_CHUNK_LIMIT = 3500
 _IO_POOL = BoundedWorkerPool(name="channel-network-io", max_workers=4)
 
 
@@ -281,6 +284,11 @@ class NetworkChannelAdapter(ChannelAdapter):
             raise ChannelConfigError("Provide a message or files")
         if not self._connected:
             raise ChannelError(f"{self.platform_display_name} is not connected", retryable=True)
+
+    @staticmethod
+    def message_chunks(message: str | None) -> list[str]:
+        """Split outbound Markdown text at readable boundaries, keeping code fences intact."""
+        return split_message(message or "", _MESSAGE_CHUNK_LIMIT)
 
     async def _send_operation(
         self, operation: Callable[..., Awaitable[Any]], *args: Any, **kwargs: Any

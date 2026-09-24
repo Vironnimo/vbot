@@ -34,12 +34,16 @@ def write(directory: Path, job: CronJob, claimed_at: str) -> None:
 
 
 def read(directory: Path, job_id: str) -> str | None:
-    claim_path = path_for(directory, job_id)
-    if not claim_path.exists():
-        return None
+    """Return the claim time, None when no claim exists, or raise when unknown.
 
+    ``CronStorageError`` means a claim may exist but cannot be read; callers must
+    then treat the job as possibly fired.
+    """
+    claim_path = path_for(directory, job_id)
     try:
         payload = json.loads(claim_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
     except UnicodeError as error:
         raise CronStorageError(f"Invalid UTF-8 in once fire claim {claim_path}: {error}") from error
     except OSError as error:

@@ -137,6 +137,10 @@ class CronJobValidationError(CronServiceError):
     """Raised when cron job data is invalid."""
 
 
+class CronJobInPastError(CronJobValidationError):
+    """Raised when a one-time job would be created or armed for a past instant."""
+
+
 class CronStorageError(CronServiceError):
     """Raised when cron storage cannot be read or written."""
 

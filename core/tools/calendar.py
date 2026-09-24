@@ -88,7 +88,6 @@ _ACTION_RECOMMENDATIONS = {
     "delete_action": 'Use {"action":"delete_action","id":"<action-id>"}',
 }
 
-_DEFAULT_EVENT_DURATION_MINUTES = 60
 _DEFAULT_ALL_DAY_DURATION_DAYS = 1
 _DEFAULT_FREE_SLOT_MINUTES = 60
 _DEFAULT_FREE_WINDOW_DAYS = 7
@@ -460,25 +459,12 @@ def _event_payload(event: CalendarEvent, calendar_service: CalendarService) -> J
         payload["start"] = event.start_date
         payload["duration"] = event.duration_days or _DEFAULT_ALL_DAY_DURATION_DAYS
         return payload
-    zone = _server_zone(calendar_service)
-    start_local = _instant_to_local(event, zone)
-    payload["start"] = start_local
-    payload["end"] = _local_end(start_local, event.duration_minutes)
+    # Recurring anchors render in their own wall-clock zone, like their occurrences.
+    zone = ZoneInfo(event.tz_name) if event.tz_name else _server_zone(calendar_service)
+    start_utc, end_utc = calendar_service.event_span(event)
+    payload["start"] = event.start_local or _to_local_naive(start_utc, zone)
+    payload["end"] = _to_local_naive(end_utc, zone)
     return payload
-
-
-def _instant_to_local(event: CalendarEvent, zone: ZoneInfo) -> str:
-    if event.start_local is not None:
-        return event.start_local
-    assert event.start_utc is not None
-    start_utc = datetime.fromisoformat(event.start_utc)
-    return start_utc.astimezone(zone).replace(tzinfo=None, microsecond=0).isoformat()
-
-
-def _local_end(start_local: str, duration_minutes: int | None) -> str:
-    start = datetime.fromisoformat(start_local)
-    end = start + timedelta(minutes=duration_minutes or _DEFAULT_EVENT_DURATION_MINUTES)
-    return end.replace(microsecond=0).isoformat()
 
 
 def _occurrence_payload(occurrence: EventOccurrence) -> JsonObject:
