@@ -174,6 +174,15 @@ class LiveWire(Protocol):
         """Forward microphone PCM (relay media only); dropped before the session runs."""
         ...
 
+    @property
+    def announces_as_user_input(self) -> bool:
+        """Whether announcements reach the voice model like user input.
+
+        The voice model then follows instructions quoted in them, so the call
+        leaves untrusted text such as Run result excerpts out.
+        """
+        ...
+
     async def announce(self, text: str) -> None:
         """Add speakable context not tied to a delegation."""
         ...

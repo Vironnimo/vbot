@@ -257,6 +257,36 @@ def test_open_user_turns_finish_at_a_new_user_item_the_response_end_or_the_call_
     ]
 
 
+def test_an_announcement_item_does_not_finish_the_open_user_turn():
+    session = _session()
+    session.receive(
+        {
+            "type": "conversation.item.input_audio_transcription.updated",
+            "item_id": "u1",
+            "transcript": "Open the",
+        }
+    )
+    session.announce("vBot update: {}")
+
+    added = session.receive(
+        {
+            "type": "conversation.item.added",
+            "item": {
+                "id": "n1",
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "vBot update: {}"}],
+            },
+        }
+    )
+
+    assert added.events == []
+    assert session.finish() == [
+        WireCaption("user", "Open the", final=True),
+        WireClosed(reason=None, usage=None, confirmed=False),
+    ]
+
+
 # -- delegation and Tool calls -------------------------------------------------
 
 
@@ -367,7 +397,7 @@ def test_results_wait_for_the_active_response_and_coalesce_into_one_create():
     assert _creates(first) == [] and _creates(announced) == []
     assert announced[0]["item"] == {
         "type": "message",
-        "role": "system",
+        "role": "user",
         "content": [{"type": "input_text", "text": 'vBot update: {"run": "completed"}'}],
     }
     assert _creates(finished.commands) == [{"type": "response.create", "event_id": "vbot_rc_1"}]
@@ -763,6 +793,7 @@ async def test_open_joins_the_pinned_model_with_connection_auth_and_configures_t
     ]
     assert re.fullmatch(r"live_[a-z0-9]{16}", wire.call_id)
     assert wire.media == relay_media()
+    assert wire.announces_as_user_input is True
 
 
 @pytest.mark.asyncio

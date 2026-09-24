@@ -106,7 +106,8 @@ DIRECT_VOICE_INSTRUCTIONS = "\n\n".join(
             )
         ),
         "Operating rules: " + _OPERATING_RULES,
-        _UPDATE_POLICY,
+        _UPDATE_POLICY + " When an update has no result_excerpt, do not guess the result; read "
+        f"that Session with {LIVE_TOOL_APP} when the user asks about it.",
         _interruption_policy("a running Tool"),
         _BACKCHANNEL_POLICY,
     )
