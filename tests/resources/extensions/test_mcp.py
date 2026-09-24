@@ -433,6 +433,51 @@ async def test_future_tools_follow_connection_grant_and_explicit_denials_win(hos
 
 
 @pytest.mark.asyncio
+async def test_stopping_a_connection_that_ignores_cancellation_still_removes_its_tools(
+    host, monkeypatch, caplog
+):
+    api = ExtensionAPI("mcp", ExtensionDeclarations(), config={}, logger=logging.getLogger("test"))
+    registry = ToolRegistry()
+    api.operations.bind(registry)
+    service = MCPService(api)
+    await service.start(host)
+    service.connections["example"] = validate_connection(
+        {"id": "example", "transport": "stdio", "command": "python"}
+    )
+    runner = service._runner(service.connections["example"])
+    runner.state = "connected"
+    service._publish(runner, {"tools": [{"name": "echo", "inputSchema": {"type": "object"}}]})
+    assert "mcp_example" in [tool.name for tool in registry.list_tools()]
+    release = asyncio.Event()
+
+    async def stuck() -> None:
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                continue
+
+    runner._task = asyncio.create_task(stuck())
+    await asyncio.sleep(0)  # enter the loop so cancellation is actually ignored
+    monkeypatch.setattr("resources.extensions.mcp.client.CONNECTION_CLOSE_TIMEOUT_SECONDS", 0.05)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger="vbot.extensions.mcp"):
+            stop = asyncio.create_task(service._stop("example"))
+            done, _ = await asyncio.wait({stop}, timeout=5)
+            assert done, "stopping must not wait forever on a connection ignoring cancellation"
+            await stop
+
+        assert "mcp_example" not in [tool.name for tool in registry.list_tools()]
+        assert runner.state == "disconnected"
+        assert "did not stop within" in caplog.text
+    finally:
+        release.set()
+        await runner._task
+        await service.close()
+
+
+@pytest.mark.asyncio
 async def test_large_media_is_available_as_a_file_when_attachment_delivery_is_unavailable(host):
     def reject(name, data):
         raise AttachmentTooLargeError("test-owned-size-limit")

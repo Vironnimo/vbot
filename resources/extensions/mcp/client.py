@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import os
@@ -199,8 +198,17 @@ class ConnectionRunner:
         if self._task is not None and not self._task.done():
             # Cancellation also interrupts handshakes and pending OAuth.
             self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await asyncio.wait_for(self._task, CONNECTION_CLOSE_TIMEOUT_SECONDS)
+            # ``asyncio.wait`` bounds the wait even when the task ignores cancellation;
+            # ``wait_for`` would keep waiting for the cancelled task to finish.
+            done, _ = await asyncio.wait({self._task}, timeout=CONNECTION_CLOSE_TIMEOUT_SECONDS)
+            if not done:
+                # The closing flag already stops reconnects; the stuck task is left behind
+                # so callers can still retire this connection's Tools.
+                _LOGGER.warning(
+                    "MCP connection did not stop within %ss; abandoning it (connection=%s)",
+                    CONNECTION_CLOSE_TIMEOUT_SECONDS,
+                    self.id,
+                )
         self.state = "disconnected"
 
     def status(self) -> dict[str, Any]:
