@@ -92,6 +92,10 @@ from core.tools.terminal_manager import TerminalManager, TerminalManagerError
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.utils.logging import LogManager
 
+# Windows environment variable names are case-insensitive. The data-dir `.env`
+# fallback follows the same rule there, matching Skill `env` requirements.
+_ENVIRONMENT_NAMES_IGNORE_CASE = os.name == "nt"
+
 
 class Runtime:
     """Bootstraps and manages the vBot application lifecycle.
@@ -537,15 +541,31 @@ class Runtime:
         """Resolve one environment credential using runtime precedence rules."""
         if key in os.environ:
             return os.environ[key]
-        return self._fallback_environment.get(key, "")
+        fallback = self._fallback_credential(key)
+        return "" if fallback is None else fallback
 
     def environment_credential_source(self, key: str) -> str | None:
         """Return the effective source for one environment credential key."""
         if key in os.environ:
             return "process_environment"
-        if key in self._fallback_environment:
+        if self._fallback_credential(key) is not None:
             return "data_dir"
         return None
+
+    def _fallback_credential(self, key: str) -> str | None:
+        """Return the data-dir `.env` value for *key* under host naming rules.
+
+        On Windows, names differing only in case match; the later `.env` entry
+        wins, as in the Skill requirement environment.
+        """
+        if not _ENVIRONMENT_NAMES_IGNORE_CASE:
+            return self._fallback_environment.get(key)
+        folded = key.upper()
+        match: str | None = None
+        for name, value in self._fallback_environment.items():
+            if name.upper() == folded:
+                match = value
+        return match
 
     def _skill_operations(self) -> SkillRuntime:
         self._ensure_started()
