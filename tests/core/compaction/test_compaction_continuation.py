@@ -10,6 +10,7 @@ from core.chat import ChatMessage
 from core.chat._message_history import effective_compaction_messages
 from core.chat.messages import COMPACTION_SUMMARY_NOTE_PREFIX
 from core.compaction import (
+    MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
     CompactionError,
     CompactionService,
     CompactionSettings,
@@ -137,6 +138,32 @@ async def test_continuation_requires_active_request_and_target() -> None:
             storage=StubStorage(),
             settings=CompactionSettings(strategy="continuation"),
         )
+
+
+def test_continuation_needs_new_context_since_the_latest_checkpoint() -> None:
+    service = CompactionService()
+    settings = CompactionSettings(strategy="continuation")
+    history = [user("u1", "old request " * 2_000), assistant("a1", "old answer " * 2_000)]
+    prior = checkpoint([])
+
+    assert service.has_new_compactable_context(history, settings)
+    assert not service.has_new_compactable_context([*history, prior], settings)
+
+
+def test_continuation_skips_new_context_below_the_reclaim_floor() -> None:
+    service = CompactionService()
+    settings = CompactionSettings(strategy="continuation")
+    prior = checkpoint([])
+    small = [prior, assistant("a2", "small step")]
+    large = [prior, assistant("a2", "large step " * 5_000)]
+
+    assert service.has_new_compactable_context(small, settings)
+    assert not service.has_new_compactable_context(
+        small, settings, minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS
+    )
+    assert service.has_new_compactable_context(
+        large, settings, minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS
+    )
 
 
 def test_checkpoint_round_trip_contains_projection_and_provenance() -> None:

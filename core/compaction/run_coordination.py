@@ -482,6 +482,7 @@ class CompactionRunCoordinator:
             request_messages=continuation_request_messages or messages,
             active_adapter=target.adapter,
             active_model_id=target.model_id,
+            minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
         )
         if not has_new_context:
             if forced:
