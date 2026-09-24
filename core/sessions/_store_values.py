@@ -247,6 +247,32 @@ def _session_list_visibility_sql(
     return visible, params
 
 
+_RECALL_SUBAGENT_MASK = _LIST_VISIBILITY_SUBAGENT_SESSION | _LIST_VISIBILITY_SUBAGENT_RUN_KIND
+# The one definition of ``SessionRecallVisibility`` over ``sessions.list_visibility_mask``.
+# Reflection kinds hide a Session even when it also carries User or Sub-Agent
+# markers. Sub-Agent markers (flag or Run kind) make it a delegated Session.
+# Otherwise legacy Sessions without valid Run kinds and Sessions with a
+# User-facing Run kind are conversations; the rest (system-only) stay hidden.
+_RECALL_VISIBILITY_SQL = (
+    "CASE"
+    f" WHEN (list_visibility_mask & {_LIST_VISIBILITY_REFLECTION}) != 0 THEN 'hidden'"
+    f" WHEN (list_visibility_mask & {_RECALL_SUBAGENT_MASK}) != 0 THEN 'subagent'"
+    f" WHEN (list_visibility_mask & {_LIST_VISIBILITY_VALID_RUN_KINDS}) = 0"
+    f" OR (list_visibility_mask & {_LIST_VISIBILITY_USER_FACING}) != 0 THEN 'conversation'"
+    " ELSE 'hidden' END"
+)
+
+
+def _recall_visibility_sql(*, include_subagents: bool) -> str:
+    """Return the ``sessions`` predicate admitting the Sessions one search may return."""
+    from core.sessions._types import recall_visibilities
+
+    admitted = ", ".join(
+        f"'{visibility}'" for visibility in recall_visibilities(include_subagents=include_subagents)
+    )
+    return f"{_RECALL_VISIBILITY_SQL} IN ({admitted})"
+
+
 _MESSAGE_INSERT = """
     INSERT INTO messages (
         message_key, session_key, seq, message_id, role, timestamp, content,

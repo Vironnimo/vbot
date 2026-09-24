@@ -8,13 +8,13 @@ import heapq
 import json
 import re
 from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any
 
 from core.chat.content_blocks import FileBlock, FileMentionBlock, MediaBlock, TextBlock
 from core.chat.messages import ChatMessage
 from core.recall.recall import (
-    JsonObject,
     RecallMatchMode,
     RecallOrder,
     RecallSearchCapabilities,
@@ -23,7 +23,12 @@ from core.recall.recall import (
     RecallSearchPage,
     RecallSearchRequest,
 )
-from core.sessions import ChatSessionManager, SessionAddress, is_skill_context_note
+from core.sessions import (
+    ChatSessionManager,
+    SessionAddress,
+    is_skill_context_note,
+    recall_visibilities,
+)
 
 # Roles indexed by the Sessions-owned canonical search projection.
 SESSION_RECALL_CONVERSATION_ROLES = (
@@ -84,6 +89,20 @@ RECALL_TOOL_RESULT_NAMES = frozenset({"session_search", "session_read"})
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 
 
+@dataclass(frozen=True)
+class RecallScope:
+    """Live Sessions of one Recall scope and the request's candidates among them.
+
+    ``candidates`` maps each candidate Session id to its canonical
+    ``(generation_id, history_revision)``; ``snapshot_id`` binds a continuation
+    to the request selection and those versions.
+    """
+
+    live_session_ids: frozenset[str]
+    candidates: dict[str, tuple[str, int]]
+    snapshot_id: str
+
+
 class CanonicalSessionRecallBackend:
     """Recall backend that scans canonical Session history on demand."""
 
@@ -115,14 +134,10 @@ class CanonicalSessionRecallBackend:
         return await asyncio.to_thread(self._search_page, request)
 
     def _search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
-        summaries = self._search_candidate_summaries(request)
-        snapshot_id = self._search_snapshot(request, summaries)
-        if request.snapshot_id is not None and request.snapshot_id != snapshot_id:
-            raise RecallSearchError(
-                "stale_cursor", "Session search source changed; repeat the search."
-            )
+        scope = self._read_scope(request)
+        _check_snapshot(request, scope.snapshot_id)
 
-        candidates = self._search_candidates(request, summaries)
+        candidates = self._search_candidates(request, sorted(scope.candidates))
         scan_complete = True
         if self._search_scan_limit is not None:
             # Budget eligible Messages globally by canonical time, before matching
@@ -167,18 +182,17 @@ class CanonicalSessionRecallBackend:
             hits=tuple(item[3] for item in ranked[start:end]),
             result_type="message",
             ranking=f"message_time_{request.order}",
-            snapshot_id=snapshot_id,
+            snapshot_id=scope.snapshot_id,
             has_more=end < len(ranked),
-            total_candidate_sessions=len(summaries),
+            total_candidate_sessions=len(scope.candidates),
             degraded=not scan_complete,
             degradation_reason=(CANONICAL_FALLBACK_PARTIAL_REASON if not scan_complete else None),
         )
 
     def _search_candidates(
-        self, request: RecallSearchRequest, summaries: list[JsonObject]
+        self, request: RecallSearchRequest, session_ids: list[str]
     ) -> Iterator[tuple[datetime, str, int, ChatMessage]]:
-        for summary in summaries:
-            session_id = str(summary["id"])
+        for session_id in session_ids:
             messages = self.sessions.get(_session_address(request, session_id)).load_active()
             for message_index, message in enumerate(messages):
                 if message_matches_search_request(message, request):
@@ -189,31 +203,33 @@ class CanonicalSessionRecallBackend:
                         message,
                     )
 
-    def _search_candidate_summaries(self, request: RecallSearchRequest) -> list[JsonObject]:
-        summaries = cast(
-            list[JsonObject], self.sessions.list_summaries(request.agent_id, request.project_id)
-        )
-        return [
-            summary
-            for summary in summaries
-            if str(summary.get("id")) not in request.excluded_session_ids
-            and (request.session_id is None or str(summary.get("id")) == request.session_id)
-        ]
+    def _read_scope(self, request: RecallSearchRequest) -> RecallScope:
+        """Read every live Session version of the scope in one Session-store query.
 
-    def _search_snapshot(self, request: RecallSearchRequest, summaries: list[JsonObject]) -> str:
-        # Recall tracks only canonical history. Metadata-only changes must not
-        # invalidate a continuation or trigger a rebuild of this projection.
-        # One batched canonical-freshness query instead of one per Session.
-        versions = self.sessions.list_history_versions(
-            [_session_address(request, str(summary["id"])) for summary in summaries]
+        Candidates keep the Sessions whose Recall visibility the request admits,
+        minus its exclusions and outside its optional Session filter. Recall
+        tracks only canonical history, so metadata-only changes do not
+        invalidate a continuation.
+        """
+
+        admitted = recall_visibilities(include_subagents=request.include_subagents)
+        excluded = set(request.excluded_session_ids)
+        live: set[str] = set()
+        candidates: dict[str, tuple[str, int]] = {}
+        for revision in self.sessions.list_history_revisions(request.agent_id, request.project_id):
+            session_id = revision.address.session_id
+            live.add(session_id)
+            if (
+                revision.recall_visibility in admitted
+                and session_id not in excluded
+                and (request.session_id is None or session_id == request.session_id)
+            ):
+                candidates[session_id] = (revision.generation_id, revision.history_revision)
+        return RecallScope(
+            live_session_ids=frozenset(live),
+            candidates=candidates,
+            snapshot_id=self._selection_snapshot(request, candidates),
         )
-        history: dict[str, tuple[str, int]] = {}
-        for summary in summaries:
-            session_id = str(summary["id"])
-            version = versions.get(_session_address(request, session_id))
-            if version is not None:
-                history[session_id] = version
-        return self._selection_snapshot(request, history)
 
     def _selection_snapshot(
         self, request: RecallSearchRequest, history: dict[str, tuple[str, int]]
@@ -230,6 +246,7 @@ class CanonicalSessionRecallBackend:
             "project_id": request.project_id,
             "session_id": request.session_id,
             "excluded_session_ids": sorted(set(request.excluded_session_ids)),
+            "include_subagents": request.include_subagents,
             "query": request.query,
             "since": request.since.isoformat() if request.since is not None else None,
             "until": request.until.isoformat() if request.until is not None else None,
@@ -241,6 +258,13 @@ class CanonicalSessionRecallBackend:
         # Offset and page size may change while traversing the same selection.
         payload = json.dumps(selection, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _check_snapshot(request: RecallSearchRequest, snapshot_id: str) -> None:
+    """Reject a continuation whose selection or source history changed."""
+
+    if request.snapshot_id is not None and request.snapshot_id != snapshot_id:
+        raise RecallSearchError("stale_cursor", "Session search source changed; repeat the search.")
 
 
 def is_recall_artifact_message(message: Any) -> bool:

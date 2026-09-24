@@ -47,6 +47,7 @@ def search(
     since: str | None = None,
     until: str | None = None,
     excluded_session_ids: Sequence[str] = (),
+    include_subagents: bool = False,
     use_fts: bool = True,
     fallback_reason: str = "fts_unavailable",
 ) -> Callable[[], builtins.list[_SearchRow]]:
@@ -81,6 +82,7 @@ def search(
         since=since,
         until=until,
         excluded_session_ids=excluded_session_ids,
+        include_subagents=include_subagents,
     )
 
     terms = [term for term in compact.split(" ") if term]
@@ -147,6 +149,7 @@ def _record_filter(
     since: str | None,
     until: str | None,
     excluded_session_ids: Sequence[str],
+    include_subagents: bool,
 ) -> tuple[str, list[Any]]:
     """Return the eligible ``history_records AS m`` filter and its parameters.
 
@@ -156,7 +159,10 @@ def _record_filter(
     list): an equality lets SQLite build an automatic index over the scoped view
     rows when this filter runs inside an ``IN`` subquery.
     """
-    scope = "SELECT session_key FROM sessions WHERE status = 'live' AND project_id = ?"
+    scope = (
+        "SELECT session_key FROM sessions WHERE status = 'live' AND project_id = ? AND "
+        + _store_values._recall_visibility_sql(include_subagents=include_subagents)
+    )
     params: list[Any] = [project_id if project_id is not None else ""]
     if agent_id is not None:
         scope += " AND agent_id = ?"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -590,5 +591,50 @@ def test_fts_query_keeps_unicode_tokenizer_spelling(tmp_path: Path) -> None:
             "Stra\u00dfe", project_id=None, agent_id="agent", session_id="unicode", roles=("user",)
         )
         assert [hit[1] for hit in hits] == [message.id]
+    finally:
+        sessions.close()
+
+
+@pytest.mark.parametrize("use_index", [True, False])
+def test_search_admits_only_recall_visible_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, use_index: bool
+) -> None:
+    from core.sessions import _store_fts as store_module
+
+    if not use_index:
+        monkeypatch.setattr(
+            store_module,
+            "_fts_health_from_connection",
+            lambda *_args, **_kwargs: store_module.FtsHealth(state="unavailable", reason="test"),
+        )
+    sessions = ChatSessionManager(tmp_path)
+    visibility = {
+        "ordinary": {"run_kinds": ["user"]},
+        "calendar": {"run_kinds": ["calendar"]},
+        "delegated": {"run_kinds": ["subagent"]},
+        "reflection": {"run_kinds": ["user", "reflection"]},
+        "system": {"run_kinds": ["system"]},
+    }
+    for session_id, metadata in visibility.items():
+        session = sessions.create("agent", session_id=session_id)
+        session.append(ChatMessage.user(f"visible needle {session_id}"))
+        sessions.set_metadata(session.address, metadata)
+    try:
+
+        def searched(**options: Any) -> set[str]:
+            return {
+                hit[0].session_id
+                for hit in sessions.fts_search(
+                    "needle", project_id=None, agent_id="agent", roles=("user",), **options
+                )
+            }
+
+        assert searched() == {"ordinary", "calendar"}
+        assert searched(include_subagents=True) == {"ordinary", "calendar", "delegated"}
+        assert searched(include_subagents=True, excluded_session_ids=("calendar",)) == {
+            "ordinary",
+            "delegated",
+        }
+        assert searched(session_id="reflection") == set()
     finally:
         sessions.close()

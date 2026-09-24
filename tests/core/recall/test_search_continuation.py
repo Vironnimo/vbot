@@ -48,6 +48,7 @@ def request() -> RecallSearchRequest:
         {"order": "oldest"},
         {"session_id": "one"},
         {"excluded_session_ids": ("nonexistent",)},
+        {"include_subagents": True},
     ],
 )
 async def test_changed_selection_rejects_continuation(

@@ -54,7 +54,13 @@ class RecallSearchCapabilities:
 
 @dataclass(frozen=True)
 class RecallSearchRequest:
-    """Normalized query-only request for the Recall backend contract."""
+    """Normalized query-only request for the Recall backend contract.
+
+    Candidates are the scope's live Sessions whose Recall visibility the request
+    admits: conversations, plus delegated Sub-Agent Sessions with
+    ``include_subagents``. ``excluded_session_ids`` removes further Sessions,
+    such as the current conversation.
+    """
 
     agent_id: str
     project_id: str | None
@@ -69,6 +75,7 @@ class RecallSearchRequest:
     limit: int
     snapshot_id: str | None = None
     excluded_session_ids: tuple[str, ...] = ()
+    include_subagents: bool = False
 
 
 @dataclass(frozen=True)

@@ -46,6 +46,7 @@ from core.sessions._types import (
     RunStartBoundary,
     SessionAddress,
     SessionDescriptorSource,
+    SessionHistoryRevision,
     SessionIdentityReferenceUpdate,
     SessionListCursor,
     SessionListFilters,
@@ -190,19 +191,15 @@ class ChatSessionManager:
         return await _run_session_io(self.get_metadata, address)
 
     def descriptor_source(self, address: SessionAddress) -> SessionDescriptorSource:
-        metadata, message_count, first_user_message = self._store.descriptor_source(address)
-        return SessionDescriptorSource(metadata, message_count, first_user_message)
+        return SessionDescriptorSource(*self._store.descriptor_source(address))
 
     def descriptor_sources(
         self, addresses: Sequence[SessionAddress]
     ) -> dict[SessionAddress, SessionDescriptorSource]:
+        """Load descriptor inputs, including Recall visibility, for many Sessions at once."""
         return {
-            address: SessionDescriptorSource(metadata, message_count, first_user_message)
-            for address, (
-                metadata,
-                message_count,
-                first_user_message,
-            ) in self._store.descriptor_sources(addresses).items()
+            address: SessionDescriptorSource(*source)
+            for address, source in self._store.descriptor_sources(addresses).items()
         }
 
     def set_metadata(self, address: SessionAddress, data: JsonObject) -> None:
@@ -536,7 +533,8 @@ class ChatSessionManager:
 
     def list_history_revisions(
         self, agent_id: str, project_id: str | None = None
-    ) -> builtins.list[tuple[SessionAddress, str, int]]:
+    ) -> builtins.list[SessionHistoryRevision]:
+        """Return every live Session version of one scope with its Recall visibility."""
         return self._store.list_history_revisions(project_id, agent_id)
 
     def list_history_versions(
@@ -1034,6 +1032,7 @@ class ChatSessionManager:
         since: str | None = None,
         until: str | None = None,
         excluded_session_ids: Sequence[str] = (),
+        include_subagents: bool = False,
     ) -> builtins.list[tuple[SessionAddress, str, str, str, float]]:
         return self._store.fts_search(
             query,
@@ -1046,6 +1045,7 @@ class ChatSessionManager:
             since=since,
             until=until,
             excluded_session_ids=excluded_session_ids,
+            include_subagents=include_subagents,
         )
 
     @staticmethod

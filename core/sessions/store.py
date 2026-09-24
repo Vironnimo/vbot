@@ -25,7 +25,12 @@ from core.sessions import (
     _store_search,
     _store_values,
 )
-from core.sessions._types import JsonObject, SessionChatHistorySnapshot
+from core.sessions._types import (
+    JsonObject,
+    SessionChatHistorySnapshot,
+    SessionHistoryRevision,
+    SessionRecallVisibility,
+)
 from core.sessions.errors import (
     FtsHealth,
     SessionNotFoundError,
@@ -289,7 +294,7 @@ class SessionStore:
 
     def descriptor_source(
         self, address: SessionAddress
-    ) -> tuple[JsonObject, int, ChatMessage | None]:
+    ) -> tuple[JsonObject, int, ChatMessage | None, SessionRecallVisibility]:
         """Load compact descriptor inputs without reconstructing Session history."""
         source = self.descriptor_sources((address,)).get(address)
         if source is None:
@@ -298,7 +303,7 @@ class SessionStore:
 
     def descriptor_sources(
         self, addresses: Sequence[SessionAddress]
-    ) -> dict[SessionAddress, tuple[JsonObject, int, ChatMessage | None]]:
+    ) -> dict[SessionAddress, tuple[JsonObject, int, ChatMessage | None, SessionRecallVisibility]]:
         return self._read_decoded(
             lambda connection: _store_queries.descriptor_sources(connection, addresses)
         )
@@ -900,7 +905,7 @@ class SessionStore:
 
     def list_history_revisions(
         self, project_id: str | None, agent_id: str
-    ) -> list[tuple[SessionAddress, str, int]]:
+    ) -> list[SessionHistoryRevision]:
         with self._runtime.read_ctx() as connection:
             return _store_queries.list_history_revisions(connection, project_id, agent_id)
 
@@ -946,6 +951,7 @@ class SessionStore:
         since: str | None = None,
         until: str | None = None,
         excluded_session_ids: Sequence[str] = (),
+        include_subagents: bool = False,
     ) -> builtins.list[tuple[SessionAddress, str, str, str, float]]:
         def select(
             **fallback: Any,
@@ -963,6 +969,7 @@ class SessionStore:
                     since=since,
                     until=until,
                     excluded_session_ids=excluded_session_ids,
+                    include_subagents=include_subagents,
                     **fallback,
                 )
 
