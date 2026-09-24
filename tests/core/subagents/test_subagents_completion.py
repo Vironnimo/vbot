@@ -658,3 +658,115 @@ async def test_malformed_qualified_subagent_address_fails_cleanly(
 
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_arguments"
+
+
+async def _start_parent_with_queued_foreground_child(
+    tmp_path: Path,
+    manager: ChatRunManager,
+    tracker: SubAgentBatchTracker,
+    release_busy: asyncio.Event,
+    *,
+    settings: JsonObject | None = None,
+) -> tuple[Any, Run, Run, asyncio.Future[JsonObject]]:
+    """Start a real Parent Run whose nested subagent call waits in a busy Queue."""
+    runtime = make_runtime(tmp_path, manager)
+    if settings is not None:
+        runtime.storage.load_subagent_settings = lambda: settings
+    runtime.chat_sessions.create("worker", session_id="busy-child")
+
+    async def busy(_run: Run) -> None:
+        await release_busy.wait()
+
+    busy_run = await manager.start(_address("worker", "busy-child"), busy)
+    tool_result: asyncio.Future[JsonObject] = asyncio.get_running_loop().create_future()
+
+    async def parent_executor(parent: Run) -> str:
+        context = replace(
+            make_context(nesting_depth=1, run_id=parent.id),
+            cancellation_hook=lambda: parent.cancel_requested,
+        )
+        result = await _handle_subagent(
+            context,
+            {"content": "follow-up", "agent_id": "worker", "session_id": "busy-child"},
+            runtime=runtime,
+            batch_tracker=tracker,
+        )
+        tool_result.set_result(result)
+        return "parent continued"
+
+    parent = await manager.start(_address("parent", "parent-session"), parent_executor)
+    for _ in range(50):
+        if manager.list_queued("worker", "busy-child", project_id=None):
+            break
+        await asyncio.sleep(0)
+    return runtime, busy_run, parent, tool_result
+
+
+async def test_removing_queued_foreground_child_returns_failure_without_cancelling_parent(
+    tmp_path: Path,
+) -> None:
+    manager = ChatRunManager()
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    release_busy = asyncio.Event()
+    try:
+        _runtime, _busy, parent, tool_result = await _start_parent_with_queued_foreground_child(
+            tmp_path, manager, tracker, release_busy
+        )
+        [item] = manager.list_queued("worker", "busy-child", project_id=None)
+
+        assert manager.remove_queued("worker", "busy-child", item.item_id, project_id=None)
+
+        assert await asyncio.wait_for(parent.wait(), 1) == "parent continued"
+        result = tool_result.result()
+        assert result["ok"] is False
+        assert result["error"]["code"] == "subagent_removed"
+        assert parent.status.value == "completed"
+        assert tracker.owned_entries("parent", "parent-session", None) == []
+    finally:
+        release_busy.set()
+        await manager.aclose()
+
+
+async def test_parent_cancel_during_queued_foreground_wait_still_cascades(
+    tmp_path: Path,
+) -> None:
+    manager = ChatRunManager()
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    release_busy = asyncio.Event()
+    try:
+        _runtime, _busy, parent, tool_result = await _start_parent_with_queued_foreground_child(
+            tmp_path, manager, tracker, release_busy
+        )
+        assert manager.list_queued("worker", "busy-child", project_id=None)
+
+        await asyncio.wait_for(manager.cancel(parent.id, reason="user"), 1)
+
+        assert parent.status.value == "cancelled"
+        assert not tool_result.done()
+        assert manager.list_queued("worker", "busy-child", project_id=None) == []
+    finally:
+        release_busy.set()
+        await manager.aclose()
+
+
+async def test_queued_foreground_wait_is_bounded_by_subagent_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("core.subagents.subagents.SECONDS_PER_MINUTE", 0.05)
+    manager = ChatRunManager()
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    release_busy = asyncio.Event()
+    try:
+        _runtime, _busy, parent, tool_result = await _start_parent_with_queued_foreground_child(
+            tmp_path, manager, tracker, release_busy, settings={"subagent_timeout_minutes": 1}
+        )
+
+        assert await asyncio.wait_for(parent.wait(), 1) == "parent continued"
+        result = tool_result.result()
+        assert result["ok"] is False
+        assert result["error"]["code"] == "subagent_timeout"
+        assert manager.list_queued("worker", "busy-child", project_id=None) == []
+        assert tracker.owned_entries("parent", "parent-session", None) == []
+    finally:
+        release_busy.set()
+        await manager.aclose()
