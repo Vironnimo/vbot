@@ -35,6 +35,7 @@ import {
   RESOURCE_KIND_SESSION_STORE,
   tokenKeysForKind,
 } from './resourceInvalidation.js';
+import { appendSessionInvalidation } from './sessionInvalidation.js';
 
 const MAX_RUN_SERVER_EVENTS = 500;
 // One bounded list feeds ChatView's merge; re-applying the whole list is
@@ -145,6 +146,11 @@ export function createAppControllerState(activeViewId) {
     serverNoticeState: '',
     serverRecoveryGeneration: 0,
     sessionDeletion: null,
+    // Bounded, id-ordered window of `resource_changed(kind:"sessions")`
+    // scopes; owners refresh only what each scope names.
+    sessionInvalidations: [],
+    // Full Session-list refresh, bumped only when continuity is uncertain
+    // (replay gap or server restart).
     sessionsRefreshToken: 0,
     sessionStoreHealth: null,
     sessionStoreIncident: null,
@@ -179,6 +185,7 @@ export function createAppController({
 }) {
   let chatSessionOverride = null;
   let sessionNavigationRequestId = 0;
+  let sessionInvalidationSequence = state.sessionInvalidations?.at(-1)?.id ?? 0;
   // An initial deep link to an Extension page whose route is unknown until
   // the page catalog loads; cleared by the first user navigation.
   let pendingExtensionViewId = '';
@@ -615,7 +622,12 @@ export function createAppController({
       await onLoadProjects();
     }
     if (tokenKeys.includes(RESOURCE_TOKEN_SESSIONS)) {
-      state.sessionsRefreshToken += 1;
+      sessionInvalidationSequence += 1;
+      state.sessionInvalidations = appendSessionInvalidation(
+        state.sessionInvalidations,
+        sessionInvalidationSequence,
+        event.payload?.scope,
+      );
       const deletion = sessionDeletionFromScope(event.payload?.scope);
       if (deletion) {
         state.sessionDeletion = deletion;

@@ -159,18 +159,36 @@ export function ensureSessionState(state, agentId, sessionId) {
   return state.sessions[key];
 }
 
-export function syncAgentSessionActivity(state, agentId, sessions) {
+// Apply one Agent's completion activity rows. The server lists only Sessions
+// with a completion, so a held Session it omits has none. With
+// `seenCompletions` (Session key -> completion Run id when the read started),
+// an omitted Session whose completion changed during the read keeps it: that
+// completion is newer than the server snapshot.
+export function syncAgentSessionActivity(
+  state,
+  agentId,
+  sessions,
+  seenCompletions = null,
+) {
   const rows = (Array.isArray(sessions) ? sessions : []).filter(
     (session) => typeof session?.id === 'string' && session.id.length > 0,
   );
   const listedSessionIds = new Set(rows.map((session) => session.id));
   for (const sessionState of Object.values(state.sessions)) {
     if (
-      sessionState.agentId === agentId &&
-      !listedSessionIds.has(sessionState.sessionId)
+      sessionState.agentId !== agentId ||
+      listedSessionIds.has(sessionState.sessionId)
     ) {
-      clearSessionCompletionActivity(sessionState);
+      continue;
     }
+    if (
+      seenCompletions &&
+      sessionCompletionRunId(sessionState) !==
+        (seenCompletions.get(sessionState.key) ?? '')
+    ) {
+      continue;
+    }
+    clearSessionCompletionActivity(sessionState);
   }
   for (const row of rows) {
     const sessionState = ensureSessionState(state, agentId, row.id);
@@ -310,7 +328,16 @@ export function sessionHasTerminalRun(sessionState, runId) {
   );
 }
 
-function clearSessionCompletionActivity(sessionState) {
+// The Run id of the completion this client holds for a Session ('' if none).
+export function sessionCompletionRunId(sessionState) {
+  return (
+    sessionState.latestCompletionRunId ||
+    (sessionState.hasUnreadCompletion ? sessionState.unreadRunId : '') ||
+    ''
+  );
+}
+
+export function clearSessionCompletionActivity(sessionState) {
   sessionState.hasUnreadCompletion = false;
   sessionState.latestCompletionRunId = '';
   sessionState.unreadRunId = '';
