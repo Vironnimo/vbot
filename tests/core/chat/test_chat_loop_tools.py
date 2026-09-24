@@ -112,15 +112,23 @@ async def test_tool_cycle_boundaries_need_no_separate_journal_writes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    writes = 0
+    writes_at: dict[str, int] = {}
+
+    def probe(context: Any, _arguments: Any) -> Any:
+        writes_at["handler"] = writes
+        return tool_success({"id": context.tool_call_id})
+
     tools = ToolRegistry()
-    tools.register(
-        "probe",
-        "Return the probe id.",
-        {"type": "object"},
-        lambda context, _arguments: tool_success({"id": context.tool_call_id}),
-    )
+    tools.register("probe", "Return the probe id.", {"type": "object"}, probe)
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["probe"])
-    adapter = StubAdapter(
+
+    class ObservingAdapter(StubAdapter):
+        async def send(self, messages: Any, *, model_id: str, **kwargs: Any) -> Any:
+            writes_at.setdefault("first_request", writes)
+            return await super().send(messages, model_id=model_id, **kwargs)
+
+    adapter = ObservingAdapter(
         [
             {
                 "content": None,
@@ -130,6 +138,7 @@ async def test_tool_cycle_boundaries_need_no_separate_journal_writes(
         ]
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime.chat_sessions.create("coder", session_id="session-one")
     journal_writes: list[list[str]] = []
     original_append_continuation = SessionStore.append_continuation
 
@@ -140,11 +149,26 @@ async def test_tool_cycle_boundaries_need_no_separate_journal_writes(
         original_append_continuation(self, address, records)
 
     monkeypatch.setattr(SessionStore, "append_continuation", recording_append_continuation)
+    store = runtime.chat_sessions._store
+    execute_write = store._execute_write
 
-    await build_chat_loop(runtime).send("coder", "probe once", session_id="session-one")
+    def counting_write(*args: Any, **kwargs: Any) -> Any:
+        nonlocal writes
+        writes += 1
+        return execute_write(*args, **kwargs)
 
-    # Assistant boundaries and Tool Results commit inside their history writes.
-    assert journal_writes == [["run_started"]]
+    monkeypatch.setattr(store, "_execute_write", counting_write)
+
+    await build_chat_loop(runtime, streaming=False).send(
+        "coder", "probe once", session_id="session-one"
+    )
+
+    # The journal starts with the input append, and Assistant boundaries and
+    # Tool Results commit inside their history writes.
+    assert journal_writes == []
+    # Only the Assistant append separates the Model response from the Tool
+    # handler: starting a Tool writes nothing.
+    assert writes_at["handler"] == writes_at["first_request"] + 1
     persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert persisted_roles(persisted)[-3:] == ["assistant", "tool", "assistant"]
 

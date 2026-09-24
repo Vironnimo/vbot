@@ -487,7 +487,7 @@ async def test_chat_queue_update_returns_ok(monkeypatch: pytest.MonkeyPatch) -> 
     captured: dict[str, Any] = {}
     fake_executor = object()
 
-    def fake_build_streaming_queue_update(
+    async def fake_build_streaming_queue_update(
         _state: Any,
         agent_id: str,
         session_id: str,
@@ -564,7 +564,7 @@ async def test_chat_queue_update_returns_not_found_for_internal_item(
 
     build_called = False
 
-    def fail_if_called(*_args: Any, **_kwargs: Any) -> tuple[str, Any, str]:
+    async def fail_if_called(*_args: Any, **_kwargs: Any) -> tuple[str, Any, str]:
         nonlocal build_called
         build_called = True
         return "session-1", object(), "should-not-build"

@@ -194,6 +194,33 @@ def test_fork_copies_history_but_not_activity_or_continuation(manager) -> None:
     )
 
 
+def test_metadata_value_reads_one_projected_or_residual_value(manager, monkeypatch) -> None:
+    address = _address("coder", "narrow")
+    manager.create(address.agent_id, session_id=address.session_id)
+    policy = {"enabled": False}
+    manager.set_metadata(
+        address,
+        {"compaction_policy": policy, "title": "Named", "seen_skills": ["one"], "flag": None},
+    )
+
+    def no_metadata_decode(_address):
+        raise AssertionError("a single value must not decode the complete metadata")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(manager._store, "metadata", no_metadata_decode)
+        assert manager.metadata_value(address, "compaction_policy") == policy
+        assert manager.metadata_value(address, "title") == "Named"
+        assert manager.metadata_value(address, "seen_skills") == ["one"]
+        assert manager.metadata_value(address, "flag") is None
+        assert manager.metadata_value(address, "missing") is None
+    # A value that does not fit its projected column stays in the open-ended JSON.
+    manager.set_metadata(address, {"compaction_policy": "not-an-object"})
+    assert manager.metadata_value(address, "compaction_policy") == "not-an-object"
+    assert manager.metadata_value(address, "title") is None
+    with pytest.raises(SessionNotFoundError):
+        manager.metadata_value(_address("coder", "missing"), "title")
+
+
 def test_prompt_cache_affinity_id_reads_only_its_stored_value(manager, monkeypatch) -> None:
     address = _address("coder", "affinity")
     manager.create(address.agent_id, session_id=address.session_id)

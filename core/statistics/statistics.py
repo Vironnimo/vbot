@@ -1,43 +1,31 @@
-"""Statistics service: canonical Session reconciliation, report access and owner-scoped usage."""
+"""Statistics service: report access and owner-scoped usage over the derived index."""
 
 from __future__ import annotations
 
-import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from core.chat.messages import ChatMessage
 from core.models.pricing import TokenPricing
 from core.projects.address import format_agent_address
-from core.sessions import (
-    OwnedRunRecord,
-    SessionAddress,
-    SessionNotFoundError,
-)
-from core.statistics._aggregation import (
-    _Aggregator,
-)
+from core.sessions import OwnedRunRecord, SessionAddress
+from core.statistics._aggregation import ReportBuilder
 from core.statistics._extensions import ExtensionSliceKey, extension_actor_key
+from core.statistics._runs import load_run_activity
 from core.statistics._sources import (
     AgentDirectory,
     ProjectDirectory,
     SessionSource,
-    _indexed_activity_summary,
-    _owned_run_messages,
     _owner_scopes,
-    _run_activity_record,
-    _run_overlaps,
-    _session_activity_messages,
     extension_session_summary,
 )
+from core.statistics._units import ReportUnit, materialize_run_slices
 from core.statistics.index import (
-    IndexedStatisticsSession,
+    IndexedSession,
+    IndexView,
     StatisticsIndex,
-    StatisticsIndexError,
     StatisticsScope,
-    statistics_session_key,
 )
 from core.statistics.report import (
     JsonObject,
@@ -48,12 +36,9 @@ from core.statistics.report import (
 )
 from core.statistics.skills import (
     SkillInventorySource,
+    offered_skill_names,
 )
-from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
-
-_LOGGER = get_logger("statistics")
-
 
 _GROUP_USAGE_WORKERS = BoundedWorkerPool(name="statistics-group-usage", max_workers=2)
 
@@ -70,21 +55,19 @@ MAX_RUN_ACTIVITY = 200
 
 
 class StatisticsService:
-    """Compute a full :class:`StatisticsReport` from a disposable Session index.
+    """Compute Statistics reports from the disposable Session index.
 
-    The service reconciles canonical Sessions into a compact SQLite projection
-    before every read. Unchanged transcripts are never loaded; append-only growth
-    validates and ingests only the new tail. A failed or incompatible projection
-    is discarded and rebuilt once, with the canonical live scan retained as a
-    final availability fallback.
+    Every read reconciles canonical Sessions into the shared
+    :class:`StatisticsIndex` and aggregates there in SQL; unchanged
+    transcripts are never loaded and no projection is kept in memory between
+    reads. Pass the runtime's shared ``index`` so every Statistics reader uses
+    one owner of the index file; without it the service owns a private one.
 
     Project sessions feed the same report as identity sessions; a project agent
     appears under its outer address form ``agent@project`` so it stays distinct
-    from the bare identity id and from the same agent in another project. Without
-    any projects (or with an absent project directory) the report is identical to
-    the identity-only scan — project scopes live under a different anchor path,
-    so the same session id under both scopes is two different files, never a
-    double count.
+    from the bare identity id and from the same agent in another project.
+    Project and identity scopes are distinct Session addresses, so the same
+    Session id under both is two Sessions, never a double count.
 
     The optional ``skill_inventory`` joins observed skill usage against the
     current skill set (see ``core/statistics/skills.py``). When omitted, the
@@ -100,54 +83,54 @@ class StatisticsService:
         skill_inventory: SkillInventorySource | None = None,
         *,
         pricing_lookup: Callable[[str], TokenPricing | None] | None = None,
+        index: StatisticsIndex | None = None,
     ) -> None:
         self._sessions = chat_sessions
         self._agents = agents
         self._projects = projects
         self._skill_inventory = skill_inventory
         self._pricing_lookup = pricing_lookup
-        self._index = StatisticsIndex(Path(chat_sessions.data_dir))
+        self._index = index if index is not None else StatisticsIndex(Path(chat_sessions.data_dir))
 
     def warm_index(self) -> None:
         """Reconcile the disposable index without building a report."""
-        scopes = self._statistics_scopes()
-        extension_sessions = self._extension_sessions()
-        self._indexed_snapshot(_index_scopes(scopes, extension_sessions))
+        scopes = _index_scopes(self._statistics_scopes(), self._extension_sessions())
+        self._index.read(self._sessions, scopes, lambda _view: None)
 
     def report(
         self, *, since: datetime | None = None, until: datetime | None = None
     ) -> StatisticsReport:
         """Reconcile all Session scopes and return the aggregated report."""
-        aggregator = _Aggregator(since=since, until=until, pricing_lookup=self._pricing_lookup)
+        builder = ReportBuilder(since=since, until=until, pricing_lookup=self._pricing_lookup)
         scopes = self._statistics_scopes()
         extension_sessions = self._extension_sessions()
-        snapshot = self._indexed_snapshot(_index_scopes(scopes, extension_sessions))
-        for scope in scopes:
-            summaries: list[JsonObject] = []
-            aggregator.register_scope(agent_id=scope.agent_id, project_id=scope.project_id)
-            for summary, messages in self._scope_sessions(scope, snapshot):
-                aggregator.process_session(scope.display_key, str(summary["id"]), messages, summary)
-                summaries.append(summary)
-            aggregator.register_agent(scope.display_key, summaries)
-        # Extension-owned Sessions count once per owner under its reserved actor
-        # key, never under their synthetic participant Agent ids.
-        owner_summaries: dict[str, list[JsonObject]] = {}
-        for entry in extension_sessions:
-            aggregator.register_scope(agent_id=None, project_id=entry.scope.project_id)
-            surviving = owner_summaries.setdefault(entry.key.owner_name, [])
-            for summary, messages in self._scope_sessions(entry.scope, snapshot):
-                aggregator.process_session(
-                    entry.scope.display_key,
-                    str(summary["id"]),
-                    messages,
-                    summary,
-                    extension=entry.key,
-                )
-                surviving.append(summary)
-        for owner_name, summaries in owner_summaries.items():
-            if summaries:
-                aggregator.register_agent(extension_actor_key(owner_name), summaries)
-        return aggregator.build(self._skill_inventory)
+
+        def consume(view: IndexView) -> None:
+            for scope in scopes:
+                builder.register_scope(agent_id=scope.agent_id, project_id=scope.project_id)
+                surviving: list[JsonObject] = []
+                for indexed, session_id in _surviving(view, scope):
+                    _add_unit(builder, scope.display_key, session_id, indexed)
+                    surviving.append(indexed.summary)
+                builder.register_agent(scope.display_key, surviving)
+            # Extension-owned Sessions count once per owner under its reserved
+            # actor key, never under their synthetic participant Agent ids.
+            owner_summaries: dict[str, list[JsonObject]] = {}
+            for entry in extension_sessions:
+                builder.register_scope(agent_id=None, project_id=entry.scope.project_id)
+                surviving = owner_summaries.setdefault(entry.key.owner_name, [])
+                for indexed, session_id in _surviving(view, entry.scope):
+                    _add_unit(
+                        builder, entry.scope.display_key, session_id, indexed, extension=entry.key
+                    )
+                    surviving.append(indexed.summary)
+            for owner_name, summaries in owner_summaries.items():
+                if summaries:
+                    builder.register_agent(extension_actor_key(owner_name), summaries)
+            builder.aggregate(view.connection)
+
+        self._index.read(self._sessions, _index_scopes(scopes, extension_sessions), consume)
+        return builder.build(self._skill_inventory)
 
     def run_activity(
         self,
@@ -156,40 +139,30 @@ class StatisticsService:
         until: datetime,
     ) -> RunActivityReport:
         """Return persisted Runs whose execution overlaps the selected interval."""
+        scopes = _index_scopes(self._statistics_scopes(), self._extension_sessions())
 
-        runs: list[RunActivity] = []
-        scopes = self._statistics_scopes()
-        extension_sessions = self._extension_sessions()
-        snapshot = self._indexed_snapshot(_index_scopes(scopes, extension_sessions))
-        for scope in _index_scopes(scopes, extension_sessions):
-            for summary, messages in self._scope_sessions(scope, snapshot):
-                session_id = str(summary["id"])
-                title = summary.get("title")
-                session_title = title if isinstance(title, str) and title else None
-                groups: dict[str, list[ChatMessage]] = {}
-                for message in messages:
-                    if message.role != "run_summary":
-                        if message.run_id:
-                            groups.setdefault(message.run_id, []).append(message)
-                        continue
-                    activity = _run_activity_record(
-                        scope.display_key,
-                        session_id,
-                        session_title,
-                        groups.get(message.run_id or "", []),
-                        message,
-                    )
-                    if _run_overlaps(activity, since=since, until=until):
-                        runs.append(activity)
+        def consume(view: IndexView) -> tuple[int, list[RunActivity]]:
+            units = [
+                ReportUnit(
+                    display_key=scope.display_key,
+                    session_key=indexed.session_key,
+                    session_id=session_id,
+                    title=_title(indexed.summary),
+                )
+                for scope in scopes
+                for indexed, session_id in _surviving(view, scope)
+            ]
+            return load_run_activity(
+                view.connection, units, since=since, until=until, limit=MAX_RUN_ACTIVITY
+            )
 
-        runs.sort(key=lambda run: run.started_at, reverse=True)
-        total_runs = len(runs)
+        total_runs, runs = self._index.read(self._sessions, scopes, consume)
         return RunActivityReport(
             generated_at=datetime.now(UTC).isoformat(),
             window=WindowInfo(since=since.isoformat(), until=until.isoformat()),
             total_runs=total_runs,
             truncated=total_runs > MAX_RUN_ACTIVITY,
-            runs=runs[:MAX_RUN_ACTIVITY],
+            runs=runs,
         )
 
     async def group_usage(
@@ -270,38 +243,50 @@ class StatisticsService:
                 owner_name=owner_name, group_id=group_id, metadata_keys=("seen_skills",)
             )
         }
-        scopes = _owner_scopes(records, summaries)
-        snapshot = self._index.snapshot(self._sessions, scopes, prune=False, scope_only=True)
         by_address: dict[SessionAddress, list[OwnedRunRecord]] = {}
         for record in records:
             by_address.setdefault(record.address, []).append(record)
-        aggregator = _Aggregator(since=None, until=None)
-        participant_aggregators: dict[str, _Aggregator] = {}
-        for address, address_records in by_address.items():
-            key = statistics_session_key(address.project_id, address.agent_id, address.session_id)
-            indexed = snapshot.get(key)
-            if indexed is None:
-                continue
-            messages = list(indexed.messages)
-            for record in address_records:
-                if indexed.generation_id != record.generation_id:
+
+        def consume(view: IndexView) -> tuple[StatisticsReport, dict[str, StatisticsReport]]:
+            # Only an owned Run of the Session generation it was recorded in
+            # counts, and only its own records: a reused Session is never
+            # treated as wholly owned.
+            owned: list[OwnedRunRecord] = []
+            slices: list[tuple[int, str]] = []
+            for address, address_records in by_address.items():
+                indexed = view.session(address.project_id, address.agent_id, address.session_id)
+                if indexed is None:
                     continue
-                sliced = _owned_run_messages(messages, record)
-                if not sliced:
+                for record in address_records:
+                    if indexed.generation_id == record.generation_id:
+                        owned.append(record)
+                        slices.append((indexed.session_key, record.run_id))
+            present = materialize_run_slices(view.connection, slices)
+            overall = _group_builder()
+            participants: dict[str, ReportBuilder] = {}
+            for position, record in enumerate(owned):
+                if position not in present:
                     continue
                 display_key = record.owner.participant_id
-                peer = participant_aggregators.setdefault(
-                    display_key, _Aggregator(since=None, until=None)
+                unit = ReportUnit(
+                    display_key=display_key,
+                    session_key=position,
+                    session_id=record.address.session_id,
                 )
-                for target in (aggregator, peer):
-                    target.register_agent(display_key, [{"id": address.session_id}])
-                    target.register_scope(agent_id=address.agent_id, project_id=address.project_id)
-                    target.process_session(
-                        display_key, address.session_id, sliced, {"id": address.session_id}
-                    )
-        return aggregator.build(None), {
-            peer_id: target.build(None) for peer_id, target in participant_aggregators.items()
-        }
+                peer = participants.setdefault(display_key, _group_builder())
+                for target in (overall, peer):
+                    target.register_agent(display_key, [{"id": record.address.session_id}])
+                    target.add_unit(unit)
+            overall.aggregate(view.connection)
+            for peer in participants.values():
+                peer.aggregate(view.connection)
+            return overall.build(None), {
+                peer_id: peer.build(None) for peer_id, peer in participants.items()
+            }
+
+        return self._index.read(
+            self._sessions, _owner_scopes(records, summaries), consume, prune=False
+        )
 
     def _project_scopes(self) -> list[tuple[str, str]]:
         """Return ``(project_id, agent_id)`` for every session-owning project agent."""
@@ -375,67 +360,51 @@ class StatisticsService:
             )
         return tuple(entries)
 
-    def _indexed_snapshot(
-        self,
-        scopes: tuple[StatisticsScope, ...],
-    ) -> dict[tuple[str, str, str], IndexedStatisticsSession] | None:
-        for attempt in range(2):
-            try:
-                return self._index.snapshot(self._sessions, scopes)
-            except (OSError, sqlite3.DatabaseError, StatisticsIndexError) as error:
-                if attempt == 0:
-                    _LOGGER.warning(
-                        "Statistics index failed; rebuilding once: %s",
-                        error,
-                    )
-                    try:
-                        self._index.discard()
-                    except OSError as discard_error:
-                        _LOGGER.warning(
-                            "Could not discard failed Statistics index: %s",
-                            discard_error,
-                        )
-                else:
-                    _LOGGER.warning(
-                        "Statistics index rebuild failed; using canonical Session scan: %s",
-                        error,
-                    )
-        return None
-
-    def _scope_sessions(
-        self,
-        scope: StatisticsScope,
-        snapshot: dict[tuple[str, str, str], IndexedStatisticsSession] | None,
-    ) -> Iterator[tuple[JsonObject, list[ChatMessage]]]:
-        """Resolve surviving Sessions with fork prefixes excluded exactly once.
-
-        Report consumers share this read boundary regardless of whether the
-        disposable index is available. A Session removed during reconciliation
-        or canonical loading contributes neither structure nor activity.
-        """
-        for summary in scope.summaries:
-            session_id = str(summary["id"])
-            if snapshot is not None:
-                indexed = snapshot.get(
-                    statistics_session_key(scope.project_id, scope.agent_id, session_id)
-                )
-                if indexed is None:
-                    continue
-                summary = indexed.summary
-                messages = list(indexed.messages)
-            else:
-                address = SessionAddress(
-                    project_id=scope.project_id, agent_id=scope.agent_id, session_id=session_id
-                )
-                try:
-                    messages = self._sessions.get(address).load()
-                except SessionNotFoundError:
-                    continue
-                messages = _session_activity_messages(messages, summary)
-            yield _indexed_activity_summary(summary), messages
-
 
 def _index_scopes(
     scopes: tuple[StatisticsScope, ...], extension_sessions: tuple[_ExtensionSession, ...]
 ) -> tuple[StatisticsScope, ...]:
     return (*scopes, *(entry.scope for entry in extension_sessions))
+
+
+def _surviving(view: IndexView, scope: StatisticsScope) -> list[tuple[IndexedSession, str]]:
+    """Return the scope's listed Sessions that survived reconciliation, in listing order."""
+    surviving: list[tuple[IndexedSession, str]] = []
+    for summary in scope.summaries:
+        session_id = str(summary["id"])
+        indexed = view.session(scope.project_id, scope.agent_id, session_id)
+        if indexed is not None:
+            surviving.append((indexed, session_id))
+    return surviving
+
+
+def _add_unit(
+    builder: ReportBuilder,
+    display_key: str,
+    session_id: str,
+    indexed: IndexedSession,
+    *,
+    extension: ExtensionSliceKey | None = None,
+) -> None:
+    created_at = indexed.summary.get("created_at")
+    builder.add_unit(
+        ReportUnit(
+            display_key=display_key,
+            session_key=indexed.session_key,
+            session_id=session_id,
+            title=_title(indexed.summary),
+            extension=extension,
+        ),
+        created_at=created_at if isinstance(created_at, str) else None,
+        offered_skills=offered_skill_names(indexed.summary),
+    )
+
+
+def _title(summary: JsonObject) -> str | None:
+    title = summary.get("title")
+    return title if isinstance(title, str) else None
+
+
+def _group_builder() -> ReportBuilder:
+    # Group usage exposes usage, Tools, Compactions and Runs only.
+    return ReportBuilder(since=None, until=None, include_costs=False, include_skills=False)

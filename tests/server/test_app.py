@@ -20,6 +20,7 @@ from core.runs import ChatRunManager, Run
 from core.runtime import Runtime
 from core.sessions import ChatSessionManager
 from core.sessions.format import write_bootstrap_marker
+from core.statistics import StatisticsIndex
 from core.utils.config import Config
 from core.utils.server_control import CONTROL_SHUTDOWN_PATH, CONTROL_TOKEN_HEADER
 from server._app_lifecycle import (
@@ -180,14 +181,7 @@ def test_control_shutdown_requires_secret_and_requests_uvicorn_exit(tmp_path: Pa
 async def test_statistics_warmup_builds_disposable_index_for_complete_runtime_surface(
     tmp_path: Path,
 ) -> None:
-    write_bootstrap_marker(tmp_path)
-    manager = ChatSessionManager(tmp_path)
-    runtime = SimpleNamespace(
-        chat_sessions=manager,
-        agents=SimpleNamespace(list=lambda: []),
-        models=SimpleNamespace(pricing_for=lambda _: None),
-        projects=SimpleNamespace(list=lambda: [], session_owning_agents=lambda _project_id: []),
-    )
+    runtime = _statistics_runtime(tmp_path)
     state = SimpleNamespace(runtime=runtime)
 
     task = _start_statistics_warmup(state)
@@ -195,7 +189,39 @@ async def test_statistics_warmup_builds_disposable_index_for_complete_runtime_su
     assert task is not None
     await task
     assert (tmp_path / "statistics" / "session-statistics.sqlite").is_file()
-    assert state.statistics_service is not None
+    assert state.statistics_service._index is runtime.statistics_index
+
+
+@pytest.mark.parametrize("missing", ["statistics_index", "models", "list_owned_session_summaries"])
+def test_statistics_warmup_skips_runtime_without_the_statistics_surface(
+    tmp_path: Path, missing: str
+) -> None:
+    runtime = _statistics_runtime(tmp_path)
+    if hasattr(runtime, missing):
+        delattr(runtime, missing)
+    else:
+        sessions = runtime.chat_sessions
+        runtime.chat_sessions = SimpleNamespace(
+            **{
+                name: getattr(sessions, name)
+                for name in ("list_summaries", "list_history_versions", "get")
+            }
+        )
+    state = SimpleNamespace(runtime=runtime)
+
+    assert _start_statistics_warmup(state) is None
+    assert not hasattr(state, "statistics_service")
+
+
+def _statistics_runtime(tmp_path: Path) -> SimpleNamespace:
+    write_bootstrap_marker(tmp_path)
+    return SimpleNamespace(
+        chat_sessions=ChatSessionManager(tmp_path),
+        statistics_index=StatisticsIndex(tmp_path),
+        agents=SimpleNamespace(list=lambda: []),
+        models=SimpleNamespace(pricing_for=lambda _: None),
+        projects=SimpleNamespace(list=lambda: [], session_owning_agents=lambda _project_id: []),
+    )
 
 
 def test_bootstrap_rpc_persists_job_without_firing_in_current_process(tmp_path: Path) -> None:

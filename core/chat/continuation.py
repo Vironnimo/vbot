@@ -176,9 +176,22 @@ class ContinuationTracker:
         )
 
     async def start(self) -> None:
-        """Durably start the continuation chain without blocking the event loop."""
+        """Durably start the continuation chain without blocking the event loop.
+
+        A Run whose input append carries :meth:`start_boundary` needs no
+        separate start; this is for a Run with no input left to persist.
+        """
         async with self._journal_lock:
             await self._ensure_started_unlocked()
+
+    def start_boundary(self) -> JournalBoundary:
+        """Start the chain inside the history write that persists this Run's input.
+
+        The journal then never records a started Run whose input did not
+        commit, and starting costs no transaction of its own. Once the chain
+        has started, the boundary adds no records.
+        """
+        return JournalBoundary(self, ())
 
     async def restart_journal(self) -> None:
         """Discard every earlier journal record and durably restart this Run's chain.
@@ -384,8 +397,10 @@ class ContinuationTracker:
             await self._write_records_unlocked(records)
 
     async def _write_records_unlocked(self, records: list[JsonObject]) -> None:
-        await self._ensure_started_unlocked()
-        await self._settle_sink(self._sink(records))
+        # An unstarted chain begins in the same transaction as its first records.
+        batch = records if self._started else [self._start_record, *records]
+        await self._settle_sink(self._sink(batch))
+        self._started = True
 
     async def _ensure_started_unlocked(self) -> None:
         if self._started:
