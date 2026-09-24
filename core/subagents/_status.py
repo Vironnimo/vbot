@@ -21,7 +21,6 @@ from core.subagents._completion import (
     _should_poll_session_result,
     _wait_for_subagent_result,
     _with_target_project,
-    _without_internal_handles,
 )
 from core.subagents._constants import (
     PARENT_AGENT_CANCEL_REASON,
@@ -229,7 +228,11 @@ async def _handle_subagent_cancel(
             queue_item_id=queue_item_id,
         )
         await _emit_subagent_status_changed(context, data)
-        return tool_success(_without_internal_handles(data))
+        return tool_success(
+            _public_subagent_result(
+                work_id, entry.agent_id, entry.project_id, entry.session_id, data
+            )
+        )
 
     # Queue admission may have completed before its watcher updated the tracker.
     # Resolve the manager's exact work identity without relying on task scheduling.
@@ -301,11 +304,16 @@ async def _cancel_owned_subagent_run(
     )
     await _emit_subagent_status_changed(context, data)
     # A started child keeps its Session history; removed Queue work never ran.
-    result = _without_internal_handles(data)
-    result["note"] = _cancelled_continuation_note(
-        entry.agent_id, entry.project_id, entry.session_id
+    return tool_success(
+        _public_subagent_result(
+            work_id,
+            entry.agent_id,
+            entry.project_id,
+            entry.session_id,
+            data,
+            note=_cancelled_continuation_note(entry.agent_id, entry.project_id, entry.session_id),
+        )
     )
-    return tool_success(result)
 
 
 def _cancelled_subagent_descriptor(
@@ -317,6 +325,11 @@ def _cancelled_subagent_descriptor(
     run_id: str | None = None,
     queue_item_id: str | None = None,
 ) -> JsonObject:
+    """Describe a cancelled child for the status-changed event, with bare ids.
+
+    The Tool result is projected from this descriptor separately, so only the
+    Agent sees the qualified ``agent_id``.
+    """
     data: JsonObject = {
         "id": work_id,
         "agent_id": target_agent_id,
