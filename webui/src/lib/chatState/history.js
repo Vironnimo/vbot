@@ -109,6 +109,9 @@ export function loadHistory(sessionState, messages, options = {}) {
   if (Object.hasOwn(options, 'contextUsage')) {
     sessionState.contextUsage = options.contextUsage ?? null;
   }
+  if (isRecord(options.compactionPolicy)) {
+    sessionState.compactionPolicy = options.compactionPolicy;
+  }
   sessionState.backgroundBashStatuses = isRecord(options.backgroundBashStatuses)
     ? { ...options.backgroundBashStatuses }
     : {};

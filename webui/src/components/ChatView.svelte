@@ -793,6 +793,7 @@
             }}
             onSessionSelected={navigation.handleSessionSelected}
             onSessionDeleted={navigation.handleSessionDeleted}
+            onCompactionPolicyChange={chatController.applySessionCompactionPolicy}
           />
         {/if}
         <div class="chat-view__timeline-shell">
@@ -968,6 +969,7 @@
                 )}
                 onForceCompaction={actions.handleCompactContext}
                 contextWindow={target.activeAgent?.context_window}
+                compactionPolicy={target.activeSessionState?.compactionPolicy}
                 usage={target.activeSessionState?.usage}
                 sessionUsage={target.activeSessionState?.sessionUsage}
                 onSendMessage={composerSendMessage}

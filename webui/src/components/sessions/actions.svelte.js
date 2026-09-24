@@ -124,10 +124,16 @@ export function createSessionActions(context) {
     policySaving = true;
     policyError = null;
     try {
-      await setSessionCompactionPolicy(
+      const sessionId = policySession.id;
+      const result = await setSessionCompactionPolicy(
         targetAgentId,
-        policySession.id,
+        sessionId,
         policyUsesOverride ? normalizeCompactionPolicy(policyDraft) : null,
+      );
+      context.onCompactionPolicyChange(
+        targetAgentId,
+        sessionId,
+        result?.effective,
       );
       policySession = null;
       policyDraft = null;

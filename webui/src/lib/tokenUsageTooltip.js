@@ -30,6 +30,108 @@ export function formatTokenUsageTooltip(
     : undefined;
 }
 
+// Context fill share at which the window counts as nearly exhausted.
+const CONTEXT_CRITICAL_RATIO = 0.9;
+// Without an automatic Compaction point, the ring warns from this share.
+const CONTEXT_LIMIT_WARNING_RATIO = 0.7;
+// With one, it warns this many percentage points before the trigger.
+const COMPACTION_WARNING_LEAD = 0.1;
+// Absorbs binary rounding, so 0.8 - 0.1 still warns from exactly 70%.
+const RATIO_TOLERANCE = 1e-9;
+
+/**
+ * Context-window share at which automatic Compaction triggers under the
+ * Session's effective Compaction Policy, or null when automatic Compaction is
+ * off, the Policy is unknown, or the trigger lies beyond the window. A
+ * `context_ratio` trigger's optional token cap applies when it comes first.
+ */
+export function automaticCompactionRatio(compactionPolicy, contextWindow) {
+  const trigger = compactionPolicy?.trigger;
+  if (
+    compactionPolicy?.enabled !== true ||
+    !trigger ||
+    !Number.isFinite(contextWindow) ||
+    contextWindow <= 0
+  ) {
+    return null;
+  }
+  const tokenRatio = (tokens) =>
+    Number.isFinite(tokens) && tokens > 0 ? tokens / contextWindow : null;
+  let ratio = null;
+  if (trigger.type === 'context_ratio') {
+    const threshold = Number.isFinite(trigger.threshold)
+      ? trigger.threshold
+      : null;
+    const cap = tokenRatio(trigger.tokens);
+    ratio =
+      threshold !== null && cap !== null
+        ? Math.min(threshold, cap)
+        : (threshold ?? cap);
+  } else if (trigger.type === 'input_tokens') {
+    ratio = tokenRatio(trigger.tokens);
+  }
+  return ratio !== null && ratio > 0 && ratio < 1 ? ratio : null;
+}
+
+/**
+ * Warning level of the context ring and card for a fill share (tokens of
+ * Current Context Usage / context window). Red near the end of the window;
+ * amber shortly before automatic Compaction triggers, or, when no automatic
+ * Compaction applies, as the window fills. `message` is the card's line.
+ */
+export function contextLimitWarning(
+  fillRatio,
+  contextWindow,
+  compactionPolicy,
+) {
+  if (fillRatio === null || !Number.isFinite(fillRatio)) {
+    return { level: 'normal', message: '' };
+  }
+  if (fillRatio >= CONTEXT_CRITICAL_RATIO) {
+    return {
+      level: 'critical',
+      message: t('chat.contextCard.atLimit', 'Context almost full'),
+    };
+  }
+  const compactionRatio = automaticCompactionRatio(
+    compactionPolicy,
+    contextWindow,
+  );
+  if (compactionRatio === null) {
+    return fillRatio >= CONTEXT_LIMIT_WARNING_RATIO
+      ? {
+          level: 'high',
+          message: t(
+            'chat.contextCard.nearContextLimit',
+            'Approaching the context limit',
+          ),
+        }
+      : { level: 'normal', message: '' };
+  }
+  if (fillRatio >= compactionRatio) {
+    return {
+      level: 'high',
+      message: t(
+        'chat.contextCard.compactionThresholdReached',
+        'Automatic Compaction threshold reached',
+      ),
+    };
+  }
+  if (
+    fillRatio >=
+    compactionRatio - COMPACTION_WARNING_LEAD - RATIO_TOLERANCE
+  ) {
+    return {
+      level: 'high',
+      message: t(
+        'chat.contextCard.nearLimit',
+        'Approaching automatic Compaction',
+      ),
+    };
+  }
+  return { level: 'normal', message: '' };
+}
+
 /**
  * Structured model for the Chat context ring's card. `summary` is the
  * "tokens / contextWindow" headline (null without a context measurement);

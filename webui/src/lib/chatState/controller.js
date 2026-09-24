@@ -38,6 +38,7 @@ import {
   addServerQueuedMessage,
   updateQueuedMessageContent,
   removeQueuedMessage,
+  isRecord,
   isRunActive,
   resetStaleRun,
 } from './sessionState.js';
@@ -290,6 +291,7 @@ export function createChatController({
         activeRunId: history?.active_run?.run_id,
         sessionUsage: history?.session_usage,
         contextUsage: history?.context_usage,
+        compactionPolicy: history?.compaction_policy,
         backgroundBashStatuses: history?.background_bash_statuses,
       });
       reflectionRequest.apply(history?.reflection_runs);
@@ -329,6 +331,15 @@ export function createChatController({
     }
   }
 
+  // A Session Compaction Policy saved from this window takes effect at once;
+  // other changes arrive with the next History read.
+  function applySessionCompactionPolicy(agentId, sessionId, policy) {
+    const sessionState = chatState.sessions[sessionKey(agentId, sessionId)];
+    if (sessionState && isRecord(policy)) {
+      sessionState.compactionPolicy = policy;
+    }
+  }
+
   async function reconcileRunSession(sessionState, expectedRunId) {
     if (!sessionState?.agentId || !sessionState?.sessionId || !expectedRunId) {
       return false;
@@ -361,6 +372,7 @@ export function createChatController({
         activeRunId: history?.active_run?.run_id,
         sessionUsage: history?.session_usage,
         contextUsage: history?.context_usage,
+        compactionPolicy: history?.compaction_policy,
         backgroundBashStatuses: history?.background_bash_statuses,
       });
       reflectionRequest.apply(history?.reflection_runs);
@@ -1003,6 +1015,7 @@ export function createChatController({
     applyBackgroundBashStatusEvents,
     applyConnectionSnapshot,
     applyQueueInvalidation,
+    applySessionCompactionPolicy,
     applySubAgentStatusUpdates,
     cancelActiveRun,
     cancelBackgroundProcess,

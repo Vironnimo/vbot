@@ -374,4 +374,43 @@ describe('chat controller', () => {
     expect(sessionState.status).toBe('running');
     expect(sessionState.currentRun?.runId).toBe('run-stalled');
   });
+
+  it('keeps the Session Compaction Policy from History and applies saved changes', async () => {
+    const historyPolicy = {
+      enabled: true,
+      trigger: { type: 'context_ratio', threshold: 0.6 },
+      strategy: { type: 'continuation' },
+    };
+    const loadChatHistory = vi
+      .fn()
+      .mockResolvedValueOnce({
+        has_more: false,
+        messages: [],
+        compaction_policy: historyPolicy,
+      })
+      .mockResolvedValueOnce({ has_more: false, messages: [] });
+    const { chatState, controller } = setup({
+      isDisplayedSession: () => true,
+      operationOverrides: { loadChatHistory },
+    });
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    expect(sessionState.compactionPolicy).toBeNull();
+
+    await controller.loadHistoryForSession('alpha', 'session-one');
+    expect(sessionState.compactionPolicy).toEqual(historyPolicy);
+
+    // An older-page style response without a Policy keeps the known one.
+    await controller.loadHistoryForSession('alpha', 'session-one');
+    expect(sessionState.compactionPolicy).toEqual(historyPolicy);
+
+    const savedPolicy = { ...historyPolicy, enabled: false };
+    controller.applySessionCompactionPolicy(
+      'alpha',
+      'session-one',
+      savedPolicy,
+    );
+    expect(sessionState.compactionPolicy).toEqual(savedPolicy);
+    controller.applySessionCompactionPolicy('alpha', 'other', historyPolicy);
+    expect(chatState.sessions['alpha::other']).toBeUndefined();
+  });
 });
