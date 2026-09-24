@@ -20,7 +20,7 @@ from cli.application.state import (
 
 def archive_payload(install: Installation, version_id: str) -> Path:
     payload = install.version(version_id)
-    validate_release(payload, shape=install.install_shape)
+    validate_release(payload, shape=install.install_shape, remove_bytecode_caches=True)
     archive = contained(install.root, f"staging/{payload.name}.zip")
     archive.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:

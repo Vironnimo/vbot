@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
+import logging
 import os
+import re
 import shutil
 import stat
 import zipfile
@@ -19,6 +22,9 @@ from cli.application.state import ApplicationError, Installation, contained, rea
 MAX_ARCHIVE_BYTES = 4 * 1024**3
 MAX_PAYLOAD_BYTES = 12 * 1024**3
 MAX_FILES = 100_000
+# CPython's bytecode cache files and the temporaries of its atomic cache writes.
+_BYTECODE_CACHE = re.compile(r"[^/]+\.pyc(?:\.[0-9]+)?")
+_LOGGER = logging.getLogger("vbot.application.packages")
 
 
 def version_label(manifest: dict[str, Any]) -> str:
@@ -80,9 +86,48 @@ def verify_signature(archive: Path, signature: bytes, public_key: str) -> None:
         raise ApplicationError("Release signature verification failed") from exc
 
 
+def _shown(names: set[str]) -> str:
+    listed = ", ".join(
+        "".join(character if character.isprintable() else "?" for character in name[:160])
+        for name in sorted(names)[:3]
+    )
+    return listed + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+
+
+def _remove_bytecode_caches(root: Path, names: list[str]) -> None:
+    """Delete caches a plain interpreter wrote; -B hosts would still load them."""
+    for name in names:
+        try:
+            (root / name).unlink()
+        except OSError as exc:
+            raise ApplicationError(
+                f"Could not remove the unverified bytecode cache {name} from the installed "
+                "version; close programs that use this vBot version and retry"
+            ) from exc
+    for directory in {(root / name).parent for name in names}:
+        with contextlib.suppress(OSError):
+            directory.rmdir()
+    _LOGGER.warning(
+        "Removed %d unverified bytecode cache files from %s, first %s",
+        len(names),
+        root,
+        min(names),
+    )
+
+
 def validate_release(
-    root: Path, *, shape: str | None = None, platform: str | None = None
+    root: Path,
+    *,
+    shape: str | None = None,
+    platform: str | None = None,
+    remove_bytecode_caches: bool = False,
 ) -> dict[str, Any]:
+    """Verify a release's exact payload against its manifest inventory.
+
+    Installed versions opt into removing `__pycache__` bytecode absent from the
+    inventory, which running their python.exe directly writes; payloads being
+    built or staged stay exact.
+    """
     contained(root, "release.json")
     release = read_json(root / "release.json", limit=32 * 1024**2)
     if release.get("schema_version") != 1 or type(release.get("bootstrap_protocol")) is not int:
@@ -98,6 +143,7 @@ def validate_release(
     if not isinstance(files, dict) or not files or len(files) > MAX_FILES:
         raise ApplicationError("Release file inventory is missing or invalid")
     actual: dict[str, Path] = {}
+    caches: list[str] = []
     pending = [root]
     # Inspect each entry once without following links. Re-resolving every ancestor
     # for every file dominated verification time on Windows; hashes remain mandatory.
@@ -112,11 +158,33 @@ def validate_release(
                 if stat.S_ISDIR(info.st_mode):
                     pending.append(path)
                 elif stat.S_ISREG(info.st_mode):
-                    actual[path.relative_to(root).as_posix()] = path
+                    name = path.relative_to(root).as_posix()
+                    if (
+                        remove_bytecode_caches
+                        and name not in files
+                        and path.parent.name == "__pycache__"
+                        and _BYTECODE_CACHE.fullmatch(entry.name)
+                    ):
+                        caches.append(name)
+                    else:
+                        actual[name] = path
                 else:
                     raise ApplicationError("Release payload contains special files")
-    if set(actual) != set(files) | {"release.json"}:
-        raise ApplicationError("Release file inventory does not match its payload")
+    if caches:
+        _remove_bytecode_caches(root, caches)
+    expected_names = set(files) | {"release.json"}
+    if set(actual) != expected_names:
+        mismatch = [
+            f"{label}: {_shown(names)}"
+            for label, names in (
+                ("unexpected", set(actual) - expected_names),
+                ("missing", expected_names - set(actual)),
+            )
+            if names
+        ]
+        raise ApplicationError(
+            f"Release file inventory does not match its payload ({'; '.join(mismatch)})"
+        )
     folded: set[str] = set()
     for name, expected in files.items():
         if not isinstance(name, str) or not name.startswith(("app/", "runtime/")):
@@ -185,7 +253,9 @@ def stage_package(install: Installation, archive: Path, *, local: bool = False) 
         version_id = manifest["version_id"]
         destination = install.version(version_id)
         if destination.exists():
-            old = validate_release(destination, shape=install.install_shape)
+            old = validate_release(
+                destination, shape=install.install_shape, remove_bytecode_caches=True
+            )
             if old != manifest:
                 raise ApplicationError("A different payload already uses this release identity")
         else:
