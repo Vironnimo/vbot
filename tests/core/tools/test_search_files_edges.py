@@ -7,10 +7,12 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import psutil  # type: ignore[import-untyped]
 import pytest
 
+from core.tools import _search_ignores
 from core.tools._search_execution import native_lines
 from core.tools._search_options import parse_options
 from core.tools._search_selection import Glob
@@ -53,6 +55,82 @@ def test_global_and_repository_excludes(tmp_path, monkeypatch):
         options=["--no-ignore-global", "--no-ignore-exclude"],
     )
     assert len(data["content"].splitlines()) == 3
+
+
+def _age(path: Path, seconds: int = 60) -> None:
+    moment = time.time() - seconds
+    os.utime(path, (moment, moment))
+
+
+def _found(root: Path) -> set[str]:
+    return set(search(root, action="content", patterns=["needle"])["content"].splitlines())
+
+
+def test_unchanged_ignore_sources_are_compiled_once_across_searches(tmp_path, monkeypatch):
+    compiled: list[list[str]] = []
+    real = _search_ignores.PathSpec
+
+    class CountingPathSpec:
+        @staticmethod
+        def from_lines(kind, lines):
+            compiled.append(list(lines))
+            return real.from_lines(kind, lines)
+
+    monkeypatch.setattr(_search_ignores, "PathSpec", CountingPathSpec)
+    (tmp_path / ".gitignore").write_text("a.py\n")
+    _age(tmp_path / ".gitignore")
+    for name in ("a.py", "b.py"):
+        (tmp_path / name).write_text("needle")
+    assert _found(tmp_path) == {"b.py:1:needle"}
+    assert ["a.py"] in compiled
+    compiled.clear()
+    for _ in range(2):
+        assert _found(tmp_path) == {"b.py:1:needle"}
+    assert compiled == []
+
+
+def test_ignore_and_git_configuration_edits_apply_to_the_next_search(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    root = tmp_path / "repo"
+    (root / ".git").mkdir(parents=True)
+    for name in ("a.py", "b.py", "c.py"):
+        (root / name).write_text("needle")
+    (home / "one").write_text("c.py\n")
+    (home / "two").write_text("b.py\n")
+    config = home / ".gitconfig"
+    config.write_text('[core]\n excludesFile = "' + (home / "one").as_posix() + '"\n')
+    ignore = root / ".gitignore"
+    ignore.write_text("a.py\n")
+    for path in (home / "one", home / "two", config, ignore):
+        _age(path)
+    assert _found(root) == {"b.py:1:needle"}
+    # Same-size rewrites differ only in modification time.
+    ignore.write_text("b.py\n")
+    _age(ignore, 30)
+    assert _found(root) == {"a.py:1:needle"}
+    config.write_text('[core]\n excludesFile = "' + (home / "two").as_posix() + '"\n')
+    _age(config, 30)
+    assert _found(root) == {"a.py:1:needle", "c.py:1:needle"}
+    ignore.unlink()
+    assert _found(root) == {"a.py:1:needle", "c.py:1:needle"}
+    config.unlink()
+    assert _found(root) == {"a.py:1:needle", "b.py:1:needle", "c.py:1:needle"}
+
+
+def test_recently_written_ignore_sources_are_reread_with_an_identical_stamp(tmp_path):
+    ignore = tmp_path / ".gitignore"
+    ignore.write_text("a.py\n")
+    for name in ("a.py", "b.py"):
+        (tmp_path / name).write_text("needle")
+    written = ignore.stat()
+    assert _found(tmp_path) == {"b.py:1:needle"}
+    # A rewrite within one filesystem timestamp tick keeps size and mtime.
+    ignore.write_text("b.py\n")
+    os.utime(ignore, ns=(written.st_atime_ns, written.st_mtime_ns))
+    assert _found(tmp_path) == {"a.py:1:needle"}
 
 
 def test_extra_ignore_case_and_explicit_ignored_file(tmp_path):
@@ -246,6 +324,34 @@ def test_finished_child_is_drained_when_process_monitor_misses_it(tmp_path, monk
         assert list(lines) == []
     assert children[0].returncode == exit_code
     assert children[0].stdout.closed and children[0].stderr.closed
+
+
+def test_child_memory_is_bounded_and_polled_at_an_interval(tmp_path, monkeypatch):
+    original = subprocess.Popen
+    polls: list[int] = []
+
+    class Monitored:
+        rss = 0
+
+        def __init__(self, pid):
+            pass
+
+        def memory_info(self):
+            polls.append(Monitored.rss)
+            return SimpleNamespace(rss=Monitored.rss)
+
+    def launch(_command, **kwargs):
+        return original([sys.executable, "-c", "for i in range(2000): print(i)"], **kwargs)
+
+    monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", launch)
+    monkeypatch.setattr("core.tools._search_execution.psutil.Process", Monitored)
+    ctx = context(tmp_path)
+    assert len(list(native_lines(Path(sys.executable), [], ctx, SearchBudget(ctx)))) == 2000
+    # Polls follow elapsed time, not output volume.
+    assert 1 <= len(polls) < 200
+    Monitored.rss = 513 * 1024 * 1024
+    with pytest.raises(RuntimeError, match="memory bound"):
+        list(native_lines(Path(sys.executable), [], ctx, SearchBudget(ctx)))
 
 
 @pytest.mark.parametrize("pattern", ["true", "false"])
