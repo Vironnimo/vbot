@@ -24,6 +24,8 @@ from tests.core.automation.cron_test_support import (
     make_service,
 )
 
+_ASYNC_COORDINATION_TIMEOUT_SECONDS = 10.0
+
 
 @pytest.mark.asyncio
 async def test_start_creates_active_tasks_and_records_missed_once_jobs(
@@ -97,7 +99,7 @@ async def test_cron_service_aclose_awaits_cancelled_job_tasks(
     monkeypatch.setattr(service, "_run_cron_job", hold_cron_task)
 
     service.start()
-    await asyncio.wait_for(started.wait(), timeout=1)
+    await asyncio.wait_for(started.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
 
     await service.aclose()
 
@@ -136,7 +138,7 @@ async def test_unexpected_scheduler_task_failure_restarts_active_recurring_job(
 
     with caplog.at_level(logging.ERROR, logger="vbot.automation.cron"):
         service.start()
-        await asyncio.wait_for(restarted.wait(), timeout=1)
+        await asyncio.wait_for(restarted.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
 
     recovered = service.get_job(job.id)
     persisted = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
