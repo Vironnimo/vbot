@@ -219,6 +219,51 @@ describe('ChatView', () => {
     ).toBe(false);
   });
 
+  it('loads the History of an Agent selected elsewhere before Chat was first shown', async () => {
+    const beta = createAgent({
+      id: 'beta',
+      name: 'Beta',
+      current_session_id: 'session-beta',
+    });
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        agents: [createAgent(), beta],
+        sessionMessages: {
+          'session-beta': [
+            { id: 'beta-message', role: 'user', content: 'Beta history' },
+          ],
+        },
+      }),
+    );
+    const props = reactiveProps({
+      active: false,
+      sharedAgents: [createAgent(), beta],
+      sharedSelectedAgentId: 'alpha',
+    });
+
+    chatViewTest.mount({ target: document.body, props });
+    flushSync();
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'chat.history' && params?.session_id === 'session-1',
+        ),
+      100,
+    );
+
+    // Another view chose Beta while the mounted Chat stayed hidden.
+    props.sharedSelectedAgentId = 'beta';
+    props.active = true;
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Beta history'),
+      100,
+    );
+    expect(selectedPersonalAgentName()).toBe('Beta');
+  });
+
   it('requests command suggestions scoped to the active agent address', async () => {
     rpcMock.mockImplementation(createChatRpcMock());
 
