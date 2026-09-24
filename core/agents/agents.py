@@ -274,26 +274,28 @@ class AgentStore:
             return _apply_defaults(agent, self._agent_defaults())
 
     def get(self, agent_id: str) -> Agent:
-        """Load an agent from disk by its exact id."""
+        """Load an agent from disk by its exact id, with a verified current Session."""
         with self._write_lock:
             agent_path = self._require_agent_path(agent_id)
-            raw_agent = self._load_raw_agent(agent_path)
+            raw_agent = self._load_verified_agent(agent_path)
             return _apply_defaults(raw_agent, self._agent_defaults())
 
     def get_raw(self, agent_id: str) -> Agent:
         """Load an agent with its **un-baked** persisted values (no defaults applied).
 
-        Same load path as :meth:`get` (workspace seeding, current-session
-        normalization) but **without** the ``defaults.agent`` injection, so the
-        returned Agent carries the raw ``model``/``fallback_models`` ("" / [] when unset)
-        and raw ``temperature``/``thinking_effort`` (``None`` when unset). This is the
+        Same config load as :meth:`get` (including workspace seeding) but **without**
+        the ``defaults.agent`` injection, so the returned Agent carries the raw
+        ``model``/``fallback_models`` ("" / [] when unset) and raw
+        ``temperature``/``thinking_effort`` (``None`` when unset). This is the
         provenance seam the resolver's identity ``effective_config`` reads to tell an
         own persisted value from a baked global default; ``get``/``list``/``update``
-        keep baking for every other consumer.
+        keep baking for every other consumer. Provenance readers never use the
+        current-Session pointer, so it is returned as stored, unverified; read it
+        through :meth:`get`.
         """
         with self._write_lock:
             agent_path = self._require_agent_path(agent_id)
-            return self._load_raw_agent(agent_path)
+            return self._load_seeded_agent(agent_path)
 
     def exists(self, agent_id: str) -> bool:
         """Return whether a valid identity Agent with exactly this id can be loaded.
@@ -334,16 +336,25 @@ class AgentStore:
                 return AgentListResult(agents=(), order_revision=0)
 
             defaults = self._agent_defaults()
-            agents: list[Agent] = []
             try:
                 agent_paths = sorted(agents_dir.glob("*/agent.json"))
             except OSError as error:
                 _LOGGER.warning("Could not scan Agent configs in %s: %s", agents_dir, error)
                 agent_paths = []
 
+            loaded: list[tuple[Path, Agent]] = []
             for agent_path in agent_paths:
                 try:
-                    raw_agent = self._load_raw_agent(agent_path)
+                    loaded.append((agent_path, self._load_seeded_agent(agent_path)))
+                except (AgentError, OSError) as error:
+                    _LOGGER.warning("Skipping invalid Agent config %s: %s", agent_path, error)
+            # One Session read verifies every current pointer of the roster.
+            live = self._live_current_session_agent_ids([agent for _path, agent in loaded])
+            agents: list[Agent] = []
+            for agent_path, raw_agent in loaded:
+                try:
+                    if raw_agent.id not in live:
+                        raw_agent = self._replace_current_session(raw_agent)
                     agents.append(_apply_defaults(raw_agent, defaults))
                 except (AgentError, OSError) as error:
                     _LOGGER.warning("Skipping invalid Agent config %s: %s", agent_path, error)
@@ -477,7 +488,7 @@ class AgentStore:
 
             changes.pop("id", None)
             agent_path = self._require_agent_path(agent_id)
-            agent = self._load_raw_agent(agent_path)
+            agent = self._load_verified_agent(agent_path)
             if not changes:
                 if copy_workspace_identity_files:
                     raise AgentError("copy_workspace_identity_files requires a workspace change")
@@ -613,7 +624,7 @@ class AgentStore:
 
             previous_listing = self.list_with_order()
             previous_order = self._load_agent_order()
-            previous_agent = self._load_raw_agent(self._agent_path(agent_id))
+            previous_agent = self._load_verified_agent(self._agent_path(agent_id))
             renamed_workspace = _rebase_path_with_tree(
                 previous_agent.workspace,
                 source_dir,
@@ -828,13 +839,10 @@ class AgentStore:
             if agent.current_session_id != removed_session_id:
                 return _apply_defaults(agent, self._agent_defaults())
 
-            remaining = self._session_manager().list_with_metadata(agent_id)
+            newest_session_id = self._session_manager().newest_session_id(agent_id)
             created_session = None
-            if remaining:
-                newest: dict[str, Any] = max(
-                    remaining, key=lambda session: session["last_active_at"]
-                )
-                landing_session_id = newest["id"]
+            if newest_session_id is not None:
+                landing_session_id = newest_session_id
             else:
                 created_session = self._session_manager().create(agent_id)
                 landing_session_id = created_session.id
@@ -968,7 +976,13 @@ class AgentStore:
             raise AgentError("defaults provider must return a dictionary")
         return AgentDefaults.from_dict(defaults)
 
-    def _load_raw_agent(self, agent_path: Path) -> Agent:
+    def _load_verified_agent(self, agent_path: Path) -> Agent:
+        """Load a seeded config whose current-Session pointer names a live Session."""
+        with self._write_lock:
+            return self._with_live_current_sessions([self._load_seeded_agent(agent_path)])[0]
+
+    def _load_seeded_agent(self, agent_path: Path) -> Agent:
+        """Load a config, seeding its Workspace; the current-Session pointer is unverified."""
         with self._write_lock:
             data = _validated_agent_data(agent_path)
             workspace_missing = _is_missing_workspace(data.get("workspace"))
@@ -980,12 +994,12 @@ class AgentStore:
             self._seed_workspace(Path(agent.workspace))
             if workspace_missing:
                 self._write_agent(agent)
-            return self._ensure_current_session(agent)
+            return agent
 
     def _read_agent_config(self, agent_path: Path) -> Agent:
         """Load and construct an agent from its config file with no side effects.
 
-        Unlike :meth:`_load_raw_agent` this seeds no workspace and runs no
+        Unlike :meth:`_load_seeded_agent` this seeds no workspace and runs no
         current-session normalization, so a caller can inspect a dangling current
         pointer before it would otherwise be silently replaced.
         """
@@ -996,10 +1010,34 @@ class AgentStore:
             default_workspace=self._default_workspace(data["id"]),
         )
 
-    def _ensure_current_session(self, agent: Agent) -> Agent:
-        if agent.current_session_id and self._session_exists(agent.id, agent.current_session_id):
-            return agent
+    def _with_live_current_sessions(self, agents: builtins.list[Agent]) -> builtins.list[Agent]:
+        live = self._live_current_session_agent_ids(agents)
+        return [
+            agent if agent.id in live else self._replace_current_session(agent) for agent in agents
+        ]
 
+    def _live_current_session_agent_ids(self, agents: builtins.list[Agent]) -> set[str]:
+        """Return the ids of *agents* whose current-Session pointer names a live Session.
+
+        The pointer lives in ``agent.json`` and Sessions live in SQLite, with no
+        transaction across both. Session removal re-aims it at write time
+        (``reset_current_after_session_removed``), but a failed or interrupted
+        re-aim, a restored Session store, or an offline edit can still leave it
+        dangling, so reads that return the pointer keep verifying it - all
+        pointers of a roster in one Session read.
+        """
+        pointers = {
+            SessionAddress(None, agent.id, agent.current_session_id): agent.id
+            for agent in agents
+            if agent.current_session_id
+        }
+        if not pointers:
+            return set()
+        live = self._session_manager().existing_addresses(builtins.list(pointers))
+        return {pointers[address] for address in live}
+
+    def _replace_current_session(self, agent: Agent) -> Agent:
+        """Point *agent* at a fresh empty Session; its stored pointer is missing or dangling."""
         session = self._session_manager().create(agent.id)
         updated_agent = replace(agent, current_session_id=session.id, updated_at=_utc_now())
         try:

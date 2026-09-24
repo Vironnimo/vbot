@@ -377,21 +377,21 @@ class ReflectionService:
         source_address = SessionAddress(
             project_id=project_id, agent_id=agent_id, session_id=session_id
         )
-        source_title = str(sessions.get_metadata(source_address).get("title") or "").strip()
+        source_title = str(
+            await sessions.metadata_value_async(source_address, "title") or ""
+        ).strip()
+        run_kind = REFLECTION_RUN_KINDS[review_scope]
+        # The fork is titled with the agent's display name so review forks stay
+        # distinguishable in a session list that spans agents; the run-kind
+        # marker on the row already says "reflection" (a fork would otherwise
+        # inherit the source session's title). Both commit with the fork.
         fork = await sessions.fork(
             source_address,
             target_project_id=project_id,
             strip_meta_keys=SESSION_FORK_ALWAYS_STRIP_META_KEYS,
+            title=f"{agent.name}: {source_title}" if source_title else agent.name,
+            run_kind=run_kind,
         )
-        # The fork is titled with the agent's display name so review forks stay
-        # distinguishable in a session list that spans agents; the run-kind
-        # marker on the row already says "reflection" (a fork would otherwise
-        # inherit the source session's title).
-        title = f"{agent.name}: {source_title}" if source_title else agent.name
-        fork_address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=fork.id)
-        sessions.set_title(fork_address, title)
-        run_kind = REFLECTION_RUN_KINDS[review_scope]
-        sessions.record_run_kind(fork_address, run_kind)
         if on_fork_created is not None:
             on_fork_created(fork.id)
         # The fork is fresh and never busy — start directly, no queueing needed.
@@ -406,6 +406,7 @@ class ReflectionService:
             tool_restriction=REFLECTION_TOOL_RESTRICTIONS[review_scope],
             run_kind=run_kind,
             contributes_to_agent_activity=False,
+            source_session_id=session_id,
         )
         final_message = await review_run.wait()
         return ReflectionResult(session_id=fork.id, summary=_final_text(final_message.content))

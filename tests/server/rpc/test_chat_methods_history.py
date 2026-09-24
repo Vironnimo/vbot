@@ -528,7 +528,7 @@ async def test_subagent_inspect_dispatches_exact_qualified_work_address() -> Non
         def __init__(self) -> None:
             self.calls: list[tuple[str, str, str, str | None]] = []
 
-        def inspect(
+        async def inspect(
             self,
             agent_id: str,
             session_id: str,

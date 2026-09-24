@@ -417,7 +417,7 @@ async def test_chat_methods_handle_handoff_command_with_missing_target_agent(
     assert "ghost" in result["reply"]
     assert "data" not in result
     # No new session was created and the source session remains current.
-    sessions = state.runtime.chat_sessions.list_with_metadata("coder")
+    sessions = state.runtime.chat_sessions.list_summaries("coder")
     assert [session["id"] for session in sessions] == ["session-one"]
     assert state.runtime.agents.get("coder").current_session_id == "session-one"
 
@@ -465,5 +465,5 @@ async def test_chat_methods_reject_handoff_command_while_session_run_is_active(
     assert response["result"]["command_handled"] is True
     assert response["result"]["output"] == "toast"
     assert response["result"]["reply"]
-    sessions = state.runtime.chat_sessions.list_with_metadata("coder")
+    sessions = state.runtime.chat_sessions.list_summaries("coder")
     assert [session["id"] for session in sessions] == ["session-one"]

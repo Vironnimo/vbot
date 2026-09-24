@@ -196,21 +196,33 @@ async def test_state_guidance_reaches_native_model_definition(board):
 @pytest.mark.asyncio
 async def test_swarm_get_projects_canonical_run_activity(board, monkeypatch):
     participant = board.swarm["participants"][0]
+    lookups: list[tuple[str, list[str]]] = []
 
-    async def active(_swarm_id, _run_id):
-        return SimpleNamespace(run=SimpleNamespace(status=SimpleNamespace(value="running")))
+    def inspections(run: object) -> object:
+        async def owned_runs(swarm_id, run_ids):
+            lookups.append((swarm_id, list(run_ids)))
+            return {run_id: SimpleNamespace(run=run) for run_id in run_ids}
+
+        return owned_runs
 
     await board.store.record_run_started(
         board.swarm["id"], participant["id"], run_id="run-active", expected_epoch=0
     )
-    monkeypatch.setattr(board.groups, "owned_run", active)
+    running = SimpleNamespace(status=SimpleNamespace(value="running"))
+    monkeypatch.setattr(board.groups, "owned_runs", inspections(running))
     projected = await board.service.operation("swarms.get", {"swarm_id": board.swarm["id"]})
     assert projected["swarm"]["participants"][0]["run_active"] is True
+    # All participants resolve through one batched ownership read.
+    assert lookups == [(board.swarm["id"], ["run-active"])]
 
-    async def retained(_swarm_id, _run_id):
-        return SimpleNamespace(run=None)
+    monkeypatch.setattr(board.groups, "owned_runs", inspections(None))
+    projected = await board.service.operation("swarms.get", {"swarm_id": board.swarm["id"]})
+    assert projected["swarm"]["participants"][0]["run_active"] is False
 
-    monkeypatch.setattr(board.groups, "owned_run", retained)
+    async def unknown(_swarm_id, _run_ids):
+        return {}
+
+    monkeypatch.setattr(board.groups, "owned_runs", unknown)
     projected = await board.service.operation("swarms.get", {"swarm_id": board.swarm["id"]})
     assert projected["swarm"]["participants"][0]["run_active"] is False
 

@@ -229,16 +229,18 @@ async def test_run_excluded_from_agent_activity_still_persists_its_session_histo
         session_id="session-one",
         internal=True,
         contributes_to_agent_activity=False,
+        source_session_id="reviewed-session",
     )
     await run.wait()
 
+    assert run.source_session_id == "reviewed-session"
     persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert [message.role for message in persisted] == ["note", "assistant", "run_summary"]
     assert persisted[-1].run_id == run.id
     assert persisted[-1].status == "completed"
     assert persisted[-1].iteration_count == 1
     assert run.events[-1].payload["iteration_count"] == 1
-    activity = runtime.chat_sessions.list_with_metadata("coder")[0]
+    activity = runtime.chat_sessions.list_summaries("coder")[0]
     assert activity["latest_completion_run_id"] is None
     assert activity["has_unread_completion"] is False
     assert all(event.contributes_to_agent_activity is False for event in run.events)

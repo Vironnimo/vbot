@@ -465,14 +465,14 @@ class _CompletionDeliveryCoordinator:
                 if not pending:
                     return
                 try:
-                    session = self._sessions.get(address)
+                    session = await self._sessions.get_async(address)
                 except Exception as error:
                     # There is no durable target left. A terminal delivery
                     # failure lets producers release their process-local state.
                     self._fail(bucket, pending, error)
                     return
                 try:
-                    session.add_note(_completion_message(pending))
+                    await session.add_note_async(_completion_message(pending))
                 except Exception:
                     _LOGGER.warning(
                         "Completion persistence failed (agent=%s session=%s); "

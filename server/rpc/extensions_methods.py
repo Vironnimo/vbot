@@ -387,15 +387,12 @@ async def _extension_page_run(state: Any, params: JsonObject) -> JsonObject:
             identity
         ):
             raise ValueError("Extension page is unavailable; refresh the page")
+        # The durable inspection stays valid while the same registration and page own it.
         await _validate_page_context(state.runtime, registry, name, page)
-        verified_host = registry.host_for(identity)
-        verified_temporary_agents = verified_host.temporary_agents
-        if verified_temporary_agents is None:
+        if registry.host_for(identity).temporary_agents is None:
             raise ValueError("Extension page is unavailable; refresh the page")
-        verified = await verified_temporary_agents.owned_run(group_id, run_id)
-        if verified.run is None:
-            return {"stream": None}
-        replay = verified.run.events
+        # Read the live replay watermark after the ownership was re-verified.
+        replay = inspection.run.events
         return {
             "replay_through_sequence": replay[-1].sequence if replay else 0,
             "stream": state.file_delivery.open_extension_run(

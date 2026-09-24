@@ -570,6 +570,12 @@ async def test_group_initial_is_durable_idempotent_across_close_and_reopen(tmp_p
             if message.role == "note"
         ] == ["resume", "background result"]
         assert (await groups.owned_run("group", first.run_id)).record.terminal_status == "completed"
+        inspections = await groups.owned_runs("group", [first.run_id, resumed.run_id, "missing"])
+        assert set(inspections) == {first.run_id, resumed.run_id}
+        assert inspections[first.run_id].run is None
+        assert inspections[resumed.run_id].record.owner == owner
+        with pytest.raises(RunNotFoundError):
+            await groups.owned_run("group", "missing")
         with pytest.raises(RunAdmissionBlockedError):
             await groups.start(
                 handle, "peer", TemporaryRunInput("initial", "changed goal", "request")

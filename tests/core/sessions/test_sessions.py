@@ -240,6 +240,89 @@ def test_prompt_cache_affinity_id_reads_only_its_stored_value(manager, monkeypat
         manager.prompt_cache_affinity_id(_address("coder", "missing"))
 
 
+def test_tool_result_persisted_needs_the_call_and_its_result_in_that_session(manager) -> None:
+    session = manager.create("coder", session_id="handoff")
+    other = manager.create("coder", session_id="other")
+    run = session.start_run("run-one")
+    assistant = ChatMessage.assistant(
+        model="test",
+        content=None,
+        tool_calls=[ToolCall(id="call-one", name="bash", arguments={"command": "vbot update"})],
+    )
+    run.append_many([ChatMessage.user("update"), assistant])
+    run.assistant_message_id = assistant.id
+
+    def persisted(address) -> bool:
+        return bool(asyncio.run(manager.tool_result_persisted_async(address, "call-one")))
+
+    # Requested but not yet answered is not durable.
+    assert persisted(session.address) is False
+    run.append(ChatMessage.tool(tool_call_id="call-one", name="bash", content="ok"))
+    assert persisted(session.address) is True
+    assert persisted(other.address) is False
+    with pytest.raises(SessionNotFoundError):
+        persisted(_address("coder", "missing"))
+
+
+def _count_writes(manager, monkeypatch) -> list[object]:
+    runtime = manager._store._runtime
+    original = runtime.execute_write
+    writes: list[object] = []
+
+    def counted(fn, **kwargs):
+        writes.append(fn)
+        return original(fn, **kwargs)
+
+    monkeypatch.setattr(runtime, "execute_write", counted)
+    return writes
+
+
+def test_get_or_create_reads_an_existing_session_without_a_write(manager, monkeypatch) -> None:
+    address = _address("coder", "existing")
+    writes = _count_writes(manager, monkeypatch)
+
+    created = manager.get_or_create(address)
+    assert len(writes) == 1
+    assert manager.get_or_create(address).address == created.address
+    assert len(writes) == 1
+
+
+def test_ensure_metadata_writes_only_a_real_change(manager, monkeypatch) -> None:
+    address = _address("coder", "channel")
+    writes = _count_writes(manager, monkeypatch)
+
+    def route(metadata):
+        metadata["platform"] = "telegram"
+
+    with pytest.raises(SessionNotFoundError):
+        manager.ensure_metadata(address, route)
+    assert writes == []
+
+    previous, updated = manager.ensure_metadata(address, route, create_missing=True)
+    # A missing Session and its metadata commit together.
+    assert len(writes) == 1
+    assert previous == {}
+    assert updated == {"platform": "telegram"}
+    assert manager.get_metadata(address)["platform"] == "telegram"
+
+    revision = manager._store.state(address)["state_revision"]
+    previous, updated = manager.ensure_metadata(address, route, create_missing=True)
+    assert len(writes) == 1
+    assert previous == updated == manager.get_metadata(address)
+    assert manager._store.state(address)["state_revision"] == revision
+
+    manager.set_title(address, "Concurrent title")
+    writes.clear()
+    previous, updated = manager.ensure_metadata(
+        address, lambda metadata: metadata.__setitem__("platform", "discord")
+    )
+    # The writer reapplies the mutation to the latest row, keeping other edits.
+    assert len(writes) == 1
+    assert previous["platform"] == "telegram"
+    assert manager.get_metadata(address)["platform"] == "discord"
+    assert manager.get_metadata(address)["title"] == "Concurrent title"
+
+
 def test_role_specific_relational_message_storage_round_trips(
     manager, tmp_path, monkeypatch
 ) -> None:

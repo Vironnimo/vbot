@@ -139,7 +139,7 @@ class SubAgentCoordinator:
             batch_tracker=self._batch_tracker,
         )
 
-    def inspect(
+    async def inspect(
         self,
         agent_id: str,
         session_id: str,
@@ -148,7 +148,7 @@ class SubAgentCoordinator:
         project_id: str | None = None,
     ) -> JsonObject | None:
         """Return the exact UI projection for one durable Sub-Agent work id."""
-        return _inspect_subagent_work(
+        return await _inspect_subagent_work(
             self._runtime,
             agent_id,
             session_id,

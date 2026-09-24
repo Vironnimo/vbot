@@ -527,7 +527,7 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
         body="background command finished",
         on_persisted=persisted,
     )
-    await asyncio.wait_for(delivery, timeout=1)
+    await asyncio.wait_for(delivery, timeout=5)
 
     completion_loop.start_run.assert_awaited_once()
     persisted.assert_called_once_with()
@@ -583,7 +583,7 @@ async def test_completion_fallback_retries_transient_persistence_failure(
         origin_run_id="origin-run",
         body="retry this result",
     )
-    await asyncio.wait_for(delivery, timeout=1)
+    await asyncio.wait_for(delivery, timeout=5)
 
     assert attempts == 2
     notes = [
@@ -616,10 +616,11 @@ async def test_completion_fallback_prunes_persisted_subagent_batch(tmp_path: Pat
     tracker.register(parent_key, "worker", "child-session", "child-run")
 
     tracker.on_sub_agent_complete(parent_key, "child-run", {"result": "finished work"})
-    for _ in range(10):
+    # The fallback note is persisted on a Session worker, off the Event Loop.
+    for _ in range(500):
         if not tracker.references_identity_agent("parent"):
             break
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
 
     assert tracker.references_identity_agent("parent") is False
     notes = [

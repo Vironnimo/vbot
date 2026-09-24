@@ -165,6 +165,9 @@ class RunAdmission:
     work_id: str | None = None
     owner: RunExecutionOwner | None = None
     input_id: str | None = None
+    # The Session a background review Run examines from its own fork; accessors
+    # attribute the review to that Session without reading fork metadata.
+    source_session_id: str | None = None
 
 
 # Module-level singleton so ``admission`` can default without a call at the
@@ -269,6 +272,7 @@ class Run:
         work_id: str | None = None,
         execution_owner: RunExecutionOwner | None = None,
         execution_input_id: str | None = None,
+        source_session_id: str | None = None,
         event_retention_limit: int = DEFAULT_RUN_EVENT_RETENTION_LIMIT,
         subscriber_queue_limit: int = DEFAULT_RUN_SUBSCRIBER_QUEUE_LIMIT,
     ) -> None:
@@ -292,6 +296,8 @@ class Run:
         # addressable after the in-memory Run has been pruned. It is internal
         # to Run orchestration and is persisted only on the terminal summary.
         self.work_id = work_id
+        # Accessor-only attribution of a review Run to the Session it examines.
+        self.source_session_id = source_session_id
         self.status = RunStatus.RUNNING
         self.created_at = datetime.now(UTC).isoformat()
         self.updated_at = self.created_at

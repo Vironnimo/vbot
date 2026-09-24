@@ -237,10 +237,8 @@ async def test_participants_metadata_written_for_groups_only(tmp_path: Path) -> 
     group_metadata = chat_sessions.get_metadata(
         SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
     )
-    participants = group_metadata["participants"]
-    assert set(participants) == {"50"}
-    assert participants["50"]["display_name"] == "Alice"
-    assert participants["50"]["last_seen_at"].endswith("+00:00")
+    # Sighting times live in the Channel access record, not in Session metadata.
+    assert group_metadata["participants"] == {"50": {"display_name": "Alice"}}
     await engine.stop()
 
 
@@ -264,6 +262,41 @@ async def test_participants_metadata_updated_on_repeat_messages(tmp_path: Path) 
     assert set(participants) == {"50", "51"}
     assert participants["50"]["display_name"] == "Alice Renamed"
     assert participants["51"]["display_name"] == "Bob"
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_routing_a_known_conversation_again_takes_no_writer_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, chat_sessions, _trigger, _transport = make_engine(tmp_path, observe_unaddressed=True)
+    runtime = chat_sessions._store._runtime
+    original = runtime.execute_write
+    writes: list[object] = []
+
+    def counted(fn, **kwargs):
+        writes.append(fn)
+        return original(fn, **kwargs)
+
+    monkeypatch.setattr(runtime, "execute_write", counted)
+    conversation = make_conversation(kind="group", user_display_name="Alice")
+
+    engine.prepare_inbound_route(conversation)
+    # Creating the Session and its channel context is one write.
+    assert len(writes) == 1
+    engine.prepare_inbound_route(conversation)
+    assert len(writes) == 1
+    # Only a real change, such as a new participant, writes again.
+    engine.prepare_inbound_route(
+        make_conversation(kind="group", user_id=51, user_display_name="Bob")
+    )
+    assert len(writes) == 2
+
+    writes.clear()
+    await engine.handle_inbound_text(conversation, "hello everyone")
+    await drain(engine, 12345)
+    # An observed message on a known conversation writes only its note.
+    assert len(writes) == 1
     await engine.stop()
 
 
@@ -340,8 +373,7 @@ async def test_observed_group_message_updates_metadata_and_participant(tmp_path:
         "channel_id": "tg-assistant",
         "platform_target": "12345",
     }
-    assert metadata["participants"]["50"]["display_name"] == "Alice"
-    assert metadata["participants"]["50"]["last_seen_at"].endswith("+00:00")
+    assert metadata["participants"] == {"50": {"display_name": "Alice"}}
     await engine.stop()
 
 

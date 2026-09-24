@@ -163,6 +163,9 @@ CREATE TABLE run_execution_owners (
 CREATE INDEX run_execution_owners_group
   ON run_execution_owners (owner_name, group_id, record_key);
 
+CREATE INDEX run_execution_owners_group_run
+  ON run_execution_owners (owner_name, group_id, run_id);
+
 CREATE TABLE runs (
   run_key INTEGER PRIMARY KEY,
   session_key INTEGER NOT NULL,

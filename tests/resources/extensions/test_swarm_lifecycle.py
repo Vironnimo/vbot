@@ -1089,7 +1089,7 @@ async def test_participant_inspection_failure_is_not_reported_as_idle(
     async def broken(*_args):
         raise RuntimeError("inspection sentinel")
 
-    monkeypatch.setattr(lifecycle.groups, "owned_run", broken)
+    monkeypatch.setattr(lifecycle.groups, "owned_runs", broken)
     with pytest.raises(RuntimeError):
         await lifecycle.service.operation("swarms.get", {"swarm_id": started["swarm_id"]})
 

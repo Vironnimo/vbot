@@ -34,7 +34,6 @@ from core.runs import (
     RunEvent,
     RunKind,
 )
-from core.sessions import SessionAddress
 from server.events import ALLOWED_SERVER_EVENT_TYPES, ServerEventBus
 from server.file_delivery import FileDelivery
 from server.rpc import event_bridge
@@ -47,7 +46,6 @@ from server.rpc.event_bridge import (
     _publish_run_events,
     _server_event_from_run_event,
     publish_resource_changed,
-    reflection_source_session_id,
 )
 
 
@@ -501,85 +499,6 @@ def test_run_event_bridge_dedupe_cache_is_bounded() -> None:
     assert list(cache) == ["run-three", "run-one"]
 
 
-class _RecordingSessions:
-    """Minimal ChatSessionManager stand-in recording provenance lookups."""
-
-    def __init__(
-        self,
-        metadata: dict[str, Any] | None = None,
-        error: Exception | None = None,
-    ) -> None:
-        self.calls: list[tuple[str, str, str | None]] = []
-        self._metadata = metadata or {}
-        self._error = error
-
-    def get_metadata(self, address: SessionAddress) -> dict[str, Any]:
-        self.calls.append((address.agent_id, address.session_id, address.project_id))
-        if self._error is not None:
-            raise self._error
-        return self._metadata
-
-
-def _reflection_run(run_kind: RunKind = RunKind.MEMORY_REFLECTION) -> Run:
-    return Run(
-        run_id="run-refl",
-        agent_id="diary",
-        session_id="fork-uuid",
-        run_kind=run_kind,
-        contributes_to_agent_activity=False,
-    )
-
-
-def test_reflection_source_session_resolves_fork_provenance() -> None:
-    sessions = _RecordingSessions(
-        {"fork_source": {"agent_id": "diary", "session_id": "source-uuid"}}
-    )
-
-    assert reflection_source_session_id(sessions, _reflection_run()) == "source-uuid"
-    assert sessions.calls == [("diary", "fork-uuid", None)]
-
-
-@pytest.mark.parametrize(
-    "run_kind",
-    [RunKind.REFLECTION, RunKind.MEMORY_REFLECTION, RunKind.SKILL_REFLECTION],
-)
-def test_all_reflection_kinds_resolve_source(run_kind: RunKind) -> None:
-    sessions = _RecordingSessions({"fork_source": {"session_id": "source-uuid"}})
-
-    assert reflection_source_session_id(sessions, _reflection_run(run_kind)) == "source-uuid"
-
-
-def test_non_reflection_run_skips_provenance_lookup() -> None:
-    sessions = _RecordingSessions(error=AssertionError("must not be called"))
-
-    assert reflection_source_session_id(sessions, _reflection_run(RunKind.USER)) == ""
-    assert sessions.calls == []
-
-
-def test_reflection_source_session_without_provenance_is_empty() -> None:
-    assert reflection_source_session_id(_RecordingSessions({}), _reflection_run()) == ""
-
-
-def test_reflection_source_session_missing_storage_is_empty() -> None:
-    assert reflection_source_session_id(None, _reflection_run()) == ""
-
-
-def test_reflection_source_session_read_failure_warns_and_is_empty(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    caplog.set_level(logging.WARNING, logger="vbot.server.rpc.event_bridge")
-
-    result = reflection_source_session_id(
-        _RecordingSessions(error=RuntimeError("sidecar boom")), _reflection_run()
-    )
-
-    assert result == ""
-    assert any(
-        record.name == "vbot.server.rpc.event_bridge" and record.exc_info is not None
-        for record in caplog.records
-    )
-
-
 def test_server_event_carries_source_session_when_resolved() -> None:
     event = RunEvent(
         sequence=1,
@@ -619,11 +538,13 @@ async def test_publish_run_events_forwards_source_session_to_lifecycle_payloads(
         session_id="fork-uuid",
         run_kind=RunKind.MEMORY_REFLECTION,
         contributes_to_agent_activity=False,
+        source_session_id="source-uuid",
     )
     run.emit(RUN_STARTED_EVENT, {"status": "running"})
     run.emit(RUN_COMPLETED_EVENT, {"status": "completed"})
 
-    await _publish_run_events(event_bus, run, source_session_id="source-uuid")
+    # Attribution comes from the Run itself; the bridge performs no Session read.
+    await _publish_run_events(event_bus, run)
 
     lifecycle_events = [event for event in event_bus.events if event["type"].startswith("run_")]
     assert lifecycle_events

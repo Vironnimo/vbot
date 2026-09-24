@@ -271,13 +271,13 @@ async def test_background_result_is_read_only_after_parent_note_persists(tmp_pat
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
-    assert sessions.list_with_metadata("worker")[0]["has_unread_completion"] is True
+    assert sessions.list_summaries("worker")[0]["has_unread_completion"] is True
     assert len(trigger_service.input_persisted_hooks) == 1
     input_persisted_hook = trigger_service.input_persisted_hooks[0]
     assert callable(input_persisted_hook)
     input_persisted_hook()
 
-    assert sessions.list_with_metadata("worker")[0]["has_unread_completion"] is False
+    assert sessions.list_summaries("worker")[0]["has_unread_completion"] is False
 
 
 async def test_background_delivery_failure_leaves_child_unread(tmp_path) -> None:
@@ -299,7 +299,7 @@ async def test_background_delivery_failure_leaves_child_unread(tmp_path) -> None
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
-    assert sessions.list_with_metadata("worker")[0]["has_unread_completion"] is True
+    assert sessions.list_summaries("worker")[0]["has_unread_completion"] is True
     assert parent_key not in tracker._batches  # noqa: SLF001 - terminal leak regression.
 
 
