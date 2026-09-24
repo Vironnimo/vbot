@@ -267,15 +267,25 @@ describe('AgentsView', () => {
     flushSync();
     await waitForCondition(() => document.querySelector('#agent-temperature'));
     const temperature = document.querySelector('#agent-temperature');
-    const options = temperature.closest('details');
-    options.open = true;
+    const toggle = document.querySelector('#agent-model-options-toggle');
+    const options = document.querySelector('#agent-model-options');
+    expect(options.contains(temperature)).toBe(true);
+    expect(toggle.getAttribute('aria-controls')).toBe('agent-model-options');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(options.hidden).toBe(true);
+    toggle.click();
+    flushSync();
+    expect(options.hidden).toBe(false);
     temperature.value = 'invalid';
     temperature.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
-    options.open = false;
+    toggle.click();
+    flushSync();
+    expect(options.hidden).toBe(true);
     getButton('Save').click();
     await waitForCondition(() => document.activeElement === temperature);
-    expect(options.open).toBe(true);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(options.hidden).toBe(false);
     expect(temperature.getAttribute('aria-invalid')).toBe('true');
   });
 
@@ -596,7 +606,7 @@ describe('AgentsView', () => {
     // covered by a sibling card/modal.
     expect(searchablePanel).toBeTruthy();
     expect(searchablePanel.parentElement).toBe(document.body);
-    expect(searchablePanel.closest('.detail-group')).toBeNull();
+    expect(searchablePanel.closest('.s-group')).toBeNull();
     expect(searchablePanel.dataset.positioning).toBe('fixed');
     expect(searchablePanel.dataset.placement).toBe('bottom');
     expect(searchablePanel.getAttribute('style')).toContain('width: 344px');
@@ -660,7 +670,7 @@ describe('AgentsView', () => {
     expect(getSimpleList('agent-thinking-effort')).toBeNull();
   });
 
-  it('lets the simple thinking-effort dropdown escape the model card clipping', async () => {
+  it('lets the simple thinking-effort dropdown escape the model group clipping', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
 
     mountedComponent = mount(AgentsView, { target: document.body });
@@ -672,12 +682,12 @@ describe('AgentsView', () => {
     );
 
     const modelCard = document.body.querySelector(
-      '.detail-group.agents-view__model-group',
+      '.s-group.agents-view__model-group',
     );
     const simpleRoot = getSimpleRoot('agent-thinking-effort');
 
     expect(modelCard).toBeTruthy();
-    expect(simpleRoot.closest('.detail-group')).toBe(modelCard);
+    expect(simpleRoot.closest('.s-group')).toBe(modelCard);
 
     openSimpleDropdown('agent-thinking-effort');
 
@@ -686,13 +696,13 @@ describe('AgentsView', () => {
     expect(simpleList.classList.contains('agents-view__thinking-list')).toBe(
       true,
     );
-    // The open list is portaled to <body>, so it lives outside the model card
+    // The open list is portaled to <body>, so it lives outside the model group
     // and cannot be clipped or covered by it.
     expect(simpleList.parentElement).toBe(document.body);
-    expect(simpleList.closest('.detail-group')).toBeNull();
+    expect(simpleList.closest('.s-group')).toBeNull();
   });
 
-  it('lets the memory dropdown escape the memory card clipping', async () => {
+  it('lets the memory dropdown escape the memory group clipping', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
 
     mountedComponent = mount(AgentsView, { target: document.body });
@@ -703,15 +713,15 @@ describe('AgentsView', () => {
       100,
     );
 
-    // The memory dropdown now lives in its own Memory card (split out of the
-    // System Prompt card), which must still let the portaled list escape.
+    // The memory dropdown lives in the Context & Memory group, which must
+    // still let the portaled list escape.
     const memoryCard = document.body.querySelector(
-      '.detail-group.agents-view__memory-group',
+      '.s-group.agents-view__memory-group',
     );
     const simpleRoot = getSimpleRoot('agent-memory-prompt-mode');
 
     expect(memoryCard).toBeTruthy();
-    expect(simpleRoot.closest('.detail-group')).toBe(memoryCard);
+    expect(simpleRoot.closest('.s-group')).toBe(memoryCard);
 
     openSimpleDropdown('agent-memory-prompt-mode');
 
@@ -720,10 +730,10 @@ describe('AgentsView', () => {
     expect(simpleList.classList.contains('agents-view__memory-list')).toBe(
       true,
     );
-    // The open list is portaled to <body>, so it lives outside the prompt card
+    // The open list is portaled to <body>, so it lives outside the memory group
     // and cannot be clipped or covered by it.
     expect(simpleList.parentElement).toBe(document.body);
-    expect(simpleList.closest('.detail-group')).toBeNull();
+    expect(simpleList.closest('.s-group')).toBeNull();
   });
 
   it('gates create-modal thinking effort by the selected model and defaults to inherit', async () => {

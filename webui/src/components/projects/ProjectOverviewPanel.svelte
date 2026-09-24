@@ -1,7 +1,6 @@
 <script>
   import { t } from '$lib/i18n.js';
   import TextField from '../ui/TextField.svelte';
-  import InfoHint from '../ui/InfoHint.svelte';
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Button from '../ui/Button.svelte';
@@ -147,211 +146,243 @@
 </script>
 
 <div class="management-topic" id="project-detail-panel-overview">
-  <!-- Section 1: Project settings -->
   <form
-    class="detail-section detail-section--overflow"
+    class="projects-settings-form"
     id="project-settings-form"
     onsubmit={handleManualSave}
   >
-    <h3 class="detail-section-title">
-      {t('projects.repositorySection', 'Repository')}
-    </h3>
-    <div class="detail-section-body">
-      <div class="projects-field-grid">
-        <label class="projects-field">
-          <span class="projects-label">
-            {t('projects.manage.displayName', 'Display name')}
-          </span>
-          <TextField
-            id="project-edit-name"
-            value={projectsState.editForm.display_name}
-            onInput={(next) => updateEditField('display_name', next)}
-          />
-        </label>
-        <label class="projects-field">
-          <span class="projects-label">
-            {t('projects.manage.sourceFormat', 'Source format')}
-            <InfoHint
-              text={t(
-                'projects.manage.sourceFormatHelp',
-                'Where this project’s agents and skills come from. Switching re-derives the team and skills from the other ecosystem’s directories; sessions are kept.',
-              )}
-            />
-          </span>
-          <Dropdown
-            id="project-edit-source-format"
-            value={projectsState.editForm.source_format}
-            options={sourceFormatOptions}
-            ariaLabel={t('projects.manage.sourceFormat', 'Source format')}
-            triggerClass="projects-dropdown"
-            onValueChange={(value) => updateEditField('source_format', value)}
-          />
-        </label>
-      </div>
-      <details class="management-disclosure">
-        <summary
-          >{t('projects.repositoryActions', 'Repository management')}</summary
-        >
-        <div class="management-disclosure-body">
-          {@render repositoryActions?.()}
+    <section class="s-section" aria-labelledby="project-section-repository">
+      <header class="s-section__head">
+        <h3 class="s-section__title" id="project-section-repository">
+          {t('projects.repositorySection', 'Repository')}
+        </h3>
+      </header>
+      <div class="s-section__body">
+        <div class="s-group">
+          <div class="s-row">
+            <div class="s-row-info">
+              <label class="s-row-label" for="project-edit-name">
+                {t('projects.manage.displayName', 'Display name')}
+              </label>
+            </div>
+            <div class="s-row-control">
+              <TextField
+                id="project-edit-name"
+                value={projectsState.editForm.display_name}
+                onInput={(next) => updateEditField('display_name', next)}
+              />
+            </div>
+          </div>
+          <div class="s-row">
+            <div class="s-row-info">
+              <label class="s-row-label" for="project-edit-source-format">
+                {t('projects.manage.sourceFormat', 'Source format')}
+              </label>
+              <div class="s-row-desc">
+                {t(
+                  'projects.manage.sourceFormatHelp',
+                  'Where this project’s agents and skills come from. Switching re-derives the team and skills from the other ecosystem’s directories; sessions are kept.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control">
+              <Dropdown
+                id="project-edit-source-format"
+                value={projectsState.editForm.source_format}
+                options={sourceFormatOptions}
+                ariaLabel={t('projects.manage.sourceFormat', 'Source format')}
+                triggerClass="projects-dropdown"
+                onValueChange={(value) =>
+                  updateEditField('source_format', value)}
+              />
+            </div>
+          </div>
+          <details class="s-disclosure projects-repository-actions">
+            <summary>
+              {t('projects.repositoryActions', 'Repository management')}
+            </summary>
+            <div class="s-disclosure__body">
+              {@render repositoryActions?.()}
+            </div>
+          </details>
         </div>
-      </details>
-      <h3 class="management-section-heading">
-        {t('projects.defaultsSection', 'Agent defaults')}
-      </h3>
-      <p class="projects-help">
+      </div>
+    </section>
+
+    <section class="s-section" aria-labelledby="project-section-defaults">
+      <header class="s-section__head">
+        <h3 class="s-section__title" id="project-section-defaults">
+          {t('projects.defaultsSection', 'Agent defaults')}
+        </h3>
+      </header>
+      <p class="s-section__desc">
         {t(
           'projects.defaultsSummary',
           'Shared starting values for the Team. Individual Agents can override them.',
         )}
       </p>
-      <div class="projects-field-grid projects-field-grid--models">
-        <label class="projects-field">
-          <span class="projects-label">
-            {t('projects.manage.defaultAgent', 'Default agent')}
-            <InfoHint
-              text={t(
-                'projects.manage.defaultAgentHelp',
-                'The team agent preselected when you open this project in Chat.',
-              )}
-            />
-          </span>
-          <Dropdown
-            id="project-edit-agent"
-            value={projectsState.editForm.default_agent}
-            options={agentOptions}
-            placeholder={t(
-              'projects.manage.defaultAgentEmpty',
-              'No project default',
-            )}
-            ariaLabel={t('projects.manage.defaultAgent', 'Default agent')}
-            triggerClass="projects-dropdown"
-            onValueChange={(value) => updateEditField('default_agent', value)}
-          />
-        </label>
-        <label class="projects-field">
-          <span class="projects-label">
-            {t('projects.manage.defaultModel', 'Default model')}
-            <InfoHint
-              text={t(
-                'projects.manage.defaultModelHelp',
-                'Used by team agents that do not declare their own model. Resolution order: per-agent override → the agent’s own value → this project default → the global default.',
-              )}
-            />
-          </span>
-          <SearchableDropdown
-            id="project-edit-model"
-            value={modelSelectValue}
-            options={modelOptions}
-            placeholder={defaultModelInheritLabel()}
-            searchPlaceholder={t(
-              'projects.manage.modelSearchPlaceholder',
-              'Filter models…',
-            )}
-            emptyLabel={t(
-              'projects.manage.modelSearchEmpty',
-              'No models match',
-            )}
-            ariaLabel={t('projects.manage.defaultModel', 'Default model')}
-            triggerClass="projects-dropdown"
-            panelClass="projects-view__search-panel"
-            footerActionLabel={modelFilterFooter}
-            onFooterAction={() =>
-              (projectsState.showAllModels = !projectsState.showAllModels)}
-            onOpenChange={trackModelDropdownOpen}
-            onValueChange={updateModelSelection}
-          />
-          <Button
-            variant="tertiary"
-            class="projects-inherit-link"
-            onClick={navigateToAgentDefaults}
-          >
-            {t('inherit.editGlobalDefaults', 'Edit global defaults')}
-          </Button>
-        </label>
-        <label class="projects-field">
-          <span class="projects-label">
-            {t(
-              'projects.manage.defaultThinkingEffort',
-              'Default thinking effort',
-            )}
-            <InfoHint
-              text={t(
-                'projects.manage.defaultThinkingEffortHelp',
-                'Used by team agents that do not set their own thinking effort. Same resolution order as the default model.',
-              )}
-            />
-          </span>
-          <Dropdown
-            id="project-edit-thinking-effort"
-            value={projectsState.editForm.default_thinking_effort}
-            options={thinkingEffortOptions}
-            ariaLabel={t(
-              'projects.manage.defaultThinkingEffort',
-              'Default thinking effort',
-            )}
-            triggerClass="projects-dropdown"
-            onValueChange={(value) =>
-              updateEditField('default_thinking_effort', value)}
-          />
-        </label>
-        <label class="projects-field">
-          <span class="projects-label">
-            {t('projects.manage.defaultTemperature', 'Default temperature')}
-            <InfoHint
-              text={t(
-                'projects.manage.defaultTemperatureHelp',
-                'Used by team agents that do not set their own temperature. Same resolution order as the default model.',
-              )}
-            />
-          </span>
-          <div class="projects-override-controls">
-            <TextField
-              id="project-edit-temperature"
-              class="projects-override-input"
-              inputmode="decimal"
-              value={projectsState.editForm.default_temperature}
-              ariaLabel={t(
-                'projects.manage.defaultTemperature',
-                'Default temperature',
-              )}
-              onInput={(next) => updateEditField('default_temperature', next)}
-            />
-            {#if !temperatureIsInherit}
+      <div class="s-section__body">
+        <div class="s-group">
+          <div class="s-row">
+            <div class="s-row-info">
+              <label class="s-row-label" for="project-edit-agent">
+                {t('projects.manage.defaultAgent', 'Default agent')}
+              </label>
+              <div class="s-row-desc">
+                {t(
+                  'projects.manage.defaultAgentHelp',
+                  'The team agent preselected when you open this project in Chat.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control">
+              <Dropdown
+                id="project-edit-agent"
+                value={projectsState.editForm.default_agent}
+                options={agentOptions}
+                placeholder={t(
+                  'projects.manage.defaultAgentEmpty',
+                  'No project default',
+                )}
+                ariaLabel={t('projects.manage.defaultAgent', 'Default agent')}
+                triggerClass="projects-dropdown"
+                onValueChange={(value) =>
+                  updateEditField('default_agent', value)}
+              />
+            </div>
+          </div>
+          <div class="s-row">
+            <div class="s-row-info">
+              <label class="s-row-label" for="project-edit-model">
+                {t('projects.manage.defaultModel', 'Default model')}
+              </label>
+              <div class="s-row-desc">
+                {t(
+                  'projects.manage.defaultModelHelp',
+                  'Used by team agents that do not declare their own model. Resolution order: per-agent override → the agent’s own value → this project default → the global default.',
+                )}
+              </div>
               <Button
                 variant="tertiary"
-                tooltip={t(
-                  'inherit.resetToInherit',
-                  'Reset to inherited value',
-                )}
-                ariaLabel={t(
-                  'inherit.resetToInherit',
-                  'Reset to inherited value',
-                )}
-                onClick={clearDefaultTemperature}
+                class="projects-inherit-link"
+                onClick={navigateToAgentDefaults}
               >
-                —
+                {t('inherit.editGlobalDefaults', 'Edit global defaults')}
               </Button>
-            {/if}
-          </div>
-          {#if temperatureIsInherit}
-            {#if globalDefaultText('temperature')}
-              <small class="projects-inherit-hint">
-                {t('inherit.hint', 'Inherited: {value} (global default)', {
-                  value: globalDefaultText('temperature'),
-                })}
-              </small>
-            {:else}
-              <small class="projects-inherit-hint">
-                {t(
-                  'inherit.hintProviderDefault',
-                  'Provider default — nothing is set here or in the global defaults.',
+            </div>
+            <div class="s-row-control">
+              <SearchableDropdown
+                id="project-edit-model"
+                value={modelSelectValue}
+                options={modelOptions}
+                placeholder={defaultModelInheritLabel()}
+                searchPlaceholder={t(
+                  'projects.manage.modelSearchPlaceholder',
+                  'Filter models…',
                 )}
-              </small>
-            {/if}
-          {/if}
-        </label>
+                emptyLabel={t(
+                  'projects.manage.modelSearchEmpty',
+                  'No models match',
+                )}
+                ariaLabel={t('projects.manage.defaultModel', 'Default model')}
+                triggerClass="projects-dropdown"
+                panelClass="projects-view__search-panel"
+                footerActionLabel={modelFilterFooter}
+                onFooterAction={() =>
+                  (projectsState.showAllModels = !projectsState.showAllModels)}
+                onOpenChange={trackModelDropdownOpen}
+                onValueChange={updateModelSelection}
+              />
+            </div>
+          </div>
+          <div class="s-row">
+            <div class="s-row-info">
+              <label class="s-row-label" for="project-edit-thinking-effort">
+                {t(
+                  'projects.manage.defaultThinkingEffort',
+                  'Default thinking effort',
+                )}
+              </label>
+              <div class="s-row-desc">
+                {t(
+                  'projects.manage.defaultThinkingEffortHelp',
+                  'Used by team agents that do not set their own thinking effort. Same resolution order as the default model.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control">
+              <Dropdown
+                id="project-edit-thinking-effort"
+                value={projectsState.editForm.default_thinking_effort}
+                options={thinkingEffortOptions}
+                ariaLabel={t(
+                  'projects.manage.defaultThinkingEffort',
+                  'Default thinking effort',
+                )}
+                triggerClass="projects-dropdown"
+                onValueChange={(value) =>
+                  updateEditField('default_thinking_effort', value)}
+              />
+            </div>
+          </div>
+          <div class="s-row">
+            <div class="s-row-info">
+              <label class="s-row-label" for="project-edit-temperature">
+                {t('projects.manage.defaultTemperature', 'Default temperature')}
+              </label>
+              <div class="s-row-desc">
+                {t(
+                  'projects.manage.defaultTemperatureHelp',
+                  'Used by team agents that do not set their own temperature. Same resolution order as the default model.',
+                )}
+              </div>
+              {#if temperatureIsInherit}
+                <div class="s-row-desc projects-inherit-hint">
+                  {#if globalDefaultText('temperature')}
+                    {t('inherit.hint', 'Inherited: {value} (global default)', {
+                      value: globalDefaultText('temperature'),
+                    })}
+                  {:else}
+                    {t(
+                      'inherit.hintProviderDefault',
+                      'Provider default — nothing is set here or in the global defaults.',
+                    )}
+                  {/if}
+                </div>
+              {/if}
+            </div>
+            <div class="s-row-control projects-number-control">
+              {#if !temperatureIsInherit}
+                <Button
+                  variant="tertiary"
+                  tooltip={t(
+                    'inherit.resetToInherit',
+                    'Reset to inherited value',
+                  )}
+                  ariaLabel={t(
+                    'inherit.resetToInherit',
+                    'Reset to inherited value',
+                  )}
+                  onClick={clearDefaultTemperature}
+                >
+                  —
+                </Button>
+              {/if}
+              <TextField
+                id="project-edit-temperature"
+                class="projects-number-input"
+                inputmode="decimal"
+                value={projectsState.editForm.default_temperature}
+                ariaLabel={t(
+                  'projects.manage.defaultTemperature',
+                  'Default temperature',
+                )}
+                onInput={(next) => updateEditField('default_temperature', next)}
+              />
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
+    </section>
   </form>
 </div>

@@ -358,7 +358,7 @@
   }
 </script>
 
-<div class="agent-defaults-fields">
+<div class="s-group">
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
@@ -473,7 +473,7 @@
         )}
       </div>
     </div>
-    <div class="s-row-control s-row-control--model">
+    <div class="s-row-control agent-defaults-fallbacks">
       {#each fallbackModelRows as row, index (index)}
         <div class="settings-view__fallback-row">
           <SearchableDropdown

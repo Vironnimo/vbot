@@ -346,7 +346,7 @@
             >
               {#snippet scanAction()}
                 <Button
-                  variant="secondary"
+                  variant="tertiary"
                   data-testid="project-repository-rescan"
                   loading={projectsState.scanRefreshRequested}
                   disabled={projectsState.scanLoading}

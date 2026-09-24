@@ -240,10 +240,8 @@ describe('AgentsView', () => {
     const trigger = getSimpleTrigger('agent-thinking-effort');
     expect(trigger.disabled).toBe(true);
     expect(
-      document.body.querySelector(
-        '.agents-view__thinking-field .form-field__help',
-      ),
-    ).toBeTruthy();
+      document.body.querySelector('#agent-thinking-effort-help').textContent,
+    ).toContain('does not support reasoning');
   });
 
   it('shows only the model ladder options for a reasoning model', async () => {
@@ -459,10 +457,19 @@ describe('AgentsView', () => {
     await waitForCondition(() => modelTriggerLabel() === 'openai/gpt-5.2', 100);
 
     expect(
-      document.body.querySelectorAll(
-        '.agents-view__model-fields .form-field__label',
+      Array.from(
+        document.body.querySelectorAll(
+          '.agents-view__model-group .s-row-label',
+        ),
+        (label) => label.textContent.trim(),
       ),
-    ).toHaveLength(4);
+    ).toEqual([
+      'Model',
+      'Thinking effort',
+      'Temperature & fallback models',
+      'Temperature',
+      'Fallback models',
+    ]);
     expect(document.querySelectorAll('#agent-model')).toHaveLength(1);
     // An empty chain renders no row dropdowns, only the single add affordance.
     expect(

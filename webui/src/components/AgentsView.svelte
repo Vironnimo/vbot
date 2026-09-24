@@ -563,23 +563,25 @@
           class="agent-detail-scroll agent-shared-content"
           bind:this={sharedContent}
         >
-          <header class="agent-shared-header">
-            <div class="agent-shared-title">
-              <h2>{t('agents.shared.title', 'Shared defaults')}</h2>
-
+          <div class="management-header agent-shared-header">
+            <div class="detail-top agent-shared-title">
+              <div>
+                <h2 class="detail-heading">
+                  {t('agents.shared.title', 'Shared defaults')}
+                </h2>
+                <p class="agent-shared-scope">
+                  {t(
+                    'agents.shared.scope',
+                    'Used by Agents and Projects that inherit these values. Explicit choices on an Agent or Project stay in place.',
+                  )}
+                </p>
+              </div>
               <Button
                 variant="secondary"
                 onClick={() => selectAgent(selectedAgentId)}
                 >{t('agents.shared.back', 'Back to Agent')}</Button
               >
             </div>
-
-            <p class="agent-shared-scope">
-              {t(
-                'agents.shared.scope',
-                'Used by Agents and Projects that inherit these values. Explicit choices on an Agent or Project stay in place.',
-              )}
-            </p>
             <nav
               class="agent-shared-jumps"
               aria-label={t(
@@ -588,17 +590,17 @@
               )}
             >
               <Button
-                variant="secondary"
+                variant="tertiary"
                 onClick={() => jumpToDefaultsSection('defaults')}
                 >{t('agents.shared.modelTitle', 'Model & Thinking')}</Button
               >
               <Button
-                variant="secondary"
+                variant="tertiary"
                 onClick={() => jumpToDefaultsSection('compaction')}
                 >{t('settings.compaction.title', 'Compaction')}</Button
               >
             </nav>
-          </header>
+          </div>
           {#if sharedSettingsLoading}
             <Banner variant="neutral"
               >{t('settings.loading', 'Loading settings…')}</Banner
@@ -613,20 +615,22 @@
             >
           {:else if sharedSettings}
             <section
-              class="agent-defaults-card"
+              class="s-section"
               data-settings-section="defaults"
+              aria-labelledby="agent-shared-model-title"
             >
-              <header>
-                <h3>{t('agents.shared.modelTitle', 'Model & Thinking')}</h3>
-                <p>
-                  {t(
-                    'agents.shared.modelDescription',
-                    'Choose the common starting point. Individual Agents can override it.',
-                  )}
-                </p>
+              <header class="s-section__head">
+                <h3 class="s-section__title" id="agent-shared-model-title">
+                  {t('agents.shared.modelTitle', 'Model & Thinking')}
+                </h3>
               </header>
-
-              <div class="agent-defaults-form">
+              <p class="s-section__desc">
+                {t(
+                  'agents.shared.modelDescription',
+                  'Choose the common starting point. Individual Agents can override it.',
+                )}
+              </p>
+              <div class="s-section__body">
                 <SettingsDefaultsPanel
                   settings={sharedSettings}
                   onCommit={commitSharedSettings}
@@ -638,22 +642,22 @@
             </section>
 
             <section
-              class="agent-defaults-card"
+              class="s-section"
               data-settings-section="compaction"
+              aria-labelledby="agent-shared-compaction-title"
             >
-              <header>
-                <div>
-                  <h3>{t('settings.compaction.title', 'Compaction')}</h3>
-                  <p>
-                    {t(
-                      'agents.shared.compactionDescription',
-                      'The inherited policy for keeping long conversations within the Model context.',
-                    )}
-                  </p>
-                </div>
+              <header class="s-section__head">
+                <h3 class="s-section__title" id="agent-shared-compaction-title">
+                  {t('settings.compaction.title', 'Compaction')}
+                </h3>
               </header>
-
-              <div id="agent-shared-compaction" class="agent-defaults-form">
+              <p class="s-section__desc">
+                {t(
+                  'agents.shared.compactionDescription',
+                  'The inherited policy for keeping long conversations within the Model context.',
+                )}
+              </p>
+              <div id="agent-shared-compaction" class="s-section__body">
                 <SettingsCompactionPanel
                   settings={sharedSettings}
                   onCommit={commitSharedSettings}
