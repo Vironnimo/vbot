@@ -295,8 +295,15 @@ python .worktrees/my-task/scripts/test-env.py start
 ```
 
 The file path points into the worktree, but the process working directory is
-still the main checkout. For the worktree workflow, prefer changing into the
-worktree first and then using relative commands.
+still the main checkout. Script entry points under `scripts/` that import vBot
+packages put their own checkout first on the import path, so `test-env.py` and
+the server it starts
+(launched from that checkout's root) run the worktree's code even though the
+editable install points at the main checkout. The default data dir and port,
+however, still come from the working directory's `.vbot-worktree` marker, so
+this command targets the main checkout's development instance. For the
+worktree workflow, prefer changing into the worktree first and then using
+relative commands.
 
 Practical rule:
 

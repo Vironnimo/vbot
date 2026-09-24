@@ -26,18 +26,29 @@ import socket
 import subprocess
 import sys
 import time
-from contextlib import suppress
+from contextlib import chdir, suppress
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import urlsplit
 
 import psutil  # type: ignore[import-untyped]
 
-from cli.server_management import CommandResult, ServerInstance, resolve_instance
-from cli.server_management import start_server as start_server_command
-from cli.server_management import stop_server as stop_server_command
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Import this checkout's packages first. Running the script puts only scripts/
+# on sys.path, so from a linked worktree `cli` and `core` would otherwise
+# resolve through the editable install to the main checkout's code.
+if sys.path[:1] != [str(PROJECT_ROOT)]:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from cli.server_management import (  # noqa: E402
+    CommandResult,
+    ServerInstance,
+    resolve_instance,
+)
+from cli.server_management import start_server as start_server_command  # noqa: E402
+from cli.server_management import stop_server as stop_server_command  # noqa: E402
+
 WEBUI_DIR = PROJECT_ROOT / "webui"
 WEBUI_DIST = WEBUI_DIR / "dist" / "index.html"
 WEBUI_NODE_MODULES = WEBUI_DIR / "node_modules"
@@ -431,7 +442,12 @@ def start_server(host: str, port: int | None, data_dir: str | None) -> int:
     print(f"target..... {instance.url}")
 
     try:
-        result = start_server_command(instance, startup_timeout_seconds=STARTUP_TIMEOUT_SECONDS)
+        # The server runs as `python -m server.main`, which imports from its
+        # working directory first; starting it from this checkout's root makes
+        # it run this checkout's code wherever test-env was launched from. The
+        # data dir is already resolved to an absolute path above.
+        with chdir(PROJECT_ROOT):
+            result = start_server_command(instance, startup_timeout_seconds=STARTUP_TIMEOUT_SECONDS)
     except KeyboardInterrupt as exc:
         _print_failure(
             "server",
