@@ -267,9 +267,11 @@ class SessionStore:
         )
 
     def ensure_live(self, address: SessionAddress) -> None:
-        return self._execute_write(
-            lambda connection: _store_mutations.ensure_live(connection, address)
-        )
+        """Create a missing live Session; an existing one costs only a read."""
+        with self._runtime.read_ctx() as connection:
+            if _store_values._find_live(connection, address) is not None:
+                return
+        self._execute_write(lambda connection: _store_mutations.ensure_live(connection, address))
 
     def exists(self, address: SessionAddress, *, include_archived: bool = False) -> bool:
         with self._runtime.read_ctx() as connection:
@@ -313,6 +315,35 @@ class SessionStore:
     ) -> tuple[JsonObject, JsonObject]:
         return self._execute_write(
             lambda connection: _store_mutations.mutate_metadata(connection, address, mutation)
+        )
+
+    def ensure_metadata(
+        self,
+        address: SessionAddress,
+        mutation: Callable[[JsonObject], None],
+        *,
+        create_missing: bool,
+    ) -> tuple[JsonObject, JsonObject]:
+        """Apply a metadata mutation, entering the writer only for a real change.
+
+        The mutation first runs against a read snapshot. A live Session whose
+        persisted metadata it leaves unchanged returns without a write
+        transaction; otherwise the writer creates the Session when allowed and
+        reapplies the mutation to the latest row. The mutation may therefore
+        run twice and must be deterministic and free of side effects.
+        """
+        with self._runtime.read_ctx() as connection:
+            state = _store_values._find_live(connection, address)
+        if state is not None:
+            previous, updated, storage = _store_mutations.metadata_change(state, mutation)
+            if storage is None:
+                return previous, updated
+        elif not create_missing:
+            raise SessionNotFoundError(f"session does not exist: {address.session_id}")
+        return self._execute_write(
+            lambda connection: _store_mutations.ensure_metadata(
+                connection, address, mutation, create_missing=create_missing
+            )
         )
 
     def activity(self, address: SessionAddress) -> JsonObject:

@@ -173,10 +173,8 @@ class ChatSessionManager:
         return await _run_session_io(self.get, address)
 
     def get_or_create(self, address: SessionAddress) -> ChatSession:
-        _validate_agent_id(address.agent_id)
-        _validate_session_id(address.session_id)
-        if address.project_id is not None and not is_valid_project_id(address.project_id):
-            raise ChatSessionError("invalid project id")
+        """Return the live Session, creating it when missing (existing ones cost a read)."""
+        _validate_creatable_address(address)
         self._store.ensure_live(address)
         return ChatSession(self._store, address)
 
@@ -185,6 +183,25 @@ class ChatSessionManager:
 
     def get_metadata(self, address: SessionAddress) -> JsonObject:
         return self._store.metadata(address)
+
+    def ensure_metadata(
+        self,
+        address: SessionAddress,
+        mutation: Callable[[JsonObject], None],
+        *,
+        create_missing: bool = False,
+    ) -> tuple[JsonObject, JsonObject]:
+        """Apply an idempotent metadata mutation; unchanged metadata costs only a read.
+
+        Suited to state that is re-asserted on every event (routing context,
+        pointers). With ``create_missing`` a missing Session is created in the
+        same write transaction. The mutation may run twice, so it must be
+        deterministic and side-effect free; ``mutate_metadata`` remains the
+        single-invocation write. Returns the previous and resulting metadata.
+        """
+        if create_missing:
+            _validate_creatable_address(address)
+        return self._store.ensure_metadata(address, mutation, create_missing=create_missing)
 
     async def get_metadata_async(self, address: SessionAddress) -> JsonObject:
         return await _run_session_io(self.get_metadata, address)
@@ -1074,6 +1091,13 @@ class ChatSessionManager:
                 callback(address)
             except Exception:
                 logging.getLogger(__name__).exception("Session callback failed")
+
+
+def _validate_creatable_address(address: SessionAddress) -> None:
+    _validate_agent_id(address.agent_id)
+    _validate_session_id(address.session_id)
+    if address.project_id is not None and not is_valid_project_id(address.project_id):
+        raise ChatSessionError("invalid project id")
 
 
 def _set_title(metadata: JsonObject, normalized: str | None) -> None:
