@@ -44,6 +44,11 @@
   let anyConfigurable = $derived(
     extensions.some((extension) => hasSettingsSchema(extension)),
   );
+  let mcpLoaded = $derived(
+    extensions.some(
+      (extension) => extension.name === 'mcp' && extension.status === 'loaded',
+    ),
+  );
   let loading = $state(true);
   let loadError = $state('');
   let reloading = $state(false);
@@ -427,16 +432,16 @@
   }
 </script>
 
-<div class="s-list-head">
-  <span class="s-list-head-info">
-    {#if !loading && !loadError}
+<div class="s-group-toolbar s-list-toolbar">
+  {#if !loading && !loadError}
+    <span class="s-group-toolbar__meta">
       {t('settings.extensions.count', '{count} discovered', {
         count: extensions.length,
       })}
-    {/if}
-  </span>
-  <div class="s-list-head-actions">
-    <Button variant="secondary" disabled={panelBusy} onClick={reloadExtensions}>
+    </span>
+  {/if}
+  <div class="s-group-toolbar__actions s-list-toolbar__end">
+    <Button variant="tertiary" disabled={panelBusy} onClick={reloadExtensions}>
       {t('settings.extensions.reload', 'Reload extensions')}
     </Button>
     <InfoHint
@@ -469,7 +474,7 @@
     description={t('settings.extensions.empty', 'No extensions discovered.')}
   />
 {:else}
-  <div class="s-ext-list">
+  <div class="s-group s-ext-list">
     {#each extensions as extension (extension.name)}
       {@const rowBusy =
         loading ||
@@ -482,8 +487,9 @@
           ? []
           : extensionCapabilityParts(extension.capabilities, t)}
       {@const waiting = describeExtensionWaiting(extension, t)}
-      <div class="s-ext-card">
-        <div class="s-ext-head">
+      {@const configExpanded = expandedConfigNames.has(extension.name)}
+      <div class="s-ext-card s-entity">
+        <div class="s-ext-head s-entity__head">
           <div class="s-row-info">
             <div class="s-ext-name-row">
               <span class="s-row-label s-ext-name">{extension.name}</span>
@@ -545,7 +551,7 @@
           </div>
 
           {#if !isOverridden}
-            <div class="s-ext-controls">
+            <div class="s-entity__end">
               <Button
                 variant="secondary"
                 disabled={rowBusy}
@@ -578,15 +584,14 @@
                     'Configuration for extension {name}',
                     { name: extension.name },
                   )}
-                  aria-expanded={expandedConfigNames.has(extension.name)}
+                  aria-expanded={configExpanded}
                   onClick={() => toggleConfigDetails(extension)}
                 >
-                  <svg
-                    viewBox="0 0 16 16"
-                    width="14"
-                    height="14"
-                    aria-hidden="true"><path d="m6 3.5 4.5 4.5L6 12.5" /></svg
-                  >
+                  <span
+                    class="disclosure-chevron"
+                    class:disclosure-chevron--open={configExpanded}
+                    aria-hidden="true"
+                  ></span>
                 </Button>
               {:else if anyConfigurable}
                 <!-- Keeps Enable/Disable aligned with rows that have a
@@ -597,15 +602,8 @@
           {/if}
         </div>
 
-        {#if extension.name === 'mcp' && extension.status === 'loaded'}
-          <SettingsMcpPanel />
-        {/if}
-
         {#if !isOverridden && hasSettingsSchema(extension)}
-          <div
-            class="s-disclosure-sub"
-            hidden={!expandedConfigNames.has(extension.name)}
-          >
+          <div class="s-disclosure-sub" hidden={!configExpanded}>
             <div class="s-ext-schema">
               {#each extension.settingsSchema as field (field.key)}
                 {@const secretSaving =
@@ -736,4 +734,10 @@
       </div>
     {/each}
   </div>
+
+  <!-- The loaded MCP Extension contributes its connection manager as a
+       sub-topic after the Extension list. -->
+  {#if mcpLoaded}
+    <SettingsMcpPanel />
+  {/if}
 {/if}

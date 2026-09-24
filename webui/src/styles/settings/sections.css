@@ -9,6 +9,8 @@
    - Setting rows (`.s-row`) put label and description on the left and the
      control in one fixed-width column on the right, so controls align across
      every group of a page.
+   - More of the same topic opens inside the group through a disclosure row
+     (`.s-disclosure`, `.s-disclosure-row`), never as a nested card.
    - A section's save state or single quiet action sits on its heading line
      (`.s-section__aside`), not on a row of its own. */
 .s-section {
@@ -62,11 +64,34 @@
   gap: 12px;
 }
 
+/* A settings panel renders its save state as the body's trailing `.s-footer`;
+   it moves onto the heading line and stays after the fields in keyboard
+   order. (Settings pages place it the same way in pages.css.) */
+.s-section:has(> .s-section__body > .s-footer) > .s-section__head {
+  padding-right: 96px;
+}
+
+.s-section > .s-section__body > .s-footer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+}
+
+.s-section > .s-section__body > .s-footer .s-save-button--inline {
+  width: auto;
+}
+
 /* Group panel: one bordered surface per topic. Every direct child after the
    first is separated by a hairline, so rows, disclosures and nested option
    blocks inside the same group read as one list. */
 .s-group {
   --s-control-width: 300px;
+  --s-number-width: 148px;
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
@@ -77,11 +102,11 @@
   border-top: 1px solid var(--border);
 }
 
-.s-group > .s-row {
+:is(.s-group, .s-group__rows) > .s-row {
   padding: 14px 18px;
 }
 
-.s-group > .s-row:not(.s-row--stacked) {
+:is(.s-group, .s-group__rows) > .s-row:not(.s-row--stacked) {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, var(--s-control-width));
   column-gap: 32px;
@@ -91,24 +116,27 @@
 
 /* Rows whose control is a compact switch, button or number keep it at the
    end of the row instead of reserving the full control column. */
-.s-group > .s-row--compact:not(.s-row--stacked) {
+:is(.s-group, .s-group__rows) > .s-row--compact:not(.s-row--stacked) {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
-.s-group > .s-row > .s-row-control {
+:is(.s-group, .s-group__rows) > .s-row > .s-row-control {
   width: 100%;
   min-width: 0;
   margin-left: 0;
   justify-content: flex-end;
 }
 
-.s-group > .s-row > .s-row-control--number {
+/* Number fields share one width that fits their placeholder next to the
+   spinner. */
+:is(.s-group, .s-group__rows) > .s-row > .s-row-control--number {
   justify-self: end;
-  width: 120px;
+  width: var(--s-number-width);
+  min-width: 0;
 }
 
-.s-group > .s-row > .s-row-control > .dropdown,
-.s-group > .s-row > .s-row-control > .searchable-dropdown {
+:is(.s-group, .s-group__rows) > .s-row > .s-row-control > .dropdown,
+:is(.s-group, .s-group__rows) > .s-row > .s-row-control > .searchable-dropdown {
   width: 100%;
 }
 
@@ -156,6 +184,76 @@
   font-size: var(--fs-mono-xs);
 }
 
+/* Disclosure rows open more of the same topic inside the group. Either a
+   native `<details class="s-disclosure">` whose plain `<summary>` is the row
+   (it gets the shared chevron) and whose `.s-disclosure__body` continues
+   below it, or a button `.s-row.s-disclosure-row` carrying a
+   `.disclosure-chevron` whose body is the group's next item. */
+.s-group .s-disclosure > summary {
+  display: flex;
+  align-items: center;
+  padding: 14px 18px;
+  color: var(--text-hi);
+  font-size: var(--fs-body-md);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.s-group > .s-disclosure-row {
+  width: 100%;
+  margin: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.s-disclosure-row .s-row-label {
+  display: inline-flex;
+  align-items: center;
+}
+
+.s-group .s-disclosure > summary:hover,
+.s-group > .s-disclosure-row:hover {
+  background: var(--surface-2);
+}
+
+.s-group .s-disclosure > summary:focus-visible,
+.s-group > .s-disclosure-row:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* A closed disclosure that ends its group keeps the group's corners. */
+.s-group > .s-disclosure:last-child:not([open]) > summary,
+.s-group > .s-disclosure-row:last-child,
+.s-group > .s-disclosure-row:has(+ [hidden]:last-child) {
+  border-radius: 0 0 calc(var(--r-lg) - 1px) calc(var(--r-lg) - 1px);
+}
+
+.s-disclosure__body {
+  margin: 0;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border);
+}
+
+/* Quiet count or state at the end of a disclosure row. */
+.s-disclosure__meta {
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Setting rows opened by a disclosure: they keep the group's control column
+   and indent their labels to the disclosure label. */
+.s-group__rows > .s-row {
+  padding-left: 33px;
+}
+
+.s-group__rows > .s-row + .s-row {
+  border-top: 1px solid var(--border);
+}
+
 /* A line of context or actions directly above a group (counts, add buttons),
    without a divider of its own. */
 .s-group-toolbar {
@@ -176,6 +274,37 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+/* Entity lists (Providers, Channels, Extensions, MCP connections) are one
+   `.s-group` with one `.s-entity` per entity. The head carries name and
+   description on the left and status plus the entity's own actions at its
+   end; details open inside the same entity, never as a nested card. A
+   `.s-group-toolbar.s-list-toolbar` above the group carries the quiet count
+   and the list's add action at its far end. */
+.s-entity {
+  min-width: 0;
+}
+
+.s-entity__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 18px;
+}
+
+.s-entity__end {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.s-list-toolbar__end {
+  margin-left: auto;
 }
 
 /* A named sub-topic inside a section (for example Connected clients under
@@ -200,19 +329,37 @@
 }
 
 @media (max-width: 640px) {
-  .s-group > .s-row {
+  :is(.s-group, .s-group__rows) > .s-row {
     padding: 14px;
   }
 
-  .s-group > .s-row:not(.s-row--stacked):not(.s-row--compact) {
+  .s-group__rows > .s-row {
+    padding-left: 29px;
+  }
+
+  :is(.s-group, .s-group__rows)
+    > .s-row:not(.s-row--stacked):not(.s-row--compact) {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .s-group > .s-row > .s-row-control--number {
+  :is(.s-group, .s-group__rows) > .s-row > .s-row-control--number {
     justify-self: start;
   }
 
+  .s-group > .s-group__block,
+  .s-group .s-disclosure > summary,
+  .s-disclosure__body {
+    padding-inline: 14px;
+  }
+
   .s-group > .s-group__block {
+    padding-block: 14px;
+  }
+
+  /* Entity rows use the group's narrow padding; wide heads let their end
+     controls wrap under the name. */
+  .s-entity__head {
+    flex-wrap: wrap;
     padding: 14px;
   }
 }

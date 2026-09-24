@@ -182,106 +182,104 @@
   });
 </script>
 
+<!-- Two sub-topics: the saved servers as one group of rows, then the form
+     that adds one. -->
 <div class="desktop-connection-settings">
   {#if operationError}
     <Banner variant="error" role="alert">{operationError}</Banner>
   {/if}
 
-  <div class="desktop-connection-block">
-    <div class="desktop-connection-block__header">
-      <div>
-        <h3>
-          {t('settings.desktop.connection.savedTitle', 'Saved servers')}
-        </h3>
-        <p>
-          {t(
-            'settings.desktop.connection.savedDescription',
-            'The active server supplies this WebUI. Switching reloads the Desktop app without moving Sessions or Runs.',
-          )}
-        </p>
-      </div>
-    </div>
-
-    {#if loadError}
-      <Banner variant="error">
-        <span>{loadError}</span>
-        <Button variant="secondary" onClick={loadServers}>
-          {t('common.retry', 'Retry')}
-        </Button>
-      </Banner>
-    {:else if loading}
-      <Banner variant="neutral">
-        {t('settings.desktop.connection.loading', 'Loading saved servers…')}
-      </Banner>
-    {:else if servers.length === 0}
-      <EmptyState
-        density="compact"
-        title={t('settings.desktop.connection.emptyTitle', 'No saved servers')}
-        description={t(
-          'settings.desktop.connection.emptyDescription',
-          'Add a server below to make it available for this Desktop app.',
-        )}
-      />
-    {:else}
-      <div class="desktop-server-list">
-        {#each servers as server (serverKey(server))}
-          {@const key = serverKey(server)}
-          <div class="s-row desktop-server-row">
-            <div class="s-row-info desktop-server-row__identity">
-              <div class="desktop-server-row__heading">
-                <span class="s-row-label">{serverName(server)}</span>
-                {#if server.active}
-                  <StatusChip variant="success">
-                    {t('settings.desktop.connection.active', 'Connected')}
-                  </StatusChip>
-                {/if}
-              </div>
-              <div class="s-row-desc desktop-server-row__address">
-                {key}
-              </div>
-            </div>
-            {#if !server.active}
-              <div class="s-row-actions desktop-server-row__actions">
-                <Button
-                  variant="primary"
-                  loading={connectingKey === key}
-                  disabled={Boolean(connectingKey || removingKey)}
-                  onClick={() => handleConnect(server)}
-                >
-                  {connectingKey === key
-                    ? t('settings.desktop.connection.connecting', 'Connecting…')
-                    : t('settings.desktop.connection.connect', 'Connect')}
-                </Button>
-                <Button
-                  variant="danger"
-                  loading={removingKey === key}
-                  disabled={Boolean(connectingKey || removingKey)}
-                  onClick={() => handleRemove(server)}
-                >
-                  {t('common.remove', 'Remove')}
-                </Button>
-              </div>
-            {/if}
-          </div>
-        {/each}
-      </div>
-    {/if}
+  <div class="s-subhead desktop-connection-subhead">
+    <h4 class="s-subhead__title">
+      {t('settings.desktop.connection.savedTitle', 'Saved servers')}
+    </h4>
+    <p class="s-subhead__desc">
+      {t(
+        'settings.desktop.connection.savedDescription',
+        'The active server supplies this WebUI. Switching reloads the Desktop app without moving Sessions or Runs.',
+      )}
+    </p>
   </div>
 
-  <div class="desktop-connection-block desktop-connection-block--add">
-    <div class="desktop-connection-block__header">
-      <div>
-        <h3>{t('settings.desktop.connection.addTitle', 'Add server')}</h3>
-        <p>
-          {t(
-            'settings.desktop.connection.addDescription',
-            'Save a local or remote vBot server for this Windows app.',
-          )}
-        </p>
-      </div>
+  {#if loadError}
+    <Banner variant="error">
+      <span>{loadError}</span>
+      <Button variant="secondary" onClick={loadServers}>
+        {t('common.retry', 'Retry')}
+      </Button>
+    </Banner>
+  {:else if loading}
+    <Banner variant="neutral">
+      {t('settings.desktop.connection.loading', 'Loading saved servers…')}
+    </Banner>
+  {:else if servers.length === 0}
+    <EmptyState
+      density="compact"
+      title={t('settings.desktop.connection.emptyTitle', 'No saved servers')}
+      description={t(
+        'settings.desktop.connection.emptyDescription',
+        'Add a server below to make it available for this Desktop app.',
+      )}
+    />
+  {:else}
+    <div class="s-group">
+      {#each servers as server (serverKey(server))}
+        {@const key = serverKey(server)}
+        <div class="s-row s-row--compact desktop-server-row">
+          <div class="s-row-info">
+            <div class="desktop-server-row__heading">
+              <span class="s-row-label">{serverName(server)}</span>
+              {#if server.active}
+                <StatusChip variant="success">
+                  {t('settings.desktop.connection.active', 'Connected')}
+                </StatusChip>
+              {/if}
+            </div>
+            <div class="s-row-desc desktop-server-row__address">
+              {key}
+            </div>
+          </div>
+          {#if !server.active}
+            <div class="s-row-control desktop-server-row__actions">
+              <Button
+                variant="secondary"
+                loading={connectingKey === key}
+                disabled={Boolean(connectingKey || removingKey)}
+                onClick={() => handleConnect(server)}
+              >
+                {connectingKey === key
+                  ? t('settings.desktop.connection.connecting', 'Connecting…')
+                  : t('settings.desktop.connection.connect', 'Connect')}
+              </Button>
+              <Button
+                variant="danger"
+                loading={removingKey === key}
+                disabled={Boolean(connectingKey || removingKey)}
+                onClick={() => handleRemove(server)}
+              >
+                {t('common.remove', 'Remove')}
+              </Button>
+            </div>
+          {/if}
+        </div>
+      {/each}
     </div>
+  {/if}
 
-    <form class="desktop-server-form" onsubmit={handleAdd}>
+  <div class="s-subhead">
+    <h4 class="s-subhead__title">
+      {t('settings.desktop.connection.addTitle', 'Add server')}
+    </h4>
+    <p class="s-subhead__desc">
+      {t(
+        'settings.desktop.connection.addDescription',
+        'Save a local or remote vBot server for this Windows app.',
+      )}
+    </p>
+  </div>
+
+  <form class="s-group" onsubmit={handleAdd}>
+    <div class="s-group__block desktop-server-form">
       <FormField
         controlId={hostControlId}
         label={t('settings.desktop.connection.host', 'Host')}
@@ -338,55 +336,20 @@
             : t('settings.desktop.connection.addAction', 'Add server')}
         </Button>
       </div>
-    </form>
-  </div>
+    </div>
+  </form>
 </div>
 
 <style>
   .desktop-connection-settings {
     display: flex;
     flex-direction: column;
-    gap: var(--space-md);
+    gap: 12px;
   }
 
-  .desktop-connection-block {
-    padding-top: var(--space-sm);
-  }
-
-  .desktop-connection-block + .desktop-connection-block {
-    padding-top: var(--space-md);
-    border-top: 1px solid var(--border);
-  }
-
-  .desktop-connection-block__header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: var(--space-md);
-    padding: var(--space-xs) 0 var(--space-sm);
-  }
-
-  .desktop-connection-block__header h3 {
-    margin: 0;
-    color: var(--text-hi);
-    font-size: var(--fs-heading-sm);
-    font-weight: 600;
-  }
-
-  .desktop-connection-block__header p {
-    max-width: 68ch;
-    margin: var(--space-xs) 0 0;
-    color: var(--text-med);
-    font-size: var(--fs-body-sm);
-    line-height: 1.5;
-  }
-
-  .desktop-server-list {
-    border-top: 1px solid var(--border);
-  }
-
-  .desktop-server-row__identity {
-    min-width: 180px;
+  /* The first sub-topic starts right under the section heading. */
+  .desktop-connection-subhead {
+    margin-top: 0;
   }
 
   .desktop-server-row__heading {
@@ -403,17 +366,14 @@
   }
 
   .desktop-server-row__actions {
-    flex-shrink: 0;
+    display: flex;
+    gap: var(--space-sm);
   }
 
   .desktop-server-form {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 132px;
     gap: var(--space-md);
-    padding: var(--space-md);
-    border: 1px solid var(--border);
-    border-radius: var(--r-lg);
-    background: var(--surface-2);
   }
 
   :global(.desktop-server-form .form-field--full),
@@ -428,13 +388,18 @@
   }
 
   @media (max-width: 640px) {
-    .desktop-server-form {
-      grid-template-columns: 1fr;
+    /* Two actions beside a server name leave it too little width on phones,
+       so the actions move under the name. */
+    .s-group > .s-row.desktop-server-row {
+      grid-template-columns: minmax(0, 1fr);
     }
 
-    .desktop-server-row__actions {
-      width: 100%;
-      justify-content: flex-end;
+    .desktop-server-row > .s-row-control.desktop-server-row__actions {
+      justify-content: flex-start;
+    }
+
+    .desktop-server-form {
+      grid-template-columns: 1fr;
     }
   }
 </style>

@@ -171,95 +171,98 @@
   }
 </script>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.reflection.enabled', 'Enable background reflection')}
+<div class="s-group">
+  <div class="s-row s-row--compact">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.reflection.enabled', 'Enable background reflection')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.reflection.enabledDescription',
+          'After a run finishes, the agent periodically reviews the conversation in a forked session and saves durable memory and skill updates. The original conversation is never touched.',
+        )}
+      </div>
     </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.reflection.enabledDescription',
-        'After a run finishes, the agent periodically reviews the conversation in a forked session and saves durable memory and skill updates. The original conversation is never touched.',
-      )}
+    <div class="s-row-control">
+      <Toggle
+        checked={reflectionSettings.enabled === true}
+        ariaLabel={t(
+          'settings.reflection.enabled',
+          'Enable background reflection',
+        )}
+        onChange={(next) => {
+          reflectionSettings = {
+            ...reflectionSettings,
+            enabled: next,
+          };
+          onError('');
+        }}
+      />
     </div>
   </div>
-  <div class="s-row-control">
-    <Toggle
-      checked={reflectionSettings.enabled === true}
-      ariaLabel={t(
-        'settings.reflection.enabled',
-        'Enable background reflection',
-      )}
-      onChange={(next) => {
-        reflectionSettings = {
-          ...reflectionSettings,
-          enabled: next,
-        };
-        onError('');
-      }}
-    />
-  </div>
-</div>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t(
-        'settings.reflection.memoryInterval',
-        'Memory review interval (turns)',
-      )}
+  <div class="s-row s-row--compact">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t(
+          'settings.reflection.memoryInterval',
+          'Memory review interval (turns)',
+        )}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.reflection.memoryIntervalDescription',
+          'A memory review becomes due after this many of your messages in a conversation.',
+        )}
+      </div>
     </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.reflection.memoryIntervalDescription',
-        'A memory review becomes due after this many of your messages in a conversation.',
-      )}
+    <div class="s-row-control s-row-control--number">
+      <TextField
+        id="settings-reflection-memory-interval"
+        type="number"
+        min="1"
+        step="1"
+        value={reflectionSettings.memory_turn_interval}
+        ariaLabel={t(
+          'settings.reflection.memoryInterval',
+          'Memory review interval (turns)',
+        )}
+        onInput={(next) => handleIntervalInput('memory_turn_interval', next)}
+      />
     </div>
   </div>
-  <div class="s-row-control s-row-control--number">
-    <TextField
-      id="settings-reflection-memory-interval"
-      type="number"
-      min="1"
-      step="1"
-      value={reflectionSettings.memory_turn_interval}
-      ariaLabel={t(
-        'settings.reflection.memoryInterval',
-        'Memory review interval (turns)',
-      )}
-      onInput={(next) => handleIntervalInput('memory_turn_interval', next)}
-    />
-  </div>
-</div>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t(
-        'settings.reflection.skillInterval',
-        'Skill review interval (Iterations)',
-      )}
+  <div class="s-row s-row--compact">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t(
+          'settings.reflection.skillInterval',
+          'Skill review interval (Iterations)',
+        )}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.reflection.skillIntervalDescription',
+          'A skill review becomes due after this many completed Model request/response pairs in a conversation.',
+        )}
+      </div>
     </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.reflection.skillIntervalDescription',
-        'A skill review becomes due after this many completed Model request/response pairs in a conversation.',
-      )}
+    <div class="s-row-control s-row-control--number">
+      <TextField
+        id="settings-reflection-skill-interval"
+        type="number"
+        min="1"
+        step="1"
+        value={reflectionSettings.skill_model_step_interval}
+        ariaLabel={t(
+          'settings.reflection.skillInterval',
+          'Skill review interval (Iterations)',
+        )}
+        onInput={(next) =>
+          handleIntervalInput('skill_model_step_interval', next)}
+      />
     </div>
-  </div>
-  <div class="s-row-control s-row-control--number">
-    <TextField
-      id="settings-reflection-skill-interval"
-      type="number"
-      min="1"
-      step="1"
-      value={reflectionSettings.skill_model_step_interval}
-      ariaLabel={t(
-        'settings.reflection.skillInterval',
-        'Skill review interval (Iterations)',
-      )}
-      onInput={(next) => handleIntervalInput('skill_model_step_interval', next)}
-    />
   </div>
 </div>
 

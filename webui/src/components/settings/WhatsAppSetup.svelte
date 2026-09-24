@@ -129,14 +129,19 @@
 </div>
 
 <style>
+  /* Setup steps for a WhatsApp Channel, shown inside its row in the Channel
+     list. */
   .whatsapp-setup {
     display: grid;
-    gap: 0.75rem;
+    gap: var(--space-sm);
     justify-items: start;
-    padding-top: 0.75rem;
   }
   .whatsapp-setup p {
+    max-width: 66ch;
     margin: 0;
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+    line-height: 1.5;
   }
   .whatsapp-setup img {
     max-width: 100%;

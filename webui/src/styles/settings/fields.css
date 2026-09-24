@@ -10,22 +10,6 @@
   padding: 12px 0;
 }
 
-.s-provider-card {
-  border-bottom: 1px solid var(--border);
-}
-
-.s-provider-card:last-of-type {
-  border-bottom: 0;
-}
-
-.s-provider-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 13px 0;
-}
-
 .s-row--stacked {
   align-items: stretch;
   flex-direction: column;
