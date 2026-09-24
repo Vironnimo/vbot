@@ -68,6 +68,18 @@ def test_normalize_catalog_entry_maps_all_openrouter_fields() -> None:
     )
 
 
+def test_normalize_catalog_entry_keeps_mandatory_reasoning_fact() -> None:
+    raw = raw_openrouter_model()
+    raw["reasoning"] = {"mandatory": True, "supported_efforts": ["low", "high"]}
+
+    model = OpenRouterAdapter.normalize_catalog_entry(raw, {})
+
+    assert model.metadata["openrouter"] == {
+        "modality": "text+image->text",
+        "reasoning_mandatory": True,
+    }
+
+
 def test_normalize_catalog_entry_preserves_non_text_outputs() -> None:
     model = OpenRouterAdapter.normalize_catalog_entry(
         raw_openrouter_model(

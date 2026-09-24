@@ -116,6 +116,43 @@ def test_public_package_exports_opencode_go_adapter() -> None:
     assert PublicOpenCodeGoAdapter is OpenCodeGoAdapter
 
 
+@pytest.mark.parametrize(
+    ("effort", "expected"),
+    [(None, None), ("none", "low"), ("high", "high")],
+)
+@pytest.mark.asyncio
+async def test_space_bunny_chat_route_and_mandatory_reasoning(effort, expected):
+    from core.providers.providers import ProviderRegistry
+
+    resources = Path(__file__).resolve().parents[3] / "resources"
+    registry = ModelRegistry.load(resources)
+    config = ProviderRegistry.load(resources).get("opencode-go")
+
+    def lookup(model_id):
+        return registry.get("opencode-go", model_id)
+
+    adapter = OpenCodeGoAdapter(config, "test-token", model_lookup=lookup)
+    try:
+        assert adapter._model_protocol("space-bunny-free") == "openai"
+        assert adapter.reasoning_replay_fidelity("space-bunny-free") == "readable_only"
+        payload = adapter._build_payload(
+            [{"role": "user", "content": "Hello"}],
+            "space-bunny-free",
+            thinking_effort=effort,
+        )
+        intent = adapter.describe_reasoning_render(
+            model_lookup=lookup,
+            model_id="space-bunny-free",
+            effort=effort,
+            provider_config=config,
+        )
+        assert payload.get("reasoning_effort") == expected
+        assert intent.kind == ("default" if expected is None else "effort")
+        assert intent.effort_level == expected
+    finally:
+        await adapter.aclose()
+
+
 @pytest.mark.parametrize("model_id", ["mimo-v2.6-flash", "mimo-v2.6-pro"])
 @pytest.mark.parametrize(
     "effort", [None, "none", "minimal", "low", "medium", "high", "xhigh", "max"]

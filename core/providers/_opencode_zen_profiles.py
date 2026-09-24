@@ -90,6 +90,7 @@ _GEMINI_MODELS = frozenset(
 
 _CHAT_MODELS = frozenset(
     {
+        "space-bunny-free",
         "deepseek-v4.1-flash",
         "deepseek-v4-flash-vision-exp",
         "glm-5.3",

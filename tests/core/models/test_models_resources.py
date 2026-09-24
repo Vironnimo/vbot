@@ -298,6 +298,7 @@ class TestModelRegistryRealResources:
                 "grok-4.6",
                 "grok-4.7",
                 "gpt-5.6-luna",
+                "gpt-6-luna",
                 "muse-spark-1.2-contributor",
                 "muse-spark-1.3-contributor",
             ),
@@ -321,6 +322,7 @@ class TestModelRegistryRealResources:
                 "mimo-v2.6-pro",
                 "hy4-preview",
                 "hy3",
+                "space-bunny-free",
             ),
             "anthropic": (
                 "minimax-m3",
@@ -333,11 +335,33 @@ class TestModelRegistryRealResources:
                 "qwen3.6-plus",
             ),
         }
-        assert sum(len(model_ids) for model_ids in expected_by_protocol.values()) == 32
+        assert sum(len(model_ids) for model_ids in expected_by_protocol.values()) == 34
         for protocol, model_ids in expected_by_protocol.items():
             for model_id in model_ids:
                 model = registry.get("opencode-go", model_id)
                 assert model.metadata["opencode_go"]["protocol"] == protocol
+        assert {model.model_id for model in registry.list_for_provider("opencode-go")} == {
+            model_id for model_ids in expected_by_protocol.values() for model_id in model_ids
+        } | {"omen-alpha"}
+
+    def test_space_bunny_gateway_facts_load(self):
+        registry = ModelRegistry.load(RESOURCES_DIR)
+        go = registry.get("opencode-go", "space-bunny-free")
+        router = registry.get("openrouter", "stealth/space-bunny-alpha")
+
+        assert go.name == "Space Bunny Free"
+        assert go.context_window == 1_048_576
+        assert go.max_output_tokens == 524_288
+        assert go.capabilities.reasoning.levels == ("low", "medium", "high", "xhigh", "max")
+        assert go.metadata["opencode_go"] == {
+            "minimum_reasoning_effort": "low",
+            "protocol": "openai",
+            "reasoning_response_field": "reasoning_content",
+        }
+        assert router.context_window == 1_000_000
+        assert router.max_output_tokens == 524_288
+        assert router.capabilities.reasoning.levels == ("low", "medium", "high", "xhigh", "max")
+        assert router.metadata["openrouter"]["reasoning_mandatory"] is True
 
     @pytest.mark.parametrize("model_id", ["mimo-v2.6-flash", "mimo-v2.6-pro"])
     def test_mimo26_opencode_gateway_facts(self, model_id):

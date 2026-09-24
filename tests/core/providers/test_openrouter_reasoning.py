@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 import respx
 
-from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.providers._openrouter_constants import (
     _REASONING_TRAILING_NEWLINES_STATE_KEY,
 )
@@ -73,6 +74,40 @@ def test_reasoning_replay_policy_is_model_specific(
     assert adapter.reasoning_replay_policy("google/gemini-2.5-pro") == "none"
     assert adapter.reasoning_replay_policy("openai/gpt-4o") == "current_run"
     assert adapter.reasoning_replay_policy("unknown/new-model") == "full_history"
+
+
+@pytest.mark.parametrize(
+    ("effort", "expected"),
+    [(None, None), ("none", "low"), ("high", "high")],
+)
+def test_space_bunny_mandatory_reasoning_uses_supported_effort(
+    openrouter_config: ProviderConfig, effort: str | None, expected: str | None
+) -> None:
+    resources = Path(__file__).resolve().parents[3] / "resources"
+    registry = ModelRegistry.load(resources)
+
+    def lookup(model_id):
+        return registry.get("openrouter", model_id)
+
+    adapter = OpenRouterAdapter(openrouter_config, API_KEY, model_lookup=lookup)
+
+    payload = adapter._build_payload(
+        [{"role": "user", "content": "Hello"}],
+        "stealth/space-bunny-alpha",
+        thinking_effort=effort,
+    )
+    intent = adapter.describe_reasoning_render(
+        model_lookup=lookup, model_id="stealth/space-bunny-alpha", effort=effort
+    )
+
+    if expected is None:
+        assert "reasoning" not in payload
+        assert intent.kind == "default"
+    else:
+        assert payload["reasoning"] == {"effort": expected}
+        assert payload["include_reasoning"] is True
+        assert intent.kind == "effort"
+        assert intent.effort_level == expected
 
 
 @respx.mock
