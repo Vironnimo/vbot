@@ -123,6 +123,8 @@ class ExtensionRegistry:
     ) -> list[tuple[ExtensionRegistrationIdentity, PageDeclaration, Path]]:
         """Return loaded page declarations with their checked Extension roots."""
         pages: list[tuple[ExtensionRegistrationIdentity, PageDeclaration, Path]] = []
+        if self._registration_retired:
+            return pages
         for record in self._records:
             if record.status != "loaded":
                 continue
@@ -145,8 +147,18 @@ class ExtensionRegistry:
         return pages
 
     def retire_registration(self) -> None:
-        """Invalidate owner capabilities before their declarations are removed."""
+        """Invalidate owner capabilities before their declarations are removed.
+
+        A retired registry is about to be replaced: owner hosts, page and
+        management operations, Session capabilities, Hooks and interaction
+        handlers stop reaching its Extensions immediately, so work arriving while
+        the replacement loads fails cleanly or proceeds without Extension hooks
+        instead of calling Extensions that are shutting down.
+        """
         self._registration_retired = True
+        self._handlers = defaultdict(list)
+        self._interaction_handlers = {}
+        self._owner_hosts.clear()
 
     @classmethod
     def load(
@@ -361,6 +373,8 @@ class ExtensionRegistry:
         return owner_host
 
     def management(self, name: str) -> ExtensionOperations:
+        if self._registration_retired:
+            raise ValueError(f"Extension is not available: {name}")
         record = next((item for item in self._records if item.name == name), None)
         if record is None or record.status != "loaded" or record.declarations.operations is None:
             raise ValueError(f"Extension is not available: {name}")
