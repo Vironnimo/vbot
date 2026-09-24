@@ -19,8 +19,9 @@ Unchanged rows keep their rowids and vectors. The schema is versioned through
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -697,17 +698,17 @@ class VectorStore:
         limit: int,
         agent_id: str | None = None,
         project_id: str = "",
-        session_id: str | None = None,
-        excluded_session_ids: Sequence[str] = (),
+        session_ids: Collection[str] | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> list[tuple[StoredPassage, float]]:
         """Return the nearest Passages after structural prefilters inside KNN.
 
-        Every scope, Session, exclusion and time filter runs inside the vec0
-        KNN, so filtered rows never take a slot of the ``limit`` nearest. KNN
-        and row hydration run as one statement, so every returned vector has
-        its Passage row.
+        ``session_ids`` names the Sessions whose Passages may match; ``None``
+        admits every Session of the scope. Every scope, Session and time filter
+        runs inside the vec0 KNN, so filtered rows never take a slot of the
+        ``limit`` nearest. KNN and row hydration run as one statement, so every
+        returned vector has its Passage row.
         """
 
         if limit <= 0:
@@ -717,8 +718,8 @@ class VectorStore:
                 f"query vector length {len(query_vector)} does not match pinned dimension "
                 f"{header.dimension} for model {header.provider_id}/{header.model_id}"
             )
-        excluded = set(excluded_session_ids)
-        if session_id is not None and session_id in excluded:
+        allowed = None if session_ids is None else set(session_ids)
+        if allowed is not None and not allowed:
             return []
         clauses = ["embedding MATCH ?", "k = ?"]
         parameters: list[object] = [
@@ -742,25 +743,10 @@ class VectorStore:
                 )
             if not self._has_table(connection, _VECTOR_TABLE_NAME):
                 raise VectorStoreError("vector store table is missing")
-            if session_id is not None:
-                clauses.append("session_id = ?")
-                parameters.append(session_id)
-            elif len(excluded) <= _MAX_PUSHED_EXCLUSIONS:
-                # vec0 filters ``!=`` inside KNN but applies ``NOT IN`` only to
-                # the k nearest rows, which would starve the page.
-                for excluded_id in sorted(excluded):
-                    clauses.append("session_id != ?")
-                    parameters.append(excluded_id)
-            else:
-                # vec0 caps the constraints of one query; many exclusions
-                # become an allowlist of the scope's other indexed Sessions.
-                allowed = sorted(
-                    set(self._read_stamps(connection, agent_id, project_id)) - excluded
-                )
-                if not allowed:
-                    return []
-                clauses.append(f"session_id IN ({', '.join('?' for _ in allowed)})")
-                parameters.extend(allowed)
+            if allowed is not None and not self._filter_sessions(
+                connection, clauses, parameters, agent_id, project_id, allowed
+            ):
+                return []
             rows = connection.execute(
                 f"""
                 WITH knn AS (
@@ -792,6 +778,43 @@ class VectorStore:
             )
             for row in rows
         ]
+
+    @classmethod
+    def _filter_sessions(
+        cls,
+        connection: sqlite3.Connection,
+        clauses: list[str],
+        parameters: list[object],
+        agent_id: str | None,
+        project_id: str,
+        allowed: set[str],
+    ) -> bool:
+        """Add the KNN constraint admitting only *allowed* Sessions.
+
+        vec0 applies ``NOT IN`` only to the k nearest rows, which would starve
+        the page, and rejects a query with more than about 16 constraints. A
+        few indexed Sessions outside *allowed* become ``!=`` constraints; more
+        become an ``IN`` allowlist read from one JSON parameter. Returns
+        ``False`` when no allowed Session has indexed Passages.
+        """
+
+        if len(allowed) == 1:
+            clauses.append("session_id = ?")
+            parameters.append(next(iter(allowed)))
+            return True
+        indexed = set(cls._read_stamps(connection, agent_id, project_id))
+        excluded = indexed - allowed
+        if len(excluded) <= _MAX_PUSHED_EXCLUSIONS:
+            for excluded_id in sorted(excluded):
+                clauses.append("session_id != ?")
+                parameters.append(excluded_id)
+            return bool(indexed & allowed)
+        admitted = sorted(indexed & allowed)
+        if not admitted:
+            return False
+        clauses.append("session_id IN (SELECT value FROM json_each(?))")
+        parameters.append(json.dumps(admitted))
+        return True
 
     # ------------------------------------------------------------------
     # Header / lifecycle

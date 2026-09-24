@@ -495,6 +495,49 @@ def test_session_list_filters_execution_categories_in_sql(manager) -> None:
     }
 
 
+RECALL_VISIBILITY_CASES = {
+    "legacy": ({}, "conversation"),
+    "unknown-kind": ({"run_kinds": ["future_kind"]}, "conversation"),
+    "user": ({"run_kinds": ["user"]}, "conversation"),
+    "channel": ({"run_kinds": ["channel"]}, "conversation"),
+    "cron": ({"run_kinds": ["cron"]}, "conversation"),
+    "calendar": ({"run_kinds": ["calendar"]}, "conversation"),
+    "user-system": ({"run_kinds": ["user", "system"]}, "conversation"),
+    "system": ({"run_kinds": ["system"]}, "hidden"),
+    "reflection": ({"run_kinds": ["reflection"]}, "hidden"),
+    "memory": ({"run_kinds": ["memory_reflection"]}, "hidden"),
+    "user-skill": ({"run_kinds": ["user", "skill_reflection"]}, "hidden"),
+    "subagent-kind": ({"run_kinds": ["subagent"]}, "subagent"),
+    "subagent-flag": ({"is_subagent_session": True}, "subagent"),
+    "subagent-user": ({"is_subagent_session": True, "run_kinds": ["user"]}, "subagent"),
+    "subagent-reflection": (
+        {"is_subagent_session": True, "run_kinds": ["reflection"]},
+        "hidden",
+    ),
+    "not-subagent-system": ({"is_subagent_session": False, "run_kinds": ["system"]}, "hidden"),
+}
+
+
+def test_recall_visibility_is_classified_in_sql(manager) -> None:
+    for session_id, (metadata, _expected) in RECALL_VISIBILITY_CASES.items():
+        manager.create("coder", session_id=session_id)
+        manager.set_metadata(_address("coder", session_id), metadata)
+    expected = {
+        session_id: visibility
+        for session_id, (_metadata, visibility) in RECALL_VISIBILITY_CASES.items()
+    }
+
+    revisions = manager.list_history_revisions("coder")
+    sources = manager.descriptor_sources([_address("coder", session_id) for session_id in expected])
+
+    assert {revision.address.session_id: revision.recall_visibility for revision in revisions} == (
+        expected
+    )
+    assert {
+        address.session_id: source.recall_visibility for address, source in sources.items()
+    } == expected
+
+
 @pytest.mark.parametrize("include_channels", [False, True])
 def test_channel_filter_counts_pages_and_preserves_required_session(manager, include_channels):
     for index, session_id in enumerate(["old", "telegram", "new", "discord"]):

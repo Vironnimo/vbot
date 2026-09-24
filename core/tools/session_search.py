@@ -25,20 +25,16 @@ from core.sessions import (
     ChatSessionManager,
 )
 from core.tools._session_recall_results import (
-    _REFLECTION_RUN_KINDS,
-    _USER_FACING_RUN_KINDS,
-    _is_subagent_session,
-    _render_search_page,
-    _search_context_for_hits,
-    _serialized_result_bytes,
-    _session_run_kinds,
-    _SessionSearchError,
-)
-from core.tools._session_recall_results import (
     SESSION_SEARCH_DEFAULT_LIMIT as SESSION_SEARCH_DEFAULT_LIMIT,
 )
 from core.tools._session_recall_results import (
     SESSION_SEARCH_RESULT_MAX_BYTES as SESSION_SEARCH_RESULT_MAX_BYTES,
+)
+from core.tools._session_recall_results import (
+    _render_search_page,
+    _search_context_for_hits,
+    _serialized_result_bytes,
+    _SessionSearchError,
 )
 from core.tools.contracts import _load_json_value
 from core.tools.tools import (
@@ -236,37 +232,6 @@ def register_session_search_tool(
     )
 
 
-def _visible_session_summaries(
-    summaries: list[JsonObject],
-    *,
-    include_subagents: bool,
-) -> list[JsonObject]:
-    return [
-        summary
-        for summary in summaries
-        if _session_is_recall_visible(summary, include_subagents=include_subagents)
-    ]
-
-
-def _session_is_recall_visible(metadata: JsonObject, *, include_subagents: bool) -> bool:
-    run_kinds = _session_run_kinds(metadata)
-    if run_kinds is not None and _REFLECTION_RUN_KINDS.intersection(run_kinds):
-        return False
-    if _session_is_subagent(metadata, run_kinds):
-        return include_subagents
-    if run_kinds is None:
-        return True
-    return bool(_USER_FACING_RUN_KINDS.intersection(run_kinds))
-
-
-def _session_is_subagent(
-    metadata: JsonObject,
-    run_kinds: list[str] | None = None,
-) -> bool:
-    resolved_run_kinds = _session_run_kinds(metadata) if run_kinds is None else run_kinds
-    return _is_subagent_session(metadata, resolved_run_kinds) is True
-
-
 async def _search_sessions(
     context: ToolContext,
     arguments: JsonObject,
@@ -294,25 +259,10 @@ async def _search_sessions(
             "Saved Session data is unavailable. Changing the query will not restore access; "
             "report this limitation if no other way to read the saved conversations is available.",
         )
-    summaries = await run_tool_worker(
-        sessions.list_summaries,
-        agent_id,
-        context.project_id,
-    )
-    visible_summaries = _visible_session_summaries(
-        summaries,
-        include_subagents=arguments.get("include_subagents") is True,
-    )
-    visible_session_ids = {
-        str(summary["id"]) for summary in visible_summaries if isinstance(summary.get("id"), str)
-    }
-    excluded_session_ids = {
-        str(summary["id"])
-        for summary in summaries
-        if isinstance(summary.get("id"), str) and str(summary["id"]) not in visible_session_ids
-    }
-    if agent_id == context.agent_id:
-        excluded_session_ids.add(context.session_id)
+    include_subagents = arguments.get("include_subagents") is True
+    # Backends admit only Recall-visible Sessions; the current conversation is
+    # excluded explicitly because it belongs to the searching Agent.
+    excluded_session_ids = (context.session_id,) if agent_id == context.agent_id else ()
     request = RecallSearchRequest(
         agent_id=agent_id,
         project_id=context.project_id,
@@ -326,19 +276,21 @@ async def _search_sessions(
         offset=0,
         limit=SESSION_SEARCH_DEFAULT_LIMIT,
         snapshot_id=None,
-        excluded_session_ids=tuple(sorted(excluded_session_ids)),
+        excluded_session_ids=excluded_session_ids,
+        include_subagents=include_subagents,
     )
     page = await _call_search_page(recall_backend, request)
-    page = _retain_visible_search_hits(page, visible_session_ids)
-    targets, session_contexts = await run_tool_worker(
+    hits, targets, session_contexts = await run_tool_worker(
         _search_context_for_hits,
         list(page.hits),
         agent_id=agent_id,
         project_id=context.project_id,
         sessions=sessions,
-        include_subagents=arguments.get("include_subagents") is True,
-        summaries={str(summary["id"]): summary for summary in visible_summaries},
+        include_subagents=include_subagents,
+        excluded_session_ids=excluded_session_ids,
     )
+    if len(hits) != len(page.hits):
+        page = replace(page, hits=tuple(hits))
     data = _render_search_page(
         page, targets, session_contexts, project_id=context.project_id, agent_id=agent_id
     )
@@ -360,16 +312,6 @@ async def _call_search_page(backend: Any, request: RecallSearchRequest) -> Recal
             "failure; do not treat it as an empty search.",
         )
     return result
-
-
-def _retain_visible_search_hits(
-    page: RecallSearchPage,
-    visible_session_ids: set[str],
-) -> RecallSearchPage:
-    hits = tuple(hit for hit in page.hits if hit.session_id in visible_session_ids)
-    if len(hits) == len(page.hits):
-        return page
-    return replace(page, hits=hits)
 
 
 def _search_capabilities(backend: Any) -> RecallSearchCapabilities:

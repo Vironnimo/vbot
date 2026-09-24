@@ -12,11 +12,10 @@ from core.recall import (
 from core.recall.canonical import (
     compact_text,
 )
-from core.runs import RunKind
 from core.sessions import (
-    SESSION_RUN_KINDS_META_KEY,
     ChatSessionManager,
     SessionAddress,
+    recall_visibilities,
 )
 from core.tools.tools import (
     JsonObject,
@@ -33,28 +32,6 @@ SESSION_SEARCH_EXCERPT_MAX_CHARS = 1800
 
 
 SESSION_DESCRIPTOR_TITLE_MAX_CHARS = 200
-SUBAGENT_SESSION_METADATA_FLAG = "is_subagent_session"
-
-
-_VALID_RUN_KINDS = frozenset(kind.value for kind in RunKind)
-
-
-_REFLECTION_RUN_KINDS = frozenset(
-    {
-        RunKind.REFLECTION.value,
-        RunKind.MEMORY_REFLECTION.value,
-        RunKind.SKILL_REFLECTION.value,
-    }
-)
-
-
-_USER_FACING_RUN_KINDS = frozenset(
-    {
-        RunKind.USER.value,
-        RunKind.CHANNEL.value,
-        RunKind.CRON.value,
-    }
-)
 
 
 class _SessionSearchError(ValueError):
@@ -261,33 +238,57 @@ def _search_context_for_hits(
     project_id: str | None,
     sessions: ChatSessionManager | None,
     include_subagents: bool,
-    summaries: dict[str, JsonObject],
-) -> tuple[list[JsonObject], dict[str, _SearchSessionContext]]:
+    excluded_session_ids: tuple[str, ...],
+) -> tuple[list[RecallSearchHit], list[JsonObject], dict[str, _SearchSessionContext]]:
+    """Describe the Sessions of *hits* and keep the hits this search may return.
+
+    Descriptors are read only for the Sessions with hits. Their Recall
+    visibility rechecks every hit, so a backend that ignores the request's
+    visibility or exclusions, or a Session that changed or vanished since
+    ranking, cannot leak into the result.
+    """
+    addresses = {
+        hit.session_id: SessionAddress(
+            project_id=project_id, agent_id=agent_id, session_id=hit.session_id
+        )
+        for hit in hits
+    }
+    sources = {} if sessions is None else sessions.descriptor_sources(list(addresses.values()))
+    admitted = recall_visibilities(include_subagents=include_subagents)
     loaded: dict[str, _SearchSessionContext] = {}
+    for session_id, address in addresses.items():
+        source = sources.get(address)
+        if (
+            source is None
+            or source.recall_visibility not in admitted
+            or session_id in excluded_session_ids
+        ):
+            continue
+        title = source.metadata.get("title") or source.metadata.get("auto_title")
+        descriptor: JsonObject = {"agent_id": agent_id, "session_id": session_id}
+        if isinstance(title, str) and title.strip():
+            descriptor["title"] = compact_text(title)[:SESSION_DESCRIPTOR_TITLE_MAX_CHARS]
+        loaded[session_id] = _SearchSessionContext(
+            descriptor=descriptor,
+            conversations={},
+            is_subagent=source.recall_visibility == "subagent",
+        )
+    kept: list[RecallSearchHit] = []
     targets: list[JsonObject] = []
     for hit in hits:
-        if hit.session_id not in loaded:
-            metadata = summaries.get(hit.session_id, {})
-            title = metadata.get("title") or metadata.get("auto_title")
-            descriptor: JsonObject = {"agent_id": agent_id, "session_id": hit.session_id}
-            if isinstance(title, str) and title.strip():
-                descriptor["title"] = compact_text(title)[:SESSION_DESCRIPTOR_TITLE_MAX_CHARS]
-            loaded[hit.session_id] = _SearchSessionContext(
-                descriptor=descriptor,
-                conversations={},
-                is_subagent=_is_subagent_session(metadata, _session_run_kinds(metadata)) is True,
-            )
-        source = loaded[hit.session_id]
+        context = loaded.get(hit.session_id)
+        if context is None:
+            continue
         target: JsonObject = {"agent_id": agent_id}
-        if include_subagents and source.is_subagent:
+        if include_subagents and context.is_subagent:
             target["include_subagents"] = True
-        if sessions is not None and hit.message_id not in source.conversations:
-            source.conversations[hit.message_id] = sessions.recall_context(
-                SessionAddress(project_id=project_id, agent_id=agent_id, session_id=hit.session_id),
-                hit.message_id,
+        if sessions is not None and hit.message_id not in context.conversations:
+            context.conversations[hit.message_id] = sessions.recall_context(
+                addresses[hit.session_id], hit.message_id
             )
+        kept.append(hit)
         targets.append(target)
-    return targets, loaded
+    return kept, targets, loaded
 
 
 def _session_descriptors_for_hits(
@@ -316,26 +317,6 @@ def _excerpt_bounds(hit: RecallSearchHit, excerpt_chars: int) -> tuple[int, int]
     end = min(start + excerpt_chars, len(hit.text))
     start = max(end - excerpt_chars, 0)
     return start, end
-
-
-def _session_run_kinds(metadata: JsonObject) -> list[str] | None:
-    raw = metadata.get(SESSION_RUN_KINDS_META_KEY)
-    if not isinstance(raw, list) or not raw:
-        return None
-    if any(not isinstance(value, str) or value not in _VALID_RUN_KINDS for value in raw):
-        return None
-    return list(dict.fromkeys(raw))
-
-
-def _is_subagent_session(metadata: JsonObject, run_kinds: list[str] | None) -> bool | None:
-    if run_kinds is not None and RunKind.SUBAGENT.value in run_kinds:
-        return True
-    explicit = metadata.get(SUBAGENT_SESSION_METADATA_FLAG)
-    if isinstance(explicit, bool):
-        return explicit
-    if run_kinds is not None:
-        return False
-    return None
 
 
 def _serialized_result_bytes(data: JsonObject) -> int:
