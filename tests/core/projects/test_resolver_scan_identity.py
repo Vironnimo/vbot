@@ -1,5 +1,8 @@
 """Project scan and Identity-Agent resolution tests."""
 
+import threading
+from typing import Any
+
 from .resolver_test_support import (
     AgentStore,
     ConfigAgent,
@@ -171,6 +174,33 @@ def test_identity_resolution_unknown_agent_raises(
 
     with pytest.raises(ResolutionAgentNotFoundError):
         resolver.resolve_agent(None, "missing-agent")
+
+
+@pytest.mark.asyncio
+async def test_async_resolution_reads_the_agent_store_off_the_event_loop(
+    agents: AgentStore, projects: ProjectStore, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Arrange
+    created = agents.create("orchestrator", "Orchestrator", model="openai/gpt-5.2")
+    resolver = _resolver(agents, projects, _openai_configured())
+    store_get = agents.get
+    reading_threads: list[int] = []
+
+    def recording_get(agent_id: str) -> Any:
+        reading_threads.append(threading.get_ident())
+        return store_get(agent_id)
+
+    monkeypatch.setattr(agents, "get", recording_get)
+
+    # Act
+    resolved = await resolver.resolve_agent_async(None, "orchestrator")
+
+    # Assert: the ordinary resolution result, read by a worker thread.
+    assert resolved == created
+    assert reading_threads
+    assert threading.get_ident() not in reading_threads
+    with pytest.raises(ResolutionAgentNotFoundError):
+        await resolver.resolve_agent_async(None, "missing-agent")
 
 
 def test_identity_wildcard_keeps_global_and_cross_project_reach(

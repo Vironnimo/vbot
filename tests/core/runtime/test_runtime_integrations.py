@@ -541,6 +541,11 @@ class _StubAgentResolver:
     def resolve_agent(self, _project_id: str | None, agent_id: str) -> object:
         return self._agents.get(agent_id)
 
+    async def resolve_agent_async(
+        self, project_id: str | None, agent_id: str, **options: Any
+    ) -> Any:
+        return self.resolve_agent(project_id, agent_id, **options)
+
 
 class _StubProviders:
     def get(self, provider_id: str) -> object:

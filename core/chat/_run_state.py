@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
@@ -13,6 +14,7 @@ from core.chat.content_blocks import ContentBlock
 from core.chat.continuation import (
     ContinuationState,
     ContinuationTracker,
+    JournalBoundary,
 )
 from core.chat.errors import ChatError
 from core.chat.events import _close_adapter
@@ -53,6 +55,7 @@ from core.runs import Run, RunStatus
 from core.sessions import (
     ChatSession,
     SessionAddress,
+    SessionReadBatch,
     SessionReadCursor,
     TemporarySessionBinding,
     editable_session_message_index,
@@ -225,6 +228,12 @@ class _RunExecutionContext:
     request_build_started: float | None = None
 
 
+class _HistoryWrite(Protocol):
+    def __call__(
+        self, *, continuation_records: list[JsonObject], since: SessionReadCursor
+    ) -> Awaitable[SessionReadBatch | None]: ...
+
+
 @dataclass
 class _SessionSnapshot:
     """Run-local canonical Session state refreshed through append-only deltas."""
@@ -262,7 +271,50 @@ class _SessionSnapshot:
         )
 
     async def refresh(self, session: ChatSession) -> None:
-        batch = await session.load_since_async(self.cursor)
+        await self._apply(session, await session.load_since_async(self.cursor))
+
+    async def append(
+        self,
+        session: ChatSession,
+        messages: list[ChatMessage],
+        *,
+        journal: JournalBoundary | None = None,
+    ) -> None:
+        """Persist *messages* and advance past them in the same transaction."""
+        if not messages:
+            raise ValueError("a snapshot append requires Messages")
+        await self.commit(session, partial(session.append_many_async, messages), journal=journal)
+
+    async def commit(
+        self,
+        session: ChatSession,
+        write: _HistoryWrite,
+        *,
+        journal: JournalBoundary | None = None,
+    ) -> None:
+        """Run one history *write* of this Session and advance to its result.
+
+        *write* persists the given Continuation records in its own transaction
+        and returns every record after *since* from that transaction, including
+        other writers' appends, exactly as :meth:`refresh` would.
+        """
+        if journal is None:
+            batch = await write(continuation_records=[], since=self.cursor)
+        else:
+            batch = await journal.commit(
+                lambda records: write(continuation_records=records, since=self.cursor)
+            )
+        await self._apply(session, batch)
+
+    async def flush_deferred_notes(self, session: ChatSession) -> None:
+        """Persist deferred notes, then include every newer record."""
+        notes = session.take_deferred_notes()
+        if notes:
+            await self.append(session, notes)
+        else:
+            await self.refresh(session)
+
+    async def _apply(self, session: ChatSession, batch: SessionReadBatch | None) -> None:
         if batch is None:
             replacement = await self.load(session)
             self.messages = replacement.messages
@@ -448,15 +500,15 @@ async def create_run_execution_context(
                 "This Session no longer matches this Run. "
                 "Ask the user to resume it through its Extension."
             )
-        agent = dependencies.agent_resolver.resolve_temporary_agent(
+        agent = await dependencies.agent_resolver.resolve_temporary_agent_async(
             parent.address,
             generation_id=parent.generation_id,
             run_overrides=request.agent_overrides,
         )
     elif request.agent_overrides is None:
-        agent = dependencies.agent_resolver.resolve_agent(project_id, run.agent_id)
+        agent = await dependencies.agent_resolver.resolve_agent_async(project_id, run.agent_id)
     else:
-        agent = dependencies.agent_resolver.resolve_agent(
+        agent = await dependencies.agent_resolver.resolve_agent_async(
             project_id,
             run.agent_id,
             run_overrides=request.agent_overrides,

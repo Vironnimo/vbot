@@ -324,7 +324,7 @@ class ReflectionService:
         ``on_fork_created`` fires with the fork id before the review run
         starts, so an accessor can surface the fork while the review runs.
         """
-        agent = self._runtime.agent_resolver.resolve_agent(project_id, agent_id)
+        agent = await self._runtime.agent_resolver.resolve_agent_async(project_id, agent_id)
         if not agent.workspace or not memory_tool_enabled(agent.memory_prompt_mode):
             raise ReflectionUnavailableError(
                 "Reflection requires an identity Agent with the memory Tool active"

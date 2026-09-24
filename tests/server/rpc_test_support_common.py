@@ -330,6 +330,11 @@ class StubAgentResolver:
                 f"agent '{agent_id}' is not on project '{project_id}' team"
             ) from error
 
+    async def resolve_agent_async(
+        self, project_id: str | None, agent_id: str, **options: Any
+    ) -> Any:
+        return self.resolve_agent(project_id, agent_id, **options)
+
     def effective_config(self, project_id: str | None, agent_id: str) -> dict[str, dict[str, Any]]:
         """Identity provenance seam the agent payload reads (agent CRUD is identity-only).
 
