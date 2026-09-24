@@ -7,6 +7,7 @@ import pytest
 
 from cli.application import operations, worker
 from cli.application.state import ApplicationError, Installation
+from core.sessions import SessionNotFoundError
 from core.tools._bash_update_handoff import HANDOFF_DIRECTORY, UpdateHandoffs
 from server.rpc.application_methods import method_handlers
 from server.rpc.dispatcher import dispatch_method
@@ -36,15 +37,15 @@ def make_server(tmp_path: Path):
         project_id=None,
         session_id="session-one",
     )
-    assistant = SimpleNamespace(
-        role="assistant", tool_calls=[SimpleNamespace(id="call-one")], tool_call_id=None
-    )
-    tool = SimpleNamespace(role="tool", tool_calls=None, tool_call_id="call-one")
-    session = SimpleNamespace(load=lambda: [assistant, tool])
+    persisted_calls = {("session-one", "call-one")}
+
+    async def tool_result_persisted_async(address, tool_call_id):
+        return (address.session_id, tool_call_id) in persisted_calls
+
     bootstrap = BootstrapStub()
     runtime = SimpleNamespace(
         storage=SimpleNamespace(data_dir=tmp_path),
-        chat_sessions=SimpleNamespace(get=lambda _address: session),
+        chat_sessions=SimpleNamespace(tool_result_persisted_async=tool_result_persisted_async),
         bootstrap_service=bootstrap,
         update_handoffs=handoffs,
     )
@@ -268,6 +269,33 @@ async def test_private_maintenance_requires_durable_acknowledgement_before_cance
 
     state.chat_runs.maintenance_begin.assert_not_awaited()
     state.chat_runs.cancel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_private_maintenance_requires_the_durable_tool_call_and_its_session(
+    tmp_path: Path,
+) -> None:
+    state, ticket, _bootstrap = make_state(tmp_path)
+    params = {
+        "control_token": "secret",
+        "operation_id": "operation-one",
+        "handoff_ticket_id": ticket.ticket_id,
+    }
+
+    async def not_persisted(_address, _tool_call_id):
+        return False
+
+    state.runtime.chat_sessions.tool_result_persisted_async = not_persisted
+    with pytest.raises(RpcError, match="does not match a durable Tool call"):
+        await dispatch_method(state, "application.maintenance_begin", params, method_handlers())
+
+    async def session_gone(_address, _tool_call_id):
+        raise SessionNotFoundError("session-one")
+
+    state.runtime.chat_sessions.tool_result_persisted_async = session_gone
+    with pytest.raises(RpcError, match="Session is unavailable"):
+        await dispatch_method(state, "application.update_continuation", params, method_handlers())
+    state.chat_runs.maintenance_begin.assert_not_awaited()
 
 
 @pytest.mark.asyncio

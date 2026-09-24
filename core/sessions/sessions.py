@@ -891,6 +891,16 @@ class ChatSessionManager:
     ) -> OwnedRunRecord | None:
         return await _run_session_io(lambda: self.owned_run_by_input(address, input_id))
 
+    def tool_result_persisted(self, address: SessionAddress, tool_call_id: str) -> bool:
+        """Report whether a live Session durably holds both a Tool call and its result.
+
+        One indexed probe answers it without loading the transcript.
+        """
+        return self._store.tool_result_persisted(address, tool_call_id)
+
+    async def tool_result_persisted_async(self, address: SessionAddress, tool_call_id: str) -> bool:
+        return await _run_session_io(lambda: self.tool_result_persisted(address, tool_call_id))
+
     def run_start_boundaries(
         self, addresses: Sequence[SessionAddress]
     ) -> builtins.list[RunStartBoundary]:

@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     from core.runtime.interfaces import RuntimeServices
 
 
-def _inspect_subagent_work(
+async def _inspect_subagent_work(
     runtime: RuntimeServices,
     agent_id: str,
     session_id: str,
@@ -58,7 +58,7 @@ def _inspect_subagent_work(
     project_id: str | None = None,
 ) -> JsonObject | None:
     address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
-    session = runtime.chat_sessions.get(address)
+    session = await runtime.chat_sessions.get_async(address)
     active_run = runtime.chat_run_manager.active_run(
         agent_id=agent_id,
         session_id=session_id,
@@ -100,7 +100,7 @@ def _inspect_subagent_work(
             status=SUBAGENT_STATUS_QUEUED,
         )
 
-    run_result = session.load_run_result(work_id=work_id)
+    run_result = await session.load_run_result_async(work_id=work_id)
     if run_result is None:
         return None
     assistant, summary = run_result.assistant, run_result.summary

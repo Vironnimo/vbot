@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -531,13 +532,23 @@ async def test_inspect_resolves_exact_completed_work_after_child_session_reuse(
         raise AssertionError("Sub-Agent inspection must use the terminal Run projection")
 
     monkeypatch.setattr(ChatSession, "load", fail_full_load)
+    read_threads: list[int] = []
+    load_run_result = ChatSession.load_run_result
 
-    result = SubAgentCoordinator(runtime, RecordingTriggerService()).inspect(
+    def recording_load_run_result(self: ChatSession, **kwargs: Any) -> Any:
+        read_threads.append(threading.get_ident())
+        return load_run_result(self, **kwargs)
+
+    monkeypatch.setattr(ChatSession, "load_run_result", recording_load_run_result)
+
+    result = await SubAgentCoordinator(runtime, RecordingTriggerService()).inspect(
         "worker",
         "reused-child",
         "sub_old",
     )
 
+    # The durable result read runs on a Session worker, never on the Event Loop.
+    assert read_threads and threading.get_ident() not in read_threads
     assert result is not None
     assert result["id"] == "sub_old"
     assert result["run_id"] == "old-run"
@@ -558,7 +569,7 @@ async def test_inspect_prefers_matching_live_work_in_child_session(tmp_path: Pat
     )
     manager.busy_sessions[("worker", "live-child")] = active
 
-    result = SubAgentCoordinator(runtime, RecordingTriggerService()).inspect(
+    result = await SubAgentCoordinator(runtime, RecordingTriggerService()).inspect(
         "worker",
         "live-child",
         "sub_live",

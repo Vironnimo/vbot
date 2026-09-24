@@ -616,10 +616,11 @@ async def test_completion_fallback_prunes_persisted_subagent_batch(tmp_path: Pat
     tracker.register(parent_key, "worker", "child-session", "child-run")
 
     tracker.on_sub_agent_complete(parent_key, "child-run", {"result": "finished work"})
-    for _ in range(10):
+    # The fallback note is persisted on a Session worker, off the Event Loop.
+    for _ in range(500):
         if not tracker.references_identity_agent("parent"):
             break
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
 
     assert tracker.references_identity_agent("parent") is False
     notes = [

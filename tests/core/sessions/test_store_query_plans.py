@@ -190,6 +190,20 @@ def test_recall_context_reads_its_anchor_by_session_index(history) -> None:
     _assert_indexed(connection, statements)
 
 
+def test_tool_result_probe_reads_one_call_by_its_public_id(history) -> None:
+    address, _anchor, connection = history
+    recorder, statements = _recording(connection)
+    assert _store_history.tool_result_persisted(recorder, address, "call") is True
+    assert _store_history.tool_result_persisted(recorder, address, "missing") is False
+    _assert_indexed(connection, statements)
+    details = [
+        str(plan[3])
+        for sql, params in statements
+        for plan in connection.execute("EXPLAIN QUERY PLAN " + sql, params)
+    ]
+    assert any("tool_calls_by_public_id" in detail for detail in details), details
+
+
 def test_delta_read_uses_one_indexed_read_from_the_anchor(history) -> None:
     address, _anchor, connection = history
     state = _store_values._require_live(connection, address)

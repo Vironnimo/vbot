@@ -384,6 +384,20 @@ def active_user_message_count(
     return int(row[0])
 
 
+def tool_result_persisted(
+    connection: sqlite3.Connection, address: SessionAddress, tool_call_id: str
+) -> bool:
+    """Report whether an Assistant Tool call of this Session has its durable result."""
+    state = _store_values._require_live(connection, address)
+    row = connection.execute(
+        "SELECT 1 FROM tool_calls t JOIN messages m ON m.message_key = t.message_key "
+        "WHERE t.tool_call_id = ? AND m.session_key = ? AND m.role = 'assistant' "
+        "AND t.result_id IS NOT NULL LIMIT 1",
+        (tool_call_id, state["session_key"]),
+    ).fetchone()
+    return row is not None
+
+
 def latest_note(
     connection: sqlite3.Connection, address: SessionAddress, *, content_prefix: str
 ) -> Callable[[], ChatMessage | None]:
