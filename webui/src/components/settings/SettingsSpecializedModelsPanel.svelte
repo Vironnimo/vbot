@@ -572,50 +572,6 @@
   </Banner>
 {/if}
 
-{#if showSpeechMemory}
-  <div data-local-speech-memory>
-    <div class="s-row-label">{t('settings.localSpeech.memoryTitle')}</div>
-    <div class="s-row-desc">{t('settings.localSpeech.memoryHelp')}</div>
-    {#if speechMemoryError}<div role="alert">{speechMemoryError}</div>{/if}
-    {#if !speechMemory && !speechMemoryError}
-      <div role="status">{t('settings.localSpeech.memoryChecking')}</div>
-    {/if}
-    {#each speechMemoryModels as model (model.target)}
-      <div class="s-row" data-speech-memory-target={model.target}>
-        <div class="s-row-info">
-          <div class="s-row-label">{model.label}</div>
-          <div class="s-row-desc" role="status" aria-live="polite">
-            {#if speechUnloading.has(model.target)}
-              {t('settings.localSpeech.unloading')}
-            {:else if model.busy}
-              {t('settings.localSpeech.memoryBusy')}
-            {:else if model.loaded}
-              {t('settings.localSpeech.memoryLoaded')}
-            {:else}
-              {t('settings.localSpeech.memoryEmpty')}
-            {/if}
-          </div>
-          {#if speechUnloadErrors[model.target]}
-            <div role="alert">{speechUnloadErrors[model.target]}</div>
-          {/if}
-        </div>
-        <div class="s-row-control">
-          <Button
-            disabled={speechUnloading.has(model.target) ||
-              !model.loaded ||
-              model.busy}
-            ariaLabel={t('settings.localSpeech.unloadAria', undefined, {
-              model: model.label,
-            })}
-            onClick={() => unloadSpeechMemory(model)}
-            >{t('settings.localSpeech.unloadButton')}</Button
-          >
-        </div>
-      </div>
-    {/each}
-  </div>
-{/if}
-
 {#snippet optionField(taskType, field)}
   {@const jsonError =
     field.type === JSON_OPTION_TYPE ? taskModelJsonError(taskType, field) : ''}
@@ -703,7 +659,7 @@
   </FormField>
 {/snippet}
 
-<div class="s-task-model-list">
+<div class="s-group s-task-model-list">
   {#each taskRows as row (row.taskType)}
     {@const binding = taskModelBindings[row.taskType] ?? {
       target: '',
@@ -713,84 +669,142 @@
     {@const selectedTarget = taskModelTargets(row.taskType).find(
       (target) => target.id === binding.target,
     )}
-    <div class="s-row s-row--stacked s-task-model-row">
-      <div class="s-task-model-head">
-        <div class="s-row-info">
-          {#if showTaskLabels}
-            <div class="s-row-label">
-              {t(row.titleKey, row.titleFallback)}
-            </div>
-          {/if}
-          <div class="s-row-desc">
-            {t(row.descriptionKey, row.descriptionFallback)}
+    <div class="s-row s-task-model-row">
+      <div class="s-row-info">
+        {#if showTaskLabels}
+          <div class="s-row-label">
+            {t(row.titleKey, row.titleFallback)}
           </div>
-        </div>
-        <div class="s-row-control s-row-control--task-model">
-          <SearchableDropdown
-            id={`settings-specialized-${row.taskType}`}
-            value={binding.target}
-            options={taskModelTargetOptions(row.taskType, binding)}
-            placeholder={t(
-              'settings.specializedModels.noTarget',
-              'Not configured',
-            )}
-            ariaLabel={t(row.titleKey, row.titleFallback)}
-            disabled={taskModelLoading}
-            triggerClass="settings-view__dropdown"
-            onValueChange={(value) =>
-              handleTaskModelTargetChange(row.taskType, value)}
-          />
+        {/if}
+        <div class="s-row-desc">
+          {t(row.descriptionKey, row.descriptionFallback)}
         </div>
       </div>
-
-      {#if binding.target && fields.length > 0}
-        <div class="s-task-model-options">
-          {#each fields as field (field.name)}
-            {#if field.type === JSON_OPTION_TYPE}
-              <details class="s-task-model-advanced">
-                <summary
-                  >{field.label}<span aria-hidden="true">JSON</span></summary
-                >
-                {@render optionField(row.taskType, field)}
-              </details>
-            {:else}
-              {@render optionField(row.taskType, field)}
-            {/if}
-          {/each}
-        </div>
-      {:else if binding.target}
-        <div class="s-row-desc">
-          {t(
-            'settings.specializedModels.noOptions',
-            'This target has no configurable options.',
+      <div class="s-row-control s-row-control--task-model">
+        <SearchableDropdown
+          id={`settings-specialized-${row.taskType}`}
+          value={binding.target}
+          options={taskModelTargetOptions(row.taskType, binding)}
+          placeholder={t(
+            'settings.specializedModels.noTarget',
+            'Not configured',
           )}
-        </div>
-      {/if}
-
-      {#if binding.target && Object.keys(binding.options).length > 0}
-        <Button
-          disabled={taskModelSaving || taskModelLoading}
-          onClick={() => resetTaskModelOptions(row.taskType)}
-          >{t(
-            'settings.specializedModels.resetOptions',
-            'Reset options',
-          )}</Button
-        >
-      {/if}
-
-      {#if ['speech_to_text', 'text_to_speech'].includes(row.taskType) && selectedTarget?.kind === 'local'}
-        {#key binding.target}
-          <LocalSpeechSupport
-            target={binding.target}
-            tts={row.taskType === 'text_to_speech'}
-            {taskSurfaceBusy}
-            onReady={() => refreshLocalTargets(row.taskType)}
-          />
-        {/key}
-      {/if}
+          ariaLabel={t(row.titleKey, row.titleFallback)}
+          disabled={taskModelLoading}
+          triggerClass="settings-view__dropdown"
+          onValueChange={(value) =>
+            handleTaskModelTargetChange(row.taskType, value)}
+        />
+      </div>
     </div>
+
+    {#if binding.target}
+      <!-- The chosen target's options continue its row. -->
+      <div class="s-group__block s-group__block--attached s-task-model-details">
+        {#if fields.length > 0}
+          <div class="s-task-model-options">
+            {#each fields as field (field.name)}
+              {#if field.type === JSON_OPTION_TYPE}
+                <details class="s-task-model-advanced">
+                  <summary
+                    >{field.label}<span aria-hidden="true">JSON</span></summary
+                  >
+                  {@render optionField(row.taskType, field)}
+                </details>
+              {:else}
+                {@render optionField(row.taskType, field)}
+              {/if}
+            {/each}
+          </div>
+        {:else}
+          <div class="s-group__note">
+            {t(
+              'settings.specializedModels.noOptions',
+              'This target has no configurable options.',
+            )}
+          </div>
+        {/if}
+
+        {#if Object.keys(binding.options).length > 0}
+          <Button
+            disabled={taskModelSaving || taskModelLoading}
+            onClick={() => resetTaskModelOptions(row.taskType)}
+            >{t(
+              'settings.specializedModels.resetOptions',
+              'Reset options',
+            )}</Button
+          >
+        {/if}
+
+        {#if ['speech_to_text', 'text_to_speech'].includes(row.taskType) && selectedTarget?.kind === 'local'}
+          {#key binding.target}
+            <LocalSpeechSupport
+              target={binding.target}
+              tts={row.taskType === 'text_to_speech'}
+              {taskSurfaceBusy}
+              onReady={() => refreshLocalTargets(row.taskType)}
+            />
+          {/key}
+        {/if}
+      </div>
+    {/if}
   {/each}
 </div>
+
+{#if showSpeechMemory}
+  <div class="s-task-memory" data-local-speech-memory>
+    <div class="s-subhead">
+      <h4 class="s-subhead__title">{t('settings.localSpeech.memoryTitle')}</h4>
+      <p class="s-subhead__desc">{t('settings.localSpeech.memoryHelp')}</p>
+    </div>
+    {#if speechMemoryError}<div role="alert">{speechMemoryError}</div>{/if}
+    {#if !speechMemory && !speechMemoryError}
+      <div class="s-group__note" role="status">
+        {t('settings.localSpeech.memoryChecking')}
+      </div>
+    {/if}
+    {#if speechMemoryModels.length}
+      <div class="s-group">
+        {#each speechMemoryModels as model (model.target)}
+          <div
+            class="s-row s-row--compact"
+            data-speech-memory-target={model.target}
+          >
+            <div class="s-row-info">
+              <div class="s-row-label">{model.label}</div>
+              <div class="s-row-desc" role="status" aria-live="polite">
+                {#if speechUnloading.has(model.target)}
+                  {t('settings.localSpeech.unloading')}
+                {:else if model.busy}
+                  {t('settings.localSpeech.memoryBusy')}
+                {:else if model.loaded}
+                  {t('settings.localSpeech.memoryLoaded')}
+                {:else}
+                  {t('settings.localSpeech.memoryEmpty')}
+                {/if}
+              </div>
+              {#if speechUnloadErrors[model.target]}
+                <div role="alert">{speechUnloadErrors[model.target]}</div>
+              {/if}
+            </div>
+            <div class="s-row-control">
+              <Button
+                disabled={speechUnloading.has(model.target) ||
+                  !model.loaded ||
+                  model.busy}
+                ariaLabel={t('settings.localSpeech.unloadAria', undefined, {
+                  model: model.label,
+                })}
+                onClick={() => unloadSpeechMemory(model)}
+                >{t('settings.localSpeech.unloadButton')}</Button
+              >
+            </div>
+          </div>
+        {/each}
+      </div>
+    {/if}
+  </div>
+{/if}
 
 <div class="s-footer">
   <SaveButton

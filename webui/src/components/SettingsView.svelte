@@ -767,7 +767,7 @@
               {#each page.sections as panelId (panelId)}
                 {@const panel = panelById.get(panelId)}
                 <section
-                  class="settings-editor"
+                  class="settings-editor s-section"
                   data-settings-section={panelId}
                   hidden={searchActive || activePageId !== page.id}
                   aria-labelledby={page.sections.length === 1
@@ -775,13 +775,17 @@
                     : 'settings-section-' + panelId}
                 >
                   {#if page.sections.length > 1}
-                    <header class="settings-section-heading">
-                      <h3 id={'settings-section-' + panelId} tabindex="-1">
+                    <header class="settings-section-heading s-section__head">
+                      <h3
+                        class="s-section__title"
+                        id={'settings-section-' + panelId}
+                        tabindex="-1"
+                      >
                         {panel.label()}
                       </h3>
                     </header>
                   {/if}
-                  <div class="settings-editor-body">
+                  <div class="settings-editor-body s-section__body">
                     {@render panelContent(panelId)}
                   </div>
                 </section>
