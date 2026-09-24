@@ -262,6 +262,51 @@ class TestReusedToolCallIndexRedirect:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_repeated_name_is_deduplicated_but_argument_bytes_are_kept(self, openai_adapter):
+        # Some compatible servers resend the full name on every fragment;
+        # argument fragments are true deltas even when they repeat a prefix.
+        fragments = ['{"value":', '{"value":', "1}}"]
+        body = "".join(
+            "data: "
+            + json.dumps(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "call_a",
+                                        "function": {"name": "write", "arguments": fragment},
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            )
+            + "\n\n"
+            for fragment in fragments
+        )
+        body += 'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
+        body += "data: [DONE]\n\n"
+        respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, text=body))
+        accumulator = StreamingAccumulator()
+        tool_deltas = []
+
+        async for delta in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            if delta["type"] == "tool_call_delta":
+                tool_deltas.append(delta)
+            accumulator.add_delta(delta)
+
+        assert [delta["name_delta"] for delta in tool_deltas] == ["write", "", ""]
+        assert [delta["arguments_delta"] for delta in tool_deltas] == fragments
+        assert accumulator.finalize_assistant_fields().tool_calls == [
+            {"id": "call_a", "name": "write", "arguments": {"value": {"value": 1}}}
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_interleaved_reused_index_returns_to_the_original_call(self, openai_adapter):
         calls = [
             {"index": 0, "id": "call_a", "function": {"name": "first", "arguments": '{"a":'}},

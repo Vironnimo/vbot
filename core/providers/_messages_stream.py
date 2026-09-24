@@ -27,7 +27,7 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
     TerminalOutcome,
 )
-from core.providers.errors import ProviderError
+from core.providers.errors import ProviderError, classify_in_band_error_type
 
 
 class AnthropicMessagesStreamDecoder:
@@ -61,7 +61,7 @@ class AnthropicMessagesStreamDecoder:
 
         event_type = event.get("type")
         if event_type == "error":
-            raise ProviderError(self._error_detail(event), retryable=False)
+            raise self._stream_error(event)
         if event_type == "message_start":
             self._capture_message_start_usage(event)
             return []
@@ -74,6 +74,22 @@ class AnthropicMessagesStreamDecoder:
         if event_type == "message_delta":
             return self._normalize_message_delta(event)
         return []
+
+    def _stream_error(self, event: dict[str, Any]) -> ProviderError:
+        """Classify an in-stream ``error`` event by its documented ``error.type``.
+
+        The stream already returned HTTP 200, so the type is the only status
+        evidence: ``overloaded_error``/``api_error`` and rate-limit/timeout
+        types are retryable, request/auth/permission/billing types stay fatal,
+        and an unknown type stays fatal.
+        """
+
+        error = event.get("error")
+        error_type = error.get("type") if isinstance(error, dict) else None
+        return classify_in_band_error_type(
+            self._error_detail(event),
+            classifier=error_type if isinstance(error_type, str) and error_type else None,
+        )
 
     @staticmethod
     def _anthropic_error_detail(event: dict[str, Any]) -> str:

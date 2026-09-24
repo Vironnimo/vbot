@@ -25,9 +25,11 @@ from core.providers._chat_completions_catalog import (
     _read_string_list,
 )
 from core.providers._http_shared import (
-    build_streaming_request,
     classify_http_status,
+    connect_streaming_with_retry,
     decode_response_json,
+    format_http_error_detail,
+    iter_stream_lines,
     wrap_network_error,
 )
 from core.providers._openrouter_catalog import (
@@ -75,7 +77,6 @@ from core.providers._openrouter_policy import (
 from core.providers.adapter import ModelLookup
 from core.providers.errors import (
     NetworkError,
-    ProviderError,
     classify_in_band_provider_error,
 )
 from core.providers.github_copilot_responses import (
@@ -396,7 +397,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         event_lines: list[str] = []
         seen_finish_delta = False
         try:
-            async for line in response.aiter_lines():
+            async for line in iter_stream_lines(response):
                 if line:
                     event_lines.append(line)
                     continue
@@ -437,34 +438,24 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         self,
         payload: dict[str, Any],
     ) -> httpx.Response:
-        async def _connect() -> httpx.Response:
-            headers = await self._build_headers()
-            request = build_streaming_request(
-                self._client,
-                "POST",
-                OPENROUTER_RESPONSES_ENDPOINT,
-                json=payload,
-                headers=headers,
+        def _handle_error_status(
+            status_code: int,
+            error_body: str,
+            response_headers: httpx.Headers,
+        ) -> None:
+            self._classify_http_status(
+                status_code,
+                detail=format_http_error_detail(status_code, error_body),
+                response_headers=response_headers,
             )
-            try:
-                response = await self._client.send(request, stream=True)
-            except httpx.TransportError as exc:
-                raise wrap_network_error(exc) from exc
-            if response.status_code >= 400:
-                body = (await response.aread()).decode("utf-8", errors="replace")
-                await response.aclose()
-                self._classify_http_status(
-                    response.status_code,
-                    detail=_openrouter_http_error_detail(response, body),
-                    response_headers=response.headers,
-                )
-                raise ProviderError(
-                    f"Provider error: {response.status_code}",
-                    retryable=False,
-                )
-            return response
 
-        return await retry_async(_connect)
+        return await connect_streaming_with_retry(
+            self._client,
+            OPENROUTER_RESPONSES_ENDPOINT,
+            payload,
+            build_headers=self._build_headers,
+            handle_error_status=_handle_error_status,
+        )
 
     def request_context_kwargs(
         self,

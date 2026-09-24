@@ -130,11 +130,8 @@ def _openrouter_provider_preferences(
     return preferences
 
 
-def _openrouter_http_error_detail(
-    response: httpx.Response,
-    body: str | None = None,
-) -> str:
-    reason = response.text if body is None else body
+def _openrouter_http_error_detail(response: httpx.Response) -> str:
+    reason = response.text
     return f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
 
 

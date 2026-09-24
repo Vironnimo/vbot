@@ -12,8 +12,9 @@ import httpx
 import pytest
 import respx
 
-from core.providers.errors import ProviderAuthError, ProviderError
+from core.providers.errors import NetworkError, ProviderAuthError, ProviderError
 from core.providers.token_getter import (
+    ROTATING_REFRESH_DEVICE_FLOWS,
     OAuthTokenGetter,
 )
 from core.providers.token_store import OAuthToken, TokenStore
@@ -171,26 +172,6 @@ async def test_nous_refresh_reuse_quarantines_token_without_retry(tmp_path: Path
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_nous_retryable_refresh_failure_is_not_replayed(tmp_path: Path) -> None:
-    token_store = TokenStore(tmp_path)
-    original = OAuthToken(
-        access_token="expired-access",
-        refresh_token="still-valid-refresh",
-        expires_at=datetime.now(UTC) - timedelta(minutes=1),
-    )
-    token_store.save("nous", "subscription", original)
-    route = respx.post(NOUS_TOKEN_URL).mock(return_value=httpx.Response(503, text="unavailable"))
-    getter = OAuthTokenGetter(token_store, "nous", "subscription", _nous_oauth_config())
-
-    with pytest.raises(ProviderError):
-        await getter()
-
-    assert route.call_count == 1
-    assert token_store.load("nous", "subscription") == original
-
-
-@respx.mock
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "expiry_fields",
     [
@@ -338,23 +319,46 @@ async def test_xai_terminal_refresh_failure_quarantines_token(tmp_path: Path) ->
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_xai_retryable_refresh_failure_preserves_token(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("provider_id", "token_url", "oauth_config"),
+    [
+        ("xai", XAI_TOKEN_URL, _xai_oauth_config),
+        ("minimax", MINIMAX_TOKEN_URL, _minimax_oauth_config),
+        ("opencode", OPENCODE_TOKEN_URL, _opencode_oauth_config),
+        ("nous", NOUS_TOKEN_URL, _nous_oauth_config),
+    ],
+)
+@pytest.mark.parametrize(
+    "failure",
+    [httpx.Response(503, text="unavailable"), httpx.ReadError("response lost")],
+    ids=["503", "lost-response"],
+)
+async def test_rotating_refresh_is_never_replayed_and_preserves_token(
+    tmp_path: Path, provider_id, token_url, oauth_config, failure
+) -> None:
+    """Every rotating flow follows ``ROTATING_REFRESH_DEVICE_FLOWS``.
+
+    A replay after a lost response would send the retired refresh token; its
+    auth rejection would then delete the still-valid stored login.
+    """
+    assert oauth_config().device_flow in ROTATING_REFRESH_DEVICE_FLOWS
     token_store = TokenStore(tmp_path)
     original = OAuthToken(
         access_token="expired-access",
         refresh_token="still-valid-refresh",
         expires_at=datetime.now(UTC) - timedelta(minutes=1),
     )
-    token_store.save("xai", "subscription", original)
-    route = respx.post(XAI_TOKEN_URL).mock(return_value=httpx.Response(503, text="unavailable"))
-    getter = OAuthTokenGetter(token_store, "xai", "subscription", _xai_oauth_config())
+    token_store.save(provider_id, "subscription", original)
+    mock = {"side_effect": failure} if isinstance(failure, Exception) else {"return_value": failure}
+    route = respx.post(token_url).mock(**mock)
+    getter = OAuthTokenGetter(token_store, provider_id, "subscription", oauth_config())
 
     with (
         patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock) as sleep_mock,
-        pytest.raises(ProviderError),
+        pytest.raises(NetworkError if isinstance(failure, Exception) else ProviderError),
     ):
         await getter()
 
-    assert route.call_count == 4
-    assert sleep_mock.await_count == 3
-    assert token_store.load("xai", "subscription") == original
+    assert route.call_count == 1
+    assert sleep_mock.await_count == 0
+    assert token_store.load(provider_id, "subscription") == original

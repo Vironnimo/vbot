@@ -25,7 +25,7 @@ This supplementary map covers xAI-specific Connection, OAuth, catalog, and Respo
 
 - xAI returns RFC 8628 polling states such as `authorization_pending` and `slow_down` as HTTP 400 JSON. Only the four standard polling errors pass status classification; any other 400 remains terminal.
 - Prefer `verification_uri_complete` when present so the browser URL carries the user code. Fall back to `verification_uri`, then the legacy `verification_url` field.
-- Refresh responses may rotate the refresh token. Persist the replacement atomically; preserve the last token on retryable transport/5xx failures, but delete it after a terminal refresh 400/401/403 so the Connection clearly requires reconnecting.
+- Refresh responses may rotate the refresh token. Persist the replacement atomically; send each refresh POST once without automatic replay, preserve the last token on retryable transport/5xx failures, but delete it after a terminal refresh 400/401/403 so the Connection clearly requires reconnecting.
 
 ## Verification
 

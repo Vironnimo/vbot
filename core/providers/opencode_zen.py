@@ -101,6 +101,7 @@ def _classify_zen_status(
     *,
     detail: str,
     response_headers: httpx.Headers,
+    extra_retryable: set[int] | None = None,
 ) -> None:
     normalized = detail.casefold()
     if status_code == 403 and "freetiererror" in normalized:
@@ -121,6 +122,7 @@ def _classify_zen_status(
     classify_http_status(
         status_code,
         idempotent=False,
+        extra_retryable=extra_retryable,
         detail=detail,
         response_headers=response_headers,
     )
@@ -149,6 +151,7 @@ class _OpenCodeZenMessagesAdapter(AnthropicCompatibleAdapter):
             status_code,
             detail=detail,
             response_headers=response_headers,
+            extra_retryable=self._extra_retryable_statuses,
         )
 
 

@@ -48,6 +48,7 @@ from core.providers._http_shared import (
     classify_http_status,
     connect_streaming_with_retry,
     decode_response_json,
+    iter_stream_lines,
     parse_sse_json_data,
     wrap_network_error,
 )
@@ -569,7 +570,7 @@ class OllamaAdapter(ProviderAdapter):
         tool_call_count = 0
         seen_done = False
         try:
-            async for line in response.aiter_lines():
+            async for line in iter_stream_lines(response):
                 if not line.strip():
                     continue
                 parsed = parse_sse_json_data(line, context="Ollama provider")

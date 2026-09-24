@@ -11,10 +11,11 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from core.providers._http_shared import (
-    build_streaming_request,
     classify_http_status,
+    connect_streaming_with_retry,
     decode_response_json,
     format_http_error_detail,
+    iter_stream_lines,
     wrap_network_error,
 )
 from core.providers.adapter import ModelLookup
@@ -695,7 +696,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         event_lines: list[str] = []
         seen_finish_delta = False
         try:
-            async for line in response.aiter_lines():
+            async for line in iter_stream_lines(response):
                 if line:
                     event_lines.append(line)
                     continue
@@ -724,35 +725,29 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         *,
         request_headers: Mapping[str, str],
     ) -> httpx.Response:
-        async def _connect() -> httpx.Response:
+        async def _build_headers() -> dict[str, str]:
             headers = await self._build_headers()
             headers.update(request_headers)
-            request = build_streaming_request(
-                self._client,
-                "POST",
-                OPENCODE_GO_RESPONSES_ENDPOINT,
-                json=payload,
-                headers=headers,
-            )
-            try:
-                response = await self._client.send(request, stream=True)
-            except httpx.TransportError as exc:
-                raise wrap_network_error(exc) from exc
-            if response.status_code >= 400:
-                body = (await response.aread()).decode("utf-8", errors="replace")
-                await response.aclose()
-                self._classify_responses_status(
-                    response.status_code,
-                    detail=_opencode_go_http_error_detail(response, body),
-                    response_headers=response.headers,
-                )
-                raise ProviderError(
-                    f"Provider error: {response.status_code}",
-                    retryable=False,
-                )
-            return response
+            return headers
 
-        return await retry_async(_connect)
+        def _handle_error_status(
+            status_code: int,
+            error_body: str,
+            response_headers: httpx.Headers,
+        ) -> None:
+            self._classify_responses_status(
+                status_code,
+                detail=format_http_error_detail(status_code, error_body),
+                response_headers=response_headers,
+            )
+
+        return await connect_streaming_with_retry(
+            self._client,
+            OPENCODE_GO_RESPONSES_ENDPOINT,
+            payload,
+            build_headers=_build_headers,
+            handle_error_status=_handle_error_status,
+        )
 
     def _kwargs_with_model_output_limit(
         self,
@@ -858,11 +853,8 @@ def _bare_model_id(model_id: str) -> str:
     return model_id.split("::", 1)[0]
 
 
-def _opencode_go_http_error_detail(
-    response: httpx.Response,
-    body: str | None = None,
-) -> str:
-    reason = response.text if body is None else body
+def _opencode_go_http_error_detail(response: httpx.Response) -> str:
+    reason = response.text
     return f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
 
 

@@ -10,10 +10,11 @@ import httpx
 import pytest
 import respx
 
-from core.providers.errors import ProviderError, ProviderRateLimitError
+from core.providers.errors import NetworkError, ProviderError, ProviderRateLimitError
 from core.providers.openrouter import (
     OpenRouterAdapter,
 )
+from core.utils.retry import caller_owns_retries
 from tests.core.providers.openrouter_helpers import (
     OPENROUTER_RESPONSES_URL,
     OPENROUTER_URL,
@@ -265,3 +266,30 @@ async def test_responses_stream_uses_router_error_policy(
     assert caught.value.retryable is retryable
     assert getattr(caught.value, "retry_after", None) == retry_after
     assert error["error"]["code"] in str(caught.value)
+
+
+class _InterruptedErrorBody(httpx.AsyncByteStream):
+    closed = False
+
+    async def __aiter__(self):
+        yield b'{"error":'
+        raise httpx.ReadError("body interrupted")
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_responses_error_body_read_failure_is_retryable_network_error_and_closes(
+    openrouter_adapter,
+):
+    body = _InterruptedErrorBody()
+    respx.post(OPENROUTER_RESPONSES_URL).mock(return_value=httpx.Response(503, stream=body))
+
+    with caller_owns_retries(), pytest.raises(NetworkError) as caught:
+        async for _ in openrouter_adapter.stream(SAMPLE_MESSAGES, model_id="openai/gpt-5.6-sol"):
+            pass
+
+    assert caught.value.retryable is True
+    assert body.closed
