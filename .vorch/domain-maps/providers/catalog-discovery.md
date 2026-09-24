@@ -8,10 +8,13 @@ Read this reference only for Provider Model discovery and refresh. Model-DB laye
 
 A discovery target is one Connection with an effective `models_endpoint`. By default it must be usable and contributes its selected Account credential; a Connection with `catalog_requires_credentials: false` may refresh a public catalog with an empty discovery credential even while no usable Account exists. The effective base URL and endpoint use Connection overrides before Provider defaults. Discovered Models are tagged with the local Connection id, not the Account.
 
+RPC callers (`model.refresh_db` and the Debug `debug.model_probe`) resolve the discovery Connection and credential through `server/rpc/provider_access._discovery_credential`: it applies the credential policy above, honors an explicit Account suffix in an OAuth Connection id (otherwise the first usable Account), and points GitHub Copilot at the Account's exchanged API endpoint.
+
 An OpenAI-compatible Custom Provider participates without a separate discovery path: its implicit `default` Connection, optional Settings `models_endpoint`, Adapter selector, and credential resolver feed this same pipeline. Manual Custom Model facts are applied later by `ModelRegistry` and therefore override a discovered Model with the same wire id without deleting discovered-only Models.
 
 ## Fetch and normalization
 
+- `build_discovery_request(provider_config, connection)` resolves the primary catalog request once: effective base URL, models URL with resolved discovery params, and `DiscoveryRequest.headers(credential)` (Provider extra headers, Connection auth header unless keyless or empty, then Adapter discovery headers). `refresh_models` sends it and `debug.model_probe` reuses it, so a probe cannot drift from refresh. A Connection without an effective `models_endpoint` raises `ValueError`.
 - Primary catalog GET accepts top-level `data` or `models` lists and passes entries through the selected Adapter class's catalog filter/normalizer.
 - `discovery_headers()`, `discovery_params()`, and `supplementary_discovery_params()` let a Provider describe catalog auth/query variants without branching generic discovery by Provider id.
 - Discovery accepts a static credential or the selected Account's live `TokenGetter`; OAuth RPC refresh keeps the getter open through discovery. Each authenticated GET/POST attempt rebuilds headers from the current token, including Adapter-derived Account routing.

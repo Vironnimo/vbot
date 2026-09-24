@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 from .openai_compatible_test_support import (
+    API_KEY,
+    OPENAI_CONFIG,
     OPENAI_URL,
     SAMPLE_MESSAGES,
     SUCCESS_RESPONSE,
     Any,
     AsyncMock,
+    Capabilities,
+    Model,
     NetworkError,
+    OpenAICompatibleAdapter,
     ProviderAuthError,
     ProviderError,
     ProviderRateLimitError,
     ProviderTimeoutError,
+    ReasoningCapabilities,
     httpx,
     json,
     logging,
@@ -416,6 +422,23 @@ RESPONSE_WITH_REASONING_TOKENS = {
 }
 
 
+def _catalog_adapter(*, reasoning_supported: bool) -> OpenAICompatibleAdapter:
+    """Adapter whose catalog knows ``gpt-5.2`` with the given reasoning support."""
+    model = Model(
+        model_id="gpt-5.2",
+        name="GPT-5.2",
+        capabilities=Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=True,
+            reasoning=ReasoningCapabilities(supported=reasoning_supported),
+        ),
+        context_window=128_000,
+        max_output_tokens=4096,
+    )
+    return OpenAICompatibleAdapter(OPENAI_CONFIG, API_KEY, model_lookup={"gpt-5.2": model}.get)
+
+
 class TestSendReasoningObservability:
     """send() surfaces the two reasoning feedback signals without changing behavior."""
 
@@ -518,6 +541,56 @@ class TestSendReasoningObservability:
         # Act
         with caplog.at_level(logging.WARNING, logger=_OPENAI_COMPATIBLE_LOGGER):
             await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", thinking_effort="none")
+
+        # Assert
+        assert [record for record in caplog.records if record.levelno == logging.WARNING] == []
+
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("reasoning_supported", "expected_warnings"), [(False, 0), (True, 1)])
+    async def test_send_zero_reasoning_tokens_warns_only_for_rendered_reasoning(
+        self, caplog: Any, reasoning_supported: bool, expected_warnings: int
+    ) -> None:
+        """A catalog non-reasoning Model strips the effort, so 0 tokens is expected."""
+        # Arrange
+        adapter = _catalog_adapter(reasoning_supported=reasoning_supported)
+        route = respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(200, json=RESPONSE_WITH_ZERO_REASONING_TOKENS)
+        )
+
+        # Act
+        with caplog.at_level(logging.WARNING, logger=_OPENAI_COMPATIBLE_LOGGER):
+            await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", thinking_effort="high")
+
+        # Assert
+        sent_effort = json.loads(route.calls.last.request.content).get("reasoning_effort")
+        assert sent_effort == ("high" if reasoning_supported else None)
+        warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+        assert len(warnings) == expected_warnings
+        if expected_warnings:
+            assert "rendered_reasoning=high" in warnings[0].getMessage()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "returned",
+        [
+            {"reasoning_content": "Thinking it through."},
+            {"reasoning_details": [{"type": "reasoning.text", "text": "Thinking."}]},
+        ],
+    )
+    async def test_send_zero_reasoning_tokens_with_returned_reasoning_does_not_warn(
+        self, openai_adapter, caplog: Any, returned: dict[str, Any]
+    ) -> None:
+        """Returned Reasoning outranks a Provider counter that reports zero."""
+        # Arrange
+        response = json.loads(json.dumps(RESPONSE_WITH_ZERO_REASONING_TOKENS))
+        response["choices"][0]["message"].update(returned)
+        respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=response))
+
+        # Act
+        with caplog.at_level(logging.WARNING, logger=_OPENAI_COMPATIBLE_LOGGER):
+            await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", thinking_effort="high")
 
         # Assert
         assert [record for record in caplog.records if record.levelno == logging.WARNING] == []

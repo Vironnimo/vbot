@@ -453,53 +453,100 @@ def test_reasoning_token_count_unknown_when_absent_or_malformed() -> None:
     assert reasoning_token_count({"completion_tokens_details": {"reasoning_tokens": True}}) is None
 
 
-def test_warn_effort_swallowed_emits_on_nonzero_effort_with_zero_tokens(caplog: Any) -> None:
-    """Effort sent but 0 reasoning tokens back emits a structured warning."""
+_ZERO_REASONING_USAGE = {"completion_tokens_details": {"reasoning_tokens": 0}}
+
+
+def _swallowed_warnings(caplog: Any) -> list[str]:
+    return [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+
+
+@pytest.mark.parametrize(
+    ("rendered", "expected_label"),
+    [
+        (ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="high"), "high"),
+        (
+            ReasoningIntent(REASONING_INTENT_BUDGET, effort_level="high", budget_tokens=16384),
+            "budget:16384",
+        ),
+        (ReasoningIntent(REASONING_INTENT_ON, effort_level="high"), "on"),
+    ],
+)
+def test_warn_effort_swallowed_emits_when_rendered_reasoning_yields_zero_tokens(
+    caplog: Any, rendered: ReasoningIntent, expected_label: str
+) -> None:
+    """Rendered reasoning with 0 reasoning tokens and nothing returned warns once."""
     # Arrange / Act
     with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
         warn_effort_swallowed(
-            selected_effort="high",
-            usage={"completion_tokens_details": {"reasoning_tokens": 0}},
+            rendered=rendered,
+            usage=_ZERO_REASONING_USAGE,
+            returned_reasoning=False,
             model_id="gpt-5.2",
         )
 
     # Assert
-    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    warnings = _swallowed_warnings(caplog)
     assert len(warnings) == 1
-    message = warnings[0].getMessage()
-    assert "gpt-5.2" in message
-    assert "high" in message
+    assert "gpt-5.2" in warnings[0]
+    assert f"rendered_reasoning={expected_label}" in warnings[0]
 
 
 def test_warn_effort_swallowed_silent_when_reasoning_tokens_nonzero(caplog: Any) -> None:
     with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
         warn_effort_swallowed(
-            selected_effort="high",
+            rendered=ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="high"),
             usage={"completion_tokens_details": {"reasoning_tokens": 42}},
+            returned_reasoning=False,
             model_id="gpt-5.2",
         )
 
-    assert [record for record in caplog.records if record.levelno == logging.WARNING] == []
+    assert _swallowed_warnings(caplog) == []
 
 
-def test_warn_effort_swallowed_silent_for_none_effort(caplog: Any) -> None:
+@pytest.mark.parametrize(
+    "rendered",
+    [
+        ReasoningIntent(REASONING_INTENT_OFF),
+        ReasoningIntent(REASONING_INTENT_OFF, effort_level="none"),
+        ReasoningIntent(REASONING_INTENT_DEFAULT),
+    ],
+)
+def test_warn_effort_swallowed_silent_when_rendered_intent_requests_no_reasoning(
+    caplog: Any, rendered: ReasoningIntent
+) -> None:
+    """Off (including a catalog non-reasoning strip) and default expect no reasoning."""
     with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
         warn_effort_swallowed(
-            selected_effort="none",
-            usage={"completion_tokens_details": {"reasoning_tokens": 0}},
+            rendered=rendered,
+            usage=_ZERO_REASONING_USAGE,
+            returned_reasoning=False,
             model_id="gpt-5.2",
         )
 
-    assert [record for record in caplog.records if record.levelno == logging.WARNING] == []
+    assert _swallowed_warnings(caplog) == []
+
+
+def test_warn_effort_swallowed_silent_when_response_returned_reasoning(caplog: Any) -> None:
+    """A zero counter cannot deny Reasoning the response actually returned."""
+    with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
+        warn_effort_swallowed(
+            rendered=ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="high"),
+            usage=_ZERO_REASONING_USAGE,
+            returned_reasoning=True,
+            model_id="gpt-5.2",
+        )
+
+    assert _swallowed_warnings(caplog) == []
 
 
 def test_warn_effort_swallowed_silent_when_token_count_unknown(caplog: Any) -> None:
     """Sparse usage (no reasoning-token counter) is unknown, not swallowed."""
     with caplog.at_level(logging.WARNING, logger=_REASONING_LOGGER):
         warn_effort_swallowed(
-            selected_effort="high",
+            rendered=ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="high"),
             usage={"prompt_tokens": 10, "completion_tokens": 5},
+            returned_reasoning=False,
             model_id="gpt-5.2",
         )
 
-    assert [record for record in caplog.records if record.levelno == logging.WARNING] == []
+    assert _swallowed_warnings(caplog) == []

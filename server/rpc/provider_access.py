@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
+from dataclasses import replace
 from typing import Any, cast
 
-from core.providers.accounts import split_connection_id
+from core.providers.accounts import ConnectionRef, split_connection_id
 from core.providers.auth_flow import DeviceFlowEngine
-from core.providers.token_getter import OAuthTokenGetter, TokenGetter
+from core.providers.token_getter import (
+    COPILOT_API_ENDPOINT_EXTRA_KEY,
+    OAuthTokenGetter,
+    TokenGetter,
+)
 from core.utils.errors import ConfigError
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RPC_ERROR_OAUTH_NOT_SUPPORTED, RpcError
 
@@ -60,7 +65,10 @@ async def _runtime_provider_credential(
         return
 
     token_store = _runtime_token_store(runtime)
-    account_id = runtime.provider_credentials.resolve_account_id(provider_id, connection.id)
+    _local_connection_id, requested_account_id = split_connection_id(provider_id, connection_id)
+    account_id = runtime.provider_credentials.resolve_account_id(
+        provider_id, connection.id, account_id=requested_account_id
+    )
     getter = OAuthTokenGetter(
         token_store, provider_id, connection.id, connection.oauth, account_id=account_id
     )
@@ -69,6 +77,59 @@ async def _runtime_provider_credential(
         # but keep recovery and per-attempt credential access alive through discovery.
         await getter()
         yield getter
+
+
+def _connection_models_endpoint(connection: Any, provider: Any) -> str | None:
+    """Return the Connection's effective catalog endpoint, or ``None`` when absent."""
+
+    return getattr(connection, "models_endpoint", None) or getattr(
+        provider, "models_endpoint", None
+    )
+
+
+@asynccontextmanager
+async def _discovery_credential(
+    runtime: Any,
+    provider_id: str,
+    connection_id: str,
+    connection: Any,
+) -> AsyncIterator[tuple[Any, str | TokenGetter]]:
+    """Yield the Connection and credential that Model catalog requests use.
+
+    A public catalog (``catalog_requires_credentials: false``) uses an empty
+    credential. Otherwise the credential resolves through
+    :func:`_runtime_provider_credential`, and GitHub Copilot discovery then
+    targets the Account's exchanged API endpoint read from current token data.
+    """
+
+    credential_context = (
+        _runtime_provider_credential(runtime, provider_id, connection_id, connection)
+        if getattr(connection, "catalog_requires_credentials", True)
+        else nullcontext("")
+    )
+    async with credential_context as credential_value:
+        yield (
+            _copilot_discovery_connection(runtime, provider_id, connection_id, connection),
+            credential_value,
+        )
+
+
+def _copilot_discovery_connection(
+    runtime: Any,
+    provider_id: str,
+    connection_id: str,
+    connection: Any,
+) -> Any:
+    if provider_id != "github-copilot":
+        return connection
+    token_extra_reader = getattr(runtime, "get_connection_token_extra", None)
+    token_extra = (
+        token_extra_reader(ConnectionRef(provider_id, connection_id))
+        if callable(token_extra_reader)
+        else {}
+    )
+    copilot_endpoint = token_extra.get(COPILOT_API_ENDPOINT_EXTRA_KEY)
+    return replace(connection, base_url=copilot_endpoint) if copilot_endpoint else connection
 
 
 def _oauth_device_connection(runtime: Any, provider_id: str, connection_id: str) -> Any:
