@@ -21,6 +21,7 @@ from core.skills._packages import (
     read_directory,
     unwrap_archive,
 )
+from core.utils.tls import shared_ssl_context
 
 
 @dataclass(frozen=True)
@@ -47,7 +48,11 @@ def _download(url: str, *, limit: int = MAX_DOWNLOAD_BYTES) -> bytes:
     current = _url(url)
     started = time.monotonic()
     try:
-        with httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0), trust_env=False) as client:
+        with httpx.Client(
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            trust_env=False,
+            verify=shared_ssl_context(),
+        ) as client:
             for _ in range(6):
                 with client.stream(
                     "GET", current, headers={"User-Agent": "vBot-Skill-Installer"}

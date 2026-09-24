@@ -24,6 +24,7 @@ import httpx
 from core.debug import DebugTraceStore, InvalidTraceIdError
 from core.debug.redaction import redact_headers, redact_url
 from core.models.discovery import build_discovery_request
+from core.utils.tls import shared_ssl_context
 from server.events import RESOURCE_KIND_DEBUG_TRACES
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -291,7 +292,7 @@ async def _debug_model_probe(state: Any, params: JsonObject) -> JsonObject:
     start_time = time.monotonic()
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=60.0, verify=shared_ssl_context()) as client:
             response = await client.get(url, headers=headers)
             status_code = response.status_code
             raw_body = response.text

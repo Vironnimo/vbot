@@ -29,6 +29,7 @@ from core.providers.token_store import OAuthToken, TokenStore
 from core.utils.http_status import is_retryable_status
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
+from core.utils.tls import shared_ssl_context
 
 _LOGGER = get_logger("providers.token_getter")
 
@@ -387,7 +388,7 @@ class OAuthTokenGetter:
         client = self._client
         close_client = False
         if client is None:
-            client = httpx.AsyncClient(timeout=60.0)
+            client = httpx.AsyncClient(timeout=60.0, verify=shared_ssl_context())
             close_client = True
         try:
             try:
@@ -413,7 +414,7 @@ class OAuthTokenGetter:
         client = self._client
         close_client = False
         if client is None:
-            client = httpx.AsyncClient(timeout=60.0)
+            client = httpx.AsyncClient(timeout=60.0, verify=shared_ssl_context())
             close_client = True
         try:
             try:

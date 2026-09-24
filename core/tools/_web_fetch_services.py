@@ -9,6 +9,8 @@ from typing import Any
 
 import httpx
 
+from core.utils.tls import shared_ssl_context
+
 _MAX_BYTES = 12 * 1024 * 1024
 _DATA_URI = re.compile(
     r"data:(?:[a-z0-9.+-]+/[a-z0-9.+-]+)?(?:;[a-z0-9=.+-]+)*,[^\s\)\]\"'<>]+", re.I
@@ -93,7 +95,9 @@ async def _post(
         async with (
             asyncio.timeout(65),
             httpx.AsyncClient(
-                timeout=httpx.Timeout(60, connect=5), follow_redirects=False
+                timeout=httpx.Timeout(60, connect=5),
+                follow_redirects=False,
+                verify=shared_ssl_context(),
             ) as client,
             client.stream("POST", endpoint, headers=headers, json=payload) as response,
         ):
