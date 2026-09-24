@@ -848,3 +848,84 @@ describe('Live voice media and connection failures', () => {
     expect(f.track.enabled).toBe(true);
   });
 });
+
+describe('Live voice microphone lease', () => {
+  function leaseFixture(acquireResult = null) {
+    const events = [];
+    const lease = {
+      acquire: vi.fn(async () => {
+        events.push('acquire');
+        return acquireResult;
+      }),
+      release: vi.fn(() => events.push('release')),
+    };
+    const f = liveFixture({ microphoneLease: lease });
+    f.mediaDevices.getUserMedia.mockImplementation(async () => {
+      events.push('microphone');
+      return f.microphone;
+    });
+    return { ...f, lease, events };
+  }
+
+  it('takes the lease before the microphone and returns it once the microphone is released', async () => {
+    const f = leaseFixture();
+    await f.goLive();
+    expect(f.events).toEqual(['acquire', 'microphone']);
+
+    f.controller.stop();
+    expect(f.events).toEqual(['acquire', 'microphone', 'release']);
+    f.frame({ type: 'closed', reason: 'stopped', usage: null });
+    expect(f.lease.release).toHaveBeenCalledOnce();
+  });
+
+  it('checks the Live voice binding before taking the lease', async () => {
+    const f = leaseFixture();
+    f.api.getLiveVoiceStatus.mockResolvedValue({
+      configured: false,
+      usable: false,
+      target: null,
+    });
+    await f.controller.start();
+    expect(f.lease.acquire).not.toHaveBeenCalled();
+  });
+
+  it('ends the start with the code the lease reports, without the microphone', async () => {
+    const f = leaseFixture('desktop_restart_required');
+    await f.controller.start();
+    expect(f.mediaDevices.getUserMedia).not.toHaveBeenCalled();
+    expect(f.lease.release).not.toHaveBeenCalled();
+    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+      code: 'desktop_restart_required',
+      severity: 'error',
+    });
+    expect(f.state.phase).toBe('off');
+  });
+
+  it('returns the lease when the start fails after the microphone opened', async () => {
+    const f = leaseFixture();
+    f.api.startLiveCall.mockResolvedValue({ error: 'access_denied' });
+    await f.controller.start();
+    expect(f.lease.release).toHaveBeenCalledOnce();
+  });
+
+  it('returns a lease granted after Stop without opening the microphone', async () => {
+    const f = leaseFixture();
+    const granted = deferred();
+    f.lease.acquire.mockReturnValue(granted.promise);
+    const started = f.controller.start();
+    await flush();
+    f.controller.stop();
+    granted.resolve(null);
+    await started;
+    expect(f.mediaDevices.getUserMedia).not.toHaveBeenCalled();
+    expect(f.lease.release).toHaveBeenCalledOnce();
+    expect(f.onNotice).not.toHaveBeenCalled();
+  });
+
+  it('returns the lease when the controller is destroyed', async () => {
+    const f = leaseFixture();
+    await f.goLive();
+    f.controller.destroy();
+    expect(f.lease.release).toHaveBeenCalledOnce();
+  });
+});

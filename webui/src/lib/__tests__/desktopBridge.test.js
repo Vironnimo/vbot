@@ -25,7 +25,19 @@ import {
   restartWakewordCalibration,
   onWakewordStatusChange,
   waitForDesktopBridge,
+  setDesktopLiveVoiceActive,
+  syncDesktopLiveVoiceActive,
+  createDesktopLiveVoiceLease,
+  onDesktopLiveRequest,
+  getDesktopLiveHotkey,
+  setDesktopLiveHotkey,
 } from '../desktopBridge.js';
+
+const NO_LIVE_CAPABILITIES = {
+  liveWakeword: false,
+  liveHotkey: false,
+  secureOrigins: [],
+};
 
 describe('desktop detection', () => {
   let originalLocation;
@@ -99,14 +111,36 @@ describe('getDesktopCapabilities', () => {
       wakeword: true,
       serverSelection: true,
       contextMenu: true,
+      ...NO_LIVE_CAPABILITIES,
     });
 
     // Second call should return cached result
     const caps2 = await getDesktopCapabilities();
-    expect(caps2).toEqual({
+    expect(caps2).toBe(caps1);
+  });
+
+  it('normalizes the Live voice capabilities', async () => {
+    globalThis.window = {
+      location: { search: '?accessor=desktop' },
+      pywebview: {
+        api: {
+          getDesktopCapabilities: () => ({
+            wakeword: true,
+            liveWakeword: true,
+            liveHotkey: 1,
+            secureOrigins: ['http://pi.lan:8420', 42, null],
+          }),
+        },
+      },
+    };
+
+    expect(await getDesktopCapabilities()).toEqual({
       wakeword: true,
-      serverSelection: true,
-      contextMenu: true,
+      serverSelection: false,
+      contextMenu: false,
+      liveWakeword: true,
+      liveHotkey: true,
+      secureOrigins: ['http://pi.lan:8420'],
     });
   });
 
@@ -118,6 +152,7 @@ describe('getDesktopCapabilities', () => {
       wakeword: false,
       serverSelection: false,
       contextMenu: false,
+      ...NO_LIVE_CAPABILITIES,
     });
   });
 
@@ -139,6 +174,7 @@ describe('getDesktopCapabilities', () => {
       wakeword: true,
       serverSelection: true,
       contextMenu: true,
+      ...NO_LIVE_CAPABILITIES,
     });
 
     globalThis.window.pywebview = {
@@ -151,6 +187,7 @@ describe('getDesktopCapabilities', () => {
       wakeword: false,
       serverSelection: false,
       contextMenu: false,
+      ...NO_LIVE_CAPABILITIES,
     });
   });
 
@@ -665,3 +702,280 @@ function deferred() {
   });
   return { promise, resolve };
 }
+
+describe('desktop Live voice integration', () => {
+  let savedWindow;
+
+  function deferred() {
+    let resolve;
+    let reject;
+    const promise = new Promise((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  function desktopWindow(
+    api,
+    { secure = true, origin = 'http://pi.lan:8420' } = {},
+  ) {
+    globalThis.window = {
+      location: { search: '?accessor=desktop', origin },
+      isSecureContext: secure,
+      pywebview: { api },
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+  }
+
+  beforeEach(() => {
+    savedWindow = globalThis.window;
+  });
+
+  afterEach(async () => {
+    // Leave the module with a settled, inactive Live voice state.
+    desktopWindow({ setLiveVoiceActive: () => ({ active: false }) });
+    await setDesktopLiveVoiceActive(false).catch(() => {});
+    globalThis.window = savedWindow;
+    vi.restoreAllMocks();
+  });
+
+  it('sends only the latest Live voice state, one call at a time', async () => {
+    const calls = [];
+    const pending = [];
+    desktopWindow({
+      setLiveVoiceActive: (active) => {
+        calls.push(active);
+        const call = deferred();
+        pending.push(call);
+        return call.promise;
+      },
+    });
+
+    const first = setDesktopLiveVoiceActive(true);
+    setDesktopLiveVoiceActive(false);
+    const last = setDesktopLiveVoiceActive(true);
+    await vi.waitFor(() => expect(calls).toEqual([true]));
+    setDesktopLiveVoiceActive(false);
+    setDesktopLiveVoiceActive(true);
+
+    pending[0].resolve({ active: true });
+    await last;
+    await first;
+    // The Desktop already has `true`: the intermediate `false` is skipped.
+    expect(calls).toEqual([true]);
+
+    const stop = setDesktopLiveVoiceActive(false);
+    await vi.waitFor(() => expect(calls).toEqual([true, false]));
+    pending[1].resolve({ active: false });
+    await stop;
+  });
+
+  it('keeps delivering a newer state after a failed call', async () => {
+    const calls = [];
+    const first = deferred();
+    desktopWindow({
+      setLiveVoiceActive: (active) => {
+        calls.push(active);
+        return calls.length === 1 ? first.promise : Promise.resolve({ active });
+      },
+    });
+
+    const started = setDesktopLiveVoiceActive(true);
+    await vi.waitFor(() => expect(calls).toEqual([true]));
+    setDesktopLiveVoiceActive(false);
+    first.reject(new Error('bridge busy'));
+    await started;
+
+    expect(calls).toEqual([true, false]);
+  });
+
+  it('rejects when the latest state could not be delivered and retries on sync', async () => {
+    const calls = [];
+    let fail = true;
+    desktopWindow({
+      setLiveVoiceActive: async (active) => {
+        calls.push(active);
+        if (fail) throw new Error('bridge busy');
+        return { active };
+      },
+    });
+
+    await expect(setDesktopLiveVoiceActive(true)).rejects.toThrow(
+      'bridge busy',
+    );
+    fail = false;
+    await syncDesktopLiveVoiceActive();
+
+    expect(calls).toEqual([true, true]);
+  });
+
+  it('resends an unconfirmed state on sync but not a confirmed one', async () => {
+    const calls = [];
+    desktopWindow({
+      setLiveVoiceActive: async (active) => {
+        calls.push(active);
+        return { active };
+      },
+    });
+
+    await setDesktopLiveVoiceActive(true);
+    await syncDesktopLiveVoiceActive();
+
+    expect(calls).toEqual([true]);
+  });
+
+  describe('microphone lease', () => {
+    it('pauses wakeword listening before the call and resumes it afterwards', async () => {
+      const calls = [];
+      desktopWindow({
+        getDesktopCapabilities: () => ({ liveWakeword: true }),
+        setLiveVoiceActive: async (active) => {
+          calls.push(active);
+          return { active };
+        },
+      });
+      const lease = createDesktopLiveVoiceLease();
+
+      expect(await lease.acquire()).toBeNull();
+      expect(calls).toEqual([true]);
+      lease.release();
+      await vi.waitFor(() => expect(calls).toEqual([true, false]));
+      lease.release();
+      await Promise.resolve();
+      expect(calls).toEqual([true, false]);
+    });
+
+    it('asks for a restart when this server was added after the Desktop started', async () => {
+      const setLiveVoiceActive = vi.fn();
+      desktopWindow(
+        {
+          getDesktopCapabilities: () => ({
+            liveWakeword: true,
+            secureOrigins: ['http://other.lan:8420'],
+          }),
+          setLiveVoiceActive,
+        },
+        { secure: false },
+      );
+
+      expect(await createDesktopLiveVoiceLease().acquire()).toBe(
+        'desktop_restart_required',
+      );
+      expect(setLiveVoiceActive).not.toHaveBeenCalled();
+    });
+
+    it('lets a server the Desktop trusted try the microphone', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      desktopWindow(
+        {
+          getDesktopCapabilities: () => ({
+            liveWakeword: true,
+            secureOrigins: ['http://pi.lan:8420'],
+          }),
+          setLiveVoiceActive: async (active) => ({ active }),
+        },
+        { secure: false },
+      );
+
+      expect(await createDesktopLiveVoiceLease().acquire()).toBeNull();
+    });
+
+    it('never blocks Live voice on a failing or slow bridge', async () => {
+      vi.useFakeTimers();
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        desktopWindow({
+          getDesktopCapabilities: () => ({ liveWakeword: true }),
+          setLiveVoiceActive: () => new Promise(() => {}),
+        });
+        const acquired = createDesktopLiveVoiceLease({
+          timeoutMs: 100,
+        }).acquire();
+        await vi.advanceTimersByTimeAsync(100);
+        expect(await acquired).toBeNull();
+        // The unanswered call times out, so later states are sent again.
+        await vi.advanceTimersByTimeAsync(10000);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('skips the pause on a Desktop without Live voice support', async () => {
+      const setLiveVoiceActive = vi.fn();
+      desktopWindow({
+        getDesktopCapabilities: () => ({ wakeword: true }),
+        setLiveVoiceActive,
+      });
+      const lease = createDesktopLiveVoiceLease();
+
+      expect(await lease.acquire()).toBeNull();
+      lease.release();
+      expect(setLiveVoiceActive).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('pushed Live voice requests', () => {
+    function listen(handler) {
+      const target = new EventTarget();
+      globalThis.window = {
+        addEventListener: target.addEventListener.bind(target),
+        removeEventListener: target.removeEventListener.bind(target),
+      };
+      const cleanup = onDesktopLiveRequest(handler);
+      const dispatch = (detail) =>
+        !target.dispatchEvent(
+          new CustomEvent('vbot-desktop-live', { cancelable: true, detail }),
+        );
+      return { cleanup, dispatch };
+    }
+
+    it('hands valid requests to the handler and acknowledges them', () => {
+      const handler = vi.fn(() => true);
+      const { cleanup, dispatch } = listen(handler);
+
+      expect(dispatch({ action: 'toggle', source: 'hotkey' })).toBe(true);
+      expect(handler).toHaveBeenCalledWith({
+        action: 'toggle',
+        source: 'hotkey',
+      });
+
+      cleanup();
+      expect(dispatch({ action: 'start', source: 'wakeword' })).toBe(false);
+      expect(handler).toHaveBeenCalledOnce();
+    });
+
+    it('ignores malformed requests and reports declined ones as unhandled', () => {
+      const handler = vi.fn(() => false);
+      const { cleanup, dispatch } = listen(handler);
+
+      expect(dispatch({ action: 'stop', source: 'hotkey' })).toBe(false);
+      expect(dispatch({ action: 'start', source: 'server' })).toBe(false);
+      expect(dispatch(null)).toBe(false);
+      expect(handler).not.toHaveBeenCalled();
+
+      expect(dispatch({ action: 'start', source: 'wakeword' })).toBe(false);
+      expect(handler).toHaveBeenCalledOnce();
+      cleanup();
+    });
+  });
+
+  it('reads and changes the global shortcut through the bridge', async () => {
+    const status = {
+      supported: true,
+      enabled: true,
+      hotkey: { ctrl: true, alt: true, shift: false, win: false, key: 'Space' },
+      error_code: null,
+    };
+    const api = {
+      getLiveHotkey: vi.fn(async () => status),
+      setLiveHotkey: vi.fn(async () => status),
+    };
+    desktopWindow(api);
+
+    expect(await getDesktopLiveHotkey()).toBe(status);
+    expect(await setDesktopLiveHotkey({ enabled: true })).toBe(status);
+    expect(api.setLiveHotkey).toHaveBeenCalledWith({ enabled: true });
+  });
+});

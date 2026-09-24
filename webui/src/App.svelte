@@ -668,7 +668,6 @@
     <LiveVoice
       configured={Boolean(setup.settings?.model_tasks?.live_voice?.target)}
       uiActions={liveUiActions}
-      wakewordEnabled={desktop.wakewordStatus.enabled}
       {serverUnavailable}
       onToast={desktop.showToast}
     />

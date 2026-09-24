@@ -13,13 +13,14 @@ vi.mock(
   async () =>
     import('../../../node_modules/svelte/src/reactivity/index-client.js'),
 );
-const { status, factory, desktop } = vi.hoisted(() => ({
+const { status, factory, desktop, lease } = vi.hoisted(() => ({
   status: vi.fn(),
   factory: vi.fn(),
+  lease: { acquire: async () => null, release: () => {} },
   desktop: {
-    isDesktopAccessor: vi.fn(() => false),
-    waitForDesktopBridge: vi.fn(async () => true),
-    getWakewordStatus: vi.fn(async () => ({ enabled: false })),
+    isDesktopAccessor: () => false,
+    createDesktopLiveVoiceLease: () => null,
+    onDesktopLiveRequest: () => () => {},
   },
 }));
 vi.mock('$lib/api.js', () => ({ getLiveVoiceStatus: status }));
@@ -36,6 +37,8 @@ const { default: LiveVoice } = await import('../LiveVoice.svelte');
 
 let component;
 let fake;
+let desktopRequest;
+const stopDesktopRequests = vi.fn();
 
 function render(props = {}) {
   component = mount(LiveVoice, {
@@ -57,9 +60,6 @@ function renderReactive(initial) {
       get serverUnavailable() {
         return props.get('serverUnavailable');
       },
-      get wakewordEnabled() {
-        return props.get('wakewordEnabled');
-      },
       get onToast() {
         return props.get('onToast');
       },
@@ -70,26 +70,29 @@ function renderReactive(initial) {
 }
 
 function simulateController() {
-  factory.mockImplementation(({ state, onNotice, uiActions }) => {
-    fake = {
-      state,
-      onNotice,
-      uiActions,
-      start: vi.fn(async () => {
-        state.phase = 'connecting';
-      }),
-      stop: vi.fn(() => {
-        state.phase = 'off';
-      }),
-      mute: vi.fn(() => {
-        state.muted = !state.muted;
-      }),
-      active: () => state.phase === 'live',
-      destroy: vi.fn(),
-      handleFrame: vi.fn(),
-    };
-    return fake;
-  });
+  factory.mockImplementation(
+    ({ state, onNotice, uiActions, microphoneLease }) => {
+      fake = {
+        state,
+        onNotice,
+        uiActions,
+        microphoneLease,
+        start: vi.fn(async () => {
+          state.phase = 'connecting';
+        }),
+        stop: vi.fn(() => {
+          state.phase = 'off';
+        }),
+        mute: vi.fn(() => {
+          state.muted = !state.muted;
+        }),
+        active: () => state.phase === 'live',
+        destroy: vi.fn(),
+        handleFrame: vi.fn(),
+      };
+      return fake;
+    },
+  );
 }
 
 const toggle = () => document.querySelector('.live-voice__toggle');
@@ -109,9 +112,14 @@ beforeEach(() => {
   init('en');
   factory.mockReset();
   status.mockReset();
-  desktop.isDesktopAccessor.mockReset().mockReturnValue(false);
-  desktop.waitForDesktopBridge.mockReset().mockResolvedValue(true);
-  desktop.getWakewordStatus.mockReset().mockResolvedValue({ enabled: false });
+  desktop.isDesktopAccessor = vi.fn(() => false);
+  desktop.createDesktopLiveVoiceLease = vi.fn(() => lease);
+  desktop.onDesktopLiveRequest = vi.fn((handler) => {
+    desktopRequest = handler;
+    return stopDesktopRequests;
+  });
+  stopDesktopRequests.mockReset();
+  desktopRequest = null;
   fake = null;
 });
 afterEach(async () => {
@@ -219,8 +227,7 @@ describe('sidebar Live control', () => {
     'connection_lost',
     'call_failed',
     'playback_blocked',
-    'wakeword_active',
-    'desktop_unavailable',
+    'desktop_restart_required',
     'ui_action_failed',
     'notification_failed',
     'replaced',
@@ -253,52 +260,91 @@ describe('sidebar Live control', () => {
   });
 });
 
-describe('Live control conflicts', () => {
-  it('refuses to start while Desktop wakeword Voice is enabled', async () => {
+describe('Live voice in the Desktop app', () => {
+  it('stays browser-only outside the Desktop accessor', () => {
     simulateController();
-    const onToast = vi.fn();
-    render({ wakewordEnabled: true, onToast });
-    toggle().click();
-    await settle();
-    expect(fake.start).not.toHaveBeenCalled();
-    expect(onToast).toHaveBeenCalledOnce();
+    render();
+    expect(fake.microphoneLease).toBeNull();
+    expect(desktop.onDesktopLiveRequest).not.toHaveBeenCalled();
   });
 
-  it('checks the Desktop wakeword state before starting in the Desktop app', async () => {
+  it('shares the microphone with wakeword listening through the Desktop lease', async () => {
     simulateController();
     desktop.isDesktopAccessor.mockReturnValue(true);
-    desktop.getWakewordStatus.mockResolvedValue({ enabled: true });
-    const onToast = vi.fn();
-    render({ onToast });
-    toggle().click();
-    await vi.waitFor(() => expect(onToast).toHaveBeenCalledOnce());
-    flushSync();
-    expect(fake.start).not.toHaveBeenCalled();
+    render();
+    expect(fake.microphoneLease).toBe(lease);
+    expect(desktop.onDesktopLiveRequest).toHaveBeenCalledOnce();
 
-    desktop.getWakewordStatus.mockResolvedValue({ enabled: false });
-    toggle().click();
-    await vi.waitFor(() => expect(fake.start).toHaveBeenCalledOnce());
-    expect(desktop.waitForDesktopBridge).toHaveBeenCalledTimes(2);
+    await unmount(component);
+    component = null;
+    expect(stopDesktopRequests).toHaveBeenCalledOnce();
+    expect(fake.destroy).toHaveBeenCalledOnce();
   });
 
-  it('stops a running call when wakeword Voice turns on', async () => {
+  it('starts from a wakeword and ignores it while a call runs', async () => {
     simulateController();
-    const onToast = vi.fn();
-    const props = renderReactive({
-      configured: true,
-      serverUnavailable: false,
-      wakewordEnabled: false,
-      onToast,
-    });
-    toggle().click();
+    desktop.isDesktopAccessor.mockReturnValue(true);
+    render();
+
+    expect(desktopRequest({ action: 'start', source: 'wakeword' })).toBe(true);
     await settle();
-    props.set('wakewordEnabled', true);
+    expect(fake.start).toHaveBeenCalledOnce();
+    expect(desktopRequest({ action: 'start', source: 'wakeword' })).toBe(true);
+    expect(fake.start).toHaveBeenCalledOnce();
+    expect(fake.stop).not.toHaveBeenCalled();
+  });
+
+  it('toggles the call from the global shortcut', async () => {
+    simulateController();
+    desktop.isDesktopAccessor.mockReturnValue(true);
+    render();
+
+    desktopRequest({ action: 'toggle', source: 'hotkey' });
+    await settle();
+    expect(fake.start).toHaveBeenCalledOnce();
+    desktopRequest({ action: 'toggle', source: 'hotkey' });
     flushSync();
     expect(fake.stop).toHaveBeenCalledOnce();
-    expect(onToast).toHaveBeenCalledOnce();
-    expect(onToast.mock.calls[0][0].variant).toBe('error');
+    expect(toggle().getAttribute('aria-label')).toBe('Start Live');
   });
 
+  it('leaves a closing call alone', () => {
+    simulateController();
+    desktop.isDesktopAccessor.mockReturnValue(true);
+    render();
+    fake.state.phase = 'closing';
+    desktopRequest({ action: 'toggle', source: 'hotkey' });
+    expect(fake.stop).not.toHaveBeenCalled();
+    expect(fake.start).not.toHaveBeenCalled();
+  });
+
+  it('explains a missing Live voice Model instead of starting', () => {
+    simulateController();
+    desktop.isDesktopAccessor.mockReturnValue(true);
+    const onToast = vi.fn();
+    render({ configured: false, onToast });
+
+    expect(desktopRequest({ action: 'start', source: 'wakeword' })).toBe(true);
+    expect(fake.start).not.toHaveBeenCalled();
+    expect(onToast).toHaveBeenCalledOnce();
+    expect(onToast.mock.calls[0][0].message).toBe(
+      t('live.error.notConfigured', ''),
+    );
+  });
+
+  it('ignores requests while the server is unavailable', () => {
+    simulateController();
+    desktop.isDesktopAccessor.mockReturnValue(true);
+    const onToast = vi.fn();
+    render({ serverUnavailable: true, onToast });
+
+    expect(desktopRequest({ action: 'toggle', source: 'hotkey' })).toBe(false);
+    expect(fake.start).not.toHaveBeenCalled();
+    expect(onToast).not.toHaveBeenCalled();
+  });
+});
+
+describe('Live control conflicts', () => {
   it.each([
     ['the server becomes unavailable', 'serverUnavailable', true],
     ['Live voice is no longer configured', 'configured', false],
@@ -308,7 +354,6 @@ describe('Live control conflicts', () => {
     const props = renderReactive({
       configured: true,
       serverUnavailable: false,
-      wakewordEnabled: false,
       onToast,
     });
     toggle().click();
