@@ -10,6 +10,7 @@ vBot may have added them, and runtime reads always name their columns.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from dataclasses import dataclass
 from functools import cache
@@ -32,6 +33,7 @@ CREATE TABLE kernel_migrations (
 KERNEL_TABLES = ("kernel_meta", "kernel_migrations")
 
 _TABLE_CONSTRAINT_PREFIXES = ("CONSTRAINT", "PRIMARY", "UNIQUE", "CHECK", "FOREIGN")
+_BARE_TOKEN = re.compile(r"([^\s(]+)\s*(.*)", re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -254,10 +256,12 @@ def _first_sql_token(item: str) -> tuple[str, str]:
             token.append(character)
             index += 1
         raise DatabaseCorruptError("schema declaration has an unterminated identifier")
-    parts = item.split(None, 1)
-    if len(parts) != 2:
+    # A bare token ends at whitespace or at the parenthesis of a table
+    # constraint written without a space, such as ``UNIQUE(a,b)``.
+    match = _BARE_TOKEN.match(item)
+    if match is None or not match.group(2).strip():
         raise DatabaseCorruptError(f"schema declaration lacks a column type: {item}")
-    return parts[0], parts[1]
+    return match.group(1), match.group(2)
 
 
 def schema_changes(
