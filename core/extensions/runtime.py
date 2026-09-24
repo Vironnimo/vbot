@@ -74,6 +74,10 @@ class ExtensionRuntime:
         old_registry = self._get_registry()
         if old_registry is not None:
             await old_registry.quiesce_all()
+            # The old layer stays installed until the replacement finished loading
+            # (async registrations may take seconds); retire it now so nothing
+            # dispatches to Extensions that are about to shut down.
+            old_registry.retire_registration()
             old_registry.remove_applied_tools(self._tools)
             if dispatcher is not None:
                 old_registry.remove_applied_commands(dispatcher)
