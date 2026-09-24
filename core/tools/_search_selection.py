@@ -82,6 +82,10 @@ class FileSelection:
         warnings: list[str],
     ):
         self.db = sqlite3.connect(database)
+        # The spool is discarded with the call, so it needs no durability:
+        # skipping fsync and the on-disk journal avoids waiting on the disk.
+        self.db.execute("PRAGMA synchronous=OFF")
+        self.db.execute("PRAGMA journal_mode=MEMORY")
         self.db.execute("PRAGMA cache_size=-2048")
         self.db.execute("PRAGMA max_page_count=32768")
         self.db.execute("PRAGMA temp_store=FILE")
