@@ -375,14 +375,16 @@ async def test_runtime_start_loads_data_dir_env_for_provider_auth(
     )
     runtime = Runtime(Config(data_dir=data_dir))
     runtime.start()
+    try:
+        # Act
+        adapter = runtime.get_adapter(ConnectionRef("openrouter", "openrouter:api-key"))
 
-    # Act
-    adapter = runtime.get_adapter(ConnectionRef("openrouter", "openrouter:api-key"))
-
-    # Assert
-    assert runtime.has_provider_credentials("openrouter") is True
-    assert runtime.get_provider_credentials("openrouter") == "sk-or-from-data-dir"
-    assert await adapter._token_getter() == "sk-or-from-data-dir"  # type: ignore[attr-defined]
+        # Assert
+        assert runtime.has_provider_credentials("openrouter") is True
+        assert runtime.get_provider_credentials("openrouter") == "sk-or-from-data-dir"
+        assert await adapter._token_getter() == "sk-or-from-data-dir"  # type: ignore[attr-defined]
+    finally:
+        await runtime.aclose()
 
 
 @pytest.mark.asyncio
@@ -402,13 +404,15 @@ async def test_runtime_start_does_not_overwrite_existing_provider_environment(
     )
     runtime = Runtime(Config(data_dir=data_dir))
     runtime.start()
+    try:
+        # Act
+        adapter = runtime.get_adapter(ConnectionRef("openrouter", "openrouter:api-key"))
 
-    # Act
-    adapter = runtime.get_adapter(ConnectionRef("openrouter", "openrouter:api-key"))
-
-    # Assert
-    assert runtime.get_provider_credentials("openrouter") == "sk-or-from-process"
-    assert await adapter._token_getter() == "sk-or-from-process"  # type: ignore[attr-defined]
+        # Assert
+        assert runtime.get_provider_credentials("openrouter") == "sk-or-from-process"
+        assert await adapter._token_getter() == "sk-or-from-process"  # type: ignore[attr-defined]
+    finally:
+        await runtime.aclose()
 
 
 def test_runtime_start_does_not_mutate_process_environment_when_loading_credentials(

@@ -315,7 +315,7 @@ class TestRefreshModels:
         async def getter() -> str:
             return next(tokens)
 
-        monkeypatch.setattr("core.utils.retry.asyncio.sleep", no_sleep)
+        monkeypatch.setattr("core.utils.retry._sleep", no_sleep)
         route = respx.get(_SIMPLE_MODELS_URL).mock(
             side_effect=[
                 httpx.Response(503),

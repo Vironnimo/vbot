@@ -124,84 +124,90 @@ async def test_custom_provider_rpc_crud_is_live_and_keeps_key_out_of_settings(
     monkeypatch.delenv("VBOT_CUSTOM_LOCAL_AI_API_KEY", raising=False)
     runtime = Runtime(Config(data_dir=tmp_path / "data"))
     runtime.start()
-    state = SimpleNamespace(runtime=runtime)
-    providers = runtime.providers
-    models = runtime.models
+    try:
+        state = SimpleNamespace(runtime=runtime)
+        providers = runtime.providers
+        models = runtime.models
 
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "provider.custom_save",
-            "params": {
-                "provider": _custom_provider_payload(),
-                "api_key": "secret-value",
+        response = await dispatch_rpc(
+            state,
+            {
+                "method": "provider.custom_save",
+                "params": {
+                    "provider": _custom_provider_payload(),
+                    "api_key": "secret-value",
+                },
             },
-        },
-    )
+        )
 
-    assert response["ok"] is True
-    assert response["result"]["provider"]["usable"] is True
-    assert "api_key" not in response["result"]["provider"]
-    assert runtime.providers is providers
-    assert runtime.models is models
-    assert providers.get("local-ai").custom is True
-    assert models.get("local-ai", "chat-model").context_window == 65_536
-    assert runtime.storage.load_environment()["VBOT_CUSTOM_LOCAL_AI_API_KEY"] == "secret-value"
-    assert "secret-value" not in runtime.storage.settings_path.read_text(encoding="utf-8")
+        assert response["ok"] is True
+        assert response["result"]["provider"]["usable"] is True
+        assert "api_key" not in response["result"]["provider"]
+        assert runtime.providers is providers
+        assert runtime.models is models
+        assert providers.get("local-ai").custom is True
+        assert models.get("local-ai", "chat-model").context_window == 65_536
+        assert runtime.storage.load_environment()["VBOT_CUSTOM_LOCAL_AI_API_KEY"] == "secret-value"
+        assert "secret-value" not in runtime.storage.settings_path.read_text(encoding="utf-8")
 
-    updated = _custom_provider_payload("Renamed")
-    updated["models"]["chat-model"]["name"] = "Renamed Model"
-    update_response = await dispatch_rpc(
-        state,
-        {
-            "method": "provider.custom_save",
-            "params": {"provider": updated},
-        },
-    )
+        updated = _custom_provider_payload("Renamed")
+        updated["models"]["chat-model"]["name"] = "Renamed Model"
+        update_response = await dispatch_rpc(
+            state,
+            {
+                "method": "provider.custom_save",
+                "params": {"provider": updated},
+            },
+        )
 
-    assert update_response["ok"] is True
-    assert providers.get("local-ai").name == "Renamed"
-    assert models.get("local-ai", "chat-model").name == "Renamed Model"
+        assert update_response["ok"] is True
+        assert providers.get("local-ai").name == "Renamed"
+        assert models.get("local-ai", "chat-model").name == "Renamed Model"
 
-    list_response = await dispatch_rpc(
-        state,
-        {"method": "provider.custom_list", "params": {}},
-    )
-    assert [item["id"] for item in list_response["result"]["providers"]] == ["local-ai"]
+        list_response = await dispatch_rpc(
+            state,
+            {"method": "provider.custom_list", "params": {}},
+        )
+        assert [item["id"] for item in list_response["result"]["providers"]] == ["local-ai"]
 
-    delete_response = await dispatch_rpc(
-        state,
-        {
-            "method": "provider.custom_delete",
-            "params": {"provider_id": "local-ai"},
-        },
-    )
+        delete_response = await dispatch_rpc(
+            state,
+            {
+                "method": "provider.custom_delete",
+                "params": {"provider_id": "local-ai"},
+            },
+        )
 
-    assert delete_response["ok"] is True
-    assert runtime.storage.load_custom_providers_settings() == {}
-    assert "VBOT_CUSTOM_LOCAL_AI_API_KEY" not in runtime.storage.load_environment()
-    with pytest.raises(KeyError):
-        providers.get("local-ai")
+        assert delete_response["ok"] is True
+        assert runtime.storage.load_custom_providers_settings() == {}
+        assert "VBOT_CUSTOM_LOCAL_AI_API_KEY" not in runtime.storage.load_environment()
+        with pytest.raises(KeyError):
+            providers.get("local-ai")
+    finally:
+        await runtime.aclose()
 
 
 @pytest.mark.asyncio
 async def test_custom_provider_rpc_rejects_bundled_id(tmp_path: Path) -> None:
     runtime = Runtime(Config(data_dir=tmp_path / "data"))
     runtime.start()
-    state = SimpleNamespace(runtime=runtime)
-    provider = _custom_provider_payload()
-    provider["id"] = "openai"
+    try:
+        state = SimpleNamespace(runtime=runtime)
+        provider = _custom_provider_payload()
+        provider["id"] = "openai"
 
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "provider.custom_save",
-            "params": {"provider": provider},
-        },
-    )
+        response = await dispatch_rpc(
+            state,
+            {
+                "method": "provider.custom_save",
+                "params": {"provider": provider},
+            },
+        )
 
-    assert response["ok"] is False
-    assert response["error"]["code"] == "invalid_request"
+        assert response["ok"] is False
+        assert response["error"]["code"] == "invalid_request"
+    finally:
+        await runtime.aclose()
 
 
 @pytest.mark.asyncio

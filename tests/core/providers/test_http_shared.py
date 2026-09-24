@@ -616,7 +616,7 @@ async def test_connect_streaming_with_retry_rebuilds_headers_on_every_attempt() 
 
     client = _mock_client(handler)
     try:
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
             response = await connect_streaming_with_retry(
                 client,
                 "/v1/chat",

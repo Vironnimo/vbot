@@ -753,7 +753,7 @@ async def test_sleep_until_utc_returns_immediately_for_past_target(
     async def record_sleep(delay_seconds: float) -> None:
         naps.append(delay_seconds)
 
-    monkeypatch.setattr(cron_module.asyncio, "sleep", record_sleep)
+    monkeypatch.setattr(cron_timing, "_sleep", record_sleep)
 
     # Act
     await cron_timing._sleep_until_utc(datetime.now(UTC) - timedelta(seconds=1))
@@ -902,7 +902,7 @@ async def test_sleep_until_utc_realigns_after_wall_clock_jump(
     async def record_sleep(delay_seconds: float) -> None:
         naps.append(delay_seconds)
 
-    monkeypatch.setattr(cron_module.asyncio, "sleep", record_sleep)
+    monkeypatch.setattr(cron_timing, "_sleep", record_sleep)
 
     # Act
     await cron_timing._sleep_until_utc(target)

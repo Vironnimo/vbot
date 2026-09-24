@@ -147,7 +147,7 @@ async def test_send_structured_400_body_becomes_retryable_leniently(
 
     # Act / Assert
     with (
-        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+        patch("core.utils.retry._sleep", new_callable=AsyncMock),
         pytest.raises(ProviderError) as exc_info,
     ):
         await openrouter_adapter.send(SAMPLE_MESSAGES, model_id="stealth/ox-alpha")
@@ -184,7 +184,7 @@ async def test_send_429_delegates_to_shared_policy_with_retry_after(
 
     # Act / Assert
     with (
-        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+        patch("core.utils.retry._sleep", new_callable=AsyncMock),
         pytest.raises(ProviderRateLimitError) as exc_info,
     ):
         await openrouter_adapter.send(SAMPLE_MESSAGES, model_id="stealth/ox-alpha")
@@ -208,7 +208,7 @@ async def test_responses_http_uses_router_error_policy(
         return_value=httpx.Response(400, json={"error": error})
     )
     with (
-        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+        patch("core.utils.retry._sleep", new_callable=AsyncMock),
         pytest.raises(ProviderError) as caught,
     ):
         if streaming:

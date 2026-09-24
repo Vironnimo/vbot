@@ -318,7 +318,7 @@ async def test_chunk_retry_never_replays_delivered_text(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str, exhausted: bool
 ) -> None:
     adapter = make_adapter(tmp_path, platform)
-    monkeypatch.setattr("core.utils.retry.asyncio.sleep", AsyncMock())
+    monkeypatch.setattr("core.utils.retry._sleep", AsyncMock())
     delivered: list[str] = []
     attempts: list[str] = []
 
@@ -387,7 +387,7 @@ async def test_slack_file_failure_preserves_prior_delivery_and_upload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str, status: int
 ) -> None:
     adapter = make_adapter(tmp_path, "slack")
-    monkeypatch.setattr("core.utils.retry.asyncio.sleep", AsyncMock())
+    monkeypatch.setattr("core.utils.retry._sleep", AsyncMock())
     calls: list[str] = []
 
     def handle(request: httpx.Request) -> httpx.Response:
