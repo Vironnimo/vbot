@@ -105,11 +105,12 @@ def test_doctor_config_reports_all_config_files(tmp_path: Path) -> None:
     agent_dir.joinpath("agent.json").write_text(
         json.dumps(
             {
+                "format_version": 1,
                 "id": "broken",
                 "name": "Broken Agent",
                 "model": "",
                 "fallback_models": [],
-                "temperature": None,
+                "temperature": 9,
                 "thinking_effort": None,
                 "allowed_tools": ["read_file"],
                 "allowed_skills": ["*"],
@@ -127,8 +128,11 @@ def test_doctor_config_reports_all_config_files(tmp_path: Path) -> None:
     assert f"data_dir: {tmp_path.resolve()}" in result.message
     assert "files_checked: 2" in result.message
     assert "errors: 1" in result.message
+    assert "warnings: 1" in result.message
     assert "settings.json" in result.message
     assert "agents/broken/agent.json" in result.message
+    assert "$.temperature" in result.message
+    # A retired field is an unknown field: reported, kept on disk, not an error.
     assert "$.allowed_tools" in result.message
 
 

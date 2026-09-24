@@ -22,9 +22,11 @@ def test_validate_data_dir_config_delegates_project_files(tmp_path: Path) -> Non
     (project_dir / "project.json").write_text(
         json.dumps(
             {
+                "format_version": 1,
                 "project_id": "vbot",
                 "display_name": "vBot",
                 "cwd": "/srv/repos/vbot",
+                "allowed_tools": [],
                 "created_at": "2026-06-18T10:00:00Z",
                 "updated_at": "2026-06-18T10:00:00Z",
             }
