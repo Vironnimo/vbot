@@ -66,6 +66,8 @@ from core.providers.openai import OPENAI_RESPONSES_PROTOCOL, OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
+    REASONING_INTENT_EFFORT,
+    ReasoningIntent,
     closest_supported_effort,
     model_reasoning_levels,
     normalize_thinking_effort,
@@ -88,9 +90,9 @@ __all__ = [
 ]
 
 _FREE_TIER_ACCESS_MESSAGE = (
-    "OpenCode Zen free Models are only available inside OpenCode. "
-    "Choose a paid Zen Model or an OpenCode Go Model. "
-    "Another API key does not enable free-tier access from vBot."
+    "This OpenCode Zen free Model is only available inside OpenCode. "
+    "Choose a supported Zen Model or an OpenCode Go Model. "
+    "Another API key does not enable access to this Model from vBot."
 )
 
 
@@ -349,6 +351,49 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             profile = model.metadata.get(OPENCODE_ZEN_METADATA_KEY)
             return profile.get(key) if isinstance(profile, Mapping) else None
         return None
+
+    def _apply_reasoning(
+        self,
+        payload: dict[str, Any],
+        request_kwargs: dict[str, Any],
+        model_id: str,
+    ) -> None:
+        selected = request_kwargs.get("thinking_effort") or request_kwargs.get("reasoning_effort")
+        if normalize_thinking_effort(selected) == "none":
+            minimum = self._profile_value(model_id, "minimum_reasoning_effort")
+            if minimum in {"minimal", "low", "medium", "high", "xhigh", "max"}:
+                request_kwargs["thinking_effort"] = minimum
+        super()._apply_reasoning(payload, request_kwargs, model_id)
+
+    @classmethod
+    def describe_reasoning_render(
+        cls,
+        *,
+        model_lookup: ModelLookup | None,
+        model_id: str,
+        effort: str | None,
+        provider_config: ProviderConfig | None = None,
+    ) -> ReasoningIntent:
+        if normalize_thinking_effort(effort) == "none" and model_lookup is not None:
+            for candidate in _model_lookup_candidates(model_id):
+                model = model_lookup(candidate)
+                if model is None:
+                    continue
+                profile = model.metadata.get(OPENCODE_ZEN_METADATA_KEY)
+                minimum = (
+                    profile.get("minimum_reasoning_effort")
+                    if isinstance(profile, Mapping)
+                    else None
+                )
+                if isinstance(minimum, str) and minimum in model.capabilities.reasoning.levels:
+                    return ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=minimum)
+                break
+        return super().describe_reasoning_render(
+            model_lookup=model_lookup,
+            model_id=model_id,
+            effort=effort,
+            provider_config=provider_config,
+        )
 
     async def _gemini_headers(self) -> dict[str, str]:
         token = await self._token_getter()

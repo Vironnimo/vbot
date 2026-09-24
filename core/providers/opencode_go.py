@@ -417,6 +417,12 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             and thinking_control == THINKING_CONTROL_PROVIDER_DEFAULT
         ):
             return ReasoningIntent(REASONING_INTENT_DEFAULT)
+        if normalize_thinking_effort(effort) == "none":
+            minimum_effort = _model_profile_value(
+                model_lookup, model_id, MINIMUM_REASONING_EFFORT_METADATA_KEY
+            )
+            if minimum_effort in {"minimal", "low", "medium", "high", "xhigh", "max"}:
+                effort = minimum_effort
         return super().describe_reasoning_render(
             model_lookup=model_lookup,
             model_id=model_id,

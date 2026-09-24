@@ -199,11 +199,16 @@ def _video_catalog_model(entry: Mapping[str, Any], video_options: dict[str, Any]
     )
 
 
-def _openrouter_runtime_metadata(architecture: Mapping[str, Any]) -> Mapping[str, Any]:
+def _openrouter_runtime_metadata(
+    architecture: Mapping[str, Any], reasoning: Any
+) -> Mapping[str, Any]:
+    metadata: dict[str, Any] = {}
     modality = architecture.get("modality")
     if isinstance(modality, str) and modality:
-        return {"openrouter": {"modality": modality}}
-    return {}
+        metadata["modality"] = modality
+    if isinstance(reasoning, Mapping) and reasoning.get("mandatory") is True:
+        metadata["reasoning_mandatory"] = True
+    return {"openrouter": metadata} if metadata else {}
 
 
 def _read_optional_string_list(data: Mapping[str, Any], key: str) -> list[str]:

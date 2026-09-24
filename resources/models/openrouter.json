@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-22T19:30:34.377716+00:00",
+  "fetched_at": "2026-09-24T09:13:44.026626+00:00",
   "models": {
     "aion-labs/aion-2.0": {
       "capabilities": {
@@ -34,11 +34,12 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 1048576,
+      "context_window": 131072,
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "AionLabs: Aion-2.0",
@@ -84,11 +85,12 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 1048576,
+      "context_window": 131072,
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "AionLabs: Aion-3.0",
@@ -134,11 +136,12 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 1048576,
+      "context_window": 131072,
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "AionLabs: Aion-3.0-Mini",
@@ -149,6 +152,122 @@
           "output": 1.4
         },
         "source": "models.dev:openrouter/aion-labs/aion-3.0-mini"
+      }
+    },
+    "aion-labs/aion-3.5": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": 32768,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text",
+          "reasoning_mandatory": true
+        }
+      },
+      "name": "AionLabs: Aion 3.5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.75,
+          "input": 3.0,
+          "output": 6.0
+        },
+        "source": "models.dev:openrouter/aion-labs/aion-3.5"
+      }
+    },
+    "aion-labs/aion-3.5-mini": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": 32768,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text",
+          "reasoning_mandatory": true
+        }
+      },
+      "name": "AionLabs: Aion 3.5 Mini",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.18,
+          "input": 0.7,
+          "output": 1.4
+        },
+        "source": "models.dev:openrouter/aion-labs/aion-3.5-mini"
       }
     },
     "aion-labs/aion-rp-llama-3.1-8b": {
@@ -1259,7 +1378,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Anthropic: Claude Fable 5",
@@ -1328,7 +1448,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Anthropic: Claude Fable 5.1",
@@ -1387,7 +1508,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Anthropic: Claude Fable 5.1 (batch)"
@@ -1437,7 +1559,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Anthropic: Claude Fable 5 (batch)"
@@ -2290,7 +2413,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Anthropic: Claude Opus 5.5",
@@ -2349,7 +2473,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Anthropic: Claude Opus 5.5 (batch)"
@@ -2932,7 +3057,8 @@
       "max_output_tokens": 80000,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Arcee AI: Trinity Large Thinking",
@@ -5135,6 +5261,66 @@
         "source": "models.dev:openrouter/cohere/command-a"
       }
     },
+    "cohere/command-a-plus": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "max_tokens",
+          "presence_penalty",
+          "reasoning",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 192000,
+      "family": "command-a",
+      "max_output_tokens": 64000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "Cohere: Command A+",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.15,
+          "input": 0.3,
+          "output": 1.5
+        },
+        "source": "models.dev:openrouter/cohere/command-a-plus"
+      }
+    },
     "cohere/command-r-08-2024": {
       "capabilities": {
         "input_modalities": [
@@ -5786,7 +5972,8 @@
       "max_output_tokens": 16000,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "DeepSeek: R1",
@@ -5847,7 +6034,8 @@
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "DeepSeek: R1 0528",
@@ -6164,9 +6352,9 @@
       "name": "DeepSeek: DeepSeek V4 Flash 0423",
       "pricing": {
         "rates": {
-          "cache_read": 0.0098,
-          "input": 0.049,
-          "output": 0.098
+          "cache_read": 0.017721,
+          "input": 0.088606,
+          "output": 0.177212
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4-flash"
       }
@@ -6236,8 +6424,8 @@
       "pricing": {
         "rates": {
           "cache_read": 0.016,
-          "input": 0.04,
-          "output": 0.64
+          "input": 0.03,
+          "output": 0.32
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4-flash-0731"
       }
@@ -6377,9 +6565,9 @@
       "name": "DeepSeek: DeepSeek V4 Pro 0423",
       "pricing": {
         "rates": {
-          "cache_read": 0.075342,
-          "input": 0.904104,
-          "output": 1.808208
+          "cache_read": 0.0783,
+          "input": 0.9396,
+          "output": 1.8792
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4-pro"
       }
@@ -6446,9 +6634,9 @@
       "name": "DeepSeek: DeepSeek V4 Pro 0813",
       "pricing": {
         "rates": {
-          "cache_read": 0.022,
-          "input": 0.66,
-          "output": 1.98
+          "cache_read": 0.0154,
+          "input": 0.462,
+          "output": 1.386
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4-pro-0813"
       }
@@ -6509,7 +6697,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek-flash",
-      "max_output_tokens": 384000,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -6518,9 +6706,9 @@
       "name": "DeepSeek: DeepSeek V4.1 Flash",
       "pricing": {
         "rates": {
-          "cache_read": 0.003,
-          "input": 0.15,
-          "output": 0.6
+          "cache_read": 0.0042,
+          "input": 0.14,
+          "output": 0.42
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4.1-flash"
       }
@@ -6632,6 +6820,75 @@
           "output": 0.0
         },
         "source": "models.dev:openrouter/dots-studio/dots-3-note-preview:free"
+      }
+    },
+    "fireworks/ember-1": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": 943718,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "Fireworks: Ember-1",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.3,
+          "input": 3.0,
+          "output": 15.0
+        },
+        "source": "models.dev:openrouter/fireworks/ember-1"
       }
     },
     "fish-audio/s1": {
@@ -7239,7 +7496,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Google: Gemini 2.5 Pro",
@@ -7319,7 +7577,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio->text"
+          "modality": "text+image+file+audio->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Google: Gemini 2.5 Pro Preview 06-05",
@@ -7399,7 +7658,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Google: Gemini 2.5 Pro (batch)"
@@ -7629,7 +7889,8 @@
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->text+image"
+          "modality": "text+image->text+image",
+          "reasoning_mandatory": true
         }
       },
       "name": "Google: Nano Banana Pro (Gemini 3 Pro Image)",
@@ -7732,7 +7993,8 @@
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->text+image"
+          "modality": "text+image->text+image",
+          "reasoning_mandatory": true
         }
       },
       "name": "Google: Nano Banana Pro (Gemini 3 Pro Image Preview)",
@@ -8410,6 +8672,7 @@
       "metadata": {
         "openrouter": {
           "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true,
           "reasoning_response_field": "reasoning_details"
         }
       },
@@ -8498,6 +8761,7 @@
       "metadata": {
         "openrouter": {
           "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true,
           "reasoning_response_field": "reasoning_details"
         }
       },
@@ -8579,7 +8843,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Google: Gemini 3.1 Pro Preview (batch)"
@@ -8645,7 +8910,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Google: Gemini 3.5 Flash",
@@ -8721,7 +8987,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Google: Gemini 3.5 Flash Lite",
@@ -8787,7 +9054,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Google: Gemini 3.5 Flash Lite (batch)"
@@ -8845,7 +9113,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Google: Gemini 3.5 Flash (batch)"
@@ -8911,7 +9180,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Google: Gemini 3.6 Flash",
@@ -8977,7 +9247,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Google: Gemini 3.6 Flash (batch)"
@@ -9042,7 +9313,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Google: Gemini 3.7 Flash",
@@ -9108,7 +9380,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Google: Gemini 3.7 Flash (batch)"
@@ -9173,7 +9446,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Google: Gemini 3.8 Flash",
@@ -9187,6 +9461,134 @@
         },
         "source": "models.dev:openrouter/google/gemini-3.8-flash"
       }
+    },
+    "google/gemini-3.8-flash-lite-tts": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "speech"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [
+          "achernar",
+          "achird",
+          "algenib",
+          "algieba",
+          "alnilam",
+          "aoede",
+          "autonoe",
+          "callirrhoe",
+          "charon",
+          "despina",
+          "enceladus",
+          "erinome",
+          "fenrir",
+          "gacrux",
+          "iapetus",
+          "kore",
+          "laomedeia",
+          "leda",
+          "orus",
+          "puck",
+          "pulcherrima",
+          "rasalgethi",
+          "sadachbia",
+          "sadaltager",
+          "schedar",
+          "sulafat",
+          "umbriel",
+          "vindemiatrix",
+          "zephyr",
+          "zubenelgenubi"
+        ],
+        "task_types": [
+          "audio_generation",
+          "text_to_speech"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 8192,
+      "max_output_tokens": 7372,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->speech"
+        }
+      },
+      "name": "Google: Gemini 3.8 Flash Lite TTS"
+    },
+    "google/gemini-3.8-flash-tts": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "speech"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [
+          "achernar",
+          "achird",
+          "algenib",
+          "algieba",
+          "alnilam",
+          "aoede",
+          "autonoe",
+          "callirrhoe",
+          "charon",
+          "despina",
+          "enceladus",
+          "erinome",
+          "fenrir",
+          "gacrux",
+          "iapetus",
+          "kore",
+          "laomedeia",
+          "leda",
+          "orus",
+          "puck",
+          "pulcherrima",
+          "rasalgethi",
+          "sadachbia",
+          "sadaltager",
+          "schedar",
+          "sulafat",
+          "umbriel",
+          "vindemiatrix",
+          "zephyr",
+          "zubenelgenubi"
+        ],
+        "task_types": [
+          "audio_generation",
+          "text_to_speech"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 8192,
+      "max_output_tokens": 7372,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->speech"
+        }
+      },
+      "name": "Google: Gemini 3.8 Flash TTS"
     },
     "google/gemini-3.8-flash:batch": {
       "capabilities": {
@@ -9239,7 +9641,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Google: Gemini 3.8 Flash (batch)"
@@ -10971,6 +11374,7 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -10980,70 +11384,6 @@
           "seed",
           "stop",
           "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding",
-          "video_input",
-          "video_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 131072,
-      "family": "ling",
-      "max_output_tokens": 32768,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image+video->text"
-        }
-      },
-      "name": "inclusionAI: Ling 3.0 Flash VL",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.012,
-          "input": 0.06,
-          "output": 0.18
-        },
-        "source": "models.dev:openrouter/inclusionai/ling-3.0-flash-vl"
-      }
-    },
-    "inclusionai/ling-3.0-flash-vl:free": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "video"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "on_off",
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logprobs",
-          "max_tokens",
-          "presence_penalty",
-          "reasoning",
-          "repetition_penalty",
-          "seed",
-          "stop",
           "temperature",
           "tool_choice",
           "tools",
@@ -11074,13 +11414,14 @@
           "modality": "text+image+video->text"
         }
       },
-      "name": "inclusionAI: Ling 3.0 Flash VL (free)",
+      "name": "inclusionAI: Ling 3.0 Flash VL",
       "pricing": {
         "rates": {
-          "input": 0.0,
-          "output": 0.0
+          "cache_read": 0.012,
+          "input": 0.06,
+          "output": 0.18
         },
-        "source": "models.dev:openrouter/inclusionai/ling-3.0-flash-vl:free"
+        "source": "models.dev:openrouter/inclusionai/ling-3.0-flash-vl"
       }
     },
     "inclusionai/ming-image-0.1-design": {
@@ -11148,6 +11489,73 @@
         }
       },
       "name": "inclusionAI: Ming Image 0.1 Design"
+    },
+    "inclusionai/ming-image-0.1-design-layer": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "presence_penalty",
+          "repetition_penalty",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "input_references": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "output_format": {
+                "type": "enum",
+                "values": [
+                  "png",
+                  "webp"
+                ]
+              }
+            }
+          }
+        },
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": 0,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "inclusionAI: Ming Image 0.1 Design Layer"
     },
     "inference-net/schematron-v2-small": {
       "capabilities": {
@@ -11948,7 +12356,8 @@
           "tool_choice",
           "tools",
           "top_k",
-          "top_logprobs"
+          "top_logprobs",
+          "top_p"
         ],
         "supported_voices": [],
         "task_types": [
@@ -11966,7 +12375,8 @@
       "max_output_tokens": 8192,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "LiquidAI: LFM2.5-2.6B (free)",
@@ -12691,7 +13101,8 @@
       "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->text"
+          "modality": "text+image->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Meta: Muse Glimmer 30B",
@@ -12806,7 +13217,8 @@
       "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Meta: Muse Spark 1.1",
@@ -12881,7 +13293,8 @@
       "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Meta: Muse Spark 1.2",
@@ -12956,7 +13369,8 @@
       "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Meta: Muse Spark 1.2 Contributor",
@@ -13032,7 +13446,8 @@
       "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Meta: Muse Spark 1.3",
@@ -13108,7 +13523,8 @@
       "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Meta: Muse Spark 1.3 Contributor",
@@ -14083,18 +14499,19 @@
       ],
       "context_window": 204800,
       "family": "minimax",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 176947,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
+          "reasoning_mandatory": true,
           "reasoning_response_field": "reasoning_details"
         }
       },
       "name": "MiniMax: MiniMax M2",
       "pricing": {
         "rates": {
-          "input": 0.255,
-          "output": 1.02
+          "input": 0.3,
+          "output": 1.2
         },
         "source": "models.dev:openrouter/minimax/minimax-m2"
       }
@@ -14190,6 +14607,7 @@
       "metadata": {
         "openrouter": {
           "modality": "text->text",
+          "reasoning_mandatory": true,
           "reasoning_response_field": "reasoning_details"
         }
       },
@@ -14253,6 +14671,7 @@
       "metadata": {
         "openrouter": {
           "modality": "text->text",
+          "reasoning_mandatory": true,
           "reasoning_response_field": "reasoning_details"
         }
       },
@@ -14315,7 +14734,8 @@
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "MiniMax: MiniMax M2.7",
@@ -14693,63 +15113,6 @@
         }
       },
       "name": "Mistral: Codestral Embed 2505"
-    },
-    "mistralai/devstral-2512": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "file"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "max_tokens",
-          "presence_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "file_input",
-          "file_understanding"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "family": "devstral",
-      "max_output_tokens": 209715,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+file->text"
-        }
-      },
-      "name": "Mistral: Devstral 2 2512",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.04,
-          "input": 0.4,
-          "output": 2.0
-        },
-        "source": "models.dev:openrouter/mistralai/devstral-2512"
-      }
     },
     "mistralai/ministral-14b-2512": {
       "capabilities": {
@@ -15984,8 +16347,8 @@
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": 0,
+      "context_window": 16384,
+      "max_output_tokens": 13107,
       "metadata": {
         "openrouter": {
           "modality": "audio->transcription"
@@ -16304,6 +16667,7 @@
       "metadata": {
         "openrouter": {
           "modality": "text->text",
+          "reasoning_mandatory": true,
           "reasoning_response_field": "reasoning_details"
         }
       },
@@ -16540,14 +16904,15 @@
       "max_output_tokens": 235929,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->text"
+          "modality": "text+image->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "MoonshotAI: Kimi K2.7 Code",
       "pricing": {
         "rates": {
           "cache_read": 0.18,
-          "input": 0.7062,
+          "input": 0.6562,
           "output": 3.3
         },
         "source": "models.dev:openrouter/moonshotai/kimi-k2.7-code"
@@ -16820,68 +17185,6 @@
       },
       "name": "Nex AGI: DeepSeek V3.1 Nex N1"
     },
-    "nex-agi/nex-n2.5-mini": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "none",
-            "medium",
-            "high"
-          ],
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "logprobs",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "structured_outputs",
-          "temperature",
-          "top_k",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": false,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "family": "agi",
-      "max_output_tokens": 235929,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image->text"
-        }
-      },
-      "name": "Nex AGI: Nex-N2.5-Mini",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.0025,
-          "input": 0.025,
-          "output": 0.1
-        },
-        "source": "models.dev:openrouter/nex-agi/nex-n2.5-mini"
-      }
-    },
     "nex-agi/nex-n2.5-mini:free": {
       "capabilities": {
         "input_modalities": [
@@ -16944,70 +17247,6 @@
           "output": 0.0
         },
         "source": "models.dev:openrouter/nex-agi/nex-n2.5-mini:free"
-      }
-    },
-    "nex-agi/nex-n2.5-pro": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "none",
-            "medium",
-            "high"
-          ],
-          "supported": true
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "logprobs",
-          "max_tokens",
-          "reasoning",
-          "reasoning_effort",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "family": "agi",
-      "max_output_tokens": 235929,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image->text"
-        }
-      },
-      "name": "Nex AGI: Nex-N2.5-Pro",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.015,
-          "input": 0.075,
-          "output": 0.25
-        },
-        "source": "models.dev:openrouter/nex-agi/nex-n2.5-pro"
       }
     },
     "nex-agi/nex-n2.5-pro:free": {
@@ -17864,7 +18103,7 @@
       ],
       "context_window": 262144,
       "family": "nemotron",
-      "max_output_tokens": 235929,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -17874,7 +18113,7 @@
       "pricing": {
         "rates": {
           "cache_read": 0.04,
-          "input": 0.07,
+          "input": 0.08,
           "output": 0.2
         },
         "source": "models.dev:openrouter/nvidia/nemotron-3.5-lightning"
@@ -19361,7 +19600,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-5",
@@ -19478,7 +19718,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text+image"
+          "modality": "text+image+file->text+image",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-5 Image",
@@ -19595,7 +19836,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text+image"
+          "modality": "text+image+file->text+image",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-5 Image Mini",
@@ -19661,7 +19903,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-5 Mini",
@@ -19718,7 +19961,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-5 Mini (batch)"
@@ -19776,7 +20020,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-5 Nano",
@@ -19833,7 +20078,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-5 Nano (batch)"
@@ -19887,7 +20133,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-5 Pro",
@@ -19943,7 +20190,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-5 Pro (batch)"
@@ -20062,7 +20310,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->text"
+          "modality": "text+image->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-5.1-Codex",
@@ -20124,7 +20373,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->text"
+          "modality": "text+image->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-5.1-Codex-Max",
@@ -20418,7 +20668,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->text"
+          "modality": "text+image->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-5.2-Codex",
@@ -20482,7 +20733,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-5.2 Pro",
@@ -20538,7 +20790,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-5.2 Pro (batch)"
@@ -21149,7 +21402,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-5.4 Pro",
@@ -21215,7 +21469,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-5.4 Pro (batch)"
@@ -21398,7 +21653,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-5.5 Pro",
@@ -21464,7 +21720,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-5.5 Pro (batch)"
@@ -22342,7 +22599,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-5 (batch)"
@@ -22401,7 +22659,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-6 Astra",
@@ -22481,7 +22740,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-6 Astra Pro",
@@ -22551,7 +22811,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-6 Astra Pro (batch)"
@@ -22600,7 +22861,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT-6 Astra (batch)"
@@ -22630,6 +22892,7 @@
         },
         "supported_parameters": [
           "include_reasoning",
+          "max_completion_tokens",
           "max_tokens",
           "reasoning",
           "reasoning_effort",
@@ -22655,7 +22918,7 @@
         "api-key"
       ],
       "context_window": 1050000,
-      "family": "gpt",
+      "family": "gpt-luna",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -22710,6 +22973,7 @@
         },
         "supported_parameters": [
           "include_reasoning",
+          "max_completion_tokens",
           "max_tokens",
           "reasoning",
           "reasoning_effort",
@@ -22888,6 +23152,7 @@
         },
         "supported_parameters": [
           "include_reasoning",
+          "max_completion_tokens",
           "max_tokens",
           "reasoning",
           "reasoning_effort",
@@ -22913,7 +23178,7 @@
         "api-key"
       ],
       "context_window": 1050000,
-      "family": "gpt",
+      "family": "gpt-sol",
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
@@ -22968,6 +23233,7 @@
         },
         "supported_parameters": [
           "include_reasoning",
+          "max_completion_tokens",
           "max_tokens",
           "reasoning",
           "reasoning_effort",
@@ -23856,7 +24122,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: gpt-oss-120b",
@@ -23868,6 +24135,59 @@
         },
         "source": "models.dev:openrouter/openai/gpt-oss-120b"
       }
+    },
+    "openai/gpt-oss-120b:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 131072,
+      "max_output_tokens": 117964,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text",
+          "reasoning_mandatory": true
+        }
+      },
+      "name": "OpenAI: gpt-oss-120b (batch)"
     },
     "openai/gpt-oss-20b": {
       "capabilities": {
@@ -23925,7 +24245,8 @@
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: gpt-oss-20b",
@@ -23984,7 +24305,8 @@
       "max_output_tokens": 117964,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: gpt-oss-20b (batch)"
@@ -24036,7 +24358,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: gpt-oss-safeguard-20b",
@@ -24355,7 +24678,8 @@
       "max_output_tokens": 100000,
       "metadata": {
         "openrouter": {
-          "modality": "text+file->text"
+          "modality": "text+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: o3 Mini High",
@@ -24625,7 +24949,8 @@
       "max_output_tokens": 100000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: o4 Mini High",
@@ -25682,7 +26007,8 @@
       "max_output_tokens": 8000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->text"
+          "modality": "text+image->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Perplexity: Sonar Pro Search",
@@ -26843,7 +27169,8 @@
       "max_output_tokens": 117964,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Qwen: Qwen3 235B A22B Thinking 2507",
@@ -26958,7 +27285,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 32000,
+      "max_output_tokens": 235929,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -26967,8 +27294,8 @@
       "name": "Qwen: Qwen3 30B A3B Instruct 2507",
       "pricing": {
         "rates": {
-          "input": 0.04815,
-          "output": 0.19305
+          "input": 0.1,
+          "output": 0.3
         },
         "source": "models.dev:openrouter/qwen/qwen3-30b-a3b-instruct-2507"
       }
@@ -27016,7 +27343,8 @@
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Qwen: Qwen3 30B A3B Thinking 2507",
@@ -27637,7 +27965,7 @@
         "api-key"
       ],
       "context_window": 32768,
-      "max_output_tokens": 29491,
+      "max_output_tokens": 28800,
       "metadata": {
         "openrouter": {
           "modality": "text->embeddings"
@@ -27846,7 +28174,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 16384,
+      "max_output_tokens": 235929,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -27855,7 +28183,8 @@
       "name": "Qwen: Qwen3 Next 80B A3B Instruct",
       "pricing": {
         "rates": {
-          "input": 0.09,
+          "cache_read": 0.07,
+          "input": 0.1,
           "output": 1.1
         },
         "source": "models.dev:openrouter/qwen/qwen3-next-80b-a3b-instruct"
@@ -27908,7 +28237,8 @@
       "max_output_tokens": 235929,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Qwen: Qwen3 Next 80B A3B Thinking",
@@ -28033,7 +28363,8 @@
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->text"
+          "modality": "text+image->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Qwen: Qwen3 VL 235B A22B Thinking",
@@ -28156,7 +28487,8 @@
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->text"
+          "modality": "text+image->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Qwen: Qwen3 VL 30B A3B Thinking",
@@ -28337,7 +28669,8 @@
       "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->text"
+          "modality": "text+image->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Qwen: Qwen3 VL 8B Thinking",
@@ -29547,7 +29880,8 @@
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Qwen: Qwen3.8 2.4T A95B",
@@ -29831,7 +30165,8 @@
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+video->text"
+          "modality": "text+image+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Qwen: Qwen3.8 Max (0902)",
@@ -29843,6 +30178,81 @@
           "output": 6.0
         },
         "source": "models.dev:openrouter/qwen/qwen3.8-max-0902"
+      }
+    },
+    "qwen/qwen3.8-max-prime": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "qwen3.8-max",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+video->text",
+          "reasoning_mandatory": true
+        }
+      },
+      "name": "Qwen: Qwen3.8 Max Prime",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.5,
+          "input": 4.0,
+          "output": 12.0
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.8-max-prime"
       }
     },
     "qwen/qwen3.8-omni-flash": {
@@ -29858,6 +30268,7 @@
           "text"
         ],
         "reasoning": {
+          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -29896,13 +30307,22 @@
         "api-key"
       ],
       "context_window": 1000000,
+      "family": "qwen",
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text+image+audio+video->text"
         }
       },
-      "name": "Qwen: Qwen3.8 Omni Flash"
+      "name": "Qwen: Qwen3.8 Omni Flash",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.016,
+          "input": 0.15,
+          "output": 0.47
+        },
+        "source": "models.dev:openrouter/qwen/qwen3.8-omni-flash"
+      }
     },
     "recraft/recraft-v3": {
       "capabilities": {
@@ -30636,6 +31056,65 @@
       },
       "name": "Recraft: Recraft V4.1"
     },
+    "recraft/recraft-v4.1-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "4:3",
+                  "3:4",
+                  "16:9",
+                  "9:16",
+                  "auto"
+                ]
+              },
+              "n": {
+                "max": 6,
+                "min": 1,
+                "type": "range"
+              }
+            },
+            "passthrough": {
+              "recraft": [
+                "controls"
+              ]
+            }
+          }
+        },
+        "task_types": [
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 65536,
+      "max_output_tokens": 58982,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->image"
+        }
+      },
+      "name": "Recraft: Recraft V4.1 Flash"
+    },
     "recraft/recraft-v4.1-pro": {
       "capabilities": {
         "input_modalities": [
@@ -31092,7 +31571,8 @@
       "max_output_tokens": 58982,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Reka Flash 3",
@@ -31391,7 +31871,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Sakana: Fugu Max",
@@ -31450,7 +31931,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->text"
+          "modality": "text+image->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Sakana: Fugu Ultra",
@@ -31523,7 +32005,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Sakana: Fugu Ultra v2",
@@ -32219,7 +32702,8 @@
       "max_output_tokens": 29491,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->image"
+          "modality": "text+image->image",
+          "reasoning_mandatory": true
         }
       },
       "name": "Sourceful: Riverflow V2.5 Fast"
@@ -32350,7 +32834,8 @@
       "max_output_tokens": 29491,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->image"
+          "modality": "text+image->image",
+          "reasoning_mandatory": true
         }
       },
       "name": "Sourceful: Riverflow V2.5 Pro"
@@ -32389,6 +32874,72 @@
       },
       "name": "Sourceful: Riverflow V2.5 Pro (free)"
     },
+    "stealth/space-bunny-alpha": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "video_input",
+          "video_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "alpha",
+      "max_output_tokens": 524288,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+video->text",
+          "reasoning_mandatory": true
+        }
+      },
+      "name": "Space Bunny Alpha",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/stealth/space-bunny-alpha"
+      }
+    },
     "stepfun/step-3.5-flash": {
       "capabilities": {
         "input_modalities": [
@@ -32424,7 +32975,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "StepFun: Step 3.5 Flash",
@@ -32497,7 +33049,8 @@
       "max_output_tokens": 230400,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+video->text"
+          "modality": "text+image+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "StepFun: Step 3.7 Flash",
@@ -32765,9 +33318,9 @@
       "name": "Tencent: Hy3",
       "pricing": {
         "rates": {
-          "cache_read": 0.020625,
-          "input": 0.0825,
-          "output": 0.33
+          "cache_read": 0.033,
+          "input": 0.132,
+          "output": 0.528
         },
         "source": "models.dev:openrouter/tencent/hy3"
       }
@@ -32849,17 +33402,23 @@
           "supported": true
         },
         "supported_parameters": [
+          "frequency_penalty",
           "include_reasoning",
           "max_completion_tokens",
           "max_tokens",
+          "presence_penalty",
           "reasoning",
           "reasoning_effort",
+          "repetition_penalty",
           "response_format",
+          "seed",
           "stop",
           "structured_outputs",
           "temperature",
           "tool_choice",
-          "tools"
+          "tools",
+          "top_k",
+          "top_p"
         ],
         "supported_voices": [],
         "task_types": [
@@ -33540,6 +34099,72 @@
         "source": "models.dev:openrouter/undi95/remm-slerp-l2-13b"
       }
     },
+    "upstage/solar-mini4": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "max_tokens",
+          "parallel_tool_calls",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 524288,
+      "family": "solar",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "Upstage: Solar Mini 4",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.005,
+          "input": 0.05,
+          "output": 0.2
+        },
+        "source": "models.dev:openrouter/upstage/solar-mini4"
+      }
+    },
     "upstage/solar-pro-3": {
       "capabilities": {
         "input_modalities": [
@@ -34003,7 +34628,8 @@
       "max_output_tokens": 1800000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "SpaceXAI: Grok 4.20 Multi-Agent",
@@ -34215,7 +34841,8 @@
       "max_output_tokens": 450000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "SpaceXAI: Grok 4.5",
@@ -34297,7 +34924,8 @@
       "max_output_tokens": 450000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "SpaceXAI: Grok 4.6",
@@ -34377,7 +35005,8 @@
       "max_output_tokens": 450000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "SpaceXAI: Grok 4.7",
@@ -34449,7 +35078,8 @@
       "max_output_tokens": 230400,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "SpaceXAI: Grok Build 0.1",
@@ -36124,15 +36754,16 @@
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Z.ai: GLM 5.3",
       "pricing": {
         "rates": {
-          "cache_read": 0.12142,
-          "input": 0.6538,
-          "output": 2.0548
+          "cache_read": 0.156,
+          "input": 0.84,
+          "output": 2.64
         },
         "source": "models.dev:openrouter/z-ai/glm-5.3"
       }
@@ -36200,7 +36831,8 @@
       "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+video->text"
+          "modality": "text+image+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Z.ai: GLM 5.3 Flash",
@@ -36266,7 +36898,8 @@
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+video->text"
+          "modality": "text+image+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Z.ai: GLM 5.3 Flash (batch)"
@@ -36323,17 +36956,84 @@
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+video->text"
+          "modality": "text+image+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Z.ai: GLM 5.3 FlashX",
       "pricing": {
         "rates": {
-          "cache_read": 0.075,
+          "cache_read": 0.09,
           "input": 0.37,
           "output": 1.25
         },
         "source": "models.dev:openrouter/z-ai/glm-5.3-flashx"
+      }
+    },
+    "z-ai/glm-5.3-prime": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "glm",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text",
+          "reasoning_mandatory": true
+        }
+      },
+      "name": "Z.ai: GLM 5.3 Prime",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.56,
+          "input": 2.8,
+          "output": 8.8
+        },
+        "source": "models.dev:openrouter/z-ai/glm-5.3-prime"
       }
     },
     "z-ai/glm-5.3:batch": {
@@ -36383,7 +37083,8 @@
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Z.ai: GLM 5.3 (batch)"
@@ -36502,7 +37203,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Anthropic: Claude Fable Latest",
@@ -36635,7 +37337,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Anthropic: Claude Opus Latest",
@@ -36783,9 +37486,9 @@
       "name": "DeepSeek: DeepSeek Flash Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.0036,
-          "input": 0.12,
-          "output": 0.48
+          "cache_read": 0.01,
+          "input": 0.04,
+          "output": 1.0
         },
         "source": "models.dev:openrouter/~deepseek/deepseek-flash-latest"
       }
@@ -36843,7 +37546,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek",
-      "max_output_tokens": 393216,
+      "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -36852,9 +37555,9 @@
       "name": "DeepSeek: DeepSeek Pro Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.017304,
-          "input": 0.54384,
-          "output": 1.63152
+          "cache_read": 0.25,
+          "input": 0.39,
+          "output": 2.9
         },
         "source": "models.dev:openrouter/~deepseek/deepseek-pro-latest"
       }
@@ -36923,9 +37626,9 @@
       "name": "DeepSeek: DeepSeek V4 Flash Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.008,
+          "cache_read": 0.016,
           "input": 0.03,
-          "output": 1.0
+          "output": 0.32
         },
         "source": "models.dev:openrouter/~deepseek/deepseek-v4-flash-latest"
       }
@@ -36990,7 +37693,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Google: Gemini Flash Latest",
@@ -37065,7 +37769,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text"
+          "modality": "text+image+file+audio+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Google: Gemini Pro Latest",
@@ -37161,9 +37866,9 @@
       "name": "MoonshotAI: Kimi Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.15,
-          "input": 1.5,
-          "output": 7.5
+          "cache_read": 0.3,
+          "input": 1.4,
+          "output": 10.75
         },
         "source": "models.dev:openrouter/~moonshotai/kimi-latest"
       }
@@ -37222,7 +37927,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT Astra Latest",
@@ -37273,6 +37979,7 @@
         },
         "supported_parameters": [
           "include_reasoning",
+          "max_completion_tokens",
           "max_tokens",
           "reasoning",
           "reasoning_effort",
@@ -37420,6 +38127,7 @@
         },
         "supported_parameters": [
           "include_reasoning",
+          "max_completion_tokens",
           "max_tokens",
           "reasoning",
           "reasoning_effort",
@@ -37644,7 +38352,8 @@
       "max_output_tokens": 450000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "xAI: Grok Latest",
@@ -37728,18 +38437,19 @@
       ],
       "context_window": 1310720,
       "family": "glm-flash",
-      "max_output_tokens": 943718,
+      "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+video->text"
+          "modality": "text+image+video->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Z.ai: GLM Flash Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.015,
-          "input": 0.075,
-          "output": 0.25
+          "cache_read": 0.01,
+          "input": 0.045,
+          "output": 0.14
         },
         "source": "models.dev:openrouter/~z-ai/glm-flash-latest"
       }
@@ -37801,15 +38511,16 @@
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
-          "modality": "text->text"
+          "modality": "text->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Z.ai: GLM Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.12142,
-          "input": 0.6538,
-          "output": 2.0548
+          "cache_read": 0.125,
+          "input": 0.5625,
+          "output": 2.5
         },
         "source": "models.dev:openrouter/~z-ai/glm-latest"
       }

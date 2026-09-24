@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-22T19:30:32.336486+00:00",
+  "fetched_at": "2026-09-24T09:13:42.162377+00:00",
   "models": {
     "deepseek-flash": {
       "capabilities": {
@@ -469,6 +469,67 @@
           ]
         },
         "source": "models.dev:opencode-go/gpt-5.6-luna"
+      }
+    },
+    "gpt-6-luna": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1050000,
+      "family": "gpt-luna",
+      "max_output_tokens": 128000,
+      "name": "gpt-6-luna",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.01,
+          "cache_write": 0.125,
+          "input": 0.1,
+          "output": 0.5,
+          "tiers": [
+            {
+              "cache_read": 0.02,
+              "cache_write": 0.25,
+              "input": 0.2,
+              "output": 0.75,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:opencode-go/gpt-6-luna"
       }
     },
     "grok-4.6": {
@@ -941,8 +1002,7 @@
           "text",
           "image",
           "audio",
-          "video",
-          "pdf"
+          "video"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -987,8 +1047,7 @@
           "text",
           "image",
           "audio",
-          "video",
-          "pdf"
+          "video"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -1537,6 +1596,58 @@
           "output": 6.0
         },
         "source": "models.dev:opencode-go/qwen3.8-max"
+      }
+    },
+    "space-bunny-free": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": 524288,
+      "metadata": {
+        "opencode_go": {
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
+      "name": "space-bunny-free",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0,
+          "cache_write": 0.0,
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:opencode-go/space-bunny-free"
       }
     }
   },
