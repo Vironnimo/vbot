@@ -288,13 +288,10 @@ class OAuthTokenGetter:
             raise ProviderAuthError("OAuth token expired — please reconnect")
         now = datetime.now(UTC)
         try:
-            if self._oauth_config.device_flow in {
-                NOUS_OAUTH_DEVICE_FLOW,
-                OPENCODE_OAUTH_DEVICE_FLOW,
-            }:
+            if self._oauth_config.device_flow in ROTATING_REFRESH_DEVICE_FLOWS:
                 # These providers rotate refresh tokens. Retrying a POST after
-                # an ambiguous transport failure can replay the retired token
-                # and invalidate the session chain.
+                # an ambiguous transport failure can replay the retired token,
+                # whose auth rejection would then clear the stored login.
                 response_data = await self._post_refresh_token(token.refresh_token)
             else:
                 response_data = await retry_async(self._post_refresh_token, token.refresh_token)
