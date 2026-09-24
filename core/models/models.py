@@ -90,6 +90,8 @@ MODEL_TASK_ORDER = (
     "text_embedding",
     "decision",
     "video_generation",
+    # Explicit-only: no modality combination derives a live voice Model.
+    "live_voice",
 )
 
 # How the provider exposes the reasoning control on the wire. ``levels`` is an
@@ -145,8 +147,11 @@ class Capabilities:
 
     * ``parameters`` — mapping of wire parameter name to a typed spec:
       ``{"type": "enum", "values": [...]}``, ``{"type": "range", "min": n,
-      "max": n}``, or ``{"type": "boolean"}`` (the parameter is supported,
-      value free-form).
+      "max": n}``, ``{"type": "boolean"}`` (the parameter is supported,
+      value free-form), or ``{"type": "model"}`` (a tool-capable chat Model
+      id of the same Provider that the selected Connection allows). A spec
+      may carry an optional ``default`` value that the option builder uses
+      when it is among the offered choices.
     * ``passthrough`` — mapping of upstream provider slug to the list of
       provider-specific option keys accepted via passthrough (OpenRouter
       ``provider.options``).

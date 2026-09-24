@@ -1,55 +1,83 @@
-"""Live voice accessor startup; app actions use the existing operator RPCs."""
+"""Live voice RPCs: status, call start/stop, and the owner's UI request answers."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from core.model_tasks.live import BACKEND_MODEL, LIVE_MODEL, LiveClient
-from core.model_tasks.model_tasks import parse_task_model_target_id
-from core.providers.errors import (
-    NetworkError,
-    ProviderAuthError,
-    ProviderError,
-    ProviderOutcomeUnknownError,
-)
-from core.utils.logging import get_logger
+from core.model_tasks.live import LiveStartRejected
+from server.live import LiveCallRegistry, LiveRegistryClosedError
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import _reject_unsupported, _required_string
 
-_LOGGER = get_logger("server.rpc.live")
+JsonObject = dict[str, Any]
+
+LIVE_UI_ERROR_MAX_CHARS = 64
 
 
-def _status(state: Any, params: dict[str, Any]) -> dict[str, Any]:
+def _registry(state: Any) -> LiveCallRegistry:
+    registry: LiveCallRegistry = state.live_calls
+    return registry
+
+
+def _status(state: Any, params: JsonObject) -> JsonObject:
+    """Report whether a ``live_voice`` binding is configured and usable."""
     _reject_unsupported(params, set(), "live.status")
-    usable = state.runtime.provider_credentials.is_usable("openai", "openai:api-key")
-    return {"configured": bool(usable), "model": LIVE_MODEL, "backend_model": BACKEND_MODEL}
+    status: JsonObject = state.runtime.live_voice.status()
+    return status
 
 
-async def _create(state: Any, params: dict[str, Any]) -> dict[str, Any]:
-    _reject_unsupported(params, {"sdp"}, "live.create")
-    sdp = _required_string(params, "sdp")
-    if not _status(state, {})["configured"]:
-        return {"error": "api_key_required"}
+async def _start(state: Any, params: JsonObject) -> JsonObject:
+    """Start a call for the accessor's SDP offer, replacing any active call."""
+    _reject_unsupported(params, {"sdp"}, "live.start")
+    offer_sdp = _required_string(params, "sdp")
     try:
-        client = LiveClient.from_runtime(
-            state.runtime, parse_task_model_target_id(f"openai/{LIVE_MODEL}::api-key")
+        call = await _registry(state).start(state.runtime.live_voice, offer_sdp=offer_sdp)
+    except LiveStartRejected as exc:
+        return {"error": exc.code}
+    except LiveRegistryClosedError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "The server is shutting down") from exc
+    return {"call_id": call.id, "media": call.media}
+
+
+def _stop(state: Any, params: JsonObject) -> JsonObject:
+    """Close a call gracefully in the background."""
+    _reject_unsupported(params, {"call_id"}, "live.stop")
+    call_id = _required_string(params, "call_id")
+    return {"stopping": _registry(state).stop(call_id)}
+
+
+def _ui_result(state: Any, params: JsonObject) -> JsonObject:
+    """Answer one UI request with either a result object or an error code."""
+    _reject_unsupported(params, {"call_id", "request_id", "result", "error"}, "live.ui_result")
+    call_id = _required_string(params, "call_id")
+    request_id = _required_string(params, "request_id")
+    if ("result" in params) == ("error" in params):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "live.ui_result requires exactly one of params.result or params.error",
         )
-        result = await client.create_session(sdp)
-    except ValueError as exc:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "invalid_sdp") from exc
-    except ProviderAuthError:
-        _LOGGER.warning("Live voice access rejected by Provider")
-        return {"error": "access_denied"}
-    except ProviderOutcomeUnknownError:
-        _LOGGER.warning("Live voice creation outcome unknown; request was not replayed")
-        return {"error": "outcome_unknown"}
-    except (ProviderError, NetworkError):
-        _LOGGER.warning("Live voice creation failed")
-        return {"error": "provider_error"}
-    _LOGGER.info("Live voice session created session_id=%s", result["session"]["id"])
-    return result
+    result: JsonObject | None = None
+    error: str | None = None
+    if "result" in params:
+        result = params["result"]
+        if not isinstance(result, dict):
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.result must be an object")
+    else:
+        error = _required_string(params, "error")
+        if len(error) > LIVE_UI_ERROR_MAX_CHARS:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"params.error must be at most {LIVE_UI_ERROR_MAX_CHARS} characters",
+            )
+    accepted = _registry(state).resolve_ui_request(call_id, request_id, result=result, error=error)
+    return {"accepted": accepted}
 
 
 def method_handlers() -> dict[str, RpcMethodHandler]:
-    return {"live.status": _status, "live.create": _create}
+    return {
+        "live.status": _status,
+        "live.start": _start,
+        "live.stop": _stop,
+        "live.ui_result": _ui_result,
+    }

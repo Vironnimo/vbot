@@ -1,0 +1,380 @@
+"""One running Live call: wire events, delegations, announcements, and shutdown.
+
+The call reads the wire's normalized events on one reader task. Every
+delegation runs on its own task (bounded concurrency) so the conversation stays
+live while work runs; results return through the wire in delegation order of
+completion. Commands to the wire are serialized so chunked appends never
+interleave. The call publishes exactly one ``closed`` update when it ends.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from collections import deque
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any
+
+from core.model_tasks._live_brain import DelegationInput, LiveBrain
+from core.model_tasks._live_tools import LIVE_UPDATE_PREFIX
+from core.model_tasks._live_wire import (
+    JsonObject,
+    LiveWire,
+    WireCaption,
+    WireClosed,
+    WireDelegation,
+    WireEvent,
+    WireProblem,
+    WireSendError,
+    WireStarted,
+    WireUsage,
+)
+from core.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from core.model_tasks.live import LiveCallHost, LiveRunNotice
+
+_LOGGER = get_logger(__name__)
+
+MAX_CONCURRENT_DELEGATIONS = 4
+START_TIMEOUT_SECONDS = 45.0
+CLOSE_TIMEOUT_SECONDS = 15.0
+DELEGATION_TIMEOUT_SECONDS = 240.0
+# Public-dialect delegations carry no text; wait until the user's speech settles.
+USER_QUIET_SECONDS = 0.4
+USER_QUIET_MAX_WAIT_SECONDS = 2.0
+_CONVERSATION_TURNS = 12
+_CONVERSATION_MAX_CHARS = 4000
+_RECENT_UPDATES = 5
+_ANNOUNCED_RUN_IDS = 500
+_ANNOUNCEMENT_EXCERPT_CHARS = 600
+_CAPTION_MAX_CHARS = 1000
+_TEARDOWN_TIMEOUT_SECONDS = 5.0
+_ABORT_CLOSE_TIMEOUT_SECONDS = 1.0
+_ROLE_LABELS = {"user": "User", "assistant": "Assistant"}
+
+
+class LiveCallSession:
+    """Implements :class:`core.model_tasks.live.LiveCall` for one joined wire."""
+
+    def __init__(
+        self,
+        *,
+        wire: LiveWire,
+        brain: LiveBrain,
+        host: LiveCallHost,
+        target: str,
+        start_timeout: float = START_TIMEOUT_SECONDS,
+        close_timeout: float = CLOSE_TIMEOUT_SECONDS,
+        delegation_timeout: float = DELEGATION_TIMEOUT_SECONDS,
+        user_quiet: float = USER_QUIET_SECONDS,
+        user_quiet_max_wait: float = USER_QUIET_MAX_WAIT_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._wire = wire
+        self._brain = brain
+        self._host = host
+        self._target = target
+        self._start_timeout = start_timeout
+        self._close_timeout = close_timeout
+        self._delegation_timeout = delegation_timeout
+        self._user_quiet = user_quiet
+        self._user_quiet_max_wait = user_quiet_max_wait
+        self._clock = clock
+        self._phase = "connecting"
+        self._closing = False
+        self._abort_reason: str | None = None
+        self._done = asyncio.Event()
+        self._reader: asyncio.Task[None] | None = None
+        self._watchdog: asyncio.Task[None] | None = None
+        self._tasks: set[asyncio.Task[Any]] = set()
+        self._send_lock = asyncio.Lock()
+        self._delegation_slots = asyncio.Semaphore(MAX_CONCURRENT_DELEGATIONS)
+        self._busy = 0
+        self._turns: deque[tuple[str, str]] = deque(maxlen=_CONVERSATION_TURNS)
+        self._partial: dict[str, str] = {}
+        self._last_user_speech_at = 0.0
+        self._updates: deque[str] = deque(maxlen=_RECENT_UPDATES)
+        self._announced: deque[str] = deque(maxlen=_ANNOUNCED_RUN_IDS)
+        self._usage: JsonObject | None = None
+        self._started_at = clock()
+
+    @property
+    def id(self) -> str:
+        return self._wire.call_id
+
+    @property
+    def media(self) -> JsonObject:
+        return {"type": "webrtc", "sdp": self._wire.answer_sdp}
+
+    def start(self) -> None:
+        """Begin reading wire events; called once by the service."""
+
+        self._publish({"type": "state", "phase": self._phase})
+        self._reader = asyncio.create_task(self._read(), name=f"live-call-reader:{self.id}")
+        self._watchdog = asyncio.create_task(
+            self._watch_start(), name=f"live-call-start-watchdog:{self.id}"
+        )
+
+    async def close(self) -> None:
+        if not self._done.is_set() and not self._closing:
+            self._closing = True
+            self._set_phase("closing")
+            try:
+                async with asyncio.timeout(self._close_timeout):
+                    if await self._send_command(self._wire.request_close):
+                        await self._done.wait()
+            except TimeoutError:
+                _LOGGER.warning("Live call close was not confirmed in time: call_id=%s", self.id)
+        if not self._done.is_set():
+            await self._teardown()
+        await self.wait_closed()
+
+    async def abort(self) -> None:
+        await self._abort("aborted")
+
+    def announce_run(self, notice: LiveRunNotice) -> None:
+        if notice.run_id in self._announced or self._done.is_set() or self._closing:
+            return
+        self._announced.append(notice.run_id)
+        text = _render_notice(notice)
+        self._updates.append(text)
+        if self._phase != "live":
+            return
+        self._spawn(
+            self._send_command(lambda: self._wire.announce(text)),
+            name=f"live-call-announce:{self.id}",
+        )
+
+    async def wait_closed(self) -> None:
+        await self._done.wait()
+        tasks = [task for task in (self._reader, self._watchdog, *self._tasks) if task is not None]
+        current = asyncio.current_task()
+        pending = [task for task in tasks if task is not current]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    async def _read(self) -> None:
+        closed: WireClosed | None = None
+        try:
+            async for event in self._wire.events():
+                if isinstance(event, WireClosed):
+                    closed = event
+                    break
+                self._handle(event)
+        except Exception as exc:
+            _LOGGER.warning(
+                "Live call control reader failed: call_id=%s error_type=%s",
+                self.id,
+                type(exc).__name__,
+            )
+        finally:
+            self._finish(closed)
+
+    def _handle(self, event: WireEvent) -> None:
+        if isinstance(event, WireStarted):
+            if self._phase == "connecting":
+                self._set_phase("live")
+                _LOGGER.debug("Live call media connected: call_id=%s", self.id)
+        elif isinstance(event, WireCaption):
+            self._on_caption(event)
+        elif isinstance(event, WireDelegation):
+            if not self._closing:
+                self._spawn(self._delegate(event), name=f"live-call-delegation:{self.id}")
+        elif isinstance(event, WireUsage):
+            self._usage = event.usage
+        elif isinstance(event, WireProblem):
+            _LOGGER.warning(
+                "Live provider reported an error: call_id=%s code=%s", self.id, event.code
+            )
+
+    def _on_caption(self, event: WireCaption) -> None:
+        if event.role == "user":
+            self._last_user_speech_at = self._clock()
+        if event.final:
+            self._partial.pop(event.role, None)
+            if event.text:
+                self._turns.append((event.role, event.text))
+        else:
+            self._partial[event.role] = event.text
+        self._publish(
+            {
+                "type": "caption",
+                "role": event.role,
+                "text": event.text[-_CAPTION_MAX_CHARS:],
+                "final": event.final,
+            }
+        )
+
+    async def _delegate(self, event: WireDelegation) -> None:
+        async with self._delegation_slots:
+            self._set_busy(1)
+            try:
+                if event.request is None:
+                    await self._await_user_quiet()
+                delegation = DelegationInput(
+                    request=event.request,
+                    conversation=self._conversation_text(),
+                    updates="\n".join(self._updates),
+                )
+                try:
+                    async with asyncio.timeout(self._delegation_timeout):
+                        answer = await self._brain.answer(delegation)
+                except TimeoutError:
+                    _LOGGER.warning("Live delegation timed out: call_id=%s", self.id)
+                    answer = (
+                        "The request took too long and was stopped. Actions it already started "
+                        "may have completed; nothing was retried."
+                    )
+            finally:
+                self._set_busy(-1)
+        await self._send_command(lambda: self._wire.deliver_result(event.delegation_id, answer))
+
+    async def _await_user_quiet(self) -> None:
+        deadline = self._clock() + self._user_quiet_max_wait
+        while self._clock() < deadline:
+            quiet_for = self._clock() - self._last_user_speech_at
+            if quiet_for >= self._user_quiet:
+                return
+            await asyncio.sleep(min(self._user_quiet - quiet_for, deadline - self._clock()))
+
+    def _conversation_text(self) -> str:
+        lines = [f"{_ROLE_LABELS.get(role, role)}: {text}" for role, text in self._turns]
+        lines.extend(
+            f"{_ROLE_LABELS.get(role, role)} (still speaking): {text}"
+            for role, text in self._partial.items()
+            if text
+        )
+        return "\n".join(lines)[-_CONVERSATION_MAX_CHARS:]
+
+    async def _watch_start(self) -> None:
+        await asyncio.sleep(self._start_timeout)
+        if self._phase == "connecting" and not self._done.is_set():
+            _LOGGER.warning("Live call media did not connect in time: call_id=%s", self.id)
+            await self._abort("start_timeout")
+
+    async def _abort(self, reason: str) -> None:
+        if not self._done.is_set():
+            self._abort_reason = self._abort_reason or reason
+            # Ask the provider to end the call so billing stops, without waiting.
+            try:
+                async with asyncio.timeout(_ABORT_CLOSE_TIMEOUT_SECONDS):
+                    await self._send_command(self._wire.request_close)
+            except TimeoutError:
+                pass
+            await self._teardown()
+        await self.wait_closed()
+
+    async def _teardown(self) -> None:
+        for task in list(self._tasks):
+            task.cancel()
+        try:
+            async with asyncio.timeout(_TEARDOWN_TIMEOUT_SECONDS):
+                await self._wire.aclose()
+                if self._reader is not None:
+                    await asyncio.shield(self._reader)
+        except (TimeoutError, asyncio.CancelledError):
+            if self._reader is not None and self._reader is not asyncio.current_task():
+                self._reader.cancel()
+        except Exception as exc:
+            _LOGGER.warning(
+                "Live call teardown failed: call_id=%s error_type=%s", self.id, type(exc).__name__
+            )
+        self._finish(None)
+
+    def _finish(self, closed: WireClosed | None) -> None:
+        if self._done.is_set():
+            return
+        for task in list(self._tasks):
+            task.cancel()
+        watchdog = self._watchdog
+        if watchdog is not None and watchdog is not asyncio.current_task():
+            watchdog.cancel()
+        reason: str | None
+        if self._abort_reason is not None:
+            reason = self._abort_reason
+        elif closed is not None and closed.confirmed:
+            reason = closed.reason
+        elif self._closing:
+            reason = "closed"
+        else:
+            reason = "connection_lost"
+        usage = (closed.usage if closed is not None else None) or self._usage
+        failed = reason in {"connection_lost", "start_timeout"}
+        self._set_phase("failed" if failed else "closed")
+        self._publish({"type": "closed", "reason": reason, "usage": usage})
+        _LOGGER.info(
+            "Live call ended: call_id=%s target=%s reason=%s duration_s=%.1f",
+            self.id,
+            self._target,
+            reason,
+            self._clock() - self._started_at,
+        )
+        self._done.set()
+
+    async def _send_command(self, send: Callable[[], Awaitable[None]]) -> bool:
+        if self._done.is_set():
+            return False
+        try:
+            async with self._send_lock:
+                await send()
+            return True
+        except WireSendError:
+            return False
+        except Exception as exc:
+            _LOGGER.warning(
+                "Live call command failed: call_id=%s error_type=%s", self.id, type(exc).__name__
+            )
+            return False
+
+    def _spawn(self, coroutine: Awaitable[Any], *, name: str) -> None:
+        task = asyncio.ensure_future(coroutine)
+        task.set_name(name)
+        self._tasks.add(task)
+        task.add_done_callback(self._task_done)
+
+    def _task_done(self, task: asyncio.Task[Any]) -> None:
+        self._tasks.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            _LOGGER.warning(
+                "Live call task failed: call_id=%s error_type=%s",
+                self.id,
+                type(task.exception()).__name__,
+            )
+
+    def _set_busy(self, delta: int) -> None:
+        was_busy = self._busy > 0
+        self._busy += delta
+        if (self._busy > 0) != was_busy and not self._done.is_set():
+            busy = self._busy > 0
+            self._publish({"type": "activity", "busy": busy, "label": "working" if busy else None})
+
+    def _set_phase(self, phase: str) -> None:
+        if self._phase == phase:
+            return
+        self._phase = phase
+        self._publish({"type": "state", "phase": phase})
+
+    def _publish(self, update: JsonObject) -> None:
+        try:
+            self._host.publish(update)
+        except Exception as exc:
+            _LOGGER.warning(
+                "Live call update delivery failed: call_id=%s error_type=%s",
+                self.id,
+                type(exc).__name__,
+            )
+
+
+def _render_notice(notice: LiveRunNotice) -> str:
+    excerpt = notice.excerpt.strip()
+    truncated = notice.truncated or len(excerpt) > _ANNOUNCEMENT_EXCERPT_CHARS
+    payload = {
+        "run": notice.kind,
+        "agent": notice.agent_id,
+        "session_id": notice.session_id,
+        "result_excerpt": excerpt[:_ANNOUNCEMENT_EXCERPT_CHARS],
+        "excerpt_truncated": truncated,
+    }
+    return f"{LIVE_UPDATE_PREFIX}: {json.dumps(payload, ensure_ascii=False)}"

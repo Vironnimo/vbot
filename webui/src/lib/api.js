@@ -94,9 +94,6 @@ export {
   listLogs,
   readLogFile,
   listClients,
-  getLiveVoiceStatus,
-  setLiveVoiceEnabled,
-  createLiveVoiceSession,
   deleteChannel,
   connectProvider,
   disconnectProvider,
@@ -210,3 +207,12 @@ export {
   cancelDecisionEvaluation,
   evaluateDecision,
 } from './api/decisions.js';
+
+export {
+  LIVE_SOCKET_ERROR_RESPONSE,
+  getLiveVoiceStatus,
+  startLiveCall,
+  stopLiveCall,
+  sendLiveUiResult,
+  openLiveCallSocket,
+} from './api/live.js';
