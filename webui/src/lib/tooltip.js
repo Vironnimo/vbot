@@ -220,8 +220,9 @@ function anchorInViewport(anchor) {
 /**
  * Shared lifecycle of one open floating layer. `show()` positions the element
  * against its anchor and registers the layer, closing competing layers (see
- * the coordination rule above). While open, the layer follows scrolling and
- * resizing (dismissed once its anchor leaves the viewport) and is dismissed
+ * the coordination rule above). While open, the layer follows scrolling,
+ * viewport resizing (dismissed once its anchor leaves the viewport) and
+ * changes of its own size (content that grows while shown), and is dismissed
  * by an outside press or Escape. `anchor`/`element` return the current nodes;
  * `onDismiss()` must close the owner's state and call `hide()`.
  * `onEscape(event)` defaults to `onDismiss`; an owner consumes Escape with
@@ -237,6 +238,7 @@ export function createFloatingLayer({
 }) {
   let pinned = false;
   let following = false;
+  let sizeObserver = null;
   const layer = {
     kind,
     get pinned() {
@@ -306,6 +308,12 @@ export function createFloatingLayer({
         window.addEventListener('scroll', onScroll, true);
         window.addEventListener('resize', follow);
         window.addEventListener('pointerdown', onPointerDown, true);
+        // Content can change while the layer is shown (a card gaining a row
+        // during a Run); keep it anchored instead of growing over the anchor.
+        if (typeof ResizeObserver === 'function') {
+          sizeObserver = new ResizeObserver(() => position());
+          sizeObserver.observe(element());
+        }
       }
     },
     position,
@@ -316,6 +324,8 @@ export function createFloatingLayer({
         window.removeEventListener('scroll', onScroll, true);
         window.removeEventListener('resize', follow);
         window.removeEventListener('pointerdown', onPointerDown, true);
+        sizeObserver?.disconnect();
+        sizeObserver = null;
       }
       unregisterOpenLayer(layer);
     },
@@ -664,6 +674,10 @@ export function floatingHoverCard(node, options = {}) {
   // anchor or card (e.g. a control disabling itself) must not close it.
   let anchorHovered = false;
   let cardHovered = false;
+  // The card control that last held focus, and an observer noticing it
+  // becoming unfocusable while the card is open (see recoverLostFocus).
+  let cardFocusTarget = null;
+  let contentObserver = null;
   const managedRole = !node.hasAttribute('role');
   const cardId = node.id || `floating-hover-card-${++hoverCardSequence}`;
   const portalAction = portal(node);
@@ -767,6 +781,56 @@ export function floatingHoverCard(node, options = {}) {
     return false;
   }
 
+  function unfocusable(element) {
+    return (
+      !element.isConnected ||
+      element.disabled === true ||
+      Boolean(element.closest('[hidden], [inert]'))
+    );
+  }
+
+  // A focused card control that becomes disabled or disappears (Compact now
+  // disabling itself after activation) drops keyboard focus to <body>, which
+  // leaves the user nowhere near the card. Return focus to the anchor and keep
+  // the card open so the updated state stays visible; Escape or Tab continue
+  // from there. Focus a user moved elsewhere is left alone.
+  function recoverLostFocus() {
+    const lost = cardFocusTarget;
+    if (!open || !lost) {
+      return;
+    }
+    const active = document.activeElement;
+    const focusDropped =
+      active === null || active === document.body || active === lost;
+    if (!focusDropped || !unfocusable(lost)) {
+      if (active !== lost) {
+        cardFocusTarget = null;
+      }
+      return;
+    }
+    cardFocusTarget = null;
+    cancelScheduledClose();
+    focusAnchor();
+  }
+
+  function observeContent() {
+    if (contentObserver || typeof MutationObserver !== 'function') {
+      return;
+    }
+    contentObserver = new MutationObserver(recoverLostFocus);
+    contentObserver.observe(node, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['disabled', 'hidden', 'inert'],
+    });
+  }
+
+  function onCardFocusIn(event) {
+    cancelScheduledClose();
+    cardFocusTarget = event.target instanceof Element ? event.target : null;
+  }
+
   function show(focusTarget = null) {
     cancelScheduledShow();
     cancelScheduledClose();
@@ -775,6 +839,7 @@ export function floatingHoverCard(node, options = {}) {
     applySemantics();
     linkDescription(focusTarget ?? anchor);
     layer.show();
+    observeContent();
   }
 
   function hide() {
@@ -786,6 +851,9 @@ export function floatingHoverCard(node, options = {}) {
     const focusWasInside = isInside(node, document.activeElement);
     open = false;
     cardHovered = false;
+    cardFocusTarget = null;
+    contentObserver?.disconnect();
+    contentObserver = null;
     if (focusWasInside) {
       focusAnchor();
     }
@@ -895,6 +963,14 @@ export function floatingHoverCard(node, options = {}) {
   }
 
   function onFocusOut(event) {
+    if (cardFocusTarget && event.target === cardFocusTarget) {
+      if (event.relatedTarget === null) {
+        // Focus left for nowhere: settle whether the control dropped it.
+        queueMicrotask(recoverLostFocus);
+      } else {
+        cardFocusTarget = null;
+      }
+    }
     if (
       anchorHovered ||
       cardHovered ||
@@ -959,7 +1035,7 @@ export function floatingHoverCard(node, options = {}) {
   anchor.addEventListener('keydown', onAnchorKeydown);
   node.addEventListener('pointerenter', onCardPointerEnter);
   node.addEventListener('pointerleave', onCardPointerLeave);
-  node.addEventListener('focusin', cancelScheduledClose);
+  node.addEventListener('focusin', onCardFocusIn);
   node.addEventListener('focusout', onFocusOut);
   node.addEventListener('keydown', onCardKeydown);
 
@@ -981,7 +1057,7 @@ export function floatingHoverCard(node, options = {}) {
       anchor.removeEventListener('keydown', onAnchorKeydown);
       node.removeEventListener('pointerenter', onCardPointerEnter);
       node.removeEventListener('pointerleave', onCardPointerLeave);
-      node.removeEventListener('focusin', cancelScheduledClose);
+      node.removeEventListener('focusin', onCardFocusIn);
       node.removeEventListener('focusout', onFocusOut);
       node.removeEventListener('keydown', onCardKeydown);
       delete node.dataset.floatingHoverCard;

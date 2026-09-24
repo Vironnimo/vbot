@@ -8,6 +8,7 @@ import { TOOLTIP_SHOW_DELAY_MS } from '../../lib/tooltip.js';
 
 const listSessionsMock = vi.fn(async () => ({ sessions: [] }));
 const renameSessionMock = vi.fn(async () => ({ title: 'Release planning' }));
+const setSessionCompactionPolicyMock = vi.fn();
 const deleteSessionMock = vi.fn(async () => ({
   agent_id: 'alpha',
   session_id: 'session-1',
@@ -22,6 +23,8 @@ vi.mock('$lib/api.js', () => ({
   listSessions: (...args) => listSessionsMock(...args),
   renameSession: (...args) => renameSessionMock(...args),
   deleteSession: (...args) => deleteSessionMock(...args),
+  setSessionCompactionPolicy: (...args) =>
+    setSessionCompactionPolicyMock(...args),
 }));
 
 const { default: SessionListDrawer } =
@@ -364,6 +367,51 @@ describe('SessionListDrawer', () => {
     expect(drawer.contains(menu)).toBe(false);
     expect(menu.dataset.positioning).toBe('fixed');
     expect(labels).toEqual(['Rename', 'Compaction Policy', 'Delete']);
+  });
+
+  it('hands a saved Session Compaction Policy to Chat', async () => {
+    const effective = {
+      enabled: false,
+      trigger: { type: 'context_ratio', threshold: 0.8 },
+      strategy: { type: 'summary_tail', tail_tokens: 15000 },
+    };
+    setSessionCompactionPolicyMock.mockReset();
+    setSessionCompactionPolicyMock.mockResolvedValue({
+      override: null,
+      effective,
+    });
+    const onCompactionPolicyChange = vi.fn();
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: 'session-1',
+        onCompactionPolicyChange,
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.querySelector('.session-row') !== null,
+    );
+
+    document.querySelector('.session-row__menu-trigger').click();
+    flushSync();
+    buttonByText('Compaction Policy').click();
+    flushSync();
+    buttonByText('Save').click();
+
+    await vi.waitFor(() =>
+      expect(onCompactionPolicyChange).toHaveBeenCalledWith(
+        'alpha',
+        'session-1',
+        effective,
+      ),
+    );
+    expect(setSessionCompactionPolicyMock).toHaveBeenCalledWith(
+      'alpha',
+      'session-1',
+      null,
+    );
   });
 
   it('cancels inline rename on Escape without calling the API', async () => {

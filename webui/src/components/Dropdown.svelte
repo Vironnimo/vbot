@@ -199,9 +199,17 @@
     if (event.ctrlKey || event.metaKey || event.altKey) {
       return false;
     }
-    // A space continues a search in progress; otherwise it selects.
+    if (event.key.length !== 1) {
+      return false;
+    }
+    // A space continues a search still inside its typeahead window;
+    // otherwise it selects the active option.
+    return event.key !== ' ' || typeaheadActive();
+  }
+
+  function typeaheadActive() {
     return (
-      event.key.length === 1 && (event.key !== ' ' || typeaheadQuery !== '')
+      typeaheadQuery !== '' && Date.now() - typeaheadAt <= TYPEAHEAD_RESET_MS
     );
   }
 

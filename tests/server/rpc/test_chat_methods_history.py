@@ -20,6 +20,7 @@ from core.runs import (
 )
 from core.sessions import ChatSession
 from core.sessions.format import write_bootstrap_marker
+from core.settings.normalizers import normalize_compaction_settings
 from core.tools.tools import tool_success
 from server.rpc import chat_methods
 from server.rpc.methods import dispatch_rpc
@@ -30,6 +31,14 @@ class HistoryAgentStore:
     def get(self, _agent_id: str) -> SimpleNamespace:
         return SimpleNamespace(current_session_id="session-one")
 
+    def resolve_agent(self, _project_id: str | None, _agent_id: str) -> SimpleNamespace:
+        return SimpleNamespace(compaction_policy=None)
+
+
+class HistoryStorage:
+    def load_compaction_settings(self) -> dict[str, object]:
+        return normalize_compaction_settings(None)
+
 
 def _history_state(tmp_path: Path) -> tuple[SimpleNamespace, ChatSessionManager]:
     write_bootstrap_marker(tmp_path)
@@ -37,6 +46,8 @@ def _history_state(tmp_path: Path) -> tuple[SimpleNamespace, ChatSessionManager]
     state = SimpleNamespace(
         runtime=SimpleNamespace(
             agents=HistoryAgentStore(),
+            agent_resolver=HistoryAgentStore(),
+            storage=HistoryStorage(),
             chat_sessions=chat_sessions,
         ),
         chat_runs=ChatRunManager(),
@@ -60,6 +71,8 @@ async def test_chat_history_hides_subagent_batch_completion_note(tmp_path: Path)
     state = SimpleNamespace(
         runtime=SimpleNamespace(
             agents=HistoryAgentStore(),
+            agent_resolver=HistoryAgentStore(),
+            storage=HistoryStorage(),
             chat_sessions=chat_sessions,
         ),
         chat_runs=ChatRunManager(),

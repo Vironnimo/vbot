@@ -220,6 +220,58 @@ describe('Dropdown', () => {
     dateNow.mockRestore();
   });
 
+  it('continues a search with Space only inside the typeahead window', async () => {
+    let now = 1_000;
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const onValueChange = vi.fn();
+    mountedComponent = mount(Dropdown, {
+      target: document.body,
+      props: {
+        id: 'typeahead-space-dropdown',
+        value: 'alpha',
+        options: [
+          { value: 'alpha', label: 'Alpha' },
+          { value: 'big deal', label: 'Big deal' },
+          { value: 'big', label: 'Bigger' },
+        ],
+        onValueChange,
+      },
+    });
+    flushSync();
+
+    document.querySelector('#typeahead-space-dropdown').click();
+    await vi.waitFor(() => {
+      expect(document.activeElement?.getAttribute('role')).toBe('listbox');
+    });
+    const listbox = document.activeElement;
+    const activeLabel = () =>
+      listbox.querySelector('[role="option"].active')?.textContent.trim();
+    const type = (key) => {
+      listbox.dispatchEvent(
+        new KeyboardEvent('keydown', { key, bubbles: true }),
+      );
+      flushSync();
+    };
+
+    type('b');
+    now += 100;
+    type('i');
+    now += 100;
+    type('g');
+    now += 100;
+    type(' ');
+    expect(activeLabel()).toBe('Big deal');
+    expect(onValueChange).not.toHaveBeenCalled();
+
+    now += 1_000;
+    type(' ');
+    expect(onValueChange).toHaveBeenCalledWith(
+      'big deal',
+      expect.objectContaining({ value: 'big deal' }),
+    );
+    dateNow.mockRestore();
+  });
+
   it('renders status dots, count badges and accessible names from option fields', async () => {
     mountedComponent = mount(Dropdown, {
       target: document.body,
