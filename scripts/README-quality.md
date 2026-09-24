@@ -116,6 +116,7 @@ Two guardrails worth knowing:
 - If a source file has **no** dedicated mirror test, the nearest ancestor directory that holds any tests runs instead (with a `note:`), so a broader suite still exercises it — e.g. a subcomponent covered only through its view's test.
 - A **directory** that holds tests is used as-is; a directory whose tests live one level up maps to that nearest ancestor (with a `note:`).
 - An input with no tests anywhere (e.g. a config file outside `src/`) selects no Vitest target and reports `NO TESTS` with a `note:`, instead of falling through to a whole-suite run.
+- **Repo-wide guard tests** (`src/**/__tests__/*.guard.test.*` — UI primitives, RPC ownership, i18n placeholders) scan every source instead of mirroring one, so no mapping above reaches them. Any non-test input under `webui/src/` or a bundled Extension `resources/extensions/<owner>/ui/` (which the UI-primitives guard also scans) adds every guard suite that no selected directory target already covers, and a `note:` lists the added suites. Explicit test files and inputs outside those roots add none.
 
 Because a source file resolves to its **actual** mirrored test rather than just its parent directory, a scoped run can no longer silently report a green pass while running zero of the tests that cover the change. Vitest still runs with `--passWithNoTests` as a safety net, and — as on the backend — an input path that does not exist under `webui/` aborts with exit 2 before any tool runs.
 
