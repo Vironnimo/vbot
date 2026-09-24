@@ -402,7 +402,8 @@ def test_statistics_report_surfaces_rpc_error(
 
     assert result.ok is False
     assert result.instance is instance
-    assert result.message.startswith("invalid_request:")
+    assert result.failure is not None
+    assert result.failure.code == "invalid_request"
 
 
 def test_statistics_report_reports_missing_section(

@@ -455,7 +455,8 @@ def test_test_instance_uses_fresh_data_explicit_flag_and_selected_port(
         assert "--test-instance" in arguments
         data_paths.append(Path(arguments[arguments.index("--data-dir") + 1]))
     assert data_paths[0] != data_paths[1]
-    assert all(path.is_dir() for path in data_paths)
+    # The server initializes the fresh root; only its parent is prepared here.
+    assert all(not path.exists() and path.parent.is_dir() for path in data_paths)
     assert all(
         path.is_relative_to(install.root / "development" / "test-instances") for path in data_paths
     )

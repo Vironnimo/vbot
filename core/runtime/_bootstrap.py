@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from datetime import UTC, datetime
 from functools import partial
 from typing import TYPE_CHECKING, Protocol, cast
@@ -616,8 +617,22 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._start_provider_usage_service()
         runtime.logger.info("Runtime started")
     except Exception:
+        _log_startup_failure(runtime)
         runtime._cleanup_failed_startup()
         raise
+
+
+def _log_startup_failure(runtime: Runtime) -> None:
+    """Record a failed startup with its traceback before cleanup closes logging.
+
+    The server host reports the re-raised error only after cleanup has closed the
+    managed handlers, so this is the failure's single entry in the log file. A
+    missing data root is never created just to hold the log.
+    """
+    if not runtime._data_dir.exists():
+        return
+    with suppress(Exception):
+        runtime._log_manager.get_logger("core").exception("Runtime startup failed")
 
 
 def _log_startup_inventory(

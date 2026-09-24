@@ -223,7 +223,8 @@ def test_debug_commands_surface_disabled_error(
 
     assert result.ok is False
     assert result.instance is instance
-    assert result.message.startswith("domain_error:")
+    assert result.failure is not None
+    assert result.failure.code == "domain_error"
 
 
 def test_run_dispatches_debug_status(

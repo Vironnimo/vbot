@@ -92,8 +92,10 @@ def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) ->
         inspection = ["project", "list"]
     elif code in {"channel_not_found", "channel_already_exists"}:
         inspection = ["channel", "list"]
-    elif code in {"last_agent", "agent_order_conflict", "agent_in_use"}:
+    elif code in {"agent_not_found", "last_agent", "agent_order_conflict", "agent_in_use"}:
         inspection = ["agent", "list"]
+    elif code == "skill_not_found":
+        inspection = ["skill", "inventory"]
     elif code == "agent_busy" and getattr(args, "id", None) and area == "agent":
         inspection = ["session", "list", args.id]
     elif code == "oauth_not_supported":

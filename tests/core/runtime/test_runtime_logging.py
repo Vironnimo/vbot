@@ -165,3 +165,54 @@ metadata:
 
     assert "[WARN] vbot.core - Loaded skills with " in contents
     assert " invalid skill directories; see vbot.skills warnings for details" in contents
+
+
+@pytest.mark.parametrize(
+    ("owner", "method"),
+    [
+        # Before ``runtime.logger`` exists, on an existing data root.
+        ("StorageManager", "ensure_directories"),
+        # After the Runtime logger is in use.
+        ("Runtime", "_start_terminal_manager"),
+    ],
+)
+def test_runtime_failed_start_logs_one_error_with_traceback(
+    config: Config, monkeypatch: pytest.MonkeyPatch, owner: str, method: str
+) -> None:
+    import core.runtime._bootstrap as bootstrap_module
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("startup sentinel")
+
+    target = Runtime if owner == "Runtime" else getattr(bootstrap_module, owner)
+    monkeypatch.setattr(target, method, fail)
+    runtime = Runtime(config)
+
+    with pytest.raises(RuntimeError, match="startup sentinel"):
+        runtime.start()
+
+    contents = next((config.data_dir / "logs").iterdir()).read_text(encoding="utf-8")
+    assert contents.count("[ERROR] vbot.core - Runtime startup failed") == 1
+    assert contents.count("Traceback (most recent call last):") == 1
+    assert contents.count("RuntimeError: startup sentinel") == 1
+    # Cleanup closed the managed handlers after the failure was recorded.
+    assert not runtime._log_manager._handlers
+
+
+def test_runtime_failed_start_never_creates_a_missing_data_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import core.runtime._bootstrap as bootstrap_module
+
+    config = Config(data_dir=tmp_path / "fresh")
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("startup sentinel")
+
+    monkeypatch.setattr(bootstrap_module.StorageManager, "ensure_directories", fail)
+
+    with pytest.raises(RuntimeError, match="startup sentinel"):
+        Runtime(config).start()
+
+    # A root created only for the log would lack the Session bootstrap marker.
+    assert not config.data_dir.exists()

@@ -36,6 +36,7 @@ from cli._server_target import (
     probe_webui,
     resolve_instance,
 )
+from core.storage.layout import initialize_data_directory
 from core.utils.logging import CONSOLE_LOGGING_ENV_VAR, LogManager
 from core.utils.processes import subprocess_creation_flags
 from core.utils.server_control import (
@@ -284,8 +285,16 @@ def start_server(
 
 
 def _create_cli_log_manager(instance: ServerInstance) -> LogManager:
-    """Return a managed CLI log manager for the target data directory."""
+    """Return a managed CLI log manager for the target data directory.
 
+    CLI lifecycle logs live under ``<data_dir>/logs``. Creating that directory in a
+    missing data root would leave a root without the Session store's bootstrap
+    marker, which the server then refuses to open, so a missing root is initialized
+    through the canonical layout first.
+    """
+
+    if not instance.data_dir.exists():
+        initialize_data_directory(instance.data_dir)
     return LogManager(data_dir=instance.data_dir, enable_console=False)
 
 
