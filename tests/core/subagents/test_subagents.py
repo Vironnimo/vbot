@@ -89,11 +89,13 @@ async def test_identity_parent_can_spawn_qualified_project_agent(tmp_path: Path)
     )
 
     assert result["ok"] is True
-    assert result["data"]["agent_id"] == "worker"
+    # The result names the address this caller passes back to continue the child.
+    assert result["data"]["agent_id"] == "worker@vbot"
     assert result["data"]["project_id"] == "vbot"
     assert runtime.agent_resolver.calls[-1] == ("vbot", "worker")
     assert manager.started[0]["project_id"] == "vbot"
     assert manager.parent_run.project_id is None
+    assert emitted_events[0][1]["data"]["agent_id"] == "worker"
     assert emitted_events[0][1]["data"]["project_id"] == "vbot"
     child_session_id = result["data"]["session_id"]
     assert runtime.chat_sessions.get(_address("worker", child_session_id, "vbot"))
@@ -352,7 +354,8 @@ async def test_subagent_self_spawn_inherits_parent_project(tmp_path: Path) -> No
 
     # Assert
     assert result["ok"] is True
-    assert result["data"]["agent_id"] == "parent"
+    assert result["data"]["agent_id"] == "parent@acme"
+    assert result["data"]["project_id"] == "acme"
     child_session_id = result["data"]["session_id"]
     assert runtime.chat_sessions.exists(_address("parent", child_session_id, "acme"))
     assert manager.started[0]["project_id"] == "acme"

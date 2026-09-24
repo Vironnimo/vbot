@@ -38,7 +38,6 @@ from core.subagents._completion import (
     _track_subagent_completion,
     _wait_for_subagent_result,
     _with_activity_note,
-    _with_target_project,
 )
 from core.subagents._constants import (
     CASCADE_BACKGROUND_CHILDREN,
@@ -462,17 +461,14 @@ async def _handle_subagent(
                     if queued_run is None:
                         return tool_success(
                             _with_activity_note(
-                                _with_target_project(
-                                    {
-                                        "id": work_id,
-                                        "agent_id": target_agent_id,
-                                        "session_id": session.id,
-                                        "status": SUBAGENT_STATUS_QUEUED,
-                                        "delivery": "automatic",
-                                        "note": TOP_LEVEL_QUEUED_BACKGROUND_NOTE,
-                                        "activity_file": activity_file,
-                                    },
+                                _public_subagent_result(
+                                    work_id,
+                                    target_agent_id,
                                     target_project_id,
+                                    session.id,
+                                    {"status": SUBAGENT_STATUS_QUEUED},
+                                    delivery="automatic",
+                                    note=TOP_LEVEL_QUEUED_BACKGROUND_NOTE,
                                 ),
                                 activity_file,
                             )
@@ -552,17 +548,14 @@ async def _handle_subagent(
         if background:
             return tool_success(
                 _with_activity_note(
-                    _with_target_project(
-                        {
-                            "id": work_id,
-                            "agent_id": target_agent_id,
-                            "session_id": session.id,
-                            "status": RunStatus.RUNNING.value,
-                            "delivery": "automatic",
-                            "note": TOP_LEVEL_BACKGROUND_NOTE,
-                            "activity_file": activity_file,
-                        },
+                    _public_subagent_result(
+                        work_id,
+                        target_agent_id,
                         target_project_id,
+                        session.id,
+                        {"status": RunStatus.RUNNING.value},
+                        delivery="automatic",
+                        note=TOP_LEVEL_BACKGROUND_NOTE,
                     ),
                     activity_file,
                 )

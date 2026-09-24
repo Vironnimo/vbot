@@ -6,6 +6,12 @@ import {
   setAgents,
   visibleTimelineItemsForRender,
 } from '../chatState.js';
+import {
+  subAgentDotStatus,
+  subAgentLastToolName,
+  subAgentRunDurationMs,
+  subAgentRunStartedAt,
+} from '../chatTimelinePresentation.js';
 import { makeStreamHarness } from './chatRunStream.support.js';
 
 describe('createChatRunStream() last-tool-name tracking for sub-agent rows', () => {
@@ -164,15 +170,14 @@ describe('createChatRunStream() project-agent address reconstruction', () => {
     expect(
       chatState.sessions[`${BARE_AGENT_ID}::${SESSION_ID}`],
     ).toBeUndefined();
-    // The status projection keys stay BARE: persisted spawn descriptors carry
-    // the child's bare id, so bare keys are the only ones their reads meet.
-    expect(
-      harness.subAgentRunStatuses[`session:${BARE_AGENT_ID}::${SESSION_ID}`],
-    ).toBe('running');
+    // Status keys use the same address Sub-Agent rows read; no bare twin.
     expect(
       harness.subAgentRunStatuses[
         `session:${PROJECT_AGENT_ADDRESS}::${SESSION_ID}`
       ],
+    ).toBe('running');
+    expect(
+      harness.subAgentRunStatuses[`session:${BARE_AGENT_ID}::${SESSION_ID}`],
     ).toBeUndefined();
     expect(harness.isDisplayedSession).toHaveBeenCalledWith(
       PROJECT_AGENT_ADDRESS,
@@ -181,7 +186,7 @@ describe('createChatRunStream() project-agent address reconstruction', () => {
     expect(subscribeRunEvents).toHaveBeenCalledTimes(1);
   });
 
-  it('rebuilds the address from a snapshot active run for the re-attach while keeping the sub-agent status key bare', () => {
+  it('rebuilds the address from a snapshot active run for the re-attach and the sub-agent status key', () => {
     const subscribeRunEvents = vi.fn(() => ({ close: vi.fn() }));
     const harness = makeStreamHarness({
       chatState,
@@ -206,11 +211,11 @@ describe('createChatRunStream() project-agent address reconstruction', () => {
       ],
     });
 
-    // Status key bare (descriptor-compatible); session STATE stays
-    // address-keyed for the displayed-session match below.
-    expect(
-      harness.subAgentRunStatuses[`session:${BARE_AGENT_ID}::${SESSION_ID}`],
-    ).toBe('running');
+    // Status key and session STATE share the address-keyed form.
+    expect(harness.subAgentRunStatuses).toEqual({
+      [`run:${RUN_ID}`]: 'running',
+      [`session:${PROJECT_AGENT_ADDRESS}::${SESSION_ID}`]: 'running',
+    });
     expect(harness.isDisplayedSession).toHaveBeenCalledWith(
       PROJECT_AGENT_ADDRESS,
       SESSION_ID,
@@ -245,6 +250,231 @@ describe('createChatRunStream() project-agent address reconstruction', () => {
     expect(
       harness.subAgentRunStatuses[`session:${BARE_AGENT_ID}::${SESSION_ID}`],
     ).toBe('running');
+  });
+});
+
+describe('createChatRunStream() Sub-Agent rows without a run id', () => {
+  const PARENT_AGENT_ID = 'lead@vbot';
+  const PARENT_SESSION_ID = 'session-parent';
+  const CHILD_SESSION_ID = 'session-child';
+  const CHILD_RUN_ID = 'run-child';
+  const STARTED_AT = '2026-09-24T10:00:00.000Z';
+
+  // A persisted background spawn row: public results never carry the child's
+  // run id, so until inspection maps the work id the row reads its status,
+  // start time, duration, and last Tool through session-scoped keys.
+  const spawnRow = (resultIdentity) => ({
+    type: 'tool_call',
+    name: 'subagent',
+    status: 'success',
+    arguments: {
+      action: 'run',
+      agent_id: resultIdentity.agent_id,
+      content: 'Work in the background',
+      background: true,
+    },
+    result: {
+      ok: true,
+      data: {
+        id: 'sub-work',
+        session_id: CHILD_SESSION_ID,
+        status: 'running',
+        delivery: 'automatic',
+        ...resultIdentity,
+      },
+    },
+  });
+
+  const childServerEvent = (type, runEventType, sequence, extra, identity) => ({
+    type,
+    payload: {
+      run_id: CHILD_RUN_ID,
+      ...identity,
+      session_id: CHILD_SESSION_ID,
+      run_event_type: runEventType,
+      run_event_sequence: sequence,
+      run_event_timestamp: STARTED_AT,
+      ...extra,
+    },
+  });
+
+  const childSseEvent = (type, sequence, payload, identity) => ({
+    data: {
+      type,
+      run_id: CHILD_RUN_ID,
+      sequence,
+      ...identity,
+      session_id: CHILD_SESSION_ID,
+      payload,
+      timestamp: STARTED_AT,
+    },
+  });
+
+  it.each([
+    {
+      name: 'Project child, current result, WebSocket',
+      result: { agent_id: 'builder@vbot', project_id: 'vbot' },
+      event: { agent_id: 'builder', project_id: 'vbot' },
+      childAddress: 'builder@vbot',
+      transport: 'websocket',
+    },
+    {
+      name: 'Project child, historical bare result, WebSocket',
+      result: { agent_id: 'builder', project_id: 'vbot' },
+      event: { agent_id: 'builder', project_id: 'vbot' },
+      childAddress: 'builder@vbot',
+      transport: 'websocket',
+    },
+    {
+      name: 'Project child, current result, SSE',
+      result: { agent_id: 'builder@vbot', project_id: 'vbot' },
+      event: { agent_id: 'builder', project_id: 'vbot' },
+      childAddress: 'builder@vbot',
+      transport: 'sse',
+    },
+    {
+      name: 'Identity child, WebSocket',
+      result: { agent_id: 'helper' },
+      event: { agent_id: 'helper' },
+      childAddress: 'helper',
+      transport: 'websocket',
+    },
+    {
+      name: 'Identity child, SSE',
+      result: { agent_id: 'helper' },
+      event: { agent_id: 'helper' },
+      childAddress: 'helper',
+      transport: 'sse',
+    },
+  ])(
+    'follows the child Run events for a $name',
+    ({ result, event, childAddress, transport }) => {
+      const chatState = createChatState();
+      let onSseEvent = null;
+      // SSE only streams the displayed Session; WebSocket covers the rest.
+      const harness = makeStreamHarness({
+        chatState,
+        displayedAgentId: transport === 'sse' ? childAddress : PARENT_AGENT_ID,
+        displayedSessionId:
+          transport === 'sse' ? CHILD_SESSION_ID : PARENT_SESSION_ID,
+        subscribeRunEvents: vi.fn((_url, handlers) => {
+          onSseEvent = handlers.onEvent;
+          return { close: vi.fn() };
+        }),
+      });
+      const row = spawnRow(result);
+      const statuses = harness.subAgentRunStatuses;
+
+      harness.stream.handleServerEvents(
+        childServerEvent(
+          'run_started',
+          'run_started',
+          1,
+          { status: 'running', output: { status: 'running' } },
+          event,
+        ),
+      );
+      const toolCall = { id: 'call-1', index: 0, name: 'read', arguments: {} };
+      if (transport === 'sse') {
+        expect(onSseEvent).toBeTypeOf('function');
+        onSseEvent(
+          childSseEvent('tool_call_started', 2, { tool_call: toolCall }, event),
+        );
+      } else {
+        harness.stream.handleServerEvents(
+          childServerEvent(
+            'run_output',
+            'tool_call_started',
+            2,
+            { output: { tool_call: toolCall } },
+            event,
+          ),
+        );
+      }
+
+      expect(subAgentDotStatus(row, statuses)).toBe('running');
+      expect(subAgentRunStartedAt(row, statuses)).toBe(STARTED_AT);
+      expect(subAgentLastToolName(row, statuses)).toBe('read');
+
+      const completedPayload = {
+        status: 'completed',
+        timing: { duration_ms: 4200 },
+      };
+      if (transport === 'sse') {
+        onSseEvent(childSseEvent('run_completed', 3, completedPayload, event));
+      } else {
+        harness.stream.handleServerEvents(
+          childServerEvent(
+            'run_completed',
+            'run_completed',
+            3,
+            completedPayload,
+            event,
+          ),
+        );
+      }
+
+      expect(subAgentDotStatus(row, statuses)).toBe('success');
+      expect(subAgentRunDurationMs(row, statuses)).toBe(4200);
+      // One key form: the bare twin of a Project address is never written.
+      expect(
+        Object.keys(statuses).filter((key) => key.startsWith('session')),
+      ).toEqual(
+        expect.arrayContaining([
+          `session:${childAddress}::${CHILD_SESSION_ID}`,
+          `sessionDuration:${childAddress}::${CHILD_SESSION_ID}`,
+          `sessionTool:${childAddress}::${CHILD_SESSION_ID}`,
+          `sessionStarted:${childAddress}::${CHILD_SESSION_ID}`,
+        ]),
+      );
+      expect(
+        Object.keys(statuses).filter(
+          (key) =>
+            key.startsWith('session') && !key.includes(`:${childAddress}::`),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it('keys an explicit Project child status change by the address the row reads', () => {
+    const chatState = createChatState();
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: PARENT_AGENT_ID,
+      displayedSessionId: PARENT_SESSION_ID,
+    });
+    const row = spawnRow({ agent_id: 'builder@vbot', project_id: 'vbot' });
+
+    harness.stream.handleServerEvents({
+      type: 'run_output',
+      payload: {
+        run_id: 'run-parent',
+        agent_id: 'lead',
+        project_id: 'vbot',
+        session_id: PARENT_SESSION_ID,
+        run_event_type: 'subagent_status_changed',
+        run_event_sequence: 4,
+        contributes_to_agent_activity: false,
+        output: {
+          data: {
+            id: 'sub-work',
+            agent_id: 'builder',
+            project_id: 'vbot',
+            session_id: CHILD_SESSION_ID,
+            status: 'cancelled',
+            started_at: STARTED_AT,
+          },
+        },
+      },
+    });
+
+    expect(harness.subAgentRunStatuses).toEqual({
+      [`session:builder@vbot::${CHILD_SESSION_ID}`]: 'cancelled',
+      [`sessionStarted:builder@vbot::${CHILD_SESSION_ID}`]: STARTED_AT,
+    });
+    expect(subAgentDotStatus(row, harness.subAgentRunStatuses)).toBe(
+      'cancelled',
+    );
   });
 });
 
