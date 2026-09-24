@@ -480,9 +480,6 @@ class StubProcessManager:
         self.cancelled_scopes: list[str] = []
         self.released_scopes: list[str] = []
 
-    def cancel_scope(self, run_id: str) -> None:
-        self.cancelled_scopes.append(run_id)
-
     async def cancel_scope_async(self, run_id: str) -> None:
         self.cancelled_scopes.append(run_id)
 

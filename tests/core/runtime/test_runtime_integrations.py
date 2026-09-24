@@ -389,7 +389,7 @@ async def test_runtime_process_manager_cancels_run_scoped_sessions(config: Confi
             cwd=config.data_dir,
         )
 
-        process_manager.cancel_scope("run-one")
+        await process_manager.cancel_scope_async("run-one")
         poll_result = await process_manager.poll(session_id, "agent-one", timeout_ms=1000)
 
         assert poll_result["status"] == "killed"
@@ -399,7 +399,7 @@ async def test_runtime_process_manager_cancels_run_scoped_sessions(config: Confi
 
 @pytest.mark.asyncio
 async def test_chat_run_cancellation_calls_runtime_process_manager(tmp_path: Path) -> None:
-    """ChatLoop wires Run cancellation to Runtime.process_manager.cancel_scope()."""
+    """ChatLoop wires Run cancellation to Runtime.process_manager.cancel_scope_async()."""
     adapter = _BlockingAdapter()
     process_manager = _RecordingProcessManager()
     runtime: Any = _ChatRuntimeStub(tmp_path, adapter, process_manager)
@@ -456,9 +456,6 @@ class _RecordingProcessManager:
     def __init__(self) -> None:
         self.cancelled_scopes: list[str] = []
         self.scope_events: list[tuple[str, str]] = []
-
-    def cancel_scope(self, scope_key: str) -> None:
-        self.cancelled_scopes.append(scope_key)
 
     async def cancel_scope_async(self, scope_key: str) -> None:
         self.cancelled_scopes.append(scope_key)

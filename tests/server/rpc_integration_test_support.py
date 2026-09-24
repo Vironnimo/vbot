@@ -384,7 +384,7 @@ class AdapterPool:
 
 
 class IntegrationProcessManager:
-    def cancel_scope(self, run_id: str) -> None:
+    async def cancel_scope_async(self, run_id: str) -> None:
         del run_id
 
     def release_scope(self, run_id: str) -> None:
