@@ -30,6 +30,7 @@ from core.sessions._types import (
 from core.sessions.history import (
     _skill_context_note_content,
     current_skill_activation_contents,
+    skill_activation_contents,
 )
 from core.sessions.store import SessionStore
 
@@ -93,12 +94,18 @@ class ChatSession:
             continuation_records=continuation_records,
             since=since,
         )
-        if any(message.role == "compaction_checkpoint" for message in messages):
+        roles = {message.role for message in messages}
+        if "compaction_checkpoint" in roles:
+            # The appended checkpoint is now the newest history row, so only
+            # activations later in this same batch survive it.
             with self._buffers.lock:
-                self._buffers.activated_skill_contents = current_skill_activation_contents(
-                    self.load()
-                )
+                self._buffers.activated_skill_contents = current_skill_activation_contents(messages)
                 self._buffers.activated_skill_cache_loaded = True
+        elif "history_edit" in roles:
+            # An edit deactivates the tail it replaced; reload on next use.
+            with self._buffers.lock:
+                self._buffers.activated_skill_contents = {}
+                self._buffers.activated_skill_cache_loaded = False
         return delta
 
     async def start_tool_async(self, call_id: str, started_at: str) -> None:
@@ -200,8 +207,8 @@ class ChatSession:
     def _load_activated_skill_contents(self) -> dict[str, str]:
         with self._buffers.lock:
             if not self._buffers.activated_skill_cache_loaded:
-                self._buffers.activated_skill_contents = current_skill_activation_contents(
-                    self.load()
+                self._buffers.activated_skill_contents = skill_activation_contents(
+                    self._store.current_skill_activation_messages(self.address)
                 )
                 self._buffers.activated_skill_cache_loaded = True
             return dict(self._buffers.activated_skill_contents)
