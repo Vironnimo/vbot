@@ -132,6 +132,8 @@ Backend: pytest with `--import-mode=importlib`; frontend: Vitest, optionally jsd
 
 **Text assertions:** Exact strings only for stable contracts (protocol tokens, persisted formats, accessibility names, forbidden internal values) or test-owned transport sentinels. For editable prose, errors, and help, assert exception types, codes, structured fields, DOM roles, or security invariants instead. Evaluate wording in scenarios, not substring tests.
 
+**Event Loop isolation:** Async tests and fixtures on a worker share one session-scoped Event Loop, so a task a test leaves behind keeps running during later tests. Close every `Runtime` started inside a test's Event Loop with `await runtime.aclose()`; the root `tests/conftest.py` fails a test that leaves one running. Never patch the process-wide `asyncio.sleep`: a module whose waits tests skip exposes a module-local `_sleep` seam (for example `core.utils.retry._sleep`), and tests patch that seam.
+
 **Quality gates:** `scripts/quality.py` (backend) and `scripts/quality-frontend.py` share format -> lint -> type-check -> test, scoped by paths or full with none. Use `--check` for non-mutating development/CI feedback; before commits use scoped auto-fix mode and keep every fix, so tests cover the fixed code. Include affected callers/tests explicitly; mapping misses cross-domain dependencies. Use full gates for broad or unscopable effects. Frontend pre-commit requires `--build`: whole WebUI build, unchanged lint/test scope. Use gates, not direct pytest/ruff/vitest; record suspected gate omissions in `.vorch/FLAGGED.md`. Pipeline, test mapping, and output details: `scripts/README-quality.md`.
 ```bash
 python scripts/quality.py <paths...>                  # Backend pre-commit

@@ -304,7 +304,7 @@ async def test_post_and_parse_does_not_retry_non_retryable_status() -> None:
     client = _make_client()
 
     with (
-        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+        patch("core.utils.retry._sleep", new_callable=AsyncMock),
         pytest.raises(ProviderError) as exc_info,
     ):
         await client.post_and_parse("/things", timeout=5.0, parse=lambda response: None)
@@ -325,7 +325,7 @@ async def test_post_and_parse_retries_retryable_status_until_success() -> None:
     ]
     client = _make_client()
 
-    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
         result = await client.post_and_parse(
             "/things", timeout=5.0, parse=lambda response: response.json()
         )
@@ -357,7 +357,7 @@ async def test_post_and_parse_rebuilds_headers_inside_retry_loop() -> None:
         model_id="example/some-model",
     )
 
-    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
         result = await client.post_and_parse(
             "/things", timeout=5.0, parse=lambda response: response.json()
         )
@@ -388,7 +388,7 @@ async def test_post_and_parse_retries_retryable_parse_errors() -> None:
             raise ProviderError("incomplete batch", retryable=True)
         return dict(response.json())
 
-    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
         result = await client.post_and_parse("/things", timeout=5.0, parse=_parse)
 
     assert result == {"ok": True}
@@ -407,7 +407,7 @@ async def test_post_and_parse_wraps_connect_errors_as_retryable_network_error() 
     ]
     client = _make_client()
 
-    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
         result = await client.post_and_parse(
             "/things", timeout=5.0, parse=lambda response: response.json()
         )
@@ -427,7 +427,7 @@ async def test_post_and_parse_raises_network_error_when_all_attempts_fail() -> N
     client = _make_client()
 
     with (
-        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+        patch("core.utils.retry._sleep", new_callable=AsyncMock),
         pytest.raises(NetworkError),
     ):
         await client.post_and_parse("/things", timeout=5.0, parse=lambda response: None)
@@ -443,7 +443,7 @@ async def test_non_idempotent_request_retries_failure_before_send() -> None:
     ]
     client = _make_client()
 
-    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
         result = await client.post_and_parse(
             "/things",
             timeout=5.0,
@@ -516,7 +516,7 @@ async def test_non_idempotent_request_retries_rate_limit() -> None:
     ]
     client = _make_client()
 
-    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
         result = await client.post_and_parse(
             "/things",
             timeout=5.0,
@@ -542,7 +542,7 @@ async def test_non_idempotent_request_only_retries_verified_status() -> None:
         verified_safe_retry_status_codes=frozenset({503}),
     )
 
-    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
         result = await client.post_and_parse(
             "/things",
             timeout=5.0,
@@ -609,7 +609,7 @@ async def test_idempotency_header_reuses_one_operation_key_across_retries() -> N
         idempotency_header_name="Idempotency-Key",
     )
 
-    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
         result = await client.post_and_parse(
             "/things",
             timeout=5.0,
@@ -665,7 +665,7 @@ async def test_get_and_parse_retries_transient_500_until_success() -> None:
     ]
     client = _make_client()
 
-    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
         result = await client.get_and_parse(
             "/jobs/abc",
             timeout=5.0,

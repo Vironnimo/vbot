@@ -354,7 +354,7 @@ async def test_rotating_refresh_is_never_replayed_and_preserves_token(
     getter = OAuthTokenGetter(token_store, provider_id, "subscription", oauth_config())
 
     with (
-        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock) as sleep_mock,
+        patch("core.utils.retry._sleep", new_callable=AsyncMock) as sleep_mock,
         pytest.raises(NetworkError if isinstance(failure, Exception) else ProviderError),
     ):
         await getter()

@@ -647,7 +647,7 @@ async def test_openrouter_routing_options_retry_http_500(
     async def _no_sleep(_delay: float) -> None:
         return None
 
-    monkeypatch.setattr("core.utils.retry.asyncio.sleep", _no_sleep)
+    monkeypatch.setattr("core.utils.retry._sleep", _no_sleep)
     adapter = OpenRouterAdapter(openrouter_config, API_KEY)
     route = respx.get("https://openrouter.ai/api/v1/providers")
     route.side_effect = [

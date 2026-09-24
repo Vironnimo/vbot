@@ -15,6 +15,9 @@ _ONCE_RETRY_MAX_DELAY_SECONDS = 3600.0
 
 _WALL_CLOCK_RECHECK_SECONDS = 60.0
 
+# Tests patch this seam instead of the process-wide ``asyncio.sleep``.
+_sleep = asyncio.sleep
+
 
 def _once_retry_delay(attempt: int) -> float:
     """Backoff delay in seconds for the Nth (1-based) failed once-job fire."""
@@ -37,7 +40,7 @@ async def _sleep_until_utc(
             return True
         nap_seconds = min(remaining_seconds, _WALL_CLOCK_RECHECK_SECONDS)
         if wake_event is None:
-            await asyncio.sleep(nap_seconds)
+            await _sleep(nap_seconds)
             continue
         try:
             await asyncio.wait_for(wake_event.wait(), timeout=nap_seconds)
