@@ -17,7 +17,7 @@ import pytest
 import respx
 
 from core.providers._http_shared import classify_http_status, post_json_with_retry
-from core.providers.errors import ProviderAuthError, ProviderError
+from core.providers.errors import ProviderAuthError, ProviderError, ProviderRateLimitError
 from core.providers.providers import AuthConfig, OAuthConfig
 from core.providers.token_getter import (
     OAuthRequestRecovery,
@@ -658,3 +658,183 @@ async def test_delayed_refresh_cannot_revive_or_remove_replaced_credentials(
         finally:
             release.set()
             await asyncio.gather(task, return_exceptions=True)
+
+
+_LEAKY_DESCRIPTION = "refresh token refresh-secret was revoked for user@example.com"
+_LEAKED_FRAGMENTS = ("refresh-secret", "user@example.com", "revoked", "error_description")
+
+
+def _expiring_refresh_token() -> OAuthToken:
+    return OAuthToken(
+        access_token="expired-access",
+        refresh_token="refresh-secret",
+        expires_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+
+
+def _token_getter_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "vbot.providers.token_getter" and record.levelno >= logging.WARNING
+    ]
+
+
+def _assert_sanitized(*texts: str) -> None:
+    for text in texts:
+        for fragment in _LEAKED_FRAGMENTS:
+            assert fragment not in text
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("flow", "quarantined"), [("openai", False), ("xai", True)])
+async def test_terminal_refresh_failure_reports_status_and_oauth_error_code(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    flow: str,
+    quarantined: bool,
+) -> None:
+    """A rejected refresh names the HTTP status and RFC 6749 code, never the body.
+
+    Quarantine stays as before: only rotating flows delete the stored login.
+    """
+
+    token_store = TokenStore(tmp_path)
+    original = _expiring_refresh_token()
+    token_store.save(flow, "subscription", original)
+    config, token_url = (
+        (_openai_oauth_config(), OPENAI_TOKEN_URL)
+        if flow == "openai"
+        else (_xai_oauth_config(), XAI_TOKEN_URL)
+    )
+    route = respx.post(token_url).mock(
+        return_value=httpx.Response(
+            400, json={"error": "invalid_grant", "error_description": _LEAKY_DESCRIPTION}
+        )
+    )
+    getter = OAuthTokenGetter(token_store, flow, "subscription", config)
+
+    with (
+        caplog.at_level(logging.WARNING, logger="vbot.providers.token_getter"),
+        pytest.raises(ProviderAuthError) as exc_info,
+    ):
+        await getter()
+
+    message = str(exc_info.value)
+    assert message == "OAuth token refresh failed (HTTP 400, invalid_grant) — please reconnect"
+    warnings = _token_getter_warnings(caplog)
+    assert any("HTTP 400, invalid_grant" in warning for warning in warnings)
+    _assert_sanitized(message, *warnings)
+    assert route.call_count == 1
+    assert token_store.load(flow, "subscription") == (None if quarantined else original)
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "expected_detail"),
+    [
+        (
+            {"error": {"code": "refresh_token_reused", "message": _LEAKY_DESCRIPTION}},
+            "HTTP 401, refresh_token_reused",
+        ),
+        ({"error": "unauthenticated:bad-credentials"}, "HTTP 401, unauthenticated:bad-credentials"),
+        ({"error": "Invalid_Grant"}, "HTTP 401"),
+        ({"error": "invalid_grant refresh-secret"}, "HTTP 401"),
+        ({"error": "invalid_grant\n"}, "HTTP 401"),
+        ({"error": "x" * 65}, "HTTP 401"),
+        ({"error": 401}, "HTTP 401"),
+        ({"error_description": _LEAKY_DESCRIPTION}, "HTTP 401"),
+        (["invalid_grant"], "HTTP 401"),
+        (f"invalid_grant: {_LEAKY_DESCRIPTION}", "HTTP 401"),
+    ],
+    ids=[
+        "nested-code",
+        "colon-code",
+        "uppercase",
+        "whitespace",
+        "trailing-newline",
+        "too-long",
+        "non-string",
+        "description-only",
+        "non-object",
+        "plain-text",
+    ],
+)
+async def test_refresh_failure_keeps_only_a_valid_oauth_error_code(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    body: object,
+    expected_detail: str,
+) -> None:
+    token_store = TokenStore(tmp_path)
+    token_store.save("openai", "subscription", _expiring_refresh_token())
+    response = (
+        httpx.Response(401, text=body) if isinstance(body, str) else httpx.Response(401, json=body)
+    )
+    respx.post(OPENAI_TOKEN_URL).mock(return_value=response)
+    getter = OAuthTokenGetter(token_store, "openai", "subscription", _openai_oauth_config())
+
+    with (
+        caplog.at_level(logging.WARNING, logger="vbot.providers.token_getter"),
+        pytest.raises(ProviderAuthError) as exc_info,
+    ):
+        await getter()
+
+    message = str(exc_info.value)
+    assert message == f"OAuth token refresh failed ({expected_detail}) — please reconnect"
+    _assert_sanitized(message, *_token_getter_warnings(caplog))
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "error_code", "error_type", "expected_message"),
+    [
+        (
+            429,
+            "slow_down",
+            ProviderRateLimitError,
+            "OAuth token refresh rate limited (HTTP 429, slow_down)",
+        ),
+        (
+            503,
+            "temporarily_unavailable",
+            ProviderError,
+            "OAuth token endpoint unavailable (HTTP 503, temporarily_unavailable)",
+        ),
+    ],
+)
+async def test_retryable_refresh_failure_is_sanitized_and_keeps_token(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    status_code: int,
+    error_code: str,
+    error_type: type[ProviderError],
+    expected_message: str,
+) -> None:
+    token_store = TokenStore(tmp_path)
+    original = _expiring_refresh_token()
+    token_store.save("xai", "subscription", original)
+    respx.post(XAI_TOKEN_URL).mock(
+        return_value=httpx.Response(
+            status_code, json={"error": error_code, "error_description": _LEAKY_DESCRIPTION}
+        )
+    )
+    getter = OAuthTokenGetter(token_store, "xai", "subscription", _xai_oauth_config())
+
+    with (
+        caplog.at_level(logging.WARNING, logger="vbot.providers.token_getter"),
+        pytest.raises(ProviderError) as exc_info,
+    ):
+        await getter()
+
+    assert type(exc_info.value) is error_type
+    assert exc_info.value.retryable is True
+    message = str(exc_info.value)
+    assert message == expected_message
+    warnings = _token_getter_warnings(caplog)
+    assert any(expected_message in warning for warning in warnings)
+    _assert_sanitized(message, *warnings)
+    assert token_store.load("xai", "subscription") == original
