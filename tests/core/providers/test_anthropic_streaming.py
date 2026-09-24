@@ -13,6 +13,7 @@ from .anthropic_test_support import (
     NetworkError,
     ProviderAuthError,
     ProviderError,
+    ProviderRateLimitError,
     ProviderTimeoutError,
     _strip_cache_control,
     httpx,
@@ -615,6 +616,53 @@ class TestStreamSSE:
                 model_id="claude-sonnet-4-20250219",
             ):
                 pass
+
+    @pytest.mark.parametrize(
+        ("error_type", "expected_type", "retryable"),
+        [
+            ("overloaded_error", ProviderError, True),
+            ("api_error", ProviderError, True),
+            ("rate_limit_error", ProviderRateLimitError, True),
+            ("timeout_error", ProviderTimeoutError, True),
+            ("invalid_request_error", ProviderError, False),
+            ("authentication_error", ProviderAuthError, False),
+            ("permission_error", ProviderError, False),
+            ("billing_error", ProviderError, False),
+            ("request_too_large", ProviderError, False),
+            ("future_unknown_error", ProviderError, False),
+        ],
+    )
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_in_band_error_event_retryability_follows_documented_error_type(
+        self, anthropic_adapter, error_type, expected_type, retryable
+    ):
+        """A mid-stream error after HTTP 200 is classified by its ``error.type``."""
+        error_event = json.dumps(
+            {"type": "error", "error": {"type": error_type, "message": "stream failed"}}
+        )
+        sse_body = (
+            "event: message_start\n"
+            'data: {"type":"message_start","message":{"usage":{"input_tokens":1}}}\n\n'
+            f"event: error\ndata: {error_event}\n\n"
+        )
+        respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text=sse_body,
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        with pytest.raises(ProviderError, match="stream failed") as exc_info:
+            async for _ in anthropic_adapter.stream(
+                SAMPLE_MESSAGES,
+                model_id="claude-sonnet-4-20250219",
+            ):
+                pass
+
+        assert type(exc_info.value) is expected_type
+        assert exc_info.value.retryable is retryable
 
     @respx.mock
     @pytest.mark.asyncio

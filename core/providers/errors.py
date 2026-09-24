@@ -117,14 +117,24 @@ class CatalogEntrySkipped(VBotError):  # noqa: N818
 # Responses-shaped wires: ``message``, a string or numeric ``code``,
 # ``metadata.error_type`` / top-level ``error_type`` (the typed vocabulary
 # below), and an ``availability`` object whose documented ``retryable`` /
-# ``retry_after`` pair is the router's own recovery hint.
+# ``retry_after`` pair is the router's own recovery hint. Messages-compatible
+# streams send ``{"type": "error", "error": {"type": ...}}`` after HTTP 200;
+# their documented ``error.type`` values share the same vocabulary
+# (https://platform.claude.com/docs/en/api/errors, read 2026-09-24).
 IN_BAND_AUTH_ERROR_CODES = frozenset(
     {"authentication", "authentication_error", "invalid_api_key", "unauthorized"}
 )
-IN_BAND_RATE_LIMIT_ERROR_CODES = frozenset({"rate_limit_exceeded"})
-IN_BAND_TIMEOUT_ERROR_CODES = frozenset({"timeout"})
+IN_BAND_RATE_LIMIT_ERROR_CODES = frozenset({"rate_limit_exceeded", "rate_limit_error"})
+IN_BAND_TIMEOUT_ERROR_CODES = frozenset({"timeout", "timeout_error"})
 IN_BAND_TRANSIENT_ERROR_CODES = frozenset(
-    {"provider_overloaded", "provider_unavailable", "server", "server_error"}
+    {
+        "api_error",
+        "overloaded_error",
+        "provider_overloaded",
+        "provider_unavailable",
+        "server",
+        "server_error",
+    }
 )
 IN_BAND_RETRYABLE_NUMERIC_CODES = frozenset({429, 502, 503, 504})
 
@@ -142,6 +152,12 @@ IN_BAND_FATAL_ERROR_CODES = frozenset(
         "permission_denied",
         "content_policy_violation",
         "refusal",
+        "billing_error",
+        "conflict_error",
+        "invalid_request_error",
+        "not_found_error",
+        "permission_error",
+        "request_too_large",
     }
 )
 
@@ -208,12 +224,38 @@ def classify_in_band_provider_error(
     numeric_code = code if isinstance(code, int) and not isinstance(code, bool) else None
 
     availability = error.get("availability")
-    availability = availability if isinstance(availability, Mapping) else {}
+    return classify_in_band_error_type(
+        message,
+        classifier=classifier,
+        numeric_code=numeric_code,
+        availability=availability if isinstance(availability, Mapping) else None,
+        lenient_unknown=lenient_unknown,
+    )
+
+
+def classify_in_band_error_type(
+    message: str,
+    *,
+    classifier: str | None,
+    numeric_code: int | None = None,
+    availability: Mapping[str, Any] | None = None,
+    lenient_unknown: bool = False,
+) -> ProviderError:
+    """Map one extracted in-band error type or code into the shared taxonomy.
+
+    ``classifier`` is the wire's typed error name (for example a Chat
+    Completions ``error_type``/``code`` or a Messages ``error.type``);
+    ``numeric_code`` an HTTP-like numeric code. Wires with their own payload
+    shape extract these facts and share this single taxonomy, keeping their
+    own ``message`` wording.
+    """
+
+    hints: Mapping[str, Any] = availability or {}
 
     def _build(retryable: bool) -> ProviderError:
         provider_error = ProviderError(message, retryable=retryable)
         if retryable:
-            retry_after = availability.get("retry_after")
+            retry_after = hints.get("retry_after")
             if (
                 isinstance(retry_after, int)
                 and not isinstance(retry_after, bool)
@@ -225,14 +267,14 @@ def classify_in_band_provider_error(
     if classifier in IN_BAND_AUTH_ERROR_CODES or numeric_code in (401, 403):
         return ProviderAuthError(message)
     if classifier in IN_BAND_RATE_LIMIT_ERROR_CODES or numeric_code == 429:
-        return _rate_limit_error(message, availability)
+        return _rate_limit_error(message, hints)
     if classifier in IN_BAND_TIMEOUT_ERROR_CODES or numeric_code == 504:
         return ProviderTimeoutError(message)
     if classifier in IN_BAND_TRANSIENT_ERROR_CODES or numeric_code in {502, 503}:
         return _build(True)
     if classifier in IN_BAND_FATAL_ERROR_CODES:
         return _build(False)
-    if availability.get("retryable") is True:
+    if hints.get("retryable") is True:
         return _build(True)
     return _build(lenient_unknown)
 
