@@ -191,6 +191,80 @@ def test_translate_to_vitest_targets_adds_only_guards_not_already_covered(tmp_pa
     assert notes == [f"{GUARD_NOTE_PREFIX}src/lib/__tests__/a.guard.test.js"]
 
 
+def test_translate_to_eslint_targets_drops_inputs_without_lintable_files():
+    module = _load_quality_frontend_module()
+
+    lint_paths, notes = module.translate_to_eslint_targets(
+        ["src/styles", "src/styles/app.css", "src/lib", "src/lib/i18n.js"]
+    )
+
+    assert lint_paths == ["src/lib", "src/lib/i18n.js"]
+    assert len(notes) == 2
+    assert notes[0].startswith("src/styles:")
+    assert notes[1].startswith("src/styles/app.css:")
+
+
+def test_translate_to_eslint_targets_ignores_dependency_and_build_folders(tmp_path, monkeypatch):
+    module = _load_quality_frontend_module()
+    webui = tmp_path / "webui"
+    (webui / "src" / "assets" / "node_modules" / "pkg").mkdir(parents=True)
+    (webui / "src" / "assets" / "node_modules" / "pkg" / "index.js").write_text("", "utf-8")
+    (webui / "src" / "assets" / "logo.svg").write_text("<svg/>", encoding="utf-8")
+    monkeypatch.setattr(module, "WEBUI_ROOT", webui)
+
+    lint_paths, notes = module.translate_to_eslint_targets(["src/assets"])
+
+    assert lint_paths == []
+    assert len(notes) == 1
+
+
+def _run_main_capturing(module, monkeypatch, argv):
+    commands: list[list[str]] = []
+    monkeypatch.setattr(module.shutil, "which", lambda name: name)
+    monkeypatch.setattr(module.sys, "argv", ["quality-frontend.py", *argv])
+    monkeypatch.setattr(module, "snapshot_target_files", lambda *args: {})
+
+    def fake_run(cmd, capture_output, text, cwd, encoding, errors):
+        commands.append(cmd)
+        stdout = "Tests  1 passed (1)\n" if cmd[1] == "vitest" else ""
+        return module.subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    return commands
+
+
+@pytest.mark.parametrize("check", [False, True])
+def test_main_skips_eslint_when_scope_has_nothing_lintable(monkeypatch, capsys, check):
+    module = _load_quality_frontend_module()
+    argv = ["--check", "webui/src/styles"] if check else ["webui/src/styles"]
+    commands = _run_main_capturing(module, monkeypatch, argv)
+
+    assert module.main() == 0
+
+    output = capsys.readouterr().out
+    assert not any(cmd[1] == "eslint" for cmd in commands)
+    eslint_lines = [line for line in output.splitlines() if line.startswith("eslint")]
+    assert len(eslint_lines) == (1 if check else 2)
+    assert all("NO FILES" in line and "PASS" not in line for line in eslint_lines)
+    assert "note: src/styles: no ESLint-lintable files" in output
+    assert ["npx", "prettier", "--check" if check else "--write", "src/styles"] in commands
+
+
+def test_main_lints_only_lintable_scope_inputs(monkeypatch, capsys):
+    module = _load_quality_frontend_module()
+    commands = _run_main_capturing(
+        module, monkeypatch, ["--check", "webui/src/styles", "webui/src/lib/i18n.js"]
+    )
+
+    assert module.main() == 0
+
+    output = capsys.readouterr().out
+    assert ["npx", "eslint", "src/lib/i18n.js"] in commands
+    assert ["npx", "prettier", "--check", "src/styles", "src/lib/i18n.js"] in commands
+    assert "eslint        .... PASS" in output
+    assert "note: src/styles: no ESLint-lintable files" in output
+
+
 def test_translate_to_vitest_targets_notes_file_without_any_tests():
     module = _load_quality_frontend_module()
 
