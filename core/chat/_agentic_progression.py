@@ -951,7 +951,6 @@ class AgenticProgression:
                     target,
                     usage=assistant_message.usage,
                     continuation_request_messages=continuation_request_messages,
-                    context_usage=tool_context_usage,
                     allow_continuation=True,
                 )
                 context.request_state = compacted_state
@@ -969,7 +968,6 @@ class AgenticProgression:
                         *messages_for_request,
                         assistant_request_message,
                     ],
-                    context_usage=assistant_context_usage,
                     continue_same_run=False,
                 )
             except asyncio.CancelledError:
