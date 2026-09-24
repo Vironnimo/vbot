@@ -39,6 +39,23 @@ SUBAGENT_QUEUED_TIMEOUT_MESSAGE_TEMPLATE = (
     "Queue; it was removed before it started and did not run."
 )
 SUBAGENT_START_FAILED_MESSAGE_TEMPLATE = "The queued Sub-Agent work could not start: {error}"
+# ``agent_id`` is the address the Tool accepts: ``agent@project`` for a Project Agent.
+SUBAGENT_CONTINUATION_CALL_TEMPLATE = (
+    "call subagent with agent_id `{agent_id}`, session_id `{session_id}` and a "
+    "continuation message as content"
+)
+SUBAGENT_INTERRUPTED_WITHOUT_OUTPUT_NOTE_TEMPLATE = (
+    "The Sub-Agent Run was interrupted before it produced Assistant output. To continue "
+    "the same Session, {continuation}."
+)
+SUBAGENT_PARTIAL_RESULT_NOTE_TEMPLATE = (
+    "Result is partial: the Sub-Agent Run was interrupted{cause}. To continue the same "
+    "Session, {continuation}."
+)
+SUBAGENT_CANCELLED_NOTE_TEMPLATE = (
+    "The Sub-Agent Run was cancelled; its Session keeps its history. To resume this work, "
+    "{continuation} instead of starting a new Session."
+)
 SUBAGENT_STATUS_RUNNING_NOTE = (
     "Still running; the result is delivered automatically. Continue other work, or "
     "finish your turn to wait for it. Repeated status calls do not make it finish "

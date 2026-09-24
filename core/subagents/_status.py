@@ -12,6 +12,7 @@ from core.runs import (
 from core.sessions import SessionAddress
 from core.subagents._completion import (
     _add_interruption_details,
+    _cancelled_continuation_note,
     _poll_result_from_session,
     _public_subagent_result,
     _register_result_acknowledgement_after_parent_persistence,
@@ -299,7 +300,12 @@ async def _cancel_owned_subagent_run(
         queue_item_id=entry.queue_item_id,
     )
     await _emit_subagent_status_changed(context, data)
-    return tool_success(_without_internal_handles(data))
+    # A started child keeps its Session history; removed Queue work never ran.
+    result = _without_internal_handles(data)
+    result["note"] = _cancelled_continuation_note(
+        entry.agent_id, entry.project_id, entry.session_id
+    )
+    return tool_success(result)
 
 
 def _cancelled_subagent_descriptor(
