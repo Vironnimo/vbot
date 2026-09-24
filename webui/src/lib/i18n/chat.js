@@ -344,6 +344,8 @@ export default Object.freeze({
   'queue.cancelEdit': 'Cancel',
   'queue.editError': 'Queued message could not be edited.',
   'queue.removeError': 'Queued message could not be removed.',
+  'queue.steeringLocked':
+    'This message is already being delivered to the running Run and can no longer be changed.',
   'queue.syncError': 'Queued messages could not be synced.',
   'queue.restartDiscardedOne':
     '1 queued message was discarded because the server restarted.',
