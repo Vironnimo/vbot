@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from core.chat.streaming import StreamingAccumulator
 from core.providers.github_copilot_policy import RESPONSES_ENDPOINT
 from core.providers.github_copilot_responses import (
     ResponsesStreamState,
@@ -849,3 +850,9 @@ def test_argument_deltas_preserve_repeated_or_prefix_overlapping_fragments(
         {"id": "call_1", "name": "write", "arguments": {"value": {"value": 1}}}
     ]
     assert result["reasoning_meta"]["response_output"][0]["arguments"] == arguments
+    # Chat appends the Adapter's true deltas verbatim, so the streamed Call
+    # matches the completed one even after a terminal snapshot.
+    accumulator = StreamingAccumulator()
+    for delta in deltas:
+        accumulator.add_delta(delta)
+    assert accumulator.finalize_assistant_fields().tool_calls == result["tool_calls"]
