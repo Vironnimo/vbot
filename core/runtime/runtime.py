@@ -39,6 +39,7 @@ from core.model_tasks import (
 )
 from core.model_tasks.decisions import DecisionService
 from core.models.models import Model, ModelRegistry
+from core.performance import PerformanceService
 from core.projects import (
     AgentResolver,
     ProjectStore,
@@ -148,6 +149,7 @@ class Runtime:
         self._providers: ProviderRegistry | None = None
         self._provider_credentials: ProviderCredentialResolverProtocol | None = None
         self._provider_usage: ProviderUsageService | None = None
+        self._performance: PerformanceService | None = None
         self._token_store: TokenStore | None = None
         self._fallback_environment: dict[str, str] = {}
         self._models: ModelRegistry | None = None
@@ -370,6 +372,8 @@ class Runtime:
             self._bootstrap_service.stop()
         if self._provider_usage is not None:
             self._provider_usage.stop()
+        if self._performance is not None:
+            self._performance.stop()
         if self._process_manager is not None:
             self._process_manager.stop()
         terminal_error: TerminalManagerError | None = None
@@ -445,6 +449,8 @@ class Runtime:
             await self._speech.aclose()
         if self._provider_usage is not None:
             await self._provider_usage.aclose()
+        if self._performance is not None:
+            await self._performance.aclose()
         if self._process_manager is not None:
             await self._process_manager.aclose()
         terminal_error: TerminalManagerError | None = None
@@ -481,6 +487,7 @@ class Runtime:
             (self._cron_service, "stop"),
             (self._bootstrap_service, "stop"),
             (self._provider_usage, "stop"),
+            (self._performance, "stop"),
             (self._process_manager, "stop"),
             (self._terminal_manager, "stop"),
             (self._keep_awake, "close"),
@@ -534,6 +541,9 @@ class Runtime:
 
     def _start_provider_usage_service(self) -> None:
         start_event_loop_service(self._provider_usage, "Provider usage service not available")
+
+    def _start_performance_service(self) -> None:
+        start_event_loop_service(self._performance, "Performance service not available")
 
     def _start_channel_service(self) -> None:
         start_event_loop_service(self._channel_service, "Channel service not available")
@@ -1031,6 +1041,10 @@ class Runtime:
 
     provider_usage: _StartedService[ProviderUsageService] = _StartedService(
         lambda runtime: runtime._provider_usage, "Provider usage service not available"
+    )
+
+    performance: _StartedService[PerformanceService] = _StartedService(
+        lambda runtime: runtime._performance, "Performance service not available"
     )
 
     system_prompts: _StartedService[SystemPromptManager] = _StartedService(
