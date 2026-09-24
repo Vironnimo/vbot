@@ -43,7 +43,7 @@ def test_validate_data_dir_config_delegates_agent_order_file(tmp_path: Path) -> 
     order_path = tmp_path / "agents" / "order.json"
     order_path.parent.mkdir(parents=True)
     order_path.write_text(
-        json.dumps({"revision": 1, "agent_ids": ["main", "main"]}),
+        json.dumps({"format_version": 1, "revision": 1, "agent_ids": ["main", "main"]}),
         encoding="utf-8",
     )
 
