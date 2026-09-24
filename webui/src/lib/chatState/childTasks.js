@@ -1,4 +1,8 @@
-import { formatAgentAddress, parseAgentAddress } from '../agentAddress.js';
+import {
+  formatAgentAddress,
+  parseAgentAddress,
+  qualifyAgentAddress,
+} from '../agentAddress.js';
 import {
   mergeBoundedEntries,
   replaceActiveSubAgentStatuses,
@@ -40,17 +44,6 @@ export function createChatChildTasks({
 
   function trimmedString(value) {
     return typeof value === 'string' ? value.trim() : '';
-  }
-
-  function qualifiedAgentAddress(agentId, projectId = '') {
-    const normalizedAgentId = trimmedString(agentId);
-    if (!normalizedAgentId) {
-      return '';
-    }
-    const parsed = parseAgentAddress(normalizedAgentId);
-    return parsed.projectId || !projectId
-      ? normalizedAgentId
-      : formatAgentAddress(parsed.agentId, projectId);
   }
 
   function applySubAgentStatusUpdates(updates, { replaceActive = false } = {}) {
@@ -180,7 +173,7 @@ export function createChatChildTasks({
     }
     return operations.inspectSubAgentWork({
       id: workId,
-      agent_id: qualifiedAgentAddress(agentId, projectId),
+      agent_id: qualifyAgentAddress(agentId, projectId),
       session_id: sessionId,
     });
   }
@@ -192,7 +185,7 @@ export function createChatChildTasks({
     projectId,
   ) {
     const result = await operations.listQueue(
-      qualifiedAgentAddress(agentId, projectId),
+      qualifyAgentAddress(agentId, projectId),
       sessionId,
     );
     return (Array.isArray(result?.items) ? result.items : []).some(
@@ -208,7 +201,7 @@ export function createChatChildTasks({
     projectId = '',
   }) {
     const history = await operations.loadChatHistory({
-      agent_id: qualifiedAgentAddress(agentId, projectId),
+      agent_id: qualifyAgentAddress(agentId, projectId),
       session_id: sessionId,
       limit: SUBAGENT_LEGACY_HISTORY_LIMIT,
     });
@@ -400,7 +393,7 @@ export function createChatChildTasks({
 
       try {
         await operations.removeFromQueue(
-          qualifiedAgentAddress(plan.agentId, projectId),
+          qualifyAgentAddress(plan.agentId, projectId),
           plan.sessionId,
           plan.queueItemId,
         );
@@ -451,7 +444,7 @@ export function createChatChildTasks({
     projectId = '',
   } = {}) {
     const normalizedProcessId = trimmedString(processId);
-    const targetAgentId = qualifiedAgentAddress(agentId, projectId);
+    const targetAgentId = qualifyAgentAddress(agentId, projectId);
     if (!sessionState || !normalizedProcessId || !targetAgentId) {
       return false;
     }

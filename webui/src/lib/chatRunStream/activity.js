@@ -9,12 +9,12 @@ const REFLECTION_TERMINAL_STATUSES = {
   run_cancelled: 'cancelled',
   run_interrupted: 'interrupted',
 };
-// Session-scoped status keys are read against persisted spawn descriptors,
-// which carry the child's BARE agent id. Live `/ws` events arrive re-addressed
-// to the full `agent@projekt` form (the session-STATE key), while SSE-delivered
-// run events stay bare — stripping the project suffix makes both sides write
-// the same key. Session ids are globally unique UUIDs, so a bare key cannot
-// collide across projects; an identity id has no `@` and passes unchanged.
+// Run-event status keys use the child's bare agent id. Live `/ws` events
+// arrive re-addressed to the full `agent@projekt` form (the session-STATE key),
+// while SSE-delivered run events stay bare — stripping the project suffix makes
+// both transports write the same key. Session ids are globally unique, so a
+// bare key cannot collide across projects; an identity id has no `@` and
+// passes unchanged.
 function bareAgentIdForStatusKey(agentId) {
   const value = typeof agentId === 'string' ? agentId : '';
   const separatorIndex = value.indexOf('@');
