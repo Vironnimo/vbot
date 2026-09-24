@@ -521,22 +521,20 @@ def test_vector_store_knn_search_applies_session_filters_before_ranking(tmp_path
         {"excluded": [_passage("alpha")], "included": [_passage("delta")], "other": []},
     )
 
-    excluded = _nearest(store, [1.0, 0.0, 0.0], limit=1, excluded_session_ids=("excluded",))
-    selected = _nearest(store, [1.0, 0.0, 0.0], limit=1, session_id="included")
+    excluded = _nearest(store, [1.0, 0.0, 0.0], limit=1, session_ids={"included", "other"})
+    selected = _nearest(store, [1.0, 0.0, 0.0], limit=1, session_ids={"included"})
 
     assert [passage.session_id for passage, _ in excluded] == ["included"]
     assert [passage.session_id for passage, _ in selected] == ["included"]
-    assert (
-        _nearest(store, [1.0, 0.0, 0.0], session_id="included", excluded_session_ids=("included",))
-        == []
-    )
+    assert _nearest(store, [1.0, 0.0, 0.0], session_ids=set()) == []
+    assert _nearest(store, [1.0, 0.0, 0.0], session_ids={"never-indexed"}) == []
 
 
 @pytest.mark.parametrize("excluded_count", [8, 40])
 def test_vector_store_knn_search_excludes_many_sessions_without_starving(
     tmp_path: Path, excluded_count: int
 ) -> None:
-    """Exclusions run inside KNN, even beyond the constraints one vec0 query accepts."""
+    """Session filters run inside KNN, even beyond the constraints one vec0 query accepts."""
 
     store = VectorStore(tmp_path)
     excluded_ids = [f"hidden-{index}" for index in range(excluded_count)]
@@ -557,7 +555,7 @@ def test_vector_store_knn_search_excludes_many_sessions_without_starving(
         [1.0, 0.0, 0.0],
         limit=2,
         agent_id="coder",
-        excluded_session_ids=excluded_ids,
+        session_ids={"visible", "far", "not-indexed-yet"},
         since=datetime(2026, 1, 1, tzinfo=UTC),
         until=datetime(2026, 12, 31, tzinfo=UTC),
     )
