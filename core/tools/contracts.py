@@ -7,6 +7,8 @@ import hashlib
 import json
 import math
 import re
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -19,6 +21,11 @@ _TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 _JSON_NUMBER_PATTERN = re.compile(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$")
 _MAX_FLOAT_DECIMAL_EXPONENT = 308
 _MIN_FLOAT_DECIMAL_EXPONENT = -324
+# Compiled contracts keyed by the digest of their exact JSON inputs. Chat compiles
+# every Provider Tool definition per request; the definitions rarely change.
+_CONTRACT_CACHE_LIMIT = 512
+_CONTRACT_CACHE: OrderedDict[str, ToolContract] = OrderedDict()
+_CONTRACT_CACHE_LOCK = threading.Lock()
 
 
 class ToolContractError(ValueError):
@@ -68,7 +75,79 @@ def compile_tool_contract(
     parallel_safe: bool = True,
     require_closed_input: bool = True,
 ) -> ToolContract:
-    """Validate, copy, compile, and fingerprint one canonical Tool contract."""
+    """Validate, copy, compile, and fingerprint one canonical Tool contract.
+
+    Identical JSON inputs return the same immutable contract without validating
+    the schemas again; any content change compiles afresh.
+    """
+    key = _contract_cache_key(
+        name, input_schema, result_schema, parallel_safe, require_closed_input
+    )
+    if key is not None:
+        with _CONTRACT_CACHE_LOCK:
+            cached = _CONTRACT_CACHE.get(key)
+            if cached is not None:
+                _CONTRACT_CACHE.move_to_end(key)
+                return cached
+    contract = _compile_tool_contract(
+        name=name,
+        input_schema=input_schema,
+        result_schema=result_schema,
+        parallel_safe=parallel_safe,
+        require_closed_input=require_closed_input,
+    )
+    if key is not None:
+        with _CONTRACT_CACHE_LOCK:
+            _CONTRACT_CACHE[key] = contract
+            _CONTRACT_CACHE.move_to_end(key)
+            while len(_CONTRACT_CACHE) > _CONTRACT_CACHE_LIMIT:
+                _CONTRACT_CACHE.popitem(last=False)
+    return contract
+
+
+def _contract_cache_key(
+    name: Any,
+    input_schema: Any,
+    result_schema: Any,
+    parallel_safe: Any,
+    require_closed_input: Any,
+) -> str | None:
+    """Digest plain JSON inputs; ``None`` leaves anything else to validation.
+
+    Only exact JSON types qualify, so a value ``json.dumps`` would coerce (such
+    as a tuple) can never share a contract with the JSON value it resembles.
+    """
+    if not (_is_plain_json(input_schema) and _is_plain_json(result_schema)):
+        return None
+    try:
+        encoded = json.dumps(
+            [name, input_schema, result_schema, parallel_safe, require_closed_input],
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except (TypeError, ValueError):
+        return None
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _is_plain_json(value: Any) -> bool:
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and _is_plain_json(item) for key, item in value.items())
+    if isinstance(value, list):
+        return all(_is_plain_json(item) for item in value)
+    return value is None or isinstance(value, (str, int, float))
+
+
+def _compile_tool_contract(
+    *,
+    name: str,
+    input_schema: JsonObject,
+    result_schema: JsonObject | None,
+    parallel_safe: bool,
+    require_closed_input: bool,
+) -> ToolContract:
     if not isinstance(name, str) or not name:
         raise ToolContractError("Tool name is required")
     if _TOOL_NAME_PATTERN.fullmatch(name) is None:
