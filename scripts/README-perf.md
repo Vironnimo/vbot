@@ -24,7 +24,7 @@ What is measured:
 - **SQLite:** `sqlite.write` (one write transaction including commit/fsync), `sqlite.write_wait` (waiting for the single writer), `sqlite.read`.
 - **Chat per Model step:** `chat.request_build`, `provider.first_token`, `provider.response`, `chat.persist`, `chat.tool_round`, `tool.<name>`, `chat.compaction`, `chat.run`.
 - **RPC:** `rpc.<method>` per registered method.
-- **Process:** `process.cpu_percent`, `process.rss_mb`, `process.threads`, `asyncio.tasks`, `runs.active`, `runs.queued`.
+- **Process:** `process.cpu_percent`, `process.rss_mb`, `process.python_threads`, `asyncio.tasks`, `runs.active`, `runs.queued`.
 
 ```bash
 vbot performance status                      # slowest operations since start, gauges, recent stalls
