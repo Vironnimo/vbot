@@ -73,6 +73,9 @@ export default Object.freeze({
   'chat.contextCard.session': 'Session',
   'chat.contextCard.measuredTurns': '{turns} measured turns',
   'chat.contextCard.nearLimit': 'Approaching automatic Compaction',
+  'chat.contextCard.compactionThresholdReached':
+    'Automatic Compaction threshold reached',
+  'chat.contextCard.nearContextLimit': 'Approaching the context limit',
   'chat.contextCard.atLimit': 'Context almost full',
   'chat.compactionPending': 'Compaction requested…',
   'chat.compactionRunning': 'Compacting…',

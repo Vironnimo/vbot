@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 import { HOVER_CARD_SHOW_DELAY_MS } from '../../lib/tooltip.js';
+import { t } from '../../lib/i18n.js';
 import {
   flushSync,
   mount,
@@ -90,22 +91,52 @@ describe('ChatComposer', () => {
     expect(card.querySelector('.context-card__level')).toBeNull();
   });
 
+  const defaultPolicy = {
+    enabled: true,
+    trigger: { type: 'context_ratio', threshold: 0.8 },
+    strategy: { type: 'summary_tail', tail_tokens: 15000 },
+  };
+  const earlyPolicy = {
+    ...defaultPolicy,
+    trigger: { type: 'context_ratio', threshold: 0.5 },
+  };
+  const disabledPolicy = { ...defaultPolicy, enabled: false };
+
   it.each([
-    [6900, 'normal', null],
-    [7000, 'high', 'Approaching automatic Compaction'],
-    [9000, 'critical', 'Context almost full'],
+    ['the default Policy', defaultPolicy, 6900, 'normal', null],
+    ['the default Policy', defaultPolicy, 7000, 'high', 'nearLimit'],
+    [
+      'the default Policy',
+      defaultPolicy,
+      8000,
+      'high',
+      'compactionThresholdReached',
+    ],
+    ['the default Policy', defaultPolicy, 9000, 'critical', 'atLimit'],
+    ['an earlier threshold', earlyPolicy, 3900, 'normal', null],
+    ['an earlier threshold', earlyPolicy, 4000, 'high', 'nearLimit'],
+    ['disabled automatic Compaction', disabledPolicy, 6900, 'normal', null],
+    [
+      'disabled automatic Compaction',
+      disabledPolicy,
+      7000,
+      'high',
+      'nearContextLimit',
+    ],
+    ['an unknown Policy', null, 7000, 'high', 'nearContextLimit'],
   ])(
-    'marks %i of 10,000 context tokens as the %s level',
-    (tokens, level, note) => {
+    'relates the context level to %s (%#)',
+    (_label, compactionPolicy, tokens, level, noteKey) => {
       const { anchor, card } = mountContextRing({
         contextUsage: { tokens, estimated: false },
+        compactionPolicy,
       });
 
       expect(anchor.classList.contains(`context-ring--${level}`)).toBe(true);
       expect(card.classList.contains(`context-card--${level}`)).toBe(true);
       expect(
         card.querySelector('.context-card__level')?.textContent.trim() ?? null,
-      ).toBe(note);
+      ).toBe(noteKey ? t(`chat.contextCard.${noteKey}`) : null);
     },
   );
 

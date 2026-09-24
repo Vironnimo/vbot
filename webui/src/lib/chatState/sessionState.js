@@ -135,6 +135,9 @@ export function ensureSessionState(state, agentId, sessionId) {
       usage: null,
       sessionUsage: null,
       contextUsage: null,
+      // The Session's effective Compaction Policy from `chat.history`; null
+      // until History reports it.
+      compactionPolicy: null,
       backgroundBashStatuses: {},
       reflectionTasks: {},
       hasOlderHistory: false,
