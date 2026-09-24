@@ -555,11 +555,13 @@ it('shows and saves each private Swarm Tool independently', async () => {
   await tick();
   for (const name of names)
     expect(
-      document.querySelector(`[aria-label="Turn off ${name}"]`),
-    ).not.toBeNull();
-  document.querySelector('[aria-label="Turn off swarm_state"]').click();
+      document
+        .querySelector(`[data-tool-name="${name}"]`)
+        ?.getAttribute('aria-checked'),
+    ).toBe('true');
+  document.querySelector('[data-tool-name="swarm_state"]').click();
   await tick();
-  document.querySelector('[aria-label="Turn off swarm_board"]').click();
+  document.querySelector('[data-tool-name="swarm_board"]').click();
   await tick();
   saveButton().click();
   await vi.waitFor(() =>
