@@ -43,15 +43,9 @@ async def test_execution_group_stop_keeps_unrelated_process_in_same_scope(manage
     assert not manager.has_execution_work(owner)
     assert manager.get_process(owned, AGENT_A).status == "killed"
     assert manager.get_process(unrelated, AGENT_A).status == "running"
-    with pytest.raises(process_manager_module.ProcessManagerError):
-        await manager.spawn(
-            SCOPE_A,
-            AGENT_A,
-            argv,
-            env=None,
-            cwd=None,
-            execution_owner=owner,
-        )
+    # The group owner settles its Runs before closing resources, so a completed
+    # drain retains no admission marker for the rest of the server lifetime.
+    assert manager._closed_execution_groups == set()
 
 
 @pytest.mark.asyncio
@@ -82,11 +76,22 @@ async def test_execution_group_stop_waits_for_pending_process_creation(manager, 
     await asyncio.sleep(0)
     assert not close.done()
     assert manager.has_execution_work(owner)
+    # A launch racing the drain is rejected while the group closes.
+    with pytest.raises(process_manager_module.ProcessManagerError):
+        await manager.spawn(
+            SCOPE_A,
+            AGENT_A,
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            env=None,
+            cwd=None,
+            execution_owner=owner,
+        )
     release.set()
     process_id = await launch
     await close
     assert manager.get_process(process_id, AGENT_A).status == "killed"
     assert not manager.has_execution_work(owner)
+    assert manager._closed_execution_groups == set()
 
 
 @pytest.mark.asyncio
@@ -129,6 +134,27 @@ async def test_shutdown_waits_for_pending_launch_and_closes_admission(
         release.set()
         await asyncio.gather(launch, close, return_exceptions=True)
         await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_settled_run_scope_releases_its_closed_marker(manager):
+    argv = [sys.executable, "-c", "import time; time.sleep(30)"]
+    process_id = await manager.spawn(SCOPE_A, AGENT_A, argv, env=None, cwd=None)
+
+    await manager.cancel_scope_async(SCOPE_A)
+
+    assert manager.get_process(process_id, AGENT_A).status == "killed"
+    # Until the Run settles, a launch racing its cancellation stays rejected.
+    with pytest.raises(process_manager_module.ProcessManagerError):
+        await manager.spawn(SCOPE_A, AGENT_A, argv, env=None, cwd=None)
+
+    manager.release_scope(SCOPE_A)
+
+    assert manager._closed_scopes == set()
+    # Releasing an unknown or already released scope is harmless.
+    manager.release_scope(SCOPE_A)
+    manager.release_scope("run-never-cancelled")
+    assert manager._closed_scopes == set()
 
 
 @pytest.mark.asyncio

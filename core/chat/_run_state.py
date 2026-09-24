@@ -49,7 +49,7 @@ from core.providers.reasoning import (
     DEFAULT_REASONING_REPLAY_POLICY,
     ReasoningReplayPolicy,
 )
-from core.runs import Run
+from core.runs import Run, RunStatus
 from core.sessions import (
     ChatSession,
     SessionAddress,
@@ -470,6 +470,14 @@ async def create_run_execution_context(
     try:
         run.add_cancel_callback(lambda: _close_adapter(target.adapter))
         run.add_cancel_callback(lambda: dependencies.process_manager.cancel_scope_async(run.id))
+
+        async def release_process_scope(_status: RunStatus) -> None:
+            # Completion observers run after the executor, every Tool task, and
+            # all cancellation callbacks have settled, so no Bash launch for this
+            # Run can race the release of its closed-scope marker.
+            dependencies.process_manager.release_scope(run.id)
+
+        run.add_completion_observer(release_process_scope)
         if temporary_source is not None:
             temporary_cwd = getattr(agent, "cwd", None)
             if not isinstance(temporary_cwd, Path):
