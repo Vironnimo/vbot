@@ -35,6 +35,7 @@ from core.extensions._declarations import (
     ExtensionRecord,
     ExtensionRegistrationIdentity,
     ExtensionStatus,
+    ExtensionUnavailableError,
     HookContext,
     HookHandler,
     LifecycleHandler,
@@ -365,7 +366,7 @@ class ExtensionRegistry:
         if cached is not None:
             return cached
         if self._host is None:
-            raise RuntimeError("Extension host is not bound")
+            raise ExtensionUnavailableError("Extension host is not bound")
         owner_host = (
             self._host.for_owner(identity) if self._host.for_owner is not None else self._host
         )
@@ -970,6 +971,7 @@ __all__ = [
     "SessionRuntimeDeclaration",
     "SessionCapability",
     "SessionCapabilityExpiredError",
+    "ExtensionUnavailableError",
     "SessionRequestContext",
     "PreparedSessionDelivery",
     "ToolBatchDecision",

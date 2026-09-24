@@ -857,6 +857,24 @@ async def test_reload_extensions_drives_runtime_and_returns_list_shape(tmp_path:
     assert names == ["guard_bash"]
 
 
+@pytest.mark.asyncio
+async def test_reload_extensions_while_shutting_down_is_a_domain_error(tmp_path: Path) -> None:
+    from core.extensions.extensions import ExtensionUnavailableError
+
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.extensions = _Registry([_loaded_record()])
+
+    async def closing() -> None:
+        raise ExtensionUnavailableError("Extension runtime is closing")
+
+    state.runtime.reload_extensions = closing
+
+    result = await dispatch_rpc(state, {"method": "extensions.reload", "params": {}})
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "domain_error"
+
+
 def test_temporary_history_context_uses_canonical_tail_outside_visible_page():
     from core.chat import ChatMessage
     from server.rpc.extensions_methods import _temporary_history_projection
