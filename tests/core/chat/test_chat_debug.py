@@ -156,6 +156,11 @@ class StubAgentResolver:
         assert project_id is None
         return self._agents.get(agent_id)
 
+    async def resolve_agent_async(
+        self, project_id: str | None, agent_id: str, **options: Any
+    ) -> Any:
+        return self.resolve_agent(project_id, agent_id, **options)
+
 
 class StubProviders:
     def __init__(self, provider_ids: set[str]) -> None:

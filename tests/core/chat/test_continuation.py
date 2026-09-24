@@ -67,6 +67,29 @@ def _session(tmp_path: Path, *, session_id: str = "session") -> ChatSession:
     return ChatSessionManager(tmp_path).create("agent", session_id=session_id)
 
 
+def _assistant(
+    content: str | None, *, reasoning: str | None = None, interrupted: bool = False
+) -> ChatMessage:
+    return ChatMessage.assistant(
+        model="provider/model", content=content, reasoning=reasoning, interrupted=interrupted
+    )
+
+
+def _collect(batches: list[list[dict[str, Any]]]) -> Any:
+    async def write(records: list[dict[str, Any]]) -> None:
+        batches.append(records)
+
+    return write
+
+
+async def _persist_assistant(
+    session: ChatSession, tracker: ContinuationTracker, message: ChatMessage
+) -> None:
+    await tracker.assistant_boundary(message).commit(
+        lambda records: session.append_many_async([message], continuation_records=records)
+    )
+
+
 @pytest.mark.asyncio
 async def test_ten_trackers_coalesce_many_deltas_to_one_periodic_flush_each(
     tmp_path: Path,
@@ -108,11 +131,8 @@ async def test_ten_trackers_coalesce_many_deltas_to_one_periodic_flush_each(
     for tracker in trackers:
         for _ in range(100):
             tracker.record_stream_delta(content="more")
-        await tracker.record_assistant_boundary(
-            message_id="assistant",
-            reasoning="r" * 100,
-            content="c" * 100,
-            interrupted=False,
+        await tracker.assistant_boundary(_assistant("c" * 100, reasoning="r" * 100)).commit(
+            _collect(batches[trackers.index(tracker)])
         )
     assert all(len(run_batches) == 3 for run_batches in batches)
     assert all(
@@ -139,12 +159,7 @@ async def test_boundary_timer_cancellation_cannot_lose_next_dirty_flush(tmp_path
     tracker.record_stream_delta(reasoning="before")
     await asyncio.sleep(0)
 
-    await tracker.record_assistant_boundary(
-        message_id="assistant-one",
-        reasoning="before",
-        content=None,
-        interrupted=False,
-    )
+    await tracker.assistant_boundary(_assistant(None, reasoning="before")).commit(_collect(batches))
     tracker.record_stream_delta(reasoning="after")
     await asyncio.sleep(0)
     await asyncio.sleep(0)
@@ -181,12 +196,7 @@ async def test_periodic_flush_cannot_land_after_its_assistant_boundary(tmp_path:
     await stream_write_started.wait()
 
     boundary = asyncio.create_task(
-        tracker.record_assistant_boundary(
-            message_id="assistant-one",
-            reasoning="before",
-            content=None,
-            interrupted=False,
-        )
+        tracker.assistant_boundary(_assistant(None, reasoning="before")).commit(_collect(batches))
     )
     await asyncio.sleep(0)
     assert not boundary.done()
@@ -237,16 +247,14 @@ async def test_replayed_attempts_keep_every_persisted_partial(tmp_path: Path) ->
     tracker = ContinuationTracker(session, run_id="run-one", request="work")
     await tracker.start()
     tracker.record_stream_delta(reasoning="PLAN", content="Visible-A")
-    await tracker.record_assistant_boundary(
-        message_id="partial-a", reasoning="PLAN", content="Visible-A", interrupted=True
+    await _persist_assistant(
+        session, tracker, _assistant("Visible-A", reasoning="PLAN", interrupted=True)
     )
     # The continuation fails before text and is replayed.
     tracker.record_stream_delta(reasoning="discarded thought")
     await tracker.discard_stream_attempt()
     tracker.record_stream_delta(content="Visible-B")
-    await tracker.record_assistant_boundary(
-        message_id="partial-b", reasoning=None, content="Visible-B", interrupted=True
-    )
+    await _persist_assistant(session, tracker, _assistant("Visible-B", interrupted=True))
     await tracker.discard_stream_attempt()
     await tracker.interrupt("network")
 
@@ -256,6 +264,31 @@ async def test_replayed_attempts_keep_every_persisted_partial(tmp_path: Path) ->
     assert [step.content for step in state.model_steps.values()] == ["Visible-A", "Visible-B"]
     assert [step.reasoning for step in state.model_steps.values()] == ["PLAN", ""]
     assert all(step.interrupted for step in state.model_steps.values())
+
+
+@pytest.mark.asyncio
+async def test_failed_boundary_write_keeps_its_deltas_for_the_interruption(
+    tmp_path: Path,
+) -> None:
+    session = _session(tmp_path)
+    tracker = ContinuationTracker(session, run_id="run-one", request="work")
+    await tracker.start()
+    tracker.record_stream_delta(reasoning="PLAN", content="Visible")
+
+    async def failing_write(_records: list[dict[str, Any]]) -> None:
+        raise RuntimeError("history write failed")
+
+    with pytest.raises(RuntimeError, match="history write failed"):
+        await tracker.assistant_boundary(_assistant("Visible", reasoning="PLAN")).commit(
+            failing_write
+        )
+    assert tracker.step == 1
+    await tracker.interrupt("internal")
+
+    state = fold_continuation_records(session.load_continuation_records())
+    assert state is not None
+    assert (state.reasoning, state.partial_output) == ("PLAN", "Visible")
+    assert [step.assistant_message_id for step in state.model_steps.values()] == [None]
 
 
 def test_fold_preserves_chain_across_repeated_interruptions() -> None:

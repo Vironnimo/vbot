@@ -272,7 +272,7 @@ async def _handle_subagent(
             or temporary_parent.address.project_id != target_project_id
         ):
             temporary_parent = None
-    validation_error = _validate_target_agent(
+    validation_error = await _validate_target_agent(
         runtime,
         target_agent_id,
         target_project_id,
@@ -393,13 +393,15 @@ async def _handle_subagent(
                 temporary_parent_binding=temporary_parent,
             )
             target_agent = (
-                runtime.agent_resolver.resolve_temporary_agent(
+                await runtime.agent_resolver.resolve_temporary_agent_async(
                     temporary_parent.address,
                     generation_id=temporary_parent.generation_id,
                     run_overrides=run_overrides,
                 )
                 if temporary_parent is not None
-                else runtime.agent_resolver.resolve_agent(target_project_id, target_agent_id)
+                else await runtime.agent_resolver.resolve_agent_async(
+                    target_project_id, target_agent_id
+                )
             )
             item = await runtime.chat_run_manager.enqueue(
                 SessionAddress(
@@ -712,13 +714,13 @@ async def _start_subagent_run(
         temporary_parent_binding=temporary_parent_binding,
     )
     target_agent = (
-        runtime.agent_resolver.resolve_temporary_agent(
+        await runtime.agent_resolver.resolve_temporary_agent_async(
             temporary_parent_binding.address,
             generation_id=temporary_parent_binding.generation_id,
             run_overrides=run_overrides,
         )
         if temporary_parent_binding is not None
-        else runtime.agent_resolver.resolve_agent(project_id, agent_id)
+        else await runtime.agent_resolver.resolve_agent_async(project_id, agent_id)
     )
     return await runtime.chat_run_manager.start(
         SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
@@ -812,7 +814,7 @@ def _parse_agent_run_overrides(arguments: JsonObject) -> AgentRunOverrides | Non
     return None if overrides.is_empty else overrides
 
 
-def _validate_target_agent(
+async def _validate_target_agent(
     runtime: RuntimeServices,
     target_agent_id: str,
     project_id: str | None,
@@ -832,18 +834,14 @@ def _validate_target_agent(
     """
     try:
         if temporary_parent_binding is not None:
-            runtime.agent_resolver.resolve_temporary_agent(
+            await runtime.agent_resolver.resolve_temporary_agent_async(
                 temporary_parent_binding.address,
                 generation_id=temporary_parent_binding.generation_id,
                 run_overrides=run_overrides,
             )
-        elif run_overrides is None:
-            runtime.agent_resolver.resolve_agent(project_id, target_agent_id)
         else:
-            runtime.agent_resolver.resolve_agent(
-                project_id,
-                target_agent_id,
-                run_overrides=run_overrides,
+            await runtime.agent_resolver.resolve_agent_async(
+                project_id, target_agent_id, run_overrides=run_overrides
             )
     except ResolutionProjectNotFoundError as error:
         return tool_failure("project_not_found", str(error))

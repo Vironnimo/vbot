@@ -245,6 +245,14 @@ class StubAgentResolver:
             raise AgentResolutionError("temporary Session binding is unavailable")
         return agent
 
+    async def resolve_agent_async(
+        self, project_id: str | None, agent_id: str, **options: Any
+    ) -> Any:
+        return self.resolve_agent(project_id, agent_id, **options)
+
+    async def resolve_temporary_agent_async(self, address: Any, **options: Any) -> Any:
+        return self.resolve_temporary_agent(address, **options)
+
 
 class StubProviders:
     def __init__(self, provider_ids: set[str], *, base_url: str | None = None) -> None:

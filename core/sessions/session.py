@@ -76,12 +76,21 @@ class ChatSession:
     def append(self, message: ChatMessage) -> None:
         self.append_many([message])
 
-    def append_many(self, messages: list[ChatMessage]) -> None:
-        self._store.append_messages(
+    def append_many(
+        self,
+        messages: list[ChatMessage],
+        *,
+        continuation_records: Sequence[JsonObject] = (),
+        since: SessionReadCursor | None = None,
+    ) -> SessionReadBatch | None:
+        """Append *messages*; see ``SessionStore.append_messages`` for the options."""
+        delta = self._store.append_messages(
             self.address,
             messages,
             run_id=self.run_id,
             assistant_message_id=self.assistant_message_id,
+            continuation_records=continuation_records,
+            since=since,
         )
         if any(message.role == "compaction_checkpoint" for message in messages):
             with self._buffers.lock:
@@ -89,6 +98,7 @@ class ChatSession:
                     self.load()
                 )
                 self._buffers.activated_skill_cache_loaded = True
+        return delta
 
     async def start_tool_async(self, call_id: str, started_at: str) -> None:
         if not self.run_id or not self.assistant_message_id:
@@ -105,9 +115,22 @@ class ChatSession:
     async def append_async(self, message: ChatMessage) -> None:
         await _run_session_io(self.append, message)
 
-    async def append_many_async(self, messages: list[ChatMessage]) -> None:
-        if messages:
-            await _run_session_io(self.append_many, list(messages))
+    async def append_many_async(
+        self,
+        messages: list[ChatMessage],
+        *,
+        continuation_records: Sequence[JsonObject] = (),
+        since: SessionReadCursor | None = None,
+    ) -> SessionReadBatch | None:
+        if not messages:
+            return None
+        return await _run_session_io(
+            lambda: self.append_many(
+                list(messages),
+                continuation_records=list(continuation_records),
+                since=since,
+            )
+        )
 
     def append_continuation_record(self, record: JsonObject) -> None:
         self.append_continuation_records([record])

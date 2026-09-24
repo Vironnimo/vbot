@@ -316,7 +316,7 @@ class ChatLoop:
         today's identity behavior.
         """
         await self._reject_owner_managed_session(project_id, agent_id, session_id)
-        agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
+        agent = await self._dependencies.agent_resolver.resolve_agent_async(project_id, agent_id)
         working_project_id = resolve_working_project_id(project_id, agent)
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
         _ensure_provider_exists(self._dependencies.providers, provider_id)
@@ -388,7 +388,7 @@ class ChatLoop:
         if compaction_service is None:
             raise CompactionUnavailableError("Compaction is not available.")
 
-        agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
+        agent = await self._dependencies.agent_resolver.resolve_agent_async(project_id, agent_id)
         working_project_id = resolve_working_project_id(project_id, agent)
         session = await self._get_session_async(
             agent_id, session_id, create_missing=False, project_id=project_id
@@ -454,7 +454,7 @@ class ChatLoop:
     ) -> Run:
         if session_id is not None:
             await self._reject_owner_managed_session(project_id, agent_id, session_id)
-        agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
+        agent = await self._dependencies.agent_resolver.resolve_agent_async(project_id, agent_id)
         working_project_id = resolve_working_project_id(project_id, agent)
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
         _ensure_provider_exists(self._dependencies.providers, provider_id)
@@ -555,11 +555,11 @@ class ChatLoop:
         ):
             parent = None
         agent = (
-            self._dependencies.agent_resolver.resolve_temporary_agent(
+            await self._dependencies.agent_resolver.resolve_temporary_agent_async(
                 parent.address, generation_id=parent.generation_id
             )
             if parent is not None
-            else self._dependencies.agent_resolver.resolve_agent(
+            else await self._dependencies.agent_resolver.resolve_agent_async(
                 address.project_id, address.agent_id
             )
         )

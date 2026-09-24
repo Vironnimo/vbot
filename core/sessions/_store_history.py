@@ -807,7 +807,19 @@ def run_result(
 def messages_since(
     connection: sqlite3.Connection, address: SessionAddress, cursor: SessionReadCursor | None
 ) -> SessionReadBatch | None:
-    from core.sessions._types import SessionReadBatch, SessionReadCursor
+    delta = message_rows_since(connection, address, cursor)
+    return None if delta is None else read_batch(delta)
+
+
+def message_rows_since(
+    connection: sqlite3.Connection, address: SessionAddress, cursor: SessionReadCursor | None
+) -> tuple[list[sqlite3.Row], SessionReadCursor] | None:
+    """Select the records after *cursor* without decoding them.
+
+    A writer can select inside its transaction and decode after commit, so
+    Message reconstruction never extends the write lock.
+    """
+    from core.sessions._types import SessionReadCursor
 
     state = _store_values._require_live(connection, address)
     count = int(state["message_count"])
@@ -837,10 +849,15 @@ def messages_since(
         ),
         (state["session_key"], start),
     ).fetchall()
+    return rows, SessionReadCursor(generation_id, revision, count, count, last_id)
+
+
+def read_batch(delta: tuple[list[sqlite3.Row], SessionReadCursor]) -> SessionReadBatch:
+    rows, cursor = delta
     messages = tuple(_store_codec.message_from_row(row) for row in rows)
     return SessionReadBatch(
         messages,
-        SessionReadCursor(generation_id, revision, count, count, last_id),
+        cursor,
         tuple(message for row, message in zip(rows, messages, strict=True) if row["active"]),
     )
 
