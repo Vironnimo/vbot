@@ -190,7 +190,7 @@ async def _handle_subagent_cancel(
         work_id,
     )
     if owned is None:
-        return _subagent_not_owned_failure(work_id)
+        return _subagent_not_found_failure(work_id)
     parent_key, entry = owned
     if entry.complete:
         return tool_failure(
@@ -326,10 +326,13 @@ def _cancelled_subagent_descriptor(
     return data
 
 
-def _subagent_not_owned_failure(work_id: str) -> JsonObject:
+def _subagent_not_found_failure(work_id: str) -> JsonObject:
+    """Explain an untracked id without revealing whether another Session owns it."""
     return tool_failure(
-        "subagent_not_owned",
-        f"Sub-Agent work is not owned by this Parent Agent Session: {work_id}",
+        "subagent_not_found",
+        f"No Sub-Agent work with id {work_id} is tracked for this Session. Work stops being "
+        "tracked after its result was delivered to you or vBot restarted; use that "
+        "delivered result, or call status without id to list tracked work.",
     )
 
 
@@ -373,7 +376,7 @@ async def _handle_subagent_status(
         work_id,
     )
     if owned is None:
-        return _subagent_not_owned_failure(work_id)
+        return _subagent_not_found_failure(work_id)
     parent_key, entry = owned
     return await _subagent_status_snapshot(
         context, parent_key, entry, runtime=runtime, batch_tracker=batch_tracker
