@@ -398,12 +398,16 @@ def loaded_history(context: BenchContext, shape: HistoryShape) -> LoadedHistory:
     """Persist ``shape``'s history once per suite run and load it back."""
 
     def build() -> LoadedHistory:
-        store = context.fixture("history-store", lambda: session_store(context, "history-store"))
-        session = store.create(AGENT_ID)
+        session = history_store(context).create(AGENT_ID)
         persist_history(session, build_history(shape))
         return LoadedHistory(shape=shape, session=session, messages=session.load_active())
 
     return context.fixture(f"history:{shape.label}", build)
+
+
+def history_store(context: BenchContext) -> ChatSessionManager:
+    """The one Session store per suite run that holds every synthetic history."""
+    return context.fixture("history-store", lambda: session_store(context, "history-store"))
 
 
 def session_store(context: BenchContext, name: str) -> ChatSessionManager:
