@@ -322,39 +322,53 @@ def _settings_top_level_key(path: str) -> str:
 
 
 def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport, ...]:
-    """Validate all current user-editable JSON config files in a data directory."""
+    """Validate every durable JSON document in a data directory.
+
+    ``settings.json`` is always reported; every other document only when present.
+    """
 
     # Settings owns bundle orchestration, while each persisted format is validated
     # by its domain. Imports stay local so those domains may reuse Settings-owned
     # scalar/Policy rules without creating package initialization cycles.
     from core.agents import validate_agent_file, validate_agent_order_file
     from core.automation import validate_bootstrap_jobs_file, validate_cron_jobs_file
+    from core.calendar import validate_calendar_actions_file, validate_calendar_events_file
     from core.channels import validate_channel_file
     from core.projects import validate_project_file
+    from core.providers.token_store import validate_oauth_token_file
+    from core.skills import validate_skill_policy_file
+    from core.storage.prompt_blocks import validate_prompt_layout_file
+    from core.tools.terminal_store import (
+        validate_terminal_groups_file,
+        validate_terminal_launch_history_file,
+    )
 
+    # The bundled MCP Extension owns ``mcp/connections.json``; core has no
+    # Extension hook for doctor checks yet, so this one import points outward.
+    from resources.extensions.mcp.config import validate_connections_file
+
+    # Data-dir relative glob patterns; a literal pattern matches only an existing file.
+    documents: tuple[tuple[str, Callable[[Path], JsonValidationReport]], ...] = (
+        ("agents/*/agent.json", validate_agent_file),
+        ("agents/order.json", validate_agent_order_file),
+        ("agents/*/prompts/layout.json", validate_prompt_layout_file),
+        ("prompts/layout.json", validate_prompt_layout_file),
+        ("channels/*/channel.json", validate_channel_file),
+        ("projects/*/project.json", validate_project_file),
+        ("cron/jobs.json", validate_cron_jobs_file),
+        ("bootstrap/jobs.json", validate_bootstrap_jobs_file),
+        ("calendar/events.json", validate_calendar_events_file),
+        ("calendar/actions.json", validate_calendar_actions_file),
+        ("skills/policy.json", validate_skill_policy_file),
+        ("terminals/launch-history.json", validate_terminal_launch_history_file),
+        ("terminals/groups.json", validate_terminal_groups_file),
+        ("oauth/*.json", validate_oauth_token_file),
+        ("mcp/connections.json", validate_connections_file),
+    )
     root = Path(data_dir).expanduser()
     reports = [validate_settings_file(root / "settings.json")]
-    reports.extend(
-        validate_agent_file(agent_path)
-        for agent_path in sorted((root / "agents").glob("*/agent.json"))
-    )
-    agent_order_path = root / "agents" / "order.json"
-    if agent_order_path.exists():
-        reports.append(validate_agent_order_file(agent_order_path))
-    reports.extend(
-        validate_channel_file(channel_path)
-        for channel_path in sorted((root / "channels").glob("*/channel.json"))
-    )
-    reports.extend(
-        validate_project_file(project_path)
-        for project_path in sorted((root / "projects").glob("*/project.json"))
-    )
-    cron_jobs_path = root / "cron" / "jobs.json"
-    if cron_jobs_path.exists():
-        reports.append(validate_cron_jobs_file(cron_jobs_path))
-    bootstrap_jobs_path = root / "bootstrap" / "jobs.json"
-    if bootstrap_jobs_path.exists():
-        reports.append(validate_bootstrap_jobs_file(bootstrap_jobs_path))
+    for pattern, validate in documents:
+        reports.extend(validate(path) for path in sorted(root.glob(pattern)) if path.is_file())
     return tuple(reports)
 
 

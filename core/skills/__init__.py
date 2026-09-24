@@ -13,6 +13,7 @@ from core.skills.policy import (
     SkillPolicy,
     SkillPolicyError,
     SkillPolicyService,
+    validate_skill_policy_file,
 )
 from core.skills.requirements import SkillAvailability, SkillRequirements
 from core.skills.skill_validator import FRONT_MATTER_DELIMITER
@@ -49,6 +50,7 @@ __all__ = [
     "SkillPolicy",
     "SkillPolicyError",
     "SkillPolicyService",
+    "validate_skill_policy_file",
     "SkillRegistry",
     "SkillRequirements",
     "SkillWriteResult",

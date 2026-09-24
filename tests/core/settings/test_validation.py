@@ -69,6 +69,57 @@ def test_validate_data_dir_config_delegates_bootstrap_jobs(tmp_path: Path) -> No
     assert bootstrap_reports[0].ok is False
 
 
+# Every durable JSON document the doctor covers, in its pre-Generation-1 form and
+# in a minimal current form.
+_DATA_DIR_DOCUMENTS: dict[str, tuple[str, dict[str, object]]] = {
+    "settings.json": ("{}", {}),
+    "agents/order.json": ("{}", {"revision": 1, "agent_ids": []}),
+    "agents/main/prompts/layout.json": ("[]", {"entries": []}),
+    "prompts/layout.json": ("[]", {"entries": []}),
+    "cron/jobs.json": ("[]", {"jobs": []}),
+    "bootstrap/jobs.json": ("[]", {"jobs": []}),
+    "calendar/events.json": ("[]", {"events": []}),
+    "calendar/actions.json": (
+        '{"actions": [], "executions": {}}',
+        {"actions": [], "executions": {}},
+    ),
+    "skills/policy.json": ('{"version": 2}', {}),
+    "terminals/launch-history.json": ('{"version": 1, "entries": []}', {"entries": []}),
+    "terminals/groups.json": ('{"version": 1, "groups": []}', {"groups": []}),
+    "oauth/github-copilot-oauth.json": ('{"access_token": "token"}', {"access_token": "token"}),
+    "mcp/connections.json": ("[]", {"connections": []}),
+}
+
+
+def _write_data_dir_documents(root: Path, *, current: bool) -> None:
+    for relative_path, (legacy, fields) in _DATA_DIR_DOCUMENTS.items():
+        path = root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        text = json.dumps({"format_version": 1, **fields}) if current else legacy
+        path.write_text(text, encoding="utf-8")
+
+
+def test_validate_data_dir_config_covers_every_json_document(tmp_path: Path) -> None:
+    _write_data_dir_documents(tmp_path, current=True)
+
+    reports = validate_data_dir_config(tmp_path)
+
+    reported = {report.file_path.relative_to(tmp_path).as_posix() for report in reports}
+    assert reported == set(_DATA_DIR_DOCUMENTS)
+    assert [
+        (report.file_path, report.diagnostics) for report in reports if report.diagnostics
+    ] == []
+
+
+def test_validate_data_dir_config_refuses_documents_before_generation_1(tmp_path: Path) -> None:
+    _write_data_dir_documents(tmp_path, current=False)
+
+    reports = validate_data_dir_config(tmp_path)
+
+    assert len(reports) == len(_DATA_DIR_DOCUMENTS)
+    assert [report.file_path for report in reports if report.ok] == []
+
+
 def test_validate_data_dir_config_reports_non_utf8_json_without_raising(tmp_path: Path) -> None:
     agent_path = tmp_path / "agents" / "main" / "agent.json"
     agent_path.parent.mkdir(parents=True)
