@@ -669,6 +669,10 @@ class SessionStore:
         with self._runtime.read_ctx() as connection:
             return _store_history.active_user_message_count(connection, address, limit=limit)
 
+    def tool_result_persisted(self, address: SessionAddress, tool_call_id: str) -> bool:
+        with self._runtime.read_ctx() as connection:
+            return _store_history.tool_result_persisted(connection, address, tool_call_id)
+
     def latest_note(self, address: SessionAddress, *, content_prefix: str) -> ChatMessage | None:
         return self._read_decoded(
             lambda connection: _store_history.latest_note(

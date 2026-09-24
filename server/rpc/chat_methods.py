@@ -346,14 +346,14 @@ def _resolve_history_session_id(
     )
 
 
-def _subagent_inspect(state: Any, params: JsonObject) -> JsonObject:
+async def _subagent_inspect(state: Any, params: JsonObject) -> JsonObject:
     supported_fields = {"id", "agent_id", "session_id"}
     _reject_unsupported(params, supported_fields, "subagent.inspect")
     work_id = _required_string(params, "id")
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
     try:
-        inspection = state.runtime.subagents.inspect(
+        inspection = await state.runtime.subagents.inspect(
             agent_id,
             session_id,
             work_id,

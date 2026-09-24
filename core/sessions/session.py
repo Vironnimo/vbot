@@ -462,6 +462,19 @@ class ChatSession:
         assistant, summary, latest_tool_name = result
         return SessionRunResult(assistant, summary, latest_tool_name)
 
+    async def load_run_result_async(
+        self,
+        *,
+        run_id: str | None = None,
+        work_id: str | None = None,
+        require_latest: bool = False,
+    ) -> SessionRunResult | None:
+        return await _run_session_io(
+            lambda: self.load_run_result(
+                run_id=run_id, work_id=work_id, require_latest=require_latest
+            )
+        )
+
     def load_since(self, cursor: SessionReadCursor | None = None) -> SessionReadBatch | None:
         return self._store.messages_since(self.address, cursor)
 

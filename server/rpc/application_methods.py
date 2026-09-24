@@ -50,7 +50,7 @@ def _operation_id(params: JsonObject) -> str:
     return operation_id
 
 
-def _verified_ticket(state: Any, ticket_id: str):
+async def _verified_ticket(state: Any, ticket_id: str):
     try:
         ticket = read_update_handoff_ticket(state.runtime.storage.data_dir, ticket_id)
     except ValueError as exc:
@@ -63,19 +63,13 @@ def _verified_ticket(state: Any, ticket_id: str):
         session_id=ticket.session_id,
     )
     try:
-        messages = state.runtime.chat_sessions.get(address).load()
+        # One indexed probe off the loop: the call and its result, never the transcript.
+        persisted = await state.runtime.chat_sessions.tool_result_persisted_async(
+            address, ticket.tool_call_id
+        )
     except Exception as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "update handoff Session is unavailable") from exc
-    requested = any(
-        message.role == "assistant"
-        and any(call.id == ticket.tool_call_id for call in (message.tool_calls or []))
-        for message in messages
-    )
-    persisted = any(
-        message.role == "tool" and message.tool_call_id == ticket.tool_call_id
-        for message in messages
-    )
-    if not requested or not persisted:
+    if not persisted:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
             "update handoff does not match a durable Tool call in its Session",
@@ -114,7 +108,7 @@ async def _maintenance_begin(state: Any, params: JsonObject) -> JsonObject:
                 RPC_ERROR_INVALID_REQUEST,
                 "params.handoff_ticket_id must be a non-empty string",
             )
-        ticket, address = _verified_ticket(state, ticket_id)
+        ticket, address = await _verified_ticket(state, ticket_id)
         origin = (address, ticket.run_id)
     try:
         result = cast(
@@ -184,7 +178,7 @@ async def _update_continuation(state: Any, params: JsonObject) -> JsonObject:
         "application.update_continuation",
     )
     ticket_id = _required_string(params, "handoff_ticket_id")
-    ticket, _address = _verified_ticket(state, ticket_id)
+    ticket, _address = await _verified_ticket(state, ticket_id)
     receipt_path = _continuation_receipt_path(state, operation_id)
     receipt = _read_receipt(receipt_path, ticket_id)
     if receipt is not None:
