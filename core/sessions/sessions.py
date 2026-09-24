@@ -245,6 +245,9 @@ class ChatSessionManager:
         """Read one metadata value (``None`` when absent) without decoding the rest."""
         return self._store.metadata_value(address, key)
 
+    async def metadata_value_async(self, address: SessionAddress, key: str) -> Any:
+        return await _run_session_io(self.metadata_value, address, key)
+
     def prompt_cache_affinity_id(self, address: SessionAddress) -> str:
         value = self._store.metadata_value(address, PROMPT_CACHE_AFFINITY_META_KEY)
         if value is None:

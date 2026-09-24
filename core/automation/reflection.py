@@ -377,8 +377,9 @@ class ReflectionService:
         source_address = SessionAddress(
             project_id=project_id, agent_id=agent_id, session_id=session_id
         )
-        source_metadata = await sessions.get_metadata_async(source_address)
-        source_title = str(source_metadata.get("title") or "").strip()
+        source_title = str(
+            await sessions.metadata_value_async(source_address, "title") or ""
+        ).strip()
         run_kind = REFLECTION_RUN_KINDS[review_scope]
         # The fork is titled with the agent's display name so review forks stay
         # distinguishable in a session list that spans agents; the run-kind
