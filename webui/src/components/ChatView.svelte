@@ -305,8 +305,12 @@
     })),
   );
 
+  // While New session is pending, the displayed Session is about to be
+  // replaced; a message sent now would land in the Session being left.
   let composerDisabled = $derived(
-    !target.activeAgent || chatState.loadingHistory,
+    !target.activeAgent ||
+      chatState.loadingHistory ||
+      navigation.creatingSession,
   );
   // Provider availability is the first prerequisite for every current Agent.
   // Do not infer it from Models: App supplies Settings' authoritative usable-
@@ -408,9 +412,10 @@
         // Routing this through handleSelectAgent would clear a just-restored
         // override and report a session navigation during a history restore —
         // the report then pushes a phantom entry over the restored one (the
-        // mount-path echo hole). The mount's loadAgents already loads the
-        // current history when the current session is displayed.
+        // mount-path echo hole). The controller still loads the adopted
+        // Agent's current History when Chat was mounted hidden.
         selectAgent(chatState, sharedSelectedAgentId);
+        void chatController.loadAdoptedSelectionHistory();
         return;
       }
       navigation.handleSelectAgent(sharedSelectedAgentId, {

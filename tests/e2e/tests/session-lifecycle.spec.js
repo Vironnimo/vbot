@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-import { sendChatMessage, startIsolatedChat } from "./chat-run-support.js";
+import {
+  parkPointer,
+  sendChatMessage,
+  startIsolatedChat,
+} from "./chat-run-support.js";
 
 const EARLIER_SESSION_TITLE = "E2E Earlier Session Navigation";
 const EARLIER_SESSION_SEED_MESSAGE =
@@ -41,6 +45,7 @@ test("Sessions can be selected and continued without a past-session warning", as
     chat.getByText("No messages yet", { exact: true }).first(),
   ).toBeVisible();
 
+  await parkPointer(page);
   await earlierSession.locator("button.session-row__select").click();
   await expect(sessionDrawer).toBeVisible();
   await expect(

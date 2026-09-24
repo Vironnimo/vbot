@@ -370,7 +370,8 @@ export default Object.freeze({
   'projects.loading': 'Loading projects…',
   'projects.loadError': 'Projects could not be loaded.',
   'projects.emptyTitle': 'No projects yet',
-  'projects.emptySubtitle': 'Choose Add to connect your first repository.',
+  'projects.emptySubtitle':
+    'Choose Add project (+) to connect your first repository.',
   'projects.add.title': 'Add project',
   'projects.add.subtitle':
     'Enter the path to a repository on this machine. The folder must already exist; vBot reads it but never writes to it.',
