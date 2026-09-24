@@ -1,876 +1,632 @@
 import * as defaultApi from './api.js';
+import { isPlainObject } from './values.js';
 
-const APP_FIELDS = {
-  context: [],
-  sessions: ['agent_id'],
-  read: ['agent_id', 'session_id'],
-  open: ['view', 'agent_id', 'session_id'],
-  send: ['agent_id', 'session_id', 'text'],
-};
-const TERMINAL_FIELDS = {
-  list: [],
-  start: ['program', 'count', 'workdir', 'name', 'group_id'],
-  read: ['terminal_id'],
-  input: ['terminal_id', 'text', 'submit', 'key'],
-  show: ['terminal_id'],
-  maximize: ['terminal_id'],
-  restore: [],
-  reorder: ['group_id', 'order'],
-  create_group: ['name'],
-  show_group: ['group_id'],
-  rename_group: ['group_id', 'name'],
-  delete_group: ['group_id'],
-  close: ['terminal_id'],
-};
-const KEYS = {
-  enter: '\r',
-  escape: '\u001b',
-  tab: '\t',
-  up: '\u001b[A',
-  down: '\u001b[B',
-  left: '\u001b[D',
-  right: '\u001b[C',
-  'ctrl-c': '\u0003',
-};
-const fail = (code) => {
-  throw Object.assign(new Error(code), { code });
-};
-const required = (value) =>
-  typeof value === 'string' && value.trim()
-    ? value
-    : fail('missing_target_or_text');
-const codingTerminal = (item) =>
-  /^(codex|claude)(\.(exe|cmd|bat))?$/i.test(
-    String(item.launch_command || item.command || '')
-      .split(/[\\/]/)
-      .pop(),
-  );
-const terminalSummary = (item) =>
-  Object.fromEntries(
-    [
-      'terminal_id',
-      'group_id',
-      'name',
-      'state',
-      'command',
-      'launch_command',
-      'workdir',
-      'screen_revision',
-      'exit_code',
-    ]
-      .filter((key) => item[key] !== undefined)
-      .map((key) => [
-        key,
-        typeof item[key] === 'string' ? item[key].slice(0, 1000) : item[key],
-      ]),
-  );
+// Live voice accessor controller. The server owns the provider call, delegated
+// reasoning and every data operation; this page owns only the microphone and
+// speaker media (WebRTC directly to the provider), UI requests the server sends
+// over the call's owner socket, and the displayed call state.
 
-function recentMessages(messages) {
-  let remaining = 8000;
-  const result = [];
-  for (const message of messages.toReversed()) {
-    if (
-      !['user', 'assistant', 'error'].includes(message.role) ||
-      typeof message.content !== 'string'
-    )
-      continue;
-    const content = message.content.slice(-remaining);
-    result.unshift({
-      id: message.id,
-      role: message.role,
-      content,
-      truncated: content.length < message.content.length,
-    });
-    remaining -= content.length;
-    if (!remaining) break;
+const STARTUP_TIMEOUT_MS = 45000;
+// Non-trickle ICE: wait for complete gathering, then offer whatever candidates
+// exist. The provider answers with its own reachable candidates, so a slow
+// local interface must not block the call.
+const ICE_GATHERING_TIMEOUT_MS = 5000;
+// Stop keeps the socket and peer only to receive the final `closed` frame.
+const CLOSE_TIMEOUT_MS = 5000;
+const PEER_DISCONNECT_GRACE_MS = 5000;
+// The server keeps a call through a short owner-socket loss; reattach within it.
+const SOCKET_REATTACH_WINDOW_MS = 8000;
+const SOCKET_REATTACH_DELAY_MS = 500;
+const CAPTION_LIMIT = 20;
+const CAPTION_TEXT_LIMIT = 2000;
+const OPEN_VIEWS = new Set(['chat', 'terminals']);
+const TERMINAL_VIEW_OPS = new Set([
+  'context',
+  'refresh',
+  'show',
+  'maximize',
+  'restore',
+  'show_group',
+]);
+const ERROR_CODE_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+const MICROPHONE_CONSTRAINTS = Object.freeze({
+  audio: {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  },
+});
+
+class LiveVoiceFailure extends Error {
+  constructor(code) {
+    super(code);
+    this.name = 'LiveVoiceFailure';
+    this.code = code;
   }
-  return result;
 }
 
-export function createLiveActions({
-  api = defaultApi,
-  getContext,
-  navigate,
-  terminalView,
-  isActive = () => true,
-}) {
-  const sessions = new Set();
-  const sessionKey = (a, s) => JSON.stringify([a, s]);
-  const ensureActive = (guard) => {
-    if (!isActive() || (guard && !guard())) fail('voice_stopped');
-  };
-  function validate(name, args) {
-    if (!args || typeof args !== 'object' || Array.isArray(args))
-      fail('invalid_arguments');
-    const fields = (
-      name === 'vbot_app'
-        ? APP_FIELDS
-        : name === 'vbot_terminal'
-          ? TERMINAL_FIELDS
-          : {}
-    )[args.action];
-    if (
-      !fields ||
-      Object.keys(args).some((key) => key !== 'action' && !fields.includes(key))
-    )
-      fail('invalid_arguments');
+const failure = (code) => new LiveVoiceFailure(code);
+const isText = (value) => typeof value === 'string' && value.length > 0;
+
+// UI owners report failures as `{code}` errors or plain `Error('<code>')`.
+function uiErrorCode(error) {
+  for (const candidate of [error?.code, error?.message]) {
+    if (typeof candidate === 'string' && ERROR_CODE_PATTERN.test(candidate))
+      return candidate;
   }
-  async function chatTarget(args, guard) {
-    const agent = required(args.agent_id);
-    const session = required(args.session_id);
-    if (!sessions.has(sessionKey(agent, session))) {
-      // Validate exact addressing with the authoritative history endpoint.
-      await api.loadChatHistory({
-        agent_id: agent,
-        session_id: session,
-        limit: 1,
-      });
-      sessions.add(sessionKey(agent, session));
-    }
-    ensureActive(guard);
-    return { agent_id: agent, session_id: session };
+  return 'operation_failed';
+}
+
+function stopTracks(stream) {
+  for (const track of stream?.getTracks?.() ?? []) {
+    track.enabled = false;
+    track.stop();
   }
-  async function appAction(args, guard) {
-    if (args.action === 'context') return getContext();
-    if (args.action === 'sessions') {
-      const agent = required(args.agent_id);
-      const result = await api.listSessions(agent, { limit: 30 });
-      return result;
-    }
-    if (args.action === 'open') {
-      if (!['chat', 'terminals'].includes(args.view)) fail('invalid_view');
-      let target = {};
-      if (args.agent_id || args.session_id) {
-        if (args.view !== 'chat') fail('invalid_arguments');
-        target = await chatTarget(args, guard);
-      }
-      ensureActive(guard);
-      if ((await navigate(args.view, target)) === false)
-        fail('navigation_not_applied');
-      return { view: args.view, ...target };
-    }
-    const target = await chatTarget(args, guard);
-    if (args.action === 'read') {
-      const history = await api.loadChatHistory({ ...target, limit: 20 });
-      return {
-        ...target,
-        messages: recentMessages(history.messages || []),
-      };
-    }
-    const text = required(args.text);
-    if (text.length > 16000) fail('text_too_long');
-    ensureActive(guard);
-    return api.startChatRun({
-      ...target,
-      content: text,
-      input_origin: 'speech_transcription',
-    });
-  }
-  async function refreshAfterMutation(
-    result,
-    guard,
-    action = 'refresh',
-    args = {},
-  ) {
-    try {
-      ensureActive(guard);
-      await terminalView(action, args);
-      return result;
-    } catch {
-      return { ...result, layout_error: 'refresh_failed' };
-    }
-  }
-  async function terminalAction(args, guard) {
-    if (args.action === 'create_group') {
-      const name = required(args.name);
-      if (name.length > 80) fail('invalid_name');
-      const result = await api.createTerminalGroup(name);
-      return refreshAfterMutation(result, guard, 'show_group', {
-        group_id: result.group.group_id,
-      });
-    }
-    const catalog = await api.listTerminals();
-    ensureActive(guard);
-    if (args.action === 'list')
-      return {
-        terminals: (catalog.terminals || []).map(terminalSummary),
-        groups: catalog.groups || [],
-        layout: await terminalView('context'),
-      };
-    if (args.action === 'restore') return terminalView('restore');
-    if (['show_group', 'rename_group', 'delete_group'].includes(args.action)) {
-      const groupId = required(args.group_id);
-      const group = (catalog.groups || []).find(
-        (item) => item.group_id === groupId,
-      );
-      if (!group) fail('group_not_found');
-      if (args.action === 'show_group')
-        return terminalView('show_group', { group_id: groupId });
-      if (!['user', 'agent'].includes(group.kind)) fail('group_not_editable');
-      let result;
-      if (args.action === 'rename_group') {
-        const name = required(args.name);
-        if (name.length > 80) fail('invalid_name');
-        result = await api.renameTerminalGroup(groupId, name);
-      } else {
-        result = await api.deleteTerminalGroup(groupId);
-      }
-      return refreshAfterMutation(result, guard);
-    }
-    if (args.action === 'reorder') {
-      const group = (catalog.groups || []).find(
-        (g) => g.group_id === args.group_id,
-      );
-      const members = (catalog.terminals || [])
-        .filter((t) => t.group_id === args.group_id)
-        .map((t) => t.terminal_id);
-      if (
-        !group ||
-        !['user', 'agent'].includes(group.kind) ||
-        !Array.isArray(args.order) ||
-        args.order.length !== members.length ||
-        new Set(args.order).size !== members.length ||
-        args.order.some((id) => !members.includes(id))
-      )
-        fail('invalid_order');
-      const result = await api.setTerminalGroupOrder(
-        group.group_id,
-        args.order,
-      );
-      try {
-        ensureActive(guard);
-        await terminalView('refresh');
-        return result;
-      } catch {
-        return { ...result, layout_error: 'refresh_failed' };
-      }
-    }
-    if (args.action === 'start') {
-      if (!['codex', 'claude'].includes(args.program))
-        fail('unsupported_program');
-      const count = args.count ?? 1;
-      if (!Number.isSafeInteger(count) || count < 1) fail('invalid_count');
-      const workdir = required(args.workdir);
-      if (
-        args.name !== undefined &&
-        (typeof args.name !== 'string' || args.name.length > 80)
-      )
-        fail('invalid_name');
-      let groupId = args.group_id;
-      if (
-        groupId &&
-        !(catalog.groups || []).some(
-          (g) => g.group_id === groupId && ['user', 'agent'].includes(g.kind),
-        )
-      )
-        fail('group_not_found');
-      const completed = [];
-      try {
-        if (!groupId) {
-          const name = args.program === 'codex' ? 'Codex' : 'Claude Code';
-          groupId = (catalog.groups || []).find(
-            (g) =>
-              g.name?.toLowerCase() === name.toLowerCase() &&
-              ['user', 'agent'].includes(g.kind),
-          )?.group_id;
-          if (!groupId)
-            groupId = (await api.createTerminalGroup(name)).group.group_id;
-        }
-        for (let i = 0; i < count; i += 1) {
-          ensureActive(guard);
-          const result = await api.startTerminal({
-            command: args.program,
-            workdir,
-            group_id: groupId,
-            ...(args.name ? { name: args.name } : {}),
-          });
-          completed.push(terminalSummary(result.terminal));
-        }
-      } catch (error) {
-        return {
-          ok: false,
-          requested_count: count,
-          completed,
-          group_id: groupId,
-          error: {
-            code: error.code || 'operation_failed',
-            message: error.message,
-            delivery_uncertain: true,
-          },
-        };
-      }
-      try {
-        ensureActive(guard);
-        const layout = await terminalView('show', {
-          terminal_id: completed[0].terminal_id,
-        });
-        return { completed, layout };
-      } catch {
-        return { completed, layout_error: 'navigation_not_applied' };
-      }
-    }
-    const terminal = (catalog.terminals || []).find(
-      (t) => t.terminal_id === args.terminal_id,
-    );
-    if (!terminal) fail('terminal_not_found');
-    if (['show', 'maximize'].includes(args.action))
-      return terminalView(args.action, args);
-    if (args.action === 'close') {
-      const result = {
-        terminal_id: terminal.terminal_id,
-        stopped: ['exited', 'error'].includes(terminal.state),
-        removed: false,
-      };
-      try {
-        if (!result.stopped) {
-          await api.killTerminal(terminal.terminal_id);
-          result.stopped = true;
-        }
-        ensureActive(guard);
-        await api.forgetTerminal(terminal.terminal_id);
-        result.removed = true;
-      } catch (error) {
-        return {
-          ...result,
-          stopped: result.stopped || null,
-          removed:
-            result.stopped && error.code !== 'voice_stopped' ? null : false,
-          ok: false,
-          error: {
-            code: error.code || 'operation_failed',
-            message: error.message,
-            delivery_uncertain: true,
-          },
-        };
-      }
-      return refreshAfterMutation(result, guard);
-    }
-    if (!codingTerminal(terminal)) fail('not_a_coding_terminal');
-    if (args.action === 'read') {
-      const snapshot = await api.readTerminal(terminal.terminal_id);
-      return {
-        terminal: terminalSummary(snapshot.terminal),
-        screen: snapshot.screen.slice(-8000),
-        truncated: snapshot.screen.length > 8000,
-      };
-    }
-    if (
-      args.key !== undefined &&
-      (args.text !== undefined ||
-        args.submit !== undefined ||
-        !Object.hasOwn(KEYS, args.key))
-    )
-      fail('invalid_input');
-    if (args.submit !== undefined && typeof args.submit !== 'boolean')
-      fail('invalid_input');
-    const snapshot = await api.readTerminal(terminal.terminal_id);
-    ensureActive(guard);
-    let data;
-    if (args.key !== undefined) data = KEYS[args.key];
-    else {
-      const text = required(args.text);
-      if (
-        text.length > 16000 ||
-        [...text].some(
-          (char) =>
-            char.charCodeAt(0) < 32 && !['\t', '\r', '\n'].includes(char),
-        )
-      )
-        fail('invalid_input');
-      data =
-        snapshot.bracketed_paste && /[\r\n]/.test(text)
-          ? `\u001b[200~${text}\u001b[201~`
-          : text;
-      if (args.submit !== false) data += '\r';
-    }
-    const result = await api.sendTerminalInput(terminal.terminal_id, data, {
-      expectedScreenRevision: snapshot.terminal.screen_revision,
-    });
-    return { terminal: terminalSummary(result.terminal) };
-  }
-  return async (name, args, guard) => {
-    ensureActive(guard);
-    validate(name, args);
-    return name === 'vbot_app'
-      ? appAction(args, guard)
-      : terminalAction(args, guard);
-  };
+}
+
+function boundCaption(text) {
+  return text.length > CAPTION_TEXT_LIMIT
+    ? text.slice(-CAPTION_TEXT_LIMIT)
+    : text;
+}
+
+function waitForIceGathering(peer) {
+  if (peer.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      peer.removeEventListener('icegatheringstatechange', check);
+      resolve();
+    };
+    const check = () => {
+      if (peer.iceGatheringState === 'complete') done();
+    };
+    const timer = setTimeout(done, ICE_GATHERING_TIMEOUT_MS);
+    peer.addEventListener('icegatheringstatechange', check);
+  });
 }
 
 export function createLiveVoiceState() {
   return {
+    // off | connecting | live | closing
     phase: 'off',
-    error: '',
-    transcript: [],
-    actions: [],
-    updates: [],
+    callId: null,
     muted: false,
-    playbackBlocked: false,
+    busy: false,
+    activityLabel: null,
+    // Bounded transient captions: {role: 'user'|'assistant', text, final}.
+    captions: [],
+    // Last error code that ended a call; kept until the next start.
+    error: '',
+    closeReason: null,
     usage: null,
-    finalized: false,
   };
 }
 
-// A single mounted accessor owns execution. Duplicate upstream events never replay
-// a function, and a replaced connection cannot deliver a late result to its successor.
+// `uiActions` execute server UI requests: `context(guard)`,
+// `open({view, agent_id?, session_id?}, guard)` (false when not applied) and
+// `terminalView({op, terminal_id?, group_id?}, guard)`. `guard.isCurrent()`
+// turns false once the requesting call stops. `onNotice({code, severity})`
+// reports errors ('error'/'warn') and call endings the user did not request
+// ('info').
 export function createLiveVoice({
   state,
-  execute,
   api = defaultApi,
   mediaDevices = globalThis.navigator?.mediaDevices,
   createPeer = () => new RTCPeerConnection(),
-  audio,
+  audio = null,
+  uiActions = {},
   onActive = () => {},
-  now = Date.now,
+  onNotice = () => {},
+  now = () => Date.now(),
 }) {
-  let generation = 0;
-  let peer = null;
-  let channel = null;
-  let microphone = null;
-  let startupTimer;
-  let closeTimer;
-  let responses = new Map();
-  let seenResponses = new Set();
-  let calls = new Set();
-  let announced = new Set();
-  let notices = [];
-  let noticePending = false;
-  let pending = Promise.resolve();
-  let busy = 0;
-  let startedAt = 0;
-  const active = () => state.phase === 'listening';
-  const send = (event) => {
-    if (channel?.readyState !== 'open') fail('connection_lost');
-    channel.send(JSON.stringify(event));
-  };
-  function cleanup() {
-    generation += 1;
-    clearTimeout(startupTimer);
-    clearTimeout(closeTimer);
-    const oldChannel = channel;
-    const oldPeer = peer;
-    channel = null;
-    peer = null;
-    for (const track of microphone?.getTracks() || []) track.stop();
-    microphone = null;
-    oldChannel?.close();
-    oldPeer?.close();
-    if (audio?.srcObject) {
-      audio.pause();
+  // The current call attempt. Its identity is the generation token: every
+  // asynchronous step re-checks it, so Stop or a newer call silences late work.
+  let current = null;
+
+  const isCurrent = (call) => call !== null && call === current;
+  const notify = (code, severity) => onNotice({ code, severity });
+
+  function schedule(call, callback, delay) {
+    const timer = setTimeout(() => {
+      call.timers.delete(timer);
+      if (isCurrent(call)) callback();
+    }, delay);
+    call.timers.add(timer);
+    return timer;
+  }
+
+  function cancel(call, timer) {
+    if (!timer) return;
+    clearTimeout(timer);
+    call.timers.delete(timer);
+  }
+
+  function armStartupTimer(call) {
+    cancel(call, call.startupTimer);
+    call.startupTimer = schedule(
+      call,
+      () => fail(call, 'connection_timeout'),
+      STARTUP_TIMEOUT_MS,
+    );
+  }
+
+  function releaseMedia(call) {
+    stopTracks(call.microphone);
+    call.microphone = null;
+    if (call.playing && audio) {
+      audio.pause?.();
       audio.srcObject = null;
     }
-    onActive(false);
+    call.playing = false;
   }
-  function failed(code) {
-    cleanup();
-    state.phase = 'error';
-    state.error = code;
-  }
-  function caption(role, delta) {
-    if (typeof delta !== 'string' || !delta) return;
-    const last = state.transcript.at(-1);
-    if (last?.role === role)
-      state.transcript = [
-        ...state.transcript.slice(0, -1),
-        { role, text: (last.text + delta).slice(-4000) },
-      ];
-    else
-      state.transcript = [
-        ...state.transcript,
-        { role, text: delta.slice(-4000) },
-      ].slice(-40);
-  }
-  function flushNotices() {
-    if (!active() || busy || noticePending || !notices.length) return;
-    noticePending = true;
-    const notice = notices.shift();
-    const message = notice.excerpt?.slice(-6000) || '';
-    const parts = Math.ceil(message.length / 180);
-    for (let index = 0; index < parts; index += 1) {
-      send({
-        type: 'session.thinking.append',
-        delegation_id: null,
-        content: JSON.stringify({
-          kind: 'agent_message',
-          agent_id: notice.agent_id,
-          session_id: notice.session_id,
-          part: index + 1,
-          parts,
-          text: message.slice(index * 180, (index + 1) * 180),
-        }),
-      });
-    }
-    // <= 500 tokens even for dense Unicode excerpts; full content stays in Chat.
-    const content = JSON.stringify({
-      kind: notice.kind,
-      agent_id: notice.agent_id,
-      session_id: notice.session_id,
-      excerpt: notice.excerpt?.slice(-180),
-      truncated: Boolean(notice.excerpt?.length > 180),
+
+  function finish(call) {
+    if (!isCurrent(call)) return;
+    current = null;
+    for (const timer of call.timers) clearTimeout(timer);
+    call.timers.clear();
+    releaseMedia(call);
+    const { channel, peer, socket } = call;
+    call.channel = null;
+    call.peer = null;
+    call.socket = null;
+    channel?.close();
+    peer?.close();
+    socket?.close();
+    Object.assign(state, {
+      phase: 'off',
+      callId: null,
+      muted: false,
+      busy: false,
+      activityLabel: null,
     });
-    send({ type: 'session.commentary.append', delegation_id: null, content });
+    if (call.announcedActive) onActive(false);
   }
-  function responseEvent(event, token) {
-    const nested = event.event;
-    if (!nested || !event.delegation_id) return;
-    if (nested.type === 'response.created') {
-      const id = nested.response?.id;
-      if (id && !seenResponses.has(id)) {
-        if (seenResponses.size >= 1000) {
-          failed('conversation_limit');
-          return;
-        }
-        seenResponses.add(id);
-        responses.set(event.delegation_id, { id, calls: [], done: false });
-        busy += 1;
-      }
-    } else if (
-      nested.type === 'response.output_item.done' &&
-      nested.item?.type === 'function_call'
-    ) {
-      const response = responses.get(event.delegation_id);
-      const item = nested.item;
-      if (response && item.call_id && !calls.has(item.call_id)) {
-        if (calls.size >= 1000) {
-          failed('conversation_limit');
-          return;
-        }
-        calls.add(item.call_id);
-        response.calls.push(item);
-      }
-    } else if (
-      [
-        'response.completed',
-        'response.failed',
-        'response.incomplete',
-        'response.cancelled',
-      ].includes(nested.type)
-    ) {
-      const response = responses.get(event.delegation_id);
-      if (
-        !response ||
-        response.done ||
-        (nested.response?.id && response.id !== nested.response.id)
-      )
+
+  // Ends the server call once. The server answers `stopping: false` for a call
+  // it no longer holds; then no `closed` frame will follow.
+  function requestStop(call) {
+    if (call.stopRequested || !call.callId) return;
+    call.stopRequested = true;
+    const callId = call.callId;
+    Promise.resolve()
+      .then(() => api.stopLiveCall(callId))
+      .then(
+        (result) => {
+          if (isCurrent(call) && result?.stopping !== true) finish(call);
+        },
+        () => {
+          if (isCurrent(call)) finish(call);
+        },
+      );
+  }
+
+  function fail(call, code) {
+    if (!isCurrent(call)) return;
+    state.error = code;
+    notify(code, 'error');
+    requestStop(call);
+    finish(call);
+  }
+
+  // Microphone and speaker stop at once; socket and peer wait for `closed`,
+  // which a lost socket or the close timeout stands in for.
+  function beginClosing(call) {
+    if (call.closing) return;
+    call.closing = true;
+    state.phase = 'closing';
+    state.busy = false;
+    releaseMedia(call);
+    cancel(call, call.startupTimer);
+    cancel(call, call.disconnectTimer);
+    schedule(call, () => applyClosed(call, {}), CLOSE_TIMEOUT_MS);
+  }
+
+  function playbackFailed(call, error) {
+    if (!isCurrent(call) || call.closing || error?.name === 'AbortError')
+      return;
+    fail(call, 'playback_blocked');
+  }
+
+  function wirePeer(call, peer) {
+    peer.addEventListener('track', (event) => {
+      if (!isCurrent(call) || call.closing || !audio) return;
+      audio.srcObject = event.streams?.[0] ?? new MediaStream([event.track]);
+      call.playing = true;
+      let playback;
+      try {
+        playback = audio.play();
+      } catch (error) {
+        playbackFailed(call, error);
         return;
-      response.done = true;
-      pending = pending
-        .then(async () => {
-          try {
-            if (token !== generation || !active()) return;
-            if (nested.type !== 'response.completed') {
-              state.error = 'backend_failed';
-              return;
-            }
-            for (const item of response.calls) {
-              if (token !== generation || !active()) return;
-              let output;
-              try {
-                output = await execute(
-                  item.name,
-                  JSON.parse(item.arguments),
-                  () => token === generation && active(),
-                );
-              } catch (error) {
-                output = {
-                  ok: false,
-                  error: {
-                    code: error.code || 'operation_failed',
-                    delivery_uncertain: true,
-                  },
-                };
-              }
-              if (token !== generation || !active()) return;
-              state.actions = [
-                ...state.actions,
-                { name: item.name, ok: output?.ok !== false, at: now() },
-              ].slice(-20);
-              if (token !== generation || !active()) return;
-              send({
-                type: 'response.item.create',
-                item: {
-                  type: 'function_call_output',
-                  call_id: item.call_id,
-                  output: JSON.stringify(output),
-                },
-              });
-            }
-            if (response.calls.length && token === generation && active())
-              send({ type: 'response.create' });
-          } finally {
-            if (token === generation) {
-              busy = Math.max(0, busy - 1);
-              flushNotices();
-            }
-          }
-        })
-        .catch(() => {
-          if (token === generation) failed('connection_lost');
-        });
-    }
+      }
+      playback?.catch?.((error) => playbackFailed(call, error));
+    });
+    peer.addEventListener('connectionstatechange', () => {
+      if (!isCurrent(call) || call.closing) return;
+      const connectionState = peer.connectionState;
+      if (connectionState === 'connected') {
+        cancel(call, call.disconnectTimer);
+        call.disconnectTimer = null;
+      } else if (connectionState === 'failed' || connectionState === 'closed') {
+        fail(call, call.reachedLive ? 'connection_lost' : 'connection_failed');
+      } else if (connectionState === 'disconnected' && !call.disconnectTimer) {
+        call.disconnectTimer = schedule(
+          call,
+          () => fail(call, 'connection_lost'),
+          PEER_DISCONNECT_GRACE_MS,
+        );
+      }
+    });
   }
-  function handleEvent(event, token = generation) {
-    if (token !== generation) return;
-    switch (event?.type) {
-      case 'session.started':
-        if (state.phase !== 'connecting') return;
-        clearTimeout(startupTimer);
-        state.phase = 'listening';
-        onActive(true);
-        flushNotices();
-        break;
-      case 'session.closed':
-        state.usage = event.usage ?? null;
-        state.finalized = true;
-        cleanup();
-        state.phase = 'off';
-        break;
-      case 'session.input_transcript.delta':
-        caption('user', event.delta);
-        break;
-      case 'session.output_transcript.delta':
-        caption('assistant', event.delta);
-        break;
-      case 'response.event':
-        responseEvent(event, token);
-        break;
-      case 'session.commentary.appended':
-        noticePending = false;
-        flushNotices();
-        break;
-      case 'error':
-        failed('provider_event_error');
-        break;
-      default:
-        break;
-    }
-  }
-  async function start() {
-    if (['connecting', 'listening', 'closing'].includes(state.phase)) return;
-    cleanup();
-    const token = generation;
-    Object.assign(state, createLiveVoiceState(), { phase: 'connecting' });
-    responses = new Map();
-    seenResponses = new Set();
-    calls = new Set();
-    announced = new Set();
-    notices = [];
-    noticePending = false;
-    busy = 0;
-    pending = Promise.resolve();
-    startedAt = now();
-    startupTimer = setTimeout(() => {
-      if (token === generation) failed('connection_timeout');
-    }, 45000);
+
+  function attachSocket(call) {
+    let connection = null;
+    const owns = () => isCurrent(call) && call.socket === connection;
     try {
-      const status = await api.getLiveVoiceStatus();
-      if (token !== generation) return;
-      if (!status.configured) fail('api_key_required');
-      if (!mediaDevices?.getUserMedia) fail('microphone_unavailable');
-      const stream = await mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
+      connection = api.openLiveCallSocket(call.callId, {
+        onEvent: (frame) => {
+          if (!owns()) return;
+          call.socketLostAt = null;
+          handleFrame(frame, call);
+        },
+        onClose: (_event, outcome) => {
+          if (owns()) socketLost(call, outcome);
         },
       });
-      if (token !== generation) {
-        stream.getTracks().forEach((track) => track.stop());
-        return;
+    } catch {
+      socketLost(call);
+      return;
+    }
+    call.socket = connection;
+  }
+
+  // Only a lagging or dropped socket may reattach. The server closes it for
+  // good once the call ended, when it no longer knows the call, and when a
+  // newer owner socket replaced this one.
+  function socketLost(call, outcome = 'lost') {
+    call.socket = null;
+    if (call.closing || outcome === 'ended') {
+      applyClosed(call, {});
+      return;
+    }
+    if (outcome === 'unknown_call' || outcome === 'replaced') {
+      fail(call, call.reachedLive ? 'connection_lost' : 'connection_failed');
+      return;
+    }
+    call.socketLostAt ??= now();
+    if (now() - call.socketLostAt >= SOCKET_REATTACH_WINDOW_MS) {
+      fail(call, call.reachedLive ? 'connection_lost' : 'connection_failed');
+      return;
+    }
+    schedule(call, () => attachSocket(call), SOCKET_REATTACH_DELAY_MS);
+  }
+
+  function applyPhase(call, phase) {
+    if (phase === 'live') {
+      if (call.closing || call.reachedLive) return;
+      call.reachedLive = true;
+      cancel(call, call.startupTimer);
+      state.phase = 'live';
+      call.announcedActive = true;
+      onActive(true);
+    } else if (phase === 'failed') {
+      call.failed = true;
+      beginClosing(call);
+    } else if (phase === 'closing' || phase === 'closed') {
+      beginClosing(call);
+    }
+  }
+
+  // Each caption frame carries the role's whole current turn so far, so it
+  // replaces the open turn's text; a final frame also closes that turn.
+  function applyCaption(frame) {
+    const { role, text } = frame;
+    if ((role !== 'user' && role !== 'assistant') || typeof text !== 'string')
+      return;
+    const final = frame.final === true;
+    const captions = state.captions;
+    const index = captions.findLastIndex(
+      (entry) => entry.role === role && !entry.final,
+    );
+    let next;
+    if (index >= 0) {
+      next = captions.toSpliced(index, 1, {
+        role,
+        text: boundCaption(text || captions[index].text),
+        final,
+      });
+    } else {
+      if (!text) return;
+      next = [...captions, { role, text: boundCaption(text), final }];
+    }
+    state.captions = next.slice(-CAPTION_LIMIT);
+  }
+
+  function applyError(call, frame) {
+    if (call.stopRequested) return;
+    const code = isText(frame.code) ? frame.code : 'provider_error';
+    if (frame.fatal !== true) {
+      notify(code, 'warn');
+      return;
+    }
+    if (call.errorReported) return;
+    call.errorReported = true;
+    state.error = code;
+    notify(code, 'error');
+    beginClosing(call);
+    requestStop(call);
+  }
+
+  function applyClosed(call, frame) {
+    state.usage = isPlainObject(frame.usage) ? frame.usage : null;
+    state.closeReason = isText(frame.reason) ? frame.reason : null;
+    if (!call.stopRequested && !call.errorReported) {
+      if (state.closeReason === 'replaced') notify('replaced', 'info');
+      else if (call.failed || !call.reachedLive) {
+        const code = call.failed ? 'call_failed' : 'connection_failed';
+        state.error = code;
+        notify(code, 'error');
+      } else notify('ended', 'info');
+    }
+    finish(call);
+  }
+
+  function uiAction(name) {
+    const action = uiActions[name];
+    if (typeof action !== 'function') throw failure('unsupported_action');
+    return action;
+  }
+
+  // Validates one UI request and returns the operation that executes it.
+  function uiOperation(actionName, rawArgs, guard) {
+    const args = rawArgs ?? {};
+    if (!isPlainObject(args)) throw failure('invalid_arguments');
+    if (actionName === 'context') {
+      const context = uiAction('context');
+      return () => context(guard);
+    }
+    if (actionName === 'open') {
+      const { view } = args;
+      const agentId = args.agent_id ?? undefined;
+      const sessionId = args.session_id ?? undefined;
+      if (!OPEN_VIEWS.has(view)) throw failure('invalid_view');
+      const hasTarget = agentId !== undefined || sessionId !== undefined;
+      if (
+        hasTarget &&
+        (view !== 'chat' || !isText(agentId) || !isText(sessionId))
+      )
+        throw failure('invalid_arguments');
+      const open = uiAction('open');
+      const target = hasTarget
+        ? { view, agent_id: agentId, session_id: sessionId }
+        : { view };
+      return async () => ({ applied: (await open(target, guard)) !== false });
+    }
+    if (actionName === 'terminal_view') {
+      const { op } = args;
+      if (!TERMINAL_VIEW_OPS.has(op)) throw failure('invalid_arguments');
+      const target = { op };
+      if (op === 'show' || op === 'maximize') {
+        if (!isText(args.terminal_id)) throw failure('invalid_arguments');
+        target.terminal_id = args.terminal_id;
+      } else if (op === 'show_group') {
+        if (!isText(args.group_id)) throw failure('invalid_arguments');
+        target.group_id = args.group_id;
       }
-      microphone = stream;
-      peer = createPeer();
-      const connection = peer;
-      connection.addEventListener('track', (event) => {
-        if (token !== generation || !audio) return;
-        audio.srcObject = new MediaStream([event.track]);
-        void audio.play().catch(() => {
-          if (token === generation) state.playbackBlocked = true;
-        });
-      });
-      connection.addEventListener('connectionstatechange', () => {
-        if (
-          token === generation &&
-          ['failed', 'disconnected', 'closed'].includes(
-            connection.connectionState,
-          )
-        )
-          failed('connection_lost');
-      });
-      for (const track of stream.getAudioTracks()) {
-        connection.addTrack(track, stream);
-        track.addEventListener('ended', () => {
-          if (token === generation) failed('microphone_unavailable');
-        });
-      }
-      channel = connection.createDataChannel('oai-events');
-      channel.addEventListener('message', ({ data }) => {
-        if (token !== generation) return;
-        try {
-          handleEvent(JSON.parse(data), token);
-        } catch {
-          failed('invalid_event');
-        }
-      });
-      channel.addEventListener('close', () => {
-        if (token === generation) failed('connection_lost');
-      });
-      channel.addEventListener('error', () => {
-        if (token === generation) failed('connection_lost');
-      });
-      const offer = await connection.createOffer();
-      if (token !== generation) return;
-      await connection.setLocalDescription(offer);
-      await waitForIce(connection);
-      if (token !== generation) return;
-      const result = await api.createLiveVoiceSession(
-        connection.localDescription.sdp,
-      );
-      if (token !== generation) return;
-      if (result.error) fail(result.error);
-      await connection.setRemoteDescription({
-        type: 'answer',
-        sdp: result.transport.sdp,
+      const terminalView = uiAction('terminalView');
+      return () => terminalView(target, guard);
+    }
+    throw failure('unsupported_action');
+  }
+
+  function handleUiRequest(call, frame) {
+    const requestId = frame.request_id;
+    if (!isText(requestId) || call.requests.has(requestId)) return;
+    call.requests.add(requestId);
+    const answer = (outcome) => {
+      // A stopped call has no server-side request left to answer.
+      if (!isCurrent(call)) return;
+      // Best effort: an unanswered request times out on the server, which
+      // tells the voice Model the action's outcome is unknown.
+      Promise.resolve()
+        .then(() => api.sendLiveUiResult(call.callId, requestId, outcome))
+        .catch(() => {});
+    };
+    if (call.closing) {
+      answer({ error: 'call_closing' });
+      return;
+    }
+    let operation;
+    try {
+      operation = uiOperation(frame.action, frame.args, {
+        isCurrent: () => isCurrent(call) && !call.closing,
       });
     } catch (error) {
-      if (token === generation)
-        failed(
-          error.code ||
-            (error.name === 'NotAllowedError'
-              ? 'microphone_denied'
-              : 'connection_failed'),
-        );
-    }
-  }
-  function stop() {
-    if (state.phase !== 'listening') {
-      cleanup();
-      state.phase = 'off';
+      answer({ error: uiErrorCode(error) });
       return;
     }
-    state.phase = 'closing';
-    // Stop collecting user speech immediately, retain transport for final usage.
-    for (const track of microphone?.getAudioTracks() || [])
-      track.enabled = false;
-    try {
-      send({ type: 'session.close' });
-    } catch {
-      failed('finalization_incomplete');
-      return;
-    }
-    closeTimer = setTimeout(() => failed('finalization_incomplete'), 15000);
-  }
-  function mute() {
-    state.muted = !state.muted;
-    for (const track of microphone?.getAudioTracks() || [])
-      track.enabled = !state.muted;
-  }
-  async function notifyRuns(events) {
-    if (!active()) return;
-    const token = generation;
-    for (const event of events) {
-      if (
-        !['run_completed', 'run_failed', 'run_interrupted'].includes(event.type)
-      )
-        continue;
-      const payload = event.payload || {};
-      if (
-        event.contributes_to_agent_activity === false ||
-        payload.contributes_to_agent_activity === false
-      )
-        continue;
-      const id = event.run_id || payload.run_id;
-      if (!id || announced.has(id)) continue;
-      const timestamp = Date.parse(
-        payload.run_event_timestamp ||
-          event.timestamp ||
-          payload.completed_at ||
-          '',
+    Promise.resolve()
+      .then(operation)
+      .then(
+        (result) => answer({ result: isPlainObject(result) ? result : {} }),
+        (error) => {
+          if (!isCurrent(call)) return;
+          answer({ error: uiErrorCode(error) });
+          if (!call.closing) notify('ui_action_failed', 'warn');
+        },
       );
-      if (Number.isFinite(timestamp) && timestamp < startedAt) {
-        announced.add(id);
-        continue;
-      }
-      const rawAgent = event.agent_id || payload.agent_id;
-      const project = event.project_id || payload.project_id;
-      const agent =
-        project && !rawAgent?.includes('@')
-          ? `${rawAgent}@${project}`
-          : rawAgent;
-      const session = event.session_id || payload.session_id;
-      if (!agent || !session) continue;
-      announced.add(id);
-      if (announced.size > 2000) {
-        failed('conversation_limit');
+  }
+
+  function handleFrame(frame, call = current) {
+    if (!isCurrent(call) || !isPlainObject(frame)) return;
+    switch (frame.type) {
+      case 'state':
+        applyPhase(call, frame.phase);
+        break;
+      case 'caption':
+        applyCaption(frame);
+        break;
+      case 'activity':
+        state.busy = frame.busy === true && !call.closing;
+        state.activityLabel = isText(frame.label) ? frame.label : null;
+        break;
+      case 'error':
+        applyError(call, frame);
+        break;
+      case 'closed':
+        applyClosed(call, frame);
+        break;
+      case 'ui_request':
+        handleUiRequest(call, frame);
+        break;
+      default:
+        // Frames added by newer servers are ignored.
+        break;
+    }
+  }
+
+  async function openMicrophone() {
+    if (typeof mediaDevices?.getUserMedia !== 'function')
+      throw failure('microphone_unavailable');
+    try {
+      return await mediaDevices.getUserMedia(MICROPHONE_CONSTRAINTS);
+    } catch (error) {
+      throw failure(
+        error?.name === 'NotAllowedError' || error?.name === 'SecurityError'
+          ? 'microphone_denied'
+          : 'microphone_unavailable',
+      );
+    }
+  }
+
+  function abandonLateCall(result) {
+    if (!isText(result?.call_id)) return;
+    Promise.resolve()
+      .then(() => api.stopLiveCall(result.call_id))
+      .catch(() => {});
+  }
+
+  async function start() {
+    if (current) return;
+    const call = {
+      callId: null,
+      microphone: null,
+      peer: null,
+      channel: null,
+      socket: null,
+      timers: new Set(),
+      requests: new Set(),
+      startupTimer: null,
+      disconnectTimer: null,
+      socketLostAt: null,
+      closing: false,
+      stopRequested: false,
+      errorReported: false,
+      failed: false,
+      reachedLive: false,
+      announcedActive: false,
+      playing: false,
+    };
+    current = call;
+    Object.assign(state, createLiveVoiceState(), { phase: 'connecting' });
+    armStartupTimer(call);
+    try {
+      const status = await api.getLiveVoiceStatus();
+      if (!isCurrent(call)) return;
+      if (status?.configured !== true) throw failure('not_configured');
+      if (status.usable !== true) throw failure('not_usable');
+
+      const microphone = await openMicrophone();
+      if (!isCurrent(call)) {
+        stopTracks(microphone);
         return;
       }
-      try {
-        const result = await api.loadChatRunResult({
-          agent_id: agent,
-          session_id: session,
-          run_id: id,
+      call.microphone = microphone;
+      // The permission prompt is user time; bound only the connection from here.
+      armStartupTimer(call);
+
+      const peer = createPeer();
+      call.peer = peer;
+      wirePeer(call, peer);
+      for (const track of microphone.getAudioTracks()) {
+        track.enabled = !state.muted;
+        track.addEventListener('ended', () => {
+          if (isCurrent(call) && !call.closing)
+            fail(call, 'microphone_unavailable');
         });
-        if (token !== generation || !active()) return;
-        const notice = {
-          kind: event.type,
-          run_id: id,
-          agent_id: agent,
-          session_id: session,
-          excerpt: result.content || '',
-          truncated: result.truncated,
-        };
-        state.updates = [...state.updates, notice].slice(-30);
-        notices.push(notice);
-        flushNotices();
-      } catch {
-        if (token === generation) state.error = 'notification_failed';
+        peer.addTrack(track, microphone);
       }
+      // The provider expects this channel in the offer. Its events duplicate
+      // what the server already receives, so the page ignores them.
+      call.channel = peer.createDataChannel('oai-events');
+      const offer = await peer.createOffer();
+      if (!isCurrent(call)) return;
+      await peer.setLocalDescription(offer);
+      if (!isCurrent(call)) return;
+      await waitForIceGathering(peer);
+      if (!isCurrent(call)) return;
+
+      const result = await api.startLiveCall(peer.localDescription.sdp);
+      if (!isCurrent(call)) {
+        abandonLateCall(result);
+        return;
+      }
+      if (result?.error)
+        throw failure(isText(result.error) ? result.error : 'provider_error');
+      if (!isText(result?.call_id)) throw failure('connection_failed');
+      call.callId = result.call_id;
+      state.callId = call.callId;
+      // Attach immediately: the server buffers call updates only briefly.
+      attachSocket(call);
+      if (result.media?.type !== 'webrtc' || !isText(result.media.sdp))
+        throw failure('connection_failed');
+      await peer.setRemoteDescription({
+        type: 'answer',
+        sdp: result.media.sdp,
+      });
+    } catch (error) {
+      fail(
+        call,
+        error instanceof LiveVoiceFailure ? error.code : 'connection_failed',
+      );
     }
   }
-  function seedRuns(events) {
-    for (const event of events) {
-      const id = event.run_id || event.payload?.run_id;
-      if (
-        id &&
-        [
-          'run_completed',
-          'run_failed',
-          'run_interrupted',
-          'run_cancelled',
-        ].includes(event.type)
-      )
-        announced.add(id);
+
+  function stop() {
+    const call = current;
+    if (!call) return;
+    // Still starting: a call created later is stopped when its start returns.
+    if (!call.callId) {
+      finish(call);
+      return;
     }
+    beginClosing(call);
+    requestStop(call);
   }
+
+  function mute(muted = !state.muted) {
+    const call = current;
+    if (!call || call.closing) return;
+    state.muted = muted === true;
+    for (const track of call.microphone?.getAudioTracks?.() ?? [])
+      track.enabled = !state.muted;
+  }
+
+  function destroy() {
+    const call = current;
+    if (!call) return;
+    requestStop(call);
+    finish(call);
+  }
+
   return {
     start,
     stop,
     mute,
-    active,
-    notifyRuns,
-    seedRuns,
-    handleEvent,
-    flush: () => pending,
-    destroy: cleanup,
+    active: () => state.phase === 'live',
+    destroy,
+    handleFrame: (frame) => handleFrame(frame),
   };
-}
-
-function waitForIce(peer) {
-  if (peer.iceGatheringState === 'complete') return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const finish = () => {
-      if (peer.iceGatheringState !== 'complete') return;
-      clearTimeout(timer);
-      peer.removeEventListener('icegatheringstatechange', finish);
-      resolve();
-    };
-    const timer = setTimeout(() => {
-      peer.removeEventListener('icegatheringstatechange', finish);
-      reject(
-        Object.assign(new Error('ice_timeout'), { code: 'connection_timeout' }),
-      );
-    }, 10000);
-    peer.addEventListener('icegatheringstatechange', finish);
-    finish();
-  });
 }

@@ -1,499 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  createLiveActions,
-  createLiveVoice,
-  createLiveVoiceState,
-} from '../liveVoice.js';
-
-const terminal = (id = 't1') => ({
-  terminal_id: id,
-  launch_command: 'codex',
-  group_id: 'g1',
-  screen_revision: 12,
-});
-function actionsFixture() {
-  const api = {
-    listTerminals: vi.fn().mockResolvedValue({
-      terminals: [terminal(), terminal('t2')],
-      groups: [{ group_id: 'g1', name: 'Codex', kind: 'user' }],
-    }),
-    startTerminal: vi.fn().mockImplementation(async () => ({
-      terminal: terminal(`new-${api.startTerminal.mock.calls.length}`),
-    })),
-    createTerminalGroup: vi
-      .fn()
-      .mockResolvedValue({ group: { group_id: 'new-group' } }),
-    readTerminal: vi.fn().mockResolvedValue({
-      terminal: terminal(),
-      screen: 'fixture',
-      bracketed_paste: true,
-    }),
-    sendTerminalInput: vi.fn().mockResolvedValue({ terminal: terminal() }),
-    killTerminal: vi
-      .fn()
-      .mockResolvedValue({ terminal: { ...terminal(), state: 'exited' } }),
-    forgetTerminal: vi.fn().mockResolvedValue({ terminal: terminal() }),
-    renameTerminalGroup: vi.fn().mockResolvedValue({
-      group: { group_id: 'g1', name: 'Review', kind: 'user' },
-    }),
-    deleteTerminalGroup: vi
-      .fn()
-      .mockResolvedValue({ group_id: 'g1', terminals_killed: 2 }),
-    setTerminalGroupOrder: vi.fn().mockResolvedValue({ order: ['t2', 't1'] }),
-    loadChatHistory: vi.fn().mockResolvedValue({ messages: [] }),
-    listSessions: vi
-      .fn()
-      .mockResolvedValue({ sessions: [{ session_id: 's1' }] }),
-    startChatRun: vi.fn().mockResolvedValue({ run_id: 'r1', status: 'queued' }),
-  };
-  const navigate = vi.fn().mockResolvedValue(true);
-  const terminalView = vi
-    .fn()
-    .mockResolvedValue({ visible_order: ['t1', 't2'] });
-  const execute = createLiveActions({
-    api,
-    navigate,
-    terminalView,
-    getContext: () => ({ selected_agent_id: 'joel' }),
-  });
-  return { api, navigate, terminalView, execute };
-}
-
-describe('voice app operations', () => {
-  it('keeps confirmed launches when displaying the new group fails', async () => {
-    const { execute, terminalView, api } = actionsFixture();
-    terminalView.mockRejectedValue(new Error('navigation failed'));
-    const result = await execute('vbot_terminal', {
-      action: 'start',
-      program: 'codex',
-      count: 4,
-      workdir: '/repo',
-    });
-    expect(result.completed).toHaveLength(4);
-    expect(result.layout_error).toBe('navigation_not_applied');
-    expect(api.startTerminal).toHaveBeenCalledTimes(4);
-  });
-  it('bounds quoted chat context and omits launch history from terminal discovery', async () => {
-    const { execute, api } = actionsFixture();
-    api.loadChatHistory.mockResolvedValue({
-      messages: Array.from({ length: 20 }, (_, id) => ({
-        id,
-        role: 'assistant',
-        content: 'x'.repeat(12000),
-      })),
-    });
-    const chat = await execute('vbot_app', {
-      action: 'read',
-      agent_id: 'joel',
-      session_id: 's',
-    });
-    expect(
-      chat.messages.reduce((n, m) => n + m.content.length, 0),
-    ).toBeLessThanOrEqual(8000);
-    api.listTerminals.mockResolvedValue({
-      terminals: [terminal()],
-      groups: [],
-      launch_history: [{ secret: 'unused' }],
-    });
-    const catalog = await execute('vbot_terminal', { action: 'list' });
-    expect(catalog).not.toHaveProperty('launch_history');
-    expect(catalog.terminals[0].terminal_id).toBe('t1');
-  });
-  it('starts four coding agents in the specified server directory and displays their group', async () => {
-    const { execute, api, terminalView } = actionsFixture();
-    const result = await execute('vbot_terminal', {
-      action: 'start',
-      program: 'codex',
-      count: 4,
-      workdir: '/projects/vbot',
-    });
-    expect(api.startTerminal).toHaveBeenCalledTimes(4);
-    expect(api.startTerminal).toHaveBeenCalledWith({
-      command: 'codex',
-      workdir: '/projects/vbot',
-      group_id: 'g1',
-    });
-    expect(result.completed).toHaveLength(4);
-    expect(terminalView).toHaveBeenCalledWith('show', { terminal_id: 'new-1' });
-  });
-  it('preserves partial launch results and does not retry an uncertain start', async () => {
-    const { execute, api } = actionsFixture();
-    api.startTerminal
-      .mockResolvedValueOnce({ terminal: terminal('new') })
-      .mockRejectedValueOnce(new Error('network'));
-    const result = await execute('vbot_terminal', {
-      action: 'start',
-      program: 'codex',
-      count: 4,
-      workdir: '/repo',
-    });
-    expect(result.ok).toBe(false);
-    expect(result.completed).toEqual([terminal('new')]);
-    expect(api.startTerminal).toHaveBeenCalledTimes(2);
-  });
-  it.each([
-    { program: 'bash' },
-    { program: 'codex', count: 1.5 },
-    { program: 'codex', count: '5' },
-    { program: 'codex', count: Infinity },
-    { program: 'codex', count: Number.MAX_SAFE_INTEGER + 1 },
-    { program: 'claude', count: 0 },
-    { program: 'codex', count: 1, workdir: '' },
-  ])('rejects an invalid launch before effects: %j', async (args) => {
-    const { execute, api } = actionsFixture();
-    await expect(
-      execute('vbot_terminal', { action: 'start', workdir: '/repo', ...args }),
-    ).rejects.toThrow();
-    expect(api.startTerminal).not.toHaveBeenCalled();
-    expect(api.createTerminalGroup).not.toHaveBeenCalled();
-  });
-  it.each([1, 5, 12, 33])(
-    'launches the requested %i terminals without a separate Live limit',
-    async (count) => {
-      const { execute, api } = actionsFixture();
-      const result = await execute('vbot_terminal', {
-        action: 'start',
-        program: 'claude',
-        count,
-        workdir: '/repo',
-      });
-      expect(api.startTerminal).toHaveBeenCalledTimes(count);
-      expect(result.completed).toHaveLength(count);
-    },
-  );
-  it('defaults an omitted launch count to one', async () => {
-    const { execute, api } = actionsFixture();
-    await execute('vbot_terminal', {
-      action: 'start',
-      program: 'codex',
-      workdir: '/repo',
-    });
-    expect(api.startTerminal).toHaveBeenCalledOnce();
-  });
-  it('reports the server capacity failure with confirmed launches and no retry', async () => {
-    const { execute, api } = actionsFixture();
-    api.startTerminal.mockImplementation(async () => {
-      if (api.startTerminal.mock.calls.length === 6)
-        throw Object.assign(new Error('fixture capacity exhausted'), {
-          code: 'invalid_request',
-        });
-      return {
-        terminal: terminal(`started-${api.startTerminal.mock.calls.length}`),
-      };
-    });
-    const result = await execute('vbot_terminal', {
-      action: 'start',
-      program: 'codex',
-      count: 12,
-      workdir: '/repo',
-    });
-    expect(result.requested_count).toBe(12);
-    expect(result.completed).toHaveLength(5);
-    expect(result.error.message).toBe('fixture capacity exhausted');
-    expect(api.startTerminal).toHaveBeenCalledTimes(6);
-  });
-  it('closes the exact terminal by stopping it before removing its tile', async () => {
-    const { execute, api, terminalView } = actionsFixture();
-    api.forgetTerminal.mockImplementation(async () => {
-      expect(api.killTerminal).toHaveBeenCalledWith('t2');
-      return {};
-    });
-    const result = await execute('vbot_terminal', {
-      action: 'close',
-      terminal_id: 't2',
-    });
-    expect(result).toEqual({ terminal_id: 't2', stopped: true, removed: true });
-    expect(api.killTerminal).toHaveBeenCalledOnce();
-    expect(api.forgetTerminal).toHaveBeenCalledWith('t2');
-    expect(terminalView).toHaveBeenCalledWith('refresh', {});
-  });
-  it('removes a finished terminal without attempting to stop it again', async () => {
-    const { execute, api } = actionsFixture();
-    api.listTerminals.mockResolvedValue({
-      terminals: [{ ...terminal(), state: 'exited' }],
-    });
-    await execute('vbot_terminal', { action: 'close', terminal_id: 't1' });
-    expect(api.killTerminal).not.toHaveBeenCalled();
-    expect(api.forgetTerminal).toHaveBeenCalledWith('t1');
-  });
-  it('preserves a confirmed stop if removing the tile fails', async () => {
-    const { execute, api } = actionsFixture();
-    api.forgetTerminal.mockRejectedValue(new Error('fixture removal failed'));
-    const result = await execute('vbot_terminal', {
-      action: 'close',
-      terminal_id: 't1',
-    });
-    expect(result).toMatchObject({
-      ok: false,
-      stopped: true,
-      removed: null,
-      terminal_id: 't1',
-    });
-    expect(api.killTerminal).toHaveBeenCalledOnce();
-    expect(api.forgetTerminal).toHaveBeenCalledOnce();
-  });
-  it('does not remove a terminal after an uncertain stop', async () => {
-    const { execute, api } = actionsFixture();
-    api.killTerminal.mockRejectedValue(new Error('fixture stop failed'));
-    const result = await execute('vbot_terminal', {
-      action: 'close',
-      terminal_id: 't1',
-    });
-    expect(result).toMatchObject({ ok: false, stopped: null, removed: false });
-    expect(api.killTerminal).toHaveBeenCalledOnce();
-    expect(api.forgetTerminal).not.toHaveBeenCalled();
-  });
-  it('stops a close sequence when Live is stopped after the process terminates', async () => {
-    const { execute, api } = actionsFixture();
-    let active = true;
-    api.killTerminal.mockImplementation(async () => {
-      active = false;
-      return {};
-    });
-    const result = await execute(
-      'vbot_terminal',
-      { action: 'close', terminal_id: 't1' },
-      () => active,
-    );
-    expect(result).toMatchObject({ ok: false, stopped: true, removed: false });
-    expect(api.forgetTerminal).not.toHaveBeenCalled();
-  });
-  it('creates and displays an empty group, then can select it by id', async () => {
-    const { execute, api, terminalView } = actionsFixture();
-    const result = await execute('vbot_terminal', {
-      action: 'create_group',
-      name: 'Review',
-    });
-    expect(result.group.group_id).toBe('new-group');
-    expect(api.createTerminalGroup).toHaveBeenCalledWith('Review');
-    expect(terminalView).toHaveBeenCalledWith('show_group', {
-      group_id: 'new-group',
-    });
-    await execute('vbot_terminal', { action: 'show_group', group_id: 'g1' });
-    expect(terminalView).toHaveBeenCalledWith('show_group', { group_id: 'g1' });
-  });
-  it.each(['user', 'agent'])(
-    'renames and deletes %s groups using the existing operator endpoints',
-    async (kind) => {
-      const { execute, api, terminalView } = actionsFixture();
-      api.listTerminals.mockResolvedValue({
-        groups: [{ group_id: 'g1', kind }],
-        terminals: [terminal()],
-      });
-      const renamed = await execute('vbot_terminal', {
-        action: 'rename_group',
-        group_id: 'g1',
-        name: 'Review',
-      });
-      expect(api.renameTerminalGroup).toHaveBeenCalledWith('g1', 'Review');
-      expect(renamed.group.name).toBe('Review');
-      const deleted = await execute('vbot_terminal', {
-        action: 'delete_group',
-        group_id: 'g1',
-      });
-      expect(api.deleteTerminalGroup).toHaveBeenCalledWith('g1');
-      expect(deleted).toEqual({ group_id: 'g1', terminals_killed: 2 });
-      expect(terminalView).toHaveBeenCalledTimes(2);
-    },
-  );
-  it.each(['automatic', 'finished'])(
-    'rejects edits of a built-in %s group before mutation',
-    async (kind) => {
-      const { execute, api } = actionsFixture();
-      api.listTerminals.mockResolvedValue({
-        groups: [{ group_id: 'g1', kind }],
-      });
-      await expect(
-        execute('vbot_terminal', {
-          action: 'rename_group',
-          group_id: 'g1',
-          name: 'New',
-        }),
-      ).rejects.toThrow('group_not_editable');
-      await expect(
-        execute('vbot_terminal', { action: 'delete_group', group_id: 'g1' }),
-      ).rejects.toThrow('group_not_editable');
-      expect(api.renameTerminalGroup).not.toHaveBeenCalled();
-      expect(api.deleteTerminalGroup).not.toHaveBeenCalled();
-    },
-  );
-  it.each([
-    { action: 'close' },
-    { action: 'close', terminal_id: 'missing' },
-    { action: 'rename_group', group_id: 'g1', name: '' },
-    { action: 'rename_group', group_id: 'g1', name: 'x'.repeat(81) },
-    { action: 'rename_group', group_id: 'missing', name: 'New' },
-    { action: 'delete_group', group_id: 'missing' },
-    { action: 'delete_group', group_id: 'g1', name: 'unexpected' },
-  ])('rejects invalid targets and fields before effects: %j', async (args) => {
-    const { execute, api } = actionsFixture();
-    await expect(execute('vbot_terminal', args)).rejects.toThrow();
-    expect(api.killTerminal).not.toHaveBeenCalled();
-    expect(api.forgetTerminal).not.toHaveBeenCalled();
-    expect(api.renameTerminalGroup).not.toHaveBeenCalled();
-    expect(api.deleteTerminalGroup).not.toHaveBeenCalled();
-  });
-  it('keeps successful mutations when refreshing the layout fails', async () => {
-    const { execute, api, terminalView } = actionsFixture();
-    terminalView.mockRejectedValue(new Error('fixture refresh failed'));
-    const created = await execute('vbot_terminal', {
-      action: 'create_group',
-      name: 'Review',
-    });
-    const renamed = await execute('vbot_terminal', {
-      action: 'rename_group',
-      group_id: 'g1',
-      name: 'Review',
-    });
-    const deleted = await execute('vbot_terminal', {
-      action: 'delete_group',
-      group_id: 'g1',
-    });
-    const closed = await execute('vbot_terminal', {
-      action: 'close',
-      terminal_id: 't1',
-    });
-    expect(created.group.group_id).toBe('new-group');
-    expect(renamed.group.name).toBe('Review');
-    expect(deleted.terminals_killed).toBe(2);
-    expect(closed.stopped && closed.removed).toBe(true);
-    for (const result of [created, renamed, deleted, closed])
-      expect(result.layout_error).toBe('refresh_failed');
-    expect(api.deleteTerminalGroup).toHaveBeenCalledOnce();
-    expect(api.killTerminal).toHaveBeenCalledOnce();
-  });
-  it('does not hide groups or retained terminals beyond the first forty entries', async () => {
-    const { execute, api } = actionsFixture();
-    const groups = Array.from({ length: 45 }, (_, i) => ({
-      group_id: `g${i}`,
-      kind: 'user',
-    }));
-    api.listTerminals.mockResolvedValue({
-      groups,
-      terminals: Array.from({ length: 45 }, (_, i) => terminal(`t${i}`)),
-    });
-    const result = await execute('vbot_terminal', { action: 'list' });
-    expect(result.groups.at(-1).group_id).toBe('g44');
-    expect(result.terminals.at(-1).terminal_id).toBe('t44');
-  });
-  it('forwards a reply to its exact Session without changing the message or confirming again', async () => {
-    const { execute, api } = actionsFixture();
-    await execute('vbot_app', {
-      action: 'send',
-      agent_id: 'joel@project',
-      session_id: 's1',
-      text: 'Use option one.',
-    });
-    expect(api.startChatRun).toHaveBeenCalledWith({
-      agent_id: 'joel@project',
-      session_id: 's1',
-      content: 'Use option one.',
-      input_origin: 'speech_transcription',
-    });
-  });
-  it('does not guess a Session when the caller omits it', async () => {
-    const { execute, api } = actionsFixture();
-    await expect(
-      execute('vbot_app', {
-        action: 'send',
-        agent_id: 'joel',
-        text: 'continue',
-      }),
-    ).rejects.toThrow();
-    expect(api.startChatRun).not.toHaveBeenCalled();
-  });
-  it('preserves multiline paste and guards input against an intervening screen change', async () => {
-    const { execute, api } = actionsFixture();
-    await execute('vbot_terminal', {
-      action: 'input',
-      terminal_id: 't1',
-      text: 'one\ntwo',
-    });
-    expect(api.sendTerminalInput).toHaveBeenCalledWith(
-      't1',
-      '\u001b[200~one\ntwo\u001b[201~\r',
-      { expectedScreenRevision: 12 },
-    );
-  });
-  it('rejects mixed input modes and arbitrary control sequences', async () => {
-    const { execute, api } = actionsFixture();
-    await expect(
-      execute('vbot_terminal', {
-        action: 'input',
-        terminal_id: 't1',
-        text: 'x',
-        key: 'enter',
-      }),
-    ).rejects.toThrow();
-    await expect(
-      execute('vbot_terminal', {
-        action: 'input',
-        terminal_id: 't1',
-        text: '\u001b[31m',
-      }),
-    ).rejects.toThrow();
-    expect(api.sendTerminalInput).not.toHaveBeenCalled();
-  });
-  it('does not operate a shell as if it were a coding agent', async () => {
-    const { execute, api } = actionsFixture();
-    api.listTerminals.mockResolvedValue({
-      terminals: [{ ...terminal(), launch_command: 'bash' }],
-    });
-    await expect(
-      execute('vbot_terminal', {
-        action: 'input',
-        terminal_id: 't1',
-        text: 'rm file',
-      }),
-    ).rejects.toThrow();
-    expect(api.sendTerminalInput).not.toHaveBeenCalled();
-  });
-  it('uses actual group order and rejects missing or duplicate members', async () => {
-    const { execute, api } = actionsFixture();
-    await expect(
-      execute('vbot_terminal', {
-        action: 'reorder',
-        group_id: 'g1',
-        order: ['t1', 't1'],
-      }),
-    ).rejects.toThrow();
-    expect(api.setTerminalGroupOrder).not.toHaveBeenCalled();
-    await execute('vbot_terminal', {
-      action: 'reorder',
-      group_id: 'g1',
-      order: ['t2', 't1'],
-    });
-    expect(api.setTerminalGroupOrder).toHaveBeenCalledWith('g1', ['t2', 't1']);
-  });
-  it('routes maximize and restore through the actual terminal view', async () => {
-    const { execute, terminalView } = actionsFixture();
-    await execute('vbot_terminal', { action: 'maximize', terminal_id: 't2' });
-    await execute('vbot_terminal', { action: 'restore' });
-    expect(terminalView).toHaveBeenCalledWith('maximize', {
-      action: 'maximize',
-      terminal_id: 't2',
-    });
-    expect(terminalView).toHaveBeenCalledWith('restore');
-  });
-  it('stops a multi-launch when its originating conversation is replaced', async () => {
-    const { execute, api } = actionsFixture();
-    let current = true;
-    api.startTerminal.mockImplementationOnce(async () => {
-      current = false;
-      return { terminal: terminal('first') };
-    });
-    const result = await execute(
-      'vbot_terminal',
-      { action: 'start', program: 'codex', count: 4, workdir: '/repo' },
-      () => current,
-    );
-    expect(result.completed).toHaveLength(1);
-    expect(api.startTerminal).toHaveBeenCalledTimes(1);
-  });
-});
+import { createLiveVoice, createLiveVoiceState } from '../liveVoice.js';
 
 class Events {
-  listeners = new Map();
+  constructor() {
+    this.listeners = new Map();
+  }
   addEventListener(name, callback) {
     this.listeners.set(name, [...(this.listeners.get(name) || []), callback]);
   }
@@ -507,294 +18,833 @@ class Events {
     for (const callback of this.listeners.get(name) || []) callback(value);
   }
 }
-function voiceFixture(
-  execute = vi.fn().mockResolvedValue({ delivered: true }),
-) {
-  const channel = new Events();
-  Object.assign(channel, { readyState: 'open', send: vi.fn(), close: vi.fn() });
-  const track = new Events();
-  Object.assign(track, { stop: vi.fn(), enabled: true });
+
+const flush = async () => {
+  for (let index = 0; index < 20; index += 1) await Promise.resolve();
+};
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
+function liveFixture(overrides = {}) {
+  const track = Object.assign(new Events(), { enabled: true, stop: vi.fn() });
   const microphone = {
     getTracks: () => [track],
     getAudioTracks: () => [track],
   };
-  const peer = new Events();
-  Object.assign(peer, {
+  const channel = Object.assign(new Events(), { close: vi.fn() });
+  const peer = Object.assign(new Events(), {
+    connectionState: 'new',
+    iceGatheringState: 'complete',
+    localDescription: { type: 'offer', sdp: 'offer-sdp' },
     addTrack: vi.fn(),
     createDataChannel: vi.fn(() => channel),
-    createOffer: vi.fn().mockResolvedValue({ sdp: 'v=0' }),
-    setLocalDescription: vi.fn(),
-    localDescription: { sdp: 'v=0' },
-    iceGatheringState: 'complete',
-    setRemoteDescription: vi.fn(),
+    createOffer: vi.fn().mockResolvedValue({ type: 'offer', sdp: 'offer' }),
+    setLocalDescription: vi.fn().mockResolvedValue(undefined),
+    setRemoteDescription: vi.fn().mockResolvedValue(undefined),
     close: vi.fn(),
   });
+  const sockets = [];
   const api = {
-    getLiveVoiceStatus: vi.fn().mockResolvedValue({ configured: true }),
-    createLiveVoiceSession: vi.fn().mockResolvedValue({
-      session: { id: 'live' },
-      transport: { sdp: 'answer' },
+    getLiveVoiceStatus: vi.fn().mockResolvedValue({
+      configured: true,
+      usable: true,
+      target: 'openai/gpt-live-1::api-key',
     }),
-    loadChatRunResult: vi
-      .fn()
-      .mockResolvedValue({ content: 'Which option?', found: true }),
+    startLiveCall: vi.fn().mockResolvedValue({
+      call_id: 'call-1',
+      media: { type: 'webrtc', sdp: 'answer-sdp' },
+    }),
+    stopLiveCall: vi.fn().mockResolvedValue({ stopping: true }),
+    sendLiveUiResult: vi.fn().mockResolvedValue({ accepted: true }),
+    openLiveCallSocket: vi.fn((callId, handlers) => {
+      const socket = { callId, handlers, close: vi.fn() };
+      sockets.push(socket);
+      return socket;
+    }),
   };
   const mediaDevices = { getUserMedia: vi.fn().mockResolvedValue(microphone) };
+  const audio = {
+    srcObject: null,
+    play: vi.fn().mockResolvedValue(undefined),
+    pause: vi.fn(),
+  };
+  const uiActions = {
+    context: vi.fn().mockResolvedValue({ view: 'chat', agents: [] }),
+    open: vi.fn().mockResolvedValue(true),
+    terminalView: vi.fn().mockResolvedValue({ visible_order: ['t1'] }),
+  };
+  const onNotice = vi.fn();
+  const onActive = vi.fn();
   const state = createLiveVoiceState();
   const controller = createLiveVoice({
     state,
-    execute,
     api,
     mediaDevices,
     createPeer: () => peer,
-    now: () => 1000,
+    audio,
+    uiActions,
+    onNotice,
+    onActive,
+    ...overrides,
   });
-  const emit = (event) =>
-    channel.emit('message', { data: JSON.stringify(event) });
-  const nested = (event) =>
-    emit({ type: 'response.event', delegation_id: 'delegation', event });
+  const socket = () => sockets.at(-1);
+  const frame = (value) => socket().handlers.onEvent(value);
+  const goLive = async () => {
+    await controller.start();
+    frame({ type: 'state', phase: 'live' });
+  };
+  const request = (requestId, action, args) =>
+    frame({ type: 'ui_request', request_id: requestId, action, args });
   return {
-    controller,
-    state,
-    channel,
-    track,
-    peer,
     api,
+    audio,
+    channel,
+    controller,
+    frame,
+    goLive,
     mediaDevices,
-    emit,
-    nested,
-    execute,
+    microphone,
+    onActive,
+    onNotice,
+    peer,
+    request,
+    socket,
+    sockets,
+    state,
+    track,
+    uiActions,
   };
 }
 
 afterEach(() => vi.useRealTimers());
-describe('Live WebRTC lifecycle and tool events', () => {
-  it('does not block a new conversation behind an old request or show its late result', async () => {
-    let finishOld;
-    const execute = vi
-      .fn()
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            finishOld = resolve;
-          }),
-      )
-      .mockResolvedValue({ delivered: true });
-    const f = voiceFixture(execute);
-    const request = (id) => {
-      f.nested({ type: 'response.created', response: { id } });
-      f.nested({
-        type: 'response.output_item.done',
-        item: {
-          type: 'function_call',
-          name: 'vbot_app',
-          call_id: id,
-          arguments: '{}',
-        },
+
+describe('Live voice startup', () => {
+  it.each([
+    [{ configured: false, usable: false, target: null }, 'not_configured'],
+    [{ configured: true, usable: false, target: 'x' }, 'not_usable'],
+  ])(
+    'checks the Live voice binding before asking for the microphone: %j',
+    async (status, code) => {
+      const f = liveFixture();
+      f.api.getLiveVoiceStatus.mockResolvedValue(status);
+      await f.controller.start();
+      expect(f.mediaDevices.getUserMedia).not.toHaveBeenCalled();
+      expect(f.api.startLiveCall).not.toHaveBeenCalled();
+      expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+        code,
+        severity: 'error',
       });
-      f.nested({ type: 'response.completed', response: { id } });
-    };
+      expect(f.state.phase).toBe('off');
+      expect(f.state.error).toBe(code);
+    },
+  );
+
+  it('offers voice-processed microphone audio with the provider data channel and attaches the call socket', async () => {
+    const f = liveFixture();
     await f.controller.start();
-    f.emit({ type: 'session.started' });
-    request('old');
-    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
-    const oldWork = f.controller.flush();
-    f.controller.stop();
-    f.emit({ type: 'session.closed' });
-    await f.controller.start();
-    f.emit({ type: 'session.started' });
-    request('new');
-    await f.controller.flush();
-    expect(execute).toHaveBeenCalledTimes(2);
-    expect(f.state.actions).toHaveLength(1);
-    finishOld({ delivered: true });
-    await oldWork;
-    expect(f.state.actions).toHaveLength(1);
-    f.controller.destroy();
-  });
-  it('returns all batch results before continuation and suppresses late effects after Stop', async () => {
-    const f = voiceFixture();
-    await f.controller.start();
-    f.emit({ type: 'session.started' });
-    f.nested({ type: 'response.created', response: { id: 'batch' } });
-    for (const call_id of ['one', 'two'])
-      f.nested({
-        type: 'response.output_item.done',
-        item: {
-          type: 'function_call',
-          name: 'vbot_app',
-          call_id,
-          arguments: '{"action":"context"}',
-        },
-      });
-    f.nested({ type: 'response.completed', response: { id: 'batch' } });
-    await f.controller.flush();
-    expect(
-      f.channel.send.mock.calls.map(([data]) => JSON.parse(data).type),
-    ).toEqual([
-      'response.item.create',
-      'response.item.create',
-      'response.create',
-    ]);
-    f.controller.stop();
-    f.nested({ type: 'response.created', response: { id: 'late' } });
-    f.nested({
-      type: 'response.output_item.done',
-      item: {
-        type: 'function_call',
-        name: 'vbot_app',
-        call_id: 'late',
-        arguments: '{}',
+    expect(f.mediaDevices.getUserMedia).toHaveBeenCalledWith({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
       },
     });
-    f.nested({ type: 'response.completed', response: { id: 'late' } });
-    await f.controller.flush();
-    expect(f.execute).toHaveBeenCalledTimes(2);
-    f.controller.destroy();
-  });
-  it('requires a usable key before requesting the microphone', async () => {
-    const f = voiceFixture();
-    f.api.getLiveVoiceStatus.mockResolvedValue({ configured: false });
-    await f.controller.start();
-    expect(f.state.error).toBe('api_key_required');
-    expect(f.mediaDevices.getUserMedia).not.toHaveBeenCalled();
-  });
-  it('waits for session.started and releases media after graceful close', async () => {
-    const f = voiceFixture();
-    await f.controller.start();
-    expect(f.state.phase).toBe('connecting');
-    expect(f.channel.send).not.toHaveBeenCalled();
-    f.emit({ type: 'session.started' });
-    expect(f.state.phase).toBe('listening');
-    f.controller.stop();
-    expect(f.track.enabled).toBe(false);
-    expect(f.track.stop).not.toHaveBeenCalled();
-    expect(JSON.parse(f.channel.send.mock.calls[0][0])).toEqual({
-      type: 'session.close',
-    });
-    f.emit({ type: 'session.closed', usage: { seconds: 10 } });
-    expect(f.track.stop).toHaveBeenCalledOnce();
-    expect(f.state.finalized).toBe(true);
-    expect(f.state.usage).toEqual({ seconds: 10 });
-  });
-  it('executes completed function items once and submits every result before continuation', async () => {
-    const f = voiceFixture();
-    await f.controller.start();
-    f.emit({ type: 'session.started' });
-    f.nested({ type: 'response.created', response: { id: 'r' } });
-    const item = {
-      type: 'function_call',
-      call_id: 'c',
-      name: 'vbot_app',
-      arguments: '{"action":"context"}',
-    };
-    f.nested({ type: 'response.output_item.done', item });
-    f.nested({ type: 'response.output_item.done', item });
-    f.nested({ type: 'response.created', response: { id: 'r' } });
-    f.nested({ type: 'response.completed', response: { id: 'r', output: [] } });
-    f.nested({ type: 'response.completed', response: { id: 'r', output: [] } });
-    await f.controller.flush();
-    expect(f.execute).toHaveBeenCalledTimes(1);
-    const sent = f.channel.send.mock.calls.map(([data]) => JSON.parse(data));
-    expect(sent.map((event) => event.type)).toEqual([
-      'response.item.create',
-      'response.create',
-    ]);
-    expect(sent[0].item.call_id).toBe('c');
-    f.controller.destroy();
-  });
-  it('never executes an unfinished or failed response', async () => {
-    const f = voiceFixture();
-    await f.controller.start();
-    f.emit({ type: 'session.started' });
-    f.nested({ type: 'response.created', response: { id: 'r' } });
-    f.nested({
-      type: 'response.output_item.done',
-      item: {
-        type: 'function_call',
-        call_id: 'c',
-        name: 'vbot_app',
-        arguments: '{}',
-      },
-    });
-    f.nested({ type: 'response.failed', response: { id: 'r' } });
-    await f.controller.flush();
-    expect(f.execute).not.toHaveBeenCalled();
-    f.controller.destroy();
-  });
-  it('discards a late microphone grant after Stop', async () => {
-    const f = voiceFixture();
-    let grant;
-    f.mediaDevices.getUserMedia.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          grant = resolve;
-        }),
+    expect(f.peer.addTrack).toHaveBeenCalledWith(f.track, f.microphone);
+    expect(f.peer.createDataChannel).toHaveBeenCalledWith('oai-events');
+    expect(f.peer.createDataChannel.mock.invocationCallOrder[0]).toBeLessThan(
+      f.peer.createOffer.mock.invocationCallOrder[0],
     );
+    expect(f.api.startLiveCall).toHaveBeenCalledWith('offer-sdp');
+    expect(f.api.openLiveCallSocket).toHaveBeenCalledWith(
+      'call-1',
+      expect.any(Object),
+    );
+    expect(f.peer.setRemoteDescription).toHaveBeenCalledWith({
+      type: 'answer',
+      sdp: 'answer-sdp',
+    });
+    expect(f.api.openLiveCallSocket.mock.invocationCallOrder[0]).toBeLessThan(
+      f.peer.setRemoteDescription.mock.invocationCallOrder[0],
+    );
+    expect(f.state).toMatchObject({ phase: 'connecting', callId: 'call-1' });
+    expect(f.onActive).not.toHaveBeenCalled();
+
+    f.frame({ type: 'state', phase: 'live' });
+    expect(f.state.phase).toBe('live');
+    expect(f.controller.active()).toBe(true);
+    expect(f.onActive).toHaveBeenCalledExactlyOnceWith(true);
+    expect(f.onNotice).not.toHaveBeenCalled();
+  });
+
+  it('reports a rejected start and releases media without a call to stop', async () => {
+    const f = liveFixture();
+    f.api.startLiveCall.mockResolvedValue({ error: 'access_denied' });
+    await f.controller.start();
+    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+      code: 'access_denied',
+      severity: 'error',
+    });
+    expect(f.track.stop).toHaveBeenCalledOnce();
+    expect(f.peer.close).toHaveBeenCalledOnce();
+    expect(f.api.openLiveCallSocket).not.toHaveBeenCalled();
+    expect(f.api.stopLiveCall).not.toHaveBeenCalled();
+    expect(f.state.phase).toBe('off');
+  });
+
+  it.each([
+    [{ name: 'NotAllowedError' }, 'microphone_denied'],
+    [{ name: 'NotFoundError' }, 'microphone_unavailable'],
+  ])('maps a microphone failure %j to %s', async (microphoneError, code) => {
+    const f = liveFixture();
+    f.mediaDevices.getUserMedia.mockRejectedValue(microphoneError);
+    await f.controller.start();
+    expect(f.onNotice).toHaveBeenCalledWith({ code, severity: 'error' });
+    expect(f.api.startLiveCall).not.toHaveBeenCalled();
+  });
+
+  it('needs a microphone API, which insecure pages lack', async () => {
+    const f = liveFixture({ mediaDevices: {} });
+    await f.controller.start();
+    expect(f.onNotice).toHaveBeenCalledWith({
+      code: 'microphone_unavailable',
+      severity: 'error',
+    });
+  });
+
+  it('offers once ICE gathering completes', async () => {
+    const f = liveFixture();
+    f.peer.iceGatheringState = 'gathering';
     const started = f.controller.start();
-    await Promise.resolve();
-    await Promise.resolve();
+    await flush();
+    expect(f.api.startLiveCall).not.toHaveBeenCalled();
+    f.peer.iceGatheringState = 'complete';
+    f.peer.emit('icegatheringstatechange');
+    await started;
+    expect(f.api.startLiveCall).toHaveBeenCalledOnce();
+  });
+
+  it('offers the gathered candidates when ICE gathering does not finish in time', async () => {
+    vi.useFakeTimers();
+    const f = liveFixture();
+    f.peer.iceGatheringState = 'gathering';
+    void f.controller.start();
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(f.api.startLiveCall).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.api.startLiveCall).toHaveBeenCalledWith('offer-sdp');
+    expect(f.onNotice).not.toHaveBeenCalled();
+  });
+
+  it('fails a call that never goes live and stops it on the server', async () => {
+    vi.useFakeTimers();
+    const f = liveFixture();
+    await f.controller.start();
+    await vi.advanceTimersByTimeAsync(44999);
+    expect(f.onNotice).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await flush();
+    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+      code: 'connection_timeout',
+      severity: 'error',
+    });
+    expect(f.api.stopLiveCall).toHaveBeenCalledWith('call-1');
+    expect(f.socket().close).toHaveBeenCalledOnce();
+    expect(f.peer.close).toHaveBeenCalledOnce();
+    expect(f.track.stop).toHaveBeenCalledOnce();
+    expect(f.state.phase).toBe('off');
+  });
+});
+
+describe('Live voice generation guards', () => {
+  it('discards a microphone grant that arrives after Stop', async () => {
+    const f = liveFixture();
+    const grant = deferred();
+    f.mediaDevices.getUserMedia.mockReturnValue(grant.promise);
+    const started = f.controller.start();
+    await flush();
     f.controller.stop();
-    grant({ getTracks: () => [f.track] });
+    expect(f.state.phase).toBe('off');
+    grant.resolve(f.microphone);
     await started;
     expect(f.track.stop).toHaveBeenCalledOnce();
-    expect(f.api.createLiveVoiceSession).not.toHaveBeenCalled();
+    expect(f.peer.addTrack).not.toHaveBeenCalled();
+    expect(f.api.startLiveCall).not.toHaveBeenCalled();
+    expect(f.onNotice).not.toHaveBeenCalled();
   });
-  it('deduplicates scoped Run notices and excludes old and background activity', async () => {
-    const f = voiceFixture();
-    await f.controller.start();
-    f.emit({ type: 'session.started' });
-    const event = {
-      type: 'run_completed',
-      payload: {
-        run_id: 'r',
-        agent_id: 'joel',
-        project_id: 'project',
-        session_id: 's',
-        run_event_timestamp: '2026-09-11T12:00:00Z',
-      },
-    };
-    await f.controller.notifyRuns([
-      event,
-      event,
-      {
-        ...event,
-        payload: {
-          ...event.payload,
-          run_id: 'old',
-          run_event_timestamp: '1970-01-01T00:00:00Z',
-        },
-      },
-      {
-        ...event,
-        payload: {
-          ...event.payload,
-          run_id: 'background',
-          contributes_to_agent_activity: false,
-        },
-      },
-    ]);
-    expect(f.api.loadChatRunResult).toHaveBeenCalledExactlyOnceWith({
-      agent_id: 'joel@project',
-      session_id: 's',
-      run_id: 'r',
-    });
-    expect(f.state.updates[0].agent_id).toBe('joel@project');
-    const notice = JSON.parse(f.channel.send.mock.calls.at(-1)[0]);
-    expect(notice.type).toBe('session.commentary.append');
-    expect(notice.delegation_id).toBeNull();
-    expect(JSON.parse(notice.content).session_id).toBe('s');
-    f.controller.destroy();
-  });
-  it('marks final usage unconfirmed on close timeout', async () => {
-    vi.useFakeTimers();
-    const f = voiceFixture();
-    await f.controller.start();
-    f.emit({ type: 'session.started' });
+
+  it('stops a call the server created after the user already pressed Stop', async () => {
+    const f = liveFixture();
+    const created = deferred();
+    f.api.startLiveCall.mockReturnValue(created.promise);
+    const started = f.controller.start();
+    await flush();
     f.controller.stop();
-    await vi.advanceTimersByTimeAsync(15000);
-    expect(f.state.error).toBe('finalization_incomplete');
-    expect(f.state.finalized).toBe(false);
     expect(f.track.stop).toHaveBeenCalledOnce();
+    created.resolve({
+      call_id: 'late-call',
+      media: { type: 'webrtc', sdp: 'answer' },
+    });
+    await started;
+    await flush();
+    expect(f.api.stopLiveCall).toHaveBeenCalledExactlyOnceWith('late-call');
+    expect(f.api.openLiveCallSocket).not.toHaveBeenCalled();
+    expect(f.peer.setRemoteDescription).not.toHaveBeenCalled();
+    expect(f.onNotice).not.toHaveBeenCalled();
+  });
+
+  it('ignores frames from the socket of a previous call', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    const previous = f.socket();
+    f.controller.stop();
+    f.frame({ type: 'closed', reason: 'stopped', usage: null });
+    f.api.startLiveCall.mockResolvedValue({
+      call_id: 'call-2',
+      media: { type: 'webrtc', sdp: 'answer' },
+    });
+    await f.controller.start();
+    expect(f.socket().callId).toBe('call-2');
+
+    previous.handlers.onEvent({
+      type: 'ui_request',
+      request_id: 'old',
+      action: 'context',
+    });
+    previous.handlers.onEvent({ type: 'closed', reason: 'replaced' });
+    previous.handlers.onClose();
+    await flush();
+    expect(f.uiActions.context).not.toHaveBeenCalled();
+    expect(f.state).toMatchObject({ phase: 'connecting', callId: 'call-2' });
+    expect(f.onNotice).not.toHaveBeenCalled();
+  });
+});
+
+describe('stopping Live voice', () => {
+  it('releases the microphone at once and closes the call after its closed frame', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    f.controller.stop();
+    expect(f.state.phase).toBe('closing');
+    expect(f.track.enabled).toBe(false);
+    expect(f.track.stop).toHaveBeenCalledOnce();
+    await flush();
+    expect(f.api.stopLiveCall).toHaveBeenCalledExactlyOnceWith('call-1');
+    expect(f.socket().close).not.toHaveBeenCalled();
+    expect(f.peer.close).not.toHaveBeenCalled();
+
+    f.frame({
+      type: 'closed',
+      reason: 'stopped',
+      usage: { audio_duration_ms: 1200 },
+    });
+    expect(f.socket().close).toHaveBeenCalledOnce();
+    expect(f.peer.close).toHaveBeenCalledOnce();
+    expect(f.channel.close).toHaveBeenCalledOnce();
+    expect(f.state).toMatchObject({
+      phase: 'off',
+      callId: null,
+      usage: { audio_duration_ms: 1200 },
+    });
+    expect(f.onActive).toHaveBeenLastCalledWith(false);
+    expect(f.onNotice).not.toHaveBeenCalled();
+  });
+
+  it('closes after a short timeout when no closed frame arrives', async () => {
+    vi.useFakeTimers();
+    const f = liveFixture();
+    await f.goLive();
+    f.controller.stop();
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(f.socket().close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.socket().close).toHaveBeenCalledOnce();
+    expect(f.state.phase).toBe('off');
+    expect(f.onNotice).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the server no longer holds the call', { stopping: false }],
+    ['the stop request fails', new Error('offline')],
+  ])('finishes at once when %s', async (_label, outcome) => {
+    const f = liveFixture();
+    if (outcome instanceof Error) f.api.stopLiveCall.mockRejectedValue(outcome);
+    else f.api.stopLiveCall.mockResolvedValue(outcome);
+    await f.goLive();
+    f.controller.stop();
+    await flush();
+    expect(f.state.phase).toBe('off');
+    expect(f.socket().close).toHaveBeenCalledOnce();
+    expect(f.onNotice).not.toHaveBeenCalled();
+  });
+
+  it('stops the server call when the controller is destroyed', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    f.controller.destroy();
+    await flush();
+    expect(f.api.stopLiveCall).toHaveBeenCalledWith('call-1');
+    expect(f.socket().close).toHaveBeenCalledOnce();
+    expect(f.state.phase).toBe('off');
+  });
+});
+
+describe('Live call frames', () => {
+  it('announces a takeover by another window and releases media', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    f.frame({ type: 'state', phase: 'closing' });
+    expect(f.track.stop).toHaveBeenCalledOnce();
+    f.frame({ type: 'closed', reason: 'replaced', usage: null });
+    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+      code: 'replaced',
+      severity: 'info',
+    });
+    expect(f.api.stopLiveCall).not.toHaveBeenCalled();
+    expect(f.state).toMatchObject({ phase: 'off', closeReason: 'replaced' });
+  });
+
+  it.each([
+    ['after it was live', true, { code: 'ended', severity: 'info' }],
+    [
+      'before it was live',
+      false,
+      { code: 'connection_failed', severity: 'error' },
+    ],
+  ])('reports a call the server ended %s', async (_label, live, notice) => {
+    const f = liveFixture();
+    await f.controller.start();
+    if (live) f.frame({ type: 'state', phase: 'live' });
+    f.frame({ type: 'closed', reason: null, usage: null });
+    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith(notice);
+    expect(f.state.phase).toBe('off');
+  });
+
+  it('reports a failed call once', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    f.frame({ type: 'state', phase: 'failed' });
+    f.frame({ type: 'closed', reason: 'error', usage: null });
+    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+      code: 'call_failed',
+      severity: 'error',
+    });
+  });
+
+  it('reports a fatal error once, ends the call and waits for its closed frame', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    f.frame({ type: 'error', code: 'control_failed', fatal: true });
+    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+      code: 'control_failed',
+      severity: 'error',
+    });
+    expect(f.state.phase).toBe('closing');
+    expect(f.track.stop).toHaveBeenCalledOnce();
+    await flush();
+    expect(f.api.stopLiveCall).toHaveBeenCalledWith('call-1');
+    f.frame({ type: 'error', code: 'provider_error', fatal: true });
+    f.frame({ type: 'closed', reason: 'error', usage: null });
+    expect(f.onNotice).toHaveBeenCalledOnce();
+    expect(f.state).toMatchObject({ phase: 'off', error: 'control_failed' });
+  });
+
+  it('keeps the call after a non-fatal error', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    f.frame({ type: 'error', code: 'announcement_failed', fatal: false });
+    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+      code: 'announcement_failed',
+      severity: 'warn',
+    });
+    expect(f.state.phase).toBe('live');
+  });
+
+  it('replaces open caption turns with each snapshot and closes them when final', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    f.frame({ type: 'caption', role: 'user', text: 'Open the', final: false });
+    f.frame({
+      type: 'caption',
+      role: 'user',
+      text: 'Open the chat',
+      final: false,
+    });
+    f.frame({ type: 'caption', role: 'assistant', text: 'Sure', final: false });
+    expect(f.state.captions).toEqual([
+      { role: 'user', text: 'Open the chat', final: false },
+      { role: 'assistant', text: 'Sure', final: false },
+    ]);
+    f.frame({
+      type: 'caption',
+      role: 'user',
+      text: 'Open the chat.',
+      final: true,
+    });
+    f.frame({ type: 'caption', role: 'assistant', text: '', final: true });
+    expect(f.state.captions).toEqual([
+      { role: 'user', text: 'Open the chat.', final: true },
+      { role: 'assistant', text: 'Sure', final: true },
+    ]);
+  });
+
+  it('bounds caption turns and their text', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    for (let index = 0; index < 25; index += 1)
+      f.frame({
+        type: 'caption',
+        role: 'assistant',
+        text: `turn ${index}`,
+        final: true,
+      });
+    f.frame({
+      type: 'caption',
+      role: 'user',
+      text: `${'x'.repeat(3000)}end`,
+      final: false,
+    });
+    expect(f.state.captions).toHaveLength(20);
+    expect(f.state.captions[0].text).toBe('turn 6');
+    expect(f.state.captions.at(-1).text).toHaveLength(2000);
+    expect(f.state.captions.at(-1).text.endsWith('end')).toBe(true);
+  });
+
+  it('tracks busy activity and ignores unknown frames', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    f.frame({ type: 'activity', busy: true, label: 'working' });
+    expect(f.state).toMatchObject({ busy: true, activityLabel: 'working' });
+    f.frame({ type: 'future_frame', value: 1 });
+    f.frame({ type: 'activity', busy: false, label: null });
+    expect(f.state).toMatchObject({
+      phase: 'live',
+      busy: false,
+      activityLabel: null,
+    });
+    expect(f.onNotice).not.toHaveBeenCalled();
+  });
+});
+
+describe('Live voice UI requests', () => {
+  it('returns the App context and answers each request once', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    f.request('r1', 'context');
+    f.request('r1', 'context');
+    await flush();
+    expect(f.uiActions.context).toHaveBeenCalledOnce();
+    expect(f.api.sendLiveUiResult).toHaveBeenCalledExactlyOnceWith(
+      'call-1',
+      'r1',
+      { result: { view: 'chat', agents: [] } },
+    );
+  });
+
+  it('opens an exact Chat Session and reports whether navigation applied', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    f.request('r1', 'open', {
+      view: 'chat',
+      agent_id: 'joel@vbot',
+      session_id: 's1',
+    });
+    await flush();
+    expect(f.uiActions.open).toHaveBeenCalledWith(
+      { view: 'chat', agent_id: 'joel@vbot', session_id: 's1' },
+      { isCurrent: expect.any(Function) },
+    );
+    expect(f.api.sendLiveUiResult).toHaveBeenLastCalledWith('call-1', 'r1', {
+      result: { applied: true },
+    });
+    f.uiActions.open.mockResolvedValue(false);
+    f.request('r2', 'open', { view: 'terminals', agent_id: null });
+    await flush();
+    expect(f.uiActions.open).toHaveBeenLastCalledWith(
+      { view: 'terminals' },
+      expect.any(Object),
+    );
+    expect(f.api.sendLiveUiResult).toHaveBeenLastCalledWith('call-1', 'r2', {
+      result: { applied: false },
+    });
+  });
+
+  it.each([
+    ['open', { view: 'settings' }, 'invalid_view'],
+    [
+      'open',
+      { view: 'terminals', agent_id: 'joel', session_id: 's1' },
+      'invalid_arguments',
+    ],
+    ['open', { view: 'chat', agent_id: 'joel' }, 'invalid_arguments'],
+    ['terminal_view', { op: 'close', terminal_id: 't1' }, 'invalid_arguments'],
+    ['terminal_view', { op: 'show' }, 'invalid_arguments'],
+    ['terminal_view', { op: 'show_group' }, 'invalid_arguments'],
+    ['context', ['unexpected'], 'invalid_arguments'],
+    ['send_message', {}, 'unsupported_action'],
+  ])(
+    'answers an invalid %s request %j with %s without running it',
+    async (action, args, code) => {
+      const f = liveFixture();
+      await f.goLive();
+      f.request('bad', action, args);
+      await flush();
+      expect(f.uiActions.context).not.toHaveBeenCalled();
+      expect(f.uiActions.open).not.toHaveBeenCalled();
+      expect(f.uiActions.terminalView).not.toHaveBeenCalled();
+      expect(f.api.sendLiveUiResult).toHaveBeenCalledExactlyOnceWith(
+        'call-1',
+        'bad',
+        { error: code },
+      );
+      expect(f.onNotice).not.toHaveBeenCalled();
+    },
+  );
+
+  it('runs Terminal layout requests with only their target fields', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    f.request('r1', 'terminal_view', {
+      op: 'maximize',
+      terminal_id: 't1',
+      group_id: 'ignored',
+    });
+    f.request('r2', 'terminal_view', { op: 'show_group', group_id: 'g1' });
+    f.request('r3', 'terminal_view', { op: 'refresh' });
+    await flush();
+    expect(
+      f.uiActions.terminalView.mock.calls.map(([target]) => target),
+    ).toEqual([
+      { op: 'maximize', terminal_id: 't1' },
+      { op: 'show_group', group_id: 'g1' },
+      { op: 'refresh' },
+    ]);
+    expect(f.api.sendLiveUiResult).toHaveBeenCalledWith('call-1', 'r1', {
+      result: { visible_order: ['t1'] },
+    });
+  });
+
+  it.each([
+    [new Error('terminal_not_found'), 'terminal_not_found'],
+    [
+      Object.assign(new Error('Navigation was cancelled'), {
+        code: 'navigation_not_applied',
+      }),
+      'navigation_not_applied',
+    ],
+    [new Error('Cannot read properties of undefined'), 'operation_failed'],
+  ])(
+    'answers a failed UI action with its error code: %s',
+    async (error, code) => {
+      const f = liveFixture();
+      await f.goLive();
+      f.uiActions.terminalView.mockRejectedValue(error);
+      f.request('r1', 'terminal_view', { op: 'show', terminal_id: 't9' });
+      await flush();
+      expect(f.api.sendLiveUiResult).toHaveBeenCalledExactlyOnceWith(
+        'call-1',
+        'r1',
+        { error: code },
+      );
+      expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+        code: 'ui_action_failed',
+        severity: 'warn',
+      });
+    },
+  );
+
+  it('drops the result of a request whose call has stopped', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    const pending = deferred();
+    f.uiActions.context.mockReturnValue(pending.promise);
+    f.request('r1', 'context');
+    await flush();
+    const [guard] = f.uiActions.context.mock.calls[0];
+    expect(guard.isCurrent()).toBe(true);
+    f.controller.stop();
+    expect(guard.isCurrent()).toBe(false);
+    f.frame({ type: 'closed', reason: 'stopped', usage: null });
+    pending.resolve({ view: 'chat' });
+    await flush();
+    expect(f.api.sendLiveUiResult).not.toHaveBeenCalled();
+  });
+
+  it('declines requests that arrive while the call is closing', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    f.controller.stop();
+    f.request('r1', 'context');
+    await flush();
+    expect(f.uiActions.context).not.toHaveBeenCalled();
+    expect(f.api.sendLiveUiResult).toHaveBeenCalledExactlyOnceWith(
+      'call-1',
+      'r1',
+      { error: 'call_closing' },
+    );
+  });
+});
+
+describe('Live voice media and connection failures', () => {
+  it('ends the call when the microphone disappears', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    f.track.emit('ended');
+    await flush();
+    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+      code: 'microphone_unavailable',
+      severity: 'error',
+    });
+    expect(f.api.stopLiveCall).toHaveBeenCalledWith('call-1');
+    expect(f.state.phase).toBe('off');
+  });
+
+  it('tolerates a brief peer disconnect but ends a lasting one', async () => {
+    vi.useFakeTimers();
+    const f = liveFixture();
+    await f.goLive();
+    const setConnection = (connectionState) => {
+      f.peer.connectionState = connectionState;
+      f.peer.emit('connectionstatechange');
+    };
+    setConnection('disconnected');
+    await vi.advanceTimersByTimeAsync(4000);
+    setConnection('connected');
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(f.onNotice).not.toHaveBeenCalled();
+    setConnection('disconnected');
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+      code: 'connection_lost',
+      severity: 'error',
+    });
+  });
+
+  it('ends the call at once when the peer connection fails', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    f.peer.connectionState = 'failed';
+    f.peer.emit('connectionstatechange');
+    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+      code: 'connection_lost',
+      severity: 'error',
+    });
+    expect(f.state.phase).toBe('off');
+  });
+
+  it('plays provider audio and ends the call when playback is blocked', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    const stream = { id: 'remote' };
+    f.peer.emit('track', { track: {}, streams: [stream] });
+    expect(f.audio.srcObject).toBe(stream);
+    expect(f.audio.play).toHaveBeenCalledOnce();
+    await flush();
+    expect(f.onNotice).not.toHaveBeenCalled();
+
+    f.audio.play.mockRejectedValue(
+      Object.assign(new Error('blocked'), { name: 'NotAllowedError' }),
+    );
+    f.peer.emit('track', { track: {}, streams: [stream] });
+    await flush();
+    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+      code: 'playback_blocked',
+      severity: 'error',
+    });
+    expect(f.audio.srcObject).toBeNull();
+    expect(f.audio.pause).toHaveBeenCalled();
+  });
+
+  it.each(['lost', 'lagged'])(
+    'reattaches a %s call socket within the grace window',
+    async (outcome) => {
+      vi.useFakeTimers();
+      const f = liveFixture();
+      await f.goLive();
+      f.socket().handlers.onClose({}, outcome);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(f.api.openLiveCallSocket).toHaveBeenCalledTimes(2);
+      f.frame({ type: 'activity', busy: true, label: null });
+      expect(f.state.busy).toBe(true);
+      expect(f.onNotice).not.toHaveBeenCalled();
+    },
+  );
+
+  it('treats a socket closed as ended like a call that ended', async () => {
+    vi.useFakeTimers();
+    const f = liveFixture();
+    await f.goLive();
+    f.socket().handlers.onClose({}, 'ended');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.api.openLiveCallSocket).toHaveBeenCalledOnce();
+    expect(f.api.stopLiveCall).not.toHaveBeenCalled();
+    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+      code: 'ended',
+      severity: 'info',
+    });
+    expect(f.state.phase).toBe('off');
+  });
+
+  it.each(['unknown_call', 'replaced'])(
+    'ends the call without reattaching when the socket closes as %s',
+    async (outcome) => {
+      vi.useFakeTimers();
+      const f = liveFixture();
+      await f.goLive();
+      f.socket().handlers.onClose({}, outcome);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(f.api.openLiveCallSocket).toHaveBeenCalledOnce();
+      expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+        code: 'connection_lost',
+        severity: 'error',
+      });
+      expect(f.api.stopLiveCall).toHaveBeenCalledWith('call-1');
+      expect(f.state.phase).toBe('off');
+    },
+  );
+
+  it('ends the call when the socket cannot be reattached in time', async () => {
+    vi.useFakeTimers();
+    const f = liveFixture();
+    await f.goLive();
+    for (
+      let attempt = 0;
+      attempt < 20 && !f.onNotice.mock.calls.length;
+      attempt += 1
+    ) {
+      f.socket().handlers.onClose();
+      await vi.advanceTimersByTimeAsync(500);
+    }
+    await flush();
+    expect(f.api.openLiveCallSocket).toHaveBeenCalledTimes(17);
+    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+      code: 'connection_lost',
+      severity: 'error',
+    });
+    expect(f.api.stopLiveCall).toHaveBeenCalledWith('call-1');
+    expect(f.state.phase).toBe('off');
+  });
+
+  it('mutes the microphone track, including before it is granted', async () => {
+    const f = liveFixture();
+    const grant = deferred();
+    f.mediaDevices.getUserMedia.mockReturnValue(grant.promise);
+    const started = f.controller.start();
+    await flush();
+    f.controller.mute();
+    expect(f.state.muted).toBe(true);
+    grant.resolve(f.microphone);
+    await started;
+    expect(f.track.enabled).toBe(false);
+    f.controller.mute();
+    expect(f.state.muted).toBe(false);
+    expect(f.track.enabled).toBe(true);
   });
 });

@@ -168,6 +168,26 @@ class TestCapabilities:
         # not text. Mirror of the "speech" → text_to_speech alias.
         assert derive_model_task_types(("text",), ("embeddings",)) == ("text_embedding",)
 
+    def test_live_voice_is_never_derived_from_modalities(self):
+        """Only an explicit ``task_types`` entry makes a Model a live voice target."""
+
+        derived = derive_model_task_types(("text", "audio"), ("text", "audio"))
+        assert "live_voice" not in derived
+        assert derive_model_task_types(("audio",), ("audio",)) == (
+            "audio_input",
+            "audio_generation",
+        )
+        explicit = Capabilities(
+            vision=False,
+            tools=False,
+            json_mode=False,
+            reasoning=ReasoningCapabilities(supported=False),
+            input_modalities=("audio",),
+            output_modalities=("audio",),
+            task_types=("live_voice",),
+        )
+        assert explicit.task_types == ("live_voice",)
+
     def test_frozen(self):
         reasoning = ReasoningCapabilities(supported=False)
         caps = Capabilities(

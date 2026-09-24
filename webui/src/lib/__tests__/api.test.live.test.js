@@ -1,0 +1,167 @@
+import { describe, expect, it, vi } from 'vitest';
+import {
+  LIVE_SOCKET_ERROR_RESPONSE,
+  RPC_ERROR_INVALID_CLIENT_REQUEST,
+  getLiveVoiceStatus,
+  openLiveCallSocket,
+  sendLiveUiResult,
+  startLiveCall,
+  stopLiveCall,
+} from '../api.js';
+import { jsonResponse, MockWebSocket } from './api.support.js';
+
+function rpcFetch(result = {}) {
+  return vi.fn().mockResolvedValue(jsonResponse({ ok: true, result }));
+}
+
+const sentEnvelope = (fetchFunction) =>
+  JSON.parse(fetchFunction.mock.calls[0][1].body);
+
+describe('Live voice RPC wrappers', () => {
+  it('reads the Live voice status', async () => {
+    const fetchFunction = rpcFetch({
+      configured: true,
+      usable: true,
+      target: 'openai/gpt-live-1::api-key',
+    });
+    await expect(
+      getLiveVoiceStatus({ fetch: fetchFunction }),
+    ).resolves.toMatchObject({ configured: true });
+    expect(sentEnvelope(fetchFunction)).toEqual({
+      method: 'live.status',
+      params: {},
+    });
+  });
+
+  it('starts a call with the SDP offer and stops it by id', async () => {
+    const started = rpcFetch({
+      call_id: 'call-1',
+      media: { type: 'webrtc', sdp: 'answer' },
+    });
+    await startLiveCall('offer', { fetch: started });
+    expect(sentEnvelope(started)).toEqual({
+      method: 'live.start',
+      params: { sdp: 'offer' },
+    });
+
+    const stopped = rpcFetch({ stopping: true });
+    await expect(stopLiveCall('call-1', { fetch: stopped })).resolves.toEqual({
+      stopping: true,
+    });
+    expect(sentEnvelope(stopped)).toEqual({
+      method: 'live.stop',
+      params: { call_id: 'call-1' },
+    });
+  });
+
+  it('sends exactly one UI request outcome', async () => {
+    const withResult = rpcFetch({ accepted: true });
+    await sendLiveUiResult(
+      'call-1',
+      'request-1',
+      { result: { applied: true } },
+      { fetch: withResult },
+    );
+    expect(sentEnvelope(withResult)).toEqual({
+      method: 'live.ui_result',
+      params: {
+        call_id: 'call-1',
+        request_id: 'request-1',
+        result: { applied: true },
+      },
+    });
+
+    const withError = rpcFetch({ accepted: true });
+    await sendLiveUiResult(
+      'call-1',
+      'request-2',
+      { error: 'terminal_not_found' },
+      { fetch: withError },
+    );
+    expect(sentEnvelope(withError).params).toEqual({
+      call_id: 'call-1',
+      request_id: 'request-2',
+      error: 'terminal_not_found',
+    });
+  });
+
+  it.each([
+    [{}],
+    [{ result: { applied: true }, error: 'operation_failed' }],
+    [{ result: ['not', 'an', 'object'] }],
+    [{ error: '' }],
+  ])('rejects an ambiguous UI outcome %j before sending', (outcome) => {
+    expect(() => sendLiveUiResult('call-1', 'request-1', outcome)).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'live.ui_result',
+      }),
+    );
+  });
+
+  it('rejects empty call ids before sending', () => {
+    expect(() => startLiveCall('')).toThrow(
+      expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
+    );
+    expect(() => stopLiveCall('')).toThrow(
+      expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
+    );
+  });
+});
+
+describe('openLiveCallSocket()', () => {
+  it('opens the encoded owner socket and delivers object frames', () => {
+    const onEvent = vi.fn();
+    const onError = vi.fn();
+    const onClose = vi.fn();
+    const connection = openLiveCallSocket(
+      'rtc/one',
+      { onEvent, onError, onClose },
+      { WebSocket: MockWebSocket, baseUrl: 'https://localhost:8420/' },
+    );
+    expect(connection.socket.url).toBe(
+      'wss://localhost:8420/ws/live/rtc%2Fone',
+    );
+
+    connection.socket.emit('message', {
+      data: JSON.stringify({ type: 'state', phase: 'live' }),
+    });
+    connection.socket.emit('message', { data: '{' });
+    connection.socket.emit('message', { data: '[1]' });
+    expect(onEvent).toHaveBeenCalledExactlyOnceWith(
+      { type: 'state', phase: 'live' },
+      expect.any(Object),
+    );
+    expect(onError).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ code: LIVE_SOCKET_ERROR_RESPONSE }),
+      expect.any(Object),
+    );
+
+    connection.close();
+    connection.close();
+    expect(connection.socket.closeCalls).toHaveLength(1);
+    connection.socket.emit('close', {});
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [1000, 'ended'],
+    [1008, 'unknown_call'],
+    [1013, 'lagged'],
+    [4000, 'replaced'],
+    [1006, 'lost'],
+  ])('reports server close code %i as %s', (code, outcome) => {
+    const onClose = vi.fn();
+    const connection = openLiveCallSocket(
+      'call-1',
+      { onClose },
+      { WebSocket: MockWebSocket, baseUrl: 'https://localhost:8420/' },
+    );
+    connection.socket.emit('close', { code });
+    expect(onClose).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ code }),
+      outcome,
+    );
+  });
+});

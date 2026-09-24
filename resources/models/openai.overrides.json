@@ -579,6 +579,91 @@
           }
         }
       }
+    },
+    "gpt-live-1": {
+      "name": "GPT-Live",
+      "connections": ["api-key"],
+      "capabilities": {
+        "vision": false,
+        "tools": false,
+        "json_mode": false,
+        "reasoning": { "supported": false },
+        "input_modalities": ["audio"],
+        "output_modalities": ["audio"],
+        "task_types": ["live_voice"],
+        "task_options": {
+          "live_voice": {
+            "parameters": {
+              "voice": {
+                "type": "enum",
+                "values": [
+                  "alloy",
+                  "ash",
+                  "ballad",
+                  "beacon",
+                  "bossa",
+                  "cedar",
+                  "cinder",
+                  "coral",
+                  "delta",
+                  "echo",
+                  "gleam",
+                  "marin",
+                  "meridian",
+                  "quartz",
+                  "ripple",
+                  "sage",
+                  "shimmer",
+                  "stone",
+                  "tempo",
+                  "verse",
+                  "vesper",
+                  "willow"
+                ],
+                "default": "marin"
+              },
+              "backend_model": { "type": "model", "default": "gpt-5.6-terra" }
+            }
+          }
+        }
+      },
+      "context_window": 128000
+    },
+    "gpt-live-1-codex": {
+      "name": "GPT-Live (ChatGPT)",
+      "connections": ["subscription"],
+      "capabilities": {
+        "vision": false,
+        "tools": false,
+        "json_mode": false,
+        "reasoning": { "supported": false },
+        "input_modalities": ["audio"],
+        "output_modalities": ["audio"],
+        "task_types": ["live_voice"],
+        "task_options": {
+          "live_voice": {
+            "parameters": {
+              "voice": {
+                "type": "enum",
+                "values": [
+                  "cove",
+                  "juniper",
+                  "maple",
+                  "spruce",
+                  "ember",
+                  "vale",
+                  "breeze",
+                  "arbor",
+                  "sol"
+                ],
+                "default": "cove"
+              },
+              "backend_model": { "type": "model", "default": "gpt-5.6-terra" }
+            }
+          }
+        }
+      },
+      "context_window": 128000
     }
   }
 }

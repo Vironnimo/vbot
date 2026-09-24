@@ -18,6 +18,7 @@ from core.model_tasks.options import (
     ALLOWED_OPTION_TYPES,
     PROVIDER_DEFAULT_CHOICE_LABEL,
     TaskModelOptionField,
+    TaskModelOptionSchema,
     TaskModelOptionValidationError,
     option_schema_for,
     validate_task_model_options,
@@ -91,6 +92,21 @@ def test_numeric_options_reject_overflow_as_validation_error(value: int) -> None
 
     with pytest.raises(TaskModelOptionValidationError):
         validate_task_model_options(schema, {"speed": value})
+
+
+def test_select_without_choices_accepts_no_value() -> None:
+    """A select whose choices are empty (for example, no candidate Model is
+    available) has no valid value; it never degrades into free text."""
+
+    schema = TaskModelOptionSchema(
+        task_type=TASK_TEXT_TO_SPEECH,
+        target="openai/tts-1::api-key",
+        fields=(TaskModelOptionField(name="voice", type="select", label="Voice"),),
+    )
+
+    validate_task_model_options(schema, {})
+    with pytest.raises(TaskModelOptionValidationError):
+        validate_task_model_options(schema, {"voice": "alloy"})
 
 
 def test_existing_field_types_still_validate() -> None:

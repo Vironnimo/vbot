@@ -11,7 +11,7 @@ Before changing editor-replacing navigation or pending-save handling, read `webu
 Domain controllers still own their data. The app shell may request a refresh or route a lifecycle event, but it must not duplicate Chat, Provider, Extension, Project, or Settings rules.
 
 
-AppShell's optional `sidebarFooter` snippet precedes the existing microphone and connection rows. App mounts the Settings-gated Live voice control there; its lifecycle and opt-in contract live in `model_tasks/live.md`.
+AppShell's optional `sidebarFooter` snippet precedes the existing microphone and connection rows. App mounts the Live voice control there, shown while a `model_tasks.live_voice` binding exists; its lifecycle lives in `model_tasks/live.md`.
 
 ## Main menu responsiveness
 

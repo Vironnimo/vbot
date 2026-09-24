@@ -14,7 +14,9 @@ Every provider target also gets an ``extra_options`` JSON escape hatch merged
 into the provider request by the wire layer, so an option vBot does not
 surface is usable without a code change. Video fields come from OpenRouter's
 dedicated Video catalog; Music exposes only sampling controls published by its
-Model."""
+Model. Live voice renders its voice and delegating backend Model from its
+``live_voice`` facts; backend choices depend on the Model registry and the
+target's Connection, so its schema carries no ``extra_options``."""
 
 from __future__ import annotations
 
@@ -24,6 +26,11 @@ from typing import Any
 
 from core.model_tasks._image_options import (
     _image_generation_fields,
+)
+from core.model_tasks._live_options import (
+    ModelCatalog,
+    _live_voice_fields,
+    live_backend_candidates,
 )
 from core.model_tasks._media_options import (
     _music_generation_fields,
@@ -64,6 +71,7 @@ from core.model_tasks._option_types import (
 )
 from core.model_tasks.constants import (
     TASK_IMAGE_GENERATION,
+    TASK_LIVE_VOICE,
     TASK_MUSIC_GENERATION,
     TASK_SPEECH_TO_TEXT,
     TASK_TEXT_EMBEDDING,
@@ -91,6 +99,7 @@ __all__ = [
     "IMAGE_PARAMETER_SKIP",
     "IMAGE_SIZE_SHORTHAND_CONFLICTS",
     "JsonObject",
+    "ModelCatalog",
     "OPENAI_IMAGE_RESPONSE_FORMAT_CHOICES",
     "OPENAI_TTS_FORMAT_CHOICES",
     "OPENAI_TTS_VOICES",
@@ -101,6 +110,7 @@ __all__ = [
     "TaskModelOptionField",
     "TaskModelOptionSchema",
     "TaskModelOptionValidationError",
+    "live_backend_candidates",
     "option_schema_for",
     "validate_task_model_options",
     "validate_text_embedding_options",
@@ -166,8 +176,10 @@ def _validate_task_model_option_value(
     if field.type in {"text", "textarea", "select"}:
         if not isinstance(value, str):
             raise TaskModelOptionValidationError(f"{label} must be a string")
-        if field.type == "select" and field.options:
+        if field.type == "select":
             choices = tuple(option.value for option in field.options)
+            if not choices:
+                raise TaskModelOptionValidationError(f"{label} has no available choices")
             if value not in choices:
                 raise TaskModelOptionValidationError(
                     f"{label} must be one of: {', '.join(choices)}"
@@ -205,16 +217,30 @@ def option_schema_for(
     target: str,
     *,
     model: Model | None = None,
+    models: ModelCatalog | None = None,
+    connection_id: str = "",
 ) -> TaskModelOptionSchema:
     """Return a model-aware option schema for *task_type* and *provider_id*.
 
     *model* is the resolved :class:`core.models.Model` for the target when
     available. Without it, the schema falls back to the provider-level
-    conservative defaults that the model-aware branches extend. Every
-    supported task type additionally carries the ``extra_options`` escape
-    hatch (provider targets only — local targets never reach this builder).
+    conservative defaults that the model-aware branches extend. Media task
+    types additionally carry the ``extra_options`` escape hatch (provider
+    targets only — local targets never reach this builder).
+
+    *models* is the Model registry and *connection_id* the target's local
+    Connection id; live voice needs both to offer backend Model choices and
+    offers none without the registry.
     """
 
+    if task_type == TASK_LIVE_VOICE:
+        return TaskModelOptionSchema(
+            task_type=task_type,
+            target=target,
+            fields=_live_voice_fields(
+                provider_id, model, models=models, connection_id=connection_id
+            ),
+        )
     if task_type == TASK_SPEECH_TO_TEXT:
         fields = _speech_to_text_fields(provider_id, model)
     elif task_type == TASK_TEXT_TO_SPEECH:

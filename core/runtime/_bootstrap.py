@@ -31,6 +31,7 @@ from core.model_tasks import (
     VideoService,
 )
 from core.model_tasks.decisions import DecisionService
+from core.model_tasks.live import LiveVoiceService
 from core.models.models import ModelRegistry
 from core.performance import PerformanceService
 from core.projects import ProjectStore, build_agent_resolver
@@ -231,6 +232,7 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._decisions = DecisionService(
             runtime._model_tasks, runtime, runtime._storage.layout.decisions_db
         )
+        runtime._live_voice = LiveVoiceService(runtime._model_tasks, runtime)
         # Sessions are a canonical service: it opens and verifies one database
         # before any Agent lifecycle operation can create or validate a Session.
         # Partial startup must close every Session resource in reverse order so a
