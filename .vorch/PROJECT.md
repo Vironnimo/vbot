@@ -31,7 +31,7 @@ Large source files are an independent maintenance problem: they increase the con
 
 Live voice is the `live_voice` Task Model: the server owns the provider call, delegated reasoning, and app operations; the accessor holds only WebRTC media to the provider and answers UI requests. See `model_tasks/live.md` for details and secure-context limits.
 
-**Persistence:** Canonical Session history: normalized columns in `<data-dir>/sessions.db` (SQLite `STRICT`, WAL where safe - packaged Windows runtimes pin a WAL-safe SQLite - `synchronous=FULL`; `session-store.json` authorizes creation). External-content FTS indexes searchable Messages; a second trigram index excludes Tool-role bulk. No mirrored search-text table. Verified `session-snapshots/` under the data directory provide auto-restore; only explicit operator, update, or converter workflows create them. Normal Runtime startup/operation never copies the database. `session-recovery.json` records incidents.
+**Persistence:** Every SQLite database opens through the shared kernel `core/database/` (`database.md`): connection and journal policy, additive schema evolution with a migration ledger, and for canonical databases the data-store marker, data snapshots, quarantine and auto-restore. Canonical Session history: normalized columns in `<data-dir>/sessions.db` (SQLite `STRICT`, WAL where safe - packaged Windows runtimes pin a WAL-safe SQLite - `synchronous=FULL`). `<data-dir>/data-store.json` authorizes every canonical database and records its identity and format generation. External-content FTS indexes searchable Messages; a second trigram index excludes Tool-role bulk. No mirrored search-text table. Verified data snapshots under `<data-dir>/snapshots/` provide per-database auto-restore; only explicit operator, update, or converter workflows create them. Normal Runtime startup/operation never copies a database. Recovery incidents live under `incidents/`, damaged files under `quarantine/`.
 
 **Tools:** Tolerate understandable Agent mistakes only while preserving operation, target, values, scope, and constraints; schema similarity alone is not intent. Schemas, argument normalization/validation, concurrency: `tools.md`. Agent-facing definition design: `tools/designing-agent-tools.md`.
 
@@ -53,6 +53,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 | runs.md | `core/runs/` | Run lifecycle, cancellation, timeline events, queues |
 | compaction.md | `core/compaction/` | Triggers, strategies, plans, checkpoints |
 | sessions.md | `core/sessions/` | Canonical SQLite Session persistence, metadata, and lifecycle |
+| database.md | `core/database/` | Shared SQLite kernel, format-stability contract, data-store marker, data snapshots and recovery |
 | recall.md | `core/recall/` | Recall backends: canonical scan, FTS index, vector index |
 | statistics.md | `core/statistics/` | Disposable SQLite projection, report RPC |
 | memory.md | `core/memory/` | Pinned memory service, workspace memory files |
@@ -90,7 +91,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 
 **Time:** Persist ISO 8601 UTC timestamps with explicit offset. Optional IANA `timezone` defaults to the server host zone; once Settings resolve, it alone controls Agent context, wall-clock Calendar/Cron behavior, and UI rendering, never implicit browser/host time. No implicit `datetime.now()`.
 
-**No legacy compatibility in app code.** Development schemas/config formats may break; only the current format is valid. No auto-migrations, fallback keys, or old-field branches. Manual converters belong in `scripts/converters/`, run explicitly by the user, never from startup or storage layers.
+**Persisted formats are stable (Generation 1).** Durable databases and JSON documents evolve compatibly: additive changes only (new tables, nullable or defaulted columns, optional JSON fields); readers tolerate and writers preserve unknown fields; data backfills are named, idempotent migrations recorded in the database, and a migration that older versions cannot read declares so. Renames, type or meaning changes, removals and new constraints require a new format generation with an explicit converter run by the updater or CLI, never by normal startup. App code knows only the current generation: no fallback keys or old-field branches. Details: `database.md`.
 
 **I18n:** All user-visible strings use i18n with English fallback: backend `utils/`, frontend `webui/src/lib/i18n.js`.
 
@@ -118,7 +119,7 @@ python desktop/main.py                # Desktop shell
 ```
 A git-ignored checkout marker selects dev data `~/.vbot-dev`, port `8421`. Installed CLI outside the checkout uses product defaults `~/.vbot`, `8420`. Never target the installed instance with development commands, including its interpreter: running an installed `versions/<id>/runtime/python.exe` writes `__pycache__` into the verified version, and the next update fails with "Release file inventory does not match its payload". Managed worktrees have separate data dirs and ports.
 
-**Session store:** Live operator-safe health: `python cli/main.py session-store status|snapshot|incident`; `snapshot restore` requires a proven-stopped target. Runs, Messages, Tool invocations/results and checkpoints are stored relationally.
+**Data store:** Live operator-safe health of every canonical database: `python cli/main.py data-store status|snapshot|incident`; `snapshot restore` requires a proven-stopped target. Session Runs, Messages, Tool invocations/results and checkpoints are stored relationally in `sessions.db`.
 
 **Frontend build:** `cd webui && npm ci && npm run build`. Also compiles bundled Extension `ui/page.html` entries to relative `web/` assets via `webui/scripts/build-extension-pages.mjs`; installers ship assets and Extension sources. The frontend gate covers these external source/test paths with the shared dependency tree.
 
