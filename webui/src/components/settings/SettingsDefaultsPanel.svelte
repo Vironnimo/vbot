@@ -139,9 +139,7 @@
       label: t(`agents.form.thinkingEffortOption.${option}`, option),
     })),
   ]);
-  let saveDisabled = $derived(
-    saving || agentDefaultsMatch(agentDefaults, settings),
-  );
+  let saveDisabled = $derived(saving || !agentDefaultsDraftHasChanges());
   const autosaveContext = useAutosaveContext();
   const modelCatalogLoader = createModelCatalogLoader({
     listModels,
@@ -269,13 +267,12 @@
     );
   }
 
+  // Dirty state, scheduling and saving all compare the normalized draft (the
+  // payload that would be sent) with the persisted values, so an empty
+  // fallback row or a respelled temperature that normalizes to the stored
+  // value is not a pending change.
   function agentDefaultsDraftHasChanges() {
-    const persisted = normalizeAgentDefaultsFormValues(settings);
-    // Array values (fallback_models) need a structural compare, not !==.
-    return Object.keys(persisted).some(
-      (key) =>
-        JSON.stringify(agentDefaults[key]) !== JSON.stringify(persisted[key]),
-    );
+    return !agentDefaultsMatch(agentDefaults, settings);
   }
 
   function handleAgentDefaultsChange(key, value) {
