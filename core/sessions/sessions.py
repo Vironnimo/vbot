@@ -54,6 +54,8 @@ from core.sessions._types import (
     SessionReadBatch,
     SessionReadCursor,
     SessionRunCompletion,
+    SessionSearchOrder,
+    SessionSearchResult,
     TemporarySessionBinding,
 )
 from core.sessions.errors import FtsHealth
@@ -1019,7 +1021,7 @@ class ChatSessionManager:
         """Return the bounded question/final-answer context for a past Message."""
         return self._store.recall_context(address, message_id)
 
-    def fts_search(
+    def search_messages(
         self,
         query: str,
         *,
@@ -1027,25 +1029,38 @@ class ChatSessionManager:
         agent_id: str | None,
         session_id: str | None = None,
         match_mode: str = "all_terms",
+        order: SessionSearchOrder = "relevance",
         limit: int = 1_000,
         roles: Sequence[str] | None = None,
         since: str | None = None,
         until: str | None = None,
         excluded_session_ids: Sequence[str] = (),
         include_subagents: bool = False,
-    ) -> builtins.list[tuple[SessionAddress, str, str, str, float]]:
-        return self._store.fts_search(
+        use_fts: bool = True,
+    ) -> SessionSearchResult:
+        """Return up to ``limit`` active Messages whose conversation text matches.
+
+        Only live Sessions whose Recall visibility the request admits are
+        searched. Each candidate is checked literally (case-insensitive
+        substring per ``match_mode``) before it counts, so results are exact
+        and full when enough matches exist; a candidate budget marks longer
+        searches incomplete. FTS supplies candidates by relevance or time;
+        ``use_fts=False`` or an unavailable index scans by Message time.
+        """
+        return self._store.search_messages(
             query,
             project_id=project_id,
             agent_id=agent_id,
             session_id=session_id,
             match_mode=match_mode,
+            order=order,
             limit=limit,
             roles=roles,
             since=since,
             until=until,
             excluded_session_ids=excluded_session_ids,
             include_subagents=include_subagents,
+            use_fts=use_fts,
         )
 
     @staticmethod

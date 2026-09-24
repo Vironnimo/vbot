@@ -293,6 +293,43 @@ class SessionHistoryRevision:
     recall_visibility: SessionRecallVisibility
 
 
+SessionSearchOrder = Literal["relevance", "newest", "oldest"]
+
+
+@dataclass(frozen=True)
+class SessionSearchHit:
+    """One active Message whose conversation text matched a Session search.
+
+    ``text`` is the Message's conversation text; ``rank`` is its bm25 rank for
+    relevance-ordered FTS searches and ``0.0`` otherwise.
+    """
+
+    address: SessionAddress
+    message_id: str
+    role: str
+    timestamp: str
+    text: str
+    rank: float
+
+
+@dataclass(frozen=True)
+class SessionSearchResult:
+    """Exactly matching Messages of one Session search, in the requested order.
+
+    ``complete`` is false when the candidate budget ended before the search
+    found its limit or ran out of candidates, so more matches may exist.
+    ``method`` names what enumerated candidates; ``fallback_reason`` says why a
+    requested FTS search scanned instead: ``fts_unavailable``, ``fts_error``, or
+    ``tool_inclusive`` (a Tool-inclusive FTS search found nothing and retried by
+    substring).
+    """
+
+    hits: tuple[SessionSearchHit, ...]
+    complete: bool
+    method: Literal["fts", "scan"]
+    fallback_reason: str | None = None
+
+
 @dataclass(frozen=True)
 class SessionListFilters:
     include_subagents: bool = True

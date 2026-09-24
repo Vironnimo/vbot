@@ -3,11 +3,9 @@
 
 from __future__ import annotations
 
-import builtins
 import json
 import logging
 import sqlite3
-from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 from core.chat.errors import ChatSessionError
@@ -389,24 +387,8 @@ _KEYED_RECORDS = "m.message_key IN (SELECT value FROM json_each(?))"
 
 
 _SEARCH_RESULT_LIMIT = 1_000
-_CANONICAL_SEARCH_SCAN_LIMIT = 10_000
-
-
-class _FtsSearchRows(builtins.list[tuple["SessionAddress", str, str, str, float]]):
-    """List-compatible search rows with internal fallback coverage metadata."""
-
-    def __init__(
-        self,
-        rows: Sequence[tuple[SessionAddress, str, str, str, float]] = (),
-        *,
-        source: str,
-        complete: bool = True,
-        fallback_reason: str | None = None,
-    ) -> None:
-        super().__init__(rows)
-        self.source = source
-        self.complete = complete
-        self.fallback_reason = fallback_reason
+# Candidates one Message search checks before it reports an incomplete result.
+_SEARCH_CANDIDATE_LIMIT = 10_000
 
 
 def _json_object(value: JsonObject, name: str) -> str:
