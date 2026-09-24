@@ -31,6 +31,7 @@ from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
     RPC_ERROR_INVALID_REQUEST,
     RPC_ERROR_QUEUE_ITEM_NOT_FOUND,
+    RPC_ERROR_QUEUE_ITEM_STEERING,
     RPC_ERROR_RUN_NOT_FOUND,
     RpcError,
 )
@@ -789,8 +790,14 @@ def _chat_queue_remove(state: Any, params: JsonObject) -> JsonObject:
     item_id = _required_string(params, "item_id")
     try:
         chat_runs = _state_chat_runs(state)
-        if not _queue_item_is_public(chat_runs, agent_id, session_id, item_id, project_id):
+        queued_item = _public_queue_item(chat_runs, agent_id, session_id, item_id, project_id)
+        if queued_item is None:
             raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
+        if queued_item.steering_in_flight:
+            raise RpcError(
+                RPC_ERROR_QUEUE_ITEM_STEERING,
+                "queued item is being delivered into the running Run and can no longer be removed",
+            )
         removed = chat_runs.remove_queued(agent_id, session_id, item_id, project_id=project_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -824,6 +831,11 @@ async def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
         queued_item = _public_queue_item(chat_runs, agent_id, session_id, item_id, project_id)
         if queued_item is None:
             raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
+        if queued_item.steering_run_id is not None:
+            raise RpcError(
+                RPC_ERROR_QUEUE_ITEM_STEERING,
+                "queued item is being steered into the running Run and can no longer be edited",
+            )
         if not queued_item.editable:
             raise RpcError(
                 RPC_ERROR_INVALID_REQUEST,

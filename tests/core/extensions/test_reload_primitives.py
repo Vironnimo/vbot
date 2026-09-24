@@ -175,3 +175,80 @@ async def test_reload_quiesces_active_owner_before_detaching_its_tools(tmp_path:
     await reload_task
     with pytest.raises(ToolNotFoundError):
         tools.get("owned_tool")
+
+
+@pytest.mark.asyncio
+async def test_reload_retires_old_registry_while_replacement_loads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.extensions.extensions import HookContext
+    from core.extensions.interactions import InteractionEvent
+    from core.extensions.operations import ExtensionHost
+
+    root = tmp_path / "extensions"
+    _write_single_file(
+        root,
+        "hooky",
+        "calls = []\n"
+        "def register(api):\n"
+        "    api.on('run_start', lambda ctx, **payload: calls.append('hook'))\n"
+        "    api.register_interaction_handler(\n"
+        "        'hooky', lambda event, responder: calls.append('tap')\n"
+        "    )\n",
+    )
+    old = ExtensionRegistry.load(root)
+    old.bind_host(cast(Any, SimpleNamespace(for_owner=None)))
+    identity = old.registration_identity("hooky")
+    old.host_for(identity)
+    module = sys.modules[next(name for name in sys.modules if name.startswith("vbot_ext."))]
+    loading = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_aload(cls: type[ExtensionRegistry], *_args: Any, **_kwargs: Any):
+        loading.set()
+        await release.wait()
+        return ExtensionRegistry()
+
+    monkeypatch.setattr(ExtensionRegistry, "aload", classmethod(slow_aload))
+    holder = {"registry": old}
+    runtime = ExtensionRuntime(
+        storage=cast(Any, SimpleNamespace(data_dir=tmp_path, load_settings=lambda: {})),
+        resources_path=tmp_path,
+        tools=ToolRegistry(),
+        get_registry=lambda: holder["registry"],
+        set_registry=lambda registry: holder.__setitem__("registry", registry),
+        get_command_dispatcher=lambda: None,
+        extra_directories=lambda _settings: [],
+        load_options=lambda _settings: (set(), {}),
+        live_config=lambda _name: {},
+        resolve_credential=lambda _key: "",
+        reload_recall=lambda: None,
+        refresh_prompts=lambda: None,
+        reload_skills=AsyncMock(),
+        recover_recall=lambda _names: None,
+        logger=SimpleNamespace(
+            info=lambda *_args, **_kwargs: None, warning=lambda *_args, **_kwargs: None
+        ),
+        make_host=lambda: cast(ExtensionHost, SimpleNamespace(for_owner=None)),
+    )
+
+    reload_task = asyncio.create_task(runtime.reload())
+    await loading.wait()
+    try:
+        # The old registry is still installed, but no longer reaches its Extensions.
+        assert holder["registry"] is old
+        await old.dispatch_run_start(
+            HookContext(session_id="s", agent_id="a", run_id="r"), session_id="s", agent_id="a"
+        )
+        tap = InteractionEvent("telegram", "c", "chat", "u", "m", "hooky:go", ())
+        assert await old.dispatch_channel_interaction(tap, cast(Any, None)) is False
+        assert module.calls == []
+        with pytest.raises(ValueError):
+            old.host_for(identity)
+        with pytest.raises(ValueError):
+            old.management("hooky")
+        assert old.page_declarations() == []
+    finally:
+        release.set()
+        await reload_task
+    assert holder["registry"] is not old

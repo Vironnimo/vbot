@@ -30,6 +30,15 @@ TOP_LEVEL_QUEUED_BACKGROUND_NOTE = (
     "result once it finishes. Continue other work, or finish your turn to wait for a "
     "result."
 )
+SUBAGENT_REMOVED_FROM_QUEUE_MESSAGE = (
+    "The queued Sub-Agent work was removed from its Session's Queue before it started, "
+    "so it did not run. Call subagent again if the work is still needed."
+)
+SUBAGENT_QUEUED_TIMEOUT_MESSAGE_TEMPLATE = (
+    "Sub-agent run timed out after {minutes} minutes while waiting in its busy Session's "
+    "Queue; it was removed before it started and did not run."
+)
+SUBAGENT_START_FAILED_MESSAGE_TEMPLATE = "The queued Sub-Agent work could not start: {error}"
 SUBAGENT_STATUS_RUNNING_NOTE = (
     "Still running; the result is delivered automatically. Continue other work, or "
     "finish your turn to wait for it. Repeated status calls do not make it finish "

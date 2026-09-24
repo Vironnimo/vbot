@@ -43,7 +43,9 @@ Successful explicit reload and Settings mutations that reload/enable/disable Ext
 
 ## Full reload sequence
 
-`Runtime.reload_extensions()` runs on the serving loop under the ExtensionRuntime mutation lock: read fresh roots/settings; detach old Extension Tools and Commands; await old shutdown; purge all `vbot_ext` modules; load a fresh registry; swap it in; reapply Tools and Commands to their stable owners; rebuild Recall, Prompt blocks, and Skills against the new loaded set; then await new startup.
+`Runtime.reload_extensions()` runs on the serving loop under the ExtensionRuntime mutation lock: read fresh roots/settings; quiesce the old registry and retire it (Hooks, interaction handlers, owner hosts, page/management operations and Session capabilities stop reaching old Extensions while the replacement loads; page RPCs fail with a refresh-the-page error, Hooks simply do not fire); detach old Extension Tools and Commands; await old shutdown; purge all `vbot_ext` modules; load a fresh registry; swap it in; reapply Tools and Commands to their stable owners; rebuild Recall, Prompt blocks, and Skills against the new loaded set; then await new startup.
+
+While the runtime is closing, reload and enable/disable changes, like a lookup of an unbound owner host, raise `ExtensionUnavailableError`, an expected `VBotError`: RPC reports it as `domain_error`, and `GET /api/extension-runs/{token}/events` answers 404 for it like an unknown token, instead of an internal error.
 
 Once admitted, reload, live disable, and startup finish their structural work before propagating caller cancellation; cancellation while waiting for admission makes no changes. A later mutation failure is logged with its operation and traceback before caller cancellation propagates. Async Runtime shutdown closes Extension mutation admission and drains the admitted operation under the same lock before shutting down the final registry and clearing service references.
 

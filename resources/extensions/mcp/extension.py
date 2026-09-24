@@ -726,9 +726,11 @@ class MCPService:
 
     async def _stop(self, identifier: str) -> None:
         runner = self.runners.pop(identifier, None)
-        if runner is not None:
-            await runner.close()
-        self.api.operations.replace_tools(identifier, [])
+        try:
+            if runner is not None:
+                await runner.close()
+        finally:
+            self.api.operations.replace_tools(identifier, [])
 
     async def _test(self, runner: ConnectionRunner) -> dict[str, Any]:
         catalog = await runner.invoke("catalog", {})

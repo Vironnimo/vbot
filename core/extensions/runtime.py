@@ -8,7 +8,11 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from core.extensions.extensions import ExtensionRegistry, purge_extension_modules
+from core.extensions.extensions import (
+    ExtensionRegistry,
+    ExtensionUnavailableError,
+    purge_extension_modules,
+)
 from core.extensions.operations import ExtensionHost
 from core.storage import StorageManager
 
@@ -62,7 +66,7 @@ class ExtensionRuntime:
         """Rebuild the layer from current disk and Settings, restart-equivalently."""
         async with self._mutation_lock:
             if self._closing:
-                raise RuntimeError("Extension runtime is closing")
+                raise ExtensionUnavailableError("Extension runtime is closing")
             await self._finish_mutation(self._reload(), name="reload")
 
     async def _reload(self) -> None:
@@ -74,6 +78,10 @@ class ExtensionRuntime:
         old_registry = self._get_registry()
         if old_registry is not None:
             await old_registry.quiesce_all()
+            # The old layer stays installed until the replacement finished loading
+            # (async registrations may take seconds); retire it now so nothing
+            # dispatches to Extensions that are about to shut down.
+            old_registry.retire_registration()
             old_registry.remove_applied_tools(self._tools)
             if dispatcher is not None:
                 old_registry.remove_applied_commands(dispatcher)
@@ -123,7 +131,7 @@ class ExtensionRuntime:
             return
         async with self._mutation_lock:
             if self._closing:
-                raise RuntimeError("Extension runtime is closing")
+                raise ExtensionUnavailableError("Extension runtime is closing")
             await self._finish_mutation(self._apply_disabled_change(newly_disabled), name="disable")
 
     async def _apply_disabled_change(self, newly_disabled: set[str]) -> None:

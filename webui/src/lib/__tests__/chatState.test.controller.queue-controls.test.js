@@ -207,6 +207,40 @@ describe('chat controller', () => {
     expect(sessionState.actionError).toContain('offline');
   });
 
+  it.each(['edit', 'remove'])(
+    'explains a Queue %s rejected because the item is being steered',
+    async (mutation) => {
+      const steering = Object.assign(new Error('raw server text'), {
+        code: 'queue_item_steering',
+      });
+      const listQueue = vi.fn().mockResolvedValue({
+        items: [{ id: 'old', content: 'Original', steering: true }],
+      });
+      const { chatState, controller } = setup({
+        operationOverrides: {
+          listQueue,
+          updateQueueItem: vi.fn().mockRejectedValue(steering),
+          removeFromQueue: vi.fn().mockRejectedValue(steering),
+        },
+      });
+      const session = ensureSessionState(chatState, 'alpha', 'one');
+      session.queue = [{ id: 'old', content: 'Original', editable: true }];
+
+      if (mutation === 'edit') {
+        expect(await controller.updateQueued(session, 'old', 'Edited')).toBe(
+          false,
+        );
+      } else {
+        await controller.removeQueued(session, 'old');
+      }
+
+      expect(session.actionError).not.toContain('raw server text');
+      expect(session.actionError).not.toBe('');
+      expect(listQueue).toHaveBeenCalledOnce();
+      expect(session.queue[0]).toMatchObject({ id: 'old', steering: true });
+    },
+  );
+
   it.each(['edit', 'remove', 'enqueue'])(
     'keeps an accepted Queue %s when an earlier list response arrives later',
     async (mutation) => {

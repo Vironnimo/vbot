@@ -234,6 +234,23 @@ def test_get_attachment_returns_not_found_for_unknown_id(tmp_path: Path) -> None
     assert response.status_code == 404
 
 
+def test_get_attachment_with_corrupt_metadata_is_unavailable_not_internal_error(
+    tmp_path: Path,
+) -> None:
+    with _create_client(tmp_path) as client:
+        upload_response = client.post(
+            "/api/upload",
+            files={"file": ("photo.jpg", _jpeg_payload(), "image/jpeg")},
+        )
+        attachment_id = upload_response.json()["attachment_id"]
+        store = AttachmentStore(tmp_path / "data", max_size_bytes=MAX_ATTACHMENT_SIZE_BYTES)
+        store._sidecar_path(attachment_id).write_text("{not json", encoding="utf-8")  # noqa: SLF001
+        response = client.get(f"/api/attachments/{attachment_id}")
+
+    assert response.status_code == 404
+    assert "sidecar" not in response.text.lower()
+
+
 def _create_client(tmp_path: Path) -> TestClient:
     runtime = _AttachmentRuntime(tmp_path / "data")
     app = create_app(runtime=cast(Any, runtime))

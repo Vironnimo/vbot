@@ -989,16 +989,27 @@ class ChatRunManager:
 
                 try:
                     self._ensure_run_admission_allowed_locked(address, item.admission)
+                    run = self._start_run_locked(
+                        address=address,
+                        executor=item.executor,
+                        queue_item_id=item.item_id,
+                        admission=item.admission,
+                    )
                 except RunAdmissionBlockedError as error:
                     item.future.set_exception(error)
                     continue
-
-                run = self._start_run_locked(
-                    address=address,
-                    executor=item.executor,
-                    queue_item_id=item.item_id,
-                    admission=item.admission,
-                )
+                except Exception as error:
+                    # One broken item must not strand the rest of the Queue. Its
+                    # owner receives the failure; the remaining items keep draining.
+                    _LOGGER.error(
+                        "Queued Run could not start (agent=%s session=%s item=%s)",
+                        address.agent_id,
+                        address.session_id,
+                        item.item_id,
+                        exc_info=True,
+                    )
+                    item.future.set_exception(error)
+                    continue
                 item.future.set_result(run)
                 return
 
@@ -1029,9 +1040,11 @@ class ChatRunManager:
             event_retention_limit=self._run_event_retention_limit,
         )
         run._started_from_queue_item_id = queue_item_id  # noqa: SLF001 - run carries its own start origin.
+        # Create the task before registering the Run: a failure here leaves no
+        # active Session entry behind. The task cannot run before this returns.
+        task = asyncio.create_task(self._execute(run, address, executor))
         self._active_by_session[address] = run
         self._runs[run.id] = run
-        task = asyncio.create_task(self._execute(run, address, executor))
         run.set_task(task)
         self._notify_run_started(run)
         return run
