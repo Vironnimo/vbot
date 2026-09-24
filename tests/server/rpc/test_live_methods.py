@@ -18,15 +18,17 @@ JsonObject = dict[str, Any]
 
 class FakeRegistry:
     def __init__(self) -> None:
-        self.starts: list[tuple[Any, str]] = []
+        self.starts: list[tuple[Any, str, str | None]] = []
         self.stops: list[str] = []
         self.answers: list[tuple[str, str, JsonObject | None, str | None]] = []
         self.start_error: Exception | None = None
 
-    async def start(self, service: Any, *, offer_sdp: str) -> Any:
-        self.starts.append((service, offer_sdp))
+    async def start(self, service: Any, *, media: str, offer_sdp: str | None = None) -> Any:
+        self.starts.append((service, media, offer_sdp))
         if self.start_error is not None:
             raise self.start_error
+        if media == "relay":
+            return SimpleNamespace(id="call-1", media={"type": "relay", "audio": {}})
         return SimpleNamespace(id="call-1", media={"type": "webrtc", "sdp": "answer"})
 
     def stop(self, call_id: str) -> bool:
@@ -65,18 +67,28 @@ def test_status_reports_the_live_voice_binding() -> None:
 @pytest.mark.asyncio
 async def test_start_passes_the_offer_to_the_registry_with_the_live_voice_service() -> None:
     current = state()
-    assert await _start(current, {"sdp": "v=0 offer"}) == {
+    assert await _start(current, {"media": "webrtc", "sdp": "v=0 offer"}) == {
         "call_id": "call-1",
         "media": {"type": "webrtc", "sdp": "answer"},
     }
-    assert current.live_calls.starts == [(current.runtime.live_voice, "v=0 offer")]
+    assert current.live_calls.starts == [(current.runtime.live_voice, "webrtc", "v=0 offer")]
+
+
+@pytest.mark.asyncio
+async def test_start_a_relay_call_without_an_offer() -> None:
+    current = state()
+    assert await _start(current, {"media": "relay"}) == {
+        "call_id": "call-1",
+        "media": {"type": "relay", "audio": {}},
+    }
+    assert current.live_calls.starts == [(current.runtime.live_voice, "relay", None)]
 
 
 @pytest.mark.asyncio
 async def test_start_returns_a_rejection_code_as_its_result() -> None:
     current = state()
     current.live_calls.start_error = LiveStartRejected("access_denied", "private detail")
-    assert await _start(current, {"sdp": "v=0"}) == {"error": "access_denied"}
+    assert await _start(current, {"media": "webrtc", "sdp": "v=0"}) == {"error": "access_denied"}
 
 
 @pytest.mark.asyncio
@@ -84,12 +96,25 @@ async def test_start_is_refused_while_the_server_shuts_down() -> None:
     current = state()
     current.live_calls.start_error = LiveRegistryClosedError()
     with pytest.raises(RpcError) as exc_info:
-        await _start(current, {"sdp": "v=0"})
+        await _start(current, {"media": "relay"})
     assert exc_info.value.code == "invalid_request"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("params", [{}, {"sdp": ""}, {"sdp": 1}, {"sdp": "v=0", "model": "x"}])
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"sdp": "v=0"},
+        {"media": "webrtc"},
+        {"media": "webrtc", "sdp": ""},
+        {"media": "webrtc", "sdp": 1},
+        {"media": "webrtc", "sdp": "v=0", "model": "x"},
+        {"media": "relay", "sdp": "v=0"},
+        {"media": "sip"},
+        {"media": 1},
+    ],
+)
 async def test_start_rejects_invalid_params(params: JsonObject) -> None:
     current = state()
     with pytest.raises(RpcError):

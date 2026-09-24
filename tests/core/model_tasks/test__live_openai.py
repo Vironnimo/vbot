@@ -165,7 +165,7 @@ async def test_codex_call_uses_verified_route_and_joins_control_with_same_header
         assert request.headers[name] == value
     assert {"session-id", "thread-id", "x-session-id"} <= set(request.headers)
     assert wire.call_id == "rtc_abc-123"
-    assert wire.answer_sdp == ANSWER
+    assert wire.media == {"type": "webrtc", "sdp": ANSWER}
     url, options = connect.calls[0]
     assert url == "wss://api.openai.com/v1/live/rtc_abc-123"
     control_headers = {key.lower(): value for key, value in options["additional_headers"].items()}

@@ -18,6 +18,7 @@ from core.model_tasks.live import LiveCallHost, LiveRunNotice, LiveStartRejected
 from server.app import create_app
 from server.events import ServerEventBus
 from server.live import (
+    LIVE_AUDIO_FRAME_MAX_BYTES,
     LIVE_SOCKET_CLOSE_ENDED,
     LIVE_SOCKET_CLOSE_LAGGED,
     LIVE_SOCKET_CLOSE_REPLACED,
@@ -57,10 +58,15 @@ async def drain() -> None:
 class FakeCall:
     """A provider call that closes when asked and records announcements."""
 
-    def __init__(self, call_id: str, host: LiveCallHost) -> None:
+    def __init__(self, call_id: str, host: LiveCallHost, media: str = "webrtc") -> None:
         self.id = call_id
         self.host = host
-        self.media: JsonObject = {"type": "webrtc", "sdp": f"answer-{call_id}"}
+        self.media: JsonObject = (
+            {"type": "relay", "audio": {"encoding": "pcm16", "sample_rate": 24000, "channels": 1}}
+            if media == "relay"
+            else {"type": "webrtc", "sdp": f"answer-{call_id}"}
+        )
+        self.audio: list[bytes] = []
         self.notices: list[LiveRunNotice] = []
         self.close_calls = 0
         self.abort_calls = 0
@@ -82,6 +88,9 @@ class FakeCall:
     def announce_run(self, notice: LiveRunNotice) -> None:
         self.notices.append(notice)
 
+    def push_audio(self, pcm: bytes) -> None:
+        self.audio.append(pcm)
+
     async def wait_closed(self) -> None:
         await self._closed.wait()
 
@@ -95,18 +104,20 @@ class FakeService:
 
     def __init__(self) -> None:
         self.calls: list[FakeCall] = []
-        self.offers: list[str] = []
+        self.starts: list[tuple[str, str | None]] = []
         self.rejection: str | None = None
         self.gate: asyncio.Event | None = None
 
-    async def start_call(self, *, offer_sdp: str, host: LiveCallHost) -> FakeCall:
+    async def start_call(
+        self, *, media: str, offer_sdp: str | None, host: LiveCallHost
+    ) -> FakeCall:
         if self.rejection is not None:
             raise LiveStartRejected(self.rejection)
         if self.gate is not None:
             await self.gate.wait()
-        call = FakeCall(f"call-{len(self.calls) + 1}", host)
+        call = FakeCall(f"call-{len(self.calls) + 1}", host, media)
         self.calls.append(call)
-        self.offers.append(offer_sdp)
+        self.starts.append((media, offer_sdp))
         return call
 
 
@@ -133,7 +144,7 @@ class OwnerReader:
 
     def __init__(self, owner: LiveOwnerStream) -> None:
         self.owner = owner
-        self.frames: list[JsonObject] = []
+        self.frames: list[Any] = []
         self.done = False
         self._task = asyncio.create_task(self._read())
 
@@ -144,7 +155,9 @@ class OwnerReader:
         self.done = True
 
     def types(self) -> list[str]:
-        return [str(frame["type"]) for frame in self.frames]
+        return [
+            "audio" if isinstance(frame, bytes) else str(frame["type"]) for frame in self.frames
+        ]
 
     async def stop(self) -> None:
         self._task.cancel()
@@ -163,7 +176,11 @@ class Harness:
         self.readers: list[OwnerReader] = []
 
     async def start(self, sdp: str = "v=0 offer") -> FakeCall:
-        await self.registry.start(self.service, offer_sdp=sdp)
+        await self.registry.start(self.service, media="webrtc", offer_sdp=sdp)
+        return self.service.calls[-1]
+
+    async def start_relay(self) -> FakeCall:
+        await self.registry.start(self.service, media="relay")
         return self.service.calls[-1]
 
     def attach(self, call: FakeCall) -> OwnerReader:
@@ -194,7 +211,7 @@ async def live() -> AsyncIterator[Harness]:
 @pytest.mark.asyncio
 async def test_start_buffers_updates_until_the_owner_attaches(live: Harness) -> None:
     call = await live.start()
-    assert live.service.offers == ["v=0 offer"]
+    assert live.service.starts == [("webrtc", "v=0 offer")]
     assert live.registry.active_call_id == call.id
     call.host.publish({"type": "state", "phase": "connecting"})
     call.host.publish({"type": "state", "phase": "live"})
@@ -333,6 +350,62 @@ async def test_unknown_calls_cannot_be_attached_stopped_or_answered(live: Harnes
     assert live.registry.attach("missing") is None
     assert live.registry.stop("missing") is False
     assert live.registry.resolve_ui_request("missing", "ui-1", result={}) is False
+
+
+# -- relayed audio --------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_relay_audio_reaches_only_an_attached_owner(live: Harness) -> None:
+    call = await live.start_relay()
+    assert live.service.starts == [("relay", None)]
+    call.host.publish_audio(b"\x01\x00")
+    call.host.publish({"type": "state", "phase": "live"})
+    reader = live.attach(call)
+    call.host.publish_audio(b"\x02\x00")
+    call.host.publish_audio(b"")
+    call.host.publish({"type": "playback_clear"})
+    await settle(lambda: len(reader.frames) == 3)
+    assert reader.frames == [
+        {"type": "state", "phase": "live"},
+        b"\x02\x00",
+        {"type": "playback_clear"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_relay_audio_counts_against_the_owner_queue_limit() -> None:
+    harness = Harness(LiveCallLimits(update_buffer_limit=2, owner_queue_limit=2))
+    try:
+        call = await harness.start_relay()
+        owner = harness.registry.attach(call.id)
+        assert owner is not None
+        for index in range(3):
+            call.host.publish_audio(bytes([index, 0]))
+        assert owner.close_code == LIVE_SOCKET_CLOSE_LAGGED
+        call.host.publish_audio(b"\x09\x00")
+        call.host.publish({"type": "state", "phase": "live"})
+        fresh = harness.attach(call)
+        await settle(lambda: len(fresh.frames) == 1)
+        assert fresh.frames == [{"type": "state", "phase": "live"}]
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_microphone_audio_from_the_owner_reaches_the_call(live: Harness) -> None:
+    call = await live.start_relay()
+    first = live.registry.attach(call.id)
+    assert first is not None
+    first.receive_audio(b"\x01\x00\x02\x00")
+    for malformed in (b"", b"\x01", bytes(LIVE_AUDIO_FRAME_MAX_BYTES + 2)):
+        first.receive_audio(malformed)
+    first.receive_audio(bytes(LIVE_AUDIO_FRAME_MAX_BYTES))
+    second = live.registry.attach(call.id)
+    assert second is not None
+    first.receive_audio(b"\x03\x00")
+    second.receive_audio(b"\x04\x00")
+    assert call.audio == [b"\x01\x00\x02\x00", bytes(LIVE_AUDIO_FRAME_MAX_BYTES), b"\x04\x00"]
 
 
 # -- stopping and ending ------------------------------------------------------
@@ -606,7 +679,7 @@ def rpc(client: TestClient, method: str, params: JsonObject) -> JsonObject:
 def test_socket_delivers_call_updates_and_closes_after_stop(tmp_path: Path) -> None:
     app, service = live_app(tmp_path)
     with TestClient(app) as client:
-        started = rpc(client, "live.start", {"sdp": "v=0 offer"})["result"]
+        started = rpc(client, "live.start", {"media": "webrtc", "sdp": "v=0 offer"})["result"]
         assert started == {"call_id": "call-1", "media": {"type": "webrtc", "sdp": "answer-call-1"}}
         portal(client).call(service.calls[0].host.publish, {"type": "state", "phase": "live"})
         with client.websocket_connect("/ws/live/call-1") as websocket:
@@ -619,10 +692,27 @@ def test_socket_delivers_call_updates_and_closes_after_stop(tmp_path: Path) -> N
         assert exc_info.value.code == LIVE_SOCKET_CLOSE_ENDED
 
 
+def test_socket_relays_audio_both_ways_as_binary_frames(tmp_path: Path) -> None:
+    app, service = live_app(tmp_path)
+    with TestClient(app) as client:
+        started = rpc(client, "live.start", {"media": "relay"})["result"]
+        assert started["media"]["type"] == "relay"
+        call = service.calls[0]
+        with client.websocket_connect("/ws/live/call-1") as websocket:
+            websocket.send_bytes(b"\x01\x00\x02\x00")
+            websocket.send_bytes(b"\x01")
+            websocket.send_json({"type": "ignored"})
+            portal(client).call(call.host.publish_audio, b"\x05\x00")
+            assert websocket.receive_bytes() == b"\x05\x00"
+            portal(client).call(call.host.publish, {"type": "playback_clear"})
+            assert websocket.receive_json() == {"type": "playback_clear"}
+            assert call.audio == [b"\x01\x00\x02\x00"]
+
+
 def test_socket_carries_ui_requests_answered_through_rpc(tmp_path: Path) -> None:
     app, service = live_app(tmp_path)
     with TestClient(app) as client:
-        rpc(client, "live.start", {"sdp": "v=0 offer"})
+        rpc(client, "live.start", {"media": "webrtc", "sdp": "v=0 offer"})
         call = service.calls[0]
         with client.websocket_connect("/ws/live/call-1") as websocket:
             operation = portal(client).start_task_soon(
@@ -657,6 +747,6 @@ def test_socket_rejects_an_unknown_call(tmp_path: Path) -> None:
 def test_server_shutdown_ends_the_active_call(tmp_path: Path) -> None:
     app, service = live_app(tmp_path)
     with TestClient(app) as client:
-        rpc(client, "live.start", {"sdp": "v=0 offer"})
+        rpc(client, "live.start", {"media": "webrtc", "sdp": "v=0 offer"})
     assert service.calls[0].close_calls == 1
     assert app.state.live_calls.active_call_id is None
