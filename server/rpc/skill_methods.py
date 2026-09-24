@@ -28,7 +28,13 @@ from server.events import RESOURCE_KIND_SKILLS
 from server.rpc._mutations import MutationHandler, serialized_mutation
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
-from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.errors import (
+    RPC_ERROR_AGENT_NOT_FOUND,
+    RPC_ERROR_DOMAIN,
+    RPC_ERROR_INVALID_REQUEST,
+    RPC_ERROR_SKILL_NOT_FOUND,
+    RpcError,
+)
 from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.validation import _optional_string, _required_string
 
@@ -60,7 +66,7 @@ def _validated_scope(state: Any, params: JsonObject) -> str:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, f"invalid agent scope id: {agent_id!r}")
         if not state.runtime.agents.exists(agent_id):
             raise RpcError(
-                RPC_ERROR_INVALID_REQUEST,
+                RPC_ERROR_AGENT_NOT_FOUND,
                 f"unknown agent for skill scope: {agent_id!r} (private skills are identity-only)",
             )
         return scope
@@ -279,7 +285,7 @@ async def _skill_set_disabled(state: Any, params: JsonObject) -> JsonObject:
     disabled = _required_bool(params, "disabled")
     inventory = await _SKILL_READ_WORKERS.run(state.runtime.skill_inventory)
     if not any(entry["name"] == name for entry in inventory["skills"]):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"unknown skill: {name!r}")
+        raise RpcError(RPC_ERROR_SKILL_NOT_FOUND, f"unknown skill: {name!r}")
     try:
         await _SKILL_READ_WORKERS.run(
             state.runtime.skill_policy.set_disabled, name, disabled=disabled
@@ -307,14 +313,14 @@ def _share_skill_policy(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, f"invalid agent id: {agent_id!r}")
     if not state.runtime.agents.exists(agent_id):
         raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
+            RPC_ERROR_AGENT_NOT_FOUND,
             f"unknown agent: {agent_id!r} (sharing is identity-agent-only)",
         )
     name = _required_string(params, "name")
     shared = _required_bool(params, "shared")
     if not state.runtime.agent_owns_private_skill(agent_id, name):
         raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
+            RPC_ERROR_SKILL_NOT_FOUND,
             f"agent {agent_id!r} owns no private skill named {name!r}",
         )
     receivers: list[str] = []
@@ -337,7 +343,7 @@ def _share_skill_policy(state: Any, params: JsonObject) -> JsonObject:
                 )
             if not state.runtime.agents.exists(receiver_id):
                 raise RpcError(
-                    RPC_ERROR_INVALID_REQUEST,
+                    RPC_ERROR_AGENT_NOT_FOUND,
                     f"unknown receiver agent: {receiver_id!r}",
                 )
             receivers.append(receiver_id)

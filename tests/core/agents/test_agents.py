@@ -431,6 +431,42 @@ def test_get_missing_agent_raises_not_found(store: AgentStore) -> None:
         store.get("missing")
 
 
+def test_case_variant_of_a_stored_agent_id_is_not_found(store: AgentStore) -> None:
+    # Ids are exact. A case-insensitive filesystem (Windows) opens the stored ``main``
+    # tree for ``MAIN``; that different id must still name no Agent on every platform,
+    # and lifecycle operations must never touch the real Agent through it.
+    store.create("main", "Main")
+
+    for operation in (
+        lambda: store.get("MAIN"),
+        lambda: store.get_raw("MAIN"),
+        lambda: store.update("MAIN", name="Renamed"),
+        lambda: store.rename("MAIN", "other"),
+        lambda: store.delete("MAIN"),
+        lambda: store.reset_current_after_session_removed("MAIN", "ses_missing"),
+    ):
+        with pytest.raises(AgentNotFoundError):
+            operation()
+
+    assert store.exists("MAIN") is False
+    assert store.get("main").name == "Main"
+    assert [agent.id for agent in store.list()] == ["main"]
+
+
+def test_get_reports_a_stored_id_that_disagrees_with_its_directory(store: AgentStore) -> None:
+    store.create("coder", "Coder")
+    agent_path = store.data_dir / "agents" / "coder" / "agent.json"
+    data = json.loads(agent_path.read_text(encoding="utf-8"))
+    data["id"] = "other"
+    agent_path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(AgentError) as exc_info:
+        store.get("coder")
+
+    assert not isinstance(exc_info.value, AgentNotFoundError)
+    assert store.exists("coder") is False
+
+
 def test_get_rejects_invalid_agent_json_schema(store: AgentStore) -> None:
     store.create("broken", "Broken Agent")
     agent_path = store.data_dir / "agents" / "broken" / "agent.json"

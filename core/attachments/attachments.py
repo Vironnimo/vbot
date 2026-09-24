@@ -327,7 +327,7 @@ def _sniff_mime(data: bytes, filename: str) -> str:
         return "image/jpeg"
     if data.startswith(b"\x89PNG"):
         return "image/png"
-    if data[:6] in (b"GIF87a", b"GIF89a") and len(data) >= 13:
+    if data[:6] in (b"GIF87a", b"GIF89a") and _has_gif_first_block(data):
         return "image/gif"
     if len(data) >= 12 and data.startswith(b"RIFF"):
         riff_format = data[8:12]
@@ -357,6 +357,25 @@ def _sniff_mime(data: bytes, filename: str) -> str:
         return "text/plain"
 
     return "application/octet-stream"
+
+
+def _has_gif_first_block(data: bytes) -> bool:
+    """Require the block that must follow a GIF's screen descriptor.
+
+    Text such as ``GIF89a version notes`` carries the signature too. A real GIF
+    continues after the 13-byte header and its optional global colour table with an
+    extension (``0x21``), an image descriptor (``0x2C``) or the trailer (``0x3B``).
+    The marker sits within the first 782 bytes, so bounded file probes and whole
+    uploads classify the same bytes identically; shorter data is not a GIF.
+    """
+
+    if len(data) < 13:
+        return False
+    flags = data[10]
+    offset = 13
+    if flags & 0x80:
+        offset += 3 * 2 ** ((flags & 0x07) + 1)
+    return len(data) > offset and data[offset] in (0x21, 0x2C, 0x3B)
 
 
 def _sniff_audio_video_media_type(data: bytes) -> str | None:

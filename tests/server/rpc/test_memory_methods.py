@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from core.agents import AgentStore
 from server.rpc.methods import dispatch_rpc
 from tests.server.rpc_test_support import StubAdapter, make_state
 
@@ -170,3 +171,28 @@ async def test_memory_mutation_publishes_scoped_invalidation(tmp_path: Path) -> 
         "kind": "memories",
         "scope": {"agent_id": "coder"},
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,params",
+    [
+        ("memory.list", {"agent_id": "ghost"}),
+        ("memory.add", {"agent_id": "ghost", "scope": "agent", "content": "x"}),
+        ("memory.remove", {"agent_id": "ghost", "scope": "user", "entry_id": 1}),
+    ],
+)
+async def test_memory_unknown_agent_is_agent_not_found(
+    tmp_path: Path,
+    method: str,
+    params: dict[str, object],
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    # The real store owns the not-found contract the RPC code is derived from.
+    state.runtime.agents = AgentStore(tmp_path / "data")
+
+    response = await dispatch_rpc(state, {"method": method, "params": params})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "agent_not_found"
+    assert state.event_bus.events == []

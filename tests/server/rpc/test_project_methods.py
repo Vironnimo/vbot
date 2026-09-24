@@ -377,6 +377,18 @@ def test_show_unknown_project_errors(tmp_path: Path) -> None:
     assert exc_info.value.code == "project_not_found"
 
 
+def test_show_case_variant_project_id_is_not_found(tmp_path: Path) -> None:
+    # Ids are exact even where the filesystem would open ``vbot`` for ``VBOT``.
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+
+    with pytest.raises(RpcError) as exc_info:
+        _show_project(state, {"project_id": "VBOT"})
+
+    assert exc_info.value.code == "project_not_found"
+
+
 def test_list_returns_projects(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     _add_project(state, {"cwd": str(_make_repo(tmp_path, "alpha")), "display_name": "Alpha"})

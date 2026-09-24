@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from core.sessions.format import read_session_store_marker
 from core.utils.config import Config
 from core.utils.logging import ManagedLoggerProxyHandler, QuietLogsWebSocketLifecycleFilter
 from server import main as server_main
@@ -235,6 +236,42 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
     }
     assert calls[0]["app"]["shutdown_token"]
     assert not (tmp_path / "data" / "runtime" / "server-8765.json").exists()
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_main_initializes_only_a_missing_data_directory(
+    tmp_path: Path, monkeypatch, existing: bool
+) -> None:
+    data_dir = tmp_path / "data"
+    if existing:
+        data_dir.mkdir()
+    markers: list[dict[str, Any] | None] = []
+
+    class FakeServer:
+        def __init__(self, config: object) -> None:
+            self.config = config
+
+        def run(self) -> None:
+            markers.append(read_session_store_marker(data_dir))
+
+    monkeypatch.setattr(
+        server_main,
+        "uvicorn",
+        SimpleNamespace(Config=lambda app, **_kwargs: app, Server=FakeServer),
+    )
+    monkeypatch.setattr(server_main, "activate_process_containment", lambda: None)
+    monkeypatch.setattr(server_main, "create_app", lambda **kwargs: kwargs)
+
+    main(["--data-dir", str(data_dir), "--port", "8765"])
+
+    assert len(markers) == 1
+    if existing:
+        # An existing root is never authorized here; Runtime startup decides.
+        assert markers[0] is None
+        assert not (data_dir / "agents").exists()
+    else:
+        assert markers[0] is not None
+        assert markers[0]["state"] == "bootstrap"
 
 
 def test_managed_logger_proxy_handler_routes_records_into_vbot_namespace() -> None:

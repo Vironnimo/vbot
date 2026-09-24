@@ -14,6 +14,9 @@ from cli.rpc_client import httpx as httpx
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
 
+_AGENT_NOT_FOUND = "agent_not_found"
+_SKILL_NOT_FOUND = "skill_not_found"
+
 
 def skill_install(
     instance: ServerInstance,
@@ -277,14 +280,21 @@ def skill_set_disabled(instance: ServerInstance, name: str, disabled: bool) -> C
 
     payload = _rpc_call(instance, "skill.set_disabled", {"name": name, "disabled": disabled})
     if not payload.ok:
-        if "unknown skill" in payload.message:
-            return _skill_name_suggestions(instance, payload.to_command_result())
-        return payload.to_command_result()
+        failed = payload.to_command_result()
+        if _failure_code(failed) == _SKILL_NOT_FOUND:
+            return _skill_name_suggestions(instance, name, failed)
+        return failed
     state = "disabled" if disabled else "enabled"
     return CommandResult(ok=True, message=f"{state} skill {name}", instance=instance)
 
 
-def _skill_name_suggestions(instance: ServerInstance, failed: CommandResult) -> CommandResult:
+def _failure_code(failed: CommandResult) -> str | None:
+    return failed.failure.code if failed.failure is not None else None
+
+
+def _skill_name_suggestions(
+    instance: ServerInstance, name: str, failed: CommandResult
+) -> CommandResult:
     """Attach known skill names to an unknown-name failure for one-retry fixes."""
 
     inventory_payload = _rpc_call(instance, "skill.inventory", {})
@@ -297,7 +307,7 @@ def _skill_name_suggestions(instance: ServerInstance, failed: CommandResult) -> 
                     _string_list([skill.get("name") for skill in skills if isinstance(skill, dict)])
                 )
             )
-    close = get_close_matches(_first_quoted(failed.message), names, n=1)
+    close = get_close_matches(name, names, n=1)
     lines = [failed.message]
     if close:
         lines.append(f"did you mean: {close[0]}")
@@ -308,16 +318,14 @@ def _skill_name_suggestions(instance: ServerInstance, failed: CommandResult) -> 
     )
 
 
-def _first_quoted(message: str) -> str:
-    start = message.find("'")
-    if start == -1:
-        return message
-    end = message.find("'", start + 1)
-    return message[start + 1 : end] if end != -1 else message
+def _agent_id_suggestions(
+    instance: ServerInstance, requested: Sequence[str], failed: CommandResult
+) -> CommandResult:
+    """Attach known agent ids to an unknown-agent failure.
 
-
-def _agent_id_suggestions(instance: ServerInstance, failed: CommandResult) -> CommandResult:
-    """Attach known agent ids to an unknown-agent failure."""
+    The server rejects the first unknown id in request order, so the suggestion
+    targets the first requested id missing from the current Agent list.
+    """
 
     listing = _rpc_call(instance, "agent.list", {})
     agents = listing.data.get("agents") if listing.ok else None
@@ -326,7 +334,8 @@ def _agent_id_suggestions(instance: ServerInstance, failed: CommandResult) -> Co
         for agent in agents:
             if isinstance(agent, dict) and isinstance(agent.get("id"), str):
                 names.append(agent["id"])
-    close = get_close_matches(_first_quoted(failed.message), names, n=1)
+    unknown = next((agent_id for agent_id in requested if agent_id not in names), None)
+    close = get_close_matches(unknown, names, n=1) if unknown is not None else []
     lines = [failed.message]
     if close:
         lines.append(f"did you mean: {close[0]}")
@@ -351,7 +360,9 @@ def skill_share(
         {"agent_id": agent_id, "name": name, "shared": True, "receivers": list(receivers)},
     )
     if not payload.ok:
-        return _share_failure_result(instance, agent_id, name, payload.to_command_result())
+        return _share_failure_result(
+            instance, agent_id, name, payload.to_command_result(), receivers=receivers
+        )
     return CommandResult(
         ok=True,
         message=(
@@ -367,12 +378,15 @@ def _share_failure_result(
     agent_id: str,
     name: str,
     failed: CommandResult,
+    *,
+    receivers: Sequence[str] = (),
 ) -> CommandResult:
     """Route share/unshare failures to the matching candidate suggestion."""
 
-    if "unknown agent" in failed.message or "unknown receiver" in failed.message:
-        return _agent_id_suggestions(instance, failed)
-    if f"owns no private skill named {name!r}" in failed.message:
+    code = _failure_code(failed)
+    if code == _AGENT_NOT_FOUND:
+        return _agent_id_suggestions(instance, (agent_id, *receivers), failed)
+    if code == _SKILL_NOT_FOUND:
         inventory_payload = _rpc_call(instance, "skill.inventory", {})
         if not inventory_payload.ok:
             return CommandResult(

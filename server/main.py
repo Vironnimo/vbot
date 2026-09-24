@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from typing import Any, Literal
 
+from core.storage.layout import initialize_data_directory
 from core.utils.config import (
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -74,6 +75,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     server_bind = resolve_server_bind(config, host=args.host, explicit_port=args.port)
     activate_process_containment()
+    if not config.data_dir.expanduser().exists():
+        # The control claim writes into the data directory. A fresh root must come
+        # from the canonical layout so it carries the Session store's bootstrap
+        # marker; an existing root without that marker is refused at startup.
+        initialize_data_directory(config.data_dir, resources_dir=config.get("RESOURCES_PATH"))
     with server_control_claim(config.data_dir, server_bind["listen_port"]):
         control = create_server_control(config.data_dir, server_bind["listen_port"])
         try:

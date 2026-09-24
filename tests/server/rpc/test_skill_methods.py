@@ -14,7 +14,7 @@ import pytest
 
 from core.skills.authoring import SkillAuthoringService
 from core.skills.skills import SkillRegistry
-from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.errors import RPC_ERROR_AGENT_NOT_FOUND, RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.skill_methods import (
     _skill_create,
     _skill_delete,
@@ -200,23 +200,25 @@ async def test_install_preview_does_not_invalidate_or_write(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "params",
+    "params,code",
     [
-        {"scope": "project:demo"},
-        {"scope": "agent:unknown"},
-        {"scope": "agent:../escape"},
-        {"scope": "global", "replace": "false"},
-        {"scope": "global", "dry_run": 1},
-        {"scope": "global", "path": ""},
-        {"scope": "global", "ref": None},
-        {"scope": "global", "unknown_option": True},
+        ({"scope": "project:demo"}, RPC_ERROR_INVALID_REQUEST),
+        ({"scope": "agent:unknown"}, RPC_ERROR_AGENT_NOT_FOUND),
+        ({"scope": "agent:../escape"}, RPC_ERROR_INVALID_REQUEST),
+        ({"scope": "global", "replace": "false"}, RPC_ERROR_INVALID_REQUEST),
+        ({"scope": "global", "dry_run": 1}, RPC_ERROR_INVALID_REQUEST),
+        ({"scope": "global", "path": ""}, RPC_ERROR_INVALID_REQUEST),
+        ({"scope": "global", "ref": None}, RPC_ERROR_INVALID_REQUEST),
+        ({"scope": "global", "unknown_option": True}, RPC_ERROR_INVALID_REQUEST),
     ],
 )
-async def test_install_rejects_invalid_target_or_flags_before_reading_source(tmp_path, params):
+async def test_install_rejects_invalid_target_or_flags_before_reading_source(
+    tmp_path, params, code
+):
     state = _state(tmp_path)
     with pytest.raises(RpcError) as error:
         await _skill_install(state, {"source": "https://example.org/download.skill", **params})
-    assert error.value.code == RPC_ERROR_INVALID_REQUEST
+    assert error.value.code == code
     assert state.runtime.reload_calls == 0
     assert state.runtime.invalidated == []
 
@@ -332,7 +334,7 @@ async def test_unknown_agent_scope_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(RpcError) as exc:
         await _skill_create(state, {"scope": "agent:ghost", "name": "demo", "content": _skill_md()})
 
-    assert exc.value.code == RPC_ERROR_INVALID_REQUEST
+    assert exc.value.code == RPC_ERROR_AGENT_NOT_FOUND
     assert "ghost" in exc.value.message
     assert not state.runtime.agent_skills_dir("ghost").exists()
 

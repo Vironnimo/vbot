@@ -169,7 +169,8 @@ def test_memory_commands_fail_on_rpc_error(tmp_path: Path, monkeypatch: pytest.M
     result = memory_management.memory_list(instance, "ghost")
 
     assert result.ok is False
-    assert result.message.startswith("invalid_request:")
+    assert result.failure is not None
+    assert result.failure.code == "invalid_request"
 
 
 def test_memory_failure_with_unknown_agent_lists_available_agents(
@@ -185,7 +186,7 @@ def test_memory_failure_with_unknown_agent_lists_available_agents(
                 400,
                 json={
                     "ok": False,
-                    "error": {"code": "not_found", "message": "agent not found: 'assistnt'"},
+                    "error": {"code": "agent_not_found", "message": "Agent not found: assistnt"},
                 },
             )
         assert json["method"] == "agent.list"
@@ -201,6 +202,52 @@ def test_memory_failure_with_unknown_agent_lists_available_agents(
     assert result.ok is False
     assert "did you mean: assistant" in result.message
     assert "available agents: assistant, coder" in result.message
+
+
+@pytest.mark.parametrize(
+    "error,expected_calls",
+    [
+        # The structured code routes the lookup; message wording is never parsed.
+        (
+            {"code": "agent_not_found", "message": "test sentinel"},
+            ["memory.remove", "agent.list"],
+        ),
+        (
+            {"code": "domain_error", "message": "entry 99 not found for unknown agent"},
+            ["memory.remove", "memory.list"],
+        ),
+    ],
+)
+def test_memory_mutation_failure_lookup_follows_the_rpc_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error: dict[str, str],
+    expected_calls: list[str],
+) -> None:
+    calls: list[str] = []
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        calls.append(json["method"])
+        if json["method"] == "memory.remove":
+            return httpx.Response(400, json={"ok": False, "error": error})
+        if json["method"] == "agent.list":
+            return httpx.Response(
+                200,
+                json={"ok": True, "result": {"agents": [{"id": "assistant"}, {"id": "coder"}]}},
+            )
+        return httpx.Response(200, json={"ok": True, "result": memory_response()})
+
+    monkeypatch.setattr(memory_management.httpx, "post", fake_post)
+
+    result = memory_management.memory_remove(make_instance(tmp_path), "assistnt", "agent", 99, True)
+
+    assert result.ok is False
+    assert calls == expected_calls
+    assert result.failure is not None
+    assert result.failure.code == error["code"]
+    assert result.failure.method == "memory.remove"
 
 
 def test_memory_remove_bad_entry_id_shows_existing_ids(

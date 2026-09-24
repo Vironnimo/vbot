@@ -259,7 +259,7 @@ def test_agent_rename_keeps_complete_identity_tree_usable_through_real_runtime(
 
     assert rename_response.json()["result"]["id"] == "researcher"
     assert history_response.json()["result"]["session_id"] == "kept-session"
-    assert old_agent_response.json()["error"]["code"] == "domain_error"
+    assert old_agent_response.json()["error"]["code"] == "agent_not_found"
     assert (data_dir / "agents" / "researcher" / "prompts" / "runtime.md").is_file()
     assert (data_dir / "agents" / "researcher" / "skills" / "private" / "SKILL.md").is_file()
     assert not (data_dir / "agents" / "coder").exists()

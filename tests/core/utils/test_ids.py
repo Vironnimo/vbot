@@ -7,6 +7,16 @@ import pytest
 from core.utils import ids
 
 
+def test_id_entry_lookup_requires_the_exact_stored_spelling(tmp_path):
+    (tmp_path / "vbot").mkdir()
+
+    assert ids.has_id_entry(tmp_path, "vbot") is True
+    # A case-insensitive filesystem opens ``VBOT`` for ``vbot``; ids stay exact.
+    assert ids.has_id_entry(tmp_path, "VBOT") is False
+    assert ids.has_id_entry(tmp_path, "missing") is False
+    assert ids.has_id_entry(tmp_path / "absent", "vbot") is False
+
+
 def test_claimed_id_uses_all_sixty_bits_and_retries_only_collisions(monkeypatch):
     values = iter((0, (1 << 60) - 1))
     widths = []
