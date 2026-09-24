@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from inspect import isawaitable
 from typing import Any
 
+from core.performance import measure
 from server.rpc.errors import (
     RPC_ERROR_INVALID_REQUEST,
     RPC_ERROR_METHOD_NOT_FOUND,
@@ -57,15 +58,17 @@ async def dispatch_method(
     params: JsonObject,
     handlers: Mapping[str, RpcMethodHandler],
 ) -> JsonObject:
-    """Invoke one registered RPC method."""
+    """Invoke one registered RPC method, measured as ``rpc.<method>``."""
 
     handler = handlers.get(method)
     if handler is None:
         raise RpcError(RPC_ERROR_METHOD_NOT_FOUND, f"unknown RPC method: {method}")
 
-    result = handler(state, params)
-    if isawaitable(result):
-        result = await result
+    # Only registered names are measured, so request input cannot grow the metric set.
+    with measure(f"rpc.{method}", track="rpc", name=method):
+        result = handler(state, params)
+        if isawaitable(result):
+            result = await result
     return result
 
 

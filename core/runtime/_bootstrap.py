@@ -32,6 +32,7 @@ from core.model_tasks import (
 )
 from core.model_tasks.decisions import DecisionService
 from core.models.models import ModelRegistry
+from core.performance import PerformanceService
 from core.projects import ProjectStore, build_agent_resolver
 from core.prompts import (
     PromptAgentStore,
@@ -83,6 +84,7 @@ from core.subagents import SubAgentCoordinator
 from core.tools import (
     ChangeTracker,
     FileReadState,
+    UpdateHandoffs,
     register_analyze_image_tool,
     register_apply_patch_tool,
     register_bash_tool,
@@ -243,6 +245,10 @@ def bootstrap(runtime: Runtime) -> None:
             temporary_files=runtime._storage.temporary_files,
         )
         runtime._start_process_manager()
+        # Bash update handoffs are claimable only by this server process; files
+        # claimed by earlier processes are retained for one update's lifetime.
+        runtime._update_handoffs = UpdateHandoffs(runtime._storage.data_dir)
+        runtime._update_handoffs.remove_expired_files()
         runtime._tools = ToolRegistry()
         # Tool-owned System Prompt block declarations (D6): the tool side of the
         # unified contributor path. Project and Sub-Agent contribute their dynamic
@@ -410,6 +416,9 @@ def bootstrap(runtime: Runtime) -> None:
             admission_validator=runtime._validate_temporary_admission,
         )
         runtime.chat_runs = runtime._chat_run_manager
+        runtime._performance = _build_performance_service(
+            runtime._storage, runtime._chat_run_manager
+        )
         if runtime._attachment_store is None:
             raise RuntimeError("Attachment store not available")
         resolver = ContentBlockResolver(runtime._attachment_store, transcriber=runtime._speech)
@@ -558,6 +567,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._trigger_service,
             credential_resolver=runtime.resolve_environment_credential,
             prompt_blocks=runtime._tool_prompt_blocks,
+            update_handoffs=runtime._update_handoffs,
         )
         runtime._subagent_coordinator = SubAgentCoordinator(
             runtime,
@@ -613,6 +623,8 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._skills,
         )
         runtime._started = True
+        # Measurement only observes; safe modes are measured like normal serving.
+        runtime._start_performance_service()
         if runtime.safe_startup_mode is None:
             runtime._start_provider_usage_service()
         runtime.logger.info("Runtime started")
@@ -620,6 +632,19 @@ def bootstrap(runtime: Runtime) -> None:
         _log_startup_failure(runtime)
         runtime._cleanup_failed_startup()
         raise
+
+
+def _build_performance_service(
+    storage: StorageManager, run_manager: ChatRunManager
+) -> PerformanceService:
+    """Build the process measurement owner with the Run gauges it samples."""
+    return PerformanceService(
+        storage.layout.performance,
+        samplers={
+            "runs.active": lambda: len(run_manager.active_runs()),
+            "runs.queued": lambda: len(run_manager.all_queued()),
+        },
+    )
 
 
 def _log_startup_failure(runtime: Runtime) -> None:

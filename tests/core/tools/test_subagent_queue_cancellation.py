@@ -440,7 +440,7 @@ async def test_qualified_subagent_queue_and_result_keep_target_project(
     assert data["note"]
     assert {key: value for key, value in data.items() if key != "note"} == {
         "id": spawn_result["data"]["id"],
-        "agent_id": "worker",
+        "agent_id": "worker@vbot",
         "project_id": "vbot",
         "session_id": "qualified-queued",
         "status": "queued",

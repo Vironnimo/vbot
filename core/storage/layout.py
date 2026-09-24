@@ -16,6 +16,7 @@ DATA_DIRECTORY_RELATIVE_PATHS = (
     Path("artifacts/speech"),
     Path("artifacts/models"),
     Path("artifacts/debug"),
+    Path("artifacts/performance"),
     Path("artifacts/temp"),
     Path("artifacts/temp/atomic"),
     Path("artifacts/temp/bash"),
@@ -82,6 +83,10 @@ class DataDirectoryLayout:
     @property
     def debug(self) -> Path:
         return self.artifacts / "debug"
+
+    @property
+    def performance(self) -> Path:
+        return self.artifacts / "performance"
 
     @property
     def temporary(self) -> Path:

@@ -100,7 +100,7 @@ async def test_continuation_note_addresses_project_agent_target_for_any_caller(
     tmp_path: Path,
     caller_project_id: str | None,
 ) -> None:
-    """A bare agent_id resolves in the caller's scope, so the note names agent@project."""
+    """A bare agent_id resolves in the caller's scope, so field and note name agent@project."""
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
@@ -134,7 +134,7 @@ async def test_continuation_note_addresses_project_agent_target_for_any_caller(
     )
 
     assert result["ok"] is True
-    assert result["data"]["agent_id"] == "builder"
+    assert result["data"]["agent_id"] == "builder@vbot"
     assert result["data"]["project_id"] == "vbot"
     assert "`builder@vbot`" in result["data"]["note"]
     assert "`builder-session`" in result["data"]["note"]

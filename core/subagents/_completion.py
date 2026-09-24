@@ -390,9 +390,8 @@ def _result_dict(
 def _continuation_call(agent_id: str, project_id: str | None, session_id: str) -> str:
     """Name the exact ``subagent`` arguments that continue one child Session.
 
-    Results carry the bare ``agent_id`` beside ``project_id``, while the Tool
-    resolves a bare id in the caller's scope; the qualified address stays
-    correct for every caller.
+    The Tool resolves a bare id in the caller's scope, so the note names the
+    same qualified address that the result's ``agent_id`` field carries.
     """
     return SUBAGENT_CONTINUATION_CALL_TEMPLATE.format(
         agent_id=format_agent_address(agent_id, project_id),
@@ -533,8 +532,8 @@ def _with_activity_note(data: JsonObject, activity_file: str | None) -> JsonObje
     return data
 
 
-def _without_internal_handles(data: JsonObject) -> JsonObject:
-    return {key: value for key, value in data.items() if key not in {"run_id", "queue_item_id"}}
+_INTERNAL_HANDLE_FIELDS = frozenset({"run_id", "queue_item_id"})
+_PUBLIC_IDENTITY_FIELDS = frozenset({"id", "agent_id", "session_id", "project_id"})
 
 
 def _public_subagent_result(
@@ -547,12 +546,24 @@ def _public_subagent_result(
     delivery: str | None = None,
     note: str | None = None,
 ) -> JsonObject:
+    """Project one child descriptor or result for the calling Agent.
+
+    ``agent_id`` is exactly the value the Tool's ``agent_id`` argument accepts
+    for this child: a bare id resolves in the caller's scope, so a Project child
+    is addressed as ``agent@project``. ``project_id`` stays its own field.
+    Internal Run and Queue handles never appear; events and Session metadata
+    keep their bare ids and do not pass through here.
+    """
     data: JsonObject = {
         "id": work_id,
-        "agent_id": agent_id,
+        "agent_id": format_agent_address(agent_id, project_id),
         "session_id": session_id,
-        **_without_internal_handles(result),
     }
+    data.update(
+        (key, value)
+        for key, value in result.items()
+        if key not in _INTERNAL_HANDLE_FIELDS and key not in _PUBLIC_IDENTITY_FIELDS
+    )
     if project_id is not None:
         data["project_id"] = project_id
     if delivery is not None:
