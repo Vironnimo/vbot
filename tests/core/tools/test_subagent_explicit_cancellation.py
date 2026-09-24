@@ -111,7 +111,7 @@ async def test_parent_cannot_cancel_another_parent_sessions_child(
     )
 
     assert result["ok"] is False
-    assert result["error"]["code"] == "subagent_not_owned"
+    assert result["error"]["code"] == "subagent_not_found"
     assert child_run.status.value == "running"
     child_run.mark_cancelled()
 
