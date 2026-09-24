@@ -103,8 +103,6 @@ class CompactionRunHost(Protocol):
 
     async def run_transform(self, function: Any, *args: Any, **kwargs: Any) -> Any: ...
 
-    async def record_run_kind(self, run: Run) -> None: ...
-
     async def materialize_manual_request(
         self,
         run: Run,
@@ -238,7 +236,6 @@ class CompactionRunCoordinator:
         """Execute one manual Compaction inside its canonical Run lifecycle."""
         await self._host.sessions.record_run_start_async(session.address, run_id=run.id)
         session = session.for_run(run.id)
-        await self._host.record_run_kind(run)
         request: Any | None = None
         # The divider appears at this emit; its visible duration ends when the
         # checkpoint is stamped below.
