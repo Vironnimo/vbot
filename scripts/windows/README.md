@@ -37,6 +37,13 @@ argument must be the version being built, not the example value above.
 Use a short build output path for Inno compilation: deeply nested build roots can
 exceed the compiler's file path limit even when the native payload itself works.
 
+The copied runtime's `DLLs/sqlite3.dll` is replaced with the official SQLite
+build pinned in [sqlite.lock.json](sqlite.lock.json), downloaded from sqlite.org
+at build time and verified against both recorded digests. CPython's bundled
+SQLite would confine Sessions to the slower rollback journal. To move the pin,
+record the new archive URL, its SHA3-256 (published on the sqlite.org download
+page) and the SHA256 of the contained `sqlite3.dll`.
+
 Outputs include:
 
 - `windows-x86_64/<shape>/`: stable bootstrap plus `versions/<id>/app`,

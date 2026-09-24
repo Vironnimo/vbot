@@ -216,6 +216,21 @@ def smoke(package: Path, *, speech: bool = False) -> None:
             temporary,
             transcript,
         )
+        # The runtime must load the pinned SQLite, which lets Sessions use WAL.
+        pinned_sqlite = json.loads(
+            Path(__file__).with_name("sqlite.lock.json").read_text(encoding="utf-8")
+        )["version"]
+        _run(
+            [
+                str(python),
+                "-c",
+                "import sqlite3; "
+                f"assert sqlite3.sqlite_version == {pinned_sqlite!r}, sqlite3.sqlite_version",
+            ],
+            environment,
+            temporary,
+            transcript,
+        )
         if shape != "server":
             _run(
                 [str(python), "-c", "import desktop.main, webview, pythoncom, win32api"],

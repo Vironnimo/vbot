@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import os
 import subprocess
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -121,9 +124,30 @@ def test_candidate_copies_source_and_resolves_dependencies_only_into_new_runtime
     base_site = base / "runtime" / "Lib" / "site-packages"
     base_site.mkdir(parents=True)
     (base_site / "base_dependency.txt").write_text("base", encoding="utf-8")
+    (base / "runtime" / "DLLs").mkdir()
+    (base / "runtime" / "DLLs" / "sqlite3.dll").write_bytes(b"cpython sqlite")
     source = tmp_path / "source"
     source.mkdir()
     (source / "custom_source.txt").write_text("custom", encoding="utf-8")
+    pinned_sqlite = b"pinned sqlite"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as bundle:
+        bundle.writestr("sqlite3.dll", pinned_sqlite)
+    sqlite_archive = buffer.getvalue()
+    sqlite_lock = source / "scripts" / "windows" / "sqlite.lock.json"
+    sqlite_lock.parent.mkdir(parents=True)
+    sqlite_lock.write_text(
+        json.dumps(
+            {
+                "version": "3.53.4",
+                "url": "https://sqlite.org/fixture.zip",
+                "archive_sha3_256": hashlib.sha3_256(sqlite_archive).hexdigest(),
+                "library_sha256": hashlib.sha256(pinned_sqlite).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("cli.application.runtime_sqlite._download", lambda _url: sqlite_archive)
     python = (
         install.root
         / "development"
@@ -175,6 +199,8 @@ def test_candidate_copies_source_and_resolves_dependencies_only_into_new_runtime
     assert (candidate_site / "fresh_dependency.txt").is_file() is (mode != "locked_unchanged")
     assert (base_site / "base_dependency.txt").is_file()
     assert not (base_site / "fresh_dependency.txt").exists()
+    assert (candidate / "runtime" / "DLLs" / "sqlite3.dll").read_bytes() == pinned_sqlite
+    assert (base / "runtime" / "DLLs" / "sqlite3.dll").read_bytes() == b"cpython sqlite"
     if mode == "locked_unchanged":
         assert not commands
         (candidate_site / "base_dependency.txt").write_text("candidate change", encoding="utf-8")
