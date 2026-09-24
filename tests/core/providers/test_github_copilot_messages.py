@@ -894,6 +894,20 @@ def test_stream_error_event_raises_provider_error() -> None:
         )
 
     assert str(exc_info.value) == ("Copilot Messages stream error (overloaded_error): overloaded")
+    assert exc_info.value.retryable is True
+
+
+def test_stream_invalid_request_error_event_stays_fatal() -> None:
+    with pytest.raises(ProviderError) as exc_info:
+        normalize_copilot_messages_stream_event(
+            {
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": "bad"},
+            },
+            CopilotMessagesStreamState(),
+        )
+
+    assert exc_info.value.retryable is False
 
 
 def test_build_payload_translates_user_image_media_block() -> None:
