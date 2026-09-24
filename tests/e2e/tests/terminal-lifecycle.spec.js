@@ -4,19 +4,9 @@ import { userInfo } from "node:os";
 import { expect, test } from "@playwright/test";
 
 import { environment } from "../environment.js";
+import { rpc } from "./rpc-support.js";
 
 const DEFAULT_SHELL_MARKER = "VBOT-DEFAULT-SHELL-READY";
-
-async function rpc(request, method, params = {}) {
-  const response = await request.post("/api/rpc", {
-    data: { method, params },
-  });
-  const payload = await response.json();
-  if (!response.ok() || payload?.ok !== true) {
-    throw new Error(`RPC ${method} failed: ${JSON.stringify(payload)}`);
-  }
-  return payload.result;
-}
 
 async function cleanupTerminals(request) {
   const result = await rpc(request, "terminal.list");

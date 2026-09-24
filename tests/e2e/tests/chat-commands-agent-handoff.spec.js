@@ -5,21 +5,18 @@ import {
   sendChatMessage,
   startIsolatedChat,
 } from "./chat-run-support.js";
+import { createAgent, deleteAgentIfPresent } from "./rpc-support.js";
 
 test("agent moves a Session while handoff starts a fresh cross-Agent Session", async ({
   page,
+  request,
 }) => {
-  await page.goto("/#agents");
-  const agents = page.getByRole("region", { name: "Agents" });
-  const agentList = agents.getByRole("complementary", { name: "Agents" });
-  await agentList.getByRole("button", { exact: true, name: "Add" }).click();
-  const createDialog = page.getByRole("dialog", { name: "Create agent" });
-  await createDialog.getByLabel("Agent ID").fill("e2e-command-agent");
-  await createDialog.getByLabel("Name").fill("E2E Command Agent");
-  await createDialog.getByRole("button", { name: "Create agent" }).click();
-  await expect(page.getByText("Agent created.", { exact: true })).toBeVisible();
-
   try {
+    await createAgent(request, {
+      id: "e2e-command-agent",
+      name: "E2E Command Agent",
+    });
+
     const chat = await startIsolatedChat(page, { agentName: "Main" });
     await sendChatMessage(chat, "E2E_STREAM Session content before move");
     await expect(
@@ -55,14 +52,6 @@ test("agent moves a Session while handoff starts a fresh cross-Agent Session", a
       chat.getByText("E2E handoff received by target Agent.", { exact: true }),
     ).toBeVisible();
   } finally {
-    await page.goto("/#agents");
-    await agentList
-      .getByRole("button", { name: /^E2E Command Agent(?:\s|$)/ })
-      .click();
-    await agents.getByRole("tab", { name: "Details", exact: true }).click();
-    await agents.getByRole("button", { name: "Delete agent" }).click();
-    await expect(
-      page.getByText("Agent deleted.", { exact: true }),
-    ).toBeVisible();
+    await deleteAgentIfPresent(request, "e2e-command-agent");
   }
 });
