@@ -681,7 +681,7 @@ async def test_rescheduling_keeps_live_run_waiter_and_global_slot(tmp_path, monk
     monkeypatch.setattr(cron_timing, "_sleep_until_utc", sleep_until)
     service.start()
     try:
-        await asyncio.wait_for(running.wait(), 1)
+        await asyncio.wait_for(running.wait(), _ASYNC_COORDINATION_TIMEOUT_SECONDS)
         task = service._job_tasks[job.id]
         available = service._run_slots._value
         service.update_job(job.id, cron_expression="*/2 * * * *")
@@ -690,7 +690,7 @@ async def test_rescheduling_keeps_live_run_waiter_and_global_slot(tmp_path, monk
         assert not task.cancelling()
         assert service._run_slots._value == available
         release.set()
-        await asyncio.wait_for(resumed.wait(), 1)
+        await asyncio.wait_for(resumed.wait(), _ASYNC_COORDINATION_TIMEOUT_SECONDS)
         assert service._run_slots._value == available + 1
         assert trigger.trigger_run.await_count == 1
     finally:
