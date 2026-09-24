@@ -1,6 +1,6 @@
 # xAI Provider
 
-This supplementary map covers xAI-specific Connection, OAuth, catalog, and Responses-wire behavior.
+This supplementary map covers xAI-specific Connection, OAuth, catalog, and Responses-wire behavior, plus a pointer for realtime voice.
 
 ## Boundary
 
@@ -20,6 +20,11 @@ This supplementary map covers xAI-specific Connection, OAuth, catalog, and Respo
 - The wire accepts only `image/jpeg` and `image/png` attachments. PDF, GIF, WebP, audio, and video must be rejected before request serialization.
 - Reasoning controls are Model-scoped: Grok 4.6 supports `low|medium|high|xhigh`; Grok 4.5 supports `low|medium|high` and maps vBot `none` to `low`; Grok 4.3 supports `none|low|medium|high`; Grok 4.20 Multi-Agent supports `low|medium|high|xhigh`; Grok Build and the fixed Grok 4.20 reasoning variant reason without accepting an effort control; the Grok 4.20 non-reasoning variant suppresses all reasoning controls and replay.
 - Grok 4.20 Multi-Agent does not support client-side/custom function Tools or output-token limit fields. Its Model profile advertises `tools: false`, and the Adapter filters both Tool definitions and `max_tokens`/`max_output_tokens` instead of sending a request the endpoint rejects. This restriction does not disable xAI built-in/server Tools or remote MCP at the upstream API; those are not vBot client Tool definitions.
+
+## Realtime voice
+
+- Grok Voice (`grok-voice-think-fast-2.0`: both Connections, `live_voice` task, `tools: false` for Chat) runs only as a Live voice Model over `wss://api.x.ai/v1/realtime`, never through `/responses`. The wire, its verified event facts, and relay media are owned by `model_tasks/live.md` -> xAI wire.
+- The realtime handshake sends the Connection's auth header and uses the same shared OAuth request recovery as HTTP requests. The SuperGrok subscription token was accepted live (2026-09-24); the API-key Connection is unverified for realtime.
 
 ## OAuth edge cases
 
