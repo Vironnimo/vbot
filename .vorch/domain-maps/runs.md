@@ -102,7 +102,9 @@ from Session Tool grants: child Runs can retain cancellation/usage ownership wit
 receiving the parent's Session Tools. `core/agents/temporary.py` closes group admission
 before cancelling exact owned Runs, Queue items and injected resource owners.
 Resources close only after those Runs are terminal, so they may release their
-per-group admission state after their own drain.
+per-group admission state after their own drain. The completion coordinator keeps
+no such state; it validates each owned submission against current group admission
+(`automation.md`).
 Unrelated work in a reused target Session remains outside that group
 (`tests/core/agents/test_temporary.py`, `tests/core/subagents/test_subagents_completion.py`).
 

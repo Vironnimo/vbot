@@ -14,6 +14,7 @@ from core.runs import (
     ActiveRunError,
     ChatRunManager,
     Run,
+    RunAdmissionBlockedError,
     RunCancelledError,
     RunExecutionOwner,
     RunKind,
@@ -39,6 +40,9 @@ AUTOMATIC_COMPLETION_GUIDANCE = (
 _SUPPRESSED_ORIGIN_LIMIT = 256
 _COMPLETION_PERSIST_RETRY_INITIAL_SECONDS = 0.25
 _COMPLETION_PERSIST_RETRY_MAX_SECONDS = 30.0
+
+OwnedCompletionValidator = Callable[[SessionAddress, RunExecutionOwner], None]
+"""Raise ``RunAdmissionBlockedError`` when an execution owner can no longer receive work."""
 
 
 @dataclass
@@ -75,8 +79,8 @@ class _CompletionDeliveryCoordinator:
         self._suppressed_origins: dict[SessionAddress, list[str]] = {}
         self._run_relay: Callable[[Run, ReplySurface], Awaitable[None]] | None = None
         self._closed = False
-        self._closed_execution_groups: set[tuple[str, str, str]] = set()
         self._owned_run_starter: Callable[..., Awaitable[Run]] | None = None
+        self._owned_completion_validator: OwnedCompletionValidator | None = None
 
     def set_run_relay(
         self,
@@ -98,20 +102,15 @@ class _CompletionDeliveryCoordinator:
         execution_owner: RunExecutionOwner | None = None,
     ) -> asyncio.Future[None]:
         """Submit one result and return a Future resolved after durable delivery."""
-        if (
-            self._closed
-            or execution_owner is not None
-            and (
-                execution_owner.extension,
-                execution_owner.group_id,
-                execution_owner.epoch,
-            )
-            in self._closed_execution_groups
+        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+        if self._closed or (
+            execution_owner is not None and not self._owner_admits(address, execution_owner)
         ):
+            # Rejected before any state is kept: a closed or stale owner can never
+            # reach a Session, including the Session-write fallback.
             delivered: asyncio.Future[None] = asyncio.get_running_loop().create_future()
             delivered.cancel()
             return delivered
-        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
         bucket = self._buckets.setdefault(address, _CompletionBucket())
         existing = bucket.notices.get(notice_id)
         if existing is not None:
@@ -385,6 +384,50 @@ class _CompletionDeliveryCoordinator:
             if notice.boundary_run is None:
                 notice.boundary_run = run
 
+    def _owner_admits(self, address: SessionAddress, owner: RunExecutionOwner) -> bool:
+        """Return whether the owner may still receive work in this Session.
+
+        Without a validator no owned delivery is admitted: an owned result must
+        never reach a Session unchecked.
+        """
+        validator = self._owned_completion_validator
+        if validator is None:
+            return False
+        try:
+            validator(address, owner)
+        except RunAdmissionBlockedError:
+            return False
+        except Exception:
+            _LOGGER.warning(
+                "Owned completion validation failed (agent=%s session=%s); rejecting delivery",
+                address.agent_id,
+                address.session_id,
+                exc_info=True,
+            )
+            return False
+        return True
+
+    def _reject_inadmissible_owned(
+        self,
+        address: SessionAddress,
+        bucket: _CompletionBucket,
+        notices: list[_CompletionNotice],
+    ) -> list[_CompletionNotice]:
+        """Fail owned notices whose owner went stale after submission; keep the rest."""
+        rejected = [
+            notice
+            for notice in notices
+            if notice.execution_owner is not None
+            and not self._owner_admits(address, notice.execution_owner)
+        ]
+        if rejected:
+            self._fail(
+                bucket,
+                rejected,
+                RunAdmissionBlockedError("completion owner can no longer receive work"),
+            )
+        return [notice for notice in notices if notice not in rejected]
+
     def _run_was_user_cancelled(self, run_id: str) -> bool:
         try:
             run = self._run_manager.get(run_id)
@@ -409,7 +452,11 @@ class _CompletionDeliveryCoordinator:
 
         retry_delay = _COMPLETION_PERSIST_RETRY_INITIAL_SECONDS
         while True:
-            pending = self._still_pending(bucket, notices)
+            # This write bypasses Run admission, so an owned notice is checked
+            # again: its owner may have gone stale since submission.
+            pending = self._reject_inadmissible_owned(
+                address, bucket, self._still_pending(bucket, notices)
+            )
             if not pending:
                 return
 
@@ -446,8 +493,8 @@ class _CompletionDeliveryCoordinator:
             )
 
     async def close_execution_group(self, extension: str, group_id: str, epoch: str) -> None:
+        """Withdraw this group's pending notices; its later submissions fail validation."""
         key = (extension, group_id, epoch)
-        self._closed_execution_groups.add(key)
         for bucket in self._buckets.values():
             for notice in list(bucket.notices.values()):
                 owner = notice.execution_owner
@@ -642,6 +689,14 @@ class TriggerService:
 
     def set_owned_completion_starter(self, starter: Callable[..., Awaitable[Run]]) -> None:
         self._completion_delivery._owned_run_starter = starter
+
+    def set_owned_completion_validator(self, validator: OwnedCompletionValidator) -> None:
+        """Install the check that an owned completion may still reach its Session.
+
+        Every submission carrying an execution owner, and every Session-write
+        fallback for one, is checked; a rejected owner's result is withdrawn.
+        """
+        self._completion_delivery._owned_completion_validator = validator
 
     async def close_execution_group(self, extension: str, group_id: str, epoch: str) -> None:
         await self._completion_delivery.close_execution_group(extension, group_id, epoch)

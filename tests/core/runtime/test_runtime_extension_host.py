@@ -15,7 +15,7 @@ from core.agents.temporary import (
     TemporaryExecutionGroups,
 )
 from core.extensions import ExtensionRegistrationIdentity
-from core.runs import ChatRunManager
+from core.runs import ChatRunManager, RunAdmissionBlockedError, RunExecutionOwner
 from core.runtime import runtime as runtime_module
 from core.runtime.runtime import Runtime
 from core.sessions import ChatSessionManager, SessionAddress
@@ -459,6 +459,49 @@ async def test_extension_owned_work_uses_the_observable_chat_loop(tmp_path):
         # The two public loops differ in whether a pending Provider response
         # exposes live Model deltas. Extension pages subscribe to those Runs.
         assert host.temporary_agents._chat is runtime.streaming_chat_loop
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_owned_completion_is_rejected_once_its_group_closes(tmp_path, monkeypatch):
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+    try:
+        monkeypatch.setattr(runtime.agent_resolver, "require_model_configured", lambda _model: None)
+        identity = runtime.extensions.registration_identity("swarm")
+        assert identity is not None
+        groups = runtime._host_operations().make_host().for_owner(identity).temporary_agents
+        config = TemporaryAgentConfig(
+            model="fixture/model",
+            cwd=tmp_path,
+            tool_access=ToolAccess(mode="selected", allowed=()),
+            allowed_skills=[],
+            tools={},
+            name="Peer",
+        )
+        binding = await groups.create("group", "peer", config)
+        handle = await groups.open_group("group")
+        owner = RunExecutionOwner("swarm", "group", "peer", binding.generation_id, handle.epoch)
+        service = runtime.trigger_service
+        validate = service._completion_delivery._owned_completion_validator
+        assert validate is not None
+
+        validate(binding.address, owner)  # the live group admits its owner
+        await groups.close_group("group")
+
+        with pytest.raises(RunAdmissionBlockedError):
+            validate(binding.address, owner)
+        late = service.submit_completion(
+            binding.address.agent_id,
+            binding.address.session_id,
+            project_id=binding.address.project_id,
+            notice_id="late",
+            origin_run_id="origin",
+            body="late owned result",
+            execution_owner=owner,
+        )
+        assert late.cancelled()
     finally:
         await runtime.aclose()
 
