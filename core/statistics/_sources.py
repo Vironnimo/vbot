@@ -1,35 +1,22 @@
-"""Statistics source contracts and canonical Session/Run activity selection."""
+"""Statistics source contracts and owner-managed Session scopes."""
 
 from __future__ import annotations
 
 import builtins
 from collections.abc import Mapping, Sequence
-from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
-from core.chat.messages import ChatMessage
 from core.sessions import (
-    FORK_SOURCE_META_KEY,
     ChatSession,
     OwnedRunRecord,
     OwnedSessionSummary,
     SessionAddress,
 )
-from core.statistics._measurements import (
-    _distinct_run_models,
-    _duration_ms,
-    _read_usage,
-    _timing_field,
-)
 from core.statistics.index import (
     StatisticsScope,
 )
-from core.statistics.report import (
-    JsonObject,
-    RunActivity,
-)
-from core.statistics.timestamps import parse_timestamp
+from core.statistics.report import JsonObject
 
 
 class _AgentLike(Protocol):
@@ -82,8 +69,6 @@ class SessionSource(Protocol):
 
     def get(self, address: SessionAddress) -> ChatSession: ...
 
-    def history_version(self, address: SessionAddress) -> tuple[str, int]: ...
-
     def list_history_versions(
         self, addresses: Sequence[SessionAddress]
     ) -> dict[SessionAddress, tuple[str, int]]: ...
@@ -120,90 +105,6 @@ def extension_session_summary(owned: OwnedSessionSummary) -> JsonObject:
     return summary
 
 
-def _indexed_activity_summary(summary: JsonObject) -> JsonObject:
-    """Remove fork slicing metadata after the read boundary omitted that prefix."""
-    projected = dict(summary)
-    projected.pop(FORK_SOURCE_META_KEY, None)
-    return projected
-
-
-def _run_activity_record(
-    agent_id: str,
-    session_id: str,
-    session_title: str | None,
-    group: list[ChatMessage],
-    summary: ChatMessage,
-) -> RunActivity:
-    measured_input = 0
-    measured_output = 0
-    estimated_input = 0
-    estimated_output = 0
-    for message in group:
-        if message.role != "assistant":
-            continue
-        facts = _read_usage(message.usage)
-        if facts.input_estimated:
-            estimated_input += facts.input_tokens
-        else:
-            measured_input += facts.input_tokens
-        if facts.output_estimated:
-            estimated_output += facts.output_tokens
-        else:
-            measured_output += facts.output_tokens
-
-    started_at = _timing_field(summary.timing, "started_at") or summary.timestamp
-    completed_at = _timing_field(summary.timing, "completed_at") or summary.timestamp
-    return RunActivity(
-        agent_id=agent_id,
-        session_id=session_id,
-        session_title=session_title,
-        run_id=summary.run_id or "",
-        status=summary.status or "completed",
-        started_at=started_at,
-        completed_at=completed_at,
-        duration_ms=_duration_ms(summary.timing) or 0,
-        models=sorted(_distinct_run_models(group)),
-        tool_calls=sum(1 for message in group if message.role == "tool"),
-        measured_input_tokens=measured_input,
-        measured_output_tokens=measured_output,
-        estimated_input_tokens=estimated_input,
-        estimated_output_tokens=estimated_output,
-    )
-
-
-def _run_overlaps(activity: RunActivity, *, since: datetime, until: datetime) -> bool:
-    started_at = parse_timestamp(activity.started_at)
-    completed_at = parse_timestamp(activity.completed_at)
-    if started_at is None or completed_at is None:
-        return False
-    return completed_at >= since and started_at <= until
-
-
-def _session_activity_messages(
-    messages: list[ChatMessage], summary: JsonObject
-) -> list[ChatMessage]:
-    """Exclude the copied transcript prefix from a fork's activity aggregates.
-
-    ``ChatSessionManager.fork`` records the exact number of copied complete
-    messages in ``fork_source.message_count``. Those records remain part of the
-    fork's visible history, but their Runs, usage, errors, and Tool calls already
-    belong to the source Session. Invalid hand-edited metadata fails open and
-    leaves the transcript unchanged rather than silently hiding activity.
-    """
-    fork_source = summary.get(FORK_SOURCE_META_KEY)
-    if not isinstance(fork_source, dict):
-        return messages
-    copied_message_count = fork_source.get("message_count")
-    if (
-        isinstance(copied_message_count, bool)
-        or not isinstance(copied_message_count, int)
-        or copied_message_count < 0
-        or copied_message_count > len(messages)
-    ):
-        return messages
-    return messages[copied_message_count:]
-
-
 def _owner_scopes(
     records: Sequence[OwnedRunRecord],
     summaries: Mapping[SessionAddress, JsonObject],
@@ -231,10 +132,3 @@ def _owner_scopes(
         )
         for (project_id, agent_id), summaries in grouped.items()
     )
-
-
-def _owned_run_messages(
-    messages: Sequence[ChatMessage], record: OwnedRunRecord
-) -> list[ChatMessage]:
-    """Select one owner Run without treating a reused Session as wholly owned."""
-    return [message for message in messages if message.run_id == record.run_id]

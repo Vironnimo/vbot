@@ -79,6 +79,7 @@ from core.skills.authoring import SkillAuthoringService
 from core.skills.policy import SkillPolicyService
 from core.skills.runtime import SkillRuntime, load_global_skill_registry
 from core.skills.skills import SkillRegistry
+from core.statistics import StatisticsIndex
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
 from core.tools import (
@@ -238,6 +239,9 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._storage.data_dir,
             store_path=runtime._storage.layout.sessions_db_path,
         )
+        # One owner of the disposable Statistics index for every reader (RPC
+        # reports and Extension group usage); it holds no open resources.
+        runtime._statistics_index = StatisticsIndex(runtime._storage.data_dir)
         runtime._agents = AgentStore(
             runtime._storage.data_dir,
             template_dir=resources_path / "workspace-templates",
