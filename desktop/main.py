@@ -22,6 +22,7 @@ import importlib
 import logging
 import os
 import sys
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
@@ -40,6 +41,7 @@ from desktop.settings import (
 
 if TYPE_CHECKING:
     from desktop.connection import ConnectionController
+    from desktop.hotkey import LiveHotkeyController
 
 logger = logging.getLogger("vbot.desktop")
 
@@ -331,8 +333,12 @@ def launch_desktop(
     probe: Callable[[DesktopTarget], DesktopProbeResult] = probe_target,
     webview_module: WebviewModule | None = None,
     app_icon_path: Path | None = None,
-) -> None:
+) -> bool:
     """Build the controller, bridge, and window, then run the GUI loop.
+
+    Returns ``False`` without creating a window when a Desktop for the same
+    config directory is already running (it is asked to come to the front
+    instead), else ``True`` after the window closed.
 
     Lifecycle (pywebview requires this order): create the window *before* the
     loop with the connection screen as neutral initial content and the bridge as
@@ -351,15 +357,75 @@ def launch_desktop(
     server URL, so window and voice always point at the same server.
     """
 
-    from desktop.connection import ConnectionController, build_connection_html
-
     args = parse_args(argv)
+    override = _resolve_launch_override(args)
+    desktop_config_directory = settings_file.parent if settings_file is not None else config_dir()
+    instance = _windows.claim_desktop_instance(desktop_config_directory)
+    if instance is None:
+        if override is not None:
+            logger.info(
+                "vBot Desktop is already running; focused the open window and ignored "
+                "the requested target %s:%s",
+                *override,
+            )
+        else:
+            logger.info("vBot Desktop is already running; focused the open window")
+        return False
+    try:
+        _run_desktop(
+            args,
+            override,
+            instance,
+            desktop_config_directory=desktop_config_directory,
+            settings_file=settings_file,
+            probe=probe,
+            webview_module=webview_module,
+            app_icon_path=app_icon_path,
+        )
+    finally:
+        instance.close()
+    return True
+
+
+def _run_desktop(
+    args: argparse.Namespace,
+    override: tuple[str, int] | None,
+    instance: _windows.DesktopInstance,
+    *,
+    desktop_config_directory: Path,
+    settings_file: Path | None,
+    probe: Callable[[DesktopTarget], DesktopProbeResult],
+    webview_module: WebviewModule | None,
+    app_icon_path: Path | None,
+) -> None:
+    """Create the window and its services for the instance that owns the Desktop."""
+
+    from desktop.connection import ConnectionController, build_connection_html
+    from desktop.hotkey import LiveHotkeyController
+    from desktop.live_requests import LiveRequestDispatcher
+
     webview = webview_module if webview_module is not None else load_webview()
 
     controller = ConnectionController(settings_file=settings_file, probe=probe)
-    override = _resolve_launch_override(args)
     server_url = _resolve_launch_server_url(override, controller)
-    bridge = _create_wakeword_bridge(args, settings_file, controller, server_url)
+    # Every remembered server plus the launch target becomes a secure context,
+    # so Live voice can open the microphone over plain HTTP on the LAN. The list
+    # is fixed for this process; a server added later needs a restart.
+    secure_origins = _windows.webview_secure_origins(_launch_targets(controller, override))
+    live_requests = LiveRequestDispatcher()
+    live_hotkey = LiveHotkeyController(
+        settings_path=settings_file,
+        on_press=lambda: live_requests.request("toggle", "hotkey"),
+    )
+    bridge = _create_wakeword_bridge(
+        args,
+        settings_file,
+        controller,
+        server_url,
+        live_hotkey=live_hotkey,
+        live_requests=live_requests.request,
+        secure_origins=secure_origins,
+    )
     wakeword_enabled = bool(read_wakeword_settings(settings_file).get("enabled", False))
     # Voice follows the window: every successful in-window connect retargets the
     # worker, so first-run connect and runtime server switches no longer leave
@@ -386,7 +452,12 @@ def launch_desktop(
         screen=window_layout.screen,
     )
     _windows.bind_window_dpi(window, (window_layout.minimum_width, window_layout.minimum_height))
+    _windows.allow_server_microphone(
+        window, lambda: _windows.url_origin(controller.active_server_url())
+    )
     controller.attach_window(window)
+    live_requests.attach_window(window)
+    instance.listen(_WindowFocus(window).bring_to_front)
 
     start_kwargs: dict[str, Any] = {}
     resolved_icon_path = app_icon_path if app_icon_path is not None else icon_path()
@@ -402,10 +473,7 @@ def launch_desktop(
     # storage_path pins it beside the Desktop settings file instead of the
     # shared %APPDATA%\pywebview folder.
     start_kwargs["private_mode"] = False
-    start_kwargs["storage_path"] = str(
-        (settings_file.parent if settings_file is not None else config_dir())
-        / WEBVIEW_STORAGE_DIR_NAME
-    )
+    start_kwargs["storage_path"] = str(desktop_config_directory / WEBVIEW_STORAGE_DIR_NAME)
 
     connection_entry = _select_launch_entry(controller, override)
 
@@ -416,6 +484,7 @@ def launch_desktop(
         connection_entry()
         if wakeword_enabled:
             bridge._start_worker()
+        live_hotkey.start()
 
     window.events.shown += start_visible_services
 
@@ -429,10 +498,69 @@ def launch_desktop(
 
     window.events.closing += persist_window_size
 
+    # WebView2 reads its browser arguments when webview.start creates it.
+    _windows.apply_browser_arguments(secure_origins)
     try:
         webview.start(**start_kwargs)
     finally:
+        live_hotkey.stop()
+        live_requests.close()
         bridge._stop_worker()
+
+
+class _WindowFocus:
+    """Bring the Desktop window to the front from a background thread.
+
+    pywebview's ``restore`` always returns to the normal size, so the window
+    state is tracked to bring a minimized, formerly maximized window back
+    maximized. The Window API marshals onto the GUI thread itself.
+    """
+
+    def __init__(self, window: Any) -> None:
+        self._window = window
+        self._lock = threading.Lock()
+        self._minimized = False
+        self._maximized = False
+        window.events.minimized += self._on_minimized
+        window.events.maximized += self._on_maximized
+        window.events.restored += self._on_restored
+
+    def bring_to_front(self) -> None:
+        with self._lock:
+            minimized = self._minimized
+            maximized = self._maximized
+        if minimized:
+            if maximized:
+                self._window.maximize()
+            else:
+                self._window.restore()
+        self._window.show()
+
+    def _on_minimized(self) -> None:
+        with self._lock:
+            self._minimized = True
+
+    def _on_maximized(self) -> None:
+        with self._lock:
+            self._minimized = False
+            self._maximized = True
+
+    def _on_restored(self) -> None:
+        with self._lock:
+            self._minimized = False
+            self._maximized = False
+
+
+def _launch_targets(
+    controller: ConnectionController,
+    override: tuple[str, int] | None,
+) -> list[tuple[str, int]]:
+    """Return every server this launch may show: remembered ones plus the override."""
+
+    targets = [(entry.host, entry.port) for entry in controller.list_servers()]
+    if override is not None:
+        targets.append(override)
+    return targets
 
 
 def resolve_window_layout(
@@ -619,6 +747,10 @@ def _create_wakeword_bridge(
     settings_file: Path | None,
     controller: ConnectionController,
     server_url: str,
+    *,
+    live_hotkey: LiveHotkeyController | None = None,
+    live_requests: Callable[[str, str], None] | None = None,
+    secure_origins: tuple[str, ...] = (),
 ) -> Any:
     """Create the DesktopBridge with engine and worker for the wakeword pipeline.
 
@@ -675,6 +807,9 @@ def _create_wakeword_bridge(
         mock=bool(args.mock_wakeword),
         mode="mock" if bool(args.mock_wakeword) else "real",
         speech_readiness_checker=check_speech_to_text_readiness,
+        live_hotkey=live_hotkey,
+        live_requests=live_requests,
+        secure_origins=secure_origins,
     )
     return bridge
 
@@ -747,12 +882,13 @@ def main(argv: list[str] | None = None) -> None:
 
     log_handler = configure_desktop_logging()
     try:
-        launch_desktop(argv)
+        opened = launch_desktop(argv)
     except Exception:
         logger.error("Desktop stopped unexpectedly", exc_info=True)
         raise
     else:
-        logger.info("Desktop stopped normally")
+        if opened:
+            logger.info("Desktop stopped normally")
     finally:
         close_desktop_logging(log_handler)
 
