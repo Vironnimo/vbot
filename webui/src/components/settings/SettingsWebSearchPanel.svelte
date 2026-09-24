@@ -33,6 +33,8 @@
   let webSearchProviderOptions = $derived(
     buildWebSearchProviderOptions(webSearchSettings, t),
   );
+  // Hosted providers need an API key in the data directory's .env file.
+  let keyHint = $derived(webSearchKeyHint(webSearchSettings.provider));
   let saveDisabled = $derived(
     saving ||
       webSearchSettingsMatch(webSearchSettings, getWebSearchSettings(settings)),
@@ -150,166 +152,130 @@
       applyResult: (next) => (webSearchSettings = getWebSearchSettings(next)),
     });
   }
-</script>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.webSearch.provider', 'Search provider')}
-    </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.webSearch.providerDescription',
-        'Provider used whenever an agent calls web_search.',
-      )}
-    </div>
-  </div>
-  <div class="s-row-control s-row-control--web-search">
-    <Dropdown
-      id="settings-web-search-provider"
-      value={webSearchSettings.provider}
-      options={webSearchProviderOptions}
-      ariaLabel={t('settings.webSearch.provider', 'Search provider')}
-      triggerClass="settings-view__dropdown"
-      listClass="settings-view__thinking-list"
-      onValueChange={handleWebSearchProviderChange}
-    />
-  </div>
-</div>
-
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.webSearch.defaultCount', 'Default result count')}
-    </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.webSearch.defaultCountDescription',
-        'Number of results a web_search call returns when the agent does not ask for a specific count (1-20).',
-      )}
-    </div>
-  </div>
-  <div class="s-row-control s-row-control--number">
-    <TextField
-      id="settings-web-search-default-count"
-      type="number"
-      min="1"
-      max="20"
-      step="1"
-      value={webSearchSettings.default_count}
-      ariaLabel={t('settings.webSearch.defaultCount', 'Default result count')}
-      onInput={(next) => handleWebSearchDefaultCountChange(next)}
-    />
-  </div>
-</div>
-
-{#if webSearchSettings.provider === 'brave'}
-  <div class="s-row s-row--stacked">
-    <div class="s-row-info">
-      <div class="s-row-desc">
-        {t(
+  function webSearchKeyHint(provider) {
+    switch (provider) {
+      case 'brave':
+        return t(
           'settings.webSearch.braveKeyHint',
           'Brave Search requires an API key: set BRAVE_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
-        )}
-      </div>
-    </div>
-  </div>
-{/if}
-
-{#if webSearchSettings.provider === 'tavily'}
-  <div class="s-row s-row--stacked">
-    <div class="s-row-info">
-      <div class="s-row-desc">
-        {t(
+        );
+      case 'tavily':
+        return t(
           'settings.webSearch.tavilyKeyHint',
           'Tavily requires an API key: set TAVILY_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
-        )}
-      </div>
-    </div>
-  </div>
-{/if}
-
-{#if webSearchSettings.provider === 'exa'}
-  <div class="s-row s-row--stacked">
-    <div class="s-row-info">
-      <div class="s-row-desc">
-        {t(
+        );
+      case 'exa':
+        return t(
           'settings.webSearch.exaKeyHint',
           'Exa requires an API key: set EXA_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
-        )}
-      </div>
-    </div>
-  </div>
-{/if}
-
-{#if webSearchSettings.provider === 'serper'}
-  <div class="s-row s-row--stacked">
-    <div class="s-row-info">
-      <div class="s-row-desc">
-        {t(
+        );
+      case 'serper':
+        return t(
           'settings.webSearch.serperKeyHint',
           'Serper requires an API key: set SERPER_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
-        )}
-      </div>
-    </div>
-  </div>
-{/if}
-
-{#if webSearchSettings.provider === 'firecrawl'}
-  <div class="s-row s-row--stacked">
-    <div class="s-row-info">
-      <div class="s-row-desc">
-        {t(
+        );
+      case 'firecrawl':
+        return t(
           'settings.webSearch.firecrawlKeyHint',
           'Firecrawl requires an API key: set FIRECRAWL_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
-        )}
-      </div>
-    </div>
-  </div>
-{/if}
-
-{#if webSearchSettings.provider === 'perplexity'}
-  <div class="s-row s-row--stacked">
-    <div class="s-row-info">
-      <div class="s-row-desc">
-        {t(
+        );
+      case 'perplexity':
+        return t(
           'settings.webSearch.perplexityKeyHint',
           'Perplexity requires an API key: set PERPLEXITY_API_KEY in the .env file in the vBot data directory. Without it, every web search fails.',
-        )}
-      </div>
-    </div>
-  </div>
-{/if}
+        );
+      default:
+        return '';
+    }
+  }
+</script>
 
-{#if webSearchSettings.provider === 'searxng'}
+<div class="s-group">
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.webSearch.searxngBaseUrl', 'SearXNG base URL')}
+        {t('settings.webSearch.provider', 'Search provider')}
       </div>
       <div class="s-row-desc">
         {t(
-          'settings.webSearch.searxngBaseUrlDescription',
-          'Address of the SearXNG instance to use. SearXNG is a self-hosted metasearch engine — you need to run one yourself or point this at a reachable instance.',
+          'settings.webSearch.providerDescription',
+          'Provider used whenever an agent calls web_search.',
         )}
       </div>
     </div>
-    <div class="s-row-control s-row-control--web-search-url">
-      <TextField
-        id="settings-web-search-searxng-base-url"
-        code
-        type="url"
-        value={webSearchSettings.searxng.base_url}
-        placeholder={t(
-          'settings.webSearch.searxngBaseUrlPlaceholder',
-          'http://localhost:8888',
-        )}
-        ariaLabel={t('settings.webSearch.searxngBaseUrl', 'SearXNG base URL')}
-        onInput={(_next, event) => handleWebSearchSearxngBaseUrlChange(event)}
+    <div class="s-row-control s-row-control--web-search">
+      <Dropdown
+        id="settings-web-search-provider"
+        value={webSearchSettings.provider}
+        options={webSearchProviderOptions}
+        ariaLabel={t('settings.webSearch.provider', 'Search provider')}
+        triggerClass="settings-view__dropdown"
+        listClass="settings-view__thinking-list"
+        onValueChange={handleWebSearchProviderChange}
       />
     </div>
   </div>
-{/if}
+  {#if keyHint}
+    <div class="s-group__block s-group__block--attached s-group__note">
+      {keyHint}
+    </div>
+  {/if}
+  {#if webSearchSettings.provider === 'searxng'}
+    <div class="s-row">
+      <div class="s-row-info">
+        <div class="s-row-label">
+          {t('settings.webSearch.searxngBaseUrl', 'SearXNG base URL')}
+        </div>
+        <div class="s-row-desc">
+          {t(
+            'settings.webSearch.searxngBaseUrlDescription',
+            'Address of the SearXNG instance to use. SearXNG is a self-hosted metasearch engine — you need to run one yourself or point this at a reachable instance.',
+          )}
+        </div>
+      </div>
+      <div class="s-row-control s-row-control--web-search-url">
+        <TextField
+          id="settings-web-search-searxng-base-url"
+          code
+          type="url"
+          value={webSearchSettings.searxng.base_url}
+          placeholder={t(
+            'settings.webSearch.searxngBaseUrlPlaceholder',
+            'http://localhost:8888',
+          )}
+          ariaLabel={t('settings.webSearch.searxngBaseUrl', 'SearXNG base URL')}
+          onInput={(_next, event) => handleWebSearchSearxngBaseUrlChange(event)}
+        />
+      </div>
+    </div>
+  {/if}
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.webSearch.defaultCount', 'Default result count')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.webSearch.defaultCountDescription',
+          'Number of results a web_search call returns when the agent does not ask for a specific count (1-20).',
+        )}
+      </div>
+    </div>
+    <div class="s-row-control s-row-control--number">
+      <TextField
+        id="settings-web-search-default-count"
+        type="number"
+        min="1"
+        max="20"
+        step="1"
+        value={webSearchSettings.default_count}
+        ariaLabel={t('settings.webSearch.defaultCount', 'Default result count')}
+        onInput={(next) => handleWebSearchDefaultCountChange(next)}
+      />
+    </div>
+  </div>
+</div>
 
 <div class="s-footer">
   <SaveButton

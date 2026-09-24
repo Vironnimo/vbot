@@ -63,21 +63,22 @@
   gap: 12px;
 }
 
-.s-task-model-list {
+/* A selected target's options, reset action and local setup continue its
+   row inside the specialized models group. */
+.s-task-model-details {
+  display: grid;
+  gap: 12px;
+  justify-items: stretch;
+}
+
+.s-task-model-details > button {
+  justify-self: start;
+}
+
+.s-task-memory {
   display: flex;
   flex-direction: column;
   gap: 12px;
-}
-
-.s-task-model-row {
-  gap: 12px;
-}
-
-.s-task-model-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
 }
 
 .s-task-model-options {
@@ -339,30 +340,6 @@
 .s-ext-config-actions {
   display: flex;
   justify-content: flex-end;
-}
-
-.s-clients-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.s-client-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-}
-
-/* The own-window row is marked by its "This window" chip; the row itself
-   only lifts one surface step instead of taking the selection accent. */
-.s-client-row--own {
-  border-color: var(--border-2);
-  background: var(--surface-2);
 }
 
 .s-client-row__head {
