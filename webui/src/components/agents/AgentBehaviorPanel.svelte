@@ -3,7 +3,6 @@
   import Button from '../ui/Button.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import CompactionPolicyEditor from '../compaction/CompactionPolicyEditor.svelte';
-  import InfoHint from '../ui/InfoHint.svelte';
   import {
     AGENT_FORM_MODE_EDIT,
     AGENT_FORM_MODE_CREATE,
@@ -12,7 +11,6 @@
   import Dropdown from '../Dropdown.svelte';
   import Banner from '../ui/Banner.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
-  import EmptyState from '../ui/EmptyState.svelte';
   import TextArea from '../ui/TextArea.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import { onDestroy } from 'svelte';
@@ -374,123 +372,132 @@
   });
 </script>
 
-<div class="management-topic" id="agent-detail-panel-behavior">
-  <h3 class="management-section-heading">
-    {t('agents.contextMemory', 'Context & Memory')}
-  </h3>
-  <div class="detail-group agents-view__prompt-group">
-    <div class="agents-view__prompt-toggle-row">
-      <span class="agents-view__prompt-toggle-label">
-        {t('agents.form.customSystemPrompt', 'Custom system prompt')}
-        <InfoHint
-          text={t(
-            'agents.form.customPromptHelp',
-            'Gives this agent its own editable copy of the system prompt. Edit it in the System Prompt tab by selecting this agent as the scope. Turning this off keeps the customized blocks but stops using them.',
-          )}
-        />
-      </span>
-      <div class="agents-view__prompt-toggle-controls">
-        {#if formMode === AGENT_FORM_MODE_EDIT && formValues.custom_system_prompt_enabled}
-          <Button
-            variant="tertiary"
-            class="agents-view__inherit-link"
-            onClick={navigateToAgentPrompt}
-          >
-            {t('agents.form.editAgentPrompt', "Edit this agent's prompt")}
-          </Button>
-        {/if}
-        <Toggle
-          size="sm"
-          class="agents-view__prompt-toggle"
-          checked={formValues.custom_system_prompt_enabled}
-          ariaLabel={t(
-            'agents.form.customSystemPrompt',
-            'Custom system prompt',
-          )}
-          disabled={formMode === AGENT_FORM_MODE_CREATE}
-          onChange={(next) => {
-            void handleCustomPromptToggle(next);
-          }}
-        />
-      </div>
-    </div>
-  </div>
+<div class="agents-view__part" id="agent-detail-panel-behavior">
+  <section class="s-section" aria-labelledby="agent-section-context">
+    <header class="s-section__head">
+      <h3 class="s-section__title" id="agent-section-context">
+        {t('agents.contextMemory', 'Context & Memory')}
+      </h3>
+    </header>
+    <div class="s-section__body">
+      <div class="s-group agents-view__memory-group">
+        <div class="s-row s-row--compact">
+          <div class="s-row-info">
+            <div class="s-row-label">
+              {t('agents.form.customSystemPrompt', 'Custom system prompt')}
+            </div>
+            <div class="s-row-desc">
+              {t(
+                'agents.form.customPromptDescription',
+                'Gives this Agent its own editable copy of the System Prompt. Turning it off keeps the customized blocks but stops using them.',
+              )}
+            </div>
+            {#if formMode === AGENT_FORM_MODE_EDIT && formValues.custom_system_prompt_enabled}
+              <Button
+                variant="tertiary"
+                class="agents-view__row-link"
+                onClick={navigateToAgentPrompt}
+              >
+                {t('agents.form.editAgentPrompt', "Edit this agent's prompt")}
+              </Button>
+            {/if}
+          </div>
+          <div class="s-row-control">
+            <Toggle
+              class="agents-view__prompt-toggle"
+              checked={formValues.custom_system_prompt_enabled}
+              ariaLabel={t(
+                'agents.form.customSystemPrompt',
+                'Custom system prompt',
+              )}
+              disabled={formMode === AGENT_FORM_MODE_CREATE}
+              onChange={(next) => {
+                void handleCustomPromptToggle(next);
+              }}
+            />
+          </div>
+        </div>
 
-  <div class="detail-group agents-view__memory-group">
-    <div class="agents-view__prompt-memory-row">
-      <span class="agents-view__prompt-toggle-label">
-        {t('agents.form.memoryPromptMode', 'Memory')}
-        <InfoHint
-          text={t(
-            'agents.form.memoryModeHelp',
-            'Which memory files are pinned into the System Prompt. The memory tool follows this setting — it is available to the agent unless this is off.',
-          )}
-        />
-      </span>
-      <Dropdown
-        id="agent-memory-prompt-mode"
-        value={formValues.memory_prompt_mode}
-        options={memoryPromptOptions}
-        ariaLabel={t('agents.form.memoryPromptMode', 'Memory')}
-        triggerClass="agents-view__memory-dropdown"
-        listClass="agents-view__memory-list"
-        onValueChange={(selectedValue) => {
-          formValues.memory_prompt_mode = selectedValue;
-        }}
-      />
-    </div>
+        <div class="s-row">
+          <div class="s-row-info">
+            <label class="s-row-label" for="agent-memory-prompt-mode">
+              {t('agents.form.memoryPromptMode', 'Memory')}
+            </label>
+            <div class="s-row-desc" id="agent-memory-prompt-mode-help">
+              {t(
+                'agents.form.memoryModeHelp',
+                'Which memory files are pinned into the System Prompt. The memory tool follows this setting — it is available to the agent unless this is off.',
+              )}
+            </div>
+          </div>
+          <div class="s-row-control">
+            <Dropdown
+              id="agent-memory-prompt-mode"
+              value={formValues.memory_prompt_mode}
+              options={memoryPromptOptions}
+              ariaLabel={t('agents.form.memoryPromptMode', 'Memory')}
+              ariaDescribedby="agent-memory-prompt-mode-help"
+              triggerClass="agents-view__dropdown"
+              listClass="agents-view__memory-list"
+              onValueChange={(selectedValue) => {
+                formValues.memory_prompt_mode = selectedValue;
+              }}
+            />
+          </div>
+        </div>
 
-    {#if formMode === AGENT_FORM_MODE_EDIT}
-      <div class="agents-view__memory-disclosure">
-        <Button
-          variant="tertiary"
-          class="agents-view__memory-disclosure-toggle"
-          aria-expanded={memoryPanelOpen}
-          aria-controls="agent-memory-manager"
-          ariaLabel={memoryPanelOpen
-            ? t('agents.memory.hide', 'Hide Memory entries')
-            : t('agents.memory.manage', 'Manage Memory entries')}
-          onClick={toggleMemoryPanel}
-        >
-          <span
-            class:disclosure-chevron--open={memoryPanelOpen}
-            class="disclosure-chevron"
-            aria-hidden="true"
-          ></span>
-          <span>
-            {memoryPanelOpen
+        {#if formMode === AGENT_FORM_MODE_EDIT}
+          <button
+            type="button"
+            class="s-row s-row--compact s-disclosure-row agents-view__memory-disclosure-toggle"
+            aria-expanded={memoryPanelOpen}
+            aria-controls="agent-memory-manager"
+            aria-label={memoryPanelOpen
               ? t('agents.memory.hide', 'Hide Memory entries')
               : t('agents.memory.manage', 'Manage Memory entries')}
-          </span>
-          {#if memoriesLoaded}
-            <span class="agents-view__memory-total">
-              {memoryCountLabel(totalMemoryCount())}
+            onclick={toggleMemoryPanel}
+          >
+            <span class="s-row-label">
+              <span
+                class="disclosure-chevron"
+                class:disclosure-chevron--open={memoryPanelOpen}
+                aria-hidden="true"
+              ></span>
+              {memoryPanelOpen
+                ? t('agents.memory.hide', 'Hide Memory entries')
+                : t('agents.memory.manage', 'Manage Memory entries')}
             </span>
-          {/if}
-        </Button>
-
-        {#if memoryPanelOpen}
-          <div id="agent-memory-manager" class="agents-view__memory-manager">
-            {#if memoriesLoading && !memoriesLoaded}
-              <Banner variant="neutral" aria-live="polite">
-                {t('agents.memory.loading', 'Loading Memory entries…')}
-              </Banner>
-            {/if}
-
-            {#if memoryError}
-              <Banner variant="error" role="alert">
-                <span>{memoryError}</span>
-                <Button
-                  variant="secondary"
-                  onClick={() => loadAgentMemoryEntries()}
-                >
-                  {t('common.retry', 'Retry')}
-                </Button>
-              </Banner>
-            {/if}
-
             {#if memoriesLoaded}
-              <div class="agents-view__memory-scopes">
+              <span class="s-disclosure__meta agents-view__memory-total">
+                {memoryCountLabel(totalMemoryCount())}
+              </span>
+            {/if}
+          </button>
+
+          {#if memoryPanelOpen}
+            <div
+              id="agent-memory-manager"
+              class="s-group__block agents-view__memory-manager"
+            >
+              {#if memoriesLoading && !memoriesLoaded}
+                <Banner variant="neutral" aria-live="polite">
+                  {t('agents.memory.loading', 'Loading Memory entries…')}
+                </Banner>
+              {/if}
+
+              {#if memoryError}
+                <Banner variant="error" role="alert">
+                  <span>{memoryError}</span>
+                  <Button
+                    variant="secondary"
+                    onClick={() => loadAgentMemoryEntries()}
+                  >
+                    {t('common.retry', 'Retry')}
+                  </Button>
+                </Banner>
+              {/if}
+
+              {#if memoriesLoaded}
                 {#each MEMORY_SCOPES as scope (scope)}
                   {@const entries = memoryEntries(scope)}
                   <section
@@ -503,9 +510,9 @@
                     <div class="agents-view__memory-scope-header">
                       <div class="agents-view__memory-scope-copy">
                         <div class="agents-view__memory-scope-title-row">
-                          <h3 id={`agent-memory-${scope}-title`}>
+                          <h4 id={`agent-memory-${scope}-title`}>
                             {memoryScopeLabel(scope)}
-                          </h3>
+                          </h4>
                           <StatusChip
                             variant={memoryScopeActive(scope)
                               ? 'success'
@@ -522,15 +529,9 @@
                     </div>
 
                     {#if entries.length === 0}
-                      <EmptyState
-                        density="compact"
-                        class="agents-view__memory-empty"
-                        title={t('agents.memory.emptyTitle', 'No memories')}
-                        description={t(
-                          'agents.memory.emptyDescription',
-                          'This category has no saved Memory entries.',
-                        )}
-                      />
+                      <p class="agents-view__memory-empty">
+                        {t('agents.memory.emptyTitle', 'No memories')}
+                      </p>
                     {:else}
                       <ol class="agents-view__memory-list">
                         {#each entries as entry (entry.id)}
@@ -586,7 +587,8 @@
                                   {t('common.edit', 'Edit')}
                                 </Button>
                                 <Button
-                                  variant="danger"
+                                  variant="tertiary"
+                                  class="agents-view__memory-delete"
                                   onClick={() =>
                                     requestDeleteMemory(scope, entry)}
                                   disabled={Boolean(memoryMutation)}
@@ -629,47 +631,50 @@
                     </div>
                   </section>
                 {/each}
-              </div>
-            {/if}
-          </div>
+              {/if}
+            </div>
+          {/if}
         {/if}
       </div>
-    {/if}
-  </div>
-  <div class="detail-group agents-view__compaction-group">
-    <div class="agents-view__prompt-toggle-row">
-      <div>
-        <div class="agents-view__prompt-toggle-label">
-          {t('agents.customCompaction', 'Custom compaction policy')}
+
+      <div class="s-group agents-view__compaction-group">
+        <div class="s-row s-row--compact">
+          <div class="s-row-info">
+            <div class="s-row-label">
+              {t('agents.customCompaction', 'Custom compaction policy')}
+            </div>
+            <div class="s-row-desc">
+              {t(
+                'agents.customCompactionHelp',
+                'Turn on to customize how this Agent condenses long conversations.',
+              )}
+            </div>
+            <Button
+              variant="tertiary"
+              class="agents-view__row-link"
+              onClick={() => onNavigateToSettingsPanel('compaction')}
+              >{t('agents.shared.title', 'Shared defaults')}</Button
+            >
+          </div>
+          <div class="s-row-control">
+            <Toggle
+              checked={formValues.compaction_policy !== null}
+              ariaLabel={t('compaction.scope.agentOwn', 'Use an Agent Policy')}
+              onChange={setOwnCompactionPolicy}
+            />
+          </div>
         </div>
-        <div class="agents-view__prompt-toggle-desc">
-          {t(
-            'agents.customCompactionHelp',
-            'Turn on to customize how this Agent condenses long conversations.',
-          )}
-        </div>
-      </div>
-      <div class="agents-view__prompt-toggle-controls">
-        <Button
-          variant="tertiary"
-          onClick={() => onNavigateToSettingsPanel('compaction')}
-          >{t('agents.shared.title', 'Shared defaults')}</Button
-        >
-        <Toggle
-          checked={formValues.compaction_policy !== null}
-          ariaLabel={t('compaction.scope.agentOwn', 'Use an Agent Policy')}
-          onChange={setOwnCompactionPolicy}
-        />
+        {#if formValues.compaction_policy}
+          <CompactionPolicyEditor
+            layout="rows"
+            value={formValues.compaction_policy}
+            onChange={(next) => (formValues.compaction_policy = next)}
+            idPrefix="agent-compaction"
+          />
+        {/if}
       </div>
     </div>
-    {#if formValues.compaction_policy}
-      <CompactionPolicyEditor
-        value={formValues.compaction_policy}
-        onChange={(next) => (formValues.compaction_policy = next)}
-        idPrefix="agent-compaction"
-      />
-    {/if}
-  </div>
+  </section>
 </div>
 
 {#if deletingMemory}

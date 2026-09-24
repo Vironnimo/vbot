@@ -6,9 +6,7 @@
     effortOptionsForReasoning,
   } from '$lib/agentForm.js';
   import Button from '../ui/Button.svelte';
-  import FormField from '../ui/FormField.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
-  import InfoHint from '../ui/InfoHint.svelte';
   import Dropdown from '../Dropdown.svelte';
   import TextField from '../ui/TextField.svelte';
   import {
@@ -61,6 +59,13 @@
     selectModelValue(formValues.model, modelOptions),
   );
 
+  // The control column is narrow; the full choice (an inherited default with
+  // its source, or a long Model id) stays readable on hover.
+  let modelTriggerTooltip = $derived(
+    modelOptions.find((option) => option.value === modelSelectValue)?.label ||
+      inheritModelLabel('model'),
+  );
+
   // The fallback chain binds to the raw ordered list. Every row shares one
   // unfiltered option catalog — a chain is short (max 5) and rows stay
   // comparable, so no per-row show/hide footer is needed.
@@ -103,6 +108,16 @@
   );
 
   let temperatureIsInherit = $derived(formValues.temperature === '');
+
+  let temperatureDescribedBy = $derived(
+    [
+      'agent-temperature-desc',
+      temperatureIsInherit ? 'agent-temperature-help' : '',
+      formErrors.temperature ? 'agent-temperature-error' : '',
+    ]
+      .filter(Boolean)
+      .join(' '),
+  );
 
   let projectDropdownOptions = $derived(buildProjectDropdownOptions());
 
@@ -202,250 +217,311 @@
   }
 </script>
 
-<div class="management-topic" id="agent-detail-panel-overview">
-  <div class="detail-group">
-    <h3 class="detail-group-title">
-      {t('agents.detail.identity', 'Identity')}
-    </h3>
-    <div class="detail-fields">
-      <FormField
-        controlId="agent-name"
-        label={t('agents.form.name', 'Name')}
-        error={formErrors.name ? fieldError('name') : ''}
-      >
-        {#snippet children(field)}
-          <TextField
-            id={field.controlId}
-            invalid={field.invalid}
-            aria-describedby={field.describedBy}
-            value={formValues.name}
-            onInput={(next) => (formValues.name = next)}
-          />
-        {/snippet}
-      </FormField>
+<div class="agents-view__part" id="agent-detail-panel-overview">
+  <section class="s-section" aria-labelledby="agent-section-identity">
+    <header class="s-section__head">
+      <h3 class="s-section__title" id="agent-section-identity">
+        {t('agents.detail.identity', 'Identity')}
+      </h3>
+    </header>
+    <div class="s-section__body">
+      <div class="s-group">
+        <div class="s-row">
+          <div class="s-row-info">
+            <label class="s-row-label" for="agent-name">
+              {t('agents.form.name', 'Name')}
+            </label>
+            {#if formErrors.name}
+              <p
+                class="agents-view__row-error"
+                id="agent-name-error"
+                role="alert"
+              >
+                {fieldError('name')}
+              </p>
+            {/if}
+          </div>
+          <div class="s-row-control">
+            <TextField
+              id="agent-name"
+              invalid={Boolean(formErrors.name)}
+              aria-describedby={formErrors.name
+                ? 'agent-name-error'
+                : undefined}
+              value={formValues.name}
+              onInput={(next) => (formValues.name = next)}
+            />
+          </div>
+        </div>
 
-      {#if formMode === AGENT_FORM_MODE_EDIT}
-        <FormField
-          controlId="agent-project"
-          label={t('agents.form.project', 'Project')}
-          help={projectCatalogError
-            ? t(
-                'agents.form.projectUnavailableHelp',
-                'The saved selection is preserved. Project editing is unavailable until the catalog reloads.',
-              )
-            : t(
-                'agents.form.projectHelp',
-                'Where relative file and shell work runs. Workspace remains the identity and memory home.',
-              )}
-        >
-          <Dropdown
-            id="agent-project"
-            value={formValues.root_project_id ?? ''}
-            options={projectDropdownOptions}
-            disabled={Boolean(projectCatalogError)}
-            ariaLabel={t('agents.form.project', 'Project')}
-            triggerClass="agents-view__dropdown"
-            onValueChange={(selectedValue) => {
-              formValues.root_project_id = selectedValue || null;
-            }}
-          />
-        </FormField>
-      {/if}
-    </div>
-  </div>
-
-  <div class="detail-group agents-view__model-group">
-    <h3 class="detail-group-title agents-view__group-title-row">
-      <span>{t('agents.detail.model', 'Model')}</span>
-      {#if formMode === AGENT_FORM_MODE_EDIT}
-        <Button
-          variant="tertiary"
-          class="agents-view__inherit-link"
-          onClick={navigateToAgentDefaults}
-        >
-          {t('inherit.editGlobalDefaults', 'Edit global defaults')}
-        </Button>
-      {/if}
-    </h3>
-    <div class="detail-fields agents-view__model-fields">
-      <FormField
-        controlId="agent-model"
-        label={t('agents.form.model', 'Model')}
-      >
-        <SearchableDropdown
-          id="agent-model"
-          value={modelSelectValue}
-          options={modelOptions}
-          placeholder={inheritModelLabel('model')}
-          searchPlaceholder={t(
-            'agents.form.modelSearchPlaceholder',
-            'Filter models…',
-          )}
-          emptyLabel={t('agents.form.modelSearchEmpty', 'No models match')}
-          ariaLabel={t('agents.form.model', 'Model')}
-          triggerClass="agents-view__dropdown"
-          panelClass="agents-view__search-panel"
-          footerActionLabel={modelFilterFooter}
-          onFooterAction={() => (showAllModels = !showAllModels)}
-          onOpenChange={onModelDropdownOpenChange}
-          onValueChange={(selectedValue) =>
-            updateModelSelection('model', selectedValue)}
-        />
-      </FormField>
-      <FormField
-        controlId="agent-thinking-effort"
-        class="agents-view__thinking-field"
-        help={effortDropdownDisabled
-          ? t(
-              'agents.form.thinkingEffortUnsupported',
-              'This model does not support reasoning.',
-            )
-          : ''}
-      >
-        {#snippet labelContent()}
-          {t('agents.form.thinkingEffort', 'Thinking effort')}
-          <InfoHint
-            text={t(
-              'agents.form.thinkingEffortHelp',
-              'How much internal reasoning the model may spend before answering. Leave at — for the default.',
-            )}
-          />
-        {/snippet}
-        <Dropdown
-          id="agent-thinking-effort"
-          value={formValues.thinking_effort}
-          options={thinkingEffortOptions}
-          disabled={effortDropdownDisabled}
-          ariaLabel={t('agents.form.thinkingEffort', 'Thinking effort')}
-          triggerClass="agents-view__dropdown"
-          listClass="agents-view__thinking-list"
-          onValueChange={(selectedValue) => {
-            formValues.thinking_effort = selectedValue;
-          }}
-        />
-      </FormField>
-      <details
-        class="management-disclosure agents-model-options"
-        bind:open={modelOptionsOpen}
-      >
-        <summary
-          >{t('agents.modelOptions', 'Temperature & fallback models')}</summary
-        >
-        <div class="management-disclosure-body">
-          <FormField
-            controlId="agent-temperature"
-            help={temperatureIsInherit
-              ? inheritSource('temperature') === 'global_default'
-                ? t('inherit.hint', 'Inherited: {value} (global default)', {
-                    value: inheritDisplayValue('temperature'),
-                  })
-                : t(
-                    'inherit.hintProviderDefault',
-                    'Provider default — nothing is set here or in the global defaults.',
-                  )
-              : ''}
-            error={formErrors.temperature ? fieldError('temperature') : ''}
-          >
-            {#snippet labelContent()}
-              {t('agents.form.temperature', 'Temperature')}
-              <InfoHint
-                text={t(
-                  'agents.form.temperatureHelp',
-                  'Sampling randomness, typically 0–2. Leave empty to use the default.',
-                )}
-              />
-            {/snippet}
-            {#snippet children(field)}
-              <div class="agents-view__temperature-input">
-                <TextField
-                  id={field.controlId}
-                  inputmode="decimal"
-                  invalid={field.invalid}
-                  aria-describedby={field.describedBy}
-                  value={formValues.temperature}
-                  onInput={(next) => (formValues.temperature = next)}
-                />
-                {#if !temperatureIsInherit}
-                  <Button
-                    variant="tertiary"
-                    class="agents-view__reset-inherit"
-                    tooltip={t(
-                      'inherit.resetToInherit',
-                      'Reset to inherited value',
+        {#if formMode === AGENT_FORM_MODE_EDIT}
+          <div class="s-row">
+            <div class="s-row-info">
+              <label class="s-row-label" for="agent-project">
+                {t('agents.form.project', 'Project')}
+              </label>
+              <div class="s-row-desc" id="agent-project-help">
+                {projectCatalogError
+                  ? t(
+                      'agents.form.projectUnavailableHelp',
+                      'The saved selection is preserved. Project editing is unavailable until the catalog reloads.',
+                    )
+                  : t(
+                      'agents.form.projectHelp',
+                      'Where relative file and shell work runs. Workspace remains the identity and memory home.',
                     )}
-                    ariaLabel={t(
-                      'inherit.resetToInherit',
-                      'Reset to inherited value',
-                    )}
-                    onClick={clearTemperature}
-                  >
-                    {EMPTY_VALUE}
-                  </Button>
-                {/if}
               </div>
-            {/snippet}
-          </FormField>
+            </div>
+            <div class="s-row-control">
+              <Dropdown
+                id="agent-project"
+                value={formValues.root_project_id ?? ''}
+                options={projectDropdownOptions}
+                disabled={Boolean(projectCatalogError)}
+                ariaLabel={t('agents.form.project', 'Project')}
+                ariaDescribedby="agent-project-help"
+                triggerClass="agents-view__dropdown"
+                onValueChange={(selectedValue) => {
+                  formValues.root_project_id = selectedValue || null;
+                }}
+              />
+            </div>
+          </div>
+        {/if}
+      </div>
+    </div>
+  </section>
 
-          <FormField controlId="agent-fallback-models" full>
-            {#snippet labelContent()}
-              {t('agents.form.fallbackModels', 'Fallback models')}
-              <InfoHint
-                text={t(
+  <section class="s-section" aria-labelledby="agent-section-model">
+    <header class="s-section__head">
+      <h3 class="s-section__title" id="agent-section-model">
+        {t('agents.detail.model', 'Model')}
+      </h3>
+      {#if formMode === AGENT_FORM_MODE_EDIT}
+        <div class="s-section__aside">
+          <Button variant="tertiary" onClick={navigateToAgentDefaults}>
+            {t('inherit.editGlobalDefaults', 'Edit global defaults')}
+          </Button>
+        </div>
+      {/if}
+    </header>
+    <div class="s-section__body">
+      <div class="s-group agents-view__model-group">
+        <div class="s-row">
+          <div class="s-row-info">
+            <label class="s-row-label" for="agent-model">
+              {t('agents.form.model', 'Model')}
+            </label>
+          </div>
+          <div class="s-row-control">
+            <SearchableDropdown
+              id="agent-model"
+              value={modelSelectValue}
+              options={modelOptions}
+              placeholder={inheritModelLabel('model')}
+              searchPlaceholder={t(
+                'agents.form.modelSearchPlaceholder',
+                'Filter models…',
+              )}
+              emptyLabel={t('agents.form.modelSearchEmpty', 'No models match')}
+              ariaLabel={t('agents.form.model', 'Model')}
+              triggerClass="agents-view__dropdown"
+              triggerTooltip={modelTriggerTooltip}
+              panelClass="agents-view__search-panel"
+              footerActionLabel={modelFilterFooter}
+              onFooterAction={() => (showAllModels = !showAllModels)}
+              onOpenChange={onModelDropdownOpenChange}
+              onValueChange={(selectedValue) =>
+                updateModelSelection('model', selectedValue)}
+            />
+          </div>
+        </div>
+
+        <div class="s-row">
+          <div class="s-row-info">
+            <label class="s-row-label" for="agent-thinking-effort">
+              {t('agents.form.thinkingEffort', 'Thinking effort')}
+            </label>
+            <div class="s-row-desc" id="agent-thinking-effort-help">
+              {effortDropdownDisabled
+                ? t(
+                    'agents.form.thinkingEffortUnsupported',
+                    'This model does not support reasoning.',
+                  )
+                : t(
+                    'agents.form.thinkingEffortDescription',
+                    'How much internal reasoning the Model may spend before answering.',
+                  )}
+            </div>
+          </div>
+          <div class="s-row-control">
+            <Dropdown
+              id="agent-thinking-effort"
+              value={formValues.thinking_effort}
+              options={thinkingEffortOptions}
+              disabled={effortDropdownDisabled}
+              ariaLabel={t('agents.form.thinkingEffort', 'Thinking effort')}
+              ariaDescribedby="agent-thinking-effort-help"
+              triggerClass="agents-view__dropdown"
+              listClass="agents-view__thinking-list"
+              onValueChange={(selectedValue) => {
+                formValues.thinking_effort = selectedValue;
+              }}
+            />
+          </div>
+        </div>
+
+        <button
+          type="button"
+          class="s-row s-row--compact s-disclosure-row"
+          id="agent-model-options-toggle"
+          aria-expanded={modelOptionsOpen}
+          aria-controls="agent-model-options"
+          onclick={() => (modelOptionsOpen = !modelOptionsOpen)}
+        >
+          <span class="s-row-label">
+            <span
+              class="disclosure-chevron"
+              class:disclosure-chevron--open={modelOptionsOpen}
+              aria-hidden="true"
+            ></span>
+            {t('agents.modelOptions', 'Temperature & fallback models')}
+          </span>
+        </button>
+        <div
+          class="s-group__rows"
+          id="agent-model-options"
+          hidden={!modelOptionsOpen}
+        >
+          <div class="s-row">
+            <div class="s-row-info">
+              <label class="s-row-label" for="agent-temperature">
+                {t('agents.form.temperature', 'Temperature')}
+              </label>
+              <div class="s-row-desc" id="agent-temperature-desc">
+                {t(
+                  'agents.form.temperatureDescription',
+                  'Sampling randomness, typically 0–2.',
+                )}
+              </div>
+              {#if temperatureIsInherit}
+                <div
+                  class="s-row-desc agents-view__inherit-hint"
+                  id="agent-temperature-help"
+                >
+                  {inheritSource('temperature') === 'global_default'
+                    ? t('inherit.hint', 'Inherited: {value} (global default)', {
+                        value: inheritDisplayValue('temperature'),
+                      })
+                    : t(
+                        'inherit.hintProviderDefault',
+                        'Provider default — nothing is set here or in the global defaults.',
+                      )}
+                </div>
+              {/if}
+              {#if formErrors.temperature}
+                <p
+                  class="agents-view__row-error"
+                  id="agent-temperature-error"
+                  role="alert"
+                >
+                  {fieldError('temperature')}
+                </p>
+              {/if}
+            </div>
+            <div class="s-row-control agents-view__temperature-control">
+              <TextField
+                id="agent-temperature"
+                inputmode="decimal"
+                invalid={Boolean(formErrors.temperature)}
+                aria-describedby={temperatureDescribedBy}
+                value={formValues.temperature}
+                onInput={(next) => (formValues.temperature = next)}
+              />
+              {#if !temperatureIsInherit}
+                <Button
+                  variant="tertiary"
+                  class="agents-view__reset-inherit"
+                  tooltip={t(
+                    'inherit.resetToInherit',
+                    'Reset to inherited value',
+                  )}
+                  ariaLabel={t(
+                    'inherit.resetToInherit',
+                    'Reset to inherited value',
+                  )}
+                  onClick={clearTemperature}
+                >
+                  {EMPTY_VALUE}
+                </Button>
+              {/if}
+            </div>
+          </div>
+
+          <div class="s-row agents-view__fallback-models">
+            <div class="s-row-info">
+              <div class="s-row-label" id="agent-fallback-models-label">
+                {t('agents.form.fallbackModels', 'Fallback models')}
+              </div>
+              <div class="s-row-desc">
+                {t(
                   'agents.form.fallbackModelsHelp',
                   'Tried in order when the primary model fails or is unavailable. The first entry has the highest priority.',
                 )}
-              />
-            {/snippet}
-            {#each fallbackModelRows as row, index (index)}
-              <div class="agents-view__fallback-row">
-                <SearchableDropdown
-                  id={`agent-fallback-model-${index}`}
-                  value={row.selectValue}
-                  options={allFallbackModelOptions}
-                  placeholder={t(
-                    'agents.form.fallbackModelPlaceholder',
-                    'None',
-                  )}
-                  searchPlaceholder={t(
-                    'agents.form.modelSearchPlaceholder',
-                    'Filter models…',
-                  )}
-                  emptyLabel={t(
-                    'agents.form.modelSearchEmpty',
-                    'No models match',
-                  )}
-                  ariaLabel={`${t('agents.form.fallbackModels', 'Fallback models')} ${index + 1}`}
-                  triggerClass="agents-view__dropdown"
-                  panelClass="agents-view__search-panel"
-                  onOpenChange={onModelDropdownOpenChange}
-                  onValueChange={(selectedValue) =>
-                    updateFallbackModelEntry(index, selectedValue)}
-                />
+              </div>
+            </div>
+            <div class="s-row-control agents-view__fallback-list">
+              {#each fallbackModelRows as row, index (index)}
+                <div class="agents-view__fallback-row">
+                  <SearchableDropdown
+                    id={`agent-fallback-model-${index}`}
+                    value={row.selectValue}
+                    options={allFallbackModelOptions}
+                    placeholder={t(
+                      'agents.form.fallbackModelPlaceholder',
+                      'None',
+                    )}
+                    searchPlaceholder={t(
+                      'agents.form.modelSearchPlaceholder',
+                      'Filter models…',
+                    )}
+                    emptyLabel={t(
+                      'agents.form.modelSearchEmpty',
+                      'No models match',
+                    )}
+                    ariaLabel={`${t('agents.form.fallbackModels', 'Fallback models')} ${index + 1}`}
+                    triggerClass="agents-view__dropdown"
+                    panelClass="agents-view__search-panel"
+                    onOpenChange={onModelDropdownOpenChange}
+                    onValueChange={(selectedValue) =>
+                      updateFallbackModelEntry(index, selectedValue)}
+                  />
+                  <button
+                    type="button"
+                    class="agents-view__fallback-remove"
+                    aria-label={t(
+                      'agents.form.removeFallbackModel',
+                      'Remove fallback model',
+                    )}
+                    onclick={() => removeFallbackModelEntry(index)}
+                  >
+                    ×
+                  </button>
+                </div>
+              {/each}
+              {#if canAddFallbackModelRow}
                 <button
                   type="button"
-                  class="agents-view__fallback-remove"
-                  aria-label={t(
-                    'agents.form.removeFallbackModel',
-                    'Remove fallback model',
-                  )}
-                  onclick={() => removeFallbackModelEntry(index)}
+                  class="agents-view__fallback-add"
+                  onclick={addFallbackModelEntry}
                 >
-                  ×
+                  {t('agents.form.addFallbackModel', '+ Add fallback model')}
                 </button>
-              </div>
-            {/each}
-            {#if canAddFallbackModelRow}
-              <button
-                type="button"
-                class="agents-view__fallback-add"
-                onclick={addFallbackModelEntry}
-              >
-                {t('agents.form.addFallbackModel', '+ Add fallback model')}
-              </button>
-            {/if}
-          </FormField>
+              {/if}
+            </div>
+          </div>
         </div>
-      </details>
+      </div>
     </div>
-  </div>
+  </section>
 </div>

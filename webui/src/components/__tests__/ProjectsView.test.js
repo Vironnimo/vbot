@@ -43,6 +43,7 @@ describe('ProjectsView', () => {
     ).toBeTruthy();
     expectSectionOrder([
       'Repository',
+      'Agent defaults',
       'Team',
       'Auto-load files',
       'Tools',
@@ -87,7 +88,7 @@ describe('ProjectsView', () => {
     expect(
       document
         .querySelector('[data-testid="project-remove-demo"]')
-        .closest('.management-disclosure'),
+        .closest('.projects-repository-actions'),
     ).not.toBeNull();
     expect(document.querySelector('#project-edit-name')).toBe(name);
     expect(name.value).toBe('Draft project');
@@ -232,9 +233,7 @@ describe('ProjectsView', () => {
     await selectDemo();
 
     await waitForCondition(() =>
-      document
-        .querySelectorAll('.detail-section')[2]
-        ?.querySelector('.empty-state'),
+      document.querySelector('#project-detail-panel-team .empty-state'),
     );
     expect(document.querySelector('.projects-team')).toBeNull();
     expect(document.querySelector('[role="alert"]')).toBeFalsy();

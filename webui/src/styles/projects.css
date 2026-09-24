@@ -91,13 +91,16 @@
   overflow: hidden;
 }
 
+/* One continuous configuration page: the header, the titled sections and the
+   final Save. Spacing between sections comes from the section grammar
+   (styles/settings/sections.css); topics continue that rhythm. */
 .projects-view .project-detail-scroll {
   display: flex;
   min-height: 0;
   min-width: 0;
   flex: 1;
   flex-direction: column;
-  gap: 22px;
+  gap: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 26px 30px;
@@ -108,6 +111,22 @@
   width: 100%;
   max-width: var(--content-max-wide);
   margin-inline: auto;
+}
+
+.projects-view .project-detail-scroll > .management-header {
+  margin-bottom: 32px;
+}
+
+.projects-view .project-detail-scroll > .banner {
+  margin-bottom: 24px;
+}
+
+.projects-view .management-topic + .management-topic {
+  margin-top: 44px;
+}
+
+.projects-view .project-detail-scroll > .management-footer {
+  margin-top: 28px;
 }
 
 .projects-view .detail-top {
@@ -142,120 +161,42 @@
 
 .projects-view .detail-btns {
   display: flex;
-  flex-shrink: 0;
+  flex-wrap: wrap;
   gap: 8px;
-}
-
-.projects-view .projects-save-row {
-  justify-content: flex-end;
-}
-
-/* ── Section cards ────────────────────────────────────────────────────────── */
-
-.projects-view .detail-section {
-  flex-shrink: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  background: var(--surface);
-}
-
-/* Sections that host dropdowns must not clip the portaled panel. */
-.projects-view .detail-section--overflow {
-  overflow: visible;
-}
-
-.projects-view .detail-section-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-sm);
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
-  border-radius: var(--r-lg) var(--r-lg) 0 0;
-  color: var(--text-hi);
-  font-size: var(--fs-body-sm);
-  font-weight: 600;
-  background: var(--surface);
-}
-
-.projects-view .projects-section-title-copy {
-  display: inline-flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-}
-
-.projects-view .detail-section-body {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 16px;
-}
-
-.projects-view .projects-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.projects-view .projects-field-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 14px;
-}
-
-.projects-view .projects-field-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.projects-view .projects-label {
-  color: var(--text-hi);
-  font-size: var(--fs-label-md);
-  font-weight: 500;
-  line-height: 1.4;
-}
-
-.projects-view .projects-sublabel {
-  margin-top: 4px;
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  font-weight: 600;
-}
-
-.projects-view .projects-help {
-  margin: 0;
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  line-height: 1.4;
-}
-
-.projects-view .projects-inherit-hint {
-  margin: 0;
-  color: var(--text-med);
-  font-size: var(--fs-label-sm);
-  line-height: 1.4;
-}
-
-/* The jump link to Settings → Agent defaults, sized to sit under a field. */
-.projects-view .projects-inherit-link {
-  align-self: flex-start;
-  padding: 2px 8px;
-  font-size: var(--fs-label-sm);
 }
 
 .projects-view .projects-dropdown {
   width: 100%;
 }
 
-/* ── Auto-load / whitelist file lists ─────────────────────────────────────── */
+/* ── Repository and Agent defaults ────────────────────────────────────────── */
+
+/* Number fields keep the shared number width; the optional reset action sits
+   in front of the input instead of widening the control column. */
+.projects-view .s-row > .projects-number-control {
+  width: auto;
+  justify-self: end;
+  gap: 6px;
+}
+
+.projects-view .projects-number-input {
+  width: var(--s-number-width, 148px);
+}
+
+.projects-view .projects-inherit-hint {
+  color: var(--text-med);
+}
+
+/* The jump link to Settings → Agent defaults, under the row description. */
+.projects-view .projects-inherit-link {
+  margin: 4px 0 0 -8px;
+  padding: 2px 8px;
+  font-size: var(--fs-label-sm);
+}
+
+/* ── Auto-load files ──────────────────────────────────────────────────────── */
 
 .projects-view .projects-file-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -264,12 +205,17 @@
 .projects-view .projects-file-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  padding: 4px 6px 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface);
+  min-height: 44px;
+  padding: 6px 14px 6px 10px;
+}
+
+.projects-view .projects-file-row + .projects-file-row {
+  border-top: 1px solid var(--border);
+}
+
+.projects-view .projects-file-list > .projects-file-row:first-child {
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
 }
 
 .projects-view .projects-file-name {
@@ -284,8 +230,8 @@
 }
 
 .projects-view .projects-file-row--drop {
-  border-color: var(--accent);
   background: var(--accent-06);
+  box-shadow: inset 0 2px 0 var(--accent);
 }
 
 .projects-view .projects-file-handle {
@@ -313,8 +259,8 @@
 /* The remove button carries only the × glyph, so its size stays literal. */
 .projects-view .projects-file-remove {
   flex-shrink: 0;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: none;
   border-radius: var(--r-sm);
@@ -335,10 +281,10 @@
   opacity: 0.5;
 }
 
-.projects-view .projects-file-add {
+.projects-view .s-group > .projects-file-add {
   display: flex;
   gap: 8px;
-  margin-top: 6px;
+  padding: 12px 18px;
 }
 
 .projects-view .projects-file-add .projects-file-input {
@@ -346,114 +292,114 @@
   min-width: 0;
 }
 
-/* ── Team rows ────────────────────────────────────────────────────────────── */
+/* ── Team ─────────────────────────────────────────────────────────────────── */
 
 .projects-view .projects-scan-loading {
   margin: 0;
   color: var(--text-lo);
-  font-size: var(--fs-label-sm);
+  font-size: var(--fs-body-sm);
 }
 
 .projects-view .projects-team {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
   margin: 0;
   padding: 0;
   list-style: none;
-}
-
-.projects-view .projects-team-member {
-  overflow: hidden;
-  border-bottom: 1px solid var(--border);
 }
 
 .projects-view .projects-team-header {
   display: flex;
   width: 100%;
   align-items: center;
-  gap: 10px;
-  min-height: 38px;
-  padding: 6px 8px;
+  gap: 6px;
+  min-height: 48px;
+  padding: 10px 18px;
   border: 0;
   background: transparent;
   color: inherit;
+  font: inherit;
   cursor: pointer;
   text-align: left;
+}
+
+.projects-view .projects-team-member:first-child .projects-team-header {
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+}
+
+.projects-view
+  .projects-team-member:last-child:not(.projects-team-member--expanded)
+  .projects-team-header {
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+}
+
+.projects-view
+  .projects-team-member:only-child:not(.projects-team-member--expanded)
+  .projects-team-header {
+  border-radius: var(--r-lg);
 }
 
 .projects-view .projects-team-header:hover {
   background: var(--surface-2);
 }
 
-.projects-view .projects-team-chevron {
-  flex-shrink: 0;
-  fill: none;
-  stroke: var(--text-med);
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  transition: transform 0.18s ease;
-}
-
-.projects-view .projects-team-chevron--open {
-  transform: rotate(90deg);
+.projects-view .projects-team-header:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 .projects-view .projects-team-name {
   min-width: 0;
   flex: 1;
   overflow: hidden;
+  color: var(--text-hi);
+  font-size: var(--fs-body-md);
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text-hi);
-  font-size: var(--fs-body-sm);
-  font-weight: 500;
 }
 
 .projects-view .projects-team-summary {
   flex-shrink: 0;
   max-width: 45%;
   overflow: hidden;
-  color: var(--text-med);
-  font-size: var(--fs-label-sm);
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* A member's settings continue its row: indented under the name, no card. */
 .projects-view .projects-team-detail {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 4px 14px 16px;
-  border-top: 1px solid var(--border);
+  gap: 24px;
+  padding: 6px 18px 22px 39px;
 }
 
-/* Effective-value lines: one row per field, value + provenance badge. */
+/* Effective values: one column per field, value above its provenance. */
 .projects-view .projects-effective-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px 24px;
   margin: 0;
-  padding-top: 10px;
+  padding: 0;
+  list-style: none;
 }
 
 .projects-view .projects-effective-row {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .projects-view .projects-effective-label {
-  min-width: 108px;
   color: var(--text-lo);
   font-size: var(--fs-label-sm);
-  font-weight: 500;
 }
 
-/* One line each for Model, temperature, and Thinking effort: a mix of names
-   and numbers, so the interface face with aligned figures. */
+/* Model, temperature and Thinking effort: a mix of names and numbers, so the
+   interface face with aligned figures. */
 .projects-view .projects-effective-value {
   color: var(--text-hi);
   font-size: var(--fs-body-sm);
@@ -471,129 +417,131 @@
   font-size: var(--fs-label-sm);
 }
 
-/* Override controls: a labeled block per field with a control + set/clear actions. */
-.projects-view .projects-overrides {
+.projects-view .projects-member-block {
   display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: 10px;
-  padding-top: 4px;
-  border-top: 1px solid var(--border);
 }
 
-.projects-view .projects-override-row {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.projects-view .projects-member-block > .s-subhead {
+  margin-top: 0;
 }
 
-.projects-view .projects-override-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.projects-view .projects-override-input {
-  flex: 1;
-  min-width: 140px;
-}
-
-.projects-view .projects-override-input .projects-dropdown {
-  width: 100%;
-}
-
-.projects-view .projects-override-help {
-  margin: 0;
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  line-height: 1.4;
-}
-
-.projects-view .projects-tool-access-override {
-  display: grid;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-left: 2px solid var(--border-2);
-  border-radius: var(--r-lg);
-  background: var(--surface-2);
-}
-
-.projects-view .projects-tool-access-heading {
+.projects-view .projects-member-subhead {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
 }
 
-.projects-view .projects-tool-access-heading > div {
+.projects-view .projects-member-subhead__copy {
   min-width: 0;
 }
 
-.projects-view .projects-tools-line,
-.projects-view .projects-source-line {
+/* Override fields use the page's row alignment: label left, control in the
+   shared control column. */
+.projects-view .projects-member-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.projects-view .projects-member-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 300px);
+  column-gap: 32px;
+  row-gap: 10px;
+  align-items: center;
+  min-height: 40px;
+}
+
+.projects-view .projects-member-field__info {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.projects-view .projects-member-field__control {
+  display: flex;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+.projects-view .projects-member-field__control > * {
+  width: 100%;
+}
+
+.projects-view .projects-member-field__control.projects-number-control > * {
+  width: 120px;
+}
+
+.projects-view .projects-member-field__control > .btn-secondary {
+  width: auto;
+}
+
+.projects-view .projects-member-field__wide {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.projects-view .projects-clear-override {
+  padding: 2px 8px;
+  font-size: var(--fs-label-sm);
+}
+
+.projects-view .projects-member-facts {
+  gap: 2px;
+}
+
+.projects-view .projects-tools-line {
   margin: 0;
   color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+}
+
+.projects-view .projects-tools-follow {
+  margin: 0 0 8px;
+  color: var(--text-lo);
   font-size: var(--fs-label-sm);
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 /* "Source: <path> (<format>)" — dominated by the file path. */
 .projects-view .projects-source-line {
+  margin: 0;
   color: var(--text-lo);
   font-family: var(--font-mono);
   font-size: var(--fs-mono-xs);
   overflow-wrap: anywhere;
 }
 
-.projects-view .projects-tools-follow {
-  margin: 2px 0 0;
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  line-height: 1.4;
-}
-
 /* ── Scan report ──────────────────────────────────────────────────────────── */
 
-.projects-view .projects-finding-group {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.projects-view .projects-finding-title {
-  margin: 0;
-  color: var(--text-hi);
-  font-size: var(--fs-body-sm);
-  font-weight: 600;
+.projects-view .projects-finding-head {
+  margin-top: 4px;
 }
 
 .projects-view .projects-findings {
-  display: flex;
-  flex-direction: column;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-/* Hairline rows, not cards: the summary banner already carries the warn
-   color, and a dozen boxed rows bury the section. */
 .projects-view .projects-finding {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 7px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.projects-view .projects-finding:last-child {
-  border-bottom: none;
+  padding: 10px 18px;
 }
 
 .projects-view .projects-finding-detail {
   color: var(--text-med);
-  font-size: var(--fs-label-sm);
-  line-height: 1.4;
+  font-size: var(--fs-body-sm);
+  line-height: 1.45;
 }
 
 /* "Agent <id>" / "Source: <path>" lines. */
@@ -603,11 +551,136 @@
   font-size: var(--fs-mono-xs);
 }
 
+/* ── Skill whitelist ──────────────────────────────────────────────────────── */
+
+/* Mirrors the Tool list above it: a count and filter line, then one panel
+   per Skill source with a group checkbox and one checkbox row per Skill. */
+.projects-view .projects-skill-search {
+  flex: 1 1 180px;
+  max-width: 260px;
+  margin-left: auto;
+}
+
+.projects-view .projects-skill-search input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  background: var(--field-surface);
+  color: var(--text-hi);
+  font: inherit;
+  font-size: var(--fs-body-sm);
+}
+
+.projects-view .projects-skill-search input::placeholder {
+  color: var(--text-lo);
+}
+
+.projects-view .projects-skill-search input:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: var(--field-focus-ring);
+}
+
+.projects-view .projects-skill-groups {
+  columns: 2;
+  column-gap: 16px;
+}
+
+.projects-view .projects-skill-group {
+  display: block;
+  margin-bottom: 16px;
+  overflow: hidden;
+  break-inside: avoid;
+}
+
+.projects-view .projects-skill-group-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 14px;
+  background: var(--surface-2);
+}
+
+.projects-view .projects-skill-group-header h4 {
+  margin: 0;
+  color: var(--text-hi);
+  font: 600 var(--fs-body-md) / 1.4 var(--font-ui);
+}
+
+.projects-view .projects-skill-count {
+  margin-left: auto;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.projects-view .projects-skill-rows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 4px 0;
+}
+
+.projects-view .projects-skill-row {
+  min-width: 0;
+}
+
+/* The whole row is the checkbox. */
+.projects-view .projects-skill-check {
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 14px;
+  border-radius: 0;
+}
+
+.projects-view .projects-skill-check:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.projects-view .projects-skill-check:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.projects-view .projects-skill-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-hi);
+  /* Skill names are identifiers. */
+  font: var(--fs-mono-sm) var(--font-mono);
+}
+
+.projects-skill-tip {
+  max-width: min(400px, calc(100vw - 16px));
+  color: var(--text-med);
+}
+
+.projects-skill-tip strong {
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+  font-weight: 600;
+}
+
+.projects-skill-tip p {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+}
+
 /* ── Modals ───────────────────────────────────────────────────────────────── */
 
 .projects-view__modal {
   width: 480px;
   max-width: calc(100vw - 40px);
+}
+
+.projects-view .projects-help {
+  margin: 0;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  line-height: 1.4;
 }
 
 /* ── Add dialog: source-format choice + CLAUDE.md suggestion ─────────────────
@@ -685,6 +758,12 @@
   }
 }
 
+@media (max-width: 760px) {
+  .projects-view .projects-skill-groups {
+    columns: 1;
+  }
+}
+
 @media (max-width: 640px) {
   .projects-view .projects-layout {
     flex-direction: column;
@@ -692,5 +771,41 @@
 
   .projects-view .project-list-pane {
     max-height: min(220px, 32vh);
+  }
+
+  .projects-view .s-row > .projects-number-control {
+    justify-self: start;
+  }
+
+  .projects-view .projects-team-header,
+  .projects-view .projects-finding,
+  .projects-view .s-group > .projects-file-add {
+    padding-inline: 14px;
+  }
+
+  .projects-view .projects-team-detail {
+    padding: 4px 14px 20px;
+  }
+
+  .projects-view .projects-effective-list,
+  .projects-view .projects-member-field {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .projects-view .projects-member-fields {
+    gap: 16px;
+  }
+
+  .projects-view .projects-member-field {
+    row-gap: 6px;
+  }
+
+  .projects-view .projects-member-field__control {
+    justify-content: flex-start;
+  }
+
+  .projects-view .projects-skill-search {
+    max-width: none;
+    margin-left: 0;
   }
 }

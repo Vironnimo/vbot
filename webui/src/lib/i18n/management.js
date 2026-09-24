@@ -203,6 +203,26 @@ export default Object.freeze({
     'How much internal reasoning the model may spend before answering. Leave at — for the default.',
   'agents.form.wildcardNote':
     'Currently all are allowed, including ones added in the future. Turning any single item off switches to a fixed list.',
+  'agents.form.thinkingEffortDescription':
+    'How much internal reasoning the Model may spend before answering.',
+  'agents.form.temperatureDescription': 'Sampling randomness, typically 0–2.',
+  'agents.form.customPromptDescription':
+    'Gives this Agent its own editable copy of the System Prompt. Turning it off keeps the customized blocks but stops using them.',
+  'agents.form.skills': 'Skills',
+  'agents.form.skillsDescription':
+    'Skills this Agent may load. Selecting all also allows Skills added later.',
+  'agents.form.subagentTargets': 'Sub-Agent targets',
+  'agents.access.allSkills': 'All Skills',
+  'agents.access.allIdentityAgents': 'All Identity Agents',
+  'agents.access.allProjectAgents': 'All Project Agents',
+  'agents.access.filterSkills': 'Filter Skills',
+  'agents.access.filterSkillsPlaceholder': 'Filter Skills…',
+  'agents.access.filterAgents': 'Filter Agents',
+  'agents.access.filterAgentsPlaceholder': 'Filter Agents…',
+  'agents.access.projectAgentDetail': '{agent} · {project}',
+  'agents.deleteTitle': 'Delete this Agent',
+  'agents.deleteDescription':
+    'Moves the Agent to the archive. An Agent that is still referenced or has active Runs cannot be deleted.',
   'toolAccess.searchLabel': 'Filter Tools',
   'toolAccess.searchPlaceholder': 'Filter Tools…',
   'toolAccess.resetOverride': 'Reset to repository policy',
@@ -408,7 +428,6 @@ export default Object.freeze({
   'projects.manage.autoLoadMoved':
     'Moved {file} to position {position} of {total}',
   'projects.manage.autoLoadEmpty': 'No auto-load files',
-  'projects.manage.allowedTools': 'Tool whitelist',
   'projects.manage.allowedToolsHelp':
     'The maximum tools this project’s agents may use. An individual agent may use fewer through its own permissions.',
   'projects.manage.resetDefaults': 'Reset to defaults',
@@ -416,12 +435,18 @@ export default Object.freeze({
   'projects.manage.toolsEmpty': 'No tools available',
   'projects.manage.unavailableToolHint':
     'This stored Tool Whitelist entry is not currently registered for Projects. Turn it off to remove the permission, or leave it on so the permission returns with the Tool.',
-  'projects.manage.allowedSkills': 'Skill whitelist',
   'projects.manage.allowedSkillsHelp':
     'Project skills are active by default; bundled and global skills are opt-in.',
   'projects.manage.projectSkills': 'Project skills',
   'projects.manage.bundledSkills': 'Bundled skills',
   'projects.manage.globalSkills': 'Global skills',
+  'projects.manage.allProjectSkills': 'All project skills',
+  'projects.manage.allBundledSkills': 'All bundled skills',
+  'projects.manage.allGlobalSkills': 'All global skills',
+  'projects.manage.skillSelectionCount': '{enabled} of {total} active',
+  'projects.manage.skillSearchPlaceholder': 'Filter skills…',
+  'projects.manage.skillSearchLabel': 'Filter skills',
+  'projects.manage.skillsNoMatch': 'No matching skills.',
   'projects.manage.toggleSkill': 'Toggle skill {name}',
   'projects.manage.skillsEmpty': 'No skills available',
   'projects.manage.save': 'Save changes',
@@ -476,7 +501,7 @@ export default Object.freeze({
   'projects.team.sourceAgentFile': 'agent file (repo)',
   'projects.team.sourceProjectDefault': 'project default',
   'projects.team.sourceGlobalDefault': 'global default',
-  'projects.team.overrideLabel': 'Override',
+  'projects.team.overridesTitle': 'Overrides',
   'projects.team.setOverride': 'Set override',
   'projects.team.clearOverride': 'Clear override',
   'projects.team.overrideSaved': 'Override saved.',

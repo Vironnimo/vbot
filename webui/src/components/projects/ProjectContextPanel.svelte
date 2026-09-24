@@ -3,7 +3,6 @@
   import { isImeComposing } from '$lib/keyboard.js';
   import InfoHint from '../ui/InfoHint.svelte';
   import Button from '../ui/Button.svelte';
-  import EmptyState from '../ui/EmptyState.svelte';
   import TextField from '../ui/TextField.svelte';
   import { tick } from 'svelte';
   let { projectsState = $bindable(), projectsController } = $props();
@@ -117,19 +116,20 @@
 </script>
 
 <div class="management-topic" id="project-detail-panel-context">
-  <!-- Section 2: Auto-load files -->
-  <div class="detail-section">
-    <h3 class="detail-section-title">
-      {t('projects.detail.sectionAutoLoad', 'Auto-load files')}
+  <section class="s-section" aria-labelledby="project-section-auto-load">
+    <header class="s-section__head">
+      <h3 class="s-section__title" id="project-section-auto-load">
+        {t('projects.detail.sectionAutoLoad', 'Auto-load files')}
+      </h3>
       <InfoHint
         text={t(
           'projects.detail.autoLoadInfo',
           'These files are embedded into the system prompt of every session in this project — the agent always sees their full content, with higher weight than normal chat history, and they are never dropped or summarized by context compaction.\n\nPaths are relative to the project folder (absolute paths also work), files load in list order, and missing files are skipped. When an outside Identity Agent explicitly loads the project with the project Tool, the same files are returned as Project Context.',
         )}
       />
-    </h3>
-    <div class="detail-section-body">
-      <div class="projects-field">
+    </header>
+    <div class="s-section__body">
+      <div class="s-group projects-auto-load">
         {#if projectsState.editForm.auto_load.length > 0}
           <ul class="projects-file-list" bind:this={autoLoadList}>
             {#each projectsState.editForm.auto_load as filePath, index (index)}
@@ -197,20 +197,11 @@
             {/each}
           </ul>
         {:else}
-          <EmptyState
-            density="compact"
-            description={t(
-              'projects.manage.autoLoadEmpty',
-              'No auto-load files',
-            )}
-          />
+          <div class="s-group__block s-group__note">
+            {t('projects.manage.autoLoadEmpty', 'No auto-load files')}
+          </div>
         {/if}
-        <span
-          class="projects-file-announcement"
-          aria-live="polite"
-          aria-atomic="true">{autoLoadAnnouncement}</span
-        >
-        <div class="projects-file-add">
+        <div class="s-group__block projects-file-add">
           <TextField
             id="project-edit-auto-load"
             class="projects-file-input"
@@ -236,6 +227,11 @@
           </Button>
         </div>
       </div>
+      <span
+        class="projects-file-announcement"
+        aria-live="polite"
+        aria-atomic="true">{autoLoadAnnouncement}</span
+      >
     </div>
-  </div>
+  </section>
 </div>
