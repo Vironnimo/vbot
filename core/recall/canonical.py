@@ -207,14 +207,23 @@ class CanonicalSessionRecallBackend:
         versions = self.sessions.list_history_versions(
             [_session_address(request, str(summary["id"])) for summary in summaries]
         )
-        fingerprint: list[str] = []
-        for summary in sorted(summaries, key=lambda item: str(item.get("id", ""))):
+        history: dict[str, tuple[str, int]] = {}
+        for summary in summaries:
             session_id = str(summary["id"])
             version = versions.get(_session_address(request, session_id))
-            if version is None:
-                continue
-            generation_id, revision = version
-            fingerprint.append(f"{session_id}:{generation_id}:{revision}")
+            if version is not None:
+                history[session_id] = version
+        return self._selection_snapshot(request, history)
+
+    def _selection_snapshot(
+        self, request: RecallSearchRequest, history: dict[str, tuple[str, int]]
+    ) -> str:
+        """Bind a continuation to the selection and the candidates' canonical versions."""
+
+        fingerprint = [
+            f"{session_id}:{generation_id}:{revision}"
+            for session_id, (generation_id, revision) in sorted(history.items())
+        ]
         selection = {
             "backend": type(self).__name__,
             "agent_id": request.agent_id,

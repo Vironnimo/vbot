@@ -82,6 +82,17 @@ OPAQUE_REASONING_BLOB_KEYS = frozenset({"encrypted_content", "signature", "redac
 REASONING_META_RESPONSE_OUTPUT_KEY = "response_output"
 REASONING_META_REASONING_ITEMS_KEY = "reasoning_items"
 REASONING_META_ENCRYPTED_CONTENT_KEY = "encrypted_content"
+# Compact JSON of a value that media or opaque-reasoning normalization would
+# change always contains one of these string starts: data URLs and ``data`` /
+# ``base64`` payload keys, image contexts, and opaque reasoning carriers. JSON
+# never escapes these characters, and a quote escaped inside string content is
+# preceded by a backslash rather than by structural ``{[,:``. The pattern starts
+# with the quote so the scan uses the regex engine's literal prefix search.
+_NORMALIZATION_MARKERS = re.compile(
+    r'"(?<=[{\[,:]")(?:data|base64"|image|input_image"|reasoning_details"|'
+    + "|".join(f'{key}"' for key in sorted(OPAQUE_REASONING_BLOB_KEYS))
+    + ")"
+)
 
 
 def estimate_tokens(text: str, *, model_id: str | None = None) -> tuple[int, bool]:
@@ -198,7 +209,9 @@ def estimate_structured_tokens(value: Any, *, model_id: str | None = None) -> tu
     Images use known Model rules and header dimensions; unavailable dimensions,
     unknown Models and other media use a fixed reserve. Top-level arrays count
     items separately so growing requests reuse cached counts for unchanged
-    messages/Tools. JSON framing remains an approximation of Provider framing.
+    messages/Tools. Items without media or opaque reasoning are counted from
+    their rendering directly. JSON framing remains an approximation of Provider
+    framing.
     """
 
     if isinstance(value, (list, tuple)):
@@ -207,13 +220,18 @@ def estimate_structured_tokens(value: Any, *, model_id: str | None = None) -> tu
             + (2 + max(0, len(value) - 1)),
             True,
         )
+    rendered = _render_without_normalization(value)
+    if rendered is not None:
+        return estimate_tokens(rendered, model_id=model_id)[0], True
+    return _estimate_normalized(value, model_id=model_id), True
+
+
+def _estimate_normalized(value: Any, *, model_id: str | None) -> int:
+    """Count one item after replacing native media and opaque reasoning blobs."""
     normalized, media_tokens = _normalize_native_media(value, model_id=model_id)
     normalized, blob_count = _normalize_opaque_reasoning_blobs(normalized)
     estimated, _ = estimate_json_tokens(normalized, model_id=model_id)
-    return (
-        estimated + media_tokens + blob_count * OPAQUE_REASONING_BLOB_TOKEN_RESERVE,
-        True,
-    )
+    return estimated + media_tokens + blob_count * OPAQUE_REASONING_BLOB_TOKEN_RESERVE
 
 
 def estimate_request_input_tokens(
@@ -244,6 +262,17 @@ def estimate_request_input_tokens(
         total_tokens += tool_tokens
     total_tokens += media_tokens
     return total_tokens, True
+
+
+def _render_without_normalization(value: Any) -> str | None:
+    """Render *value* when normalization could not change it, else ``None``."""
+    if value is None or isinstance(value, str):
+        return _render_token_estimate_value(value)
+    try:
+        rendered = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    except (TypeError, ValueError):
+        return None
+    return None if _NORMALIZATION_MARKERS.search(rendered) else rendered
 
 
 def _render_token_estimate_value(value: Any) -> str:

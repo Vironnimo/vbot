@@ -19,7 +19,7 @@ from core.chat.wire_shaping import (
     _quote_external_json,
 )
 from core.providers.errors import NetworkError, ProviderTimeoutError
-from core.sessions import ChatSession
+from core.sessions import ChatSession, SessionContinuationState, SessionContinuationStep
 from core.utils.errors import ProviderError
 
 if TYPE_CHECKING:
@@ -54,16 +54,12 @@ def _timestamp() -> str:
 
 
 @dataclass
-class _ModelStepState:
-    reasoning: str = ""
-    content: str = ""
-    assistant_message_id: str | None = None
-    interrupted: bool = False
-
-
-@dataclass
 class ContinuationState:
-    """Folded private state of one unresolved continuation chain."""
+    """Chat's working view of one unresolved Continuation chain.
+
+    Sessions folds the journal records into :class:`SessionContinuationState`;
+    this view only adds what recovery learns from canonical history.
+    """
 
     checkpoint_id: str
     origin_run_id: str
@@ -71,118 +67,46 @@ class ContinuationState:
     cause: ContinuationCause | None = None
     active: bool = True
     original_requests: list[Any] = field(default_factory=list)
-    model_steps: dict[tuple[str, int], _ModelStepState] = field(default_factory=dict)
+    model_steps: tuple[SessionContinuationStep, ...] = ()
     operations: dict[str, JsonObject] = field(default_factory=dict)
+
+    @classmethod
+    def from_stored(cls, stored: SessionContinuationState) -> ContinuationState:
+        operations: dict[str, JsonObject] = {}
+        for operation in stored.operations:
+            value: JsonObject = {
+                "tool_call_id": operation.tool_call_id,
+                "name": operation.name,
+                "run_id": operation.run_id,
+                "status": "completed" if operation.completed else "unknown",
+            }
+            if operation.completed:
+                value["ok"] = operation.ok is True
+            operations[operation.tool_call_id] = value
+        return cls(
+            checkpoint_id=stored.checkpoint_id,
+            origin_run_id=stored.origin_run_id,
+            latest_run_id=stored.latest_run_id,
+            cause=cast(ContinuationCause | None, stored.cause),
+            active=stored.active,
+            original_requests=list(stored.requests),
+            model_steps=stored.steps,
+            operations=operations,
+        )
 
     @property
     def reasoning(self) -> str:
-        return "\n\n".join(step.reasoning for step in self.model_steps.values() if step.reasoning)
+        return "\n\n".join(step.reasoning for step in self.model_steps if step.reasoning)
 
     @property
     def partial_output(self) -> str:
-        return "\n\n".join(step.content for step in self.model_steps.values() if step.content)
+        return "\n\n".join(step.content for step in self.model_steps if step.content)
 
     @property
     def unresolved_operations(self) -> list[JsonObject]:
         return [
             dict(value) for value in self.operations.values() if value.get("status") != "completed"
         ]
-
-
-def fold_continuation_records(records: list[JsonObject]) -> ContinuationState | None:
-    """Fold append-only journal records into the current unresolved state."""
-    state: ContinuationState | None = None
-    for record in records:
-        if record.get("version") != CONTINUATION_RECORD_VERSION:
-            raise ValueError("unsupported continuation record version")
-        record_type = record.get("type")
-        if record_type == "run_started":
-            checkpoint_id = _required_string(record, "checkpoint_id")
-            run_id = _required_string(record, "run_id")
-            origin_run_id = _required_string(record, "origin_run_id")
-            if state is None or state.checkpoint_id != checkpoint_id:
-                state = ContinuationState(
-                    checkpoint_id=checkpoint_id,
-                    origin_run_id=origin_run_id,
-                    latest_run_id=run_id,
-                )
-            state.latest_run_id = run_id
-            state.active = True
-            state.cause = None
-            if "request" in record and record["request"] is not None:
-                state.original_requests.append(record["request"])
-        elif record_type == "stream_delta" and state is not None:
-            run_id = _required_string(record, "run_id")
-            step_number = _required_int(record, "step")
-            step = state.model_steps.setdefault((run_id, step_number), _ModelStepState())
-            reasoning = record.get("reasoning_delta")
-            content = record.get("content_delta")
-            if isinstance(reasoning, str):
-                step.reasoning += reasoning
-            if isinstance(content, str):
-                step.content += content
-        elif record_type == "stream_attempt_discarded" and state is not None:
-            run_id = _required_string(record, "run_id")
-            step_number = _required_int(record, "step")
-            state.model_steps.pop((run_id, step_number), None)
-        elif record_type == "assistant_boundary" and state is not None:
-            run_id = _required_string(record, "run_id")
-            step_number = _required_int(record, "step")
-            step = state.model_steps.setdefault((run_id, step_number), _ModelStepState())
-            reasoning = record.get("reasoning")
-            content = record.get("content")
-            if isinstance(reasoning, str):
-                step.reasoning = reasoning
-            if isinstance(content, str):
-                step.content = content
-            message_id = record.get("message_id")
-            step.assistant_message_id = message_id if isinstance(message_id, str) else None
-            step.interrupted = record.get("interrupted") is True
-            tool_calls = record.get("tool_calls")
-            if isinstance(tool_calls, list):
-                for tool_call in tool_calls:
-                    if not isinstance(tool_call, dict):
-                        continue
-                    tool_call_id = tool_call.get("id")
-                    name = tool_call.get("name")
-                    if isinstance(tool_call_id, str) and isinstance(name, str):
-                        state.operations.setdefault(
-                            tool_call_id,
-                            {
-                                "tool_call_id": tool_call_id,
-                                "name": name,
-                                "run_id": run_id,
-                                "status": "unknown",
-                            },
-                        )
-        elif record_type == "tool_started" and state is not None:
-            tool_call_id = _required_string(record, "tool_call_id")
-            state.operations[tool_call_id] = {
-                "tool_call_id": tool_call_id,
-                "name": _required_string(record, "name"),
-                "run_id": _required_string(record, "run_id"),
-                "status": "unknown",
-            }
-        elif record_type == "tool_result" and state is not None:
-            tool_call_id = _required_string(record, "tool_call_id")
-            operation = state.operations.setdefault(
-                tool_call_id,
-                {
-                    "tool_call_id": tool_call_id,
-                    "name": _required_string(record, "name"),
-                    "run_id": _required_string(record, "run_id"),
-                },
-            )
-            operation["status"] = "completed"
-            operation["ok"] = record.get("ok") is True
-        elif record_type == "run_interrupted" and state is not None:
-            state.latest_run_id = _required_string(record, "run_id")
-            state.cause = _required_cause(record)
-            state.active = False
-        elif record_type == "resolved" and state is not None:
-            if record.get("checkpoint_id") == state.checkpoint_id:
-                state = None
-    return state
 
 
 @dataclass(frozen=True)
@@ -396,8 +320,7 @@ class ContinuationTracker:
         )
         await self._close_timer(cancelled_task)
         self._closed = True
-        state = fold_continuation_records(await self._session.load_continuation_records_async())
-        if state is None:
+        if await self._session.load_continuation_async() is None:
             raise RuntimeError("continuation journal lost its unresolved state")
 
     async def prepare_completion(self) -> None:
@@ -527,18 +450,10 @@ async def recover_continuation(
     active_run_id: str | None = None,
 ) -> ContinuationState | None:
     """Load a checkpoint and lazily classify a journal abandoned by a restart."""
-    records = await session.load_continuation_records_async()
-    if not records:
+    stored = await session.load_continuation_async()
+    if stored is None:
         return None
-    try:
-        state = fold_continuation_records(records)
-    except (TypeError, ValueError) as exc:
-        from core.chat.errors import ChatSessionError
-
-        raise ChatSessionError(f"invalid continuation journal for session: {session.id}") from exc
-    if state is None:
-        await session.clear_continuation_async()
-        return None
+    state = ContinuationState.from_stored(stored)
     messages = await session.load_run_messages_async(state.latest_run_id)
     _reconcile_canonical_tool_results(state, messages)
     if not state.active or state.latest_run_id == active_run_id:
@@ -557,9 +472,11 @@ async def recover_continuation(
             }
         ]
     )
-    recovered = fold_continuation_records(await session.load_continuation_records_async())
-    if recovered is not None:
-        _reconcile_canonical_tool_results(recovered, messages)
+    stored = await session.load_continuation_async()
+    if stored is None:
+        return None
+    recovered = ContinuationState.from_stored(stored)
+    _reconcile_canonical_tool_results(recovered, messages)
     return recovered
 
 
@@ -733,24 +650,3 @@ def _reconcile_canonical_tool_results(state: ContinuationState, messages: list[A
             except json.JSONDecodeError:
                 payload = {}
             operation["ok"] = isinstance(payload, dict) and payload.get("ok") is True
-
-
-def _required_string(record: JsonObject, key: str) -> str:
-    value = record.get(key)
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"continuation record {key} must be a non-empty string")
-    return value
-
-
-def _required_int(record: JsonObject, key: str) -> int:
-    value = record.get(key)
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise ValueError(f"continuation record {key} must be a positive integer")
-    return value
-
-
-def _required_cause(record: JsonObject) -> ContinuationCause:
-    value = record.get("cause")
-    if value not in {"user", "provider", "network", "timeout", "process_restart", "internal"}:
-        raise ValueError("continuation record cause is invalid")
-    return cast(ContinuationCause, value)

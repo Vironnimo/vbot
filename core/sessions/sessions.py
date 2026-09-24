@@ -225,7 +225,7 @@ class ChatSessionManager:
         await _run_session_io(self.set_metadata, address, data)
 
     def prompt_cache_affinity_id(self, address: SessionAddress) -> str:
-        value = self.get_metadata(address).get(PROMPT_CACHE_AFFINITY_META_KEY)
+        value = self._store.prompt_cache_affinity_value(address)
         if value is None:
             return _default_prompt_cache_affinity_id(address)
         if not _is_prompt_cache_affinity_id(value):

@@ -29,6 +29,7 @@ from core.sessions.schema import APPLICATION_ID, DATABASE_ID_META_KEY, SCHEMA_VE
 from core.sessions.sqlite_runtime import (
     classify_unavailable,
     classify_write_error,
+    copy_database,
     readonly_sqlite_uri,
 )
 
@@ -577,13 +578,11 @@ def create_offline_snapshot(
 
     validate_session_store_paths(data_dir, database_path)
 
-    def backup(destination: Path) -> None:
-        with (
-            closing(sqlite3.connect(readonly_sqlite_uri(database_path), uri=True)) as source,
-            closing(sqlite3.connect(destination)) as target,
-        ):
-            source.execute("PRAGMA query_only=ON")
-            source.backup(target, pages=256, sleep=0.01)
+    def backup(destination: Path) -> bool:
+        with closing(
+            sqlite3.connect(readonly_sqlite_uri(database_path), uri=True, isolation_level=None)
+        ) as source:
+            return copy_database(source, destination)
 
     return create_snapshot(
         data_dir,

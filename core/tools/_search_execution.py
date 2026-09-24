@@ -8,6 +8,7 @@ import os
 import queue
 import subprocess
 import threading
+import time
 from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,8 @@ from core.tools.tools import ToolContext
 from core.utils.processes import subprocess_creation_flags
 
 MAX_PROTOCOL_LINE = 8 * 1024 * 1024
+# Polling interval for the child memory bound; each poll is a process query.
+MEMORY_POLL_SECONDS = 0.05
 
 
 def native_lines(
@@ -94,13 +97,16 @@ def native_lines(
     ]
     for thread in threads:
         thread.start()
+    next_memory_poll = 0.0
     try:
         while budget.keep_going():
-            with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
-                if monitored is not None and monitored.memory_info().rss > 512 * 1024 * 1024:
-                    raise RuntimeError(
-                        "Search exceeded its memory bound; narrow files or patterns."
-                    )
+            if monitored is not None and time.monotonic() >= next_memory_poll:
+                next_memory_poll = time.monotonic() + MEMORY_POLL_SECONDS
+                with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+                    if monitored.memory_info().rss > 512 * 1024 * 1024:
+                        raise RuntimeError(
+                            "Search exceeded its memory bound; narrow files or patterns."
+                        )
             try:
                 kind, line = messages.get(timeout=0.05)
             except queue.Empty:
@@ -163,9 +169,16 @@ def validate_patterns(
     for pattern in patterns:
         args.extend(["-e", pattern])
     args.extend(["--", str(empty_file)])
-    try:
+    with _explained_pattern_errors():
         for _ in native_lines(binary, args, context, budget):
             pass
+
+
+@contextlib.contextmanager
+def _explained_pattern_errors() -> Iterator[None]:
+    """Add the literal-text correction to native pattern compilation errors."""
+    try:
+        yield
     except RuntimeError as error:
         if "regex parse error" in str(error) or "PCRE2: error compiling pattern" in str(error):
             raise RuntimeError(
@@ -223,9 +236,12 @@ def content_events(
 
     def execute() -> Generator[dict[str, Any], None, None]:
         buffer = b""
-        with contextlib.closing(
-            native_lines(binary, [*base, "--", *batch], context, budget)
-        ) as lines:
+        with (
+            _explained_pattern_errors(),
+            contextlib.closing(
+                native_lines(binary, [*base, "--", *batch], context, budget)
+            ) as lines,
+        ):
             for line in lines:
                 if not mode:
                     yield json.loads(line)

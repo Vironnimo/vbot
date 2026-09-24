@@ -358,6 +358,10 @@ def _message_records_sql(*, where: str, order_by: str = "") -> str:
     )
 
 
+# Records named by a JSON array of history keys; each view branch probes its own key.
+_KEYED_RECORDS = "m.message_key IN (SELECT value FROM json_each(?))"
+
+
 _SEARCH_RESULT_LIMIT = 1_000
 _CANONICAL_SEARCH_SCAN_LIMIT = 10_000
 
@@ -447,10 +451,15 @@ def _allocate_address(connection: sqlite3.Connection, scope: SessionAddress) -> 
     from core.sessions._types import SessionAddress
 
     def available(candidate: str) -> bool:
+        # One probe per status: each address index is partial on its status.
+        address = _scope(SessionAddress(scope.project_id, scope.agent_id, candidate))
         return (
             connection.execute(
-                "SELECT 1 FROM sessions WHERE project_id = ? AND agent_id = ? AND session_id = ? LIMIT 1",
-                _scope(SessionAddress(scope.project_id, scope.agent_id, candidate)),
+                "SELECT 1 FROM sessions WHERE project_id = ? AND agent_id = ? "
+                "AND session_id = ? AND status = 'live' "
+                "UNION ALL SELECT 1 FROM sessions WHERE project_id = ? AND agent_id = ? "
+                "AND session_id = ? AND status = 'archived' LIMIT 1",
+                (*address, *address),
             ).fetchone()
             is None
         )
