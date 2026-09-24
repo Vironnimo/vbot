@@ -40,7 +40,7 @@ Session generation and registered owner establish authority; forked history does
 not copy these capabilities. Carrier Messages and delivery receipts commit together.
 Explicit Message Run membership restricts owned usage even when ordinary Runs reuse the Session. Deletion of a drained temporary group uses `delete_temporary_group`: one
 transaction removes only Session generations bound to the exact owner/group;
-normal Session deletion still rejects owner-managed history. Schema and ownership tests cover these relations (`test_schema_reconcile.py`, `test_run_ownership.py`). The owner-bound creation/admission facade is
+normal Session deletion still rejects owner-managed history. Owned-Run reads are indexed point lookups: `owned_runs_by_id` resolves exact Run ids of one owner group through `run_execution_owners_group_run` (bounded statements of 100 ids), and `owned_run_by_input` resolves a live Session's admitted input through `UNIQUE (session_key, input_id)`; `owned_runs` pages remain for whole-group listings. Schema and ownership tests cover these relations (`test_schema_reconcile.py`, `test_run_ownership.py`, `test_store_query_plans.py`). The owner-bound creation/admission facade is
 `core/agents/temporary.py`; domain state belongs to the Extension.
 
 `temporary_group_titles` holds one optional display title per owner/group

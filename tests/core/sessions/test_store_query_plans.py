@@ -17,8 +17,10 @@ from typing import Any, cast
 import pytest
 
 from core.chat.messages import ChatMessage, ToolCall
+from core.runs import RunExecutionOwner
 from core.sessions import (
     _store_history,
+    _store_owned,
     _store_queries,
     _store_search,
     _store_values,
@@ -266,3 +268,37 @@ def test_session_catalog_reads_scope_history_by_session_index(history) -> None:
     sources = _store_queries.descriptor_sources(recorder, [address])()
     assert sources[address][2] is not None
     _assert_indexed(connection, statements)
+
+
+def test_owned_run_point_lookups_probe_indexes_not_group_history(manager) -> None:
+    binding = manager.create_bound_temporary_session(
+        SessionAddress(None, "temporary", "participant"),
+        owner_name="owner",
+        group_id="group",
+        participant_id="peer",
+        config={},
+    )
+    owner = RunExecutionOwner("owner", "group", "peer", binding.generation_id, "epoch")
+    for number in range(3):
+        manager._store.record_run_owner(
+            binding.address, run_id=f"run{number}", owner=owner, input_id=f"input{number}"
+        )
+    connection = sqlite3.connect(manager._store.path)
+    connection.row_factory = sqlite3.Row
+    try:
+        recorder, statements = _recording(connection)
+        rows = _store_owned.owned_runs_by_id(
+            recorder, owner_name="owner", group_id="group", run_ids=["run2", "run0"]
+        )
+        assert sorted(row["run_id"] for row in rows) == ["run0", "run2"]
+        row = _store_owned.owned_run_by_input(recorder, binding.address, "input1")
+        assert row is not None and row["run_id"] == "run1"
+        details = [
+            str(plan[3])
+            for sql, params in statements
+            for plan in connection.execute("EXPLAIN QUERY PLAN " + sql, params)
+        ]
+        assert not [detail for detail in details if detail.startswith("SCAN")], details
+        assert any("run_execution_owners_group_run" in detail for detail in details), details
+    finally:
+        connection.close()

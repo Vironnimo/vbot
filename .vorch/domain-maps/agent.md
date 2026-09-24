@@ -24,7 +24,7 @@ Tool permission persists as root `tool_access`: mode `all`/`selected`/`none`, `s
 
 ## Uniform Agent Resolution
 
-Owner-managed temporary Agents resolve through `AgentResolver.resolve_temporary_agent` using an exact canonical Session generation. `core/agents/temporary.py` owns their immutable configuration, indexed bindings and execution groups; Identity creation, workspace seeding and roster operations are not involved. Explicit Project Tool/Skill ceilings still narrow profile selections. Tests: `tests/core/agents/test_temporary.py` and `tests/core/projects/test_resolver_config_agent.py`.
+Owner-managed temporary Agents resolve through `AgentResolver.resolve_temporary_agent` using an exact canonical Session generation. `core/agents/temporary.py` owns their immutable configuration, indexed bindings and execution groups; Identity creation, workspace seeding and roster operations are not involved. `TemporaryExecutionGroups.owned_run`/`owned_runs` inspect exact Run ids with one indexed read (ids without an owned record raise `RunNotFoundError` or are absent), and `start` detects a replayed input by its durable input id rather than scanning the group's Run history. Explicit Project Tool/Skill ceilings still narrow profile selections. Tests: `tests/core/agents/test_temporary.py` and `tests/core/projects/test_resolver_config_agent.py`.
 
 `TemporaryExecutionGroups.delete_group` requires a closed group and current
 registration, waits for draining, deletes its bound participant Sessions through

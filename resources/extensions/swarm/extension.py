@@ -17,7 +17,7 @@ from core.extensions import (
     ToolBatchDecision,
 )
 from core.extensions.operations import ExtensionHost
-from core.runs import RunAdmission, RunNotFoundError
+from core.runs import RunAdmission
 from core.sessions import SessionAddress, TemporarySessionBinding
 from core.tools import ToolContext, tool_success
 from core.tools._argument_repair import normalize_call_arguments
@@ -513,20 +513,21 @@ class SwarmExtension:
         swarm = await self._store().get_swarm(_string(arguments, "swarm_id"))
         host = self.host
         groups = None if host is None else host.temporary_agents
-
-        async def active(participant: Json) -> bool:
-            run_id = participant.get("lifecycle_run_id")
-            if groups is None or not run_id:
-                return False
-            try:
-                inspection = await groups.owned_run(swarm["id"], run_id)
-            except RunNotFoundError:
-                return False
-            return inspection.run is not None and inspection.run.status.value == "running"
-
-        values = await asyncio.gather(*(active(item) for item in swarm["participants"]))
-        for participant, run_active in zip(swarm["participants"], values, strict=True):
-            participant["run_active"] = run_active
+        run_ids = [
+            participant["lifecycle_run_id"]
+            for participant in swarm["participants"]
+            if participant.get("lifecycle_run_id")
+        ]
+        inspections = (
+            await groups.owned_runs(swarm["id"], run_ids) if groups is not None and run_ids else {}
+        )
+        for participant in swarm["participants"]:
+            inspection = inspections.get(participant.get("lifecycle_run_id") or "")
+            participant["run_active"] = (
+                inspection is not None
+                and inspection.run is not None
+                and inspection.run.status.value == "running"
+            )
         return {"swarm": _swarm_projection(swarm)}
 
     async def _swarms_events(self, arguments: Json) -> Json:

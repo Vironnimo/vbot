@@ -600,6 +600,28 @@ class SessionStore:
                 limit=limit,
             )
 
+    def owned_runs_by_id(
+        self, *, owner_name: str, group_id: str, run_ids: Sequence[str]
+    ) -> list[sqlite3.Row]:
+        unique = list(dict.fromkeys(run_ids))
+        limit = _store_owned.OWNED_RUN_LOOKUP_LIMIT
+        rows: list[sqlite3.Row] = []
+        with self._runtime.read_ctx() as connection:
+            for start in range(0, len(unique), limit):
+                rows.extend(
+                    _store_owned.owned_runs_by_id(
+                        connection,
+                        owner_name=owner_name,
+                        group_id=group_id,
+                        run_ids=unique[start : start + limit],
+                    )
+                )
+        return rows
+
+    def owned_run_by_input(self, address: SessionAddress, input_id: str) -> sqlite3.Row | None:
+        with self._runtime.read_ctx() as connection:
+            return _store_owned.owned_run_by_input(connection, address, input_id)
+
     def run_start_boundaries(self, addresses: Sequence[SessionAddress]) -> list[sqlite3.Row]:
         with self._runtime.read_ctx() as connection:
             return _store_owned.run_start_boundaries(connection, addresses)

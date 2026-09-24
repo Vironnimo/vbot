@@ -124,6 +124,7 @@ def test_reconcile_adds_missing_session_read_indexes(tmp_path) -> None:
     connection = _create_current_database(tmp_path / "sessions.db")
     indexes = (
         "sessions_archived_address",
+        "run_execution_owners_group_run",
         "compaction_checkpoints_by_session",
         "history_edits_by_session",
     )

@@ -460,6 +460,17 @@ def record_run_start(
     write(connection)
 
 
+_OWNED_RUN_COLUMNS = (
+    "SELECT o.*, s.project_id, s.agent_id, s.session_id, "
+    "CASE WHEN r.status='running' THEN NULL ELSE r.status END AS terminal_status, "
+    "r.terminal_sequence AS terminal_sequence "
+    "FROM run_execution_owners o JOIN sessions s ON s.session_key=o.session_key "
+    "AND s.generation_id=o.generation_id JOIN runs r "
+    "ON r.session_key=o.session_key AND r.run_id=o.run_id WHERE "
+)
+OWNED_RUN_LOOKUP_LIMIT = 100
+
+
 def owned_runs(
     connection: sqlite3.Connection,
     *,
@@ -479,17 +490,57 @@ def owned_runs(
         values.append(participant_id)
     values.append(limit)
     rows = connection.execute(
-        "SELECT o.*, s.project_id, s.agent_id, s.session_id, "
-        "CASE WHEN r.status='running' THEN NULL ELSE r.status END AS terminal_status, "
-        "r.terminal_sequence AS terminal_sequence "
-        "FROM run_execution_owners o JOIN sessions s ON s.session_key=o.session_key "
-        "AND s.generation_id=o.generation_id JOIN runs r "
-        "ON r.session_key=o.session_key AND r.run_id=o.run_id WHERE "
-        + " AND ".join(clauses)
-        + " ORDER BY o.record_key LIMIT ?",
+        _OWNED_RUN_COLUMNS + " AND ".join(clauses) + " ORDER BY o.record_key LIMIT ?",
         values,
     ).fetchall()
     return cast(list[sqlite3.Row], rows)
+
+
+def owned_runs_by_id(
+    connection: sqlite3.Connection,
+    *,
+    owner_name: str,
+    group_id: str,
+    run_ids: Sequence[str],
+) -> list[sqlite3.Row]:
+    """Read the exact execution records of a bounded set of Run ids in one group.
+
+    ``run_execution_owners_group_run`` makes each id one index probe, so the cost
+    does not grow with the group's retained Run history.
+    """
+    unique = tuple(dict.fromkeys(run_ids))
+    if len(unique) > OWNED_RUN_LOOKUP_LIMIT or not all(
+        isinstance(run_id, str) and run_id for run_id in unique
+    ):
+        raise ValueError("invalid owned Run ids")
+    if not unique:
+        return []
+    placeholders = ", ".join("?" for _ in unique)
+    rows = connection.execute(
+        _OWNED_RUN_COLUMNS
+        + f"o.owner_name = ? AND o.group_id = ? AND o.run_id IN ({placeholders})",
+        (owner_name, group_id, *unique),
+    ).fetchall()
+    return cast(list[sqlite3.Row], rows)
+
+
+def owned_run_by_input(
+    connection: sqlite3.Connection, address: SessionAddress, input_id: str
+) -> sqlite3.Row | None:
+    """Read the execution record admitted for one input of a live Session.
+
+    ``UNIQUE (session_key, input_id)`` serves the probe; a Session that is not
+    live has no admissible input and yields ``None``.
+    """
+    if not isinstance(input_id, str) or not input_id:
+        raise ValueError("invalid owned Run input id")
+    row = connection.execute(
+        _OWNED_RUN_COLUMNS
+        + "o.session_key = (SELECT session_key FROM sessions WHERE project_id = ? "
+        "AND agent_id = ? AND session_id = ? AND status = 'live') AND o.input_id = ?",
+        (*_store_values._scope(address), input_id),
+    ).fetchone()
+    return cast(sqlite3.Row | None, row)
 
 
 def run_start_boundaries(

@@ -668,28 +668,28 @@ def create_app(
                 raise ValueError("Extension Run is unavailable")
             inspection = await temporary_agents.owned_run(claims["group_id"], claims["run_id"])
             # The checked host may be retired while awaiting durable ownership.
-            # Re-resolve both page and owner before exposing the SSE iterator.
+            # Re-resolve page and owner before exposing the SSE iterator; the
+            # durable inspection stays valid while that registration still owns it.
             if request.app.state.runtime.extensions is not registry:
                 raise ValueError("Extension Run is unavailable")
-            identity, page = await FILE_PREVIEW_WORKERS.run(
+            verified_identity, page = await FILE_PREVIEW_WORKERS.run(
                 _current_extension_page,
                 registry,
                 claims,
             )
-            if identity is None or page is None:
+            if (
+                verified_identity != identity
+                or page is None
+                or registry.host_for(identity).temporary_agents is None
+            ):
                 raise ValueError("Extension Run is unavailable")
-            verified_host = registry.host_for(identity)
-            verified_groups = verified_host.temporary_agents
-            if verified_groups is None:
-                raise ValueError("Extension Run is unavailable")
-            verified = await verified_groups.owned_run(claims["group_id"], claims["run_id"])
-            if inspection.run is None or verified.run is None:
+            if inspection.run is None:
                 raise ValueError("Extension Run is not live")
         except (KeyError, ValueError, ExtensionUnavailableError):
             raise HTTPException(status_code=404, detail="Extension Run is unavailable") from None
         return StreamingResponse(
             _sse_run_events(
-                verified.run,
+                inspection.run,
                 after_sequence=claims["after_sequence"],
                 file_delivery=delivery,
             ),
