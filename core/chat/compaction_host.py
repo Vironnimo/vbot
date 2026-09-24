@@ -21,7 +21,7 @@ from core.chat._run_state import (
     _CompactionPromptRefresh,
 )
 from core.chat.continuation import (
-    fold_continuation_records,
+    ContinuationState,
     render_continuation_reminder,
 )
 from core.chat.events import _close_adapter
@@ -557,12 +557,10 @@ class ChatCompactionHost:
     ) -> None:
         if context.continuation_reminder is None or context.continuation_tracker is None:
             return
-        active_continuation = fold_continuation_records(
-            await context.session.load_continuation_records_async()
-        )
-        if active_continuation is not None:
+        stored = await context.session.load_continuation_async()
+        if stored is not None:
             context.continuation_reminder = render_continuation_reminder(
-                active_continuation,
+                ContinuationState.from_stored(stored),
                 context_window=context_window,
             )
 
