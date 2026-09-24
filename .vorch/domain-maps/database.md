@@ -6,7 +6,7 @@ The shared SQLite kernel (`core/database/`): how every vBot database opens, evol
 
 `core/database/` owns connection policy, schema evolution, the canonical and disposable profiles, the data-store marker and maintenance guard, data snapshots, quarantine, recovery incidents, automatic restore, and operator-safe status. An owner declares a `DatabaseSpec` and calls `open_database`; it keeps its own DDL, queries, domain errors and domain semantics. The kernel knows no Session, Channel or Provider concept.
 
-Owners today: the Session store (`sessions.md`, `core/sessions/_store_schema.session_database_spec`). Decisions, swarm, Statistics and the Recall indexes still open SQLite on their own and are expected to move onto the kernel in later phases; `APPLICATION_IDS` already reserves their ids.
+Owners today: the Session store (`sessions.md`, `core/sessions/_store_schema.session_database_spec`) and the Provider usage history (`providers/usage.md`, `core/providers/usage_history.provider_usage_database_spec`). Decisions, swarm, Statistics and the Recall indexes still open SQLite on their own and are expected to move onto the kernel in later phases; `APPLICATION_IDS` already reserves their ids.
 
 Not owned here: data-directory placement and creation (`storage.md`; `layout.initialize_data_directory` only writes the bootstrap marker through `write_bootstrap_marker`), the CLI/RPC/WebUI operator surfaces (`cli.md`, `server.md`, `webui.md`), and the offline Generation 1 converter (`scripts/converters/persistence_generation_1/`); converters build their outputs with `open_offline_database`.
 

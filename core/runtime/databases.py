@@ -11,6 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from core.database import DatabaseSpec, canonical_database_path
+from core.providers.usage_history import DATABASE_NAME as PROVIDER_USAGE_DATABASE_NAME
+from core.providers.usage_history import provider_usage_database_spec
 from core.sessions._store_schema import session_database_spec
 from core.sessions.schema import DATABASE_NAME as SESSIONS_DATABASE_NAME
 
@@ -21,4 +23,9 @@ def canonical_database_specs(data_dir: Path) -> tuple[DatabaseSpec, ...]:
     Extension databases are declared by their Extensions at load time and are
     not listed here; offline tools verify them by kernel identity only.
     """
-    return (session_database_spec(canonical_database_path(data_dir, SESSIONS_DATABASE_NAME)),)
+    return (
+        session_database_spec(canonical_database_path(data_dir, SESSIONS_DATABASE_NAME)),
+        provider_usage_database_spec(
+            canonical_database_path(data_dir, PROVIDER_USAGE_DATABASE_NAME)
+        ),
+    )

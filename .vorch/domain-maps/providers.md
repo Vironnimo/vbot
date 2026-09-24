@@ -97,7 +97,7 @@ Read these only when your task matches - not by default.
 - Changing Provider/Connection config, Accounts, credentials, enablement, OAuth/device flow, token storage/refresh, Connection RPCs, or local reachability -> `providers/connections.md`
 - Changing Model endpoint discovery, catalog normalization, connection-scoped merge, supplementary/task feeds, refresh retry behavior, or local auto-refresh -> `providers/catalog-discovery.md`
 - Changing Adapter request/response/SSE behavior, error/retry policy, reasoning, CoT replay, media support, output/context limits, or shared task HTTP plumbing -> `providers/request-policy.md`
-- Changing live subscription limits, usage fetchers/parsers, caching, timeout/fail-open behavior, or `provider.usage` -> `providers/usage.md`
+- Changing live subscription limits, usage fetchers/parsers, caching, timeout/fail-open behavior, the automatic usage history in `provider-usage.db`, or the `provider.usage*` RPCs -> `providers/usage.md`
 - Adding a Provider, Connection variant, Adapter selector, discovery normalizer, or Provider-specific map -> `providers/add-a-provider.md`
 - Changing native Anthropic Messages behavior -> `providers/anthropic.md`
 - Changing GitHub Copilot auth, routing, policy, or catalog metadata -> `providers/github-copilot.md`

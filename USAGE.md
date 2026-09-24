@@ -394,7 +394,6 @@ Setup, Runtime, direct `core/storage/layout.py` use, and managed Worktree creati
 │       ├── subagents/
 │       └── terminals/
 ├── statistics/
-│   └── provider-usage/
 ├── agents/
 ├── archive/
 ├── channels/
@@ -411,7 +410,7 @@ Setup, Runtime, direct `core/storage/layout.py` use, and managed Worktree creati
 └── settings.json
 ```
 
-`artifacts/attachments/`, `artifacts/speech/`, `artifacts/models/`, `artifacts/debug/`, and `artifacts/performance/` contain durable domain-owned artifacts; the performance folder keeps the newest 20 Recordings. The four `artifacts/temp/` children remain separate: atomic replacement staging, 72-hour retained Bash and Terminal output, and 24-hour retained Sub-Agent activity. `statistics/provider-usage/` is normalized Provider-owned upstream history; local Statistics still derive from Sessions and add no persistence. The tracked system Model DB remains `resources/models/`; only the complete instance runtime Model DB moves under `artifacts/models/`.
+`artifacts/attachments/`, `artifacts/speech/`, `artifacts/models/`, `artifacts/debug/`, and `artifacts/performance/` contain durable domain-owned artifacts; the performance folder keeps the newest 20 Recordings. The four `artifacts/temp/` children remain separate: atomic replacement staging, 72-hour retained Bash and Terminal output, and 24-hour retained Sub-Agent activity. `statistics/` holds only the disposable local Statistics index, which is derived from Sessions; the automatic Provider usage history is the canonical `provider-usage.db` at the data root (see Data-store maintenance below). The tracked system Model DB remains `resources/models/`; only the complete instance runtime Model DB moves under `artifacts/models/`.
 
 Independent roots keep their established ownership: `agents/` contains Identity Agent configs, default Workspaces, private Skills, and Sessions; `projects/` contains Project metadata and Project Agent Sessions; `skills/` contains global user Skills; `channels/`, `cron/`, `extensions/`, `prompts/`, `recall/`, `logs/`, `oauth/`, and `archive/` retain their existing records. Custom absolute Workspaces remain outside the data directory. `processes/` is reserved for future persistent process records and is not the Bash-output location.
 
@@ -453,7 +452,7 @@ The structural converter defaults to a read-only preflight, rejects symlinks, sp
 
 ### Data-store maintenance and legacy conversion
 
-The canonical databases, such as the Session database `<data-dir>/sessions.db`, are authorized by `<data-dir>/data-store.json`, which records each database's identity and format generation. FTS, Recall, Vector, Statistics, data snapshots under `snapshots/`, and quarantine bundles under `quarantine/` are derived or recovery data and never replace canonical history. Runtime refuses an existing root without a valid marker and never searches legacy files to guess how to initialize it. A damaged or missing canonical database is restored automatically from the newest verified data snapshot; the damaged files move to quarantine and a recovery incident under `incidents/` records the possible loss interval.
+The canonical databases, such as the Session database `<data-dir>/sessions.db` and the Provider usage history `<data-dir>/provider-usage.db`, are authorized by `<data-dir>/data-store.json`, which records each database's identity and format generation. FTS, Recall, Vector, Statistics, data snapshots under `snapshots/`, and quarantine bundles under `quarantine/` are derived or recovery data and never replace canonical history. Runtime refuses an existing root without a valid marker and never searches legacy files to guess how to initialize it. A damaged or missing canonical database is restored automatically from the newest verified data snapshot; the damaged files move to quarantine and a recovery incident under `incidents/` records the possible loss interval.
 
 Inspect the canonical databases and their recovery state through the live server or the local offline commands:
 
