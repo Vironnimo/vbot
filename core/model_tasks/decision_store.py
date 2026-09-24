@@ -17,6 +17,14 @@ from core.utils.logging import get_logger
 _LOGGER = get_logger("decisions")
 
 
+# Reads name their columns and never use ``SELECT *``: an older vBot must not
+# pick up columns a newer one adds.
+_EXPERIMENT_COLUMNS = "id,title,revision,draft,created_at,updated_at"
+_EVALUATION_COLUMNS = (
+    "sequence,id,experiment_id,request_id,status,snapshot,result,error,created_at,completed_at"
+)
+
+
 def now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -73,7 +81,9 @@ class DecisionStore:
 
     def get(self, identifier: str) -> dict[str, Any]:
         with self.connection() as db:
-            row = db.execute("SELECT * FROM experiments WHERE id=?", (identifier,)).fetchone()
+            row = db.execute(
+                f"SELECT {_EXPERIMENT_COLUMNS} FROM experiments WHERE id=?", (identifier,)
+            ).fetchone()
         if row is None:
             raise DecisionError(
                 "Experiment no longer exists. Refresh the experiment list.", code="not_found"
@@ -116,7 +126,9 @@ class DecisionStore:
                         "This experiment changed elsewhere. Reload it before saving your changes.",
                         code="conflict",
                     )
-            row = db.execute("SELECT * FROM experiments WHERE id=?", (identifier,)).fetchone()
+            row = db.execute(
+                f"SELECT {_EXPERIMENT_COLUMNS} FROM experiments WHERE id=?", (identifier,)
+            ).fetchone()
         _LOGGER.info("Decision experiment saved (id=%s)", identifier)
         return {**dict(row), "draft": json.loads(row["draft"])}
 
@@ -159,7 +171,9 @@ class DecisionStore:
 
     def evaluation(self, identifier: str) -> dict[str, Any]:
         with self.connection() as db:
-            row = db.execute("SELECT * FROM evaluations WHERE id=?", (identifier,)).fetchone()
+            row = db.execute(
+                f"SELECT {_EVALUATION_COLUMNS} FROM evaluations WHERE id=?", (identifier,)
+            ).fetchone()
         if row is None:
             raise DecisionError("Evaluation no longer exists.", code="not_found")
         value = dict(row)

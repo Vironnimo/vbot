@@ -45,3 +45,15 @@ def test_pagination_and_completed_records_are_immutable(tmp_path):
     assert tail["next_before"] is None
     store.finish(records[-1], "cancelled")
     assert store.evaluation(records[-1])["status"] == "completed"
+
+
+def test_reads_return_every_stored_column_by_name(tmp_path):
+    store = DecisionStore(tmp_path / "decisions.db")
+    saved = store.save({"title": "Columns", "state": "draft", "questions": []})
+    record = store.begin(saved["id"], 1, "request", {"state": "draft"})
+    with store.connection() as db:
+        experiment_columns = [row[1] for row in db.execute("PRAGMA table_info(experiments)")]
+        evaluation_columns = [row[1] for row in db.execute("PRAGMA table_info(evaluations)")]
+
+    assert list(store.get(saved["id"])) == experiment_columns
+    assert list(store.evaluation(record["id"])) == evaluation_columns
