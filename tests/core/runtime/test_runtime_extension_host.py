@@ -461,3 +461,27 @@ async def test_extension_owned_work_uses_the_observable_chat_loop(tmp_path):
         assert host.temporary_agents._chat is runtime.streaming_chat_loop
     finally:
         await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_extension_group_title_reaches_the_shared_title_generator(tmp_path):
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+    try:
+        identity = runtime.extensions.registration_identity("swarm")
+        assert identity is not None
+        groups = runtime._host_operations().make_host().for_owner(identity).temporary_agents
+
+        # Without participants no Model qualifies, so the local title is final.
+        title = await groups.title_group("swr_new", "  Review the\n parser  ")
+
+        assert title == "Review the parser"
+        assert await groups.group_titles(["swr_new", "swr_other"]) == {
+            "swr_new": "Review the parser"
+        }
+        stored = await runtime.chat_sessions.temporary_group_titles_async(
+            owner_name="swarm", group_ids=["swr_new"]
+        )
+        assert stored == {"swr_new": "Review the parser"}
+    finally:
+        await runtime.aclose()

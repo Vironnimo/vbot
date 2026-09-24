@@ -247,6 +247,7 @@ class Runtime:
                 project_skill_names=self.project_skill_names,
                 resources=(self.process_manager, self.terminal_manager, self.trigger_service),
                 get_change_publisher=lambda: self._extension_change_publisher,
+                get_title_service=lambda: self._session_title_service,
                 logger=self.logger,
             )
         return self._extension_host_factory

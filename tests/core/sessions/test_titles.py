@@ -11,9 +11,10 @@ import pytest
 
 from core.chat import ChatMessage
 from core.chat.content_blocks import ContentBlock, FileBlock, FileMentionBlock, TextBlock
+from core.models.pricing import TokenPricing, TokenRates
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
-from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import ChatSessionManager, OwnedSessionSummary, SessionAddress
 from core.sessions.titles import (
     GENERATED_TITLE_MAX_CHARACTERS,
     TITLE_INPUT_HEAD_BYTES,
@@ -69,8 +70,19 @@ class StubAdapter:
 
 
 class StubModels:
-    def __init__(self, recommended: dict[tuple[str, str], float] | None = None) -> None:
+    def __init__(
+        self,
+        recommended: dict[tuple[str, str], float] | None = None,
+        prices: dict[str, tuple[float, float]] | None = None,
+    ) -> None:
         self._recommended = recommended or {}
+        self._prices = prices or {}
+
+    def pricing_for(self, model_reference: str) -> TokenPricing | None:
+        price = self._prices.get(model_reference.split("::", 1)[0])
+        if price is None:
+            return None
+        return TokenPricing("catalog", TokenRates(input=price[0], output=price[1]))
 
     def get(self, provider_id: str, model_id: str) -> Any:
         recommended = self._recommended.get((provider_id, model_id))
@@ -88,10 +100,11 @@ class StubRuntime:
         configured_model: str = "",
         adapters: list[StubAdapter] | None = None,
         recommended_temperatures: dict[tuple[str, str], float] | None = None,
+        prices: dict[str, tuple[float, float]] | None = None,
     ) -> None:
         self.chat_sessions = ChatSessionManager(tmp_path)
         self.storage = StubStorage(enabled=enabled, model=configured_model)
-        self.models = StubModels(recommended_temperatures)
+        self.models = StubModels(recommended_temperatures, prices)
         self._adapters = list(adapters or [StubAdapter()])
         self.adapter_calls: list[tuple[str, str]] = []
 
@@ -678,3 +691,113 @@ async def test_manual_name_skips_model_but_preserves_local_title_underneath(tmp_
     assert metadata["title"] == "Manual name"
     assert metadata["auto_title"] == "Investigate login failure"
     assert runtime.adapter_calls == []
+
+
+def _participant(participant_id: str, model: str | None) -> OwnedSessionSummary:
+    return OwnedSessionSummary(
+        address=_address(f"tmp_{participant_id}", f"ses_{participant_id}"),
+        owner_name="swarm",
+        group_id="swr_one",
+        group_title=None,
+        participant_id=participant_id,
+        participant_name=participant_id.title(),
+        model=model,
+        summary={},
+    )
+
+
+async def _group_title(runtime: StubRuntime, *participants: OwnedSessionSummary) -> str | None:
+    service = SessionTitleService(cast(Any, runtime))
+    return await service.generate_group_title(
+        owner_name="swarm",
+        group_id="swr_one",
+        source_text="  Rework the\n parser   error recovery  ",
+        participants=participants,
+    )
+
+
+async def _stored_group_title(runtime: StubRuntime) -> str | None:
+    titles = await runtime.chat_sessions.temporary_group_titles_async(
+        owner_name="swarm", group_ids=["swr_one"]
+    )
+    return titles.get("swr_one")
+
+
+@pytest.mark.asyncio
+async def test_group_title_uses_configured_title_model_for_the_group(tmp_path) -> None:
+    adapter = StubAdapter("Parser recovery rework")
+    runtime = StubRuntime(
+        tmp_path, enabled=True, configured_model="openai/title::cheap", adapters=[adapter]
+    )
+
+    title = await _group_title(runtime, _participant("ada", "anthropic/big::main"))
+
+    assert title == "Parser recovery rework"
+    assert await _stored_group_title(runtime) == "Parser recovery rework"
+    assert runtime.adapter_calls == [("openai", "openai:cheap")]
+    assert adapter.requests[0]["messages"][0] == {"role": "system", "content": TITLE_SYSTEM_PROMPT}
+    assert adapter.debug_context.run_id == "title-swr_one"
+    assert adapter.debug_context.session_id == "ses_ada"
+    assert adapter.closed is True
+
+
+@pytest.mark.asyncio
+async def test_group_title_without_title_model_uses_cheapest_priced_participant(tmp_path) -> None:
+    runtime = StubRuntime(
+        tmp_path,
+        enabled=True,
+        adapters=[StubAdapter("Parser recovery rework")],
+        prices={"anthropic/big": (3.0, 15.0), "openai/small": (0.1, 0.4)},
+    )
+
+    await _group_title(
+        runtime,
+        _participant("none", None),
+        _participant("unpriced", "google/unpriced::main"),
+        _participant("big", "anthropic/big::main"),
+        _participant("small", "openai/small::fast"),
+    )
+
+    assert runtime.adapter_calls == [("openai", "openai:fast")]
+
+
+@pytest.mark.asyncio
+async def test_group_title_without_prices_uses_first_participant_model(tmp_path) -> None:
+    runtime = StubRuntime(tmp_path, enabled=True, adapters=[StubAdapter("Parser rework")])
+
+    await _group_title(
+        runtime,
+        _participant("none", None),
+        _participant("first", "google/first::main"),
+        _participant("second", "openai/second::main"),
+    )
+
+    assert runtime.adapter_calls == [("google", "google:main")]
+
+
+@pytest.mark.asyncio
+async def test_disabled_group_title_generation_stores_local_title_only(tmp_path) -> None:
+    runtime = StubRuntime(tmp_path, enabled=False, adapters=[])
+
+    title = await _group_title(runtime, _participant("ada", "openai/small::main"))
+
+    assert title == "Rework the parser error recovery"
+    assert await _stored_group_title(runtime) == "Rework the parser error recovery"
+    assert runtime.adapter_calls == []
+
+
+@pytest.mark.asyncio
+async def test_failed_group_title_request_keeps_local_title_after_one_attempt(tmp_path) -> None:
+    runtime = StubRuntime(
+        tmp_path,
+        enabled=True,
+        adapters=[StubAdapter(error=RuntimeError("provider down")), StubAdapter()],
+    )
+
+    title = await _group_title(
+        runtime, _participant("ada", "openai/a::main"), _participant("bo", "openai/b::main")
+    )
+
+    assert title == "Rework the parser error recovery"
+    assert await _stored_group_title(runtime) == "Rework the parser error recovery"
+    assert runtime.adapter_calls == [("openai", "openai:main")]
