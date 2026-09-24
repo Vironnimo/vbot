@@ -48,7 +48,10 @@ STOP_RESULT = {
         "metrics": {
             "event_loop.lag": _metric(1.0, 12.0, 80.0, 50.0),
             "sqlite.write": _metric(0.5, 9.0, 20.0, 400.0),
+            "sqlite.write_wait": _metric(0.2, 15.0, 25.0, 60.0),
             "chat.request_build": _metric(3.0, 30.0, 45.0, 900.0),
+            "tool.read": _metric(2.0, 6.0, 7.0, 25.0, count=4),
+            "tool.bash": _metric(600.0, 650.0, 700.0, 800.0, count=2),
             "worker_pools.ignored": _metric(0, 0, 0, 0),
             "worker_pool.sqlite.wait": _metric(0.1, 40.0, 60.0, 30.0),
             "worker_pool.sqlite.run": _metric(1.0, 8.0, 10.0, 300.0),
@@ -57,6 +60,8 @@ STOP_RESULT = {
         "gauges_max": {
             "event_loop.utilization": 0.83,
             "process.rss_mb": 250.0,
+            "runs.queued": 3,
+            "worker_pool.sqlite.active": 1,
             "worker_pool.sqlite.waiting": 7,
         },
         "stalls": [
@@ -131,8 +136,21 @@ def test_digest_extracts_the_report_figures():
         "sum": 50.0,
     }
     assert digest["event_loop_utilization_max"] == 0.83
+    assert digest["runs_queued_max"] == 3
     assert digest["sqlite_write_ms"]["p99"] == 9.0
+    assert digest["sqlite_write_wait_ms"]["max"] == 25.0
     assert digest["chat_request_build_ms"]["p50"] == 3.0
+    # Metrics absent from the recording stay in the digest with empty figures.
+    assert digest["chat_persist_ms"] == {
+        "count": 0,
+        "p50": None,
+        "p90": None,
+        "p99": None,
+        "max": None,
+        "sum": None,
+    }
+    assert list(digest["tools_ms"]) == ["bash", "read"]
+    assert digest["tools_ms"]["bash"]["p50"] == 600.0
     assert [pool["pool"] for pool in digest["worker_pools"]] == ["sqlite", "default"]
     assert digest["worker_pools"][0] == {
         "pool": "sqlite",
@@ -140,6 +158,7 @@ def test_digest_extracts_the_report_figures():
         "wait_p99_ms": 40.0,
         "wait_max_ms": 60.0,
         "run_p99_ms": 8.0,
+        "active_max": 1,
         "waiting_max": 7,
     }
     assert digest["top_metrics"][0]["name"] == "chat.request_build"
@@ -154,6 +173,7 @@ def test_digest_of_an_empty_summary_has_no_figures():
     digest = digest_recording({"summary": {}})
 
     assert digest["event_loop_lag_ms"]["p99"] is None
+    assert digest["tools_ms"] == {}
     assert digest["worker_pools"] == []
     assert digest["stalls"] == {"count": 0, "total_ms": 0.0, "worst": None}
 

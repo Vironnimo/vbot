@@ -26,6 +26,7 @@ from typing import Any
 
 import psutil  # type: ignore[import-untyped]
 
+from core.performance import MAX_RECORDING_SECONDS
 from scripts.perf_load_suite.directive import DEFAULT_TOOLS, PerfDirective
 from scripts.perf_load_suite.driver import (
     UI_AGENT_ID,
@@ -89,8 +90,10 @@ class LoadConfig:
             raise ValueError("levels must be distinct")
         if self.turns < 1 or self.identity_agents < 1:
             raise ValueError("turns and identity agents must be at least 1")
-        if self.run_timeout_seconds <= 0 or self.recording_max_seconds < 1:
-            raise ValueError("run timeout and recording limit must be positive")
+        if self.run_timeout_seconds <= 0:
+            raise ValueError("run timeout must be positive")
+        if not 1 <= self.recording_max_seconds <= MAX_RECORDING_SECONDS:
+            raise ValueError(f"recording limit must be from 1 to {MAX_RECORDING_SECONDS} seconds")
         if self.history_tokens < 0:
             raise ValueError("history tokens must not be negative")
         # Validates steps/tokens/rate/think_ms/tools/calls once, up front.
