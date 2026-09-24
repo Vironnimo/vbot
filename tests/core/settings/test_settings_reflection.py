@@ -114,11 +114,12 @@ class TestValidateReflection:
         settings_path.write_text(
             json.dumps(
                 {
+                    "format_version": 1,
                     "reflection": {
                         "enabled": True,
                         "memory_turn_interval": 10,
                         "skill_model_step_interval": 25,
-                    }
+                    },
                 }
             ),
             encoding="utf-8",
@@ -131,7 +132,9 @@ class TestValidateReflection:
 
     def test_omitting_reflection_section_is_valid(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
-        settings_path.write_text(json.dumps({"server_port": 8500}), encoding="utf-8")
+        settings_path.write_text(
+            json.dumps({"format_version": 1, "server_port": 8500}), encoding="utf-8"
+        )
 
         report = validate_settings_file(settings_path)
 
@@ -139,7 +142,9 @@ class TestValidateReflection:
 
     def test_reflection_not_an_object(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
-        settings_path.write_text(json.dumps({"reflection": []}), encoding="utf-8")
+        settings_path.write_text(
+            json.dumps({"format_version": 1, "reflection": []}), encoding="utf-8"
+        )
 
         report = validate_settings_file(settings_path)
 
@@ -150,7 +155,9 @@ class TestValidateReflection:
 
     def test_non_boolean_enabled(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
-        settings_path.write_text(json.dumps({"reflection": {"enabled": "yes"}}), encoding="utf-8")
+        settings_path.write_text(
+            json.dumps({"format_version": 1, "reflection": {"enabled": "yes"}}), encoding="utf-8"
+        )
 
         report = validate_settings_file(settings_path)
 
@@ -162,7 +169,9 @@ class TestValidateReflection:
     @pytest.mark.parametrize("field", ["memory_turn_interval", "skill_model_step_interval"])
     def test_non_integer_interval(self, tmp_path: Path, field: str) -> None:
         settings_path = tmp_path / "settings.json"
-        settings_path.write_text(json.dumps({"reflection": {field: "five"}}), encoding="utf-8")
+        settings_path.write_text(
+            json.dumps({"format_version": 1, "reflection": {field: "five"}}), encoding="utf-8"
+        )
 
         report = validate_settings_file(settings_path)
 
@@ -174,7 +183,9 @@ class TestValidateReflection:
     @pytest.mark.parametrize("field", ["memory_turn_interval", "skill_model_step_interval"])
     def test_zero_interval(self, tmp_path: Path, field: str) -> None:
         settings_path = tmp_path / "settings.json"
-        settings_path.write_text(json.dumps({"reflection": {field: 0}}), encoding="utf-8")
+        settings_path.write_text(
+            json.dumps({"format_version": 1, "reflection": {field: 0}}), encoding="utf-8"
+        )
 
         report = validate_settings_file(settings_path)
 
@@ -186,7 +197,7 @@ class TestValidateReflection:
     def test_unknown_reflection_field_warns(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps({"reflection": {"enabled": True, "extra": 1}}),
+            json.dumps({"format_version": 1, "reflection": {"enabled": True, "extra": 1}}),
             encoding="utf-8",
         )
 

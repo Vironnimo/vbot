@@ -30,7 +30,19 @@ from core.config_validation import (
 from core.config_validation import (
     warn_unknown_keys as _warn_unknown_keys,
 )
-from core.fetch_config import parse_web_fetch_settings
+from core.fetch_config import WEB_FETCH_FIELDS, parse_web_fetch_settings
+from core.json_documents import (
+    FORMAT_VERSION_FIELD,
+    OPAQUE,
+    JsonDocumentFormat,
+    JsonShape,
+    json_document,
+    json_map,
+    json_object,
+    strip_unknown_fields,
+    validate_format_version,
+    warn_unknown_fields,
+)
 from core.model_tasks.constants import (
     SUPPORTED_TASK_TYPES,
     SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS,
@@ -43,6 +55,11 @@ from core.search_config import (
     MAX_WEB_SEARCH_COUNT,
     MIN_WEB_SEARCH_COUNT,
 )
+from core.settings._provider_settings import (
+    CUSTOM_MODEL_CAPABILITY_FIELDS,
+    CUSTOM_PROVIDER_FIELDS,
+    CUSTOM_PROVIDER_MODEL_FIELDS,
+)
 from core.settings.agent_defaults import diagnose_agent_default_value
 from core.settings.normalizers import (
     SUPPORTED_APPEARANCE_LANGUAGES,
@@ -51,6 +68,8 @@ from core.settings.normalizers import (
 )
 from core.settings.settings import (
     AGENT_DEFAULT_FIELDS,
+    OPENROUTER_ROUTING_FIELDS,
+    OPENROUTER_ROUTING_POLICY_FIELDS,
     RECALL_BACKEND_PATTERN,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
     SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
@@ -62,8 +81,11 @@ from core.settings.settings import (
 )
 from core.utils.errors import StorageError
 
+SETTINGS_FORMAT_VERSION = 1
+
 KNOWN_RAW_SETTINGS_KEYS = frozenset(
     {
+        FORMAT_VERSION_FIELD,
         "PORT",
         "SERVER_PORT",
         "appearance",
@@ -117,30 +139,120 @@ LOCAL_MODELS_FIELDS = frozenset({"context_windows"})
 PROVIDERS_FIELDS = frozenset({"connections", "custom", "openrouter"})
 OPENROUTER_PROVIDER_FIELDS = frozenset({"routing"})
 REFLECTION_INTERVAL_FIELDS = ("memory_turn_interval", "skill_model_step_interval")
+COMPACTION_TRIGGER_FIELDS = frozenset({"type", "threshold", "tokens"})
+COMPACTION_STRATEGY_FIELDS = frozenset({"type", "tail_tokens", "summary_model"})
+
+COMPACTION_POLICY_SHAPE = json_object(
+    COMPACTION_FIELDS,
+    {
+        "trigger": json_object(COMPACTION_TRIGGER_FIELDS),
+        "strategy": json_object(COMPACTION_STRATEGY_FIELDS),
+    },
+)
+WEB_FETCH_SHAPE = json_object(WEB_FETCH_FIELDS)
+CUSTOM_PROVIDER_SHAPE = json_object(
+    CUSTOM_PROVIDER_FIELDS,
+    {
+        "defaults": OPAQUE,
+        "models": json_map(
+            json_object(
+                CUSTOM_PROVIDER_MODEL_FIELDS,
+                {"capabilities": json_object(CUSTOM_MODEL_CAPABILITY_FIELDS)},
+            )
+        ),
+    },
+)
+_OPENROUTER_ROUTING_POLICY_SHAPE = json_object(OPENROUTER_ROUTING_POLICY_FIELDS)
+OPENROUTER_ROUTING_SHAPE = json_object(
+    OPENROUTER_ROUTING_FIELDS,
+    {
+        "default": _OPENROUTER_ROUTING_POLICY_SHAPE,
+        "models": json_map(_OPENROUTER_ROUTING_POLICY_SHAPE),
+    },
+)
+SETTINGS_SHAPE: JsonShape = json_document(
+    KNOWN_RAW_SETTINGS_KEYS,
+    {
+        "appearance": json_object(APPEARANCE_FIELDS),
+        "compaction": COMPACTION_POLICY_SHAPE,
+        "debug": json_object(DEBUG_FIELDS),
+        "defaults": json_object(DEFAULTS_SECTIONS, {"agent": json_object(AGENT_DEFAULT_FIELDS)}),
+        "extensions": json_object(EXTENSIONS_FIELDS, {"config": json_map(OPAQUE)}),
+        "local_models": json_object(LOCAL_MODELS_FIELDS),
+        "model_tasks": json_object(
+            SUPPORTED_TASK_TYPES,
+            {
+                task_type: json_object(MODEL_TASK_BINDING_FIELDS)
+                for task_type in SUPPORTED_TASK_TYPES
+            },
+        ),
+        "providers": json_object(
+            PROVIDERS_FIELDS,
+            {
+                "custom": json_map(CUSTOM_PROVIDER_SHAPE),
+                "openrouter": json_object(
+                    OPENROUTER_PROVIDER_FIELDS, {"routing": OPENROUTER_ROUTING_SHAPE}
+                ),
+            },
+        ),
+        "recall": json_object(RECALL_FIELDS),
+        "reflection": json_object(REFLECTION_FIELDS),
+        "session_titles": json_object(SESSION_TITLE_FIELDS),
+        "speech": json_object(
+            SPEECH_FIELDS, {"transcription_audio": json_object(TRANSCRIPTION_AUDIO_FIELDS)}
+        ),
+        "web_fetch": WEB_FETCH_SHAPE,
+        "web_search": json_object(
+            WEB_SEARCH_FIELDS, {"searxng": json_object(WEB_SEARCH_SEARXNG_FIELDS)}
+        ),
+    },
+)
 
 SettingsDiagnostic = JsonDiagnostic
 SettingsValidationReport = JsonValidationReport
 
 
+def validate_settings_document(data: Any) -> list[JsonDiagnostic]:
+    """Validate a decoded ``settings.json`` document, including its ``format_version``."""
+
+    if not isinstance(data, dict):
+        return [_error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
+    diagnostics: list[JsonDiagnostic] = []
+    if not validate_format_version(diagnostics, data, SETTINGS_FORMAT_VERSION):
+        return diagnostics
+    return diagnostics + validate_settings_data(data)
+
+
+SETTINGS_FORMAT = JsonDocumentFormat(
+    name="Settings file",
+    version=SETTINGS_FORMAT_VERSION,
+    shape=SETTINGS_SHAPE,
+    validate=validate_settings_document,
+    sort_keys=True,
+)
+
+
 def validate_settings_file(settings_path: str | Path) -> JsonValidationReport:
     """Validate a raw ``settings.json`` file without mutating it."""
-    return validate_json_file(settings_path, validate_settings_data, missing_ok=True)
+    return validate_json_file(settings_path, validate_settings_document, missing_ok=True)
 
 
 def load_validated_settings_json(settings_path: str | Path) -> JsonObject:
-    """Load a validated raw ``settings.json`` mapping, or `{}` when missing."""
+    """Load the Settings fields of a valid ``settings.json``, or `{}` when missing.
+
+    ``format_version`` and unknown fields are left out; the Settings writer sets
+    the version and merges unknown fields back from disk.
+    """
     try:
-        return cast(
-            "JsonObject",
-            load_validated_json_file(
-                settings_path,
-                validate_settings_data,
-                missing_ok=True,
-                missing_default={},
-            ),
+        data = load_validated_json_file(
+            settings_path,
+            validate_settings_document,
+            missing_ok=True,
+            missing_default={},
         )
     except JsonConfigValidationError as error:
         raise SettingsValidationError(str(error)) from error
+    return _settings_fields(data)
 
 
 def load_runtime_settings_json(
@@ -148,10 +260,12 @@ def load_runtime_settings_json(
 ) -> tuple[JsonObject, tuple[JsonDiagnostic, ...]]:
     """Load usable Settings without letting one invalid key reject valid siblings.
 
-    Syntax and root-shape failures cannot be isolated and therefore raise. Schema
-    failures are isolated at their top-level Settings key: the invalid section or
-    scalar is omitted, valid siblings remain live, and diagnostics are returned so
-    runtime callers can report the degradation without mutating the source file.
+    Syntax, root-shape, and ``format_version`` failures cannot be isolated and
+    therefore raise. Schema failures are isolated at their top-level Settings key:
+    the invalid section or scalar is omitted, valid siblings remain live, and
+    diagnostics are returned so runtime callers can report the degradation without
+    mutating the source file. ``format_version`` and unknown fields are left out
+    of the result.
     """
 
     path = Path(settings_path)
@@ -177,16 +291,25 @@ def load_runtime_settings_json(
         raise SettingsValidationError(
             f"{path}: error $: Expected a JSON object, got {type(data).__name__}"
         )
+    version_errors: list[JsonDiagnostic] = []
+    if not validate_format_version(version_errors, data, SETTINGS_FORMAT_VERSION):
+        details = "; ".join(f"error {item.path}: {item.message}" for item in version_errors)
+        raise SettingsValidationError(f"{path}: {details}")
 
     errors = tuple(
         diagnostic for diagnostic in validate_settings_data(data) if diagnostic.severity == "error"
     )
-    if not errors:
-        return dict(data), ()
-
     invalid_keys = {_settings_top_level_key(diagnostic.path) for diagnostic in errors}
     usable = {key: value for key, value in data.items() if key not in invalid_keys}
-    return usable, errors
+    return _settings_fields(usable), errors
+
+
+def _settings_fields(data: JsonObject) -> JsonObject:
+    """Return the Settings a runtime consumer reads from a decoded document."""
+
+    fields = cast("JsonObject", strip_unknown_fields(data, SETTINGS_SHAPE))
+    fields.pop(FORMAT_VERSION_FIELD, None)
+    return fields
 
 
 def _settings_top_level_key(path: str) -> str:
@@ -199,44 +322,62 @@ def _settings_top_level_key(path: str) -> str:
 
 
 def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport, ...]:
-    """Validate all current user-editable JSON config files in a data directory."""
+    """Validate every durable JSON document in a data directory.
+
+    ``settings.json`` is always reported; every other document only when present.
+    """
 
     # Settings owns bundle orchestration, while each persisted format is validated
     # by its domain. Imports stay local so those domains may reuse Settings-owned
     # scalar/Policy rules without creating package initialization cycles.
     from core.agents import validate_agent_file, validate_agent_order_file
     from core.automation import validate_bootstrap_jobs_file, validate_cron_jobs_file
+    from core.calendar import validate_calendar_actions_file, validate_calendar_events_file
     from core.channels import validate_channel_file
     from core.projects import validate_project_file
+    from core.providers.token_store import validate_oauth_token_file
+    from core.skills import validate_skill_policy_file
+    from core.storage.prompt_blocks import validate_prompt_layout_file
+    from core.tools.terminal_store import (
+        validate_terminal_groups_file,
+        validate_terminal_launch_history_file,
+    )
 
+    # The bundled MCP Extension owns ``mcp/connections.json``; core has no
+    # Extension hook for doctor checks yet, so this one import points outward.
+    from resources.extensions.mcp.config import validate_connections_file
+
+    # Data-dir relative glob patterns; a literal pattern matches only an existing file.
+    documents: tuple[tuple[str, Callable[[Path], JsonValidationReport]], ...] = (
+        ("agents/*/agent.json", validate_agent_file),
+        ("agents/order.json", validate_agent_order_file),
+        ("agents/*/prompts/layout.json", validate_prompt_layout_file),
+        ("prompts/layout.json", validate_prompt_layout_file),
+        ("channels/*/channel.json", validate_channel_file),
+        ("projects/*/project.json", validate_project_file),
+        ("cron/jobs.json", validate_cron_jobs_file),
+        ("bootstrap/jobs.json", validate_bootstrap_jobs_file),
+        ("calendar/events.json", validate_calendar_events_file),
+        ("calendar/actions.json", validate_calendar_actions_file),
+        ("skills/policy.json", validate_skill_policy_file),
+        ("terminals/launch-history.json", validate_terminal_launch_history_file),
+        ("terminals/groups.json", validate_terminal_groups_file),
+        ("oauth/*.json", validate_oauth_token_file),
+        ("mcp/connections.json", validate_connections_file),
+    )
     root = Path(data_dir).expanduser()
     reports = [validate_settings_file(root / "settings.json")]
-    reports.extend(
-        validate_agent_file(agent_path)
-        for agent_path in sorted((root / "agents").glob("*/agent.json"))
-    )
-    agent_order_path = root / "agents" / "order.json"
-    if agent_order_path.exists():
-        reports.append(validate_agent_order_file(agent_order_path))
-    reports.extend(
-        validate_channel_file(channel_path)
-        for channel_path in sorted((root / "channels").glob("*/channel.json"))
-    )
-    reports.extend(
-        validate_project_file(project_path)
-        for project_path in sorted((root / "projects").glob("*/project.json"))
-    )
-    cron_jobs_path = root / "cron" / "jobs.json"
-    if cron_jobs_path.exists():
-        reports.append(validate_cron_jobs_file(cron_jobs_path))
-    bootstrap_jobs_path = root / "bootstrap" / "jobs.json"
-    if bootstrap_jobs_path.exists():
-        reports.append(validate_bootstrap_jobs_file(bootstrap_jobs_path))
+    for pattern, validate in documents:
+        reports.extend(validate(path) for path in sorted(root.glob(pattern)) if path.is_file())
     return tuple(reports)
 
 
 def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
-    """Validate a decoded raw Settings mapping and return diagnostics."""
+    """Validate the Settings fields of a decoded mapping and return diagnostics.
+
+    ``format_version`` belongs to the file rather than to the fields; see
+    :func:`validate_settings_document`.
+    """
 
     diagnostics: list[JsonDiagnostic] = []
     if not isinstance(data, dict):
@@ -275,8 +416,12 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
     _validate_extensions(diagnostics, data.get("extensions"))
     _validate_web_search(diagnostics, data.get("web_search"))
     if "web_fetch" in data:
+        web_fetch = data["web_fetch"]
+        warn_unknown_fields(
+            diagnostics, "$.web_fetch", web_fetch, WEB_FETCH_SHAPE, label="web_fetch field"
+        )
         try:
-            parse_web_fetch_settings(data["web_fetch"])
+            parse_web_fetch_settings(strip_unknown_fields(web_fetch, WEB_FETCH_SHAPE))
         except ValueError as error:
             _error(diagnostics, "$.web_fetch", str(error))
     _validate_model_tasks(diagnostics, data.get("model_tasks"))
@@ -578,13 +723,7 @@ def _validate_defaults(diagnostics: list[JsonDiagnostic], value: Any) -> None:
         _error(diagnostics, "$.defaults", "must be an object")
         return
 
-    unsupported_sections = sorted(set(value) - DEFAULTS_SECTIONS)
-    for section in unsupported_sections:
-        _error(
-            diagnostics,
-            _child_path("$.defaults", section),
-            f"unsupported defaults section: {section}",
-        )
+    _warn_unknown_keys(diagnostics, "$.defaults", value, DEFAULTS_SECTIONS, "defaults section")
 
     agent_defaults = value.get("agent")
     if agent_defaults is None:
@@ -593,13 +732,13 @@ def _validate_defaults(diagnostics: list[JsonDiagnostic], value: Any) -> None:
         _error(diagnostics, "$.defaults.agent", "must be an object")
         return
 
-    unsupported_fields = sorted(set(agent_defaults) - AGENT_DEFAULT_FIELDS)
-    for field in unsupported_fields:
-        _error(
-            diagnostics,
-            _child_path("$.defaults.agent", field),
-            f"unsupported defaults.agent setting: {field}",
-        )
+    _warn_unknown_keys(
+        diagnostics,
+        "$.defaults.agent",
+        agent_defaults,
+        AGENT_DEFAULT_FIELDS,
+        "defaults.agent setting",
+    )
 
     for field, item in agent_defaults.items():
         if field not in AGENT_DEFAULT_FIELDS:
@@ -718,11 +857,10 @@ def _validate_model_tasks(diagnostics: list[JsonDiagnostic], value: Any) -> None
         _error(diagnostics, "$.model_tasks", "must be an object")
         return
 
+    _warn_unknown_keys(diagnostics, "$.model_tasks", value, SUPPORTED_TASK_TYPES, "model task type")
     for task_type, binding in value.items():
         task_path = _child_path("$.model_tasks", str(task_type))
-        if not isinstance(task_type, str) or task_type not in SUPPORTED_TASK_TYPES:
-            allowed = ", ".join(sorted(SUPPORTED_TASK_TYPES))
-            _error(diagnostics, task_path, f"unsupported task type; supported: {allowed}")
+        if task_type not in SUPPORTED_TASK_TYPES:
             continue
         if not isinstance(binding, Mapping):
             _error(diagnostics, task_path, "must be an object")
@@ -820,8 +958,17 @@ def _validate_providers(diagnostics: list[JsonDiagnostic], value: Any) -> None:
         else:
             for provider_id, provider in custom.items():
                 provider_path = _child_path("$.providers.custom", str(provider_id))
+                warn_unknown_fields(
+                    diagnostics,
+                    provider_path,
+                    provider,
+                    CUSTOM_PROVIDER_SHAPE,
+                    label="custom provider field",
+                )
                 try:
-                    normalize_custom_provider_settings(str(provider_id), provider)
+                    normalize_custom_provider_settings(
+                        str(provider_id), strip_unknown_fields(provider, CUSTOM_PROVIDER_SHAPE)
+                    )
                 except StorageError as exc:
                     _error(
                         diagnostics,
@@ -845,8 +992,15 @@ def _validate_providers(diagnostics: list[JsonDiagnostic], value: Any) -> None:
     routing = openrouter.get("routing")
     if routing is None:
         return
+    warn_unknown_fields(
+        diagnostics,
+        "$.providers.openrouter.routing",
+        routing,
+        OPENROUTER_ROUTING_SHAPE,
+        label="routing field",
+    )
     try:
-        parse_openrouter_routing(routing)
+        parse_openrouter_routing(strip_unknown_fields(routing, OPENROUTER_ROUTING_SHAPE))
     except SettingsValidationError as exc:
         _error(
             diagnostics,

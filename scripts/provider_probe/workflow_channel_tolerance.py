@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, Mock
 
 from core.channels import ChannelConfig
 from core.channels.adapter import RouteFacts
+from core.database import write_bootstrap_marker
 from core.sessions import ChatSessionManager
-from core.sessions.format import write_bootstrap_marker
 from core.tools import ToolContext, ToolRegistry, tool_failure
 from core.tools.channel import _normalize_channel_send_arguments, register_channel_send_tool
 from core.tools.contracts import compile_tool_contract

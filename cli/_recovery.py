@@ -35,7 +35,7 @@ _INSPECTIONS = {
     "debug": ("debug", "status"),
     "performance": ("performance", "status"),
     "statistics": ("log", "list"),
-    "session-store": ("session-store", "status"),
+    "data-store": ("data-store", "status"),
     "server": ("server", "status"),
     "update": ("server", "status"),
     "autostart": ("autostart", "status"),

@@ -361,9 +361,9 @@ describe('App controller', () => {
     );
   });
 
-  it('reloads the Session-store projection on connect and invalidation', async () => {
-    const onLoadSessionStoreStatus = vi.fn().mockResolvedValue(undefined);
-    const { controller } = setup({ onLoadSessionStoreStatus });
+  it('reloads the data-store projection on connect and invalidation', async () => {
+    const onLoadDataStoreStatus = vi.fn().mockResolvedValue(undefined);
+    const { controller } = setup({ onLoadDataStoreStatus });
 
     await controller.handleServerEvent({
       type: 'connection_ready',
@@ -372,10 +372,10 @@ describe('App controller', () => {
     });
     await controller.handleServerEvent({
       type: 'resource_changed',
-      payload: { kind: 'session_store' },
+      payload: { kind: 'data_store' },
     });
 
-    expect(onLoadSessionStoreStatus).toHaveBeenCalledTimes(2);
+    expect(onLoadDataStoreStatus).toHaveBeenCalledTimes(2);
   });
 
   it('refreshes Extension page descriptors on each bounded reconnect without replaying mutations', async () => {
@@ -394,7 +394,7 @@ describe('App controller', () => {
   it('starts independent replay-gap recovery without waiting for optional projections', async () => {
     let finishStatus;
     let finishPages;
-    const onLoadSessionStoreStatus = vi.fn(
+    const onLoadDataStoreStatus = vi.fn(
       () =>
         new Promise((resolve) => {
           finishStatus = resolve;
@@ -407,7 +407,7 @@ describe('App controller', () => {
         }),
     );
     const { actions, controller, state } = setup({
-      onLoadSessionStoreStatus,
+      onLoadDataStoreStatus,
       onReloadExtensionPages,
     });
 
@@ -423,7 +423,7 @@ describe('App controller', () => {
     expect(state.sessionsRefreshToken).toBe(1);
     expect(actions.onLoadProjects).toHaveBeenCalledOnce();
     expect(actions.onReloadAgents).toHaveBeenCalledOnce();
-    expect(onLoadSessionStoreStatus).toHaveBeenCalledOnce();
+    expect(onLoadDataStoreStatus).toHaveBeenCalledOnce();
     expect(onReloadExtensionPages).toHaveBeenCalledOnce();
     controller.destroy();
     finishStatus();
@@ -435,12 +435,12 @@ describe('App controller', () => {
 
   it('starts every recovery owner even when another owner fails synchronously', async () => {
     const failure = new Error('optional projection failed');
-    const onLoadSessionStoreStatus = vi.fn(() => {
+    const onLoadDataStoreStatus = vi.fn(() => {
       throw failure;
     });
     const onReloadExtensionPages = vi.fn();
     const { actions, controller, state } = setup({
-      onLoadSessionStoreStatus,
+      onLoadDataStoreStatus,
       onReloadExtensionPages,
     });
     await expect(

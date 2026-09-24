@@ -168,7 +168,13 @@ def _registry_model(
     tools: bool = False,
     connections: tuple[str, ...] = (),
     task_options: Mapping[str, object] | None = None,
+    reasoning_levels: tuple[str, ...] = (),
 ) -> Model:
+    reasoning = (
+        ReasoningCapabilities(supported=True, control="levels", levels=reasoning_levels)
+        if reasoning_levels
+        else ReasoningCapabilities(supported=False)
+    )
     return Model(
         model_id=model_id,
         name=name,
@@ -176,7 +182,7 @@ def _registry_model(
             vision=False,
             tools=tools,
             json_mode=False,
-            reasoning=ReasoningCapabilities(supported=False),
+            reasoning=reasoning,
             task_types=task_types,
             task_options=task_options or {},
         ),
@@ -193,7 +199,8 @@ def _live_voice_registry() -> ModelRegistry:
     ``api-key``. ``terra`` runs on both, ``astra`` only on ``subscription``
     and ``platform`` only on ``api-key``. ``quiet`` is chat-only without Tools,
     ``painter`` is tool-capable but not a chat Model, and ``foreign`` belongs to
-    another Provider.
+    another Provider. ``terra`` and ``platform`` publish reasoning ladders;
+    ``astra`` publishes none.
     """
 
     chat = ("chat", "text_output")
@@ -213,13 +220,23 @@ def _live_voice_registry() -> ModelRegistry:
             task_options=LIVE_VOICE_TASK_OPTIONS,
         ),
         ("openai", "terra"): _registry_model(
-            "terra", "Terra", task_types=chat, tools=True, connections=("api-key", "subscription")
+            "terra",
+            "Terra",
+            task_types=chat,
+            tools=True,
+            connections=("api-key", "subscription"),
+            reasoning_levels=("high", "low", "medium"),
         ),
         ("openai", "astra"): _registry_model(
             "astra", "Astra", task_types=chat, tools=True, connections=("subscription",)
         ),
         ("openai", "platform"): _registry_model(
-            "platform", "Platform", task_types=chat, tools=True, connections=("api-key",)
+            "platform",
+            "Platform",
+            task_types=chat,
+            tools=True,
+            connections=("api-key",),
+            reasoning_levels=("low", "max"),
         ),
         ("openai", "quiet"): _registry_model("quiet", "Quiet", task_types=chat),
         ("openai", "painter"): _registry_model(

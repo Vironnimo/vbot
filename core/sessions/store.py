@@ -1,18 +1,17 @@
-"""Canonical SQLite lifecycle, transaction admission and recovery policy."""
+"""The Session store: typed reads and transactional writes on the Session database."""
 # ruff: noqa: E501
 
 from __future__ import annotations
 
 import builtins
 import sqlite3
-import threading
-import uuid
 from collections.abc import Callable, Sequence
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar
 
+from core.database import Database, DatabaseError, open_database, open_offline_database
 from core.sessions import (
     _store_continuation,
     _store_fts,
@@ -20,10 +19,10 @@ from core.sessions import (
     _store_mutations,
     _store_owned,
     _store_queries,
-    _store_schema,
     _store_search,
     _store_values,
 )
+from core.sessions._store_schema import session_database_spec
 from core.sessions._types import (
     JsonObject,
     OwnedRunRecord,
@@ -36,27 +35,6 @@ from core.sessions._types import (
 from core.sessions.errors import (
     FtsHealth,
     SessionNotFoundError,
-    SessionStorageFormatError,
-    SessionStoreCorruptError,
-    SessionStoreHealth,
-    SessionStoreSchemaMismatchError,
-    SessionStoreUnavailableError,
-)
-from core.sessions.format import (
-    MARKER_STATE_BOOTSTRAP,
-    publish_ready_marker,
-    read_session_store_marker,
-    validate_session_store_paths,
-)
-from core.sessions.schema import (
-    SCHEMA_VERSION,
-)
-from core.sessions.sqlite_runtime import (
-    ACTIVITY_WRITE_PATIENCE_S,
-    TRANSCRIPT_WRITE_PATIENCE_S,
-    WRITE_PATIENCE_S,
-    SQLiteRuntime,
-    classify_write_error,
 )
 
 if TYPE_CHECKING:
@@ -79,6 +57,12 @@ if TYPE_CHECKING:
     )
 
 
+WRITE_PATIENCE_S = 20.0
+# Transcript appends are the user's conversation: wait longer before failing.
+TRANSCRIPT_WRITE_PATIENCE_S = 60.0
+# Activity updates are advisory and frequent: give up quickly under contention.
+ACTIVITY_WRITE_PATIENCE_S = 0.5
+
 _WriteResult = TypeVar("_WriteResult")
 _Decoded = TypeVar("_Decoded")
 # Records selected inside a write transaction and decoded after commit.
@@ -86,74 +70,33 @@ _HistoryDelta = tuple[list[sqlite3.Row], "SessionReadCursor"] | None
 
 
 class SessionStore:
-    """One canonical SQLite database with explicit read/write snapshots."""
+    """The canonical Session database, served by the shared database kernel.
+
+    Opening goes through the kernel's canonical profile: marker authorization,
+    identity and format checks, additive reconcile, automatic restore from a
+    data snapshot, then the search index readiness hook. Reads use pooled read
+    transactions; writes run as whole ``BEGIN IMMEDIATE`` transactions.
+    """
 
     def __init__(self, path: Path, *, _offline: bool = False) -> None:
         self.path = Path(path)
-        self._runtime = SQLiteRuntime(self.path)
-        self._offline = _offline
-        try:
-            self._writer = self._open_runtime(offline=_offline)
-        except BaseException:
-            self._runtime.close()
-            raise
+        spec = session_database_spec(self.path)
+        self._database = open_offline_database(spec) if _offline else open_database(spec)
 
-    def _open_runtime(self, *, offline: bool) -> sqlite3.Connection:
-        if offline:
-            database_id = uuid.uuid4().hex if not self.path.exists() else None
-            writer = self._runtime.open_writer(
-                create=not self.path.exists(), database_id=database_id
-            )
-            self._reconcile_open_database(writer, expected_database_id=None)
-            return writer
+    @property
+    def database(self) -> Database:
+        """The kernel handle, for data snapshots, status and blocking-work offload."""
+        return self._database
 
-        validate_session_store_paths(self.path.parent, self.path)
-        marker = read_session_store_marker(self.path.parent)
-        if marker is None:
-            raise SessionStorageFormatError(
-                f"the data directory does not authorize a current-format Session store: "
-                f"{self.path.parent}; initialize the data directory or install a converted "
-                "Session database first"
-            )
-        if int(marker["schema_version"]) != SCHEMA_VERSION:
-            raise SessionStoreSchemaMismatchError(
-                "Session store marker schema does not match the Runtime: "
-                f"schema version {marker['schema_version']}"
-            )
-        database_id = str(marker["database_id"])
-        if marker["state"] == MARKER_STATE_BOOTSTRAP:
-            writer = self._runtime.open_writer(create=True, database_id=database_id)
-            self._reconcile_open_database(writer, expected_database_id=database_id)
-            publish_ready_marker(self.path.parent, database_id)
-            return writer
-        from core.sessions.recovery import auto_restore_if_needed, read_recovery_incident
+    @property
+    def _writer(self) -> sqlite3.Connection:
+        return self._database.writer
 
-        pending_incident = read_recovery_incident(self.path.parent)
-        if pending_incident and pending_incident.get("verification") == "pending":
-            auto_restore_if_needed(self.path.parent, self.path)
-        if not self.path.exists() and not auto_restore_if_needed(self.path.parent, self.path):
-            raise SessionStoreUnavailableError(
-                f"the Session database is missing although the store is ready: {self.path}"
-            )
-        try:
-            writer = self._runtime.open_writer(expected_database_id=database_id)
-            self._reconcile_open_database(writer, expected_database_id=database_id)
-            return writer
-        except (SessionStoreCorruptError, sqlite3.DatabaseError, OSError):
-            self._runtime.close()
-            if auto_restore_if_needed(self.path.parent, self.path):
-                self._runtime = SQLiteRuntime(self.path)
-                writer = self._runtime.open_writer(expected_database_id=database_id)
-                self._reconcile_open_database(writer, expected_database_id=database_id)
-                return writer
-            raise
-
-    def _reconcile_open_database(
-        self, connection: sqlite3.Connection, *, expected_database_id: str | None
-    ) -> None:
-        _store_schema._reconcile_open_database(
-            connection, self.path, expected_database_id=expected_database_id
-        )
+    async def run_async(
+        self, function: Callable[..., _Decoded], *arguments: Any, **keyword_arguments: Any
+    ) -> _Decoded:
+        """Run blocking Session work on the database's bounded worker pool."""
+        return await self._database.run_async(function, *arguments, **keyword_arguments)
 
     def _read_decoded(
         self, select: Callable[[sqlite3.Connection], Callable[[], _Decoded]]
@@ -163,7 +106,7 @@ class SessionStore:
         A rollback-journal store serves reads under its runtime lock, so Message
         reconstruction outside the transaction never delays a writer.
         """
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             decode = select(connection)
         return decode()
 
@@ -175,98 +118,27 @@ class SessionStore:
         fts_retried = False
         while True:
             try:
-                return cast(_WriteResult, self._runtime.execute_write(func, patience_s=patience_s))
-            except sqlite3.Error as exc:
-                message = str(exc).lower()
+                return self._database.write(func, patience_s=patience_s)
+            except (sqlite3.Error, DatabaseError) as exc:
+                cause = exc if isinstance(exc, sqlite3.Error) else exc.__cause__
+                message = str(cause).lower() if isinstance(cause, sqlite3.Error) else ""
                 if not fts_retried and any(
                     marker in message for marker in ("fts", "messages_fts", "message_search")
                 ):
+                    # The derived search index failed, not canonical storage:
+                    # detach it and retry the write without it.
                     fts_retried = True
                     with suppress(Exception):
-                        self._runtime.execute_write(_store_fts._detach_fts, patience_s=patience_s)
+                        self._database.write(_store_fts._detach_fts, patience_s=patience_s)
                     continue
-                classification = classify_write_error(exc)
-                if classification == "corrupt":
-                    raise SessionStoreCorruptError(
-                        f"Session database write found corruption: {self.path}"
-                    ) from exc
-                if classification == "unavailable":
-                    raise SessionStoreUnavailableError(
-                        f"Session database write failed: {self.path}"
-                    ) from exc
                 raise
 
     def close(self) -> None:
-        self._runtime.close()
-
-    def backup(
-        self,
-        destination: Path,
-        *,
-        cancel_event: threading.Event | None = None,
-    ) -> bool:
-        return self._runtime.backup(destination, cancel_event=cancel_event)
+        self._database.close()
 
     def verify_read_write(self) -> None:
-        """Exercise the opened Runtime's read/write path without changing canonical rows."""
-
-        def verify(connection: sqlite3.Connection) -> None:
-            connection.execute("CREATE TEMP TABLE session_store_verify(value INTEGER NOT NULL)")
-            try:
-                connection.execute("INSERT INTO session_store_verify(value) VALUES (1)")
-                row = connection.execute("SELECT value FROM session_store_verify").fetchone()
-                if row is None or int(row[0]) != 1:
-                    raise SessionStoreUnavailableError(
-                        "Session database read/write verification failed"
-                    )
-            finally:
-                connection.execute("DROP TABLE IF EXISTS session_store_verify")
-
-        self._execute_write(verify)
-
-    def status_projection(self) -> JsonObject:
-        """Return operator-safe health, snapshot, and incident state."""
-        from core.sessions.recovery import read_recovery_incident
-        from core.sessions.snapshots import read_snapshot_health, snapshot_inventory
-
-        marker = read_session_store_marker(self.path.parent)
-        if marker is None:
-            raise SessionStorageFormatError("current-format Session marker is missing")
-        fts = self.fts_health()
-        incident = read_recovery_incident(self.path.parent)
-        snapshots = snapshot_inventory(
-            self.path.parent, expected_database_id=str(marker["database_id"])
-        )
-        snapshot_health = read_snapshot_health(self.path.parent)
-        active_incident = incident if incident and not incident.get("acknowledged", False) else None
-        if active_incident:
-            health = SessionStoreHealth("recovered_with_incident")
-        elif not fts.available:
-            health = SessionStoreHealth("search_degraded", fts.reason)
-        elif not snapshots or snapshot_health.get("state") != "healthy":
-            health = SessionStoreHealth(
-                "snapshot_degraded",
-                str(snapshot_health.get("reason") or "no verified Session snapshot is available"),
-            )
-        else:
-            health = SessionStoreHealth("healthy")
-        return {
-            "state": health.state,
-            "reason": health.reason,
-            "database_id": str(marker["database_id"]),
-            "marker_state": marker["state"],
-            "schema_version": int(marker["schema_version"]),
-            "fts": {
-                "state": fts.state,
-                "reason": fts.reason,
-                "generation": fts.generation,
-                "target_high_water": fts.target_high_water,
-                "completed_high_water": fts.completed_high_water,
-            },
-            "snapshots": snapshots,
-            "snapshot_health": snapshot_health,
-            "incident": active_incident,
-        }
+        """Exercise the opened read/write path without changing canonical rows."""
+        self._database.verify_read_write()
 
     def create(
         self, address: SessionAddress, created_at: str | None = None, *, generate_id: bool = False
@@ -279,22 +151,22 @@ class SessionStore:
 
     def ensure_live(self, address: SessionAddress) -> None:
         """Create a missing live Session; an existing one costs only a read."""
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             if _store_values._find_live(connection, address) is not None:
                 return
         self._execute_write(lambda connection: _store_mutations.ensure_live(connection, address))
 
     def exists(self, address: SessionAddress) -> bool:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_queries.exists(connection, address)
 
     def existing_addresses(self, addresses: Sequence[SessionAddress]) -> set[SessionAddress]:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_queries.existing_addresses(connection, addresses)
 
     def state(self, address: SessionAddress) -> sqlite3.Row:
         """Read one live Session row; a missing Session raises ``SessionNotFoundError``."""
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_values._require_live(connection, address)
 
     def metadata(self, address: SessionAddress) -> JsonObject:
@@ -302,7 +174,7 @@ class SessionStore:
 
     def metadata_value(self, address: SessionAddress, key: str) -> Any:
         """Return one metadata value, or ``None`` when the Session has none."""
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_queries.metadata_value(connection, address, key)
 
     def descriptor_sources(
@@ -332,7 +204,7 @@ class SessionStore:
         create_missing: bool,
     ) -> tuple[JsonObject, JsonObject]:
         """Try the mutation on a read snapshot; enter the writer only for a real change."""
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             state = _store_values._find_live(connection, address)
         if state is not None:
             previous, updated, storage = _store_mutations.metadata_change(state, mutation)
@@ -484,7 +356,7 @@ class SessionStore:
     def temporary_group_titles(
         self, *, owner_name: str, group_ids: Sequence[str]
     ) -> dict[str, str]:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_owned.temporary_group_titles(
                 connection, owner_name=owner_name, group_ids=group_ids
             )
@@ -538,7 +410,7 @@ class SessionStore:
     def delivery_receipt(
         self, address: SessionAddress, *, generation_id: str, owner_name: str, receipt_id: str
     ) -> DeliveryReceipt | None:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_owned.delivery_receipt(
                 connection,
                 address,
@@ -618,7 +490,7 @@ class SessionStore:
         after: int = 0,
         limit: int = 100,
     ) -> list[OwnedRunRecord]:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_owned.owned_runs(
                 connection,
                 owner_name=owner_name,
@@ -631,17 +503,17 @@ class SessionStore:
     def owned_runs_by_id(
         self, *, owner_name: str, group_id: str, run_ids: Sequence[str]
     ) -> dict[str, OwnedRunRecord]:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_owned.owned_runs_by_id(
                 connection, owner_name=owner_name, group_id=group_id, run_ids=run_ids
             )
 
     def owned_run_by_input(self, address: SessionAddress, input_id: str) -> OwnedRunRecord | None:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_owned.owned_run_by_input(connection, address, input_id)
 
     def run_start_boundaries(self, addresses: Sequence[SessionAddress]) -> list[RunStartBoundary]:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_owned.run_start_boundaries(connection, addresses)
 
     def messages(self, address: SessionAddress) -> list[ChatMessage]:
@@ -653,11 +525,11 @@ class SessionStore:
         )
 
     def active_user_message_count(self, address: SessionAddress, *, limit: int) -> int:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_history.active_user_message_count(connection, address, limit=limit)
 
     def tool_result_persisted(self, address: SessionAddress, tool_call_id: str) -> bool:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_history.tool_result_persisted(connection, address, tool_call_id)
 
     def latest_note(self, address: SessionAddress, *, content_prefix: str) -> ChatMessage | None:
@@ -713,7 +585,7 @@ class SessionStore:
         *,
         snapshot_sequence: int | None = None,
     ) -> tuple[str, list[tuple[int, str, str, str]]] | None:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_history.history_snapshot(
                 connection, address, snapshot_sequence=snapshot_sequence
             )
@@ -757,7 +629,7 @@ class SessionStore:
         sections: Sequence[tuple[int, int]],
         excluded_tool_name: str,
     ) -> dict[int, tuple[int, str | None, str | None]] | None:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_history.history_section_stats(
                 connection,
                 address,
@@ -798,7 +670,7 @@ class SessionStore:
         )
 
     def reflection_runs(self, address: SessionAddress) -> list[JsonObject]:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_history.reflection_runs(connection, address)
 
     def run_messages(self, address: SessionAddress, run_id: str) -> list[ChatMessage]:
@@ -836,12 +708,12 @@ class SessionStore:
     def messages_since(
         self, address: SessionAddress, cursor: SessionReadCursor | None
     ) -> SessionReadBatch | None:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             delta = _store_history.message_rows_since(connection, address, cursor)
         return None if delta is None else _store_history.read_batch(delta)
 
     def continuation(self, address: SessionAddress) -> SessionContinuationState | None:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_continuation.continuation(connection, address)
 
     def append_continuation(self, address: SessionAddress, records: Sequence[JsonObject]) -> None:
@@ -855,7 +727,7 @@ class SessionStore:
         )
 
     def bookend_timestamps(self, address: SessionAddress) -> tuple[str, str] | None:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_history.bookend_timestamps(connection, address)
 
     def current_skill_activation_messages(self, address: SessionAddress) -> list[ChatMessage]:
@@ -871,7 +743,7 @@ class SessionStore:
         include_all_scopes: bool = False,
         exclude_owner_managed: bool = False,
     ) -> list[SessionAddress]:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_queries.list_addresses(
                 connection,
                 project_id=project_id,
@@ -883,7 +755,7 @@ class SessionStore:
     def list_agent_ids(
         self, project_id: str | None, *, exclude_owner_managed: bool = False
     ) -> list[str]:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_queries.list_agent_ids(
                 connection, project_id, exclude_owner_managed=exclude_owner_managed
             )
@@ -927,7 +799,7 @@ class SessionStore:
     def list_completion_activity(
         self, scopes: Sequence[tuple[str | None, str]]
     ) -> dict[tuple[str | None, str], list[JsonObject]]:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_queries.list_completion_activity(connection, scopes)
 
     def session_ids_with_messages(
@@ -938,7 +810,7 @@ class SessionStore:
         since: datetime | None,
         until: datetime | None,
     ) -> set[str]:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_queries.session_ids_with_messages(
                 connection, project_id, agent_id, roles, since, until
             )
@@ -946,19 +818,19 @@ class SessionStore:
     def list_history_revisions(
         self, project_id: str | None, agent_id: str
     ) -> list[SessionHistoryRevision]:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_queries.list_history_revisions(connection, project_id, agent_id)
 
     def list_history_versions(
         self, addresses: Sequence[SessionAddress]
     ) -> dict[SessionAddress, tuple[str, int]]:
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_queries.list_history_versions(connection, addresses)
 
     def fts_health(self) -> FtsHealth:
         """Return operator-facing FTS state with explicit canonical coverage checks."""
         try:
-            with self._runtime.read_ctx() as connection:
+            with self._database.read() as connection:
                 return _store_fts._fts_health_from_connection(connection, verify_coverage=True)
         except Exception as exc:
             return FtsHealth(state="unavailable", reason=f"FTS health check failed: {exc}")
@@ -966,7 +838,7 @@ class SessionStore:
     def is_fts_available(self) -> bool:
         """Return cheap marker-backed availability; rebuild verification owns coverage scans."""
         try:
-            with self._runtime.read_ctx() as connection:
+            with self._database.read() as connection:
                 return _store_fts._fts_health_from_connection(
                     connection, verify_coverage=False
                 ).available
@@ -975,7 +847,7 @@ class SessionStore:
 
     def recall_context(self, address: SessionAddress, message_id: str) -> builtins.list[JsonObject]:
         """Return bounded conversation text beside a search anchor."""
-        with self._runtime.read_ctx() as connection:
+        with self._database.read() as connection:
             return _store_history.recall_context(connection, address, message_id)
 
     def search_messages(
@@ -996,7 +868,7 @@ class SessionStore:
         use_fts: bool = True,
     ) -> SessionSearchResult:
         def select(*, use_fts: bool, fallback_reason: str | None = None) -> SessionSearchResult:
-            with self._runtime.read_ctx() as connection:
+            with self._database.read() as connection:
                 return _store_search.search(
                     connection,
                     query,

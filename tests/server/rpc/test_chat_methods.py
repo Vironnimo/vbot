@@ -28,8 +28,8 @@ from tests.server.rpc.chat_methods_test_support import (
 
 @pytest.mark.asyncio
 async def test_run_result_keeps_exact_scope_when_session_has_continued(tmp_path):
+    from core.database import write_bootstrap_marker
     from core.sessions import ChatSessionManager
-    from core.sessions.format import write_bootstrap_marker
     from server.rpc.chat_methods import _chat_run_result
 
     write_bootstrap_marker(tmp_path)

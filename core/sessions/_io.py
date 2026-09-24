@@ -1,4 +1,4 @@
-"""Bounded Session I/O and reentrant write leases."""
+"""Reentrant Session write leases and chat-history cursors."""
 
 from __future__ import annotations
 
@@ -7,15 +7,9 @@ import base64
 import contextvars
 import hashlib
 import json
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, TypeVar
 
 from core.sessions._types import _CHAT_HISTORY_CURSOR_PREFIX
-from core.utils.workers import BoundedWorkerPool
-
-_SessionIoResult = TypeVar("_SessionIoResult")
-_SESSION_IO_WORKERS = BoundedWorkerPool(name="session-io", max_workers=8)
 
 
 @dataclass
@@ -51,13 +45,6 @@ class _SessionWriteLock:
         if lease.holders == 0:
             lease.active = False
             self._lock.release()
-
-
-async def _run_session_io(
-    function: Callable[..., _SessionIoResult],
-    *arguments: Any,
-) -> _SessionIoResult:
-    return await _SESSION_IO_WORKERS.run(function, *arguments)
 
 
 def _encode_chat_history_cursor(generation_id: str, sequence: int) -> str:

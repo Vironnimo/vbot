@@ -17,7 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from core.sessions.schema import required_journal_mode
+from core.database import required_journal_mode
 
 from ._store_values import (
     SwarmStoreError,
@@ -187,3 +187,22 @@ CREATE INDEX IF NOT EXISTS posts_discussion_page ON posts(swarm_id,discussion_id
 CREATE INDEX IF NOT EXISTS discussions_page ON discussions(swarm_id,is_main DESC,sequence);
 CREATE UNIQUE INDEX IF NOT EXISTS discussions_one_main ON discussions(swarm_id) WHERE is_main=1;
 """
+
+# Reads name their columns and never use ``SELECT *``: an older vBot must not
+# pick up columns a newer one adds. Keep these lists equal to the tables above.
+SWARM_COLUMNS = "id,prompt,profile_snapshot,effective_configuration,state,created_at"
+PARTICIPANT_COLUMNS = "id,swarm_id,model,display_name,ordinal,state,idle_boundary,wake_announced_seq,wake_epoch,wake_pending,wake_pending_seq,lifecycle_run_id"
+DISCUSSION_COLUMNS = "id,swarm_id,title,sequence,is_main,created_at"
+POST_COLUMNS = "id,swarm_id,discussion_id,sequence,author_kind,author_id,author_name,text,reply_to,recipients_json,created_at"
+WIKI_PAGE_COLUMNS = "id,swarm_id,revision"
+WIKI_REVISION_COLUMNS = "id,swarm_id,page_id,revision,title,content,deleted,author_id,author_name,author_kind,created_at"
+
+
+def qualified(columns: str, alias: str) -> str:
+    """``columns`` prefixed with a table alias, for joined reads."""
+    return ",".join(f"{alias}.{name}" for name in columns.split(","))
+
+
+ALIASED_DISCUSSION_COLUMNS = qualified(DISCUSSION_COLUMNS, "d")
+ALIASED_POST_COLUMNS = qualified(POST_COLUMNS, "p")
+ALIASED_WIKI_REVISION_COLUMNS = qualified(WIKI_REVISION_COLUMNS, "r")

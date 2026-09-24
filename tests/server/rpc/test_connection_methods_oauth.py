@@ -529,6 +529,29 @@ async def test_provider_disconnect_deletes_token_and_cancels_flow(tmp_path: Any)
 
 
 @pytest.mark.asyncio
+async def test_provider_disconnect_removes_a_token_file_that_fails_to_load(tmp_path: Any) -> None:
+    state = make_state(tmp_path, make_provider(connection=make_oauth_connection()))
+    token_path = tmp_path / "oauth" / "github-copilot-oauth.json"
+    token_path.parent.mkdir(parents=True)
+    token_path.write_text("not json", encoding="utf-8")
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.disconnect",
+            "params": {
+                "provider_id": "github-copilot",
+                "connection_id": "github-copilot:oauth",
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["status"] == "disconnected"
+    assert not token_path.exists()
+
+
+@pytest.mark.asyncio
 async def test_provider_disconnect_with_account_deletes_only_that_account_token(
     tmp_path: Any,
 ) -> None:

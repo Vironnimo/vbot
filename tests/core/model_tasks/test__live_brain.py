@@ -14,7 +14,12 @@ from core.model_tasks._live_tools import DELEGATION_INSTRUCTIONS
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
 
-TARGET = BrainTarget(provider_id="openai", connection_id="subscription", model_id="gpt-5.6-terra")
+TARGET = BrainTarget(
+    provider_id="openai",
+    connection_id="subscription",
+    model_id="gpt-5.6-terra",
+    thinking_effort="low",
+)
 
 
 class FakeAdapter:
@@ -41,7 +46,9 @@ class FakeAdapter:
 
 
 class Harness:
-    def __init__(self, responses: list[Any], *, max_steps: int = 8) -> None:
+    def __init__(
+        self, responses: list[Any], *, max_steps: int = 8, target: BrainTarget = TARGET
+    ) -> None:
         self.adapter = FakeAdapter(responses)
         self.connections: list[ConnectionRef] = []
         self.executed: list[tuple[str, dict[str, Any]]] = []
@@ -50,7 +57,7 @@ class Harness:
         runtime = SimpleNamespace(get_adapter=self._get_adapter, models=SimpleNamespace())
         self.brain = LiveBrain(
             runtime,
-            TARGET,
+            target,
             self._execute,
             conversation_id="live:rtc_1",
             max_steps=max_steps,
@@ -122,6 +129,27 @@ async def test_tool_loop_executes_calls_and_replays_reasoning_to_the_same_connec
         "content": json.dumps({"ok": True, "terminals": [{"id": "term-1"}]}),
     }
     assert harness.adapter.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("effort", ["high", None], ids=["configured", "model-default"])
+async def test_every_model_request_sends_the_configured_reasoning_effort(effort: str | None):
+    target = BrainTarget(
+        provider_id="openai",
+        connection_id="subscription",
+        model_id="gpt-5.6-terra",
+        thinking_effort=effort,
+    )
+    harness = Harness(
+        [_tool_turn(("vbot_app", {"action": "context"})), _answer("Done.")], target=target
+    )
+
+    await harness.brain.answer(DELEGATION)
+
+    assert [kwargs["thinking_effort"] for _m, _id, kwargs in harness.adapter.requests] == [
+        effort,
+        effort,
+    ]
 
 
 @pytest.mark.asyncio

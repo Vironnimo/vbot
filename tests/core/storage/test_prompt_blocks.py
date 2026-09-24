@@ -166,18 +166,52 @@ def test_write_layout_omits_none_source_on_disk(tmp_path: Path) -> None:
     store.write_layout(None, [LayoutEntry(id="core:intro")])
 
     raw = json.loads((tmp_path / "prompts" / "layout.json").read_text(encoding="utf-8"))
-    assert raw == [{"id": "core:intro", "enabled": True}]
+    assert raw == {"format_version": 1, "entries": [{"id": "core:intro", "enabled": True}]}
 
 
 def test_read_layout_defaults_enabled_and_source(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     layout_path = tmp_path / "prompts" / "layout.json"
     layout_path.parent.mkdir(parents=True, exist_ok=True)
-    layout_path.write_text(json.dumps([{"id": "core:intro"}]), encoding="utf-8")
+    layout_path.write_text(
+        json.dumps({"format_version": 1, "entries": [{"id": "core:intro"}]}), encoding="utf-8"
+    )
 
     [entry] = store.read_layout(None)
 
     assert entry == LayoutEntry(id="core:intro", enabled=True, source=None)
+
+
+def test_write_layout_keeps_unknown_fields_of_the_file(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    layout_path = tmp_path / "prompts" / "layout.json"
+    layout_path.parent.mkdir(parents=True, exist_ok=True)
+    layout_path.write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "note": "kept",
+                "entries": [
+                    {"id": "core:intro", "enabled": True, "pinned": True},
+                    {"id": "tool:bash", "enabled": True, "pinned": False},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert store.read_layout(None) == [
+        LayoutEntry(id="core:intro"),
+        LayoutEntry(id="tool:bash"),
+    ]
+    store.write_layout(None, [LayoutEntry(id="core:intro", enabled=False)])
+
+    raw = json.loads(layout_path.read_text(encoding="utf-8"))
+    assert raw == {
+        "format_version": 1,
+        "entries": [{"id": "core:intro", "enabled": False, "pinned": True}],
+        "note": "kept",
+    }
 
 
 @pytest.mark.parametrize("scope", [None, "assistant"])
@@ -186,26 +220,39 @@ def test_read_layout_defaults_enabled_and_source(tmp_path: Path) -> None:
     [
         b"{not json",
         b"{}",
-        b'[{"enabled": true}]',
-        b"[null]",
+        b'[{"id":"core:intro"}]',
+        b'{"format_version":1}',
+        b'{"format_version":2,"entries":[]}',
+        b'{"format_version":1,"entries":[{"enabled": true}]}',
+        b'{"format_version":1,"entries":[null]}',
         b"\xff",
-        b'[{"id":"core:intro","enabled":"yes"}]',
-        b'[{"id":"core:intro","source":42}]',
-        b'[{"id":"core:intro","enabled":false},null]',
+        b'{"format_version":1,"entries":[{"id":"core:intro","enabled":"yes"}]}',
+        b'{"format_version":1,"entries":[{"id":"core:intro","source":42}]}',
+        b'{"format_version":1,"entries":[{"id":"core:intro","enabled":false},null]}',
     ],
 )
-def test_invalid_layout_falls_back_without_rewriting(tmp_path, caplog, scope, body):
+def test_invalid_layout_falls_back_and_is_only_replaced_by_a_reset(tmp_path, caplog, scope, body):
     store = make_store(tmp_path)
     path = store.layout_path(scope)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(body)
     assert store.read_layout(scope) == []
-    assert path.read_bytes() == body
     assert any(record.levelname == "WARNING" for record in caplog.records)
+
+    with pytest.raises(StorageError, match="Refusing to overwrite Prompt layout"):
+        store.write_layout(scope, [LayoutEntry(id="core:intro")])
+    with pytest.raises(StorageError, match="Reset the layout"):
+        store.prune_layout(scope, [LayoutEntry(id="core:intro")], {"core:intro"})
+    assert path.read_bytes() == body
+
+    store.write_layout(scope, [LayoutEntry(id="core:intro")], reset=True)
+
+    assert store.read_layout(scope) == [LayoutEntry(id="core:intro")]
 
 
 def test_unreadable_layout_falls_back(tmp_path, monkeypatch, caplog):
     store = make_store(tmp_path)
+    store.write_layout(None, [LayoutEntry(id="core:intro")])
 
     def fail_read(*args, **kwargs):
         raise PermissionError("test sentinel")

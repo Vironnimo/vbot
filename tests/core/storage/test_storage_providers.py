@@ -31,7 +31,9 @@ class TestLoadProvidersSettings:
     def test_defaults_non_object_section(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
-        storage.settings_path.write_text(json.dumps({"providers": []}), encoding="utf-8")
+        storage.settings_path.write_text(
+            json.dumps({"format_version": 1, "providers": []}), encoding="utf-8"
+        )
 
         assert storage.load_providers_settings() == {"connections": {}}
 
@@ -39,7 +41,9 @@ class TestLoadProvidersSettings:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
-            json.dumps({"providers": {"connections": {"ollama:local": "yes"}}}),
+            json.dumps(
+                {"format_version": 1, "providers": {"connections": {"ollama:local": "yes"}}}
+            ),
             encoding="utf-8",
         )
 
@@ -49,7 +53,7 @@ class TestLoadProvidersSettings:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
-            json.dumps({"providers": {"connections": {"ollama": True}}}),
+            json.dumps({"format_version": 1, "providers": {"connections": {"ollama": True}}}),
             encoding="utf-8",
         )
 

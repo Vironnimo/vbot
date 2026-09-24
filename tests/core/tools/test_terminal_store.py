@@ -68,7 +68,7 @@ def test_corrupt_documents_degrade_to_empty_collections(
     history_path = tmp_path / "launch-history.json"
     groups_path = tmp_path / "groups.json"
     history_path.write_text("not json", encoding="utf-8")
-    _write_groups(groups_path, {"version": 1, "groups": [{"id": "broken"}]})
+    _write_groups(groups_path, {"format_version": 1, "groups": [{"id": "broken"}]})
 
     with caplog.at_level("WARNING"):
         store = TerminalOperatorStore(
@@ -79,6 +79,79 @@ def test_corrupt_documents_degrade_to_empty_collections(
     assert store.groups == {}
     assert any("launch history" in message for message in caplog.messages)
     assert any("groups" in message for message in caplog.messages)
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        "not json",
+        '{"format_version": 2, "groups": []}',
+        '{"version": 1, "groups": []}',
+        '{"format_version": 1, "groups": [{"id": "broken"}]}',
+    ],
+)
+def test_documents_that_failed_to_load_are_never_overwritten(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, stored: str
+) -> None:
+    history_path = tmp_path / "launch-history.json"
+    groups_path = tmp_path / "groups.json"
+    history_path.write_text(stored.replace("groups", "entries"), encoding="utf-8")
+    groups_path.write_text(stored, encoding="utf-8")
+    store = TerminalOperatorStore(
+        launch_history_path=history_path, groups_path=groups_path, data_dir=tmp_path
+    )
+
+    with caplog.at_level("WARNING"):
+        store.remember_launch(command="pwsh", arguments=[], workdir=None)
+        store.groups["u-1"] = TerminalGroup(
+            group_id="u-1", name="Builds", kind="user", order=[], created_at=_SEED_TIMESTAMP
+        )
+        store.persist_groups()
+
+    assert history_path.read_text(encoding="utf-8") == stored.replace("groups", "entries")
+    assert groups_path.read_text(encoding="utf-8") == stored
+    assert sum("Refusing to overwrite" in message for message in caplog.messages) == 2
+    # The change stays in memory for this process.
+    assert [entry.command for entry in store.launch_history] == ["pwsh"]
+
+
+def test_persist_keeps_unknown_fields_of_the_documents(tmp_path: Path) -> None:
+    groups_path = tmp_path / "groups.json"
+    _write_groups(
+        groups_path,
+        {
+            "format_version": 1,
+            "future": "kept",
+            "groups": [
+                {
+                    "id": "u-1",
+                    "name": "Builds",
+                    "order": [],
+                    "created_at": "2026-01-01T12:00:00+00:00",
+                    "color": "blue",
+                }
+            ],
+        },
+    )
+    store = TerminalOperatorStore(
+        launch_history_path=None, groups_path=groups_path, data_dir=tmp_path
+    )
+
+    store.groups["u-1"].name = "Renamed"
+    store.persist_groups()
+
+    document = json.loads(groups_path.read_text(encoding="utf-8"))
+    assert document["format_version"] == 1
+    assert document["future"] == "kept"
+    assert document["groups"] == [
+        {
+            "id": "u-1",
+            "name": "Renamed",
+            "order": [],
+            "created_at": "2026-01-01T12:00:00+00:00",
+            "color": "blue",
+        }
+    ]
 
 
 def test_persist_groups_writes_only_user_groups_and_survives_reload(tmp_path: Path) -> None:

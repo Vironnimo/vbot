@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -37,6 +37,16 @@ from core.config_validation import (
     validate_string_list,
     warn_unknown_keys,
 )
+from core.json_documents import (
+    OPAQUE,
+    JsonDocumentFormat,
+    json_document,
+    json_map,
+    json_object,
+    strip_unknown_fields,
+    validate_format_version,
+    warn_unknown_fields,
+)
 from core.memory import (
     DEFAULT_MEMORY_PROMPT_MODE,
     MEMORY_PROMPT_MODES,
@@ -53,6 +63,7 @@ from core.settings import (
 )
 from core.settings.agent_defaults import validate_fallback_chain
 from core.settings.validation import (
+    COMPACTION_POLICY_SHAPE,
     validate_optional_compaction_policy,
     validate_temperature_diagnostic,
     validate_thinking_effort_diagnostic,
@@ -60,6 +71,7 @@ from core.settings.validation import (
 from core.tools.availability import (
     BASH_ALLOWED_ENV_KEY,
     BASH_TOOL_SETTINGS_KEY,
+    TOOL_ACCESS_FIELDS,
     ToolAccess,
     normalize_env_keys,
     normalize_tool_access,
@@ -103,6 +115,26 @@ _BASH_TOOL_SETTING_FIELDS = frozenset({BASH_ALLOWED_ENV_KEY})
 
 _AGENT_ORDER_FIELDS = frozenset({"agent_ids", "revision"})
 
+AGENT_FORMAT_VERSION = 1
+AGENT_ORDER_FORMAT_VERSION = 1
+
+TOOL_ACCESS_SHAPE = json_object(TOOL_ACCESS_FIELDS)
+AGENT_SHAPE = json_document(
+    _AGENT_CONFIG_FIELDS,
+    {
+        "compaction_policy": COMPACTION_POLICY_SHAPE,
+        "tool_access": TOOL_ACCESS_SHAPE,
+        "tools": json_map(
+            OPAQUE,
+            known={
+                BASH_TOOL_SETTINGS_KEY: json_object(_BASH_TOOL_SETTING_FIELDS),
+                "subagent": json_object(_SUBAGENT_TOOL_SETTING_FIELDS),
+            },
+        ),
+    },
+)
+AGENT_ORDER_SHAPE = json_document(_AGENT_ORDER_FIELDS)
+
 
 def validate_agent_order_file(order_path: str | Path) -> JsonValidationReport:
     """Validate the optional persisted Identity Agent order document."""
@@ -110,12 +142,14 @@ def validate_agent_order_file(order_path: str | Path) -> JsonValidationReport:
 
 
 def validate_agent_order_data(data: Any) -> list[JsonDiagnostic]:
-    """Validate a decoded raw ``agents/order.json`` mapping."""
+    """Validate a decoded raw ``agents/order.json`` document."""
     diagnostics: list[JsonDiagnostic] = []
     if not isinstance(data, dict):
         return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
+    if not validate_format_version(diagnostics, data, AGENT_ORDER_FORMAT_VERSION):
+        return diagnostics
 
-    warn_unknown_keys(diagnostics, "$", data, _AGENT_ORDER_FIELDS, "agent order field")
+    warn_unknown_keys(diagnostics, "$", data, AGENT_ORDER_SHAPE.fields, "agent order field")
     validate_required_fields(diagnostics, "$", data, _AGENT_ORDER_FIELDS)
     if "revision" in data:
         validate_positive_integer(diagnostics, "$.revision", data["revision"], required=True)
@@ -145,29 +179,26 @@ def validate_agent_file(agent_path: str | Path) -> JsonValidationReport:
 
 
 def load_validated_agent_json(agent_path: str | Path) -> JsonObject:
-    """Load one schema-valid ``agent.json`` mapping."""
+    """Load the modeled fields of one schema-valid ``agent.json``.
+
+    Unknown fields are left out; the Agent writer merges them back from disk.
+    """
     try:
-        return cast(
-            "JsonObject",
-            load_validated_json_file(agent_path, validate_agent_data, missing_ok=False),
-        )
+        data = load_validated_json_file(agent_path, validate_agent_data, missing_ok=False)
     except JsonConfigValidationError as error:
         raise AgentError(str(error)) from error
+    return cast("JsonObject", strip_unknown_fields(data, AGENT_SHAPE))
 
 
 def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
-    """Validate a decoded raw ``agent.json`` mapping."""
+    """Validate a decoded raw ``agent.json`` document."""
     diagnostics: list[JsonDiagnostic] = []
     if not isinstance(data, dict):
         return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
+    if not validate_format_version(diagnostics, data, AGENT_FORMAT_VERSION):
+        return diagnostics
 
-    warn_unknown_keys(diagnostics, "$", data, _AGENT_CONFIG_FIELDS, "agent field")
-    if "allowed_tools" in data:
-        add_error(
-            diagnostics,
-            "$.allowed_tools",
-            "retired Identity Agent field; run the agent Tool-access converter",
-        )
+    warn_unknown_keys(diagnostics, "$", data, AGENT_SHAPE.fields, "agent field")
     _validate_agent_config_id(diagnostics, "$.id", data.get("id"))
     validate_non_empty_string(diagnostics, "$.name", data.get("name"), required=False)
     validate_string(diagnostics, "$.model", data.get("model"), required=False)
@@ -198,8 +229,12 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
             frozenset(MEMORY_PROMPT_MODES),
         )
     if data.get("tool_access") is not None:
+        tool_access = data["tool_access"]
+        warn_unknown_fields(
+            diagnostics, "$.tool_access", tool_access, TOOL_ACCESS_SHAPE, label="tool_access field"
+        )
         try:
-            normalize_tool_access(data["tool_access"])
+            normalize_tool_access(strip_unknown_fields(tool_access, TOOL_ACCESS_SHAPE))
         except ValueError as error:
             add_error(diagnostics, "$.tool_access", str(error))
     if data.get("allowed_skills") is not None:
@@ -499,6 +534,34 @@ def _agent_from_dict(
         created_at=data.get("created_at") or timestamp_default,
         updated_at=data.get("updated_at") or timestamp_default,
     )
+
+
+def _agent_document(agent: Agent, *, workspace: str) -> JsonObject:
+    """Return the persisted ``agent.json`` fields of one Agent."""
+    persisted = asdict(agent)
+    persisted["tool_access"] = agent.tool_access.to_dict()
+    if not persisted["tools"]:
+        persisted.pop("tools")
+    persisted["workspace"] = workspace
+    return persisted
+
+
+def _agent_order_document(order: _AgentOrderDocument) -> JsonObject:
+    return {"revision": order.revision, "agent_ids": list(order.agent_ids)}
+
+
+AGENT_FORMAT = JsonDocumentFormat(
+    name="Agent config",
+    version=AGENT_FORMAT_VERSION,
+    shape=AGENT_SHAPE,
+    validate=validate_agent_data,
+)
+AGENT_ORDER_FORMAT = JsonDocumentFormat(
+    name="Agent order",
+    version=AGENT_ORDER_FORMAT_VERSION,
+    shape=AGENT_ORDER_SHAPE,
+    validate=validate_agent_order_data,
+)
 
 
 def _validated_agent_data(agent_path: Path) -> JsonObject:

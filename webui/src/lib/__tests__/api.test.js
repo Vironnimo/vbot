@@ -4,10 +4,10 @@ import {
   RPC_ERROR_INVALID_CLIENT_REQUEST,
   RPC_ERROR_NETWORK,
   RPC_ERROR_RESPONSE,
-  acknowledgeSessionStoreIncident,
+  acknowledgeDataStoreIncident,
   createRpcEnvelope,
-  createSessionStoreSnapshot,
-  getSessionStoreStatus,
+  createDataSnapshot,
+  getDataStoreStatus,
   getStatisticsReport,
   inspectSubAgentWork,
   listQueue,
@@ -85,23 +85,23 @@ describe('rpc()', () => {
     );
   });
 
-  it('exposes Session-store status, snapshot, and incident acknowledgement RPCs', async () => {
+  it('exposes data-store status, snapshot, and incident acknowledgement RPCs', async () => {
     const fetchFunction = vi
       .fn()
       .mockResolvedValue(
         jsonResponse({ ok: true, result: { state: 'ready' } }),
       );
 
+    await expect(getDataStoreStatus({ fetch: fetchFunction })).resolves.toEqual(
+      {
+        state: 'ready',
+      },
+    );
     await expect(
-      getSessionStoreStatus({ fetch: fetchFunction }),
-    ).resolves.toEqual({
-      state: 'ready',
-    });
-    await expect(
-      createSessionStoreSnapshot('manual', { fetch: fetchFunction }),
+      createDataSnapshot('manual', { fetch: fetchFunction }),
     ).resolves.toEqual({ state: 'ready' });
     await expect(
-      acknowledgeSessionStoreIncident('incident-1', { fetch: fetchFunction }),
+      acknowledgeDataStoreIncident('incident-1', { fetch: fetchFunction }),
     ).resolves.toEqual({ state: 'ready' });
 
     expect(
@@ -110,18 +110,18 @@ describe('rpc()', () => {
         JSON.parse(init.body),
       ]),
     ).toEqual([
-      ['/api/rpc', { method: 'session_store.status', params: {} }],
+      ['/api/rpc', { method: 'data_store.status', params: {} }],
       [
         '/api/rpc',
         {
-          method: 'session_store.snapshot_create',
+          method: 'data_store.snapshot_create',
           params: { reason: 'manual' },
         },
       ],
       [
         '/api/rpc',
         {
-          method: 'session_store.incident_acknowledge',
+          method: 'data_store.incident_acknowledge',
           params: { incident_id: 'incident-1' },
         },
       ],

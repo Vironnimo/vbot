@@ -14,12 +14,12 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from core.automation import _cron_claims as cron_claims
 from core.automation.cron import CronService
 from core.chat import ChatLoop
+from core.database import write_bootstrap_marker
 from core.extensions import ExtensionRegistrationIdentity
 from core.extensions.extensions import ExtensionUnavailableError
 from core.runs import ChatRunManager, Run
 from core.runtime import Runtime
 from core.sessions import ChatSessionManager
-from core.sessions.format import write_bootstrap_marker
 from core.statistics import StatisticsIndex
 from core.utils.config import Config
 from core.utils.server_control import CONTROL_SHUTDOWN_PATH, CONTROL_TOKEN_HEADER
@@ -348,7 +348,9 @@ def test_create_app_derives_server_bind_from_settings_file(tmp_path: Path) -> No
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     write_bootstrap_marker(data_dir)
-    (data_dir / "settings.json").write_text('{"server_port": 8500}', encoding="utf-8")
+    (data_dir / "settings.json").write_text(
+        '{"format_version": 1, "server_port": 8500}', encoding="utf-8"
+    )
     app = create_app(runtime=Runtime(Config(data_dir=data_dir)))
 
     with TestClient(app):

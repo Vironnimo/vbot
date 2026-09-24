@@ -10,9 +10,9 @@ from typing import Any, cast
 import pytest
 
 from core.automation.cron import CronService
+from core.database import write_bootstrap_marker
 from core.runs import ChatRunManager, RunKind, RunStatus
 from core.sessions import ChatSessionManager, SessionAddress
-from core.sessions.format import write_bootstrap_marker
 from server._app_lifecycle import (
     _register_bash_process_change_bridge,
     _register_cron_change_bridge,

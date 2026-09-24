@@ -49,7 +49,6 @@ from core.runs import ChatRunManager
 from core.runtime._configuration import (
     _SKILLS_DIRNAME,
     _VBOT_ROOT,
-    _detect_vbot_version,
     _disabled_skill_names,
     _extension_load_options,
     _extra_extension_directories,
@@ -115,6 +114,7 @@ from core.tools.subagent import register_subagent_tools
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.utils.tls import prewarm_shared_ssl_context
+from core.utils.version import detect_vbot_version
 
 if TYPE_CHECKING:
     from core.runtime.runtime import Runtime
@@ -612,7 +612,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._tools,
             cast(SkillPromptRegistry, runtime._skills),
             channel_registry=cast(ChannelService, runtime._channel_service),
-            vbot_version=str(runtime._config.get("VBOT_VERSION") or _detect_vbot_version()),
+            vbot_version=str(runtime._config.get("VBOT_VERSION") or detect_vbot_version()),
             vbot_root=_VBOT_ROOT,
             data_root=runtime._storage.data_dir,
             memory_provider=runtime._memory_service,

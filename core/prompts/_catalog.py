@@ -254,12 +254,13 @@ class PromptBlockCatalog:
 
         The agreed server-side reset so the tab need not reconstruct the default:
         the active scope's ``layout.json`` is overwritten with the bundled default
-        layout. Per-block text overrides are untouched (use :meth:`reset_block` for
-        text). Returns the restored effective layout.
+        layout, also when the saved layout fails to load (the explicit repair).
+        Per-block text overrides are untouched (use :meth:`reset_block` for text).
+        Returns the restored effective layout.
         """
         prompt_scope = self._resolve_edit_scope(scope)
         scope_key = self.scope_key(prompt_scope)
-        self._block_store.write_layout(scope_key, self._default_layout)
+        self._block_store.write_layout(scope_key, self._default_layout, reset=True)
         return {"layout": [self._layout_entry_dict(entry) for entry in self._default_layout]}
 
     def _resolve_edit_scope(self, scope: Any = None) -> PromptScope:

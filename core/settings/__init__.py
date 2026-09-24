@@ -61,12 +61,15 @@ from core.settings.settings import (
     validate_thinking_effort,
 )
 from core.settings.validation import (
+    SETTINGS_FORMAT,
+    SETTINGS_FORMAT_VERSION,
     SettingsDiagnostic,
     SettingsValidationReport,
     load_runtime_settings_json,
     load_validated_settings_json,
     validate_data_dir_config,
     validate_settings_data,
+    validate_settings_document,
     validate_settings_file,
 )
 
@@ -100,6 +103,8 @@ __all__ = [
     "PROJECT_ID_PATTERN",
     "PROJECT_SOURCE_FORMATS",
     "PROJECT_TOOL_ALLOWLIST_WILDCARD",
+    "SETTINGS_FORMAT",
+    "SETTINGS_FORMAT_VERSION",
     "SUPPORTED_APPEARANCE_CHAT_WIDTHS",
     "SUPPORTED_APPEARANCE_CHAT_WORKING_MODES",
     "SUPPORTED_APPEARANCE_LANGUAGES",
@@ -126,6 +131,7 @@ __all__ = [
     "setting_details",
     "validate_data_dir_config",
     "validate_settings_data",
+    "validate_settings_document",
     "validate_settings_file",
     "validate_temperature",
     "validate_thinking_effort",
