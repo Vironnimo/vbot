@@ -7,7 +7,9 @@ from cli.parser import AREA_ALIASES, parse_args
 
 @pytest.mark.parametrize("alias,canonical", AREA_ALIASES.items())
 def test_collection_aliases_dispatch_identically(alias, canonical):
-    target = ["list", "--host", "192.0.2.10", "--port", "9000"]
+    # Collection areas share a list command; other aliased areas name their read command.
+    command = {"performance": "status"}.get(canonical, "list")
+    target = [command, "--host", "192.0.2.10", "--port", "9000"]
     if canonical == "session":
         target.insert(1, "test-agent")
     assert vars(parse_args([alias, *target])) == vars(parse_args([canonical, *target]))

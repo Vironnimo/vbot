@@ -8,8 +8,8 @@ default (guaranteeing the same filesystem for the replace); pass ``data_dir``
 to stage it under the data directory's canonical atomic-temporary area instead.
 Pass ``mode`` (e.g. ``0o600`` for secret control records) to create the temp
 file with those exact permissions and re-assert them on the target after the
-replace. On failure the temp file is removed and the ``OSError`` re-raised for
-the caller to translate into its own domain error.
+replace. On failure the temp file is removed and the error (normally an
+``OSError``) re-raised for the caller to translate into its own domain error.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import os
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
+from typing import BinaryIO
 from uuid import uuid4
 
 from core.storage.layout import DataDirectoryLayout
@@ -69,6 +70,28 @@ def atomic_write_text(
     _atomic_write(target_path, write, data_dir=data_dir, mode=mode)
 
 
+def atomic_write_stream(
+    target_path: Path,
+    write: Callable[[BinaryIO], None],
+    *,
+    data_dir: Path | None = None,
+    mode: int | None = None,
+) -> None:
+    """Atomically write the bytes ``write`` streams into a binary handle.
+
+    For documents too large to hold as one ``bytes`` value; the flush, fsync and
+    replace follow the module docstring.
+    """
+
+    def write_temporary(temp_path: Path) -> None:
+        with temp_path.open("wb") as handle:
+            write(handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+    _atomic_write(target_path, write_temporary, data_dir=data_dir, mode=mode)
+
+
 def _atomic_write(
     target_path: Path,
     write: Callable[[Path], None],
@@ -91,7 +114,8 @@ def _atomic_write(
         write(temp_path)
         os.replace(temp_path, target_path)
         _fsync_replace_directories(temp_path, target_path)
-    except OSError:
+    except BaseException:
+        # A streamed writer can fail outside the OS layer; never leave its temp.
         remove_temporary_file(temp_path)
         raise
     if mode is not None:

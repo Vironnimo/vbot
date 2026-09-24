@@ -387,6 +387,7 @@ Setup, Runtime, direct `core/storage/layout.py` use, and managed Worktree creati
 │   ├── speech/
 │   ├── models/
 │   ├── debug/
+│   ├── performance/
 │   └── temp/
 │       ├── atomic/
 │       ├── bash/
@@ -410,7 +411,7 @@ Setup, Runtime, direct `core/storage/layout.py` use, and managed Worktree creati
 └── settings.json
 ```
 
-`artifacts/attachments/`, `artifacts/speech/`, `artifacts/models/`, and `artifacts/debug/` contain durable domain-owned artifacts. The four `artifacts/temp/` children remain separate: atomic replacement staging, 72-hour retained Bash and Terminal output, and 24-hour retained Sub-Agent activity. `statistics/provider-usage/` is normalized Provider-owned upstream history; local Statistics still derive from Sessions and add no persistence. The tracked system Model DB remains `resources/models/`; only the complete instance runtime Model DB moves under `artifacts/models/`.
+`artifacts/attachments/`, `artifacts/speech/`, `artifacts/models/`, `artifacts/debug/`, and `artifacts/performance/` contain durable domain-owned artifacts; the performance folder keeps the newest 20 Recordings. The four `artifacts/temp/` children remain separate: atomic replacement staging, 72-hour retained Bash and Terminal output, and 24-hour retained Sub-Agent activity. `statistics/provider-usage/` is normalized Provider-owned upstream history; local Statistics still derive from Sessions and add no persistence. The tracked system Model DB remains `resources/models/`; only the complete instance runtime Model DB moves under `artifacts/models/`.
 
 Independent roots keep their established ownership: `agents/` contains Identity Agent configs, default Workspaces, private Skills, and Sessions; `projects/` contains Project metadata and Project Agent Sessions; `skills/` contains global user Skills; `channels/`, `cron/`, `extensions/`, `prompts/`, `recall/`, `logs/`, `oauth/`, and `archive/` retain their existing records. Custom absolute Workspaces remain outside the data directory. `processes/` is reserved for future persistent process records and is not the Bash-output location.
 
@@ -1109,7 +1110,7 @@ Installed commands use `vbot`. From a source checkout, `python cli/main.py` and 
 | Bootstrap | `bootstrap list`, `bootstrap show`, `bootstrap create`, `bootstrap update`, `bootstrap delete`, `bootstrap enable`, `bootstrap disable` |
 | Statistics | `statistics overview`, `statistics usage`, `statistics runs`, `statistics compactions`, `statistics errors`, `statistics tools`, `statistics skills` |
 | Configuration | `config list`, `config describe`, `config effective`, `config raw`, `config get`, `config set`, `config unset`, `config patch`, `doctor settings`, `doctor config` |
-| Diagnostics | `log list`, `log read`, `debug status`, `debug traces`, `debug trace`, `debug clear`, `debug probe` |
+| Diagnostics | `log list`, `log read`, `debug status`, `debug traces`, `debug trace`, `debug clear`, `debug probe`, `performance status`, `performance record start`, `performance record stop`, `performance recordings` (alias `perf`) |
 
 `config set <path> --stdin` reads an exact JSON value without shell-quoting loss. `log read` prints the latest 100 entries by default; `--limit 0` prints all, and `--level` filters first. Provider credential writes and Extension activation can save successfully while a later refresh/load check fails; the nonzero exit and output preserve both outcomes.
 
@@ -1122,7 +1123,11 @@ vbot model refresh openai
 vbot statistics usage --since 2026-07-01
 vbot log read 2026-07-18.log --level error --limit 100
 vbot debug probe openrouter --connection openrouter:api-key
+vbot performance record start --label slow-chat --max-seconds 120
+vbot performance record stop
 ```
+
+`performance status` shows the slowest operations since server start, key process and Event Loop gauges, and recent Event Loop stalls with their top stack frames. A Recording captures a timeline of RPC calls, Runs, Tool calls, database transactions and worker pools until `record stop` or its `--max-seconds` limit (default 300, at most 3600); stop prints the trace file path to open at https://ui.perfetto.dev. Only one Recording runs at a time. Traces hold timings, ids and code locations, never message content.
 
 Run `vbot <area> --help` and `vbot <area> <command> --help` for every flag and positional argument. Primary Agent, Project, Session, Channel, Provider, task type, Cron job, and Extension identifiers shown in the examples are positional unless the leaf help explicitly names an option.
 

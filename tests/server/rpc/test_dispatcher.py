@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from server.rpc.dispatcher import dispatch_rpc
+from core.performance import PerformanceService
+from core.performance.performance import reset_for_tests
+from server.rpc.dispatcher import RpcMethodHandler, dispatch_rpc
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 
@@ -58,3 +62,32 @@ async def test_unexpected_rpc_error_is_logged_with_traceback_and_reraised(
 def test_key_error_is_not_an_expected_domain_error() -> None:
     with pytest.raises(KeyError, match="missing internal setting"):
         _map_expected_error(KeyError("missing internal setting"))
+
+
+@pytest.fixture
+def performance(tmp_path: Path) -> Iterator[PerformanceService]:
+    reset_for_tests()
+    service = PerformanceService(tmp_path / "performance")
+    yield service
+    service.stop()
+    reset_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_registered_methods_are_measured_and_unknown_names_are_not(
+    performance: PerformanceService,
+) -> None:
+    async def succeed(_state: Any, _params: dict[str, Any]) -> dict[str, Any]:
+        return {}
+
+    def reject(_state: Any, _params: dict[str, Any]) -> dict[str, Any]:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "rejected")
+
+    handlers: dict[str, RpcMethodHandler] = {"example.succeed": succeed, "example.reject": reject}
+    for method in ("example.succeed", "example.reject", "example.unknown"):
+        await dispatch_rpc(object(), {"method": method}, handlers)
+
+    metrics = (await performance.snapshot())["metrics"]
+    assert metrics["rpc.example.succeed"]["count"] == 1
+    assert metrics["rpc.example.reject"]["count"] == 1
+    assert not any(name.startswith("rpc.example.unknown") for name in metrics)

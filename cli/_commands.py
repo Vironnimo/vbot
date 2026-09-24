@@ -41,6 +41,7 @@ from cli._dispatch_operations import (
     dispatch_debug_command,
     dispatch_log_command,
     dispatch_memory_command,
+    dispatch_performance_command,
     dispatch_prompt_command,
     dispatch_skill_command,
     dispatch_statistics_command,
@@ -473,6 +474,11 @@ def run(
 
     if args.area == "debug":
         result = dispatch_debug_command(args, instance)
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    if args.area == "performance":
+        result = dispatch_performance_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 

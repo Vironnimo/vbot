@@ -20,7 +20,12 @@ RPC_TIMEOUT_SECONDS = 10.0
 # unbounded after the local server accepts them, while the ordinary connect,
 # write, and pool limits still fail fast when the server cannot be reached.
 _LONG_RUNNING_METHODS: frozenset[str] = frozenset(
-    {"model.refresh_db", "session_store.snapshot_create", "skill.install"}
+    {
+        "model.refresh_db",
+        "performance.recording_stop",
+        "session_store.snapshot_create",
+        "skill.install",
+    }
 )
 RPC_LONG_RUNNING_TIMEOUT = httpx.Timeout(RPC_TIMEOUT_SECONDS, read=None)
 
@@ -30,6 +35,7 @@ _PROGRESS_PHASES = {
     "session_store.snapshot_create": "Creating and verifying a Session-store snapshot",
     "extensions.reload": "Reloading Extensions and checking their load results",
     "provider.usage": "Checking live Provider usage limits",
+    "performance.recording_stop": "Writing the performance trace file",
 }
 
 

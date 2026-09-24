@@ -15,6 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from core.performance import measure, record_span
 from core.sessions.errors import (
     SessionStoreCorruptError,
     SessionStoreSchemaMismatchError,
@@ -38,6 +39,8 @@ _WRITE_RETRY_SLOW_AFTER_S = 2.0
 _WAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024
 _WAL_INCOMPAT_MARKERS = ("locking protocol", "not authorized", "disk i/o error")
 _SQLITE_PRIMARY_CODE_MASK = 0xFF
+_PERFORMANCE_TRACK = "sqlite"
+_LOCK_WAIT_SPAN_MIN_MS = 1.0
 _SQLITE_CORRUPTION_CODES = frozenset(
     {
         sqlite3.SQLITE_CORRUPT,
@@ -611,21 +614,34 @@ class SQLiteRuntime:
         *,
         patience_s: float = WRITE_PATIENCE_S,
     ) -> Any:
-        """Run a whole idempotent transaction with busy-only retry."""
+        """Run a whole idempotent transaction with busy-only retry.
+
+        Each attempt is measured as ``sqlite.write`` (BEGIN through COMMIT) after
+        ``sqlite.write_wait`` for this runtime's connection lock.
+        """
         deadline = time.monotonic() + patience_s
         while True:
             try:
+                waiting = time.perf_counter()
                 with self._lock:
+                    record_span(
+                        "sqlite.write_wait",
+                        waiting,
+                        track=_PERFORMANCE_TRACK,
+                        name="write wait",
+                        min_span_ms=_LOCK_WAIT_SPAN_MIN_MS,
+                    )
                     connection = self.writer
-                    connection.execute("BEGIN IMMEDIATE")
-                    try:
-                        result = fn(connection)
-                        connection.execute("COMMIT")
-                    except BaseException:
-                        with contextlib.suppress(BaseException):
-                            if connection.in_transaction:
-                                connection.execute("ROLLBACK")
-                        raise
+                    with measure("sqlite.write", track=_PERFORMANCE_TRACK, name="write"):
+                        connection.execute("BEGIN IMMEDIATE")
+                        try:
+                            result = fn(connection)
+                            connection.execute("COMMIT")
+                        except BaseException:
+                            with contextlib.suppress(BaseException):
+                                if connection.in_transaction:
+                                    connection.execute("ROLLBACK")
+                            raise
                     self._write_count += 1
                     checkpoint = self._write_count % CHECKPOINT_EVERY_N_WRITES == 0
                 if checkpoint:
@@ -654,7 +670,19 @@ class SQLiteRuntime:
 
     @contextlib.contextmanager
     def read_ctx(self):
-        """Yield one bounded read connection or the serialized writer."""
+        """Yield one bounded read connection or the serialized writer.
+
+        The whole read transaction, including the caller's work, is measured as
+        ``sqlite.read``.
+        """
+        with (
+            measure("sqlite.read", track=_PERFORMANCE_TRACK, name="read"),
+            self._read_transaction() as connection,
+        ):
+            yield connection
+
+    @contextlib.contextmanager
+    def _read_transaction(self):
         with self._lock:
             if self._writer is None or self._closed:
                 raise RuntimeError("SQLite runtime is closed")

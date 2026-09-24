@@ -8,11 +8,11 @@ Data-directory bootstrap, temporary-file lifecycle, atomic settings and credenti
 
 ## Canonical layout
 
-`DataDirectoryLayout` is the immutable path contract: `artifacts/{attachments,speech,models,debug,temp/{atomic,bash,subagents,terminals}}`, `statistics/` (Provider-owned usage history plus the Statistics-owned disposable SQLite), and independent roots `agents`, `archive`, `bootstrap`, `channels`, `cron`, `extensions`, `logs`, `oauth`, `processes`, `projects`, `prompts`, `recall`, `skills`, `terminals`. The canonical Session files `<data-dir>/sessions.db` and `<data-dir>/session-store.json` are owned by `core/sessions/`; verified snapshots, quarantine bundles, and recovery incidents have separate fixed roots there. Initialization creates the full set non-destructively - `.env.example` copies only when `.env` is absent, empty settings only when missing; creation failures in the canonical directory are fatal.
+`DataDirectoryLayout` is the immutable path contract: `artifacts/{attachments,speech,models,debug,performance,temp/{atomic,bash,subagents,terminals}}`, `statistics/` (Provider-owned usage history plus the Statistics-owned disposable SQLite), and independent roots `agents`, `archive`, `bootstrap`, `channels`, `cron`, `extensions`, `logs`, `oauth`, `processes`, `projects`, `prompts`, `recall`, `skills`, `terminals`. The canonical Session files `<data-dir>/sessions.db` and `<data-dir>/session-store.json` are owned by `core/sessions/`; verified snapshots, quarantine bundles, and recovery incidents have separate fixed roots there. Initialization creates the full set non-destructively - `.env.example` copies only when `.env` is absent, empty settings only when missing; creation failures in the canonical directory are fatal.
 
 `DataDirectoryLayout.decisions_db` places durable Jev experiments and evaluation history at `<data-dir>/decisions.db`; schema, revision checks, and lifecycle belong to Task Models (`model_tasks/decisions.md`).
 
-Directory creation does not transfer ownership: Agents own their trees, Channels theirs, Cron/Bootstrap their job stores, Attachments/Speech their artifacts, Models the Model DB, Providers `statistics/provider-usage/`, Statistics its read model, Terminal Manager launch history. Layout changes belong in `layout.py`; format/retention changes stay with owning domains.
+Directory creation does not transfer ownership: Agents own their trees, Channels theirs, Cron/Bootstrap their job stores, Attachments/Speech their artifacts, Performance its Recordings (`performance.md`), Models the Model DB, Providers `statistics/provider-usage/`, Statistics its read model, Terminal Manager launch history. Layout changes belong in `layout.py`; format/retention changes stay with owning domains.
 
 The explicit `scripts/converters/data_dir_artifacts_layout.py` converter preflights all supported legacy files and collisions before moving them. Canonical destination ancestry below the chosen data root must contain no symbolic links, including when the destination directory already exists.
 
@@ -46,7 +46,7 @@ Block persistence: each scope persists ordered `layout.json` plus thin text over
 ## Constraints & Gotchas
 
 - Directory creation implies nothing about data ownership (see layout section) - domain formats and lifecycles stay with owning domains.
-- Durable artifacts (attachments/speech/models/debug) are not temporary-file cleanup candidates; caller-owned generated images sit outside both.
+- Durable artifacts (attachments/speech/models/debug/performance) are not temporary-file cleanup candidates; caller-owned generated images sit outside both.
 - User-editable JSON validates before runtime consumption: Storage gates settings.json while other domains use validated loaders from the same module.
 - Default fragments read bundled resources unless a hand-created data-dir copy exists - such stale copies shadow bundled updates and should be deleted.
 - Agent-scope prompt seeding copies current effective content once when custom prompts activate; missing agent-scope fragments read as `""` and assemble only under the enabled flag. Block layout writes are inert-tolerant (pruning contributor-gone ids is normal, never an error) and seeding preserves existing layouts without copying text overrides.

@@ -40,6 +40,7 @@ from core.chat.streaming import (
     iter_with_chunk_timeout,
 )
 from core.chat.wire_shaping import _assistant_message_from_response
+from core.performance import record_span, session_track
 from core.providers.accounts import ConnectionRef
 from core.providers.adapter import (
     TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
@@ -67,6 +68,17 @@ if TYPE_CHECKING:
     from core.runs import Run
 
 _LOGGER = get_logger("chat")
+
+
+def _record_first_token(run: Run, started: float) -> None:
+    """Measure one request attempt until its first Model output (``provider.first_token``)."""
+    record_span(
+        "provider.first_token",
+        started,
+        track=session_track(run.agent_id, run.session_id, run.project_id),
+        name="first token",
+        args={"run_id": run.id},
+    )
 
 
 def _has_fallback_chain(agent: Any) -> bool:
@@ -368,6 +380,7 @@ class WireRequestRunner:
                                         response_model,
                                         messages,
                                         tools,
+                                        run,
                                         public_model=public_model,
                                         request_context=request_context,
                                         temperature=temperature,
@@ -430,12 +443,14 @@ class WireRequestRunner:
         response_model: str,
         messages: list[JsonObject],
         tools: list[JsonObject],
+        run: Run,
         *,
         public_model: str,
         request_context: dict[str, Any],
         temperature: float | None,
         top_p: float | None,
     ) -> _AssistantStep:
+        send_started = time.perf_counter()
         response = await adapter.send(
             messages,
             model_id=model_id,
@@ -445,6 +460,8 @@ class WireRequestRunner:
             tools=tools,
             **request_context,
         )
+        # Without streaming, the first Model output arrives with the whole response.
+        _record_first_token(run, send_started)
         return await _CHAT_TRANSFORM_WORKERS.run(
             _normalize_non_streaming_step,
             adapter,
@@ -477,6 +494,8 @@ class WireRequestRunner:
     ) -> _AssistantStep:
         accumulator = StreamingAccumulator()
         delta_emitter = _StreamingRunDeltaEmitter(run)
+        attempt_started = time.perf_counter()
+        awaiting_first_delta = True
         stream = adapter.stream(
             messages,
             model_id=model_id,
@@ -508,6 +527,9 @@ class WireRequestRunner:
                         },
                     )
                     continue
+                if awaiting_first_delta:
+                    awaiting_first_delta = False
+                    _record_first_token(run, attempt_started)
                 last_model_delta_at = time.monotonic()
                 visible_deltas = accumulator.add_delta(delta)
                 for visible_delta in visible_deltas:
