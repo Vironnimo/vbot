@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import psutil  # type: ignore[import-untyped]
 import pytest
@@ -323,6 +324,34 @@ def test_finished_child_is_drained_when_process_monitor_misses_it(tmp_path, monk
         assert list(lines) == []
     assert children[0].returncode == exit_code
     assert children[0].stdout.closed and children[0].stderr.closed
+
+
+def test_child_memory_is_bounded_and_polled_at_an_interval(tmp_path, monkeypatch):
+    original = subprocess.Popen
+    polls: list[int] = []
+
+    class Monitored:
+        rss = 0
+
+        def __init__(self, pid):
+            pass
+
+        def memory_info(self):
+            polls.append(Monitored.rss)
+            return SimpleNamespace(rss=Monitored.rss)
+
+    def launch(_command, **kwargs):
+        return original([sys.executable, "-c", "for i in range(2000): print(i)"], **kwargs)
+
+    monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", launch)
+    monkeypatch.setattr("core.tools._search_execution.psutil.Process", Monitored)
+    ctx = context(tmp_path)
+    assert len(list(native_lines(Path(sys.executable), [], ctx, SearchBudget(ctx)))) == 2000
+    # Polls follow elapsed time, not output volume.
+    assert 1 <= len(polls) < 200
+    Monitored.rss = 513 * 1024 * 1024
+    with pytest.raises(RuntimeError, match="memory bound"):
+        list(native_lines(Path(sys.executable), [], ctx, SearchBudget(ctx)))
 
 
 @pytest.mark.parametrize("pattern", ["true", "false"])

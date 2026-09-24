@@ -129,7 +129,8 @@ means no match; native diagnostics cannot become a successful empty search.
 Invalid-regex diagnostics suggest `-F` only as an explicit caller correction;
 the Tool never changes regex semantics automatically. A child that exits before
 process monitoring attaches still has its output, diagnostics and exit code drained
-through the original process handle; memory monitoring remains active when available.
+through the original process handle; memory monitoring remains active when available
+and polls the child every 50 ms rather than per output record.
 
 Independent bounds cover 50 KiB content output, 8 MiB native protocol records,
 bounded pipe queues/stderr, 512 MiB child RSS, candidate storage (128 MiB), one
