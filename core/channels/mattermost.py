@@ -160,7 +160,7 @@ class MattermostChannelAdapter(NetworkChannelAdapter):
                 files={"files": (file.filename, file.data, file.media_type)},
             )
             file_ids.extend(info["id"] for info in upload["file_infos"])
-        chunks = [(message or "")[i : i + 3500] for i in range(0, len(message or ""), 3500)] or [""]
+        chunks = self.message_chunks(message) or [""]
         for index, chunk in enumerate(chunks):
             payload: dict[str, Any] = {"channel_id": platform_target, "message": chunk}
             if thread_id:
