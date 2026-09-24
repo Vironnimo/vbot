@@ -465,6 +465,38 @@ def test_fingerprint_is_deterministic_and_covers_result_and_scheduling_contracts
     assert serial.schema_fingerprint != base.schema_fingerprint
 
 
+def test_identical_inputs_reuse_one_contract_until_their_content_changes() -> None:
+    # Arrange
+    schema = _input_schema()
+    first = compile_tool_contract(name="sample", input_schema=schema)
+
+    # Act
+    again = compile_tool_contract(name="sample", input_schema=_input_schema())
+    open_variant = compile_tool_contract(
+        name="sample", input_schema=_input_schema(), require_closed_input=False
+    )
+    schema["properties"]["count"]["minimum"] = 5
+    changed = compile_tool_contract(name="sample", input_schema=schema)
+
+    # Assert: equal content shares one contract; any input change compiles afresh.
+    assert again is first
+    assert open_variant is not first
+    assert changed is not first
+    assert first.input_schema["properties"]["count"]["minimum"] == 1
+    first.validate_arguments({"count": 1})
+    with pytest.raises(ToolContractError, match="minimum of 5"):
+        changed.validate_arguments({"count": 1})
+
+
+def test_a_tuple_schema_stays_rejected_after_its_json_twin_compiled() -> None:
+    compile_tool_contract(name="sample", input_schema=_input_schema())
+
+    with pytest.raises(ToolContractError, match="is not of type 'array'"):
+        compile_tool_contract(
+            name="sample", input_schema={**_input_schema(), "required": ("count",)}
+        )
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [("YES", True), (1, True), ("1", True), ("off", False), (0, False), ("No", False)],
