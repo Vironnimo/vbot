@@ -329,36 +329,47 @@ async def test_unknown_skill_trigger_reminder_appears_once_in_first_request(
     assert request_text.count("Skill trigger 'missing' did not match") == 1
 
 
-def test_announce_newly_available_skills_seeds_then_announces_once(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_newly_available_skills_are_announced_once_with_the_run_input(
+    tmp_path: Path,
+) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_skills=["*"])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
-    runtime.chat_sessions.create("coder", session_id="s1")
-    session = runtime.chat_sessions.get(session_address("coder", "s1"))
+    adapter = StubAdapter([{"content": f"reply {index}", "tool_calls": None} for index in range(4)])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.skills = StubSkills([])
     loop = build_chat_loop(runtime)
 
-    def announce(skills: Any) -> None:
-        loop._requests._announce_newly_available_skills("coder", "s1", session, agent, skills, None)
+    def history() -> list[ChatMessage]:
+        return cast(
+            list[ChatMessage], runtime.chat_sessions.get(session_address("coder", "s1")).load()
+        )
 
     def available_notes() -> list[ChatMessage]:
-        return [message for message in session.load() if is_skill_available_note(message)]
+        return [message for message in history() if is_skill_available_note(message)]
 
-    # The first build seeds the baseline (here empty) without announcing anything.
-    announce(StubSkills([]))
+    # The first Run seeds the baseline (here empty) without announcing anything.
+    await loop.send("coder", "first", session_id="s1")
     assert available_notes() == []
 
-    # A skill that becomes available is announced exactly once, with name + description.
-    deploy = StubSkills([StubSkill("deploy", "Ship the app.", tmp_path / "deploy")])
-    announce(deploy)
+    # A Skill that becomes available is announced exactly once, with name and
+    # description, directly ahead of the input it was persisted with.
+    runtime.skills = StubSkills([StubSkill("deploy", "Ship the app.", tmp_path / "deploy")])
+    await loop.send("coder", "second", session_id="s1")
     notes = available_notes()
     assert len(notes) == 1
     assert "deploy: Ship the app." in cast(str, notes[0].content)
+    messages = history()
+    note_index = next(i for i, message in enumerate(messages) if is_skill_available_note(message))
+    assert messages[note_index + 1].role == "user"
+    assert messages[note_index + 1].content == "second"
 
-    # Re-running with the same registry does not re-announce it.
-    announce(deploy)
+    # Later Runs with the same catalog do not re-announce it.
+    await loop.send("coder", "third", session_id="s1")
     assert len(available_notes()) == 1
 
-    # A skill going away is deliberately not announced (additions only).
-    announce(StubSkills([]))
+    # A Skill going away is deliberately not announced (additions only).
+    runtime.skills = StubSkills([])
+    await loop.send("coder", "fourth", session_id="s1")
     assert len(available_notes()) == 1
 
 
