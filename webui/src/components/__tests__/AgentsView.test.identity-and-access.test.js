@@ -608,9 +608,9 @@ describe('AgentsView', () => {
     await waitForText('write');
 
     const memoryChip = toolAccessToggle('memory');
-    expect(memoryChip.textContent).toBe('memory');
+    expect(memoryChip.getAttribute('aria-label')).toBe('memory');
     expect(memoryChip.getAttribute('aria-checked')).toBe('true');
-    expect(memoryChip.classList.contains('is-automatic')).toBe(true);
+    expect(memoryChip.textContent).toContain('Automatic');
     expect(memoryChip.disabled).toBe(false);
     expect(document.body.textContent).toContain('Automatic while Memory is on');
   });
@@ -636,7 +636,7 @@ describe('AgentsView', () => {
     await waitForText('bash');
 
     const memoryChip = toolAccessToggle('memory');
-    expect(memoryChip.textContent).toBe('memory');
+    expect(memoryChip.getAttribute('aria-label')).toBe('memory');
     expect(memoryChip.getAttribute('aria-checked')).toBe('true');
     expect(document.body.textContent).toContain('Memory is currently off');
   });

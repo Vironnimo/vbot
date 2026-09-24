@@ -392,7 +392,7 @@ describe('ProjectsView', () => {
     search.value = 'edit';
     search.dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
-    document.querySelector('[aria-label="Turn on Files"]').click();
+    document.querySelector('[aria-label="All Files Tools"]').click();
     buttonByTestId('project-save-demo').click();
     await waitForCondition(() => setProjectMock.mock.calls.length === 1);
     expect(setProjectMock).toHaveBeenCalledWith('demo', {
