@@ -133,7 +133,7 @@ metadata:
 ```
 
 - `all` requires every child; `any` at least one; `optional` failures report without changing `available`.
-- `env` checks a non-empty value in the snapshot environment (process env wins over `.env` fallback). Every declared `env` leaf doubles as an activation-time Bash grant surfaced via `environment_access` (Tool activations as sibling field, internal contexts wrapped before instructions), listing names and per-call `bash.env_keys` - permanent Agent grants are the separate `tools.bash.allowed_env` source (see `tools/bash.md`).
+- `env` checks a non-empty value in the snapshot environment (process env wins over `.env` fallback). Names match case-insensitively on Windows (`os.name == "nt"`, where `os.environ` reports upper-cased names) and case-sensitively on POSIX (`core/skills/skills.py::_environment_key`, `test_skills.py`). Every declared `env` leaf doubles as an activation-time Bash grant surfaced via `environment_access` (Tool activations as sibling field, internal contexts wrapped before instructions), listing names and per-call `bash.env_keys` - permanent Agent grants are the separate `tools.bash.allowed_env` source (see `tools/bash.md`).
 - `binary` resolves via `shutil.which` against the snapshot PATH - lookup, never shell execution. `skill` checks dependency loadable+available+allowed, walking chains with a cycle guard (circular -> `unavailable` with a cycle reason). Malformed requirements make the Skill invalid/non-loadable.
 
 ## External Dependencies
