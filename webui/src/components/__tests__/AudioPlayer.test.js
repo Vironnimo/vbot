@@ -2,9 +2,11 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import {
+  appendRunEvent,
   createChatState,
   ensureSessionState,
   loadHistory,
+  startRun,
   visibleTimelineItemsForRender,
 } from '../../lib/chatState.js';
 import { t } from '../../lib/i18n.js';
@@ -19,6 +21,7 @@ const { default: ChatAssistantRun } =
   await import('../chat/ChatAssistantRun.svelte');
 const { default: ChatTimelineEntry } =
   await import('../chat/ChatTimelineEntry.svelte');
+const { default: ChatTimeline } = await import('../ChatTimeline.svelte');
 let components = [];
 let play;
 let pause;
@@ -353,4 +356,97 @@ it('restores a paused player for a speech result read back from Session history'
   await flush();
   expect(play).not.toHaveBeenCalled();
   expect(control('audio.play', player)).toBeTruthy();
+});
+
+it('keeps a requested automatic start when autoplay is withdrawn before the audio can play', async () => {
+  const props = reactiveProps({ src: '/test.wav', autoplay: true });
+  render(props);
+  props.autoplay = false;
+  await flush();
+  ready();
+  await flush();
+  expect(play).toHaveBeenCalledTimes(1);
+  expect(control('audio.pause')).toBeTruthy();
+});
+
+it('keeps speech playing when its finished Run is rebuilt from Session history', async () => {
+  const url = '/api/speech/artifacts/aud_live';
+  const envelope = {
+    ok: true,
+    error: null,
+    data: { artifact: { id: 'aud_live', kind: 'speech', url } },
+    artifacts: [],
+  };
+  const toolCall = {
+    id: 'call-speech',
+    name: 'text_to_speech',
+    arguments: { text: 'test-owned speech' },
+  };
+  const messages = [
+    { id: 'user-one', role: 'user', content: 'Read it aloud' },
+    { id: 'assistant-one', role: 'assistant', tool_calls: [toolCall] },
+    {
+      id: 'tool-one',
+      role: 'tool',
+      tool_call_id: toolCall.id,
+      name: toolCall.name,
+      content: JSON.stringify(envelope),
+    },
+    { id: 'assistant-two', role: 'assistant', content: 'Spoken.' },
+  ];
+  const props = reactiveProps({
+    sessionState: ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-speech-handoff',
+    ),
+    agentName: 'Alpha',
+  });
+  const { sessionState } = props;
+  let sequence = 0;
+  const appendEvent = (type, payload) =>
+    appendRunEvent(sessionState, {
+      type,
+      run_id: 'run-speech',
+      sequence: ++sequence,
+      payload,
+    });
+  startRun(sessionState, { run_id: 'run-speech', status: 'running' });
+  appendEvent('user_message_persisted', { message: messages[0] });
+  appendEvent('tool_call_started', {
+    assistant_message_id: 'assistant-one',
+    tool_call: toolCall,
+  });
+  appendEvent('tool_call_result', {
+    assistant_message_id: 'assistant-one',
+    tool_call: toolCall,
+    result: envelope,
+  });
+  render(props, ChatTimeline);
+  const audio = document.querySelector('audio');
+  expect(audio?.getAttribute('src')).toBe(url);
+  ready(audio);
+  await flush();
+  expect(play).toHaveBeenCalledTimes(1);
+  const pausesWhilePlaying = pause.mock.calls.length;
+
+  appendEvent('assistant_output', { message: messages[3] });
+  appendEvent('run_completed', { status: 'completed' });
+  loadHistory(
+    sessionState,
+    messages.map((message, index) => ({
+      ...message,
+      history_run_id: 'run-speech',
+      history_sequence: index + 1,
+    })),
+    { runs: [{ run_id: 'run-speech', complete: true }] },
+  );
+  await flush();
+
+  expect(sessionState.runEvents).toEqual([]);
+  expect(document.querySelector('audio')).toBe(audio);
+  expect(audio.getAttribute('src')).toBe(url);
+  expect(pause.mock.calls.length).toBe(pausesWhilePlaying);
+  expect(play).toHaveBeenCalledTimes(1);
+  expect(control('audio.pause')).toBeTruthy();
 });

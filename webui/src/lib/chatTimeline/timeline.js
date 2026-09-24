@@ -1,7 +1,7 @@
 import { t } from '../i18n.js';
 import { stripTimelineSequence, normalizedIterationCount } from './model.js';
 import { historyTimelineItems } from './history.js';
-import { reconcileTimeline } from './reconciliation.js';
+import { keepLiveRunIdentities, reconcileTimeline } from './reconciliation.js';
 import { liveTimelineItems } from './live.js';
 
 export function visibleTimelineItemsForRender(sessionState) {
@@ -73,10 +73,12 @@ function buildVisibleTimelineItems(sessionState, runEvents) {
     liveRunProjectionCache(sessionState),
   );
   applyCurrentRunIterationCount(liveItems, sessionState.currentRun);
-  const reconciledItems =
+  const reconciledItems = keepLiveRunIdentities(
+    sessionState,
     runEvents.length > 0
       ? reconcileTimeline(sessionState, liveItems, runEvents)
-      : historyTimelineItems(sessionState.messages);
+      : historyTimelineItems(sessionState.messages),
+  );
 
   const persistedMessageIds = new Set(
     reconciledItems
