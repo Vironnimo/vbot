@@ -148,7 +148,12 @@ class _ProbePromptManager:
 
 
 class _NoopProcessManager:
-    def cancel_scope(self, _scope_key: str) -> None:
+    """Run-scope hooks ChatLoop calls; the probe starts no managed processes."""
+
+    async def cancel_scope_async(self, _scope_key: str) -> None:
+        return None
+
+    def release_scope(self, _scope_key: str) -> None:
         return None
 
 

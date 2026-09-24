@@ -158,8 +158,7 @@ async def test_settled_run_scope_releases_its_closed_marker(manager):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scope_only", [False, True])
-async def test_synchronous_stop_retires_a_late_launch(manager, monkeypatch, scope_only):
+async def test_synchronous_stop_retires_a_late_launch(manager, monkeypatch):
     started = asyncio.Event()
     release = asyncio.Event()
     original = asyncio.create_subprocess_exec
@@ -174,10 +173,7 @@ async def test_synchronous_stop_retires_a_late_launch(manager, monkeypatch, scop
     launch = asyncio.create_task(manager.spawn(SCOPE_A, AGENT_A, argv, env=None, cwd=None))
     await started.wait()
     try:
-        if scope_only:
-            manager.cancel_scope(SCOPE_A)
-        else:
-            manager.stop()
+        manager.stop()
         release.set()
         process_id = await launch
         tracked = manager.get_process(process_id, AGENT_A)
@@ -359,7 +355,7 @@ async def test_cancel_scope_kills_active_processes(manager: ProcessManager) -> N
         cwd=None,
     )
 
-    manager.cancel_scope(SCOPE_A)
+    await manager.cancel_scope_async(SCOPE_A)
     result = await manager.poll(process_id, AGENT_A, timeout_ms=5000)
 
     assert result["status"] == "killed"

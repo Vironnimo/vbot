@@ -434,8 +434,8 @@ async def test_parallel_process_ids_skip_collisions(manager, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("synchronous", [False, True])
-async def test_kill_failure_keeps_process_retryable(manager, monkeypatch, synchronous):
+@pytest.mark.parametrize("shutdown", [False, True])
+async def test_kill_failure_keeps_process_retryable(manager, monkeypatch, shutdown):
     process_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
@@ -455,24 +455,26 @@ async def test_kill_failure_keeps_process_retryable(manager, monkeypatch, synchr
         patch.setattr(process_manager_module, "kill_process_tree_async", fail_async)
         patch.setattr(manager, "_kill_process_tree", fail_sync)
         with pytest.raises(process_manager_module.ProcessTerminationError):
-            if synchronous:
-                manager.cancel_scope(SCOPE_A)
+            if shutdown:
+                # Synchronous shutdown kill; aclose retries it after pending launches.
+                manager.stop()
             else:
                 await manager.cancel_scope_async(SCOPE_A)
         assert tracked.status == "running"
         assert tracked.proc.returncode is None
         assert tracked.finished_at is None
-    await manager.cancel_scope_async(SCOPE_A)
+    if shutdown:
+        await manager.aclose()
+    else:
+        await manager.cancel_scope_async(SCOPE_A)
     assert tracked.status == "killed"
     assert tracked.proc.returncode is not None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize("shutdown", [False, True])
 @pytest.mark.parametrize("code", [0, 7])
-async def test_kill_during_reader_drain_preserves_real_exit(
-    manager, monkeypatch, synchronous, code
-):
+async def test_kill_during_reader_drain_preserves_real_exit(manager, monkeypatch, shutdown, code):
     draining = asyncio.Event()
     release = asyncio.Event()
     original = manager._await_reader_tasks
@@ -496,8 +498,8 @@ async def test_kill_during_reader_drain_preserves_real_exit(
     assert tracked.status == "running"
     kill = None
     try:
-        if synchronous:
-            manager.cancel_scope(SCOPE_A)
+        if shutdown:
+            manager.stop()
         else:
             kill = asyncio.create_task(manager.kill(process_id, AGENT_A))
             await asyncio.sleep(0)

@@ -524,26 +524,6 @@ class ProcessManager:
         if notification_task is not None and not notification_task.done():
             notification_task.cancel()
 
-    def cancel_scope(self, scope_key: str) -> None:
-        """Kill active processes in a run scope synchronously.
-
-        Prefer :meth:`cancel_scope_async` on the event loop - the Windows
-        tree-kill can block for seconds. This variant is for shutdown paths.
-        """
-        if not scope_key:
-            return
-
-        self._closed_scopes.add(scope_key)
-        failures: list[ProcessTerminationError] = []
-        for tracked in list(self._processes.values()):
-            if tracked.scope_key == scope_key and tracked.status == "running":
-                try:
-                    self._kill_process_now(tracked)
-                except ProcessTerminationError as error:
-                    failures.append(error)
-        if failures:
-            raise failures[0]
-
     async def sweep_finished(self) -> None:
         """Remove finished processes older than the configured TTL."""
         expires_before = _utc_now() - self._finished_process_ttl
