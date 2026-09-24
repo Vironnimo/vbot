@@ -572,7 +572,7 @@
                             updateOverrideDraft(
                               member.agent_id,
                               'compaction_policy',
-                              structuredClone(
+                              $state.snapshot(
                                 projectsState.globalCompactionPolicy ?? {},
                               ),
                             )}

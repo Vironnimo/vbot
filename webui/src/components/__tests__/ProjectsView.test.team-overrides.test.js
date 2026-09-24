@@ -400,6 +400,76 @@ describe('ProjectsView', () => {
     );
   });
 
+  it('starts a member Compaction Policy override from the global policy', async () => {
+    const globalPolicy = {
+      enabled: true,
+      trigger: { type: 'context_ratio', threshold: 0.7 },
+      strategy: { type: 'continuation' },
+    };
+    rpcMock.mockImplementation((method) => {
+      if (method === 'settings.get') {
+        return Promise.resolve({
+          defaults: { agent: {} },
+          compaction: globalPolicy,
+        });
+      }
+      if (method === 'model.list') {
+        return Promise.resolve({ models: [] });
+      }
+      return Promise.resolve({});
+    });
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+    showProjectMock.mockResolvedValue({
+      project: project({ project_id: 'demo' }),
+      scan: {
+        team: [member({ agent_id: 'builder', display_name: 'Builder' })],
+        report: { clean: true, findings: [] },
+      },
+    });
+
+    suite.mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await selectDemo();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-team-toggle-builder"]'),
+    );
+    buttonByTestId('project-team-toggle-builder').click();
+    flushSync();
+
+    const customizeButton = () =>
+      [
+        ...document.querySelectorAll(
+          '[data-testid="project-team-member-builder"] button',
+        ),
+      ].find((button) =>
+        button.textContent.includes('Customize for this agent'),
+      );
+    await waitForCondition(customizeButton);
+    customizeButton().click();
+    flushSync();
+
+    const editor = document.querySelector(
+      '[data-testid="project-compaction-builder-editor"]',
+    );
+    expect(
+      editor.querySelector(
+        'input[name="project-compaction-builder-strategy"]:checked',
+      ).value,
+    ).toBe('continuation');
+
+    await wait(AUTO_SAVE_WAIT_MS);
+    await waitForCondition(() => setOverrideMock.mock.calls.length === 1);
+    expect(setOverrideMock).toHaveBeenCalledWith(
+      'demo',
+      'builder',
+      'compaction_policy',
+      globalPolicy,
+    );
+  });
+
   it('clears an override through project.clear_override', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [project({ project_id: 'demo', display_name: 'Demo' })],

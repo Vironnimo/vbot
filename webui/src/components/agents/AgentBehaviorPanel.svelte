@@ -69,7 +69,7 @@
 
   function setOwnCompactionPolicy(enabled) {
     formValues.compaction_policy = enabled
-      ? structuredClone(agent?.effective_compaction_policy ?? {})
+      ? $state.snapshot(agent?.effective_compaction_policy ?? {})
       : null;
   }
 
