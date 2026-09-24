@@ -22,10 +22,21 @@ class DataDirectoryConversionError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class DirectoryMapping:
-    """One supported legacy root mapped to a canonical layout property."""
+    """One supported legacy root mapped to its converted location.
+
+    ``destination_attribute`` names a canonical layout property.
+    ``destination_relative`` instead fixes a location below the data root for
+    data that a later converter consumes from there.
+    """
 
     source_relative: Path
-    destination_attribute: str
+    destination_attribute: str | None = None
+    destination_relative: Path | None = None
+
+    def destination_root(self, layout: DataDirectoryLayout) -> Path:
+        if self.destination_relative is not None:
+            return layout.root / self.destination_relative
+        return Path(getattr(layout, str(self.destination_attribute)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +73,11 @@ LEGACY_DIRECTORY_MAPPINGS = (
     DirectoryMapping(Path(".tmp"), "atomic_temporary"),
     DirectoryMapping(Path("temp/bash"), "bash_temporary"),
     DirectoryMapping(Path("temp/subagents"), "subagent_temporary"),
-    DirectoryMapping(Path("provider-usage"), "provider_usage"),
+    # Provider usage history kept this location until Generation 1 moved it into
+    # provider-usage.db; the Generation 1 converter reads it from there.
+    DirectoryMapping(
+        Path("provider-usage"), destination_relative=Path("statistics/provider-usage")
+    ),
 )
 # Skill drafts were temporary authoring state, not durable product data. The
 # retired legacy category remains allowlisted so conversion can proceed without
@@ -81,7 +96,7 @@ def plan_data_directory_conversion(data_dir: str | Path) -> DataDirectoryConvers
     existing_source_roots: list[Path] = []
     for mapping in LEGACY_DIRECTORY_MAPPINGS:
         source_root = data_root / mapping.source_relative
-        destination_root = getattr(layout, mapping.destination_attribute)
+        destination_root = mapping.destination_root(layout)
         if not source_root.exists() and not source_root.is_symlink():
             continue
         _validate_directory(source_root, label="Legacy source")
@@ -307,7 +322,7 @@ def _print_plan(plan: DataDirectoryConversionPlan) -> None:
         move_counts[mapping] = sum(
             1 for move in plan.moves if move.source.is_relative_to(source_root)
         )
-        destination_root = getattr(layout, mapping.destination_attribute)
+        destination_root = mapping.destination_root(layout)
         print(
             "data-dir-artifacts-layout..... "
             f"{mapping.source_relative.as_posix()} -> "

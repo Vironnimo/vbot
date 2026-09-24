@@ -382,7 +382,7 @@ class Runtime:
         if self._bootstrap_service is not None:
             self._bootstrap_service.stop()
         if self._provider_usage is not None:
-            self._provider_usage.stop()
+            self._provider_usage.close()
         if self._performance is not None:
             self._performance.stop()
         if self._process_manager is not None:
@@ -497,7 +497,7 @@ class Runtime:
             (self._channel_service, "stop"),
             (self._cron_service, "stop"),
             (self._bootstrap_service, "stop"),
-            (self._provider_usage, "stop"),
+            (self._provider_usage, "close"),
             (self._performance, "stop"),
             (self._process_manager, "stop"),
             (self._terminal_manager, "stop"),
@@ -1004,9 +1004,14 @@ class Runtime:
         status reads their owner health; registered databases that are not
         open here are read from their files.
         """
-        if self._chat_sessions is None:
-            return ()
-        return (self._chat_sessions.database,)
+        databases: list[Database] = []
+        if self._chat_sessions is not None:
+            databases.append(self._chat_sessions.database)
+        if self._provider_usage is not None:
+            provider_usage = self._provider_usage.history_database
+            if provider_usage is not None:
+                databases.append(provider_usage)
+        return tuple(databases)
 
     chat_sessions: _StartedService[ChatSessionManager] = _StartedService(
         lambda runtime: runtime._chat_sessions, "Chat session service not available"

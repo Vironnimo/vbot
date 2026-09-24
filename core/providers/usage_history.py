@@ -1,43 +1,148 @@
-"""Durable append-only history for normalized Provider subscription usage."""
+"""Durable history of normalized Provider subscription usage.
+
+The Provider domain owns the canonical database ``<data-dir>/provider-usage.db``
+as its primary record of upstream observations: one sample per meaningful
+automatic collection, the per-Connection snapshots it held, and their usage
+windows. Statistics may read the normalized projection but never writes it.
+Retention is manual: only an explicit clear deletes samples.
+
+Runtime reads and writes run on the database's own worker pool, never on the
+Event Loop. Every stored timestamp is canonical fixed-width UTC text, so text
+order is time order.
+"""
 
 from __future__ import annotations
 
-import json
-import os
+import sqlite3
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from math import isfinite
 from pathlib import Path
-from threading import RLock
 from typing import Any
 
-from core.storage.layout import DataDirectoryLayout
+from core.database import (
+    APPLICATION_IDS,
+    CANONICAL,
+    Database,
+    DatabaseSpec,
+    SnapshotFacts,
+    canonical_database_path,
+    open_database,
+)
 from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
 
-USAGE_HISTORY_SCHEMA_VERSION = 1
-USAGE_HISTORY_FILE_SUFFIX = ".jsonl"
+DATABASE_NAME = "provider_usage"
+FORMAT_GENERATION = 1
 
 _LOGGER = get_logger("providers.usage")
 
+# Every index names its reader. ``usage_samples_by_time`` serves the inclusive
+# time-range read of ``ProviderUsageHistoryStore.samples`` and the ``MAX`` of
+# ``latest_sampled_at``. Snapshot and window rows are clustered under their
+# sample by their primary keys.
+SCHEMA_SQL = """
+CREATE TABLE usage_samples (
+  sample_key INTEGER PRIMARY KEY AUTOINCREMENT,
+  sampled_at TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX usage_samples_by_time ON usage_samples (sampled_at);
+
+CREATE TABLE usage_snapshots (
+  sample_key      INTEGER NOT NULL REFERENCES usage_samples (sample_key) ON DELETE CASCADE,
+  ordinal         INTEGER NOT NULL CHECK (ordinal >= 0),
+  connection      TEXT NOT NULL,
+  account         TEXT NOT NULL,
+  display_name    TEXT NOT NULL,
+  plan            TEXT,
+  credits_enabled INTEGER CHECK (credits_enabled IS NULL OR credits_enabled IN (0, 1)),
+  credits_balance REAL,
+  error           TEXT,
+  PRIMARY KEY (sample_key, ordinal),
+  CHECK (credits_enabled IS NOT NULL OR credits_balance IS NULL)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE usage_windows (
+  sample_key       INTEGER NOT NULL,
+  snapshot_ordinal INTEGER NOT NULL,
+  ordinal          INTEGER NOT NULL CHECK (ordinal >= 0),
+  label            TEXT NOT NULL,
+  used_percent     REAL NOT NULL CHECK (used_percent >= 0),
+  reset_at         TEXT,
+  window_seconds   INTEGER CHECK (window_seconds IS NULL OR window_seconds > 0),
+  used_units       REAL,
+  remaining_units  REAL,
+  total_units      REAL,
+  unit             TEXT,
+  unlimited        INTEGER CHECK (unlimited IS NULL OR unlimited IN (0, 1)),
+  PRIMARY KEY (sample_key, snapshot_ordinal, ordinal),
+  FOREIGN KEY (sample_key, snapshot_ordinal)
+    REFERENCES usage_snapshots (sample_key, ordinal) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+"""
+
+# Owner facts every data snapshot records for this member and re-verifies.
+_SNAPSHOT_FACTS = SnapshotFacts(
+    {
+        "sample_count": "SELECT COUNT(*) FROM usage_samples",
+        "snapshot_count": "SELECT COUNT(*) FROM usage_snapshots",
+        "window_count": "SELECT COUNT(*) FROM usage_windows",
+    }
+)
+
+_SNAPSHOT_KEYS = frozenset(
+    {"connection", "account", "display_name", "plan", "windows", "credits", "error"}
+)
+_WINDOW_KEYS = frozenset(
+    {
+        "label",
+        "used_percent",
+        "reset_at",
+        "window_seconds",
+        "used_units",
+        "remaining_units",
+        "total_units",
+        "unit",
+        "unlimited",
+    }
+)
+_CREDITS_KEYS = frozenset({"enabled", "balance"})
+
+
+def provider_usage_database_spec(path: Path) -> DatabaseSpec:
+    """Declare the canonical Provider usage database at ``path``."""
+    return DatabaseSpec(
+        name=DATABASE_NAME,
+        path=Path(path),
+        profile=CANONICAL,
+        application_id=APPLICATION_IDS[DATABASE_NAME],
+        format_generation=FORMAT_GENERATION,
+        schema_sql=SCHEMA_SQL,
+        snapshot_facts=_SNAPSHOT_FACTS,
+    )
+
 
 class UsageHistoryError(Exception):
-    """A durable usage-history read, append, or deletion failure."""
+    """A usage sample that cannot be stored because it is invalid."""
 
 
 @dataclass(frozen=True)
 class UsageHistorySample:
-    """One persisted automatic collection attempt with meaningful targets."""
+    """One normalized automatic collection attempt with meaningful targets.
+
+    ``sampled_at`` is canonical UTC text. Each Provider entry is the public
+    snapshot projection: ``connection``, ``account``, ``display_name``,
+    ``plan``, ``windows``, ``credits`` and ``error``.
+    """
 
     sampled_at: str
-    providers: list[JsonObject] = field(default_factory=list)
+    providers: tuple[JsonObject, ...] = ()
 
     def to_dict(self) -> JsonObject:
-        return {
-            "sampled_at": self.sampled_at,
-            "providers": [dict(snapshot) for snapshot in self.providers],
-        }
+        return {"sampled_at": self.sampled_at, "providers": list(self.providers)}
 
 
 @dataclass(frozen=True)
@@ -56,7 +161,12 @@ class UsageHistoryReport:
 
 @dataclass(frozen=True)
 class UsageHistoryClearResult:
-    """Outcome of an explicit full history deletion."""
+    """Outcome of an explicit full history deletion.
+
+    ``deleted_files`` is kept for accessors of the file-based history: it is 1
+    when the clear removed samples from the history database and 0 when the
+    history was already empty. The database file itself always remains.
+    """
 
     deleted_samples: int
     deleted_files: int
@@ -68,212 +178,283 @@ class UsageHistoryClearResult:
         }
 
 
-class ProviderUsageHistoryStore:
-    """Append-only monthly JSONL history under the vBot data directory.
+def usage_history_sample(sampled_at: str, providers: Sequence[Any]) -> UsageHistorySample:
+    """Validate and normalize one sample before it is stored.
 
-    The Provider domain owns these files as primary upstream observations.
-    Statistics may read their normalized projection, but never writes them.
+    Every snapshot, window and credits object must have exactly the public
+    projection keys. Numbers must be finite, ``used_percent`` is clamped to
+    0-100, and timestamps need an explicit offset and become canonical UTC.
+    Raises :class:`UsageHistoryError` for anything else.
+    """
+    if not isinstance(providers, Sequence) or isinstance(providers, str) or not providers:
+        raise UsageHistoryError("providers must be a non-empty list")
+    return UsageHistorySample(
+        sampled_at=_canonical_timestamp(_required_string(sampled_at, "sampled_at")),
+        providers=tuple(_snapshot_from_dict(item) for item in providers),
+    )
+
+
+class ProviderUsageHistoryStore:
+    """The canonical Provider usage history, served by the shared database kernel.
+
+    The store owns its database handle and closes it with :meth:`close`. The
+    async methods run their SQL on the database's bounded worker pool.
     """
 
-    def __init__(self, data_root: str | Path) -> None:
-        self._directory = DataDirectoryLayout(data_root).provider_usage
-        self._lock = RLock()
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    @classmethod
+    def open(cls, data_dir: str | Path) -> ProviderUsageHistoryStore:
+        """Open ``<data_dir>/provider-usage.db`` under the canonical profile."""
+        path = canonical_database_path(Path(data_dir), DATABASE_NAME)
+        return cls(open_database(provider_usage_database_spec(path)))
 
     @property
-    def directory(self) -> Path:
-        return self._directory
+    def database(self) -> Database:
+        """The kernel handle, for data snapshots and data-store status."""
+        return self._database
 
-    def append(self, generated_at: str, providers: list[JsonObject]) -> bool:
+    def close(self) -> None:
+        self._database.close()
+
+    async def append(self, sampled_at: str, providers: Sequence[Any]) -> bool:
         """Persist one meaningful automatic report.
 
         Empty reports mean no supported usable Connection exists and are not
         written. Error snapshots are meaningful: they preserve why an expected
-        observation is missing.
+        observation is missing. An invalid report raises
+        :class:`UsageHistoryError` and writes nothing.
         """
-
         if not providers:
             return False
-        payload: JsonObject = {
-            "schema_version": USAGE_HISTORY_SCHEMA_VERSION,
-            "sampled_at": generated_at,
-            "providers": providers,
-        }
-        sample = _history_sample_from_dict(payload)
-        encoded = (
-            json.dumps(
-                {
-                    "schema_version": USAGE_HISTORY_SCHEMA_VERSION,
-                    **sample.to_dict(),
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-            + "\n"
-        ).encode("utf-8")
-        path = self._path_for(sample.sampled_at)
-        with self._lock:
-            try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                _append_bytes(path, encoded)
-            except OSError as exc:
-                raise UsageHistoryError(f"Cannot append Provider usage history: {exc}") from exc
+        sample = usage_history_sample(sampled_at, providers)
+        await self._database.write_async(lambda connection: _insert_sample(connection, sample))
         return True
 
-    def report(
+    def import_samples(self, samples: Iterable[UsageHistorySample]) -> int:
+        """Insert normalized samples in one transaction; blocking, for offline conversion."""
+        batch = list(samples)
+
+        def insert(connection: sqlite3.Connection) -> int:
+            for sample in batch:
+                _insert_sample(connection, sample)
+            return len(batch)
+
+        return self._database.write(insert)
+
+    async def samples(
         self,
         *,
         since: datetime | None = None,
         until: datetime | None = None,
-    ) -> UsageHistoryReport:
-        """Read all valid samples in the inclusive UTC window."""
+    ) -> list[UsageHistorySample]:
+        """Every sample in the inclusive UTC window, oldest first."""
+        return await self._database.run_async(self._read_samples, since, until)
 
-        with self._lock:
-            samples: list[UsageHistorySample] = []
-            for path in self._paths_for_window(since=since, until=until):
-                samples.extend(self._read_file(path, since=since, until=until))
-        samples.sort(key=lambda sample: sample.sampled_at)
-        return UsageHistoryReport(
-            generated_at=datetime.now(UTC).isoformat(),
-            samples=samples,
-        )
+    async def latest_sampled_at(self) -> datetime | None:
+        """The newest sample timestamp, or ``None`` when the history is empty."""
 
-    def latest_sampled_at(self) -> datetime | None:
-        """Return the newest valid sample timestamp without inventing state."""
+        def latest(connection: sqlite3.Connection) -> str | None:
+            row = connection.execute("SELECT MAX(sampled_at) FROM usage_samples").fetchone()
+            return None if row is None or row[0] is None else str(row[0])
 
-        with self._lock:
-            for path in reversed(self._history_paths()):
-                samples = self._read_file(path, since=None, until=None)
-                if samples:
-                    timestamps = [
-                        parsed
-                        for sample in samples
-                        if (parsed := _parse_iso_timestamp(sample.sampled_at)) is not None
-                    ]
-                    if timestamps:
-                        return max(timestamps)
-        return None
+        value = await self._database.read_async(latest)
+        return None if value is None else _parse_iso_timestamp(value)
 
-    def clear(self) -> UsageHistoryClearResult:
-        """Delete every history file after an explicit caller confirmation."""
-
-        with self._lock:
-            paths = self._history_paths()
-            deleted_samples = sum(
-                len(self._read_file(path, since=None, until=None)) for path in paths
-            )
-            deleted_files = 0
-            try:
-                for path in paths:
-                    path.unlink()
-                    deleted_files += 1
-            except OSError as exc:
-                raise UsageHistoryError(f"Cannot clear Provider usage history: {exc}") from exc
-        _LOGGER.info(
-            "Provider usage history cleared (samples=%s files=%s)",
-            deleted_samples,
-            deleted_files,
-        )
+    async def clear(self) -> UsageHistoryClearResult:
+        """Delete every sample in one transaction after an explicit caller confirmation."""
+        deleted_samples = await self._database.write_async(_delete_all)
+        _LOGGER.info("Provider usage history cleared (samples=%s)", deleted_samples)
         return UsageHistoryClearResult(
             deleted_samples=deleted_samples,
-            deleted_files=deleted_files,
+            deleted_files=1 if deleted_samples else 0,
         )
 
-    def _path_for(self, sampled_at: str) -> Path:
-        parsed = _parse_iso_timestamp(sampled_at)
-        if parsed is None:
-            raise UsageHistoryError("Provider usage sample timestamp is invalid")
-        return self._directory / f"{parsed:%Y-%m}{USAGE_HISTORY_FILE_SUFFIX}"
-
-    def _history_paths(self) -> list[Path]:
-        if not self._directory.is_dir():
-            return []
-        return sorted(self._directory.glob(f"*{USAGE_HISTORY_FILE_SUFFIX}"))
-
-    def _paths_for_window(
-        self,
-        *,
-        since: datetime | None,
-        until: datetime | None,
-    ) -> list[Path]:
-        paths = self._history_paths()
-        if since is None and until is None:
-            return paths
-        first_month = since.strftime("%Y-%m") if since is not None else None
-        last_month = until.strftime("%Y-%m") if until is not None else None
-        return [
-            path
-            for path in paths
-            if (first_month is None or path.stem >= first_month)
-            and (last_month is None or path.stem <= last_month)
-        ]
-
-    def _read_file(
-        self,
-        path: Path,
-        *,
-        since: datetime | None,
-        until: datetime | None,
+    def _read_samples(
+        self, since: datetime | None, until: datetime | None
     ) -> list[UsageHistorySample]:
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except OSError as exc:
-            raise UsageHistoryError(f"Cannot read Provider usage history: {exc}") from exc
-
-        samples: list[UsageHistorySample] = []
-        for line_number, line in enumerate(lines, start=1):
-            try:
-                sample = _history_sample_from_dict(json.loads(line))
-            except (TypeError, ValueError, UsageHistoryError) as exc:
-                _LOGGER.warning(
-                    "Skipping invalid Provider usage history row %s:%s: %s",
-                    path.name,
-                    line_number,
-                    exc,
-                )
-                continue
-            sampled_at = _parse_iso_timestamp(sample.sampled_at)
-            if sampled_at is None:
-                continue
-            if since is not None and sampled_at < since:
-                continue
-            if until is not None and sampled_at > until:
-                continue
-            samples.append(sample)
-        return samples
+        """Select the window in one read transaction, then assemble it after it ends."""
+        where, parameters = _time_window(since, until)
+        with self._database.read() as connection:
+            sample_rows = connection.execute(
+                "SELECT s.sample_key, s.sampled_at FROM usage_samples AS s"
+                f"{where} ORDER BY s.sampled_at, s.sample_key",
+                parameters,
+            ).fetchall()
+            snapshot_rows = connection.execute(
+                "SELECT n.sample_key, n.ordinal, n.connection, n.account, n.display_name, "
+                "n.plan, n.credits_enabled, n.credits_balance, n.error "
+                "FROM usage_snapshots AS n JOIN usage_samples AS s ON s.sample_key = n.sample_key"
+                f"{where} ORDER BY n.sample_key, n.ordinal",
+                parameters,
+            ).fetchall()
+            window_rows = connection.execute(
+                "SELECT w.sample_key, w.snapshot_ordinal, w.label, w.used_percent, w.reset_at, "
+                "w.window_seconds, w.used_units, w.remaining_units, w.total_units, w.unit, "
+                "w.unlimited "
+                "FROM usage_windows AS w JOIN usage_samples AS s ON s.sample_key = w.sample_key"
+                f"{where} ORDER BY w.sample_key, w.snapshot_ordinal, w.ordinal",
+                parameters,
+            ).fetchall()
+        return _assemble_samples(sample_rows, snapshot_rows, window_rows)
 
 
-def _history_sample_from_dict(raw: Any) -> UsageHistorySample:
-    if not isinstance(raw, dict):
-        raise UsageHistoryError("row must be an object")
-    _require_exact_keys(raw, {"schema_version", "sampled_at", "providers"}, "row")
-    if raw["schema_version"] != USAGE_HISTORY_SCHEMA_VERSION:
-        raise UsageHistoryError("unsupported schema_version")
-    sampled_at = _normalize_iso_timestamp(_required_string(raw["sampled_at"], "sampled_at"))
-    providers_raw = raw["providers"]
-    if not isinstance(providers_raw, list) or not providers_raw:
-        raise UsageHistoryError("providers must be a non-empty list")
-    return UsageHistorySample(
-        sampled_at=sampled_at,
-        providers=[_snapshot_from_dict(item) for item in providers_raw],
+# ---------------------------------------------------------------------------
+# SQL helpers
+# ---------------------------------------------------------------------------
+
+
+def _insert_sample(connection: sqlite3.Connection, sample: UsageHistorySample) -> None:
+    cursor = connection.execute(
+        "INSERT INTO usage_samples(sampled_at) VALUES (?)", (sample.sampled_at,)
     )
+    sample_key = cursor.lastrowid
+    snapshot_rows: list[tuple[Any, ...]] = []
+    window_rows: list[tuple[Any, ...]] = []
+    for snapshot_ordinal, snapshot in enumerate(sample.providers):
+        credits = snapshot["credits"]
+        snapshot_rows.append(
+            (
+                sample_key,
+                snapshot_ordinal,
+                snapshot["connection"],
+                snapshot["account"],
+                snapshot["display_name"],
+                snapshot["plan"],
+                None if credits is None else int(credits["enabled"]),
+                None if credits is None else credits["balance"],
+                snapshot["error"],
+            )
+        )
+        for ordinal, window in enumerate(snapshot["windows"]):
+            unlimited = window["unlimited"]
+            window_rows.append(
+                (
+                    sample_key,
+                    snapshot_ordinal,
+                    ordinal,
+                    window["label"],
+                    window["used_percent"],
+                    window["reset_at"],
+                    window["window_seconds"],
+                    window["used_units"],
+                    window["remaining_units"],
+                    window["total_units"],
+                    window["unit"],
+                    None if unlimited is None else int(unlimited),
+                )
+            )
+    connection.executemany(
+        "INSERT INTO usage_snapshots(sample_key, ordinal, connection, account, display_name, "
+        "plan, credits_enabled, credits_balance, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        snapshot_rows,
+    )
+    connection.executemany(
+        "INSERT INTO usage_windows(sample_key, snapshot_ordinal, ordinal, label, used_percent, "
+        "reset_at, window_seconds, used_units, remaining_units, total_units, unit, unlimited) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        window_rows,
+    )
+
+
+def _delete_all(connection: sqlite3.Connection) -> int:
+    row = connection.execute("SELECT COUNT(*) FROM usage_samples").fetchone()
+    connection.execute("DELETE FROM usage_windows")
+    connection.execute("DELETE FROM usage_snapshots")
+    connection.execute("DELETE FROM usage_samples")
+    return int(row[0]) if row is not None else 0
+
+
+def _time_window(since: datetime | None, until: datetime | None) -> tuple[str, tuple[str, ...]]:
+    """An inclusive ``sampled_at`` range filter; canonical text compares as time."""
+    clauses: list[str] = []
+    parameters: list[str] = []
+    if since is not None:
+        clauses.append("s.sampled_at >= ?")
+        parameters.append(_format_canonical(since))
+    if until is not None:
+        clauses.append("s.sampled_at <= ?")
+        parameters.append(_format_canonical(until))
+    if not clauses:
+        return "", ()
+    return " WHERE " + " AND ".join(clauses), tuple(parameters)
+
+
+def _assemble_samples(
+    sample_rows: Sequence[Sequence[Any]],
+    snapshot_rows: Sequence[Sequence[Any]],
+    window_rows: Sequence[Sequence[Any]],
+) -> list[UsageHistorySample]:
+    windows: dict[tuple[int, int], list[JsonObject]] = {}
+    for row in window_rows:
+        (
+            sample_key,
+            snapshot_ordinal,
+            label,
+            used_percent,
+            reset_at,
+            window_seconds,
+            used_units,
+            remaining_units,
+            total_units,
+            unit,
+            unlimited,
+        ) = row
+        windows.setdefault((sample_key, snapshot_ordinal), []).append(
+            {
+                "label": label,
+                "used_percent": used_percent,
+                "reset_at": reset_at,
+                "window_seconds": window_seconds,
+                "used_units": used_units,
+                "remaining_units": remaining_units,
+                "total_units": total_units,
+                "unit": unit,
+                "unlimited": None if unlimited is None else bool(unlimited),
+            }
+        )
+    snapshots: dict[int, list[JsonObject]] = {}
+    for row in snapshot_rows:
+        (
+            sample_key,
+            ordinal,
+            connection,
+            account,
+            display_name,
+            plan,
+            credits_enabled,
+            credits_balance,
+            error,
+        ) = row
+        snapshots.setdefault(sample_key, []).append(
+            {
+                "connection": connection,
+                "account": account,
+                "display_name": display_name,
+                "plan": plan,
+                "windows": windows.get((sample_key, ordinal), []),
+                "credits": None
+                if credits_enabled is None
+                else {"enabled": bool(credits_enabled), "balance": credits_balance},
+                "error": error,
+            }
+        )
+    return [
+        UsageHistorySample(sampled_at=sampled_at, providers=tuple(snapshots.get(sample_key, ())))
+        for sample_key, sampled_at in sample_rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
 
 
 def _snapshot_from_dict(raw: Any) -> JsonObject:
     if not isinstance(raw, dict):
         raise UsageHistoryError("provider snapshot must be an object")
-    _require_exact_keys(
-        raw,
-        {
-            "connection",
-            "account",
-            "display_name",
-            "plan",
-            "windows",
-            "credits",
-            "error",
-        },
-        "provider snapshot",
-    )
+    _require_exact_keys(raw, _SNAPSHOT_KEYS, "provider snapshot")
     windows_raw = raw["windows"]
     if not isinstance(windows_raw, list):
         raise UsageHistoryError("provider windows must be a list")
@@ -291,21 +472,7 @@ def _snapshot_from_dict(raw: Any) -> JsonObject:
 def _window_from_dict(raw: Any) -> JsonObject:
     if not isinstance(raw, dict):
         raise UsageHistoryError("usage window must be an object")
-    _require_exact_keys(
-        raw,
-        {
-            "label",
-            "used_percent",
-            "reset_at",
-            "window_seconds",
-            "used_units",
-            "remaining_units",
-            "total_units",
-            "unit",
-            "unlimited",
-        },
-        "usage window",
-    )
+    _require_exact_keys(raw, _WINDOW_KEYS, "usage window")
     used_percent = _optional_number(raw["used_percent"], "used_percent")
     if used_percent is None:
         raise UsageHistoryError("used_percent must be a number")
@@ -320,12 +487,10 @@ def _window_from_dict(raw: Any) -> JsonObject:
     if unlimited is not None and not isinstance(unlimited, bool):
         raise UsageHistoryError("unlimited must be a boolean or null")
     reset_at = _optional_string(raw["reset_at"], "reset_at")
-    if reset_at is not None:
-        reset_at = _normalize_iso_timestamp(reset_at)
     return {
         "label": _required_string(raw["label"], "label"),
         "used_percent": max(0.0, min(100.0, used_percent)),
-        "reset_at": reset_at,
+        "reset_at": None if reset_at is None else _canonical_timestamp(reset_at),
         "window_seconds": window_seconds,
         "used_units": _optional_number(raw["used_units"], "used_units"),
         "remaining_units": _optional_number(raw["remaining_units"], "remaining_units"),
@@ -340,7 +505,7 @@ def _credits_from_dict(raw: Any) -> JsonObject | None:
         return None
     if not isinstance(raw, dict):
         raise UsageHistoryError("credits must be an object or null")
-    _require_exact_keys(raw, {"enabled", "balance"}, "credits")
+    _require_exact_keys(raw, _CREDITS_KEYS, "credits")
     if not isinstance(raw["enabled"], bool):
         raise UsageHistoryError("credits.enabled must be a boolean")
     return {
@@ -374,12 +539,18 @@ def _optional_number(value: Any, field_name: str) -> float | None:
     return number
 
 
-def _require_exact_keys(raw: JsonObject, expected: set[str], context: str) -> None:
+def _require_exact_keys(raw: JsonObject, expected: frozenset[str], context: str) -> None:
     if set(raw) != expected:
         raise UsageHistoryError(f"{context} fields are invalid")
 
 
+# ---------------------------------------------------------------------------
+# Timestamps
+# ---------------------------------------------------------------------------
+
+
 def _parse_iso_timestamp(value: str) -> datetime | None:
+    """Parse ISO 8601 with an explicit offset (``Z`` included) as aware UTC."""
     try:
         normalized = value.removesuffix("Z") + "+00:00" if value.endswith("Z") else value
         parsed = datetime.fromisoformat(normalized)
@@ -390,23 +561,14 @@ def _parse_iso_timestamp(value: str) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
-def _normalize_iso_timestamp(value: str) -> str:
+def _canonical_timestamp(value: str) -> str:
     parsed = _parse_iso_timestamp(value)
     if parsed is None:
         raise UsageHistoryError("timestamp must be ISO 8601 with an explicit offset")
-    return parsed.isoformat()
+    return _format_canonical(parsed)
 
 
-def _append_bytes(path: Path, data: bytes) -> None:
-    flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY | getattr(os, "O_BINARY", 0)
-    file_descriptor = os.open(path, flags, 0o600)
-    try:
-        written = 0
-        while written < len(data):
-            count = os.write(file_descriptor, data[written:])
-            if count <= 0:
-                raise OSError("Provider usage history append wrote zero bytes")
-            written += count
-        os.fsync(file_descriptor)
-    finally:
-        os.close(file_descriptor)
+def _format_canonical(value: datetime) -> str:
+    """Fixed-width ``YYYY-MM-DDTHH:MM:SS.ffffffZ``; a naive value is taken as UTC."""
+    aware = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    return aware.replace(tzinfo=None).isoformat(timespec="microseconds") + "Z"

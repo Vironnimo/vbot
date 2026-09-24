@@ -24,7 +24,6 @@ DATA_DIRECTORY_RELATIVE_PATHS = (
     Path("artifacts/temp/terminals"),
     Path("artifacts/temp/web_fetch"),
     Path("statistics"),
-    Path("statistics/provider-usage"),
     Path("agents"),
     Path("archive"),
     Path("bootstrap"),
@@ -115,10 +114,6 @@ class DataDirectoryLayout:
     @property
     def statistics(self) -> Path:
         return self.root / "statistics"
-
-    @property
-    def provider_usage(self) -> Path:
-        return self.statistics / "provider-usage"
 
     @property
     def agents(self) -> Path:
