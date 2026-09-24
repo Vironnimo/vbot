@@ -40,7 +40,6 @@ from server.rpc.event_bridge import (
     _bridge_queued_item_to_event_bus,
     _bridge_run_to_event_bus,
     publish_resource_changed,
-    reflection_source_session_id,
 )
 from server.rpc.payloads import (
     _queued_response,
@@ -259,10 +258,13 @@ async def _reflection_runs(state: Any, session: Any) -> list[JsonObject]:
     address = session.address
     # Capture running reviews before the durable read. If one finishes during
     # that read, its persisted terminal status wins over the active snapshot.
+    # Review Runs execute in same-scope forks and carry the Session they examine.
     active = [
         run
         for run in _state_chat_runs(state).active_runs()
-        if run.agent_id == address.agent_id and run.project_id == address.project_id
+        if run.agent_id == address.agent_id
+        and run.project_id == address.project_id
+        and run.source_session_id == address.session_id
     ]
 
     def read() -> list[JsonObject]:
@@ -275,7 +277,6 @@ async def _reflection_runs(state: Any, session: Any) -> list[JsonObject]:
                 "started_at": run.created_at,
             }
             for run in active
-            if reflection_source_session_id(state.runtime.chat_sessions, run) == address.session_id
         }
         rows.update({row["run_id"]: row for row in session.reflection_runs()})
         return list(rows.values())

@@ -197,6 +197,7 @@ class ChatLoop:
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
         resume_process_restart: bool = False,
+        source_session_id: str | None = None,
     ) -> Run:
         """Start one chat run against an existing session for server-facing callers.
 
@@ -209,6 +210,8 @@ class ChatLoop:
         restricted run keeps a byte-identical prompt prefix (the prompt-cache
         invariant). ``None`` is the unrestricted default.
 
+        ``source_session_id`` attributes a review Run executing in a fork to the
+        Session it examines; it is accessor-only provenance on the Run.
         """
         return await self._start_run(
             agent_id,
@@ -226,6 +229,7 @@ class ChatLoop:
             run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
             resume_process_restart=resume_process_restart,
+            source_session_id=source_session_id,
         )
 
     async def edit_run(
@@ -451,6 +455,7 @@ class ChatLoop:
         contributes_to_agent_activity: bool = True,
         resume_process_restart: bool = False,
         edit_message_id: str | None = None,
+        source_session_id: str | None = None,
     ) -> Run:
         if session_id is not None:
             await self._reject_owner_managed_session(project_id, agent_id, session_id)
@@ -485,6 +490,7 @@ class ChatLoop:
                 working_project_id=working_project_id,
                 run_kind=run_kind,
                 contributes_to_agent_activity=contributes_to_agent_activity,
+                source_session_id=source_session_id,
             ),
         )
 

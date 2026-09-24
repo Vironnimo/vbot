@@ -229,9 +229,11 @@ async def test_run_excluded_from_agent_activity_still_persists_its_session_histo
         session_id="session-one",
         internal=True,
         contributes_to_agent_activity=False,
+        source_session_id="reviewed-session",
     )
     await run.wait()
 
+    assert run.source_session_id == "reviewed-session"
     persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
     assert [message.role for message in persisted] == ["note", "assistant", "run_summary"]
     assert persisted[-1].run_id == run.id

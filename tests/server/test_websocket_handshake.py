@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 
 from core.runs import ChatRunManager, RunKind, RunStatus
-from core.sessions import SessionAddress
 from server.app import create_app
 from server.events import APP_ERROR_EVENT, ServerEventBus
 from tests.server.test_rpc import StubAdapter, StubRuntime
@@ -276,19 +275,15 @@ def test_websocket_handshake_active_runs_lists_running_with_sse_url_and_omits_te
 def test_websocket_handshake_reflection_run_carries_source_session(
     tmp_path: Path,
 ) -> None:
-    """A running reflection Run's snapshot entry resolves the reviewed source
-    Session from the fork's provenance sidecar so the WebUI can project the
-    review onto its originating Session."""
+    """A running reflection Run's snapshot entry carries the reviewed source
+    Session from the Run itself so the WebUI can project the review onto its
+    originating Session without a Session read."""
     runtime = StubRuntime(tmp_path, StubAdapter())
     app = create_app(runtime=cast(Any, runtime))
 
     sessions = runtime.chat_sessions
     source = sessions.create("coder", session_id="session-source")
     fork = sessions.create("coder", session_id="session-fork")
-    sessions.set_metadata(
-        SessionAddress(project_id=None, agent_id="coder", session_id=fork.id),
-        {"fork_source": {"agent_id": "coder", "session_id": source.id}},
-    )
 
     reflection_run = cast(
         Any,
@@ -301,6 +296,7 @@ def test_websocket_handshake_reflection_run_carries_source_session(
                 "project_id": None,
                 "session_id": fork.id,
                 "run_kind": RunKind.MEMORY_REFLECTION,
+                "source_session_id": source.id,
                 "status": RunStatus.RUNNING,
                 "created_at": "2026-05-03T14:30:01+00:00",
                 "iteration_count": 0,
