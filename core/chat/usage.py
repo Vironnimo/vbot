@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import OrderedDict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from core.chat.messages import (
@@ -17,6 +18,9 @@ from core.providers.adapter import estimate_wire_request_input_tokens
 from core.utils.tokens import estimate_request_input_tokens
 
 JsonObject = dict[str, Any]
+# A Run estimates the same request before sending it, when observing its Usage,
+# for Compaction and often again as the next request; a few entries cover that.
+_ESTIMATE_MEMO_SIZE = 4
 
 
 @dataclass
@@ -26,6 +30,8 @@ class RequestContextUsage:
     Local estimation error in the unchanged request cancels out. A changed
     route, prompt epoch, System Prompt or Tool catalog starts a new estimate.
     Signed deltas also account for image retirement and request-only hooks.
+    Wire estimates are memoized by the request's digests, so an identical
+    request is estimated once.
     """
 
     _key: str | None = None
@@ -33,6 +39,7 @@ class RequestContextUsage:
     _input_tokens: int | None = None
     _request_estimate: int = 0
     _output_tokens: int | None = None
+    _estimates: OrderedDict[tuple[str, str], int] = field(default_factory=OrderedDict, repr=False)
 
     def reset(self) -> None:
         self._key = None
@@ -54,8 +61,8 @@ class RequestContextUsage:
         self._key = self._context_key(messages, adapter, model_id, tools, scope)
         self._request_hash = _context_digest(messages)
         self._input_tokens = tokens
-        self._request_estimate = estimate_wire_request_input_tokens(
-            adapter, messages, model_id=model_id, tools=tools
+        self._request_estimate = self._estimate(
+            self._key, self._request_hash, adapter, messages, model_id, tools
         )
         self._output_tokens = (
             _optional_non_negative_int(usage.get("output_tokens"))
@@ -72,16 +79,15 @@ class RequestContextUsage:
         tools: Sequence[Mapping[str, Any]],
         scope: str,
     ) -> JsonObject:
-        estimated = estimate_wire_request_input_tokens(
-            adapter, messages, model_id=model_id, tools=tools
-        )
         key = self._context_key(messages, adapter, model_id, tools, scope)
+        request_hash = _context_digest(messages)
+        estimated = self._estimate(key, request_hash, adapter, messages, model_id, tools)
         if self._input_tokens is None or key != self._key:
             return {"tokens": estimated, "estimated": True}
         delta = estimated - self._request_estimate
         if self._input_tokens + delta <= 0 and estimated > 0:
             return {"tokens": estimated, "estimated": True}
-        changed = _context_digest(messages) != self._request_hash
+        changed = request_hash != self._request_hash
         result: JsonObject = {
             "tokens": max(0, self._input_tokens + delta),
             "estimated": changed,
@@ -92,6 +98,33 @@ class RequestContextUsage:
         if changed:
             result["estimated_delta_tokens"] = delta
         return result
+
+    def _estimate(
+        self,
+        key: str,
+        request_hash: str,
+        adapter: Any,
+        messages: Sequence[Mapping[str, Any]],
+        model_id: str,
+        tools: Sequence[Mapping[str, Any]],
+    ) -> int:
+        """Estimate one wire request, reusing the result for identical requests.
+
+        The context key covers the Adapter, Model and Tool catalog, the request
+        digest every message; only digests and counts are retained.
+        """
+        memo_key = (key, request_hash)
+        cached = self._estimates.get(memo_key)
+        if cached is not None:
+            self._estimates.move_to_end(memo_key)
+            return cached
+        estimated = estimate_wire_request_input_tokens(
+            adapter, messages, model_id=model_id, tools=tools
+        )
+        self._estimates[memo_key] = estimated
+        while len(self._estimates) > _ESTIMATE_MEMO_SIZE:
+            self._estimates.popitem(last=False)
+        return estimated
 
     @staticmethod
     def _context_key(messages: Any, adapter: Any, model_id: str, tools: Any, scope: str) -> str:

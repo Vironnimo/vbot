@@ -26,7 +26,7 @@ def render_tool_definitions(
         {
             "name": tool["name"],
             "description": tool["description"],
-            "parameters": copy.deepcopy(tool["parameters"]),
+            "parameters": tool["parameters"],
             **({"strict": False} if profile == "explicit_non_strict" else {}),
         }
         for tool in normalized
@@ -46,6 +46,7 @@ def sanitize_anthropic_tool_input_schema(
 
 
 def _normalized_tool(tool: Mapping[str, Any]) -> JsonObject:
+    """Return the canonical fields with an independent copy of the schema."""
     name = tool.get("name")
     description = tool.get("description")
     parameters = tool.get("parameters")

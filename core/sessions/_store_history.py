@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import bisect
+import json
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
 from core.chat.errors import ChatSessionError
 from core.sessions import _store_codec, _store_timeline, _store_values
 from core.sessions._io import _encode_chat_history_cursor
 from core.sessions._types import (
+    SKILL_CONTEXT_NOTE_PREFIX,
+    SKILL_TOOL_MESSAGE_NAME,
     JsonObject,
     SessionChatHistorySnapshot,
     SessionMessagePage,
@@ -88,6 +92,18 @@ def _session_usage_from_connection(
     return usage, int(row["cache_input_tokens"])
 
 
+def _records_by_key(connection: sqlite3.Connection, keys: Sequence[int]) -> list[sqlite3.Row]:
+    """Read full records for keys already selected from one Session, by sequence."""
+    if not keys:
+        return []
+    return connection.execute(
+        _store_values._message_records_sql(
+            where=_store_values._KEYED_RECORDS, order_by="ORDER BY m.seq"
+        ),
+        (json.dumps(list(keys)),),
+    ).fetchall()
+
+
 def _active_message_page_from_connection(
     connection: sqlite3.Connection,
     state: sqlite3.Row,
@@ -131,35 +147,39 @@ def _active_message_page_from_connection(
             raise SessionPageCursorError("before must reference an active message id")
         cutoff = int(before_row["seq"])
 
-    page_clauses = [*clauses, "m.seq < ?"]
-    page_params = [*params, cutoff]
-    sql = _store_values._message_records_sql(
-        where=" AND ".join(page_clauses),
-        order_by="ORDER BY m.seq DESC",
-    )
-    if limit is not None:
-        sql += " LIMIT ?"
-        page_params.append(limit)
-    rows = list(reversed(connection.execute(sql, page_params).fetchall()))
+    if limit is None:
+        rows = connection.execute(
+            _store_values._message_records_sql(
+                where=" AND ".join([*clauses, "m.seq < ?"]),
+                order_by="ORDER BY m.seq",
+            ),
+            (*params, cutoff),
+        ).fetchall()
+    else:
+        # Order and limit narrow keys first; only the page reads full records.
+        keys = connection.execute(
+            "SELECT m.seq, m.message_key, m.owner_run_id FROM history_records AS m WHERE "
+            + " AND ".join([*clauses, "m.seq < ?"])
+            + " ORDER BY m.seq DESC LIMIT ?",
+            (*params, cutoff, limit),
+        ).fetchall()
+        if keys and complete_run_segment and keys[-1]["owner_run_id"] is not None:
+            boundary = connection.execute(
+                "SELECT start_sequence FROM runs WHERE session_key=? AND run_id=?",
+                (session_key, keys[-1]["owner_run_id"]),
+            ).fetchone()
+            assert boundary is not None
+            if int(boundary[0]) < int(keys[-1]["seq"]):
+                keys = connection.execute(
+                    "SELECT m.message_key FROM history_records AS m WHERE "
+                    + " AND ".join([*clauses, "m.seq >= ?", "m.seq < ?"]),
+                    (*params, int(boundary[0]), cutoff),
+                ).fetchall()
+        rows = _records_by_key(connection, [int(row["message_key"]) for row in keys])
     if not rows:
         return [], False, frozenset(), None
 
     page_floor = int(rows[0]["seq"])
-    if limit is not None and complete_run_segment and rows[0]["owner_run_id"] is not None:
-        boundary = connection.execute(
-            "SELECT start_sequence FROM runs WHERE session_key=? AND run_id=?",
-            (session_key, rows[0]["owner_run_id"]),
-        ).fetchone()
-        assert boundary is not None
-        if int(boundary[0]) < page_floor:
-            rows = connection.execute(
-                _store_values._message_records_sql(
-                    where=" AND ".join([*clauses, "m.seq >= ?", "m.seq < ?"]),
-                    order_by="ORDER BY m.seq",
-                ),
-                (*params, int(boundary[0]), cutoff),
-            ).fetchall()
-            page_floor = int(rows[0]["seq"])
 
     has_more = (
         connection.execute(
@@ -240,6 +260,42 @@ def _context_usage_rows_from_connection(
     ).fetchall()
 
 
+def current_skill_activation_messages(
+    connection: sqlite3.Connection, address: SessionAddress
+) -> Callable[[], list[ChatMessage]]:
+    """Load the active Skill activation candidates the current context can still see.
+
+    Candidates are ``[skill-context]`` Notes and ``skill`` Tool Results after the
+    newest active Compaction checkpoint; the caller decides which of them carry
+    a valid activation. Rows a history edit deactivated never qualify.
+    """
+    state = _store_values._require_live(connection, address)
+    checkpoint = connection.execute(
+        "SELECT MAX(seq) FROM compaction_checkpoints WHERE session_key = ? AND active = 1",
+        (state["session_key"],),
+    ).fetchone()
+    floor = -1 if checkpoint is None or checkpoint[0] is None else int(checkpoint[0])
+    rows = connection.execute(
+        _store_values._message_records_sql(
+            where=(
+                "m.session_key = ? AND m.active = 1 AND m.seq > ? "
+                "AND m.role IN ('note', 'tool') "
+                "AND (m.role = 'tool' OR substr(m.content, 1, ?) = ?) "
+                "AND (m.role = 'note' OR t.name = ?)"
+            ),
+            order_by="ORDER BY m.seq",
+        ),
+        (
+            state["session_key"],
+            floor,
+            len(SKILL_CONTEXT_NOTE_PREFIX),
+            SKILL_CONTEXT_NOTE_PREFIX,
+            SKILL_TOOL_MESSAGE_NAME,
+        ),
+    ).fetchall()
+    return lambda: [_store_codec.message_from_row(row) for row in rows]
+
+
 def _history_record_filter(
     roles: Sequence[str],
     excluded_tool_name: str,
@@ -297,7 +353,9 @@ def _history_snapshot_is_current(
     return checkpoint is not None
 
 
-def active_messages(connection: sqlite3.Connection, address: SessionAddress) -> list[ChatMessage]:
+def active_messages(
+    connection: sqlite3.Connection, address: SessionAddress
+) -> Callable[[], list[ChatMessage]]:
     """Load the relationally materialized active lineage only."""
     state = _store_values._require_live(connection, address)
     rows = connection.execute(
@@ -307,7 +365,7 @@ def active_messages(connection: sqlite3.Connection, address: SessionAddress) -> 
         ),
         (state["session_key"],),
     ).fetchall()
-    return [_store_codec.message_from_row(row) for row in rows]
+    return lambda: [_store_codec.message_from_row(row) for row in rows]
 
 
 def active_user_message_count(
@@ -328,7 +386,7 @@ def active_user_message_count(
 
 def latest_note(
     connection: sqlite3.Connection, address: SessionAddress, *, content_prefix: str
-) -> ChatMessage | None:
+) -> Callable[[], ChatMessage | None]:
     """Load the newest Note matching one canonical content prefix."""
     if not content_prefix:
         raise ChatSessionError("note prefix must be non-empty")
@@ -340,7 +398,7 @@ def latest_note(
         ),
         (state["session_key"], len(content_prefix), content_prefix),
     ).fetchone()
-    return None if row is None else _store_codec.message_from_row(row)
+    return lambda: None if row is None else _store_codec.message_from_row(row)
 
 
 def chat_history_snapshot(
@@ -356,7 +414,7 @@ def chat_history_snapshot(
     background_roles: Sequence[str],
     background_tool_names: Sequence[str],
     after: tuple[str, int] | None = None,
-) -> SessionChatHistorySnapshot:
+) -> Callable[[], SessionChatHistorySnapshot]:
     """Read one WebUI history projection from a single SQLite snapshot."""
     if limit is not None and (not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0):
         raise ChatSessionError("message page limit must be a positive integer")
@@ -400,35 +458,43 @@ def chat_history_snapshot(
         tool_names=background_tool_names,
     )
     generation = str(state["generation_id"])
-    return SessionChatHistorySnapshot(
-        page=SessionMessagePage(
-            messages=tuple(_store_codec.message_from_row(row) for row in page_rows),
-            has_more=has_more,
-            editable_message_ids=editable_ids,
-            before_cursor=(
-                _encode_chat_history_cursor(generation, page_floor)
-                if has_more and page_floor is not None
-                else None
-            ),
-            record_sequences=tuple(int(row["seq"]) for row in page_rows),
-            record_run_ids=_store_timeline.record_run_ids(connection, state, page_rows),
-        ),
-        session_usage=usage,
-        context_messages=tuple(_store_codec.message_from_row(row) for row in context_rows),
-        background_messages=tuple(_store_codec.message_from_row(row) for row in background_rows),
-        generation_id=generation,
-        after_cursor=_encode_chat_history_cursor(generation, through),
-        incremental=incremental,
-        has_newer=through < int(state["message_count"]),
-        runs=_store_timeline.page_runs(
-            connection, state, page_rows, through=through, incremental=incremental
-        ),
+    has_newer = through < int(state["message_count"])
+    runs = _store_timeline.page_runs(
+        connection, state, page_rows, through=through, incremental=incremental
     )
+
+    def decode() -> SessionChatHistorySnapshot:
+        return SessionChatHistorySnapshot(
+            page=SessionMessagePage(
+                messages=tuple(_store_codec.message_from_row(row) for row in page_rows),
+                has_more=has_more,
+                editable_message_ids=editable_ids,
+                before_cursor=(
+                    _encode_chat_history_cursor(generation, page_floor)
+                    if has_more and page_floor is not None
+                    else None
+                ),
+                record_sequences=tuple(int(row["seq"]) for row in page_rows),
+                record_run_ids=_store_timeline.record_run_ids(page_rows),
+            ),
+            session_usage=usage,
+            context_messages=tuple(_store_codec.message_from_row(row) for row in context_rows),
+            background_messages=tuple(
+                _store_codec.message_from_row(row) for row in background_rows
+            ),
+            generation_id=generation,
+            after_cursor=_encode_chat_history_cursor(generation, through),
+            incremental=incremental,
+            has_newer=has_newer,
+            runs=runs,
+        )
+
+    return decode
 
 
 def status_snapshot(
     connection: sqlite3.Connection, address: SessionAddress
-) -> tuple[str | None, int, JsonObject | None, JsonObject, int]:
+) -> Callable[[], tuple[str | None, int, JsonObject | None, JsonObject, int]]:
     state = _store_values._require_live(connection, address)
     session_key = int(state["session_key"])
     facts = connection.execute(
@@ -444,14 +510,11 @@ def status_snapshot(
         ),
         (session_key,),
     ).fetchone()
-    latest_usage = None
-    if latest_row is not None:
-        latest_usage = _store_codec.message_from_row(latest_row).usage
     usage, cache_input_tokens = _session_usage_from_connection(connection, session_key)
-    return (
+    return lambda: (
         None if facts["first_message_at"] is None else str(facts["first_message_at"]),
         int(facts["user_count"] or 0),
-        latest_usage,
+        None if latest_row is None else _store_codec.message_from_row(latest_row).usage,
         usage,
         cache_input_tokens,
     )
@@ -506,7 +569,7 @@ def history_records(
     cursor_sequence: int | None,
     limit: int,
     excluded_tool_name: str,
-) -> list[tuple[int, ChatMessage]] | None:
+) -> Callable[[], list[tuple[int, ChatMessage]] | None]:
     """Read one bounded canonical history batch in sequence order."""
     if direction not in {"start", "end"}:
         raise ChatSessionError("history direction must be start or end")
@@ -520,7 +583,7 @@ def history_records(
         expected_generation_id=expected_generation_id,
         snapshot_sequence=snapshot_sequence,
     ):
-        return None
+        return lambda: None
     clauses = [
         "m.session_key = ?",
         "m.active = 1",
@@ -549,7 +612,7 @@ def history_records(
         ),
         params,
     ).fetchall()
-    return [(int(row["seq"]), _store_codec.message_from_row(row)) for row in rows]
+    return lambda: [(int(row["seq"]), _store_codec.message_from_row(row)) for row in rows]
 
 
 def history_section_stats(
@@ -574,25 +637,32 @@ def history_section_stats(
         snapshot_sequence=snapshot_sequence,
     ):
         return None
+    if not sections:
+        return result
+    # One pass over the covering range; each section is a slice of its sequences.
+    rows = connection.execute(
+        "SELECT m.seq, m.timestamp FROM history_records AS m "
+        f"{_store_values._MESSAGE_RECORD_JOINS} WHERE m.session_key = ? AND m.active = 1 "
+        "AND m.seq > ? AND m.seq < ? AND " + record_filter + " ORDER BY m.seq",
+        (
+            state["session_key"],
+            min(lower for lower, _upper in sections),
+            max(upper for _lower, upper in sections),
+            *filter_params,
+        ),
+    ).fetchall()
+    sequences = [int(row["seq"]) for row in rows]
     for lower_sequence, upper_sequence in sections:
-        row = connection.execute(
-            "WITH eligible AS ("
-            "SELECT m.seq, m.timestamp FROM history_records AS m "
-            f"{_store_values._MESSAGE_RECORD_JOINS} WHERE m.session_key = ? AND m.active = 1 "
-            "AND m.seq > ? AND m.seq < ? AND " + record_filter + "), bounds AS ("
-            "SELECT COUNT(*) AS eligible_count, MIN(seq) AS first_seq, "
-            "MAX(seq) AS last_seq FROM eligible) "
-            "SELECT bounds.eligible_count, first.timestamp AS start_timestamp, "
-            "last.timestamp AS end_timestamp FROM bounds "
-            "LEFT JOIN eligible AS first ON first.seq = bounds.first_seq "
-            "LEFT JOIN eligible AS last ON last.seq = bounds.last_seq",
-            (state["session_key"], lower_sequence, upper_sequence, *filter_params),
-        ).fetchone()
-        assert row is not None
+        start = bisect.bisect_right(sequences, lower_sequence)
+        end = bisect.bisect_left(sequences, upper_sequence)
+        if start >= end:
+            result[upper_sequence] = (0, None, None)
+            continue
+        first, last = rows[start]["timestamp"], rows[end - 1]["timestamp"]
         result[upper_sequence] = (
-            int(row["eligible_count"]),
-            None if row["start_timestamp"] is None else str(row["start_timestamp"]),
-            None if row["end_timestamp"] is None else str(row["end_timestamp"]),
+            end - start,
+            None if first is None else str(first),
+            None if last is None else str(last),
         )
     return result
 
@@ -610,7 +680,7 @@ def history_around(
     before: int,
     after: int,
     excluded_tool_name: str,
-) -> tuple[bool, list[tuple[int, ChatMessage]]] | None:
+) -> Callable[[], tuple[bool, list[tuple[int, ChatMessage]]] | None]:
     """Read a bounded eligible neighborhood around the earliest matching public id."""
     record_filter, filter_params = _history_record_filter(roles, excluded_tool_name)
     state = _store_values._require_live(connection, address)
@@ -620,7 +690,7 @@ def history_around(
         expected_generation_id=expected_generation_id,
         snapshot_sequence=snapshot_sequence,
     ):
-        return None
+        return lambda: None
     exists = (
         connection.execute(
             "SELECT 1 FROM history_records WHERE session_key = ? AND active = 1 "
@@ -650,7 +720,7 @@ def history_around(
         (*base_params, message_id),
     ).fetchone()
     if anchor is None:
-        return exists, []
+        return lambda: (exists, [])
     anchor_sequence = int(anchor["seq"])
     earlier_rows = connection.execute(
         _store_values._message_records_sql(
@@ -667,7 +737,7 @@ def history_around(
         (*base_params, anchor_sequence, after),
     ).fetchall()
     rows = [*reversed(earlier_rows), anchor, *later_rows]
-    return exists, [(int(row["seq"]), _store_codec.message_from_row(row)) for row in rows]
+    return lambda: (exists, [(int(row["seq"]), _store_codec.message_from_row(row)) for row in rows])
 
 
 def reflection_runs(connection: sqlite3.Connection, address: SessionAddress) -> list[JsonObject]:
@@ -709,7 +779,7 @@ def reflection_runs(connection: sqlite3.Connection, address: SessionAddress) -> 
 
 def run_messages(
     connection: sqlite3.Connection, address: SessionAddress, run_id: str
-) -> list[ChatMessage]:
+) -> Callable[[], list[ChatMessage]]:
     state = _store_values._require_live(connection, address)
     rows = connection.execute(
         _store_values._message_records_sql(
@@ -718,7 +788,7 @@ def run_messages(
         ),
         (state["session_key"], run_id),
     ).fetchall()
-    return [_store_codec.message_from_row(row) for row in rows]
+    return lambda: [_store_codec.message_from_row(row) for row in rows]
 
 
 def run_summary(
@@ -727,7 +797,7 @@ def run_summary(
     *,
     run_id: str | None = None,
     work_id: str | None = None,
-) -> ChatMessage | None:
+) -> Callable[[], ChatMessage | None]:
     if (run_id is None) == (work_id is None):
         raise ChatSessionError("exactly one of run_id or work_id is required")
     state = _store_values._require_live(connection, address)
@@ -739,7 +809,7 @@ def run_summary(
         ),
         (state["session_key"], value),
     ).fetchone()
-    return None if row is None else _store_codec.message_from_row(row)
+    return lambda: None if row is None else _store_codec.message_from_row(row)
 
 
 def run_result(
@@ -749,7 +819,7 @@ def run_result(
     run_id: str | None = None,
     work_id: str | None = None,
     require_latest: bool = False,
-) -> tuple[ChatMessage | None, ChatMessage, str | None] | None:
+) -> Callable[[], tuple[ChatMessage | None, ChatMessage, str | None] | None]:
     """Project one terminal Run without reconstructing its Tool/result payloads."""
     if run_id is not None and work_id is not None:
         raise ChatSessionError("run_id and work_id cannot be combined")
@@ -770,14 +840,14 @@ def run_result(
         params,
     ).fetchone()
     if summary_row is None:
-        return None
+        return lambda: None
     if require_latest:
         latest = connection.execute(
             "SELECT run_id FROM runs WHERE session_key=? ORDER BY run_key DESC LIMIT 1",
             (state["session_key"],),
         ).fetchone()
         if latest is None or latest["run_id"] != summary_row["run_id"]:
-            return None
+            return lambda: None
     assistant_row = connection.execute(
         _store_values._message_records_sql(
             where=(
@@ -797,18 +867,11 @@ def run_result(
         "ORDER BY m.seq DESC, tc.ordinal DESC LIMIT 1",
         (state["session_key"], summary_row["run_id"]),
     ).fetchone()
-    return (
+    return lambda: (
         None if assistant_row is None else _store_codec.message_from_row(assistant_row),
         _store_codec.message_from_row(summary_row),
         None if latest_tool is None else str(latest_tool["name"]),
     )
-
-
-def messages_since(
-    connection: sqlite3.Connection, address: SessionAddress, cursor: SessionReadCursor | None
-) -> SessionReadBatch | None:
-    delta = message_rows_since(connection, address, cursor)
-    return None if delta is None else read_batch(delta)
 
 
 def message_rows_since(
@@ -826,30 +889,33 @@ def message_rows_since(
     revision = int(state["history_revision"])
     generation_id = str(state["generation_id"])
     last_id = state["last_message_id"]
-    if cursor is not None:
+    current = SessionReadCursor(generation_id, revision, count, count, last_id)
+    if cursor is None:
+        start = 0
+    else:
         if cursor.generation_id != generation_id or not 0 <= cursor.next_seq <= count:
             return None
         if cursor.next_seq < int(state["history_reset_sequence"]):
             return None
-        if cursor.next_seq == 0:
-            anchor_id = None
-        else:
-            anchor = connection.execute(
-                "SELECT message_id FROM history_records WHERE session_key = ? AND seq = ?",
-                (state["session_key"], cursor.next_seq - 1),
-            ).fetchone()
-            anchor_id = None if anchor is None else anchor["message_id"]
-        if anchor_id != cursor.last_message_id:
-            return None
-    start = 0 if cursor is None else cursor.next_seq
+        if cursor.next_seq == count and cursor.last_message_id == last_id:
+            # The Session row names its newest record, so a current cursor needs no read.
+            return [], current
+        start = cursor.next_seq
+    # One read from the anchor record, which is the one before the cursor.
     rows = connection.execute(
         _store_values._message_records_sql(
             where="m.session_key = ? AND m.seq >= ?",
             order_by="ORDER BY m.seq",
         ),
-        (state["session_key"], start),
+        (state["session_key"], max(start - 1, 0)),
     ).fetchall()
-    return rows, SessionReadCursor(generation_id, revision, count, count, last_id)
+    if cursor is not None:
+        anchor_id = None
+        if start > 0 and rows and int(rows[0]["seq"]) == start - 1:
+            anchor_id = rows.pop(0)["message_id"]
+        if anchor_id != cursor.last_message_id:
+            return None
+    return rows, current
 
 
 def read_batch(delta: tuple[list[sqlite3.Row], SessionReadCursor]) -> SessionReadBatch:
@@ -877,13 +943,15 @@ def bookend_timestamps(
     return str(first["timestamp"]), str(state["last_message_at"])
 
 
-def messages(connection: sqlite3.Connection, address: SessionAddress) -> list[ChatMessage]:
+def messages(
+    connection: sqlite3.Connection, address: SessionAddress
+) -> Callable[[], list[ChatMessage]]:
     state = _store_values._require_live(connection, address)
     rows = connection.execute(
         _store_values._message_records_sql(where="m.session_key = ?", order_by="ORDER BY m.seq"),
         (state["session_key"],),
     ).fetchall()
-    return [_store_codec.message_from_row(row) for row in rows]
+    return lambda: [_store_codec.message_from_row(row) for row in rows]
 
 
 def recall_context(
@@ -895,10 +963,11 @@ def recall_context(
     do not repeat it or hydrate Tool graphs. A deleted/edited-away anchor returns
     no context rather than borrowing a different conversation block.
     """
+    # The scalar Session key reaches every view branch; a join would not.
     anchor = connection.execute(
-        "SELECT m.session_key, m.seq, m.role FROM history_records m JOIN sessions s "
-        "ON s.session_key = m.session_key WHERE s.project_id = ? AND s.agent_id = ? "
-        "AND s.session_id = ? AND s.status = 'live' AND m.active = 1 "
+        "SELECT m.session_key, m.seq, m.role FROM history_records AS m "
+        "WHERE m.session_key = (SELECT session_key FROM sessions WHERE project_id = ? "
+        "AND agent_id = ? AND session_id = ? AND status = 'live') AND m.active = 1 "
         "AND m.message_id = ? ORDER BY m.seq DESC LIMIT 1",
         (*_store_values._scope(address), message_id),
     ).fetchone()
@@ -916,15 +985,19 @@ def recall_context(
     if first is None:
         return []
     following = bounds["following"]
+    answer = connection.execute(
+        "SELECT MAX(seq) FROM history_records WHERE session_key = ? AND active = 1 "
+        "AND role = 'assistant' AND seq > ? AND (? IS NULL OR seq < ?) "
+        "AND length(COALESCE(content, content_search, '')) > 0",
+        (key, first, following, following),
+    ).fetchone()[0]
     # Two narrow row lookups; substr bounds the text before it leaves SQLite.
     rows = connection.execute(
         "SELECT seq, message_id, role, timestamp, "
         "substr(COALESCE(content, content_search, ''), 1, 801) AS text "
-        "FROM history_records WHERE session_key = ? AND active = 1 AND seq != ? AND "
-        "(seq = ? OR seq = (SELECT MAX(seq) FROM history_records WHERE session_key = ? "
-        "AND active = 1 AND role = 'assistant' AND seq > ? AND (? IS NULL OR seq < ?) "
-        "AND length(COALESCE(content, content_search, '')) > 0)) ORDER BY seq",
-        (key, seq, first, key, first, following, following),
+        "FROM history_records WHERE session_key = ? AND active = 1 AND seq != ? "
+        "AND seq IN (?, ?) ORDER BY seq",
+        (key, seq, first, answer),
     ).fetchall()
     return [
         {

@@ -101,12 +101,13 @@ async def test_monitor_samples_loop_process_and_injected_gauges(tmp_path: Path) 
         "event_loop.utilization",
         "process.cpu_percent",
         "process.rss_mb",
-        "process.threads",
+        "process.python_threads",
         "asyncio.tasks",
     ):
         assert isinstance(gauges[name], int | float), name
     assert gauges["process.rss_mb"] > 0
-    assert gauges["process.threads"] >= 2
+    # The Event Loop thread plus the stall watchdog.
+    assert gauges["process.python_threads"] >= 2
     assert gauges["runs.active"] == 2
 
 

@@ -130,7 +130,7 @@ async def test_internal_bootstrap_can_resume_process_restart_continuation(tmp_pa
     )
     await run.wait()
 
-    assert session.load_continuation_records() == []
+    assert session.load_continuation() is None
 
 
 @pytest.mark.asyncio
@@ -147,7 +147,7 @@ async def test_ordinary_internal_run_does_not_consume_continuation(tmp_path: Pat
     )
     await run.wait()
 
-    assert session.load_continuation_records()
+    assert session.load_continuation() is not None
 
 
 @pytest.mark.asyncio
@@ -180,7 +180,7 @@ async def test_run_commit_failure_preserves_output_and_recoverable_continuation(
     assert run.status is RunStatus.FAILED
     assert run.events[-1].payload["history_persisted"] is False
     assert any(message.content == "Verified" for message in session.load())
-    assert session.load_continuation_records()
+    assert session.load_continuation() is not None
     assert session.find_run_summary(run_id=run.id) is None
 
 

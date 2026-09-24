@@ -4,19 +4,25 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 import sqlite3
+
+import pytest
 
 import core.sessions._store_codec as session_store_module
 from core.chat import ChatMessage
 from core.chat.content_blocks import FileMentionBlock, TextBlock
-from core.chat.continuation import fold_continuation_records
+from core.chat.errors import ChatSessionError
 from core.chat.messages import MessageSender, ToolCall, ToolCallRejection
 from core.chat.output_files import AssistantFileReference
 from core.sessions import (
     FORK_SOURCE_META_KEY,
     PROMPT_CACHE_AFFINITY_META_KEY,
+    ChatSession,
 )
 from core.sessions import _store_values as store_values
+from core.sessions.errors import SessionNotFoundError
+from core.sessions.history import skill_tool_activation
 from tests.core.sessions.sessions_test_support import (
     _address,
     _continuation_start,
@@ -76,12 +82,15 @@ def test_continuation_events_update_one_normalized_current_state(manager) -> Non
         ]
     )
 
-    state = fold_continuation_records(session.load_continuation_records())
+    state = session.load_continuation()
     assert state is not None
-    assert state.reasoning == "first second"
-    assert state.partial_output == "partial answer"
-    assert state.operations["call-one"]["status"] == "completed"
-    assert state.cause == "user"
+    assert [(step.reasoning, step.content) for step in state.steps] == [
+        ("first second", "partial answer")
+    ]
+    assert [(op.tool_call_id, op.completed, op.ok) for op in state.operations] == [
+        ("call-one", True, True)
+    ]
+    assert (state.active, state.cause) == (False, "user")
     with sqlite3.connect(manager._store.path) as connection:
         tables = {
             row[0]
@@ -91,6 +100,77 @@ def test_continuation_events_update_one_normalized_current_state(manager) -> Non
         assert connection.execute("SELECT COUNT(*) FROM continuations").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM continuation_steps").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM continuation_operations").fetchone()[0] == 1
+
+
+def test_continuation_steps_start_at_one_and_a_rejected_record_rolls_back_its_append(
+    manager,
+) -> None:
+    session = manager.create("coder", session_id="continuation-steps")
+    session.append_continuation_records([_continuation_start()])
+    step_zero = {
+        "version": 1,
+        "type": "stream_delta",
+        "run_id": "run-one",
+        "timestamp": "2026-08-31T12:00:01+00:00",
+        "step": 0,
+        "content_delta": "lost",
+    }
+
+    with pytest.raises(ChatSessionError):
+        session.append_many([ChatMessage.user("not committed")], continuation_records=[step_zero])
+
+    assert session.load() == []
+    state = session.load_continuation()
+    assert state is not None
+    assert state.steps == ()
+
+
+def test_skill_activation_cache_follows_checkpoints_and_history_edits(manager, monkeypatch) -> None:
+    session = manager.create("coder", session_id="skill-cache")
+    session.append(ChatMessage.user("start"))
+    session.activate_skill_context("alpha", {"activation_content": "ALPHA"})
+    skill_result = ChatMessage.tool(
+        tool_call_id="skill-1",
+        name="skill",
+        content=json.dumps(
+            {"ok": True, "data": {"status": "loaded", "name": "gamma", "content": "GAMMA"}}
+        ),
+    )
+    session.start_run("run-1").append_many(
+        [
+            ChatMessage.assistant(
+                model="test",
+                content=None,
+                tool_calls=[ToolCall(id="skill-1", name="skill", arguments={"name": "gamma"})],
+            ),
+            skill_result,
+        ]
+    )
+    gamma = skill_tool_activation(skill_result)
+    assert gamma is not None
+    edited = ChatMessage.user("edited away")
+    session.append(edited)
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="checkpoint", projection=[], compacted_token_count=1
+    )
+
+    def no_full_load(_self):
+        raise AssertionError("the Skill cache must not load the full history")
+
+    monkeypatch.setattr(ChatSession, "load", no_full_load)
+    session.append_many([checkpoint])
+    assert session.activated_skill_contents() == {}
+    session.activate_skill_context("beta", {"activation_content": "BETA"})
+    assert session.activated_skill_contents() == {"beta": "BETA"}
+    assert manager.get(session.address).activated_skill_contents() == {"beta": "BETA"}
+
+    # The edit deactivates the checkpoint and the later activation; the
+    # activations before the edited message become current again.
+    session.append_many([ChatMessage.history_edit(edited.id), ChatMessage.user("replacement")])
+
+    expected = {"alpha": "ALPHA", gamma[0]: gamma[1]}
+    assert session.activated_skill_contents() == expected
+    assert manager.get(session.address).activated_skill_contents() == expected
 
 
 def test_fork_copies_history_but_not_activity_or_continuation(manager) -> None:
@@ -105,13 +185,32 @@ def test_fork_copies_history_but_not_activity_or_continuation(manager) -> None:
     forked = asyncio.run(manager.fork(source_address, target_agent_id="reviewer"))
 
     assert forked.load() == source.load()
-    assert forked.load_continuation_records() == []
+    assert forked.load_continuation() is None
     assert manager.list_completion_activity("reviewer")[0]["has_unread_completion"] is False
     metadata = manager.get_metadata(forked.address)
     assert metadata[FORK_SOURCE_META_KEY]["session_id"] == "source"
     assert metadata[PROMPT_CACHE_AFFINITY_META_KEY] != manager.prompt_cache_affinity_id(
         source_address
     )
+
+
+def test_prompt_cache_affinity_id_reads_only_its_stored_value(manager, monkeypatch) -> None:
+    address = _address("coder", "affinity")
+    manager.create(address.agent_id, session_id=address.session_id)
+    default = manager.prompt_cache_affinity_id(address)
+    rotated = manager.rotate_prompt_cache_affinity_id(address)
+
+    def no_metadata_decode(_address):
+        raise AssertionError("the affinity id must not decode the complete metadata")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(manager._store, "metadata", no_metadata_decode)
+        assert manager.prompt_cache_affinity_id(address) == rotated != default
+    manager.set_metadata(address, {PROMPT_CACHE_AFFINITY_META_KEY: {"nested": "value"}})
+    with pytest.raises(ChatSessionError, match="invalid prompt cache affinity id"):
+        manager.prompt_cache_affinity_id(address)
+    with pytest.raises(SessionNotFoundError):
+        manager.prompt_cache_affinity_id(_address("coder", "missing"))
 
 
 def test_role_specific_relational_message_storage_round_trips(

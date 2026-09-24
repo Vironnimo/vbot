@@ -102,6 +102,10 @@ CREATE INDEX sessions_live_fork_source
   ON sessions (project_id, agent_id, json_extract(fork_source_json, '$.session_id'))
   WHERE status = 'live';
 
+CREATE INDEX sessions_archived_address
+  ON sessions (project_id, agent_id, session_id)
+  WHERE status = 'archived';
+
 CREATE TABLE temporary_session_bindings (
   session_key INTEGER PRIMARY KEY,
   generation_id TEXT NOT NULL,
@@ -370,6 +374,9 @@ CREATE TABLE compaction_checkpoints (
   FOREIGN KEY (session_key, run_id) REFERENCES runs(session_key, run_id)
 ) STRICT;
 
+CREATE INDEX compaction_checkpoints_by_session
+  ON compaction_checkpoints (session_key, seq);
+
 CREATE TABLE run_change_paths (
   run_key INTEGER NOT NULL,
   ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
@@ -387,6 +394,9 @@ CREATE TABLE history_edits (
   target_message_id TEXT NOT NULL,
   FOREIGN KEY (session_key) REFERENCES sessions(session_key) ON DELETE CASCADE
 ) STRICT;
+
+CREATE INDEX history_edits_by_session
+  ON history_edits (session_key, seq);
 
 CREATE TABLE continuations (
   session_key INTEGER PRIMARY KEY,

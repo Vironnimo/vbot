@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from core.runs import RunExecutionOwner
     from core.sessions._types import (
         SessionAddress,
+        SessionContinuationState,
         SessionIdentityReferenceUpdate,
         SessionReadBatch,
         SessionReadCursor,
@@ -65,6 +66,7 @@ if TYPE_CHECKING:
 
 
 _WriteResult = TypeVar("_WriteResult")
+_Decoded = TypeVar("_Decoded")
 # Records selected inside a write transaction and decoded after commit.
 _HistoryDelta = tuple[list[sqlite3.Row], "SessionReadCursor"] | None
 
@@ -138,6 +140,18 @@ class SessionStore:
         _store_schema._reconcile_open_database(
             connection, self.path, expected_database_id=expected_database_id
         )
+
+    def _read_decoded(
+        self, select: Callable[[sqlite3.Connection], Callable[[], _Decoded]]
+    ) -> _Decoded:
+        """Select rows in one read transaction, then decode them after it ends.
+
+        A rollback-journal store serves reads under its runtime lock, so Message
+        reconstruction outside the transaction never delays a writer.
+        """
+        with self._runtime.read_ctx() as connection:
+            decode = select(connection)
+        return decode()
 
     def _execute_write(
         self,
@@ -268,6 +282,11 @@ class SessionStore:
     def metadata(self, address: SessionAddress) -> JsonObject:
         return _store_values._session_metadata_from_state(self.state(address))
 
+    def prompt_cache_affinity_value(self, address: SessionAddress) -> Any:
+        """Return the stored affinity value, or ``None`` when the Session has none."""
+        with self._runtime.read_ctx() as connection:
+            return _store_queries.prompt_cache_affinity_value(connection, address)
+
     def descriptor_source(
         self, address: SessionAddress
     ) -> tuple[JsonObject, int, ChatMessage | None]:
@@ -280,8 +299,9 @@ class SessionStore:
     def descriptor_sources(
         self, addresses: Sequence[SessionAddress]
     ) -> dict[SessionAddress, tuple[JsonObject, int, ChatMessage | None]]:
-        with self._runtime.read_ctx() as connection:
-            return _store_queries.descriptor_sources(connection, addresses)
+        return self._read_decoded(
+            lambda connection: _store_queries.descriptor_sources(connection, addresses)
+        )
 
     def replace_metadata(self, address: SessionAddress, metadata: JsonObject) -> None:
         return self._execute_write(
@@ -585,21 +605,23 @@ class SessionStore:
             return _store_owned.run_start_boundaries(connection, addresses)
 
     def messages(self, address: SessionAddress) -> list[ChatMessage]:
-
-        with self._runtime.read_ctx() as connection:
-            return _store_history.messages(connection, address)
+        return self._read_decoded(lambda connection: _store_history.messages(connection, address))
 
     def active_messages(self, address: SessionAddress) -> list[ChatMessage]:
-        with self._runtime.read_ctx() as connection:
-            return _store_history.active_messages(connection, address)
+        return self._read_decoded(
+            lambda connection: _store_history.active_messages(connection, address)
+        )
 
     def active_user_message_count(self, address: SessionAddress, *, limit: int) -> int:
         with self._runtime.read_ctx() as connection:
             return _store_history.active_user_message_count(connection, address, limit=limit)
 
     def latest_note(self, address: SessionAddress, *, content_prefix: str) -> ChatMessage | None:
-        with self._runtime.read_ctx() as connection:
-            return _store_history.latest_note(connection, address, content_prefix=content_prefix)
+        return self._read_decoded(
+            lambda connection: _store_history.latest_note(
+                connection, address, content_prefix=content_prefix
+            )
+        )
 
     def chat_history_snapshot(
         self,
@@ -615,8 +637,8 @@ class SessionStore:
         background_tool_names: Sequence[str],
         after: tuple[str, int] | None = None,
     ) -> SessionChatHistorySnapshot:
-        with self._runtime.read_ctx() as connection:
-            return _store_history.chat_history_snapshot(
+        return self._read_decoded(
+            lambda connection: _store_history.chat_history_snapshot(
                 connection,
                 address,
                 limit=limit,
@@ -629,13 +651,15 @@ class SessionStore:
                 background_tool_names=background_tool_names,
                 after=after,
             )
+        )
 
     def status_snapshot(
         self,
         address: SessionAddress,
     ) -> tuple[str | None, int, JsonObject | None, JsonObject, int]:
-        with self._runtime.read_ctx() as connection:
-            return _store_history.status_snapshot(connection, address)
+        return self._read_decoded(
+            lambda connection: _store_history.status_snapshot(connection, address)
+        )
 
     def history_snapshot(
         self,
@@ -662,8 +686,8 @@ class SessionStore:
         limit: int,
         excluded_tool_name: str,
     ) -> list[tuple[int, ChatMessage]] | None:
-        with self._runtime.read_ctx() as connection:
-            return _store_history.history_records(
+        return self._read_decoded(
+            lambda connection: _store_history.history_records(
                 connection,
                 address,
                 expected_generation_id=expected_generation_id,
@@ -676,6 +700,7 @@ class SessionStore:
                 limit=limit,
                 excluded_tool_name=excluded_tool_name,
             )
+        )
 
     def history_section_stats(
         self,
@@ -710,8 +735,8 @@ class SessionStore:
         after: int,
         excluded_tool_name: str,
     ) -> tuple[bool, list[tuple[int, ChatMessage]]] | None:
-        with self._runtime.read_ctx() as connection:
-            return _store_history.history_around(
+        return self._read_decoded(
+            lambda connection: _store_history.history_around(
                 connection,
                 address,
                 expected_generation_id=expected_generation_id,
@@ -724,14 +749,16 @@ class SessionStore:
                 after=after,
                 excluded_tool_name=excluded_tool_name,
             )
+        )
 
     def reflection_runs(self, address: SessionAddress) -> list[JsonObject]:
         with self._runtime.read_ctx() as connection:
             return _store_history.reflection_runs(connection, address)
 
     def run_messages(self, address: SessionAddress, run_id: str) -> list[ChatMessage]:
-        with self._runtime.read_ctx() as connection:
-            return _store_history.run_messages(connection, address, run_id)
+        return self._read_decoded(
+            lambda connection: _store_history.run_messages(connection, address, run_id)
+        )
 
     def run_summary(
         self,
@@ -740,8 +767,11 @@ class SessionStore:
         run_id: str | None = None,
         work_id: str | None = None,
     ) -> ChatMessage | None:
-        with self._runtime.read_ctx() as connection:
-            return _store_history.run_summary(connection, address, run_id=run_id, work_id=work_id)
+        return self._read_decoded(
+            lambda connection: _store_history.run_summary(
+                connection, address, run_id=run_id, work_id=work_id
+            )
+        )
 
     def run_result(
         self,
@@ -751,18 +781,20 @@ class SessionStore:
         work_id: str | None = None,
         require_latest: bool = False,
     ) -> tuple[ChatMessage | None, ChatMessage, str | None] | None:
-        with self._runtime.read_ctx() as connection:
-            return _store_history.run_result(
+        return self._read_decoded(
+            lambda connection: _store_history.run_result(
                 connection, address, run_id=run_id, work_id=work_id, require_latest=require_latest
             )
+        )
 
     def messages_since(
         self, address: SessionAddress, cursor: SessionReadCursor | None
     ) -> SessionReadBatch | None:
         with self._runtime.read_ctx() as connection:
-            return _store_history.messages_since(connection, address, cursor)
+            delta = _store_history.message_rows_since(connection, address, cursor)
+        return None if delta is None else _store_history.read_batch(delta)
 
-    def continuation(self, address: SessionAddress) -> list[JsonObject]:
+    def continuation(self, address: SessionAddress) -> SessionContinuationState | None:
         with self._runtime.read_ctx() as connection:
             return _store_continuation.continuation(connection, address)
 
@@ -779,6 +811,11 @@ class SessionStore:
     def bookend_timestamps(self, address: SessionAddress) -> tuple[str, str] | None:
         with self._runtime.read_ctx() as connection:
             return _store_history.bookend_timestamps(connection, address)
+
+    def current_skill_activation_messages(self, address: SessionAddress) -> list[ChatMessage]:
+        return self._read_decoded(
+            lambda connection: _store_history.current_skill_activation_messages(connection, address)
+        )
 
     def list_addresses(
         self,
@@ -910,7 +947,9 @@ class SessionStore:
         until: str | None = None,
         excluded_session_ids: Sequence[str] = (),
     ) -> builtins.list[tuple[SessionAddress, str, str, str, float]]:
-        try:
+        def select(
+            **fallback: Any,
+        ) -> Callable[[], builtins.list[tuple[SessionAddress, str, str, str, float]]]:
             with self._runtime.read_ctx() as connection:
                 return _store_search.search(
                     connection,
@@ -924,7 +963,11 @@ class SessionStore:
                     since=since,
                     until=until,
                     excluded_session_ids=excluded_session_ids,
+                    **fallback,
                 )
+
+        try:
+            decode = select()
         except sqlite3.Error as exc:
             if "fts" in str(exc).lower() or "messages_fts" in str(exc).lower():
                 error_message = str(exc)
@@ -932,22 +975,8 @@ class SessionStore:
                     self._execute_write(
                         lambda connection: _store_fts._detach_fts(connection, error_message)
                     )
-            with self._runtime.read_ctx() as connection:
-                return _store_search.search(
-                    connection,
-                    query,
-                    project_id=project_id,
-                    agent_id=agent_id,
-                    session_id=session_id,
-                    match_mode=match_mode,
-                    limit=limit,
-                    roles=roles,
-                    since=since,
-                    until=until,
-                    excluded_session_ids=excluded_session_ids,
-                    use_fts=False,
-                    fallback_reason="fts_error",
-                )
+            decode = select(use_fts=False, fallback_reason="fts_error")
+        return decode()
 
     def archive(self, address: SessionAddress) -> None:
         return self._execute_write(lambda connection: _store_mutations.archive(connection, address))
