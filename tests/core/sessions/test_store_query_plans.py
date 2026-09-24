@@ -26,6 +26,7 @@ from core.sessions import (
     _store_values,
 )
 from core.sessions._types import SessionAddress, SessionReadCursor
+from core.sessions.errors import SessionNotFoundError
 from tests.core.sessions.sessions_test_support import manager as manager
 
 _BRANCH_NODES = {"COMPOUND QUERY", "LEFT-MOST SUBQUERY", "UNION ALL"}
@@ -229,6 +230,31 @@ def test_existing_addresses_probe_the_live_address_index_in_one_statement(histor
     assert any("sessions_one_live_address" in detail for detail in details), details
 
 
+def test_session_point_reads_probe_the_live_address_index(history) -> None:
+    address, _anchor, connection = history
+    missing = SessionAddress("project", "agent", "missing")
+    recorder, statements = _recording(connection)
+    assert _store_queries.exists(recorder, address) is True
+    assert _store_queries.exists(recorder, missing) is False
+    assert _store_values._require_live(recorder, address)["session_id"] == "two"
+    with pytest.raises(SessionNotFoundError):
+        _store_values._require_live(recorder, missing)
+    details = [
+        str(plan[3])
+        for sql, params in statements
+        for plan in connection.execute("EXPLAIN QUERY PLAN " + sql, params)
+    ]
+    assert len(details) == len(statements) == 4, details
+    assert all(
+        re.fullmatch(
+            r"SEARCH sessions USING (COVERING )?INDEX sessions_one_live_address "
+            r"\(project_id=\? AND agent_id=\? AND session_id=\?\)",
+            detail,
+        )
+        for detail in details
+    ), details
+
+
 def test_session_owning_agents_read_distinct_ids_from_the_live_address_index(history) -> None:
     _address, _anchor, connection = history
     recorder, statements = _recording(connection)
@@ -400,7 +426,7 @@ def test_owned_run_point_lookups_probe_indexes_not_group_history(manager) -> Non
 def test_completion_activity_searches_each_scope_by_live_address_index(history) -> None:
     _address, _anchor, connection = history
     recorder, statements = _recording(connection)
-    _store_queries.list_completion_activity_rows(recorder, [("project", "agent"), (None, "other")])
+    _store_queries.list_completion_activity(recorder, [("project", "agent"), (None, "other")])
     plans = [
         str(row[3])
         for sql, params in statements

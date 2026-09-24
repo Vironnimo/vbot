@@ -420,16 +420,6 @@ def test_completion_activity_reads_completed_sessions_for_many_scopes(manager) -
         ],
         (None, "unknown"): [],
     }
-    rows = manager._store.list_completion_activity_rows([(None, "coder")])
-    assert set(rows[0].keys()) == {
-        "project_id",
-        "agent_id",
-        "session_id",
-        "latest_completion_run_id",
-        "latest_completion_status",
-        "latest_completion_at",
-        "read_completion_run_id",
-    }
 
 
 def test_completion_activity_reads_all_scopes_in_one_snapshot(manager, monkeypatch) -> None:

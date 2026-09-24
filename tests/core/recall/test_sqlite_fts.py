@@ -14,6 +14,7 @@ from core.chat import ChatMessage, ToolCall
 from core.chat.content_blocks import FileBlock, TextBlock
 from core.recall import (
     RecallBackendContext,
+    RecallOrder,
     RecallSearchRequest,
     SqliteFtsRecallBackend,
 )
@@ -503,6 +504,45 @@ async def test_large_canonical_fallback_reports_partial_instead_of_false_empty(
         sessions.close()
 
 
+@pytest.mark.parametrize("complete", [True, False])
+@pytest.mark.parametrize("order", ["relevance", "newest", "oldest"])
+async def test_fallback_reason_names_the_scan_order_actually_used(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    order: RecallOrder,
+    complete: bool,
+) -> None:
+    from core.sessions import FtsHealth, _store_fts
+    from core.sessions import _store_values as store_module
+
+    if not complete:
+        monkeypatch.setattr(store_module, "_SEARCH_CANDIDATE_LIMIT", 3)
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="fallback-order").append_many(
+        [ChatMessage.user(f"needle {day}", timestamp=timestamp(day)) for day in range(1, 8)]
+    )
+    monkeypatch.setattr(
+        _store_fts,
+        "_fts_health_from_connection",
+        lambda *_args, **_kwargs: FtsHealth(state="unavailable", reason="test fallback"),
+    )
+    try:
+        page = await backend(tmp_path, sessions).search_page(
+            replace(message_request("needle"), order=order)
+        )
+    finally:
+        sessions.close()
+
+    scan_order, other_order = ("oldest", "newest") if order == "oldest" else ("newest", "oldest")
+    assert page.ranking == f"substring_scan_{scan_order}"
+    assert page.degraded is True
+    reason = page.degradation_reason or ""
+    assert f"{scan_order}-first" in reason
+    assert f"{other_order}-first" not in reason
+    assert ("relevance" in reason.lower()) == (order == "relevance" and complete)
+    assert ("incomplete" in reason.lower()) == (not complete)
+
+
 def _short_term_history(sessions: ChatSessionManager) -> list[ChatMessage]:
     """Store Messages whose better-ranked ``c`` tokens do not contain ``C#``."""
     session = sessions.create("coder", session_id="languages")
@@ -621,7 +661,7 @@ async def test_passage_index_rewrites_only_changed_passages(tmp_path: Path) -> N
         stamp = connection.execute(
             "SELECT generation_id, history_revision FROM indexed_sessions"
         ).fetchall()
-    version = sessions.history_version(session.address)
+    version = sessions.list_history_versions([session.address])[session.address]
     assert stamp == [(version[0], version[1])]
 
 

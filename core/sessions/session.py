@@ -293,9 +293,6 @@ class ChatSession:
     def load(self) -> list[ChatMessage]:
         return self._store.messages(self.address)
 
-    async def load_async(self) -> list[ChatMessage]:
-        return await _run_session_io(self.load)
-
     def load_active(self) -> list[ChatMessage]:
         return self._store.active_messages(self.address)
 
