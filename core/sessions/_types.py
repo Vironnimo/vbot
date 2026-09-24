@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from core.runs import RunExecutionOwner
 
@@ -283,11 +283,70 @@ class SessionHistorySectionStats:
     end_timestamp: str | None
 
 
+# How Session Recall treats one live Session: an ordinary conversation, a
+# delegated Sub-Agent Session searched only on request, or an internal Session
+# (reflection, system-only) that search never returns.
+SessionRecallVisibility = Literal["conversation", "subagent", "hidden"]
+
+
+def recall_visibilities(*, include_subagents: bool) -> tuple[SessionRecallVisibility, ...]:
+    """Return the Recall visibilities one search admits."""
+    return ("conversation", "subagent") if include_subagents else ("conversation",)
+
+
 @dataclass(frozen=True)
 class SessionDescriptorSource:
     metadata: JsonObject
     message_count: int
     first_user_message: ChatMessage | None
+    recall_visibility: SessionRecallVisibility
+
+
+@dataclass(frozen=True)
+class SessionHistoryRevision:
+    """Canonical history version and Recall visibility of one live Session."""
+
+    address: SessionAddress
+    generation_id: str
+    history_revision: int
+    recall_visibility: SessionRecallVisibility
+
+
+SessionSearchOrder = Literal["relevance", "newest", "oldest"]
+
+
+@dataclass(frozen=True)
+class SessionSearchHit:
+    """One active Message whose conversation text matched a Session search.
+
+    ``text`` is the Message's conversation text; ``rank`` is its bm25 rank for
+    relevance-ordered FTS searches and ``0.0`` otherwise.
+    """
+
+    address: SessionAddress
+    message_id: str
+    role: str
+    timestamp: str
+    text: str
+    rank: float
+
+
+@dataclass(frozen=True)
+class SessionSearchResult:
+    """Exactly matching Messages of one Session search, in the requested order.
+
+    ``complete`` is false when the candidate budget ended before the search
+    found its limit or ran out of candidates, so more matches may exist.
+    ``method`` names what enumerated candidates; ``fallback_reason`` says why a
+    requested FTS search scanned instead: ``fts_unavailable``, ``fts_error``, or
+    ``tool_inclusive`` (a Tool-inclusive FTS search found nothing and retried by
+    substring).
+    """
+
+    hits: tuple[SessionSearchHit, ...]
+    complete: bool
+    method: Literal["fts", "scan"]
+    fallback_reason: str | None = None
 
 
 @dataclass(frozen=True)

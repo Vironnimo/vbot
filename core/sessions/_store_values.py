@@ -3,11 +3,9 @@
 
 from __future__ import annotations
 
-import builtins
 import json
 import logging
 import sqlite3
-from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 from core.chat.errors import ChatSessionError
@@ -256,6 +254,32 @@ def _session_list_visibility_sql(
     return visible, params
 
 
+_RECALL_SUBAGENT_MASK = _LIST_VISIBILITY_SUBAGENT_SESSION | _LIST_VISIBILITY_SUBAGENT_RUN_KIND
+# The one definition of ``SessionRecallVisibility`` over ``sessions.list_visibility_mask``.
+# Reflection kinds hide a Session even when it also carries User or Sub-Agent
+# markers. Sub-Agent markers (flag or Run kind) make it a delegated Session.
+# Otherwise legacy Sessions without valid Run kinds and Sessions with a
+# User-facing Run kind are conversations; the rest (system-only) stay hidden.
+_RECALL_VISIBILITY_SQL = (
+    "CASE"
+    f" WHEN (list_visibility_mask & {_LIST_VISIBILITY_REFLECTION}) != 0 THEN 'hidden'"
+    f" WHEN (list_visibility_mask & {_RECALL_SUBAGENT_MASK}) != 0 THEN 'subagent'"
+    f" WHEN (list_visibility_mask & {_LIST_VISIBILITY_VALID_RUN_KINDS}) = 0"
+    f" OR (list_visibility_mask & {_LIST_VISIBILITY_USER_FACING}) != 0 THEN 'conversation'"
+    " ELSE 'hidden' END"
+)
+
+
+def _recall_visibility_sql(*, include_subagents: bool) -> str:
+    """Return the ``sessions`` predicate admitting the Sessions one search may return."""
+    from core.sessions._types import recall_visibilities
+
+    admitted = ", ".join(
+        f"'{visibility}'" for visibility in recall_visibilities(include_subagents=include_subagents)
+    )
+    return f"{_RECALL_VISIBILITY_SQL} IN ({admitted})"
+
+
 _MESSAGE_INSERT = """
     INSERT INTO messages (
         message_key, session_key, seq, message_id, role, timestamp, content,
@@ -372,24 +396,8 @@ _KEYED_RECORDS = "m.message_key IN (SELECT value FROM json_each(?))"
 
 
 _SEARCH_RESULT_LIMIT = 1_000
-_CANONICAL_SEARCH_SCAN_LIMIT = 10_000
-
-
-class _FtsSearchRows(builtins.list[tuple["SessionAddress", str, str, str, float]]):
-    """List-compatible search rows with internal fallback coverage metadata."""
-
-    def __init__(
-        self,
-        rows: Sequence[tuple[SessionAddress, str, str, str, float]] = (),
-        *,
-        source: str,
-        complete: bool = True,
-        fallback_reason: str | None = None,
-    ) -> None:
-        super().__init__(rows)
-        self.source = source
-        self.complete = complete
-        self.fallback_reason = fallback_reason
+# Candidates one Message search checks before it reports an incomplete result.
+_SEARCH_CANDIDATE_LIMIT = 10_000
 
 
 def _json_object(value: JsonObject, name: str) -> str:
