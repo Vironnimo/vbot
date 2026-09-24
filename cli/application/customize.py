@@ -615,7 +615,10 @@ def run_test_instance(install: Installation, *, port: int = 0) -> None:
         reservation.bind(("127.0.0.1", port))
         selected_port = reservation.getsockname()[1]
     data = contained(install.root, f"development/test-instances/{new_id('test')}")
-    data.mkdir(parents=True)
+    # The test server initializes this fresh data directory itself. Creating the
+    # root here would leave it without the Session store's bootstrap marker, and
+    # the server refuses an existing root without that marker.
+    data.parent.mkdir(parents=True, exist_ok=True)
     print(f"Test instance: http://127.0.0.1:{selected_port}; fresh data: {data}", flush=True)
     result = subprocess.run(
         [
