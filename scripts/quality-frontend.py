@@ -92,6 +92,9 @@ def _is_explicit_test_file(path: str) -> bool:
 
 # Test files live in ``__tests__`` dirs and carry one of these extensions.
 TEST_FILE_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"}
+# Repo-wide guard scans (UI primitives, RPC ownership, i18n placeholders):
+# they cover every source, so no source-to-mirror mapping ever selects them.
+GUARD_TEST_GLOB = "*.guard.test.*"
 
 
 def _looks_like_test_file(name: str) -> bool:
@@ -227,6 +230,43 @@ def _is_webui_testable_source(path: Path) -> bool:
     return any(path == root or root in path.parents for root in (SRC_ROOT, WEBUI_ROOT / "scripts"))
 
 
+def _selects_guard_tests(path: Path) -> bool:
+    """Return whether a non-test input falls inside a scope the guard tests scan.
+
+    The guards read every WebUI source under ``src/`` (``uiPrimitives`` also
+    reads bundled Extension ``ui/`` sources), so a change anywhere there can
+    break one without touching its mirrored test.
+    """
+    src_root = WEBUI_ROOT / "src"
+    if path == src_root or src_root in path.parents:
+        return True
+    ui_root = _extension_ui_root(path)
+    return ui_root is not None and EXTENSION_UI_ROOT in ui_root.parents
+
+
+def _guard_test_targets() -> list[str]:
+    """Return every repo-wide guard test (``src/**/__tests__/*.guard.test.*``)."""
+    src_root = WEBUI_ROOT / "src"
+    if not src_root.is_dir():
+        return []
+    return sorted(
+        _relative_to_webui(entry)
+        for entry in src_root.rglob(GUARD_TEST_GLOB)
+        if entry.is_file()
+        and entry.parent.name == "__tests__"
+        and entry.suffix in TEST_FILE_SUFFIXES
+        and "node_modules" not in entry.parts
+    )
+
+
+def _is_covered_by_target(path: str, targets: list[str]) -> bool:
+    """Return whether *path* equals a target or lies under a directory target."""
+    return any(
+        path == target or (not _has_extension(target) and path.startswith(target + "/"))
+        for target in targets
+    )
+
+
 def translate_to_vitest_targets(paths: list[str]) -> tuple[list[str], list[str]]:
     """Translate input paths to the Vitest targets that actually cover them.
 
@@ -237,10 +277,13 @@ def translate_to_vitest_targets(paths: list[str]) -> tuple[list[str], list[str]]
     directory keeps its tests one level up, the nearest ancestor directory that
     holds any tests runs instead so a broader suite still exercises it. Inputs
     with no tests anywhere become a note, not a Vitest argument, so the runner
-    reports "no tests" honestly instead of a silent green pass.
+    reports "no tests" honestly instead of a silent green pass. Any non-test
+    input under ``src/`` or a bundled Extension ``ui/`` also runs every
+    repo-wide guard test not already covered by a directory target, with a note.
     """
     targets: list[str] = []
     notes: list[str] = []
+    run_guard_tests = False
 
     def add(target: str) -> None:
         if target not in targets:
@@ -252,6 +295,7 @@ def translate_to_vitest_targets(paths: list[str]) -> tuple[list[str], list[str]]
             continue
 
         absolute = (WEBUI_ROOT / p).resolve()
+        run_guard_tests = run_guard_tests or _selects_guard_tests(absolute)
         if _is_extension_page_source(absolute):
             for test_file in _find_extension_page_tests(absolute):
                 add((Path("..") / test_file.relative_to(PROJECT_ROOT)).as_posix())
@@ -290,7 +334,15 @@ def translate_to_vitest_targets(paths: list[str]) -> tuple[list[str], list[str]]
             add(relative)
             notes.append(f"{p}: no {stem} test, running {relative}/ instead")
 
-    return deduplicate_paths(targets, _has_extension), notes
+    targets = deduplicate_paths(targets, _has_extension)
+    if run_guard_tests:
+        guards = [
+            guard for guard in _guard_test_targets() if not _is_covered_by_target(guard, targets)
+        ]
+        if guards:
+            targets.extend(guards)
+            notes.append(f"repo-wide guard tests added: {', '.join(guards)}")
+    return targets, notes
 
 
 def _tool_path_and_absolute(path: str) -> tuple[str, Path]:
@@ -373,10 +425,11 @@ Pipeline:
 Path behavior:
   With no PATH, run the complete frontend gate and build. PATH values may be
   project-root-relative (`webui/src/...`) or WebUI-relative (`src/...`) files or
-  directories. Source paths select their nearest mirrored Vitest coverage. A scoped
-  run omits the build unless --build is given. --build adds a full WebUI build
-  without widening the selected lint or test paths. Missing paths abort before
-  any quality tool runs.
+  directories. Source paths select their nearest mirrored Vitest coverage; any
+  non-test path under src/ or a bundled Extension ui/ also selects the repo-wide
+  *.guard.test.* suites. A scoped run omits the build unless --build is given.
+  --build adds a full WebUI build without widening the selected lint or test
+  paths. Missing paths abort before any quality tool runs.
 
 Notes:
   npx and npm must be on PATH. The default mode keeps and reports every source-file
