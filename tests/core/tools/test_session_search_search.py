@@ -119,9 +119,10 @@ async def test_search_returns_at_most_ten_results_without_pagination(tmp_path: P
     assert "next_cursor" not in data
 
 
-async def test_unscoped_search_filters_internal_sessions_before_result_shaping(
+async def test_unscoped_search_rechecks_hit_sessions_before_result_shaping(
     tmp_path: Path,
 ) -> None:
+    """Visibility travels in the request; hits a backend still returns are rechecked."""
     sessions = ChatSessionManager(tmp_path)
     root = sessions.create("coder", session_id="root")
     duplicate = ChatMessage.user("needle duplicated", timestamp=timestamp(1))
@@ -192,11 +193,8 @@ async def test_unscoped_search_filters_internal_sessions_before_result_shaping(
     )
 
     assert [request.limit for request in seen_requests] == [10]
-    assert set(seen_requests[0].excluded_session_ids) >= {
-        "reflection-one",
-        "reflection-two",
-        "current-session",
-    }
+    assert seen_requests[0].excluded_session_ids == ("current-session",)
+    assert seen_requests[0].include_subagents is False
     assert [item["session_id"] for item in data["items"]] == [
         "root",
         "other-0",

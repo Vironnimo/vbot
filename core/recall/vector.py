@@ -27,6 +27,7 @@ from core.model_tasks import (
 from core.models.models import ModelRegistry
 from core.recall.canonical import (
     CanonicalSessionRecallBackend,
+    RecallScope,
 )
 from core.recall.passages import (
     PASSAGE_OVERLAP_CHARS,
@@ -45,7 +46,6 @@ from core.recall.recall import (
 from core.recall.vector_store import (
     RefreshPlan,
     SessionPassages,
-    SessionVersion,
     StoredPassage,
     VectorHeader,
     VectorStore,
@@ -118,15 +118,6 @@ class _EmbeddingOperationUsage:
 
 
 @dataclass(frozen=True)
-class _ScopeVersions:
-    """Live Session versions of one Recall scope, read in one Session-store query."""
-
-    live_session_ids: frozenset[str]
-    candidates: dict[str, SessionVersion]
-    source_fingerprint: str
-
-
-@dataclass(frozen=True)
 class PreparedSemanticSearch:
     """One semantic search whose index is fresh and whose query is embedded.
 
@@ -137,7 +128,7 @@ class PreparedSemanticSearch:
     backend: VectorRecallBackend
     request: RecallSearchRequest
     snapshot_id: str
-    candidate_sessions: int
+    candidate_session_ids: frozenset[str]
     header: VectorHeader | None = None
     query_vector: tuple[float, ...] = ()
 
@@ -171,17 +162,20 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
         prepared = await self.prepare_search(request)
         return await prepared.page(request.offset, request.limit)
 
-    async def prepare_search(self, request: RecallSearchRequest) -> PreparedSemanticSearch:
+    async def prepare_search(
+        self, request: RecallSearchRequest, scope: RecallScope | None = None
+    ) -> PreparedSemanticSearch:
         """Reconcile the request's candidates and embed its query once.
 
-        Emits one embedding Usage summary for the whole operation.
+        Emits one embedding Usage summary for the whole operation. A caller that
+        already read the request's scope passes it.
         """
 
         usage = _EmbeddingOperationUsage()
         try:
             async with self._index_lock:
                 return await self._semantic_operation(
-                    lambda: self._prepare(request, usage),
+                    lambda: self._prepare(request, usage, scope),
                     recover=True,
                 )
         finally:
@@ -212,6 +206,7 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
         self,
         request: RecallSearchRequest,
         usage: _EmbeddingOperationUsage,
+        scope: RecallScope | None,
     ) -> PreparedSemanticSearch:
         binding_header = await asyncio.to_thread(self._resolve_header, self.store, _INDEX_POLICY)
         if binding_header is None:
@@ -219,7 +214,8 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
                 "semantic_unavailable",
                 "Semantic search is unavailable because no embedding model is configured.",
             )
-        scope = await asyncio.to_thread(self._read_scope, request)
+        if scope is None:
+            scope = await asyncio.to_thread(self._read_scope, request)
         if binding_header.dimension > 0:
             # A pinned header already names the complete embedding space, so a
             # stale continuation fails before any embedding is paid for.
@@ -227,7 +223,7 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
         if not scope.candidates:
             snapshot_id = self._vector_snapshot(scope, binding_header)
             self._check_snapshot(request, snapshot_id)
-            return PreparedSemanticSearch(self, request, snapshot_id, 0)
+            return PreparedSemanticSearch(self, request, snapshot_id, frozenset())
 
         # The query embedding observes the live dimension and actual model
         # first; every document vector of this search must match it.
@@ -244,7 +240,7 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
             self,
             request,
             snapshot_id,
-            len(scope.candidates),
+            frozenset(scope.candidates),
             header,
             tuple(query_vector),
         )
@@ -276,8 +272,7 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
                 limit=offset + limit + 1,
                 agent_id=request.agent_id,
                 project_id=_project_scope(request.project_id),
-                session_id=request.session_id,
-                excluded_session_ids=request.excluded_session_ids,
+                session_ids=prepared.candidate_session_ids,
                 since=request.since,
                 until=request.until,
             )
@@ -308,7 +303,7 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
             ranking="cosine_distance",
             snapshot_id=prepared.snapshot_id,
             has_more=len(ranked) > offset + len(page_hits),
-            total_candidate_sessions=prepared.candidate_sessions,
+            total_candidate_sessions=len(prepared.candidate_session_ids),
         )
 
     async def _semantic_operation(
@@ -338,32 +333,10 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
                 "Semantic search failed; retry or check the embedding provider.",
             ) from error
 
-    def _read_scope(self, request: RecallSearchRequest) -> _ScopeVersions:
-        """Read every live Session version of the scope in one Session-store query."""
-
-        live = {
-            address.session_id: (generation_id, history_revision)
-            for address, generation_id, history_revision in self.sessions.list_history_revisions(
-                request.agent_id, request.project_id
-            )
-        }
-        excluded = set(request.excluded_session_ids)
-        candidates = {
-            session_id: version
-            for session_id, version in live.items()
-            if session_id not in excluded
-            and (request.session_id is None or session_id == request.session_id)
-        }
-        return _ScopeVersions(
-            live_session_ids=frozenset(live),
-            candidates=candidates,
-            source_fingerprint=self._selection_snapshot(request, candidates),
-        )
-
     @staticmethod
-    def _vector_snapshot(scope: _ScopeVersions, header: VectorHeader) -> str:
+    def _vector_snapshot(scope: RecallScope, header: VectorHeader) -> str:
         payload = (
-            f"{scope.source_fingerprint}\0{header.provider_id}\0{header.model_id}\0"
+            f"{scope.snapshot_id}\0{header.provider_id}\0{header.model_id}\0"
             f"{header.response_model_id}\0{header.space_fingerprint}\0{header.index_policy}"
         ).encode()
         return hashlib.sha256(payload).hexdigest()
@@ -630,7 +603,7 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
     async def _refresh_index(
         self,
         request: RecallSearchRequest,
-        scope: _ScopeVersions,
+        scope: RecallScope,
         header: VectorHeader,
         *,
         usage: _EmbeddingOperationUsage,
@@ -666,7 +639,7 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
     def _plan_refresh(
         self,
         request: RecallSearchRequest,
-        scope: _ScopeVersions,
+        scope: RecallScope,
         header: VectorHeader,
     ) -> RefreshPlan:
         """Reread changed candidate Sessions and diff their Passages off the event loop."""

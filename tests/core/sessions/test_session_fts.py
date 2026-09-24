@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from core.chat import ChatMessage
 from core.sessions import ChatSessionManager, SessionAddress
-from core.sessions import _store_codec as codec_module
 from core.sessions.schema import (
     FTS_COMPLETED_HIGH_WATER_KEY,
     FTS_DEGRADED_REASON_KEY,
@@ -19,7 +19,7 @@ from core.sessions.schema import (
     FTS_STORAGE_VERSION_KEY,
     FTS_TARGET_HIGH_WATER_KEY,
 )
-from tests.core.sessions.history_fixtures import seed_history
+from tests.core.sessions.history_fixtures import append_tool_fixture, seed_history
 
 
 def test_empty_store_bootstrap_does_not_enter_resumable_fts_backfill(
@@ -56,8 +56,10 @@ def test_search_availability_uses_lifecycle_markers_without_coverage_scans(
     monkeypatch.setattr(store_module, "_fts_coverage_ok", fail_coverage)
     try:
         assert sessions.is_fts_available()
-        hits = sessions.fts_search("marker", project_id=None, agent_id="agent", session_id="search")
-        assert [hit[1] for hit in hits] == [message.id]
+        hits = sessions.search_messages(
+            "marker", project_id=None, agent_id="agent", session_id="search"
+        ).hits
+        assert [hit.message_id for hit in hits] == [message.id]
     finally:
         sessions.close()
 
@@ -77,14 +79,14 @@ def test_detached_fts_reopens_complete_when_canonical_projection_already_exists(
 
     reopened = ChatSessionManager(tmp_path)
     try:
-        hits = reopened.fts_search(
+        hits = reopened.search_messages(
             "canonical",
             project_id=None,
             agent_id=address.agent_id,
             session_id=address.session_id,
-        )
+        ).hits
         assert reopened.is_fts_available()
-        assert [hit[1] for hit in hits] == [message.id]
+        assert [hit.message_id for hit in hits] == [message.id]
     finally:
         reopened.close()
 
@@ -102,10 +104,10 @@ def test_empty_internal_fts_index_never_reports_healthy_or_hides_matches(tmp_pat
         health = sessions.fts_health()
         assert health.state == "degraded"
         assert sessions.status_projection()["state"] == "search_degraded"
-        hits = sessions.fts_search(
+        hits = sessions.search_messages(
             "needle", project_id=None, agent_id=address.agent_id, session_id=address.session_id
-        )
-        assert [hit[1] for hit in hits] == [message.id]
+        ).hits
+        assert [hit.message_id for hit in hits] == [message.id]
     finally:
         sessions.close()
 
@@ -113,13 +115,13 @@ def test_empty_internal_fts_index_never_reports_healthy_or_hides_matches(tmp_pat
     try:
         assert reopened.fts_health().state == "healthy"
         assert [
-            hit[1]
-            for hit in reopened.fts_search(
+            hit.message_id
+            for hit in reopened.search_messages(
                 "needle",
                 project_id=None,
                 agent_id=address.agent_id,
                 session_id=address.session_id,
-            )
+            ).hits
         ] == [message.id]
     finally:
         reopened.close()
@@ -176,13 +178,13 @@ def test_fts_projection_uses_canonical_message_key_and_recall_text_only(tmp_path
         assert metadata[FTS_DEGRADED_REASON_KEY] == ""
         assert sessions.is_fts_available()
         assert (
-            sessions.fts_search(
+            sessions.search_messages(
                 "internal",
                 project_id=None,
                 agent_id=address.agent_id,
                 session_id=address.session_id,
-            )
-            == []
+            ).hits
+            == ()
         )
     finally:
         sessions.close()
@@ -200,10 +202,10 @@ def test_fts_search_preserves_same_message_id_in_distinct_sessions(tmp_path: Pat
         )
         sessions.create("agent", session_id=session_id).append(message)
     try:
-        hits = sessions.fts_search(
+        hits = sessions.search_messages(
             "shared", project_id=None, agent_id="agent", match_mode="all_terms"
-        )
-        assert {(hit[0].session_id, hit[1]) for hit in hits} == {
+        ).hits
+        assert {(hit.address.session_id, hit.message_id) for hit in hits} == {
             ("one", shared_id),
             ("two", shared_id),
         }
@@ -216,8 +218,14 @@ def test_fts_and_canonical_search_apply_explicit_result_bounds(tmp_path: Path) -
     session = sessions.create("agent", session_id="bounded")
     session.append_many([ChatMessage.user(f"bounded ne needle {index}") for index in range(20)])
     try:
-        assert len(sessions.fts_search("needle", project_id=None, agent_id="agent", limit=7)) == 7
-        assert len(sessions.fts_search("ne", project_id=None, agent_id="agent", limit=7)) == 7
+        assert (
+            len(sessions.search_messages("needle", project_id=None, agent_id="agent", limit=7).hits)
+            == 7
+        )
+        assert (
+            len(sessions.search_messages("ne", project_id=None, agent_id="agent", limit=7).hits)
+            == 7
+        )
     finally:
         sessions.close()
 
@@ -229,8 +237,8 @@ def test_short_fts_terms_match_tokens_without_substring_scanning(tmp_path: Path)
     substring_only = ChatMessage.user("main project")
     session.append_many([exact, substring_only])
     try:
-        hits = sessions.fts_search("ai", project_id=None, agent_id="agent")
-        assert [hit[1] for hit in hits] == [exact.id]
+        hits = sessions.search_messages("ai", project_id=None, agent_id="agent").hits
+        assert [hit.message_id for hit in hits] == [exact.id]
     finally:
         sessions.close()
 
@@ -240,23 +248,23 @@ def test_healthy_fts_null_result_does_not_fall_back_to_canonical_scan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
 
+    from core.sessions import _store_search
+
     sessions = ChatSessionManager(tmp_path)
     sessions.create("agent", session_id="no-match").append(ChatMessage.user("present text"))
 
-    def fail_decode(_row: sqlite3.Row) -> ChatMessage:
+    def fail_scan(*_args: object) -> None:
         raise AssertionError("healthy FTS null results must not scan canonical rows")
 
-    monkeypatch.setattr(codec_module, "message_from_row", fail_decode)
+    monkeypatch.setattr(_store_search, "_scan_candidates", fail_scan)
     try:
-        assert (
-            sessions.fts_search(
-                "absent",
-                project_id=None,
-                agent_id="agent",
-                roles=("user", "assistant", "error", "compaction_checkpoint"),
-            )
-            == []
+        result = sessions.search_messages(
+            "absent",
+            project_id=None,
+            agent_id="agent",
+            roles=("user", "assistant", "error", "compaction_checkpoint"),
         )
+        assert (result.hits, result.complete, result.method) == ((), True, "fts")
     finally:
         sessions.close()
 
@@ -269,15 +277,15 @@ def test_fts_candidate_filters_apply_before_the_result_limit(tmp_path: Path) -> 
     included_message = ChatMessage.user("needle")
     included.append(included_message)
     try:
-        rows = sessions.fts_search(
+        rows = sessions.search_messages(
             "needle",
             project_id=None,
             agent_id="agent",
             roles=("user",),
             excluded_session_ids=("excluded",),
             limit=1,
-        )
-        actual = [(row[0].session_id, row[1]) for row in rows]
+        ).hits
+        actual = [(row.address.session_id, row.message_id) for row in rows]
         assert actual == [("included", included_message.id)]
     finally:
         sessions.close()
@@ -299,24 +307,24 @@ def test_history_edit_materializes_active_lineage_and_removes_stale_fts_rows(
 
     assert [message.content for message in session.load_active()] == ["replacement text"]
     assert (
-        sessions.fts_search(
+        sessions.search_messages(
             "needle",
             project_id=None,
             agent_id="agent",
             roles=("user", "assistant"),
-        )
-        == []
+        ).hits
+        == ()
     )
     forked = asyncio.run(sessions.fork(session.address, target_agent_id="reviewer"))
     assert [message.content for message in forked.load_active()] == ["replacement text"]
     assert [
-        hit[1]
-        for hit in sessions.fts_search(
+        hit.message_id
+        for hit in sessions.search_messages(
             "replacement",
             project_id=None,
             agent_id="reviewer",
             session_id=forked.address.session_id,
-        )
+        ).hits
     ] == [forked.load_active()[0].id]
     with sqlite3.connect(tmp_path / "sessions.db") as connection:
         assert connection.execute(
@@ -373,10 +381,10 @@ def test_session_delete_and_history_edit_remove_exactly_their_indexed_rows(
         assert base_rows == (3,)
         assert trigram_rows == (2,)
         assert sessions.fts_health().state == "healthy"
-        hits = sessions.fts_search(
+        hits = sessions.search_messages(
             "needle", project_id=None, agent_id="agent", roles=("user", "assistant", "tool")
-        )
-        assert {(hit[0].session_id, hit[1]) for hit in hits} == {
+        ).hits
+        assert {(hit.address.session_id, hit.message_id) for hit in hits} == {
             ("kept", message.id) for message in seeded["kept"][:3]
         }
     finally:
@@ -436,10 +444,10 @@ def test_malformed_fts_progress_uses_canonical_search_without_hiding_matches(
         health = sessions._store.fts_health()
         assert health.available is False
         assert "high-water" in (health.reason or "")
-        hits = sessions.fts_search(
+        hits = sessions.search_messages(
             "canonical", project_id=None, agent_id=address.agent_id, session_id=address.session_id
-        )
-        assert [hit[1] for hit in hits] == [message.id]
+        ).hits
+        assert [hit.message_id for hit in hits] == [message.id]
     finally:
         sessions.close()
 
@@ -517,7 +525,9 @@ def test_fts_rebuild_resumes_after_an_interrupted_batch(tmp_path: Path, monkeypa
     reopened = ChatSessionManager(tmp_path)
     try:
         assert reopened.is_fts_available()
-        assert len(reopened.fts_search("resume", project_id=None, agent_id="agent")) == 105
+        assert (
+            len(reopened.search_messages("resume", project_id=None, agent_id="agent").hits) == 105
+        )
     finally:
         reopened.close()
 
@@ -586,9 +596,76 @@ def test_fts_query_keeps_unicode_tokenizer_spelling(tmp_path: Path) -> None:
     message = ChatMessage.user("Die Stra\u00dfe ist lang")
     sessions.create("agent", session_id="unicode").append(message)
     try:
-        hits = sessions.fts_search(
+        hits = sessions.search_messages(
             "Stra\u00dfe", project_id=None, agent_id="agent", session_id="unicode", roles=("user",)
+        ).hits
+        assert [hit.message_id for hit in hits] == [message.id]
+    finally:
+        sessions.close()
+
+
+@pytest.mark.parametrize("use_index", [True, False])
+def test_search_admits_only_recall_visible_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, use_index: bool
+) -> None:
+    from core.sessions import _store_fts as store_module
+
+    if not use_index:
+        monkeypatch.setattr(
+            store_module,
+            "_fts_health_from_connection",
+            lambda *_args, **_kwargs: store_module.FtsHealth(state="unavailable", reason="test"),
         )
-        assert [hit[1] for hit in hits] == [message.id]
+    sessions = ChatSessionManager(tmp_path)
+    visibility = {
+        "ordinary": {"run_kinds": ["user"]},
+        "calendar": {"run_kinds": ["calendar"]},
+        "delegated": {"run_kinds": ["subagent"]},
+        "reflection": {"run_kinds": ["user", "reflection"]},
+        "system": {"run_kinds": ["system"]},
+    }
+    for session_id, metadata in visibility.items():
+        session = sessions.create("agent", session_id=session_id)
+        session.append(ChatMessage.user(f"visible needle {session_id}"))
+        sessions.set_metadata(session.address, metadata)
+    try:
+
+        def searched(**options: Any) -> set[str]:
+            return {
+                hit.address.session_id
+                for hit in sessions.search_messages(
+                    "needle", project_id=None, agent_id="agent", roles=("user",), **options
+                ).hits
+            }
+
+        assert searched() == {"ordinary", "calendar"}
+        assert searched(include_subagents=True) == {"ordinary", "calendar", "delegated"}
+        assert searched(include_subagents=True, excluded_session_ids=("calendar",)) == {
+            "ordinary",
+            "delegated",
+        }
+        assert searched(session_id="reflection") == set()
+    finally:
+        sessions.close()
+
+
+@pytest.mark.parametrize("use_fts", [True, False])
+def test_tool_inclusive_search_skips_persisted_recall_results(
+    tmp_path: Path, use_fts: bool
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("agent", session_id="tools")
+    artifact = ChatMessage.tool(
+        tool_call_id="call-search", name="session_search", content='{"items": ["needle"]}'
+    )
+    ordinary = ChatMessage.tool(tool_call_id="call-read", name="read", content="needle in a file")
+    append_tool_fixture(session, artifact)
+    append_tool_fixture(session, ordinary)
+    try:
+        result = sessions.search_messages(
+            "needle", project_id=None, agent_id="agent", roles=("tool",), use_fts=use_fts
+        )
+        assert [hit.message_id for hit in result.hits] == [ordinary.id]
+        assert result.hits[0].text == "needle in a file"
     finally:
         sessions.close()
