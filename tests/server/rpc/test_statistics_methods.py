@@ -22,6 +22,8 @@ from core.projects import ProjectStore
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions._types import SKILL_CONTEXT_NOTE_PREFIX
 from core.sessions.format import write_bootstrap_marker
+from core.statistics import StatisticsIndex, StatisticsUnavailableError
+from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RpcError
 from server.rpc.methods import build_method_handlers
 from server.rpc.statistics_methods import (
@@ -69,6 +71,7 @@ class _RuntimeStub:
     def __init__(self, data_dir: Path, manager: ChatSessionManager, agent_ids: list[str]) -> None:
         self._data_dir = data_dir
         self.chat_sessions = manager
+        self.statistics_index = StatisticsIndex(data_dir)
         self.agents = _FakeAgents(agent_ids)
         self.projects = ProjectStore(data_dir, sessions=manager)
         self.global_skills: list = []
@@ -213,6 +216,14 @@ def test_report_lazily_caches_service_on_state(tmp_path: Path) -> None:
     asyncio.run(_statistics_report(state, {}))
 
     assert state.statistics_service is cached
+    assert cached._index is state.runtime.statistics_index
+
+
+def test_busy_statistics_index_maps_to_retryable_domain_error() -> None:
+    error = _map_expected_error(StatisticsUnavailableError("Statistics are busy; retry shortly"))
+
+    assert error.code == "domain_error"
+    assert "retry" in error.message
 
 
 def test_report_rejects_unknown_params(tmp_path: Path) -> None:

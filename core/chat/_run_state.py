@@ -279,11 +279,42 @@ class _SessionSnapshot:
         messages: list[ChatMessage],
         *,
         journal: JournalBoundary | None = None,
+        metadata_mutation: Callable[[JsonObject], None] | None = None,
     ) -> None:
-        """Persist *messages* and advance past them in the same transaction."""
+        """Persist *messages* and advance past them in the same transaction.
+
+        *metadata_mutation* commits in that transaction too, so Session metadata
+        describing these Messages can never outlive a failed append.
+        """
         if not messages:
             raise ValueError("a snapshot append requires Messages")
-        await self.commit(session, partial(session.append_many_async, messages), journal=journal)
+        await self.commit(
+            session,
+            partial(session.append_many_async, messages, metadata_mutation=metadata_mutation),
+            journal=journal,
+        )
+
+    async def commit_checkpoint(
+        self,
+        session: ChatSession,
+        checkpoint: ChatMessage,
+        *,
+        metadata_mutation: Callable[[JsonObject], None] | None = None,
+    ) -> str | None:
+        """Persist a Compaction *checkpoint* only while this snapshot is current.
+
+        Returns the rotated prompt-cache affinity id and advances past the
+        checkpoint, or returns ``None`` without writing or advancing when
+        another writer changed the Session since this snapshot's cursor.
+        """
+        committed = await session.commit_compaction_checkpoint_async(
+            checkpoint, since=self.cursor, metadata_mutation=metadata_mutation
+        )
+        if committed is None:
+            return None
+        batch, affinity_id = committed
+        await self._apply(session, batch)
+        return affinity_id
 
     async def commit(
         self,

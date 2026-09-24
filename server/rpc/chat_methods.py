@@ -885,7 +885,7 @@ async def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
             resolved_session_id,
             updated_executor,
             updated_display_content,
-        ) = _build_streaming_queue_update(
+        ) = await _build_streaming_queue_update(
             state,
             agent_id,
             session_id,

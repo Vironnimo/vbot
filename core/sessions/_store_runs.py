@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from core.chat.errors import ChatSessionError
 from core.sessions import _store_codec, _store_mutations, _store_owned, _store_values
 from core.sessions._io import _encode_chat_history_cursor
+from core.sessions._metadata import _append_run_kind
 from core.sessions._types import JsonObject, SessionAddress, SessionRunCompletion
 
 
@@ -29,25 +30,14 @@ def start_run(
         "WHERE session_key=? AND run_id=? AND status='running'",
         (work_id, run_kind, int(contributes_to_activity), started_at, state["session_key"], run_id),
     )
+    record_run_kind(connection, address, run_kind)
 
 
-def start_tool(
-    connection: sqlite3.Connection,
-    address: SessionAddress,
-    run_id: str,
-    assistant_id: str,
-    call_id: str,
-    started_at: str,
-) -> None:
-    state = _store_values._require_live(connection, address)
-    updated = connection.execute(
-        "UPDATE tool_calls SET status='running',started_at=? WHERE tool_call_id=? "
-        "AND status='pending' AND message_key IN (SELECT message_key FROM messages "
-        "WHERE session_key=? AND run_id=? AND message_id=?)",
-        (started_at, call_id, state["session_key"], run_id, assistant_id),
+def record_run_kind(connection: sqlite3.Connection, address: SessionAddress, run_kind: str) -> None:
+    """Add *run_kind* to the Session's listed Run kinds; a known kind is a no-op."""
+    _store_mutations.mutate_metadata(
+        connection, address, lambda metadata: _append_run_kind(metadata, run_kind)
     )
-    if updated.rowcount != 1:
-        raise ChatSessionError("Tool start must identify one pending invocation")
 
 
 def finish_run(

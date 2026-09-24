@@ -584,10 +584,19 @@ async def test_inspect_prefers_matching_live_work_in_child_session(tmp_path: Pat
 
 
 async def test_qualified_subagent_result_uses_target_project_for_persisted_fallback(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
+    store = runtime.chat_sessions._store
+    run_result = store.run_result
+    reader_threads: list[int] = []
+
+    def recording_run_result(*args: Any, **kwargs: Any) -> Any:
+        reader_threads.append(threading.get_ident())
+        return run_result(*args, **kwargs)
+
+    monkeypatch.setattr(store, "run_result", recording_run_result)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     context = make_context(project_id=None)
     session = runtime.chat_sessions.create("worker", session_id="project-child", project_id="vbot")
@@ -624,6 +633,9 @@ async def test_qualified_subagent_result_uses_target_project_for_persisted_fallb
     assert result["ok"] is True
     assert result["data"]["project_id"] == "vbot"
     assert result["data"]["result"] == "project result"
+    # The persisted fallback reads the child Session off the Event Loop thread.
+    assert reader_threads
+    assert threading.get_ident() not in reader_threads
 
 
 async def test_status_cannot_read_unowned_subagent_work(tmp_path: Path) -> None:

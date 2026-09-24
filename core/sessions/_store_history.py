@@ -907,9 +907,7 @@ def message_rows_since(
     if cursor is None:
         start = 0
     else:
-        if cursor.generation_id != generation_id or not 0 <= cursor.next_seq <= count:
-            return None
-        if cursor.next_seq < int(state["history_reset_sequence"]):
+        if not _cursor_continues(state, cursor):
             return None
         if cursor.next_seq == count and cursor.last_message_id == last_id:
             # The Session row names its newest record, so a current cursor needs no read.
@@ -930,6 +928,27 @@ def message_rows_since(
         if anchor_id != cursor.last_message_id:
             return None
     return rows, current
+
+
+def cursor_is_current(
+    connection: sqlite3.Connection, address: SessionAddress, cursor: SessionReadCursor
+) -> bool:
+    """Whether *cursor* still names the Session's newest record, without reading history."""
+    state = _store_values._require_live(connection, address)
+    return (
+        _cursor_continues(state, cursor)
+        and cursor.next_seq == int(state["message_count"])
+        and cursor.last_message_id == state["last_message_id"]
+    )
+
+
+def _cursor_continues(state: sqlite3.Row, cursor: SessionReadCursor) -> bool:
+    """An edit rewrites an existing prefix, so no cursor before it can continue."""
+    return (
+        cursor.generation_id == str(state["generation_id"])
+        and 0 <= cursor.next_seq <= int(state["message_count"])
+        and cursor.next_seq >= int(state["history_reset_sequence"])
+    )
 
 
 def read_batch(delta: tuple[list[sqlite3.Row], SessionReadCursor]) -> SessionReadBatch:

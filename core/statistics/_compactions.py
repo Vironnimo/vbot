@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable
-from dataclasses import replace
 from datetime import UTC, datetime
 
-from core.chat.messages import ChatMessage, usage_token_is_estimated
-from core.statistics._measurements import _mean, _nearest_rank_percentile, _usage_nonnegative_int
+from core.statistics._measurements import _mean, _nearest_rank_percentile
+from core.statistics._units import UnitScan
 from core.statistics.report import (
     CompactionContextStats,
     CompactionObservation,
@@ -24,49 +22,65 @@ class CompactionAccumulator:
     def __init__(self) -> None:
         self.observations: list[CompactionObservation] = []
 
-    def observe_session(
-        self,
-        agent_id: str,
-        session_id: str,
-        title: str | None,
-        messages: list[ChatMessage],
-        in_window: Callable[[str], bool],
-    ) -> None:
-        steps: int | None = None
-        pending: int | None = None
-        for message in messages:
-            if message.role == "assistant":
-                if steps is not None:
-                    steps += 1
-                if pending is not None:
-                    measured = _usage_nonnegative_int(message.usage, "input_tokens")
-                    if measured is not None and not usage_token_is_estimated(
-                        message.usage or {}, "input_tokens"
-                    ):
-                        self.observations[pending] = replace(
-                            self.observations[pending], next_input_tokens=measured
-                        )
-                    # Only the very first request is comparable to a fresh checkpoint.
-                    pending = None
-            elif message.role == "compaction_checkpoint":
-                pending = None
-                if in_window(message.timestamp):
-                    self.observations.append(
-                        CompactionObservation(
-                            agent_id,
-                            session_id,
-                            title,
-                            message.timestamp,
-                            message.compaction_strategy or "unknown",
-                            _usage_nonnegative_int(message.usage, "context_tokens_before"),
-                            _usage_nonnegative_int(message.usage, "context_tokens_after"),
-                            _usage_nonnegative_int(message.usage, "compaction_duration_ms"),
-                            steps,
-                            None,
-                        )
-                    )
-                    pending = len(self.observations) - 1
-                steps = 0
+    def load(self, scan: UnitScan, titles: list[str | None]) -> None:
+        """Observe every in-window checkpoint of the scanned units in processing order.
+
+        ``steps_since_previous`` counts the Assistant Model steps since the unit's
+        previous checkpoint, in or out of the window, and stays empty for its
+        first. ``next_input_tokens`` is the measured prompt of the very first
+        Assistant step after the checkpoint, when that step precedes any later
+        checkpoint; only that request is comparable to the fresh context.
+        """
+        for unit, timestamp, strategy, before, after, duration, steps, next_input in scan.execute(
+            f"""
+            SELECT o.unit, o.timestamp, o.strategy, o.context_before, o.context_after,
+                o.duration_ms,
+                CASE WHEN o.previous_checkpoint IS NULL THEN NULL ELSE (
+                    SELECT COUNT(*) FROM stat_calls c
+                    WHERE c.session_key = o.session_key AND c.kind = 0
+                        AND c.seq > o.previous_checkpoint AND c.seq < o.seq
+                ) END,
+                CASE WHEN o.next_call IS NOT NULL
+                    AND (o.next_checkpoint IS NULL OR o.next_call < o.next_checkpoint)
+                THEN (
+                    SELECT c.input_tokens FROM stat_calls c
+                    WHERE c.session_key = o.session_key AND c.seq = o.next_call
+                        AND c.input_estimated = 0
+                ) END
+            FROM (
+                SELECT u.unit, x.session_key, x.seq, r.timestamp, x.strategy,
+                    x.context_before, x.context_after, x.duration_ms,
+                    (SELECT MAX(p.seq) FROM stat_checkpoints p
+                        WHERE p.session_key = x.session_key AND p.seq < x.seq
+                    ) AS previous_checkpoint,
+                    (SELECT MIN(p.seq) FROM stat_checkpoints p
+                        WHERE p.session_key = x.session_key AND p.seq > x.seq
+                    ) AS next_checkpoint,
+                    (SELECT MIN(c.seq) FROM stat_calls c
+                        WHERE c.session_key = x.session_key AND c.seq > x.seq AND c.kind = 0
+                    ) AS next_call
+                FROM {scan.source("stat_checkpoints", "x")}
+                JOIN stat_records r ON r.session_key = x.session_key AND r.seq = x.seq
+                WHERE {scan.where("x")}
+            ) o
+            ORDER BY o.unit, o.seq
+            """
+        ):
+            report_unit = scan.units[unit]
+            self.observations.append(
+                CompactionObservation(
+                    report_unit.display_key,
+                    report_unit.session_id,
+                    titles[unit],
+                    timestamp,
+                    strategy,
+                    before,
+                    after,
+                    duration,
+                    steps,
+                    next_input,
+                )
+            )
 
     def build(self) -> CompactionsSection:
         rows = self.observations
