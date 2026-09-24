@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -12,6 +11,8 @@ from zoneinfo import ZoneInfo
 from core.calendar._events import (
     _EVENT_INPUT_FIELDS,
     _EXDATE_FORMAT_ERROR,
+    CALENDAR_EVENT_SHAPE,
+    CALENDAR_EVENTS_FORMAT,
     DEFAULT_ALL_DAY_DURATION_DAYS,
     DEFAULT_EVENT_DURATION_MINUTES,
     FIND_FREE_MAX_RESULTS,
@@ -69,7 +70,11 @@ from core.calendar.when import looks_like_date, parse_when
 from core.config_validation import (
     JsonDiagnostic,
 )
-from core.utils.atomic import atomic_write_text
+from core.json_documents import (
+    JsonDocumentWriteError,
+    strip_unknown_fields,
+    write_json_document,
+)
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
@@ -785,7 +790,7 @@ class CalendarService:
         events: dict[str, CalendarEvent] = {}
         for index, item in enumerate(raw_payload):
             diagnostics: list[JsonDiagnostic] = []
-            _validate_event_data(diagnostics, index, item)
+            _validate_event_data(diagnostics, f"$.events[{index}]", item)
             errors = [diagnostic for diagnostic in diagnostics if diagnostic.severity == "error"]
             if errors:
                 details = "; ".join(
@@ -795,15 +800,17 @@ class CalendarService:
                 self._invalid_event_entries.append(item)
                 continue
             try:
-                event = CalendarEvent.from_dict(cast("dict[str, Any]", item))
+                event = CalendarEvent.from_dict(
+                    cast("dict[str, Any]", strip_unknown_fields(item, CALENDAR_EVENT_SHAPE))
+                )
                 self._validate_event(event)
             except (CalendarValidationError, TypeError, ValueError) as error:
-                _LOGGER.warning("Skipping invalid calendar event at $[%d]: %s", index, error)
+                _LOGGER.warning("Skipping invalid calendar event at $.events[%d]: %s", index, error)
                 self._invalid_event_entries.append(item)
                 continue
             if event.id in events:
                 _LOGGER.warning(
-                    "Skipping duplicate calendar event id at $[%d]: %s", index, event.id
+                    "Skipping duplicate calendar event id at $.events[%d]: %s", index, event.id
                 )
                 self._invalid_event_entries.append(item)
                 continue
@@ -811,14 +818,19 @@ class CalendarService:
         return events
 
     def _save_events(self) -> None:
+        """Write the events, invalid entries verbatim, and unknown fields back.
+
+        A file that no longer loads is never overwritten.
+        """
         self._ensure_storage_exists()
-        payload = [
+        events = [
             event.to_dict()
             for event in sorted(self._events.values(), key=lambda item: (item.created_at, item.id))
         ] + list(self._invalid_event_entries)
-        serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         try:
-            atomic_write_text(self._events_path, serialized)
+            write_json_document(self._events_path, {"events": events}, CALENDAR_EVENTS_FORMAT)
+        except JsonDocumentWriteError as error:
+            raise CalendarStorageError(str(error)) from error
         except OSError as error:
             raise CalendarStorageError(f"Cannot write {self._events_path}: {error}") from error
 
@@ -868,7 +880,7 @@ class CalendarService:
         try:
             self._calendar_dir.mkdir(parents=True, exist_ok=True)
             if not self._events_path.exists():
-                self._events_path.write_text("[]\n", encoding="utf-8")
+                write_json_document(self._events_path, {"events": []}, CALENDAR_EVENTS_FORMAT)
         except OSError as error:
             raise CalendarStorageError(
                 f"Cannot initialize calendar storage at {self._calendar_dir}: {error}"

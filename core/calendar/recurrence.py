@@ -37,7 +37,7 @@ WEEKDAY_CODES = ("mo", "tu", "we", "th", "fr", "sa", "su")
 MAX_RRULE_INTERVAL = 1000
 MAX_RRULE_COUNT = 10000
 
-_RRULE_FIELDS = frozenset(("freq", "interval", "count", "until", "by_weekday"))
+RRULE_FIELDS = frozenset(("freq", "interval", "count", "until", "by_weekday"))
 _DATEUTIL_FREQS = {
     "daily": DAILY,
     "weekly": WEEKLY,
@@ -72,7 +72,7 @@ def normalize_rrule(payload: object) -> dict[str, Any] | None:
         return None
     if not isinstance(payload, dict):
         raise CalendarValidationError("rrule must be an object")
-    unknown_fields = sorted(set(payload) - _RRULE_FIELDS)
+    unknown_fields = sorted(set(payload) - RRULE_FIELDS)
     if unknown_fields:
         raise CalendarValidationError(f"Unsupported rrule fields: {', '.join(unknown_fields)}")
 
