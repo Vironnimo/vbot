@@ -372,6 +372,7 @@ class Runtime:
         self._started = False
         if self._extensions is not None:
             self._extensions.fire_shutdown_blocking()
+        self._close_extension_databases()
 
         if self._channel_service is not None:
             self._channel_service.stop()
@@ -438,6 +439,7 @@ class Runtime:
             await self._extension_runtime.aclose()
         elif self._extensions is not None:
             await self._extensions.fire_shutdown()
+        self._close_extension_databases()
         self._started = False
 
         if self._channel_service is not None:
@@ -486,6 +488,11 @@ class Runtime:
         if terminal_error is not None:
             raise terminal_error
 
+    def _close_extension_databases(self) -> None:
+        """Close Extension databases a shutdown handler did not release."""
+        if self._extension_host_factory is not None:
+            self._extension_host_factory.databases.close()
+
     def _log_shutdown(self) -> None:
         if self.logger is not None:
             self.logger.info("Runtime stopped")
@@ -513,6 +520,8 @@ class Runtime:
             method = getattr(service, method_name)
             with suppress(Exception):
                 method()
+        with suppress(Exception):
+            self._close_extension_databases()
         if self._storage is not None:
             with suppress(Exception):
                 self._storage.temporary_files.stop()
@@ -1022,6 +1031,8 @@ class Runtime:
                 databases.append(provider_usage)
         if self._channel_service is not None:
             databases.append(self._channel_service.database)
+        if self._extension_host_factory is not None:
+            databases.extend(self._extension_host_factory.databases.open_databases())
         return tuple(databases)
 
     chat_sessions: _StartedService[ChatSessionManager] = _StartedService(
