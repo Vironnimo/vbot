@@ -55,9 +55,18 @@ from scripts._worktree_records import (  # noqa: E402
 )
 
 
+def _script_checkout_root() -> Path:
+    """Return the checkout that holds the running script.
+
+    Resolved at call time: a worktree checkout runs its own code and fixtures,
+    which may be newer than the linked main repository's (``PROJECT_ROOT``).
+    """
+    return Path(__file__).resolve().parent.parent
+
+
 def _resolve_project_root() -> Path:
     """Resolve the canonical repository root across linked git worktrees."""
-    script_root = Path(__file__).resolve().parent.parent
+    script_root = _script_checkout_root()
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -82,7 +91,8 @@ def _resolve_project_root() -> Path:
 PROJECT_ROOT = _resolve_project_root()
 
 WORKTREES_DIR = PROJECT_ROOT / ".worktrees"
-FAKE_PROVIDER_SETTINGS_PATH = PROJECT_ROOT / "tests" / "e2e" / "fake-provider-settings.json"
+# Relative to the running script's checkout (see ``_script_checkout_root``).
+FAKE_PROVIDER_SETTINGS_RELATIVE_PATH = Path("tests") / "e2e" / "fake-provider-settings.json"
 VALID_WORKTREE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 TRASH_DIR_PREFIX = ".trash-"
 PORT_ALLOCATION_LOCK_NAME = "vbot-worktree-port.lock"
@@ -133,7 +143,7 @@ def initialize_data_dir(data_dir: Path) -> None:
     # own code defines the layout its server expects. The seed resources
     # (.env.example and friends) come from the same checkout, otherwise a branch
     # that changes a resource would seed the main copy and diverge from it.
-    checkout_root = Path(__file__).resolve().parent.parent
+    checkout_root = _script_checkout_root()
     layout_module = runpy.run_path(
         str(checkout_root / "core" / "storage" / "layout.py"),
         run_name="vbot_data_directory_layout",
@@ -341,7 +351,10 @@ def seed_worktree_settings(settings_path: Path, *, server_port: int) -> None:
         if isinstance(loaded, dict):
             settings = loaded
 
-    fixture = json.loads(FAKE_PROVIDER_SETTINGS_PATH.read_text(encoding="utf-8"))
+    # The fixture comes from the running checkout, like the data-dir layout in
+    # ``initialize_data_dir``: a branch that changes it seeds its own version.
+    fixture_path = _script_checkout_root() / FAKE_PROVIDER_SETTINGS_RELATIVE_PATH
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     if not isinstance(fixture, dict):
         raise ValueError("fake Provider settings fixture must be a JSON object")
     providers = fixture["providers"]
