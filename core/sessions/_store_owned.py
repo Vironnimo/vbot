@@ -569,7 +569,12 @@ def owned_run_by_input(
 def run_start_boundaries(
     connection: sqlite3.Connection, addresses: Sequence[SessionAddress]
 ) -> list[sqlite3.Row]:
-    """Read exact owner-backed Run starts for a bounded set of live addresses."""
+    """Read every Run start, owned or ordinary, of up to 100 addresses.
+
+    Each address contributes its live generation and any archived generations;
+    rows carry ``generation_id`` so callers can tell them apart, ordered by
+    address, then start sequence.
+    """
     unique = tuple(dict.fromkeys(addresses))
     if len(unique) > 100:
         raise ValueError("too many Run boundary addresses")
