@@ -1,18 +1,19 @@
-"""Accumulate measured Session facts and build the Statistics report sections."""
+"""Aggregate report units in SQL and build the Statistics report sections.
+
+The builder registers units in processing order, lets SQL aggregate their
+typed facts (window filters and grouping run on indexed columns), and walks
+rows in order only where the report is order-dependent: Run groups, the
+prompt-cache heuristic, Compaction recurrence and sequential cost sums.
+"""
 
 from __future__ import annotations
 
+import json
+import sqlite3
 from collections import Counter
-from collections.abc import Callable
-from dataclasses import replace
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
-from core.chat.messages import ChatMessage
-from core.models.pricing import TokenPricing
-from core.sessions import (
-    skill_context_note_name,
-    skill_tool_activation_name,
-)
 from core.statistics._accumulators import (
     _AgentAcc,
     _DailyAcc,
@@ -20,43 +21,37 @@ from core.statistics._accumulators import (
     _ProviderAcc,
     _ToolAcc,
 )
-from core.statistics._cache import (
-    _SessionCacheTracker,
-)
+from core.statistics._cache import CacheFacts, load_cache_facts
 from core.statistics._compactions import CompactionAccumulator
-from core.statistics._costs import CostAccumulator
+from core.statistics._costs import (
+    CostAccumulator,
+    PricingLookup,
+    refresh_retrospective_costs,
+)
 from core.statistics._extensions import (
     EXTENSION_ACTOR_PREFIX,
     ExtensionSlice,
-    ExtensionSliceKey,
     ExtensionUsageAccumulator,
 )
 from core.statistics._measurements import (
     UNKNOWN_MODEL_KEY,
     _count_entries,
-    _date_key,
-    _distinct_run_models,
-    _duration_ms,
-    _group_is_open,
-    _is_visible_assistant_message,
-    _is_visible_chat_message,
     _max_timestamp,
     _mean,
     _nearest_rank_percentile,
-    _parse_envelope,
-    _provider_model_key,
     _ratio,
-    _read_usage,
-    _timing_field,
-    _usage_nonnegative_int,
 )
-from core.statistics._sources import (
-    _session_activity_messages,
+from core.statistics._projection import (
+    CALL_KIND_COMPACTION,
+    MICROSECONDS_PER_DAY,
+    MICROSECONDS_PER_HOUR,
+    datetime_instant,
+    day_key,
 )
+from core.statistics._units import ReportUnit, UnitScan, max_timestamp_sql
 from core.statistics.report import (
     AgentActivity,
     AgentRunCount,
-    CacheBreakIncident,
     CacheSection,
     CompactionsSection,
     DailyCount,
@@ -69,9 +64,9 @@ from core.statistics.report import (
     ModelUsage,
     OverviewSection,
     ProviderUsage,
+    RunActivity,
     RunsSection,
     RunStatusCounts,
-    SessionCacheUsage,
     SessionRunCount,
     StatisticsReport,
     SuspectedCacheBreaks,
@@ -88,10 +83,8 @@ from core.statistics.skills import (
     SkillsSection,
     SkillUsageAccumulator,
     empty_inventory,
-    offered_skill_names,
     resolve_inventory,
 )
-from core.statistics.timestamps import parse_timestamp
 
 # Visible conversation roles stay separate from the full persisted Session
 # record vocabulary. User records always count; Assistant records count only
@@ -130,31 +123,65 @@ TOP_CACHE_SESSIONS = 20
 TOP_CACHE_BREAK_INCIDENTS = 20
 
 
-class _Aggregator:
-    """Mutable accumulator for one statistics scan."""
+_TOOL_P95 = 95
+
+# Floor-correct UTC hour of a microsecond instant, also before the epoch.
+_HOUR_SQL = (
+    f"(((e.instant % {MICROSECONDS_PER_DAY}) + {MICROSECONDS_PER_DAY}) "
+    f"% {MICROSECONDS_PER_DAY}) / {MICROSECONDS_PER_HOUR}"
+)
+
+_MEASURED_INPUT = "SUM(CASE WHEN c.input_estimated = 1 THEN 0 ELSE COALESCE(c.input_tokens, 0) END)"
+_ESTIMATED_INPUT = (
+    "SUM(CASE WHEN c.input_estimated = 1 THEN COALESCE(c.input_tokens, 0) ELSE 0 END)"
+)
+_MEASURED_OUTPUT = (
+    "SUM(CASE WHEN c.output_estimated = 1 THEN 0 ELSE COALESCE(c.output_tokens, 0) END)"
+)
+_ESTIMATED_OUTPUT = (
+    "SUM(CASE WHEN c.output_estimated = 1 THEN COALESCE(c.output_tokens, 0) ELSE 0 END)"
+)
+# Reasoning counts only for a measured output with a valid reported breakdown.
+_REASONING = "(c.output_estimated = 0 AND c.reasoning_tokens IS NOT NULL)"
+# Cache fields count only for a measured prompt that reported them.
+_CACHE = "(c.input_estimated = 0 AND c.has_cache = 1)"
+
+
+class ReportBuilder:
+    """Aggregate one report over registered units, then build its sections."""
 
     def __init__(
         self,
         *,
         since: datetime | None,
         until: datetime | None,
-        pricing_lookup: Callable[[str], TokenPricing | None] | None = None,
+        pricing_lookup: PricingLookup | None = None,
+        include_costs: bool = True,
+        include_skills: bool = True,
     ) -> None:
-        self._costs = CostAccumulator(pricing_lookup)
-        self._compactions = CompactionAccumulator()
-        self._compaction_calls = 0
-        self._unreported_calls = 0
         self._since = since
         self._until = until
+        self._pricing_lookup = pricing_lookup
+        self._include_costs = include_costs
+        self._include_skills = include_skills
+
+        self._units: list[ReportUnit] = []
+        self._skill_facts: list[tuple[str | None, list[str]]] = []
+        self._slices: list[ExtensionSlice | None] = []
+
+        self._costs = CostAccumulator()
+        self._compactions = CompactionAccumulator()
+        self._cache = CacheFacts()
+        self._compaction_calls = 0
+        self._unreported_calls = 0
         self._extensions = ExtensionUsageAccumulator(
             windowed=since is not None or until is not None
         )
-        # The participant slice of the Extension-owned Session being processed.
-        self._slice: ExtensionSlice | None = None
 
         self._agent_order: list[str] = []
         self._agents: dict[str, _AgentAcc] = {}
         self._total_sessions = 0
+        self._total_records = 0
         self._role_counts: Counter[str] = Counter()
         self._chat_message_role_counts: Counter[str] = Counter()
         self._last_activity: str | None = None
@@ -183,9 +210,6 @@ class _Aggregator:
         self._cache_write_tokens = 0
         self._cache_turns = 0
         self._cache_input_tokens = 0
-        self._session_cache_records: list[SessionCacheUsage] = []
-        self._cache_break_evaluated_turns = 0
-        self._cache_break_incidents: list[CacheBreakIncident] = []
 
         self._total_errors = 0
         self._error_by_kind: Counter[str] = Counter()
@@ -206,9 +230,28 @@ class _Aggregator:
         self._scanned_agent_ids: set[str] = set()
         self._scanned_project_ids: set[str] = set()
 
-    # -- ingest ------------------------------------------------------------
+    # -- registration ------------------------------------------------------
 
-    def register_agent(self, agent_id: str, summaries: list[JsonObject]) -> None:
+    def add_unit(
+        self,
+        unit: ReportUnit,
+        *,
+        created_at: str | None = None,
+        offered_skills: Sequence[str] = (),
+    ) -> None:
+        """Queue one surviving unit in processing order.
+
+        ``created_at`` and ``offered_skills`` feed the skills tally, which
+        windows offers by Session start rather than by record timestamp.
+        """
+        self._agent(unit.display_key)
+        self._units.append(unit)
+        self._skill_facts.append((created_at, list(offered_skills)))
+        self._slices.append(
+            None if unit.extension is None else self._extensions.slice(unit.extension)
+        )
+
+    def register_agent(self, agent_id: str, summaries: Sequence[JsonObject]) -> None:
         """Record an agent and its session-level structural facts."""
         accumulator = self._agent(agent_id)
         accumulator.sessions = len(summaries)
@@ -218,139 +261,6 @@ class _Aggregator:
             if isinstance(last_active, str):
                 accumulator.last_activity = _max_timestamp(accumulator.last_activity, last_active)
                 self._last_activity = _max_timestamp(self._last_activity, last_active)
-
-    def process_session(
-        self,
-        agent_id: str,
-        session_id: str,
-        messages: list[ChatMessage],
-        summary: JsonObject,
-        extension: ExtensionSliceKey | None = None,
-    ) -> None:
-        """Accumulate every aggregate for one session.
-
-        ``agent_id`` is the report display key (bare id, or ``agent@projekt`` for
-        a project Session). ``summary`` is the Session's merged canonical metadata
-        (from the narrow Session summary projection), carrying ``created_at`` and
-        ``seen_skills``. All non-skills aggregates run over the in-window
-        messages; the skills tally is fed the full activation notes and applies
-        its own window (offered by session ``created_at``, activated by note
-        timestamp). ``extension`` identifies an Extension-owned participant
-        Session; its in-window activity also fills that participant's slice.
-        """
-        self._slice = None if extension is None else self._extensions.slice(extension)
-        try:
-            self._process_session(agent_id, session_id, messages, summary)
-        finally:
-            self._slice = None
-
-    def _process_session(
-        self,
-        agent_id: str,
-        session_id: str,
-        messages: list[ChatMessage],
-        summary: JsonObject,
-    ) -> None:
-        agent = self._agent(agent_id)
-        activity_messages = _session_activity_messages(messages, summary)
-        title = summary.get("title")
-        title = title if isinstance(title, str) else None
-        self._compactions.observe_session(
-            agent_id, session_id, title, activity_messages, self._in_window
-        )
-        in_window = [message for message in activity_messages if self._in_window(message.timestamp)]
-
-        groups: dict[str, list[ChatMessage]] = {}
-        completed: set[str] = set()
-        current_model: str | None = None
-        session_runs = 0
-        session_tool_calls = 0
-        cache_tracker = _SessionCacheTracker(agent_id=agent_id, session_id=session_id)
-
-        for message in in_window:
-            self._role_counts[message.role] += 1
-            agent.session_records += 1
-            if self._slice is not None:
-                self._slice.observe_record(message.timestamp)
-            if _is_visible_chat_message(message):
-                self._chat_message_role_counts[message.role] += 1
-                agent.chat_messages += 1
-            cache_tracker.observe(message)
-            if message.role == "compaction_checkpoint":
-                call = (message.usage or {}).get("model_call")
-                if isinstance(call, dict) and isinstance(call.get("usage"), dict):
-                    call_message = replace(
-                        message, role="assistant", model=call.get("model"), usage=call["usage"]
-                    )
-                    self._record_usage(call_message, _date_key(message.timestamp), compaction=True)
-                    self._record_cost(
-                        *self._costs.observe(
-                            call_message,
-                            agent_id=agent_id,
-                            session_id=session_id,
-                            session_title=title,
-                            kind="compaction",
-                        )
-                    )
-            if message.role == "assistant":
-                self._record_cost(
-                    *self._costs.observe(
-                        message, agent_id=agent_id, session_id=session_id, session_title=title
-                    )
-                )
-            if message.role == "run_summary":
-                self._record_run(
-                    agent, agent_id, session_id, groups.get(message.run_id or "", []), message
-                )
-                if message.run_id:
-                    completed.add(message.run_id)
-                session_runs += 1
-                continue
-
-            self._record_message(agent, current_model, message)
-            if message.role == "assistant":
-                current_model = _provider_model_key(message.model)
-            if message.role == "tool":
-                session_tool_calls += 1
-            if message.run_id:
-                groups.setdefault(message.run_id, []).append(message)
-
-        self._open_run_groups += sum(
-            _group_is_open(group) for run_id, group in groups.items() if run_id not in completed
-        )
-
-        if session_runs:
-            self._runs_per_session.append(SessionRunCount(agent_id, session_id, session_runs))
-        if session_tool_calls:
-            self._tool_by_session[(agent_id, session_id)] += session_tool_calls
-
-        session_cache_record = cache_tracker.session_record()
-        if session_cache_record is not None:
-            self._session_cache_records.append(session_cache_record)
-        self._cache_break_evaluated_turns += cache_tracker.evaluated_turns
-        self._cache_break_incidents.extend(cache_tracker.incidents)
-
-        self._record_skill_usage(agent_id, summary, activity_messages)
-
-    def _record_skill_usage(
-        self, display_key: str, summary: JsonObject, messages: list[ChatMessage]
-    ) -> None:
-        created_at = summary.get("created_at")
-        # Both activation carriers count: user-trigger notes and loading ``skill``
-        # tool results (a (session, skill) pair still counts at most once — the
-        # accumulator dedups).
-        activations: list[tuple[str, str | None]] = [
-            (name, message.timestamp)
-            for message in messages
-            if (name := skill_context_note_name(message) or skill_tool_activation_name(message))
-            is not None
-        ]
-        self._skill_usage.observe_session(
-            display_key=display_key,
-            created_at=created_at if isinstance(created_at, str) else None,
-            offered_names=offered_skill_names(summary),
-            activations=activations,
-        )
 
     def register_scope(self, *, agent_id: str | None, project_id: str | None) -> None:
         """Record a scanned scope's bare ids for the inventory join at build time.
@@ -363,228 +273,424 @@ class _Aggregator:
         if project_id is not None:
             self._scanned_project_ids.add(project_id)
 
-    def _record_cost(self, cost: JsonObject, retrospective: bool) -> None:
-        if self._slice is not None:
-            self._slice.costs.add(cost, retrospective=retrospective)
+    # -- aggregation -------------------------------------------------------
 
-    # -- per-message accumulation -----------------------------------------
-
-    def _record_message(
-        self, agent: _AgentAcc, current_model: str | None, message: ChatMessage
-    ) -> None:
-        day = _date_key(message.timestamp)
-
-        if message.role == "assistant":
-            self._record_usage(message, day)
-        elif message.role == "error":
-            self._record_error(agent, current_model, message, day)
-        elif message.role == "tool":
-            self._record_tool(agent, message)
-
-    def _record_usage(
-        self, message: ChatMessage, day: str | None, *, compaction: bool = False
-    ) -> None:
-        self._compaction_calls += int(compaction)
-        self._usage_assistant_messages += int(not compaction)
-        key = _provider_model_key(message.model)
-        provider = key.split("/", 1)[0] if "/" in key else key
-        model = self._model(provider, key)
-        provider_acc = self._provider(provider)
-        model.assistant_messages += 1
-        provider_acc.assistant_messages += 1
-
-        facts = _read_usage(message.usage)
-        daily = self._daily_bucket(day)
-        if self._slice is not None:
-            self._slice.model_calls += 1
-            if facts.input_estimated:
-                self._slice.estimated_input_tokens += facts.input_tokens
-            else:
-                self._slice.measured_input_tokens += facts.input_tokens
-            if facts.output_estimated:
-                self._slice.estimated_output_tokens += facts.output_tokens
-            else:
-                self._slice.measured_output_tokens += facts.output_tokens
-
-        if facts.estimated:
-            self._usage_estimated_turns += 1
-            model.estimated_turns += 1
-            provider_acc.estimated_turns += 1
-        elif all(
-            _usage_nonnegative_int(message.usage, key) is not None
-            for key in ("input_tokens", "output_tokens")
-        ):
-            self._usage_measured_turns += 1
-        else:
-            self._unreported_calls += 1
-
-        if facts.input_estimated:
-            model.estimated_input_tokens += facts.input_tokens
-            provider_acc.estimated_input_tokens += facts.input_tokens
-            if daily is not None:
-                daily.estimated_input_tokens += facts.input_tokens
-        else:
-            model.measured_input_tokens += facts.input_tokens
-            provider_acc.measured_input_tokens += facts.input_tokens
-            if daily is not None:
-                daily.measured_input_tokens += facts.input_tokens
-
-        if facts.output_estimated:
-            model.estimated_output_tokens += facts.output_tokens
-            provider_acc.estimated_output_tokens += facts.output_tokens
-            if daily is not None:
-                daily.estimated_output_tokens += facts.output_tokens
-        else:
-            model.measured_output_tokens += facts.output_tokens
-            provider_acc.measured_output_tokens += facts.output_tokens
-            if daily is not None:
-                daily.measured_output_tokens += facts.output_tokens
-
-        if not facts.output_estimated and facts.has_reasoning_data:
-            self._reasoning_tokens += facts.reasoning
-            self._reasoning_turns += 1
-            for reasoning_acc in (model, provider_acc):
-                reasoning_acc.reasoning_tokens += facts.reasoning
-                reasoning_acc.reasoning_turns += 1
-            if daily is not None:
-                daily.reasoning_tokens += facts.reasoning
-                daily.reasoning_turns += 1
-        if not facts.input_estimated and facts.has_cache_data:
-            self._cache_read_tokens += facts.cache_read
-            self._cache_write_tokens += facts.cache_write
-            self._cache_turns += 1
-            self._cache_input_tokens += facts.input_tokens
-            for cache_acc in (model, provider_acc):
-                cache_acc.cache_turns += 1
-                cache_acc.cache_input_tokens += facts.input_tokens
-                cache_acc.cache_read_tokens += facts.cache_read
-                cache_acc.cache_write_tokens += facts.cache_write
-            if daily is not None:
-                daily.cache_input_tokens += facts.input_tokens
-                daily.cache_read_tokens += facts.cache_read
-                daily.cache_write_tokens += facts.cache_write
-
-    def _record_error(
-        self,
-        agent: _AgentAcc,
-        current_model: str | None,
-        message: ChatMessage,
-        day: str | None,
-    ) -> None:
-        self._total_errors += 1
-        agent.errors += 1
-        if self._slice is not None:
-            self._slice.errors += 1
-        self._error_by_kind[message.error_kind or UNKNOWN_MODEL_KEY] += 1
-        self._error_by_agent[agent.agent_id] += 1
-
-        model_key = current_model or UNKNOWN_MODEL_KEY
-        provider = model_key.split("/", 1)[0] if "/" in model_key else model_key
-        self._error_by_model[model_key] += 1
-        self._error_by_provider[provider] += 1
-        if model_key != UNKNOWN_MODEL_KEY:
-            self._model(provider, model_key).errors += 1
-            self._provider(provider).errors += 1
-
-        parsed = parse_timestamp(message.timestamp)
-        if parsed is not None:
-            self._error_by_hour[parsed.hour] += 1
-        if day is not None:
-            self._daily_bucket(day).errors += 1
-
-    def _record_tool(self, agent: _AgentAcc, message: ChatMessage) -> None:
-        self._tool_total_calls += 1
-        if self._slice is not None:
-            self._slice.tool_calls += 1
-        name = message.name or UNKNOWN_MODEL_KEY
-        self._tool_by_agent[agent.agent_id] += 1
-        tool = self._tool(name)
-        tool.calls += 1
-
-        duration = _duration_ms(message.timing)
-        if duration is not None:
-            tool.duration_total_ms += duration
-            tool.duration_samples.append(duration)
-
-        envelope = _parse_envelope(message.content)
-        if envelope is None:
-            return
-        if envelope["ok"]:
-            tool.successes += 1
-        else:
-            tool.failures += 1
-            code = envelope["error"]["code"]
-            tool.error_codes[code] += 1
-
-    # -- per-run accumulation ---------------------------------------------
-
-    def _record_run(
-        self,
-        agent: _AgentAcc,
-        agent_id: str,
-        session_id: str,
-        group: list[ChatMessage],
-        summary: ChatMessage,
-    ) -> None:
-        self._total_runs += 1
-        agent.runs += 1
-        status = summary.status or "completed"
-        self._status_counts[status] += 1
-        if self._slice is not None:
-            self._slice.runs += 1
-            self._slice.status[status] += 1
-
-        duration = _duration_ms(summary.timing)
-        if duration is not None:
-            self._run_durations.append(duration)
-
-        models = _distinct_run_models(group)
-        if len(models) >= 2:
-            self._derived_fallback_runs += 1
-        for model_key in models:
-            provider = model_key.split("/", 1)[0] if "/" in model_key else model_key
-            model = self._model(provider, model_key)
-            model.runs += 1
-            self._provider(provider).runs += 1
-            if duration is not None:
-                model.run_duration_total_ms += duration
-                model.run_duration_count += 1
-
-        tool_calls = sum(1 for message in group if message.role == "tool")
-        self._run_model_steps += sum(1 for message in group if message.role == "assistant")
-        self._run_agent_messages += sum(
-            1 for message in group if _is_visible_assistant_message(message)
-        )
-        if tool_calls:
-            self._runs_with_tool_calls += 1
-            self._run_tool_calls += tool_calls
-
-        if duration is not None:
-            self._longest_runs.append(
-                LongestRun(
-                    agent_id=agent_id,
-                    session_id=session_id,
-                    run_id=summary.run_id or "",
-                    status=status,
-                    duration_ms=duration,
-                    started_at=_timing_field(summary.timing, "started_at"),
-                    completed_at=_timing_field(summary.timing, "completed_at"),
-                    models=sorted(models),
-                )
+    def aggregate(self, connection: sqlite3.Connection) -> None:
+        """Aggregate every registered unit from the reconciled index."""
+        scan = UnitScan(connection, self._units, since=self._since, until=self._until)
+        titles = [unit.title for unit in self._units]
+        self._load_records(scan)
+        self._load_calls(scan)
+        self._load_errors(scan)
+        self._load_tools(scan)
+        self._load_runs(scan)
+        self._compactions.load(scan, titles)
+        self._cache = load_cache_facts(scan, top_incidents=TOP_CACHE_BREAK_INCIDENTS)
+        self._load_slice_activity(scan)
+        if self._include_costs:
+            refresh_retrospective_costs(connection, self._pricing_lookup)
+            self._costs.load(
+                scan,
+                titles=titles,
+                slices=[None if value is None else value.costs for value in self._slices],
             )
+        if self._include_skills:
+            self._load_skills(scan)
 
-        day = _date_key(summary.timestamp)
-        if day is not None:
-            bucket = self._daily_bucket(day)
-            bucket.runs += 1
-            if status == "completed":
-                bucket.completed += 1
-            elif status == "failed":
-                bucket.failed += 1
-            elif status == "cancelled":
-                bucket.cancelled += 1
-            elif status == "interrupted":
-                bucket.interrupted += 1
+    def _load_records(self, scan: UnitScan) -> None:
+        role_columns = ", ".join(f"SUM(r.role = '{role}')" for role in SESSION_RECORD_ROLES)
+        user_column = 2 + SESSION_RECORD_ROLES.index("user")
+        for row in scan.execute(
+            f"""
+            SELECT u.unit, COUNT(*), {role_columns}
+            FROM {scan.source("stat_records", "r")}
+            WHERE {scan.where("r")}
+            GROUP BY u.unit
+            """
+        ):
+            unit, total = row[0], row[1]
+            agent = self._agents[self._units[unit].display_key]
+            self._total_records += total
+            agent.session_records += total
+            for role, count in zip(SESSION_RECORD_ROLES, row[2:], strict=True):
+                if count:
+                    self._role_counts[role] += count
+            users = row[user_column]
+            self._chat_message_role_counts["user"] += users
+            agent.chat_messages += users
+            unit_slice = self._slices[unit]
+            if unit_slice is not None:
+                unit_slice.records += total
+
+    def _load_calls(self, scan: UnitScan) -> None:
+        for (
+            unit,
+            visible,
+            calls,
+            measured_input,
+            estimated_input,
+            measured_output,
+            estimated_output,
+        ) in scan.execute(
+            f"""
+            SELECT u.unit, SUM(c.kind = 0 AND c.visible = 1), COUNT(*),
+                {_MEASURED_INPUT}, {_ESTIMATED_INPUT}, {_MEASURED_OUTPUT}, {_ESTIMATED_OUTPUT}
+            FROM {scan.source("stat_calls", "c")}
+            WHERE {scan.where("c")}
+            GROUP BY u.unit
+            """
+        ):
+            self._chat_message_role_counts["assistant"] += visible
+            self._agents[self._units[unit].display_key].chat_messages += visible
+            unit_slice = self._slices[unit]
+            if unit_slice is not None:
+                unit_slice.model_calls += calls
+                unit_slice.measured_input_tokens += measured_input
+                unit_slice.estimated_input_tokens += estimated_input
+                unit_slice.measured_output_tokens += measured_output
+                unit_slice.estimated_output_tokens += estimated_output
+
+        for (
+            kind,
+            model_key,
+            day,
+            calls,
+            estimated_turns,
+            measured_turns,
+            measured_input,
+            estimated_input,
+            measured_output,
+            estimated_output,
+            reasoning_tokens,
+            reasoning_turns,
+            cache_turns,
+            cache_input,
+            cache_read,
+            cache_write,
+        ) in scan.execute(
+            f"""
+            SELECT c.kind, c.model_key, c.day, COUNT(*),
+                SUM(c.input_estimated = 1 OR c.output_estimated = 1),
+                SUM(c.input_estimated = 0 AND c.output_estimated = 0
+                    AND c.input_tokens IS NOT NULL AND c.output_tokens IS NOT NULL),
+                {_MEASURED_INPUT}, {_ESTIMATED_INPUT}, {_MEASURED_OUTPUT}, {_ESTIMATED_OUTPUT},
+                SUM(CASE WHEN {_REASONING} THEN c.reasoning_tokens ELSE 0 END),
+                SUM({_REASONING}),
+                SUM({_CACHE}),
+                SUM(CASE WHEN {_CACHE} THEN COALESCE(c.input_tokens, 0) ELSE 0 END),
+                SUM(CASE WHEN {_CACHE} THEN COALESCE(c.cache_read_tokens, 0) ELSE 0 END),
+                SUM(CASE WHEN {_CACHE} THEN COALESCE(c.cache_write_tokens, 0) ELSE 0 END)
+            FROM {scan.source("stat_calls", "c")}
+            WHERE {scan.where("c")}
+            GROUP BY c.kind, c.model_key, c.day
+            """
+        ):
+            if kind == CALL_KIND_COMPACTION:
+                self._compaction_calls += calls
+            else:
+                self._usage_assistant_messages += calls
+            provider = _provider_of(model_key)
+            model = self._model(provider, model_key)
+            provider_acc = self._provider(provider)
+            self._usage_estimated_turns += estimated_turns
+            self._usage_measured_turns += measured_turns
+            self._unreported_calls += calls - estimated_turns - measured_turns
+            self._reasoning_tokens += reasoning_tokens
+            self._reasoning_turns += reasoning_turns
+            self._cache_read_tokens += cache_read
+            self._cache_write_tokens += cache_write
+            self._cache_turns += cache_turns
+            self._cache_input_tokens += cache_input
+            for accumulator in (model, provider_acc):
+                accumulator.assistant_messages += calls
+                accumulator.estimated_turns += estimated_turns
+                accumulator.measured_input_tokens += measured_input
+                accumulator.estimated_input_tokens += estimated_input
+                accumulator.measured_output_tokens += measured_output
+                accumulator.estimated_output_tokens += estimated_output
+                accumulator.reasoning_tokens += reasoning_tokens
+                accumulator.reasoning_turns += reasoning_turns
+                accumulator.cache_turns += cache_turns
+                accumulator.cache_input_tokens += cache_input
+                accumulator.cache_read_tokens += cache_read
+                accumulator.cache_write_tokens += cache_write
+            if day is None:
+                continue
+            daily = self._daily_bucket(day_key(day))
+            daily.measured_input_tokens += measured_input
+            daily.estimated_input_tokens += estimated_input
+            daily.measured_output_tokens += measured_output
+            daily.estimated_output_tokens += estimated_output
+            daily.reasoning_tokens += reasoning_tokens
+            daily.reasoning_turns += reasoning_turns
+            daily.cache_input_tokens += cache_input
+            daily.cache_read_tokens += cache_read
+            daily.cache_write_tokens += cache_write
+
+    def _load_errors(self, scan: UnitScan) -> None:
+        # An error is attributed to the Model of the latest in-window
+        # Assistant step before it in the same unit.
+        for unit, kind, day, hour, current_model, count in scan.execute(
+            f"""
+            SELECT u.unit, e.kind, e.day,
+                CASE WHEN e.instant IS NULL THEN NULL ELSE {_HOUR_SQL} END AS hour,
+                (
+                    SELECT c.model_key FROM stat_calls c
+                    WHERE c.session_key = e.session_key AND c.seq < e.seq AND c.kind = 0
+                        AND {scan.in_window("c")}
+                    ORDER BY c.seq DESC LIMIT 1
+                ) AS current_model,
+                COUNT(*)
+            FROM {scan.source("stat_errors", "e")}
+            WHERE {scan.where("e")}
+            GROUP BY u.unit, e.kind, e.day, hour, current_model
+            ORDER BY u.unit
+            """
+        ):
+            display_key = self._units[unit].display_key
+            self._total_errors += count
+            self._agents[display_key].errors += count
+            unit_slice = self._slices[unit]
+            if unit_slice is not None:
+                unit_slice.errors += count
+            self._error_by_kind[kind] += count
+            self._error_by_agent[display_key] += count
+            model_key = current_model or UNKNOWN_MODEL_KEY
+            provider = _provider_of(model_key)
+            self._error_by_model[model_key] += count
+            self._error_by_provider[provider] += count
+            if model_key != UNKNOWN_MODEL_KEY:
+                self._model(provider, model_key).errors += count
+                self._provider(provider).errors += count
+            if hour is not None:
+                self._error_by_hour[hour] += count
+            if day is not None:
+                self._daily_bucket(day_key(day)).errors += count
+
+    def _load_tools(self, scan: UnitScan) -> None:
+        source, where = scan.source("stat_tools", "t"), scan.where("t")
+        for name, calls, successes, failures, duration_total, duration_count in scan.execute(
+            f"""
+            SELECT t.name, COUNT(*), SUM(t.outcome IS 1), SUM(t.outcome IS 0),
+                SUM(t.duration_ms), COUNT(t.duration_ms)
+            FROM {source}
+            WHERE {where}
+            GROUP BY t.name
+            """
+        ):
+            tool = self._tool(name)
+            tool.calls += calls
+            tool.successes += successes
+            tool.failures += failures
+            tool.duration_total_ms += duration_total or 0
+            tool.duration_count += duration_count
+        percentiles = scan.nearest_rank(
+            f"""
+            SELECT t.name AS key, t.duration_ms AS value
+            FROM {source}
+            WHERE {where} AND t.duration_ms IS NOT NULL
+            """,
+            {
+                name: tool.duration_count
+                for name, tool in self._tools.items()
+                if tool.duration_count
+            },
+            _TOOL_P95,
+        )
+        for name, value in percentiles.items():
+            self._tools[str(name)].p95_duration_ms = value
+        # Failure codes are counted in processing order: the first-seen code
+        # wins a tie for the most frequent one.
+        for name, code in scan.execute(
+            f"""
+            SELECT t.name, t.error_code
+            FROM {source}
+            WHERE {where} AND t.outcome = 0
+            ORDER BY u.unit, t.seq
+            """
+        ):
+            self._tools[name].error_codes[code] += 1
+        for unit, calls in scan.execute(
+            f"""
+            SELECT u.unit, COUNT(*)
+            FROM {source}
+            WHERE {where}
+            GROUP BY u.unit
+            ORDER BY u.unit
+            """
+        ):
+            report_unit = self._units[unit]
+            self._tool_total_calls += calls
+            self._tool_by_agent[report_unit.display_key] += calls
+            self._tool_by_session[(report_unit.display_key, report_unit.session_id)] += calls
+            unit_slice = self._slices[unit]
+            if unit_slice is not None:
+                unit_slice.tool_calls += calls
+
+    def _load_runs(self, scan: UnitScan) -> None:
+        # A Run's group is every earlier in-window record of the same unit
+        # that carries its Run id; a repeated Run id keeps accumulating.
+        session_runs: dict[int, int] = {}
+        for (
+            unit,
+            day,
+            run_id,
+            status,
+            duration,
+            started_at,
+            completed_at,
+            tool_calls,
+            model_steps,
+            agent_messages,
+            models_json,
+        ) in scan.execute(
+            f"""
+            WITH summaries AS (
+                SELECT u.unit, s.session_key, s.seq, s.day, s.run_id, s.status,
+                    s.duration_ms, s.timing_started_at, s.timing_completed_at
+                FROM {scan.source("stat_runs", "s")}
+                WHERE {scan.where("s")}
+            ),
+            groups AS (
+                SELECT m.unit, m.seq,
+                    SUM(r.role = 'tool') AS tool_calls,
+                    SUM(r.role = 'assistant') AS model_steps,
+                    SUM(COALESCE(c.visible, 0)) AS agent_messages,
+                    json_group_array(DISTINCT CASE WHEN c.has_model = 1 THEN c.model_key END)
+                        AS models
+                FROM summaries m
+                CROSS JOIN stat_records r
+                    ON r.session_key = m.session_key AND r.run_id = m.run_id AND r.seq < m.seq
+                LEFT JOIN stat_calls c
+                    ON c.session_key = r.session_key AND c.seq = r.seq
+                    AND r.role = 'assistant' AND c.kind = 0
+                WHERE r.run_id IS NOT NULL AND r.run_id <> '' AND r.role <> 'run_summary'
+                    AND {scan.in_window("r")}
+                GROUP BY m.unit, m.seq
+            )
+            SELECT m.unit, m.day, m.run_id, m.status, m.duration_ms, m.timing_started_at,
+                m.timing_completed_at, g.tool_calls, g.model_steps, g.agent_messages, g.models
+            FROM summaries m
+            LEFT JOIN groups g ON g.unit = m.unit AND g.seq = m.seq
+            ORDER BY m.unit, m.seq
+            """
+        ):
+            report_unit = self._units[unit]
+            agent = self._agents[report_unit.display_key]
+            self._total_runs += 1
+            agent.runs += 1
+            session_runs[unit] = session_runs.get(unit, 0) + 1
+            self._status_counts[status] += 1
+            unit_slice = self._slices[unit]
+            if unit_slice is not None:
+                unit_slice.runs += 1
+                unit_slice.status[status] += 1
+            if duration is not None:
+                self._run_durations.append(duration)
+            models = _json_models(models_json)
+            if len(models) >= 2:
+                self._derived_fallback_runs += 1
+            for model_key in models:
+                provider = _provider_of(model_key)
+                model = self._model(provider, model_key)
+                model.runs += 1
+                self._provider(provider).runs += 1
+                if duration is not None:
+                    model.run_duration_total_ms += duration
+                    model.run_duration_count += 1
+            tool_calls = tool_calls or 0
+            self._run_model_steps += model_steps or 0
+            self._run_agent_messages += agent_messages or 0
+            if tool_calls:
+                self._runs_with_tool_calls += 1
+                self._run_tool_calls += tool_calls
+            if duration is not None:
+                self._longest_runs.append(
+                    LongestRun(
+                        agent_id=report_unit.display_key,
+                        session_id=report_unit.session_id,
+                        run_id=run_id or "",
+                        status=status,
+                        duration_ms=duration,
+                        started_at=started_at,
+                        completed_at=completed_at,
+                        models=sorted(models),
+                    )
+                )
+            if day is not None:
+                bucket = self._daily_bucket(day_key(day))
+                bucket.runs += 1
+                if status == "completed":
+                    bucket.completed += 1
+                elif status == "failed":
+                    bucket.failed += 1
+                elif status == "cancelled":
+                    bucket.cancelled += 1
+                elif status == "interrupted":
+                    bucket.interrupted += 1
+        for unit, runs in session_runs.items():
+            report_unit = self._units[unit]
+            self._runs_per_session.append(
+                SessionRunCount(report_unit.display_key, report_unit.session_id, runs)
+            )
+        # A Run id with conversational in-window records but no in-window
+        # terminal summary in its unit is a best-effort open group.
+        self._open_run_groups += scan.execute(
+            f"""
+            SELECT COUNT(*) FROM (
+                SELECT DISTINCT u.unit, r.run_id
+                FROM {scan.source("stat_records", "r")}
+                WHERE {scan.where("r")}
+                    AND r.run_id IS NOT NULL AND r.run_id <> ''
+                    AND r.role IN ('user', 'assistant')
+                    AND NOT EXISTS (
+                        SELECT 1 FROM stat_runs s
+                        WHERE s.session_key = r.session_key AND s.run_id = r.run_id
+                            AND {scan.in_window("s")}
+                    )
+            )
+            """
+        ).fetchone()[0]
+
+    def _load_slice_activity(self, scan: UnitScan) -> None:
+        if all(value is None for value in self._slices):
+            return
+        for unit, timestamp in scan.execute(
+            f"""
+            SELECT unit, timestamp FROM (
+                SELECT u.unit, r.timestamp, ROW_NUMBER() OVER (
+                    PARTITION BY u.unit ORDER BY {max_timestamp_sql("r")}
+                ) AS position
+                FROM {scan.source("stat_records", "r")}
+                WHERE u.extension = 1 AND {scan.where("r")}
+            ) WHERE position = 1
+            """
+        ):
+            unit_slice = self._slices[unit]
+            if unit_slice is not None:
+                unit_slice.last_activity = timestamp
+
+    def _load_skills(self, scan: UnitScan) -> None:
+        # Skills apply their own windows (offers by Session start, activations
+        # by record time) and count activations ever, so every unit is read.
+        activations: dict[int, list[tuple[str, str | None]]] = {}
+        for unit, name, timestamp in scan.execute(
+            f"""
+            SELECT u.unit, k.name, r.timestamp
+            FROM {scan.source("stat_skills", "k")}
+            JOIN stat_records r ON r.session_key = k.session_key AND r.seq = k.seq
+            ORDER BY u.unit, k.seq
+            """
+        ):
+            activations.setdefault(unit, []).append((name, timestamp))
+        for unit, report_unit in enumerate(self._units):
+            created_at, offered = self._skill_facts[unit]
+            self._skill_usage.observe_session(
+                display_key=report_unit.display_key,
+                created_at=created_at,
+                offered_names=offered,
+                activations=activations.get(unit, []),
+            )
 
     # -- build -------------------------------------------------------------
 
@@ -651,7 +757,7 @@ class _Aggregator:
                 role: int(self._chat_message_role_counts.get(role, 0))
                 for role in CHAT_MESSAGE_ROLES
             },
-            total_session_records=int(sum(self._role_counts.values())),
+            total_session_records=self._total_records,
             session_records_by_role={
                 role: int(self._role_counts.get(role, 0)) for role in SESSION_RECORD_ROLES
             },
@@ -738,23 +844,15 @@ class _Aggregator:
         # Worst hit rate first; equal rates surface the bigger session (more
         # tokens paid) before the smaller one.
         sessions = sorted(
-            self._session_cache_records,
+            self._cache.sessions,
             key=lambda record: (record.hit_rate, -record.input_tokens, record.session_id),
         )[:TOP_CACHE_SESSIONS]
-        incidents = sorted(
-            self._cache_break_incidents,
-            key=lambda incident: (
-                -(incident.previous_input_tokens - incident.cache_read_tokens),
-                incident.session_id,
-                incident.timestamp,
-            ),
-        )[:TOP_CACHE_BREAK_INCIDENTS]
         return CacheSection(
             lowest_hit_rate_sessions=sessions,
             suspected_breaks=SuspectedCacheBreaks(
-                evaluated_turns=self._cache_break_evaluated_turns,
-                suspected_turns=len(self._cache_break_incidents),
-                incidents=incidents,
+                evaluated_turns=self._cache.evaluated_turns,
+                suspected_turns=self._cache.suspected_turns,
+                incidents=self._cache.incidents,
             ),
         )
 
@@ -905,7 +1003,6 @@ class _Aggregator:
         )
 
     def _tool_stat(self, accumulator: _ToolAcc) -> ToolStat:
-        samples = sorted(accumulator.duration_samples)
         top_error = accumulator.error_codes.most_common(1)
         return ToolStat(
             name=accumulator.name,
@@ -914,8 +1011,12 @@ class _Aggregator:
             failures=accumulator.failures,
             success_rate=_ratio(accumulator.successes, accumulator.calls),
             error_rate=_ratio(accumulator.failures, accumulator.calls),
-            average_duration_ms=(accumulator.duration_total_ms / len(samples) if samples else None),
-            p95_duration_ms=_nearest_rank_percentile(samples, 95),
+            average_duration_ms=(
+                accumulator.duration_total_ms / accumulator.duration_count
+                if accumulator.duration_count
+                else None
+            ),
+            p95_duration_ms=accumulator.p95_duration_ms,
             top_error_code=top_error[0][0] if top_error else None,
             error_codes=_count_entries(accumulator.error_codes),
         )
@@ -951,28 +1052,124 @@ class _Aggregator:
             self._tools[name] = accumulator
         return accumulator
 
-    def _daily_bucket(self, day: str | None) -> _DailyAcc:
-        # Callers guard ``day is None``; the empty-string key keeps the helper
-        # total but never appears in the sorted output.
-        key = day or ""
-        bucket = self._daily.get(key)
+    def _daily_bucket(self, day: str) -> _DailyAcc:
+        bucket = self._daily.get(day)
         if bucket is None:
             bucket = _DailyAcc()
-            self._daily[key] = bucket
+            self._daily[day] = bucket
         return bucket
 
     def _sorted_daily(self) -> list[tuple[str, _DailyAcc]]:
-        return sorted(
-            ((date, bucket) for date, bucket in self._daily.items() if date),
-            key=lambda item: item[0],
-        )
+        return sorted(self._daily.items(), key=lambda item: item[0])
 
-    def _in_window(self, timestamp: str) -> bool:
-        if self._since is None and self._until is None:
-            return True
-        parsed = parse_timestamp(timestamp)
-        if parsed is None:
-            return True
-        if self._since is not None and parsed < self._since:
-            return False
-        return not (self._until is not None and parsed > self._until)
+
+def load_run_activity(
+    connection: sqlite3.Connection,
+    units: Sequence[ReportUnit],
+    *,
+    since: datetime,
+    until: datetime,
+    limit: int,
+) -> tuple[int, list[RunActivity]]:
+    """Return the overlap count and the latest-started Runs overlapping the interval.
+
+    A Run's execution spans its timed start and completion, falling back to its
+    summary timestamp; a Run without a parseable span never overlaps. Runs are
+    ordered by that start text, newest first, ties in processing order, and
+    only the returned Runs read their groups: every earlier record of the same
+    unit with the Run id, regardless of the interval.
+    """
+    scan = UnitScan(connection, units)
+    params = {"since": datetime_instant(since), "until": datetime_instant(until), "limit": limit}
+    # Overlapping Runs come from the activity index, so a narrow interval never
+    # visits every Run of every unit.
+    overlapping = """
+        FROM stat_runs s
+        CROSS JOIN temp.units u ON u.session_key = s.session_key
+        JOIN stat_records sr ON sr.session_key = s.session_key AND sr.seq = s.seq
+        WHERE s.activity_end >= :since AND s.activity_start <= :until
+            AND s.activity_start IS NOT NULL AND s.activity_end IS NOT NULL
+    """
+    total = scan.execute(f"SELECT COUNT(*) {overlapping}", params).fetchone()[0]
+    runs: list[RunActivity] = []
+    for (
+        unit,
+        run_id,
+        status,
+        duration,
+        started_at,
+        completed_at,
+        tool_calls,
+        measured_input,
+        estimated_input,
+        measured_output,
+        estimated_output,
+        models_json,
+    ) in scan.execute(
+        f"""
+        WITH selected AS (
+            SELECT u.unit, s.session_key, s.seq, s.run_id, s.status, s.duration_ms,
+                COALESCE(NULLIF(s.timing_started_at, ''), sr.timestamp) AS started_at,
+                COALESCE(NULLIF(s.timing_completed_at, ''), sr.timestamp) AS completed_at
+            {overlapping}
+            ORDER BY started_at DESC, u.unit, s.seq
+            LIMIT :limit
+        ),
+        groups AS (
+            SELECT m.unit, m.seq,
+                SUM(r.role = 'tool') AS tool_calls,
+                {_MEASURED_INPUT} AS measured_input,
+                {_ESTIMATED_INPUT} AS estimated_input,
+                {_MEASURED_OUTPUT} AS measured_output,
+                {_ESTIMATED_OUTPUT} AS estimated_output,
+                json_group_array(DISTINCT CASE WHEN c.has_model = 1 THEN c.model_key END)
+                    AS models
+            FROM selected m
+            CROSS JOIN stat_records r
+                ON r.session_key = m.session_key AND r.run_id = m.run_id AND r.seq < m.seq
+            LEFT JOIN stat_calls c
+                ON c.session_key = r.session_key AND c.seq = r.seq
+                AND r.role = 'assistant' AND c.kind = 0
+            WHERE r.run_id IS NOT NULL AND r.run_id <> '' AND r.role <> 'run_summary'
+            GROUP BY m.unit, m.seq
+        )
+        SELECT m.unit, m.run_id, m.status, m.duration_ms, m.started_at, m.completed_at,
+            COALESCE(g.tool_calls, 0), COALESCE(g.measured_input, 0),
+            COALESCE(g.estimated_input, 0), COALESCE(g.measured_output, 0),
+            COALESCE(g.estimated_output, 0), g.models
+        FROM selected m
+        LEFT JOIN groups g ON g.unit = m.unit AND g.seq = m.seq
+        ORDER BY m.started_at DESC, m.unit, m.seq
+        """,
+        params,
+    ):
+        report_unit = units[unit]
+        runs.append(
+            RunActivity(
+                agent_id=report_unit.display_key,
+                session_id=report_unit.session_id,
+                session_title=report_unit.title or None,
+                run_id=run_id or "",
+                status=status,
+                started_at=started_at,
+                completed_at=completed_at,
+                duration_ms=duration or 0,
+                models=sorted(_json_models(models_json)),
+                tool_calls=tool_calls,
+                measured_input_tokens=measured_input,
+                measured_output_tokens=measured_output,
+                estimated_input_tokens=estimated_input,
+                estimated_output_tokens=estimated_output,
+            )
+        )
+    return total, runs
+
+
+def _provider_of(model_key: str) -> str:
+    return model_key.split("/", 1)[0] if "/" in model_key else model_key
+
+
+def _json_models(value: str | None) -> set[str]:
+    if value is None:
+        return set()
+    return {model for model in json.loads(value) if isinstance(model, str)}
