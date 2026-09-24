@@ -44,7 +44,7 @@ async def test_owned_run_survives_reopen_and_requires_exact_durable_terminal(tmp
     await sessions.record_run_owner_async(child.address, run_id="owned", owner=owner)
     child.append(ChatMessage.user("owned work"))
     child.start_run("foreign").append(summary("foreign"))
-    rows = await sessions.owned_runs_async(owner_name="fixture", group_id="group")
+    rows = sessions.owned_runs(owner_name="fixture", group_id="group")
     assert len(rows) == 1
     assert rows[0].owner == owner
     assert rows[0].address == child.address
@@ -57,14 +57,14 @@ async def test_owned_run_survives_reopen_and_requires_exact_durable_terminal(tmp
 
     reopened = ChatSessionManager(tmp_path)
     try:
-        records = await reopened.owned_runs_async(owner_name="fixture", group_id="group")
+        records = reopened.owned_runs(owner_name="fixture", group_id="group")
         assert records[0].start_sequence == 2
         assert records[0].terminal_status == "completed"
         assert records[0].terminal_sequence == 4
         assert records[0].owner.generation_id == binding.generation_id
         assert records[0].generation_id != binding.generation_id
-        assert not await reopened.owned_runs_async(owner_name="other", group_id="group")
-        assert not await reopened.owned_runs_async(owner_name="fixture", group_id="other")
+        assert not reopened.owned_runs(owner_name="other", group_id="group")
+        assert not reopened.owned_runs(owner_name="fixture", group_id="other")
     finally:
         reopened.close()
 

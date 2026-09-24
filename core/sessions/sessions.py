@@ -164,9 +164,6 @@ class ChatSessionManager:
         _validate_session_id(address.session_id)
         return self._store.exists(address)
 
-    async def exists_async(self, address: SessionAddress) -> bool:
-        return await _run_session_io(self.exists, address)
-
     def existing_addresses(self, addresses: Sequence[SessionAddress]) -> set[SessionAddress]:
         """Return which *addresses* name live Sessions, in one set-oriented read."""
         return self._store.existing_addresses(addresses)
@@ -184,9 +181,6 @@ class ChatSessionManager:
         _validate_creatable_address(address)
         self._store.ensure_live(address)
         return ChatSession(self._store, address)
-
-    async def get_or_create_async(self, address: SessionAddress) -> ChatSession:
-        return await _run_session_io(self.get_or_create, address)
 
     def get_metadata(self, address: SessionAddress) -> JsonObject:
         return self._store.metadata(address)
@@ -208,9 +202,6 @@ class ChatSessionManager:
 
     async def get_metadata_async(self, address: SessionAddress) -> JsonObject:
         return await _run_session_io(self.get_metadata, address)
-
-    def descriptor_source(self, address: SessionAddress) -> SessionDescriptorSource:
-        return SessionDescriptorSource(*self._store.descriptor_source(address))
 
     def descriptor_sources(
         self, addresses: Sequence[SessionAddress]
@@ -236,9 +227,6 @@ class ChatSessionManager:
     ) -> tuple[JsonObject, JsonObject]:
         """Atomically mutate metadata and return exact before/after snapshots."""
         return self._store.mutate_metadata(address, mutation)
-
-    async def set_metadata_async(self, address: SessionAddress, data: JsonObject) -> None:
-        await _run_session_io(self.set_metadata, address, data)
 
     def metadata_value(self, address: SessionAddress, key: str) -> Any:
         """Read one metadata value (``None`` when absent) without decoding the rest."""
@@ -393,11 +381,6 @@ class ChatSessionManager:
             ChatSession(self._store, address)
             for address in self._store.list_addresses(project_id=project_id, agent_id=agent_id)
         ]
-
-    async def list_async(
-        self, agent_id: str, project_id: str | None = None
-    ) -> builtins.list[ChatSession]:
-        return await _run_session_io(self.list, agent_id, project_id)
 
     def list_addresses(
         self,
@@ -554,10 +537,6 @@ class ChatSessionManager:
         """Batched generation/revision lookup for derived-projection freshness."""
         return self._store.list_history_versions(addresses)
 
-    def history_version(self, address: SessionAddress) -> tuple[str, int]:
-        state = self._store.state(address)
-        return str(state["generation_id"]), int(state["history_revision"])
-
     def create_bound_temporary_session(
         self,
         address: SessionAddress,
@@ -580,11 +559,6 @@ class ChatSessionManager:
         if binding is None or binding.generation_id != generation_id:
             raise ChatSessionError("temporary Session binding was not retained")
         return binding
-
-    async def create_bound_temporary_session_async(
-        self, *args: Any, **kwargs: Any
-    ) -> TemporarySessionBinding:
-        return await _run_session_io(self.create_bound_temporary_session, *args, **kwargs)
 
     def temporary_binding(self, address: SessionAddress) -> TemporarySessionBinding | None:
         row = self._store.temporary_binding(address)
@@ -845,25 +819,6 @@ class ChatSessionManager:
             participant_id=participant_id,
             after=after,
             limit=limit,
-        )
-
-    async def owned_runs_async(
-        self,
-        *,
-        owner_name: str,
-        group_id: str,
-        participant_id: str | None = None,
-        after: int = 0,
-        limit: int = 100,
-    ) -> builtins.list[OwnedRunRecord]:
-        return await _run_session_io(
-            lambda: self.owned_runs(
-                owner_name=owner_name,
-                group_id=group_id,
-                participant_id=participant_id,
-                after=after,
-                limit=limit,
-            )
         )
 
     async def owned_runs_by_id_async(

@@ -113,9 +113,6 @@ def _copy_session_messages(
     _store_fts._insert_fts_session(connection, target_session_key)
 
 
-BUSY_TIMEOUT_MS = 1_000
-
-
 def _split_structured_fields(
     payload: JsonObject | None,
     validators: dict[str, Callable[[Any], bool]],
@@ -549,26 +546,6 @@ def message_from_row(row: sqlite3.Row) -> ChatMessage:
         return ChatMessage.from_dict(data)
     except (json.JSONDecodeError, IndexError, KeyError, TypeError, ValueError) as exc:
         raise SessionStoreCorruptError("invalid canonical Session message") from exc
-
-
-def _message_payload(row: sqlite3.Row) -> str:
-    return _message_json(message_from_row(row))
-
-
-def _message_json(message: ChatMessage) -> str:
-    try:
-        return json.dumps(message.to_dict(), ensure_ascii=False, separators=(",", ":"))
-    except (TypeError, ValueError) as exc:
-        raise SessionStoreCorruptError("invalid canonical Session message") from exc
-
-
-def messages_from_connection(connection: sqlite3.Connection, session_key: int) -> list[ChatMessage]:
-    """Decode one generation for offline verification/export callers."""
-    rows = connection.execute(
-        _store_values._message_records_sql(where="m.session_key = ?", order_by="ORDER BY m.seq"),
-        (session_key,),
-    ).fetchall()
-    return [message_from_row(row) for row in rows]
 
 
 def _message_base_row(message: ChatMessage) -> tuple[Any, ...]:

@@ -621,7 +621,7 @@ async def test_passage_index_rewrites_only_changed_passages(tmp_path: Path) -> N
         stamp = connection.execute(
             "SELECT generation_id, history_revision FROM indexed_sessions"
         ).fetchall()
-    version = sessions.history_version(session.address)
+    version = sessions.list_history_versions([session.address])[session.address]
     assert stamp == [(version[0], version[1])]
 
 
