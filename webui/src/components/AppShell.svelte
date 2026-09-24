@@ -272,6 +272,7 @@
         return 'mic-icon--warning';
       case 'error':
         return 'mic-icon--error';
+      case 'paused':
       default:
         return 'mic-icon--off';
     }
@@ -315,6 +316,11 @@
           'voice.mic.tooltip.microphoneDisconnected',
           'Microphone disconnected',
         );
+      case 'paused':
+        return t(
+          'voice.mic.tooltip.paused',
+          'Wakeword paused during Live voice',
+        );
       case 'error':
         return t('voice.mic.tooltip.error', 'Voice error');
       default:
@@ -355,6 +361,8 @@
           'voice.state.microphone_disconnected',
           'Microphone disconnected',
         );
+      case 'paused':
+        return t('voice.state.paused', 'Paused during Live voice');
       case 'error':
         return t('voice.state.error', 'Voice error');
       default:

@@ -270,6 +270,9 @@ describe('SettingsView', () => {
     expect(
       document.querySelector('[data-settings-section="desktop_connection"]'),
     ).toBeNull();
+    expect(
+      document.querySelector('[data-settings-section="live_voice_shortcut"]'),
+    ).toBeNull();
     expect(buttonByText('Voice')).toBeTruthy();
     expect(
       document.querySelector('button[aria-label="Transcription audio"]'),
@@ -279,6 +282,52 @@ describe('SettingsView', () => {
         '[role="switch"][aria-label="Enable wakeword listening"]',
       ),
     ).toBeNull();
+  });
+
+  it('adds the Live voice shortcut to Voice when the Desktop supports it', async () => {
+    rpcMock.mockImplementation(createSettingsRpcMock());
+    window.history.pushState({}, '', '/?accessor=desktop');
+    window.pywebview = {
+      api: {
+        getLiveHotkey: vi.fn().mockResolvedValue({
+          supported: true,
+          enabled: false,
+          hotkey: {
+            ctrl: true,
+            alt: true,
+            shift: false,
+            win: false,
+            key: 'Space',
+          },
+          error_code: null,
+        }),
+      },
+    };
+
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: { desktopCapabilities: { liveHotkey: true } },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document
+          .querySelector('.live-shortcut__capture')
+          ?.textContent.trim() === 'Ctrl + Alt + Space',
+    );
+    const page = document.querySelector('[data-settings-page="voice"]');
+    expect(
+      Array.from(
+        page.querySelectorAll('[data-settings-section]'),
+        (section) => section.dataset.settingsSection,
+      ),
+    ).toEqual([
+      'speech_models',
+      'live_voice_model',
+      'live_voice_shortcut',
+      'voice_controls',
+    ]);
   });
 
   it('highlights the Voice section once for a target panel request', async () => {

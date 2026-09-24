@@ -456,6 +456,18 @@ describe('AppShell wakeword mic indicator', () => {
     expect(onNavigate).not.toHaveBeenCalled();
   });
 
+  it('shows wakeword listening as paused while Live voice holds the microphone', () => {
+    mountMicIndicator({
+      state: 'paused',
+      onStop: vi.fn(),
+      onNavigate: vi.fn(),
+    });
+
+    const indicator = document.querySelector('.sidebar-footer__mic');
+    expect(indicator.textContent).toContain('Paused during Live voice');
+    expect(indicator.querySelector('.mic-icon--off')).toBeTruthy();
+  });
+
   it('navigates to voice settings when clicked while not recording', () => {
     const onStop = vi.fn();
     const onNavigate = vi.fn();
