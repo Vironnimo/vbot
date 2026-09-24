@@ -1014,6 +1014,8 @@ class Runtime:
         databases: list[Database] = []
         if self._chat_sessions is not None:
             databases.append(self._chat_sessions.database)
+        if self._decisions is not None:
+            databases.append(self._decisions.database)
         if self._provider_usage is not None:
             provider_usage = self._provider_usage.history_database
             if provider_usage is not None:
