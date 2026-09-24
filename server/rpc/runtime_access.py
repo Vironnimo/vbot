@@ -13,7 +13,7 @@ def _streaming_chat_loop(state: Any) -> ChatLoop:
     return cast(ChatLoop, state.streaming_chat_loop)
 
 
-def _build_streaming_queue_update(
+async def _build_streaming_queue_update(
     state: Any,
     agent_id: str,
     session_id: str,
@@ -24,16 +24,13 @@ def _build_streaming_queue_update(
     project_id: str | None = None,
 ) -> tuple[str, RunExecutor, str]:
     streaming_chat_loop = _streaming_chat_loop(state)
-    return cast(
-        tuple[str, RunExecutor, str],
-        streaming_chat_loop.build_queue_update(
-            agent_id,
-            session_id,
-            content,
-            queued_item,
-            input_origin=cast(Any, input_origin),
-            project_id=project_id,
-        ),
+    return await streaming_chat_loop.build_queue_update(
+        agent_id,
+        session_id,
+        content,
+        queued_item,
+        input_origin=cast(Any, input_origin),
+        project_id=project_id,
     )
 
 
