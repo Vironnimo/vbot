@@ -76,6 +76,7 @@ from core.providers.usage_history import (
 )
 from core.utils.errors import ConfigError
 from core.utils.logging import get_logger
+from core.utils.tls import shared_ssl_context
 
 __all__ = [
     "COPILOT_USAGE_CONNECTION",
@@ -130,7 +131,7 @@ class HttpxUsageTransport:
     ) -> UsageResponse:
         """Issue one GET, mapping transport failures to a clean fetch error."""
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, verify=shared_ssl_context()) as client:
             try:
                 return await client.get(
                     url,
