@@ -116,7 +116,7 @@ python server/main.py                 # Server foreground
 python cli/main.py server start       # Server background (managed)
 python desktop/main.py                # Desktop shell
 ```
-A git-ignored checkout marker selects dev data `~/.vbot-dev`, port `8421`. Installed CLI outside the checkout uses product defaults `~/.vbot`, `8420`. Never target the installed instance with development commands. Managed worktrees have separate data dirs and ports.
+A git-ignored checkout marker selects dev data `~/.vbot-dev`, port `8421`. Installed CLI outside the checkout uses product defaults `~/.vbot`, `8420`. Never target the installed instance with development commands, including its interpreter: running an installed `versions/<id>/runtime/python.exe` writes `__pycache__` into the verified version, and the next update fails with "Release file inventory does not match its payload". Managed worktrees have separate data dirs and ports.
 
 **Session store:** Live operator-safe health: `python cli/main.py session-store status|snapshot|incident`; `snapshot restore` requires a proven-stopped target. Runs, Messages, Tool invocations/results and checkpoints are stored relationally.
 
