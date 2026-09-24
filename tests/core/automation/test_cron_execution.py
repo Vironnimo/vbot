@@ -16,6 +16,7 @@ import core.automation.cron as cron_module
 from core.automation import _cron_claims as cron_claims
 from core.automation import _cron_timing as cron_timing
 from core.automation.cron import (
+    CronJobInPastError,
     CronStorageError,
 )
 from core.runs import RunKind
@@ -31,12 +32,15 @@ async def test_start_creates_active_tasks_and_records_missed_once_jobs(
 ) -> None:
     # Arrange
     service, trigger_service = make_service(tmp_path)
-    missed = service.create_job(
-        agent_id="agent-one",
-        prompt="Missed once",
-        schedule_type="once",
-        run_at=(datetime.now(UTC) - timedelta(minutes=1)).isoformat(),
-    )
+    with monkeypatch.context() as earlier:
+        # Created while its time was still ahead; it passed while vBot was offline.
+        earlier.setattr(cron_timing, "_utc_now", lambda: datetime.now(UTC) - timedelta(hours=1))
+        missed = service.create_job(
+            agent_id="agent-one",
+            prompt="Missed once",
+            schedule_type="once",
+            run_at=(datetime.now(UTC) - timedelta(minutes=1)).isoformat(),
+        )
     active_cron = service.create_job(
         agent_id="agent-two",
         prompt="Cron active",
@@ -325,8 +329,9 @@ async def test_run_once_job_retries_trigger_failure_without_completing(
         agent_id="agent-one",
         prompt="Once prompt",
         schedule_type="once",
-        run_at=(datetime.now(UTC) - timedelta(minutes=1)).isoformat(),
+        run_at=(datetime.now(UTC) + timedelta(minutes=1)).isoformat(),
     )
+    monkeypatch.setattr(cron_timing, "_sleep_until_utc", AsyncMock(return_value=True))
     sleep_delays: list[float] = []
 
     async def record_sleep(delay_seconds: float) -> None:
@@ -359,8 +364,9 @@ async def test_run_once_job_abandons_after_attempt_limit_with_backoff(
         agent_id="agent-gone",
         prompt="Once prompt",
         schedule_type="once",
-        run_at=(datetime.now(UTC) - timedelta(minutes=1)).isoformat(),
+        run_at=(datetime.now(UTC) + timedelta(minutes=1)).isoformat(),
     )
+    monkeypatch.setattr(cron_timing, "_sleep_until_utc", AsyncMock(return_value=True))
     sleep_delays: list[float] = []
 
     async def record_sleep(delay_seconds: float) -> None:
@@ -394,7 +400,7 @@ def test_failed_once_job_can_be_re_enabled(tmp_path: Path) -> None:
         agent_id="agent-one",
         prompt="Once prompt",
         schedule_type="once",
-        run_at=(datetime.now(UTC) - timedelta(minutes=1)).isoformat(),
+        run_at=(datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
     )
     service._abandon_once_job(job.id, cron_module._ONCE_MAX_FIRE_ATTEMPTS)
     assert service.get_job(job.id).status == "failed"
@@ -404,6 +410,50 @@ def test_failed_once_job_can_be_re_enabled(tmp_path: Path) -> None:
 
     # Assert
     assert re_enabled.status == "active"
+
+
+@pytest.mark.parametrize("status", ["paused", "failed"])
+def test_once_job_with_elapsed_time_is_not_rearmed(
+    tmp_path: Path, status: cron_module.CronJobStatus
+) -> None:
+    service, trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Once prompt",
+        schedule_type="once",
+        run_at=(datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
+        status="paused",
+    )
+    service._jobs[job.id].status = status
+    service._jobs[job.id].run_at = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+
+    with pytest.raises(CronJobInPastError):
+        service.enable_job(job.id)
+    assert service.get_job(job.id).status == status
+    # Choosing a future time together with the status change arms it normally.
+    future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+    assert service.update_job(job.id, status="active", run_at=future).status == "active"
+    trigger_service.trigger_run.assert_not_called()
+
+
+def test_once_job_cannot_be_created_or_moved_into_the_past(tmp_path: Path) -> None:
+    service, _trigger_service = make_service(tmp_path, tz="Europe/Berlin")
+    past = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+
+    with pytest.raises(CronJobInPastError):
+        service.create_job(agent_id="agent-one", prompt="p", schedule_type="once", run_at=past)
+    assert service.list_jobs() == []
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="p",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+    )
+    with pytest.raises(CronJobInPastError):
+        service.update_job(
+            job.id, schedule_type="once", run_at=past, cron_expression=None, remaining_runs=1
+        )
+    assert service.get_job(job.id).schedule_type == "cron"
 
 
 @pytest.mark.asyncio

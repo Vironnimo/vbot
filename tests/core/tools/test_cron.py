@@ -533,6 +533,40 @@ def test_enable_action_returns_success(tmp_path: Path) -> None:
     cron_service.enable_job.assert_called_once_with("job-enable")
 
 
+def test_past_one_time_schedule_is_rejected_with_future_time_guidance(tmp_path: Path) -> None:
+    from tests.core.automation.cron_test_support import make_service
+
+    cron_service, trigger_service = make_service(tmp_path, tz="Europe/Berlin")
+    registry = ToolRegistry()
+    register_cron_tool(registry, cron_service)
+    past = "2020-01-01T09:00:00"
+
+    created = asyncio.run(
+        _dispatch(registry, tmp_path, {"action": "create", "prompt": "Remind me", "schedule": past})
+    )
+    job_id = cast(
+        dict[str, Any],
+        asyncio.run(
+            _dispatch(
+                registry,
+                tmp_path,
+                {"action": "create", "prompt": "Remind me", "schedule": "in 30m"},
+            )
+        )["data"],
+    )["job"]["id"]
+    updated = asyncio.run(
+        _dispatch(registry, tmp_path, {"action": "update", "id": job_id, "schedule": past})
+    )
+
+    for result in (created, updated):
+        assert result["ok"] is False
+        error = cast(dict[str, Any], result["error"])
+        assert error["code"] == "invalid_arguments"
+        assert error["retryable"] is False
+    assert [job.id for job in cron_service.list_jobs()] == [job_id]
+    trigger_service.trigger_run.assert_not_called()
+
+
 def test_disable_action_returns_success(tmp_path: Path) -> None:
     cron_service = _cron_service_mock()
     cron_service.disable_job.return_value = _make_job(
