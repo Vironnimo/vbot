@@ -11,12 +11,12 @@ from typing import TYPE_CHECKING, Any, cast
 
 from core.chat.errors import ChatSessionError
 from core.sessions import _store_codec, _store_values
-from core.sessions._types import JsonObject
+from core.sessions._types import JsonObject, SessionHistoryRevision
 from core.sessions.errors import SessionNotFoundError
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
-    from core.sessions._types import SessionAddress
+    from core.sessions._types import SessionAddress, SessionRecallVisibility
 
 
 def exists(
@@ -50,11 +50,13 @@ def state(
 
 def descriptor_sources(
     connection: sqlite3.Connection, addresses: Sequence[SessionAddress]
-) -> Callable[[], dict[SessionAddress, tuple[JsonObject, int, ChatMessage | None]]]:
+) -> Callable[
+    [], dict[SessionAddress, tuple[JsonObject, int, ChatMessage | None, SessionRecallVisibility]]
+]:
     """Load compact descriptor inputs for many Sessions in set-oriented reads.
 
     The returned decoder projects metadata and first User Messages after the
-    read transaction.
+    read transaction. Each source carries the Session's Recall visibility.
     """
     selected: list[tuple[sqlite3.Row, sqlite3.Row | None]] = []
     by_scope: dict[tuple[str, str], list[str]] = {}
@@ -67,7 +69,8 @@ def descriptor_sources(
             chunk = session_ids[start : start + _store_values._DESCRIPTOR_SOURCE_BATCH_SIZE]
             placeholders = ", ".join("?" for _ in chunk)
             states = connection.execute(
-                f"SELECT session_key, message_count, {_store_values._SESSION_LIST_COLUMNS} "
+                f"SELECT session_key, message_count, {_store_values._SESSION_LIST_COLUMNS}, "
+                f"{_store_values._RECALL_VISIBILITY_SQL} AS recall_visibility "
                 "FROM sessions WHERE project_id = ? AND agent_id = ? "
                 "AND status = 'live' "
                 f"AND session_id IN ({placeholders})",
@@ -98,6 +101,7 @@ def descriptor_sources(
             _store_values._session_projected_metadata_from_state(state),
             int(state["message_count"]),
             None if first_user is None else _store_codec.message_from_row(first_user),
+            cast("SessionRecallVisibility", str(state["recall_visibility"])),
         )
         for state, first_user in selected
     }
@@ -312,13 +316,21 @@ def session_ids_with_messages(
 
 def list_history_revisions(
     connection: sqlite3.Connection, project_id: str | None, agent_id: str
-) -> list[tuple[SessionAddress, str, int]]:
+) -> list[SessionHistoryRevision]:
+    """Return every live Session version of one scope with its Recall visibility."""
     rows = connection.execute(
-        "SELECT project_id, agent_id, session_id, generation_id, history_revision FROM sessions WHERE status = 'live' AND project_id = ? AND agent_id = ? ORDER BY session_id",
+        "SELECT project_id, agent_id, session_id, generation_id, history_revision, "
+        f"{_store_values._RECALL_VISIBILITY_SQL} AS recall_visibility "
+        "FROM sessions WHERE status = 'live' AND project_id = ? AND agent_id = ? ORDER BY session_id",
         (project_id or "", agent_id),
     ).fetchall()
     return [
-        (_store_values._address(row), str(row["generation_id"]), int(row["history_revision"]))
+        SessionHistoryRevision(
+            _store_values._address(row),
+            str(row["generation_id"]),
+            int(row["history_revision"]),
+            cast("SessionRecallVisibility", str(row["recall_visibility"])),
+        )
         for row in rows
     ]
 

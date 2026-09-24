@@ -15,7 +15,7 @@ from core.recall import (
     RecallSearchError,
     RecallSearchRequest,
 )
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, FtsHealth, _store_fts
 from tests.core.recall.vector_helpers import _StubEmbeddings
 
 
@@ -48,6 +48,7 @@ def request() -> RecallSearchRequest:
         {"order": "oldest"},
         {"session_id": "one"},
         {"excluded_session_ids": ("nonexistent",)},
+        {"include_subagents": True},
     ],
 )
 async def test_changed_selection_rejects_continuation(
@@ -89,10 +90,11 @@ async def test_fts_fallback_preserves_original_selection_snapshot(
             "sqlite_fts", RecallBackendContext(tmp_path, sessions)
         )
 
-        def fail_fts(*args: Any, **kwargs: Any) -> None:
-            raise OSError("index unavailable")
-
-        monkeypatch.setattr(sessions, "fts_search", fail_fts)
+        monkeypatch.setattr(
+            _store_fts,
+            "_fts_health_from_connection",
+            lambda *_args, **_kwargs: FtsHealth(state="unavailable", reason="test"),
+        )
         original = request()
         first = await recall.search_page(original)
         continued = await recall.search_page(

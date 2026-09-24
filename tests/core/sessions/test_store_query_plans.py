@@ -147,22 +147,30 @@ def _assert_indexed(connection: sqlite3.Connection, statements: _Statements) -> 
     [
         {},
         {"roles": ("user",)},
+        {"roles": ("user",), "include_subagents": True},
         {"roles": ("user", "assistant"), "since": "2026-01-01T00:00:00Z"},
         {"roles": ("tool",), "until": "2100-01-01T00:00:00Z", "excluded_session_ids": ("one",)},
     ],
 )
 @pytest.mark.parametrize("use_fts", [True, False])
+@pytest.mark.parametrize("order", ["relevance", "newest", "oldest"])
 def test_scoped_search_pushes_the_session_scope_into_every_branch(
-    history, scope, filters, use_fts
+    history, scope, filters, use_fts, order
 ) -> None:
     _address, _anchor, connection = history
-    for query in ("needle", "absent"):
+    for query in ("needle", "ne", "absent"):
         recorder, statements = _recording(connection)
-        rows = _store_search.search(
-            recorder, query, project_id="project", use_fts=use_fts, **scope, **filters
-        )()
+        result = _store_search.search(
+            recorder,
+            query,
+            project_id="project",
+            use_fts=use_fts,
+            order=order,
+            **scope,
+            **filters,
+        )
         if query == "absent":
-            assert rows == []
+            assert result.hits == ()
         _assert_indexed(connection, statements)
 
 
@@ -171,7 +179,7 @@ def test_time_filtered_search_reads_messages_through_the_instant_index(history) 
     recorder, statements = _recording(connection)
     _store_search.search(
         recorder, "needle", project_id="project", agent_id="agent", since="2026-01-01T00:00:00Z"
-    )()
+    )
     plans = [
         str(row[3])
         for sql, params in statements
@@ -265,4 +273,5 @@ def test_session_catalog_reads_scope_history_by_session_index(history) -> None:
     ) == {"one", "two"}
     sources = _store_queries.descriptor_sources(recorder, [address])()
     assert sources[address][2] is not None
+    assert sources[address][3] == "conversation"
     _assert_indexed(connection, statements)
