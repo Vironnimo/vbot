@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import { startIsolatedChat } from "./chat-run-support.js";
 import { expectToolSucceeded, runToolScenario } from "./chat-tool-support.js";
+import { createAgent, deleteAgentIfPresent } from "./rpc-support.js";
 
 const AGENT_ID = "memory-prompt-agent";
 const AGENT_NAME = "Memory Prompt Agent";
@@ -9,57 +10,31 @@ const AGENT_NAME = "Memory Prompt Agent";
 async function setMemoryMode(page, modeName) {
   await page.goto("/#agents");
   const agents = page.getByRole("region", { name: "Agents" });
-  const agentList = agents.getByRole("complementary", { name: "Agents" });
-  await agentList
+  await agents
+    .getByRole("complementary", { name: "Agents" })
     .getByRole("button", { name: new RegExp(`^${AGENT_NAME}(?:\\s|$)`) })
     .click();
 
-  await agents.getByRole("tab", { name: "Behavior", exact: true }).click();
-  const memoryMode = agents.getByRole("button", {
+  const context = agents.getByRole("region", { name: "Context & Memory" });
+  const memoryMode = context.getByRole("button", {
     exact: true,
     name: "Memory",
   });
   await memoryMode.scrollIntoViewIfNeeded();
-  await expect(memoryMode).toBeInViewport();
   await memoryMode.click();
   await page.getByRole("option", { exact: true, name: modeName }).click();
-  await agents.getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByText("Agent updated.", { exact: true })).toBeVisible();
-}
-
-async function deleteAgent(page) {
-  await page.goto("/#agents");
-  const agents = page.getByRole("region", { name: "Agents" });
-  const agentButton = agents
-    .getByRole("complementary", { name: "Agents" })
-    .getByRole("button", { name: new RegExp(`^${AGENT_NAME}(?:\\s|$)`) });
-  await expect(agentButton).toBeVisible();
-  await agentButton.click();
-  await agents.getByRole("tab", { name: "Details", exact: true }).click();
-  await agents.getByRole("button", { name: "Delete agent" }).click();
-  await expect(page.getByText("Agent deleted.", { exact: true })).toBeVisible();
+  await expect(memoryMode).toContainText(modeName);
+  await expect(
+    agents.getByRole("button", { exact: true, name: "Saved" }),
+  ).toBeVisible();
 }
 
 test("Agent Memory settings control what reaches the Provider prompt", async ({
   page,
+  request,
 }) => {
-  let agentCreated = false;
   try {
-    await page.goto("/#agents");
-    const agents = page.getByRole("region", { name: "Agents" });
-    await agents
-      .getByRole("complementary", { name: "Agents" })
-      .getByRole("button", { exact: true, name: "Add" })
-      .click();
-
-    const createDialog = page.getByRole("dialog", { name: "Create agent" });
-    await createDialog.getByLabel("Agent ID").fill(AGENT_ID);
-    await createDialog.getByLabel("Name").fill(AGENT_NAME);
-    await createDialog.getByRole("button", { name: "Create agent" }).click();
-    await expect(
-      page.getByText("Agent created.", { exact: true }),
-    ).toBeVisible();
-    agentCreated = true;
+    await createAgent(request, { id: AGENT_ID, name: AGENT_NAME });
 
     let chat = await startIsolatedChat(page, { agentName: AGENT_NAME });
     await runToolScenario(chat, {
@@ -82,8 +57,6 @@ test("Agent Memory settings control what reaches the Provider prompt", async ({
       finalText: "Pinned Memory reached the Provider.",
     });
   } finally {
-    if (agentCreated) {
-      await deleteAgent(page);
-    }
+    await deleteAgentIfPresent(request, AGENT_ID);
   }
 });

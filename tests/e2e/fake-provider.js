@@ -272,51 +272,6 @@ function plannedToolResponse(prompt, results, offeredTools) {
     return { text: "Runtime tools completed." };
   }
 
-  if (prompt.includes("E2E_TOOL_FILESYSTEM")) {
-    const reads = resultsFor(results, "read");
-    const patches = resultsFor(results, "apply_patch");
-    if (patches.length === 0) {
-      return {
-        calls: [
-          addFileCall("tool-e2e/workflow.txt", "alpha\nneedle before\nomega\n"),
-        ],
-      };
-    }
-    if (reads.length === 0) {
-      return {
-        calls: [toolCall("read", { path: "tool-e2e/workflow.txt" })],
-      };
-    }
-    if (patches.length === 1) {
-      return {
-        calls: [
-          toolCall("apply_patch", {
-            patch:
-              "*** Begin Patch\n*** Update File: tool-e2e/workflow.txt\n@@\n-needle before\n+needle after\n*** End Patch",
-          }),
-        ],
-      };
-    }
-    if (resultsFor(results, "search_files").length === 0) {
-      return {
-        calls: [
-          toolCall("search_files", {
-            args: ["--files", "-g", "*.txt", "tool-e2e"],
-          }),
-          toolCall("search_files", {
-            args: ["-F", "needle after", "tool-e2e"],
-          }),
-        ],
-      };
-    }
-    if (reads.length === 1) {
-      return {
-        calls: [toolCall("read", { path: "tool-e2e/workflow.txt" })],
-      };
-    }
-    return { text: "Filesystem tools completed." };
-  }
-
   if (prompt.includes("E2E_TOOL_MISSING_FILE")) {
     if (resultsFor(results, "read").length === 0) {
       return {
@@ -324,119 +279,6 @@ function plannedToolResponse(prompt, results, offeredTools) {
       };
     }
     return { text: "Missing file error handled." };
-  }
-
-  if (prompt.includes("E2E_TOOL_MEMORY")) {
-    const memoryResults = resultsFor(results, "memory");
-    if (memoryResults.length === 0) {
-      return {
-        calls: [
-          toolCall("memory", {
-            action: "add",
-            scope: "agent",
-            content: "E2E temporary memory entry",
-          }),
-        ],
-      };
-    }
-    if (memoryResults.length === 1) {
-      return {
-        calls: [toolCall("memory", { action: "list", scope: "agent" })],
-      };
-    }
-    if (memoryResults.length === 2) {
-      const entryId = memoryResults[0]?.envelope?.data?.entry?.id ?? 1;
-      return {
-        calls: [
-          toolCall("memory", {
-            action: "remove",
-            scope: "agent",
-            entry_id: entryId,
-          }),
-        ],
-      };
-    }
-    return { text: "Memory tool lifecycle completed." };
-  }
-
-  if (
-    prompt.includes("E2E_TOOL_SKILL") &&
-    !prompt.includes("E2E_TOOL_SKILL_MANAGE")
-  ) {
-    if (resultsFor(results, "skill").length === 0) {
-      return { calls: [toolCall("skill", { name: "weather" })] };
-    }
-    return { text: "Skill tool completed." };
-  }
-
-  if (prompt.includes("E2E_TOOL_SKILL_MANAGE")) {
-    const manageResults = resultsFor(results, "skill_manage");
-    if (manageResults.length === 0) {
-      return {
-        calls: [
-          skillManageCall("create", {
-            name: "e2e-authored",
-            content:
-              "---\nname: e2e-authored\ndescription: Temporary deterministic E2E Skill.\n---\n\n# E2E Authored Skill\n\nOriginal instruction marker.\n",
-          }),
-        ],
-      };
-    }
-    if (manageResults.length === 1) {
-      return {
-        calls: [
-          skillManageCall("write_file", {
-            name: "e2e-authored",
-            file_path: "references/evidence.txt",
-            content: "temporary support-file evidence",
-          }),
-        ],
-      };
-    }
-    if (manageResults.length === 2) {
-      return {
-        calls: [
-          skillManageCall("patch", {
-            name: "e2e-authored",
-            match: "Original instruction marker.",
-            content: "Updated instruction marker.",
-          }),
-        ],
-      };
-    }
-    if (resultsFor(results, "skill").length === 0) {
-      return { calls: [toolCall("skill", { name: "e2e-authored" })] };
-    }
-    if (resultsFor(results, "skill").length === 1) {
-      return {
-        calls: [
-          toolCall("skill", {
-            name: "e2e-authored",
-            file_path: "references/evidence.txt",
-          }),
-        ],
-      };
-    }
-    if (manageResults.length === 3) {
-      return {
-        calls: [
-          skillManageCall("remove_file", {
-            name: "e2e-authored",
-            file_path: "references/evidence.txt",
-          }),
-        ],
-      };
-    }
-    if (manageResults.length === 4) {
-      return {
-        calls: [
-          skillManageCall("delete", {
-            name: "e2e-authored",
-          }),
-        ],
-      };
-    }
-    return { text: "Skill authoring lifecycle completed." };
   }
 
   if (prompt.includes("E2E_TOOL_HISTORY")) {
@@ -477,49 +319,6 @@ function plannedToolResponse(prompt, results, offeredTools) {
     };
   }
 
-  if (prompt.includes("E2E_TOOL_SESSION_SEARCH")) {
-    if (resultsFor(results, "session_search").length === 0) {
-      return {
-        calls: [
-          toolCall("session_search", {
-            query: "stored sapphire beacon 7319",
-          }),
-        ],
-      };
-    }
-    return { text: "Session search tool completed." };
-  }
-
-  if (prompt.includes("E2E_TOOL_CRON")) {
-    const cronResults = resultsFor(results, "cron");
-    if (cronResults.length === 0) {
-      return {
-        calls: [
-          toolCall("cron", {
-            action: "create",
-            name: "E2E tool-created schedule",
-            prompt: "E2E tool-created scheduled prompt",
-            schedule: "15 4 * * *",
-          }),
-        ],
-      };
-    }
-    const jobId = cronResults[0]?.envelope?.data?.job?.id ?? "";
-    if (cronResults.length === 1) {
-      return { calls: [toolCall("cron", { action: "disable", id: jobId })] };
-    }
-    if (cronResults.length === 2) {
-      return { calls: [toolCall("cron", { action: "enable", id: jobId })] };
-    }
-    if (cronResults.length === 3) {
-      return { calls: [toolCall("cron", { action: "list" })] };
-    }
-    if (cronResults.length === 4) {
-      return { calls: [toolCall("cron", { action: "delete", id: jobId })] };
-    }
-    return { text: "Schedule tool lifecycle completed." };
-  }
-
   if (prompt.includes("E2E_TOOL_SUBAGENT")) {
     const subagentResults = resultsFor(results, "subagent");
     if (subagentResults.length === 0) {
@@ -552,6 +351,13 @@ function responseText(model, prompt, messages = []) {
   }
   if (model === "e2e-live" && prompt.includes("E2E_CUSTOM_PROVIDER_LIVE")) {
     return "Dynamic Custom Provider response.";
+  }
+  if (prompt.includes("E2E_PROMPT_SCOPE_CHECK")) {
+    return messagesText(messages, "system").includes(
+      "Agent-only E2E prompt 3307",
+    )
+      ? "Agent-scoped System Prompt reached the Provider."
+      : "Agent-scoped System Prompt stayed out of the Provider prompt.";
   }
   if (
     messagesText(messages, "system").includes(
@@ -591,9 +397,6 @@ function responseText(model, prompt, messages = []) {
   ) {
     return "E2E reflection completed.";
   }
-  if (prompt.includes("E2E_QUEUE_FOLLOWUP")) {
-    return "Fake provider queued response.";
-  }
   if (prompt.includes("E2E_QUEUE_FIRST")) {
     return "First queued response.";
   }
@@ -603,11 +406,11 @@ function responseText(model, prompt, messages = []) {
   if (prompt.includes("E2E_QUEUE_THIRD")) {
     return "Third queued response.";
   }
+  if (prompt.includes("E2E_SCHEDULED_RUN")) {
+    return "Scheduled Run delivered 4471.";
+  }
   if (prompt.includes("E2E_STREAM")) {
     return "Fake provider streaming response.";
-  }
-  if (prompt.includes("E2E_SESSION_SEARCH_SEED")) {
-    return "Stored sapphire beacon 7319.";
   }
   if (prompt.includes("E2E_HISTORY_SEED")) {
     return "Archived obsidian record 8642.";
@@ -849,14 +652,13 @@ async function handleChatCompletion(request, response) {
   }
 
   if (prompt.includes("E2E_QUEUE_ACTIVE")) {
-    const delayMilliseconds = prompt.includes("E2E_QUEUE_ACTIVE_LONG")
-      ? 1_300
-      : 600;
+    // Long enough for the browser to queue, edit, and remove messages before
+    // the active Run finishes and the Queue starts draining.
     await streamCompletion(
       response,
       model,
       ["Queue run started.", " Still active.", " Almost finished.", " Done."],
-      delayMilliseconds,
+      2_000,
     );
     return;
   }

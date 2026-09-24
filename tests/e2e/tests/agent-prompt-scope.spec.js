@@ -1,9 +1,14 @@
 import { expect, test } from "@playwright/test";
 
+import { sendChatMessage, startIsolatedChat } from "./chat-run-support.js";
+import { createAgent, deleteAgentIfPresent } from "./rpc-support.js";
+
+const AGENT_ID = "prompt-agent";
+const AGENT_NAME = "Prompt Agent";
+const AGENT_BLOCK = "user:agent_only";
+const AGENT_BLOCK_TEXT = "Agent-only E2E prompt 3307";
+
 async function selectPromptScope(page, systemPrompt, name) {
-  await systemPrompt
-    .getByRole("tab", { name: "Edit blocks", exact: true })
-    .click();
   const promptScope = systemPrompt.getByRole("button", {
     name: "Prompt scope",
   });
@@ -18,78 +23,57 @@ async function selectPromptScope(page, systemPrompt, name) {
   }).toPass({ timeout: 7_500 });
 }
 
-test("an Agent-specific System Prompt stays isolated from the Default scope", async ({
+test("an Agent-scoped System Prompt block reaches only that Agent's Provider prompt", async ({
   page,
+  request,
 }) => {
-  await page.goto("/#agents");
+  try {
+    await createAgent(request, {
+      id: AGENT_ID,
+      name: AGENT_NAME,
+      custom_system_prompt_enabled: true,
+    });
 
-  const agents = page.getByRole("region", { name: "Agents" });
-  const agentList = agents.getByRole("complementary", { name: "Agents" });
-  await agentList.getByRole("button", { exact: true, name: "Add" }).click();
+    await page.goto("/#system-prompt");
+    const systemPrompt = page.getByRole("region", { name: "System Prompt" });
+    await systemPrompt
+      .getByRole("tab", { name: "Edit blocks", exact: true })
+      .click();
+    await selectPromptScope(page, systemPrompt, AGENT_NAME);
 
-  const createDialog = page.getByRole("dialog", { name: "Create agent" });
-  await createDialog.getByLabel("Agent ID").fill("prompt-agent");
-  await createDialog.getByLabel("Name").fill("Prompt Agent");
-  await createDialog.getByRole("button", { name: "Create agent" }).click();
-  await expect(page.getByText("Agent created.", { exact: true })).toBeVisible();
-  await expect(
-    agentList.getByRole("button", { name: /^Prompt Agent(?:\s|$)/ }),
-  ).toHaveClass(/active/);
+    page.once("dialog", (dialog) => dialog.accept("agent_only"));
+    await systemPrompt.getByRole("button", { name: "New block" }).click();
+    const agentBlock = systemPrompt
+      .getByRole("listitem")
+      .filter({ hasText: AGENT_BLOCK });
+    await agentBlock.getByRole("textbox").fill(AGENT_BLOCK_TEXT);
+    await systemPrompt
+      .getByRole("button", { exact: true, name: "Save" })
+      .click();
+    await expect(page.getByText("Saved", { exact: true })).toBeVisible();
 
-  await agents.getByRole("tab", { name: "Behavior", exact: true }).click();
-  await agents.getByRole("switch", { name: "Custom system prompt" }).click();
-  await agents.getByRole("button", { name: "Save changes" }).click();
-  // Navigation flushes autosave; the Provider/scope assertions below verify the saved policy.
+    await selectPromptScope(page, systemPrompt, "Default");
+    await expect(
+      systemPrompt.getByText(AGENT_BLOCK, { exact: true }),
+    ).toHaveCount(0);
 
-  await page.getByRole("button", { name: "System Prompt" }).click();
-  const systemPrompt = page.getByRole("region", { name: "System Prompt" });
-  await systemPrompt
-    .getByRole("tab", { name: "Edit blocks", exact: true })
-    .click();
-  const promptScope = systemPrompt.getByRole("button", {
-    name: "Prompt scope",
-  });
-  await selectPromptScope(page, systemPrompt, "Prompt Agent");
-  await expect(promptScope).toContainText("Prompt Agent");
+    let chat = await startIsolatedChat(page, { agentName: AGENT_NAME });
+    await sendChatMessage(chat, "E2E_PROMPT_SCOPE_CHECK Inspect this Agent");
+    await expect(
+      chat.getByText("Agent-scoped System Prompt reached the Provider.", {
+        exact: true,
+      }),
+    ).toBeVisible();
 
-  page.once("dialog", (dialog) => dialog.accept("agent_only"));
-  await systemPrompt.getByRole("button", { name: "New block" }).click();
-  let agentBlock = systemPrompt
-    .getByRole("listitem")
-    .filter({ hasText: "user:agent_only" });
-  await agentBlock.getByRole("textbox").fill("Agent-only E2E prompt");
-  await systemPrompt.getByRole("button", { exact: true, name: "Save" }).click();
-  // Scope navigation flushes autosave; re-opening the scope below verifies persistence.
-
-  await selectPromptScope(page, systemPrompt, "Default");
-  await expect(promptScope).toContainText("Default");
-  await expect(
-    systemPrompt.getByText("user:agent_only", { exact: true }),
-  ).toHaveCount(0);
-
-  await selectPromptScope(page, systemPrompt, "Prompt Agent");
-  agentBlock = systemPrompt
-    .getByRole("listitem")
-    .filter({ hasText: "user:agent_only" });
-  await agentBlock.getByRole("button", { name: "Edit", exact: true }).click();
-  await expect(agentBlock.getByRole("textbox")).toHaveValue(
-    "Agent-only E2E prompt",
-  );
-
-  await agentBlock.getByRole("button", { name: "Remove" }).click();
-  const removeDialog = page.getByRole("dialog", { name: "Remove block" });
-  await removeDialog
-    .getByRole("button", { exact: true, name: "Remove" })
-    .click();
-  await expect(
-    systemPrompt.getByText("user:agent_only", { exact: true }),
-  ).toHaveCount(0);
-
-  await page.getByRole("button", { name: "Agents" }).click();
-  await agentList
-    .getByRole("button", { name: /^Prompt Agent(?:\s|$)/ })
-    .click();
-  await agents.getByRole("tab", { name: "Details", exact: true }).click();
-  await agents.getByRole("button", { name: "Delete agent" }).click();
-  await expect(page.getByText("Agent deleted.", { exact: true })).toBeVisible();
+    chat = await startIsolatedChat(page, { agentName: "Main" });
+    await sendChatMessage(chat, "E2E_PROMPT_SCOPE_CHECK Inspect Main");
+    await expect(
+      chat.getByText(
+        "Agent-scoped System Prompt stayed out of the Provider prompt.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+  } finally {
+    await deleteAgentIfPresent(request, AGENT_ID);
+  }
 });

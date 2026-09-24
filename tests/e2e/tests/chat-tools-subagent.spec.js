@@ -6,22 +6,14 @@ import {
   openToolRow,
   runToolScenario,
 } from "./chat-tool-support.js";
+import { createAgent, deleteAgentIfPresent } from "./rpc-support.js";
 
 test("a top-level subagent Tool Run delivers its child result automatically", async ({
   page,
+  request,
 }) => {
   try {
-    await page.goto("/#agents");
-    const agents = page.getByRole("region", { name: "Agents" });
-    const agentList = agents.getByRole("complementary", { name: "Agents" });
-    await agentList.getByRole("button", { exact: true, name: "Add" }).click();
-    const createDialog = page.getByRole("dialog", { name: "Create agent" });
-    await createDialog.getByLabel("Agent ID").fill("e2e-worker");
-    await createDialog.getByLabel("Name").fill("E2E Worker");
-    await createDialog.getByRole("button", { name: "Create agent" }).click();
-    await expect(
-      page.getByText("Agent created.", { exact: true }),
-    ).toBeVisible();
+    await createAgent(request, { id: "e2e-worker", name: "E2E Worker" });
 
     const chat = await startIsolatedChat(page, { agentName: "Main" });
     await runToolScenario(chat, {
@@ -33,11 +25,6 @@ test("a top-level subagent Tool Run delivers its child result automatically", as
     await openToolRow(subagent);
     await expect(subagent).toContainText("Fake sub-agent result.");
   } finally {
-    await page.request.post("/api/rpc", {
-      data: {
-        method: "agent.delete",
-        params: { id: "e2e-worker" },
-      },
-    });
+    await deleteAgentIfPresent(request, "e2e-worker");
   }
 });
