@@ -114,7 +114,7 @@ async def test_upstream_json_failure_retries_identical_request(
     notices: list[RetryNotice] = []
     with (
         observe_retries(notices.append),
-        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock) as sleep,
+        patch("core.utils.retry._sleep", new_callable=AsyncMock) as sleep,
     ):
         await _request(opencode_go_adapter, model_id, streaming)
 
@@ -169,7 +169,7 @@ async def test_persistent_upstream_json_failure_exhausts_standalone_retry_budget
     route = respx.post(url).mock(return_value=httpx.Response(403, json=UPSTREAM_JSON_FAILURE))
 
     with (
-        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+        patch("core.utils.retry._sleep", new_callable=AsyncMock),
         pytest.raises(ProviderError) as failure,
     ):
         await _request(opencode_go_adapter, model_id, streaming)

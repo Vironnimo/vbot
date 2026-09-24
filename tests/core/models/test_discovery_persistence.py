@@ -259,7 +259,7 @@ class TestRefreshModels:
         async def _no_sleep(_delay: float) -> None:
             return None
 
-        monkeypatch.setattr("core.utils.retry.asyncio.sleep", _no_sleep)
+        monkeypatch.setattr("core.utils.retry._sleep", _no_sleep)
         respx.get(OPENROUTER_MODELS_URL).mock(
             return_value=httpx.Response(500, text="Internal Server Error")
         )
@@ -292,7 +292,7 @@ class TestRefreshModels:
         async def _no_sleep(_delay: float) -> None:
             return None
 
-        monkeypatch.setattr("core.utils.retry.asyncio.sleep", _no_sleep)
+        monkeypatch.setattr("core.utils.retry._sleep", _no_sleep)
 
         responses = [
             httpx.Response(status_code, text="Transient provider failure"),
@@ -317,7 +317,7 @@ class TestRefreshModels:
         async def _fail_if_called(_delay: float) -> None:
             raise AssertionError("fatal status must not trigger a retry sleep")
 
-        monkeypatch.setattr("core.utils.retry.asyncio.sleep", _fail_if_called)
+        monkeypatch.setattr("core.utils.retry._sleep", _fail_if_called)
         route = respx.get(_SIMPLE_MODELS_URL).mock(
             return_value=httpx.Response(404, text="Not Found")
         )
@@ -339,7 +339,7 @@ class TestRefreshModels:
         async def _no_sleep(_delay: float) -> None:
             return None
 
-        monkeypatch.setattr("core.utils.retry.asyncio.sleep", _no_sleep)
+        monkeypatch.setattr("core.utils.retry._sleep", _no_sleep)
 
         responses: list[httpx.Response | Exception] = [
             httpx.ConnectError("connection reset"),

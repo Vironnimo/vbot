@@ -16,6 +16,9 @@ MAX_TARGET_ATTEMPTS = 9
 MAX_RECOVERY_ATTEMPTS = 18
 RECOVERY_TIMEOUT_SECONDS = 1800.0
 
+# Tests patch this seam instead of the process-wide ``asyncio.sleep``.
+_sleep = asyncio.sleep
+
 
 class IncompleteResponseError(ProviderError):
     """The Model finished without completing a usable answer or Tool step."""
@@ -78,7 +81,7 @@ class RecoveryBudget:
             )
             notice = RetryNotice(self.last_error, attempt, max_attempts, delay, True)
             notify(notice)
-            await asyncio.sleep(delay)
+            await _sleep(delay)
             if not self.available(target):
                 raise self.exhausted() from self.last_error
             notify(RetryNotice(self.last_error, attempt, max_attempts, 0, False))

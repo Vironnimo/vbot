@@ -8,6 +8,7 @@ import json
 import pytest
 from mcp.shared.auth import OAuthToken
 
+from resources.extensions.mcp import client as mcp_client
 from resources.extensions.mcp.client import ConnectionRunner, OAuthStorage
 from resources.extensions.mcp.config import validate_connection
 from resources.extensions.mcp.interactions import InputRequests
@@ -100,7 +101,7 @@ async def test_read_failures_retry_but_mutations_are_not_replayed(
         pass
 
     monkeypatch.setattr(runner, "_perform", fail)
-    monkeypatch.setattr(asyncio, "sleep", sleep)
+    monkeypatch.setattr(mcp_client, "_sleep", sleep)
 
     with pytest.raises(TimeoutError):
         await runner._perform_with_retries(operation, {})
