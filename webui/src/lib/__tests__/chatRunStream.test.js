@@ -615,15 +615,134 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
       'child-session',
     );
     expect(childSession.status).toBe('completed');
-    expect(childSession.runEvents.map((event) => event.sequence)).toEqual([
-      1, 6, 8,
-    ]);
+    expect(childSession.currentRun).toMatchObject({
+      runId: 'child-run',
+      status: 'completed',
+    });
+    expect(childSession).toMatchObject({
+      hasUnreadCompletion: true,
+      unreadRunId: 'child-run',
+      unreadRunStatus: 'completed',
+    });
+    // Nothing renders this Session's live projection: opening it loads
+    // canonical History, so the finished Run's events are released.
+    expect(childSession.runEvents).toEqual([]);
+    expect(harness.reconcileRunSession).not.toHaveBeenCalled();
+    expect(harness.syncSessionQueue).toHaveBeenCalledWith(childSession);
     expect(harness.subAgentRunStatuses).toMatchObject({
       'run:child-run': 'completed',
       'runStarted:child-run': '2026-08-05T18:03:00.000Z',
       'session:worker::child-session': 'completed',
       'sessionStarted:worker::child-session': '2026-08-05T18:03:00.000Z',
     });
+
+    // A late re-delivery (here through an owner whose dedup window no longer
+    // holds the event) cannot revive the finished Run or re-grow its events.
+    const lateOwner = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+    });
+    lateOwner.stream.handleServerEvents({
+      type: 'run_started',
+      payload: {
+        ...basePayload,
+        run_event_type: 'run_started',
+        run_event_sequence: 1,
+        status: 'running',
+      },
+    });
+    expect(childSession.status).toBe('completed');
+    expect(childSession.currentRun.status).toBe('completed');
+    expect(childSession.runEvents).toEqual([]);
+    expect(agentActivityStatus(chatState, 'worker')).toBe('unread');
+  });
+
+  it('keeps and reconciles a finished Run of a non-displayed Session whose History is loaded', async () => {
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+    });
+    const background = ensureSessionState(chatState, 'alpha', 'background');
+    background.historyLoaded = true;
+    const basePayload = {
+      run_id: 'background-run',
+      agent_id: 'alpha',
+      session_id: 'background',
+    };
+    for (const [type, runEventType, sequence] of [
+      ['run_started', 'run_started', 1],
+      ['run_output', 'tool_call_started', 2],
+      ['run_completed', 'run_completed', 3],
+    ]) {
+      harness.stream.handleServerEvents({
+        type,
+        payload: {
+          ...basePayload,
+          run_event_type: runEventType,
+          run_event_sequence: sequence,
+          ...(type === 'run_completed' ? { status: 'completed' } : {}),
+        },
+      });
+    }
+
+    expect(background.status).toBe('completed');
+    expect(background.runEvents.map((event) => event.sequence)).toEqual([
+      1, 2, 3,
+    ]);
+    await vi.waitFor(() =>
+      expect(harness.reconcileRunSession).toHaveBeenCalledWith(
+        background,
+        'background-run',
+      ),
+    );
+  });
+
+  it('releases only the finished Run when a predecessor terminal arrives late', () => {
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+    });
+    const event = (runId, type, runEventType, sequence) => ({
+      type,
+      payload: {
+        run_id: runId,
+        agent_id: 'alpha',
+        session_id: 'background',
+        run_event_type: runEventType,
+        run_event_sequence: sequence,
+        ...(type === 'run_completed' ? { status: 'completed' } : {}),
+      },
+    });
+    harness.stream.handleServerEvents(
+      event('first', 'run_started', 'run_started', 1),
+    );
+    harness.stream.handleServerEvents(
+      event('second', 'run_started', 'run_started', 1),
+    );
+    harness.stream.handleServerEvents(
+      event('second', 'run_output', 'tool_call_started', 2),
+    );
+    harness.stream.handleServerEvents(
+      event('first', 'run_completed', 'run_completed', 5),
+    );
+
+    const background = ensureSessionState(chatState, 'alpha', 'background');
+    expect(background.currentRun).toMatchObject({
+      runId: 'second',
+      status: 'running',
+    });
+    expect(
+      background.runEvents.map((runEvent) => [
+        runEvent.run_id,
+        runEvent.sequence,
+      ]),
+    ).toEqual([
+      ['second', 1],
+      ['second', 2],
+    ]);
   });
 
   it('applies SSE events only after their Run sequence becomes contiguous', () => {

@@ -44,14 +44,14 @@ Reflection recovery: `chat.history` includes the source Session's `reflection_ru
 
 ## `resource_changed`
 
-`publish_resource_changed(state, kind, scope=None)` is the single generic invalidation seam. Payload is `{kind, scope?}` and contains no resource data; consumers re-fetch through normal RPC. It no-ops when no bus exists (CLI/runtime stubs) and rejects unknown kinds. Current allowed kinds are `models`, `queue`, `sessions`, `agents`, `providers`, `clients`, `channels`, `debug_traces`, `projects`, `cron`, `commands`, `terminals`, `memories`, and `skills`.
+`publish_resource_changed(state, kind, scope=None)` is the single generic invalidation seam. Payload is `{kind, scope?}` and contains no resource data; consumers re-fetch through normal RPC. A scope carries only identifiers: the addressed Agent/Session, plus the ids a client must act on before re-fetching (an Identity Agent rename's `{old_agent_id, new_agent_id}`, a Session deletion's archived and landing ids). It no-ops when no bus exists (CLI/runtime stubs) and rejects unknown kinds. Current allowed kinds are `models`, `queue`, `sessions`, `agents`, `providers`, `clients`, `channels`, `debug_traces`, `projects`, `cron`, `commands`, `terminals`, `memories`, and `skills`.
 
 `commands` is emitted after a successful explicit Extension reload and after Settings mutations that reload, enable, or disable Extensions. Config-only Extension saves do not emit it because runtime values are read live and the Command structure is unchanged.
 
 Emission belongs to the server mutation edge, never `core/`. Representative ownership:
 
 - Model Refresh -> `models`; credential/Connection changes -> `providers`; Agent CRUD -> `agents`; Project mutations/removal -> `projects` and any affected `agents`.
-- Session create/rename/delete, title-change callbacks, terminal Runs, and successful completion read acknowledgements -> scoped `sessions`; deleting an Identity Agent's current Session also invalidates `agents` because its current pointer changes.
+- Session create/rename/delete, title-change callbacks, terminal Runs, and successful completion read acknowledgements -> scoped `sessions`; deleting an Identity Agent's current Session also invalidates `agents` because its current pointer changes. `session.delete` scopes its event as `{agent_id, project_id, deleted_session_id, next_session_id}` (bare Agent id, `project_id` null for Identity Agents, `next_session_id` the same landing the RPC returns) so other windows displaying the archived Session release it and follow the landing (`tests/server/rpc/test_session_methods_delete.py`).
 - RPC Queue mutations and the queued branches of `chat.send`/`chat.stream` -> scoped `queue`. Core-origin enqueues intentionally do not publish this browser invalidation.
 - Channel mutations -> `channels`; `/ws` presence lifecycle -> `clients`; terminal Run bridge and Debug mutations -> `debug_traces`.
 - `CronService.add_changed_callback` is bridged in `server/_app_lifecycle.py` -> `cron`, covering RPC/Tool mutations and scheduler-owned status/health transitions without importing the server bus into core.

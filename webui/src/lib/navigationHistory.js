@@ -78,9 +78,18 @@ export const sameNavigationSelection = (left, right) => {
   );
 };
 
+// The view a location hash names, whether or not that view is known yet.
+export const requestedViewIdFromLocationHash = (hash) =>
+  String(hash ?? '').replace(/^#\/?/, '');
+
 export const viewIdFromLocationHash = (hash, knownViewIds) => {
-  const normalized = String(hash ?? '').replace(/^#\/?/, '');
+  const normalized = requestedViewIdFromLocationHash(hash);
   return knownViewIds.includes(normalized) ? normalized : '';
 };
+
+// Extension page routes join the known views only once the server's page
+// catalog has loaded, after startup.
+export const isExtensionViewId = (viewId) =>
+  typeof viewId === 'string' && viewId.startsWith('extension:');
 
 export const locationHashForView = (viewId) => `#${viewId}`;
