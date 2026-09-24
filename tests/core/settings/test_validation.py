@@ -60,7 +60,7 @@ def test_validate_data_dir_config_delegates_agent_order_file(tmp_path: Path) -> 
 def test_validate_data_dir_config_delegates_bootstrap_jobs(tmp_path: Path) -> None:
     jobs_path = tmp_path / "bootstrap" / "jobs.json"
     jobs_path.parent.mkdir(parents=True)
-    jobs_path.write_text('[{"mode": "sometimes"}]', encoding="utf-8")
+    jobs_path.write_text('{"format_version": 1, "jobs": [{"mode": "sometimes"}]}', encoding="utf-8")
 
     reports = validate_data_dir_config(tmp_path)
 

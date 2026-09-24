@@ -19,6 +19,7 @@ from core.json_documents import (
     preserve_unknown_fields,
     render_json_document,
     strip_unknown_fields,
+    validate_collection_root,
     validate_format_version,
     warn_unknown_fields,
     write_json_document,
@@ -185,6 +186,40 @@ def test_validate_format_version_accepts_the_current_version() -> None:
 
     assert validate_format_version(diagnostics, {"format_version": 1}, 1) is True
     assert diagnostics == []
+
+
+@pytest.mark.parametrize(
+    ("data", "path", "message"),
+    [
+        ([], "$", "Expected a JSON object, got list"),
+        ({"entries": []}, "$.format_version", "is required"),
+        ({"format_version": 1}, "$.entries", "is required"),
+        ({"format_version": 1, "entries": {}}, "$.entries", "must be an array"),
+    ],
+)
+def test_validate_collection_root_rejects_an_unreadable_root(
+    data: Any, path: str, message: str
+) -> None:
+    diagnostics: list[JsonDiagnostic] = []
+
+    assert (
+        validate_collection_root(diagnostics, data, version=1, shape=SHAPE, collection="entries")
+        is None
+    )
+    assert [(item.severity, item.path) for item in diagnostics] == [("error", path)]
+    assert diagnostics[0].message.startswith(message)
+
+
+def test_validate_collection_root_returns_the_entries_and_warns_on_unknown_fields() -> None:
+    diagnostics: list[JsonDiagnostic] = []
+    data = {"format_version": 1, "future": 1, "entries": [{"id": "a"}, "broken"]}
+
+    entries = validate_collection_root(
+        diagnostics, data, version=1, shape=SHAPE, collection="entries"
+    )
+
+    assert entries == [{"id": "a"}, "broken"]
+    assert [(item.severity, item.path) for item in diagnostics] == [("warning", "$.future")]
 
 
 def test_write_json_document_creates_a_versioned_document(tmp_path: Path) -> None:
