@@ -9,7 +9,7 @@ from typing import Any
 
 from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager
-from core.projects import AgentResolutionError
+from core.projects import ResolutionAgentNotFoundError
 from core.runs import (
     DEFAULT_RUN_ADMISSION,
     ActiveRunError,
@@ -157,8 +157,8 @@ class FakeAgentResolver:
 
     Resolves the target under the parent run's project — identity or project,
     both delegate to the same known-id set here — and raises
-    :class:`AgentResolutionError` for an unknown target, matching how the real
-    resolver fails an off-Team / unknown-agent spawn. Records the
+    :class:`ResolutionAgentNotFoundError` for an unknown target, matching how the
+    real resolver fails an off-Team / unknown-agent spawn. Records the
     ``(project_id, agent_id)`` it was asked to resolve so a test can prove the
     child inherits the parent's project.
     """
@@ -179,7 +179,7 @@ class FakeAgentResolver:
         try:
             return self._agents.get(agent_id)
         except AgentNotFoundError as error:
-            raise AgentResolutionError(str(error)) from error
+            raise ResolutionAgentNotFoundError(str(error)) from error
 
 
 class FakeRunManager:

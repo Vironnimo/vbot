@@ -11,6 +11,8 @@ from core.projects import (
     AgentRunOverrides,
     InvalidAgentAddressError,
     ModelConfigurationError,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
     format_agent_address,
     parse_agent_address,
     resolve_working_project_id,
@@ -53,6 +55,7 @@ from core.subagents._constants import (
     SUBAGENT_SESSION_TITLE_MAX_CHARACTERS,
     SUBAGENT_START_FAILED_MESSAGE_TEMPLATE,
     SUBAGENT_STATUS_QUEUED,
+    SUBAGENT_TARGET_UNAVAILABLE_MESSAGE_TEMPLATE,
     TOP_LEVEL_BACKGROUND_NOTE,
     TOP_LEVEL_QUEUED_BACKGROUND_NOTE,
 )
@@ -821,10 +824,11 @@ def _validate_target_agent(
 
     Routes through the one resolver seam: ``project_id=None`` resolves the store
     identity agent, while a set ``project_id`` requires the target to be on that
-    project's Team with a usable model. Any resolver failure (unknown
-    agent/project, off-Team target, or a model chain that fell through) becomes
-    the validation failure envelope so the tool returns a clean result instead of
-    letting the error escape the tool boundary.
+    project's Team with a usable model. Every resolver failure becomes a failure
+    envelope instead of escaping the tool boundary: only a missing Agent (unknown
+    or off-Team) or Project reports ``agent_not_found`` / ``project_not_found``;
+    a target that cannot run (for example, a model chain that fell through)
+    reports ``agent_unavailable`` with the resolver's reason.
     """
     try:
         if temporary_parent_binding is not None:
@@ -841,8 +845,18 @@ def _validate_target_agent(
                 target_agent_id,
                 run_overrides=run_overrides,
             )
-    except AgentResolutionError as error:
+    except ResolutionProjectNotFoundError as error:
+        return tool_failure("project_not_found", str(error))
+    except ResolutionAgentNotFoundError as error:
         return tool_failure("agent_not_found", str(error))
+    except AgentResolutionError as error:
+        return tool_failure(
+            "agent_unavailable",
+            SUBAGENT_TARGET_UNAVAILABLE_MESSAGE_TEMPLATE.format(
+                target=format_agent_address(target_agent_id, project_id), reason=error
+            ),
+            retryable=False,
+        )
     except ModelConfigurationError as error:
         return tool_failure("invalid_arguments", str(error))
     return None

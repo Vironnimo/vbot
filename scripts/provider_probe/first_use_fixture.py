@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from core.chat import ChatMessage
-from core.projects import AgentResolutionError
+from core.projects import ResolutionAgentNotFoundError
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.format import write_bootstrap_marker
@@ -106,7 +106,7 @@ class FirstUseFixture:
 
     def resolve_agent(self, project_id, agent_id, *, run_overrides=None):
         if project_id is not None or agent_id not in self.agents:
-            raise AgentResolutionError(f"Agent is unavailable: {agent_id}")
+            raise ResolutionAgentNotFoundError(f"Agent not found: {agent_id}")
         return self.agents[agent_id]
 
     def child_loop(self, *, nesting_depth):
