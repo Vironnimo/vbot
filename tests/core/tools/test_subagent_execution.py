@@ -557,7 +557,8 @@ async def test_wait_for_subagent_result_preserves_interrupted_partial() -> None:
     assert result["result"] == "partial result"
     assert result["interrupted"] is True
     assert result["interruption_cause"] == "network"
-    assert "Continue the same Session" in result["note"]
+    assert "`worker`" in result["note"]
+    assert "`sub-session`" in result["note"]
 
 
 async def test_wait_for_subagent_result_does_not_swallow_waiter_cancellation() -> None:

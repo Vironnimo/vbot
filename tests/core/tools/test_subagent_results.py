@@ -91,10 +91,53 @@ async def test_subagent_result_marks_preserved_partial_as_interrupted(tmp_path: 
     assert result["data"]["status"] == "completed"
     assert result["data"]["interrupted"] is True
     assert result["data"]["interruption_cause"] == "timeout"
-    assert result["data"]["note"] == (
-        "Result is partial: the Sub-Agent Run was interrupted by timeout. Continue the "
-        "same Session by passing both agent_id and session_id from this result to subagent."
+    assert "`worker`" in result["data"]["note"]
+    assert "`sub-session`" in result["data"]["note"]
+
+
+@pytest.mark.parametrize("caller_project_id", [None, "vbot"])
+async def test_continuation_note_addresses_project_agent_target_for_any_caller(
+    tmp_path: Path,
+    caller_project_id: str | None,
+) -> None:
+    """A bare agent_id resolves in the caller's scope, so the note names agent@project."""
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(tool_name=SUBAGENT_TOOL_NAME, project_id=caller_project_id)
+    parent_key = (context.agent_id, context.session_id, context.run_id)
+    sub_run = Run(
+        run_id="sub-run",
+        agent_id="builder",
+        session_id="builder-session",
+        project_id="vbot",
     )
+    sub_run.mark_completed(
+        ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="Half of the plan.",
+            interrupted=True,
+            interruption_cause="timeout",
+        )
+    )
+    manager.runs[sub_run.id] = sub_run
+    assert tracker.reserve_slot(parent_key, 1, caller_project_id)
+    tracker.register_reserved(
+        parent_key, "builder", "builder-session", sub_run.id, "vbot", work_id=WORK_ID
+    )
+
+    result = await _handle_subagent_result(
+        context,
+        {"id": WORK_ID},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["agent_id"] == "builder"
+    assert result["data"]["project_id"] == "vbot"
+    assert "`builder@vbot`" in result["data"]["note"]
+    assert "`builder-session`" in result["data"]["note"]
 
 
 async def test_subagent_result_preserves_interruption_details_from_jsonl(tmp_path: Path) -> None:
