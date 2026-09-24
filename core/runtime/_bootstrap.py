@@ -83,6 +83,7 @@ from core.subagents import SubAgentCoordinator
 from core.tools import (
     ChangeTracker,
     FileReadState,
+    UpdateHandoffs,
     register_analyze_image_tool,
     register_apply_patch_tool,
     register_bash_tool,
@@ -243,6 +244,10 @@ def bootstrap(runtime: Runtime) -> None:
             temporary_files=runtime._storage.temporary_files,
         )
         runtime._start_process_manager()
+        # Bash update handoffs are claimable only by this server process; files
+        # claimed by earlier processes are retained for one update's lifetime.
+        runtime._update_handoffs = UpdateHandoffs(runtime._storage.data_dir)
+        runtime._update_handoffs.remove_expired_files()
         runtime._tools = ToolRegistry()
         # Tool-owned System Prompt block declarations (D6): the tool side of the
         # unified contributor path. Project and Sub-Agent contribute their dynamic
@@ -558,6 +563,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._trigger_service,
             credential_resolver=runtime.resolve_environment_credential,
             prompt_blocks=runtime._tool_prompt_blocks,
+            update_handoffs=runtime._update_handoffs,
         )
         runtime._subagent_coordinator = SubAgentCoordinator(
             runtime,

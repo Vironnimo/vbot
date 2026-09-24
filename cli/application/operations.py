@@ -92,18 +92,41 @@ def spawn_worker(install: Installation, operation: Operation) -> None:
     operation.save(install)
 
 
-def _normalized_handoff(install: Installation, handoff_ticket: str | None) -> str | None:
-    if handoff_ticket is None:
+def _claimed_handoff(install: Installation, handoff_token: str | None) -> str | None:
+    """Exchange a Bash call's handoff token for the server's durable ticket path."""
+    if not handoff_token:
         return None
     if not install.owns_server or install.server_data_directory is None:
         raise ApplicationError("An Agent handoff cannot target a client-only installation")
-    from core.tools._bash_update_handoff import ticket_id_from_path
+    from cli.application.processes import target
+    from cli.rpc_client import rpc_call
 
+    result = rpc_call(
+        target(install), "application.update_handoff_mint", {"handoff_token": handoff_token}
+    )
+    ticket = result.data.get("handoff_ticket") if result.ok else None
+    if not isinstance(ticket, str) or not ticket:
+        detail = (result.message or "the server returned no handoff ticket").splitlines()[0]
+        raise ApplicationError(
+            "No update was started: the vBot server did not accept this command's "
+            f"VBOT_UPDATE_HANDOFF value ({detail}). The value is valid only while the Bash "
+            "Tool call that started this command is still running on this installation's "
+            "server. Run the command again directly in a new Bash Tool call."
+        )
+    return _normalized_handoff(install, ticket)
+
+
+def _normalized_handoff(install: Installation, handoff_ticket: str) -> str:
+    assert install.server_data_directory is not None
+    from core.tools._bash_update_handoff import read_handoff_ticket, ticket_id_from_path
+
+    data_directory = Path(install.server_data_directory)
     try:
-        ticket_id_from_path(Path(install.server_data_directory), handoff_ticket)
+        read_handoff_ticket(data_directory, ticket_id_from_path(data_directory, handoff_ticket))
     except ValueError as exc:
         raise ApplicationError(
-            "The Agent handoff ticket is outside this server data directory"
+            "The server returned an Agent handoff ticket that is not valid for this "
+            "installation's data directory"
         ) from exc
     return str(Path(handoff_ticket).expanduser().resolve())
 
@@ -128,11 +151,12 @@ def request_update(
     *,
     package: Path | None = None,
     restart: bool = True,
-    handoff_ticket: str | None = None,
+    handoff_token: str | None = None,
 ) -> Operation:
     if package is not None and not package.expanduser().is_file():
         raise ApplicationError("The selected application package does not exist")
-    handoff_ticket = _normalized_handoff(install, handoff_ticket)
+    # Claiming is idempotent per token, so a repeated Agent request coalesces below.
+    handoff_ticket = _claimed_handoff(install, handoff_token)
     with exclusive(install.root, "dispatch", timeout=5):
         ensure_not_removing(install.root)
         pending = [item for item in operations(install) if not item.terminal]
