@@ -163,7 +163,7 @@ def test_failed_share_inventory_lookup_does_not_claim_no_private_skills(
                 json={
                     "ok": False,
                     "error": {
-                        "code": "domain_error",
+                        "code": "skill_not_found",
                         "message": "assistant owns no private skill named 'x'",
                     },
                 },
@@ -177,7 +177,7 @@ def test_failed_share_inventory_lookup_does_not_claim_no_private_skills(
     assert "assistant owns no private skills" not in result.message
     assert calls == ["skill.share", "skill.inventory"]
     assert result.failure.method == "skill.share"
-    assert result.failure.code == "domain_error"
+    assert result.failure.code == "skill_not_found"
 
 
 def test_parse_args_supports_skill_catalog_command() -> None:
@@ -674,7 +674,7 @@ def test_skill_disable_unknown_name_attaches_candidates(
                 400,
                 json={
                     "ok": False,
-                    "error": {"code": "invalid_request", "message": "unknown skill: 'librrarian'"},
+                    "error": {"code": "skill_not_found", "message": "unknown skill: 'librrarian'"},
                 },
             )
         assert json["method"] == "skill.inventory"
@@ -717,7 +717,7 @@ def test_skill_share_unknown_owner_lists_agents(
                 json={
                     "ok": False,
                     "error": {
-                        "code": "invalid_request",
+                        "code": "agent_not_found",
                         "message": "unknown agent: 'assistnt' (sharing is identity-agent-only)",
                     },
                 },
@@ -737,6 +737,38 @@ def test_skill_share_unknown_owner_lists_agents(
     assert "available agents: assistant, coder" in result.message
 
 
+def test_skill_share_unknown_receiver_suggests_that_receiver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The structured code routes the lookup; the suggestion targets the first
+    # requested id missing from the Agent list, never text parsed from the message.
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        if json["method"] == "skill.share":
+            return httpx.Response(
+                400,
+                json={"ok": False, "error": {"code": "agent_not_found", "message": "sentinel"}},
+            )
+        assert json["method"] == "agent.list"
+        return httpx.Response(
+            200,
+            json={"ok": True, "result": {"agents": [{"id": "assistant"}, {"id": "coder"}]}},
+        )
+
+    monkeypatch.setattr(skill_management.httpx, "post", fake_post)
+
+    result = skill_management.skill_share(
+        make_instance(tmp_path), "assistant", "librarian", ["codr"]
+    )
+
+    assert result.ok is False
+    assert result.failure is not None
+    assert result.failure.code == "agent_not_found"
+    assert "did you mean: coder" in result.message
+    assert "available agents: assistant, coder" in result.message
+
+
 def test_skill_share_wrong_private_skill_lists_owned_skills(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -751,7 +783,7 @@ def test_skill_share_wrong_private_skill_lists_owned_skills(
                 json={
                     "ok": False,
                     "error": {
-                        "code": "invalid_request",
+                        "code": "skill_not_found",
                         "message": "agent 'assistant' owns no private skill named 'ghost'",
                     },
                 },
