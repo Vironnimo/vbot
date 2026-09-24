@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import builtins
-import json
 import sqlite3
 import threading
 import uuid
@@ -64,12 +63,19 @@ if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
     from core.runs import RunExecutionOwner
     from core.sessions._types import (
+        DeliveryReceipt,
+        OwnedSessionSummary,
+        RunStartBoundary,
         SessionAddress,
         SessionContinuationState,
         SessionIdentityReferenceUpdate,
+        SessionListCursor,
+        SessionListFilters,
+        SessionListPage,
         SessionReadBatch,
         SessionReadCursor,
         SessionRunCompletion,
+        TemporarySessionBinding,
     )
 
 
@@ -193,9 +199,6 @@ class SessionStore:
     def close(self) -> None:
         self._runtime.close()
 
-    def checkpoint(self) -> None:
-        self._runtime.checkpoint()
-
     def backup(
         self,
         destination: Path,
@@ -281,17 +284,18 @@ class SessionStore:
                 return
         self._execute_write(lambda connection: _store_mutations.ensure_live(connection, address))
 
-    def exists(self, address: SessionAddress, *, include_archived: bool = False) -> bool:
+    def exists(self, address: SessionAddress) -> bool:
         with self._runtime.read_ctx() as connection:
-            return _store_queries.exists(connection, address, include_archived=include_archived)
+            return _store_queries.exists(connection, address)
 
     def existing_addresses(self, addresses: Sequence[SessionAddress]) -> set[SessionAddress]:
         with self._runtime.read_ctx() as connection:
             return _store_queries.existing_addresses(connection, addresses)
 
-    def state(self, address: SessionAddress, *, include_archived: bool = False) -> sqlite3.Row:
+    def state(self, address: SessionAddress) -> sqlite3.Row:
+        """Read one live Session row; a missing Session raises ``SessionNotFoundError``."""
         with self._runtime.read_ctx() as connection:
-            return _store_queries.state(connection, address, include_archived=include_archived)
+            return _store_values._require_live(connection, address)
 
     def metadata(self, address: SessionAddress) -> JsonObject:
         return _store_values._session_metadata_from_state(self.state(address))
@@ -300,15 +304,6 @@ class SessionStore:
         """Return one metadata value, or ``None`` when the Session has none."""
         with self._runtime.read_ctx() as connection:
             return _store_queries.metadata_value(connection, address, key)
-
-    def descriptor_source(
-        self, address: SessionAddress
-    ) -> tuple[JsonObject, int, ChatMessage | None, SessionRecallVisibility]:
-        """Load compact descriptor inputs without reconstructing Session history."""
-        source = self.descriptor_sources((address,)).get(address)
-        if source is None:
-            raise SessionNotFoundError(f"session does not exist: {address.session_id}")
-        return source
 
     def descriptor_sources(
         self, addresses: Sequence[SessionAddress]
@@ -350,16 +345,6 @@ class SessionStore:
                 connection, address, mutation, create_missing=create_missing
             )
         )
-
-    def activity(self, address: SessionAddress) -> JsonObject:
-        payload = self.state(address)["activity_json"]
-        try:
-            data = json.loads(payload)
-        except json.JSONDecodeError as exc:
-            raise SessionStoreCorruptError(
-                f"invalid Session activity: {address.session_id}"
-            ) from exc
-        return data if isinstance(data, dict) else {}
 
     def replace_activity(self, address: SessionAddress, activity: JsonObject) -> None:
         return self._execute_write(
@@ -454,17 +439,19 @@ class SessionStore:
             )
         )
 
-    def temporary_binding(self, address: SessionAddress) -> sqlite3.Row | None:
-        with self._runtime.read_ctx() as connection:
-            return _store_owned.temporary_binding(connection, address)
+    def temporary_binding(self, address: SessionAddress) -> TemporarySessionBinding | None:
+        return self._read_decoded(
+            lambda connection: _store_owned.temporary_binding(connection, address)
+        )
 
     def temporary_binding_by_participant(
         self, *, owner_name: str, group_id: str, participant_id: str
-    ) -> tuple[SessionAddress, sqlite3.Row] | None:
-        with self._runtime.read_ctx() as connection:
-            return _store_owned.temporary_binding_by_participant(
+    ) -> TemporarySessionBinding | None:
+        return self._read_decoded(
+            lambda connection: _store_owned.temporary_binding_by_participant(
                 connection, owner_name=owner_name, group_id=group_id, participant_id=participant_id
             )
+        )
 
     def delete_temporary_group(self, *, owner_name: str, group_id: str) -> int:
         return self._execute_write(
@@ -480,11 +467,12 @@ class SessionStore:
         group_id: str,
         after: str = "",
         limit: int = 100,
-    ) -> list[tuple[SessionAddress, sqlite3.Row]]:
-        with self._runtime.read_ctx() as connection:
-            return _store_owned.temporary_bindings(
+    ) -> list[TemporarySessionBinding]:
+        return self._read_decoded(
+            lambda connection: _store_owned.temporary_bindings(
                 connection, owner_name=owner_name, group_id=group_id, after=after, limit=limit
             )
+        )
 
     def set_temporary_group_title(self, *, owner_name: str, group_id: str, title: str) -> None:
         self._execute_write(
@@ -501,17 +489,18 @@ class SessionStore:
                 connection, owner_name=owner_name, group_ids=group_ids
             )
 
-    def owned_session_summary_rows(
+    def owned_session_summaries(
         self,
         *,
         owner_name: str | None = None,
         group_id: str | None = None,
         metadata_keys: Sequence[str] = (),
-    ) -> list[sqlite3.Row]:
-        with self._runtime.read_ctx() as connection:
-            return _store_owned.owned_session_summary_rows(
+    ) -> list[OwnedSessionSummary]:
+        return self._read_decoded(
+            lambda connection: _store_owned.owned_session_summaries(
                 connection, owner_name=owner_name, group_id=group_id, metadata_keys=metadata_keys
             )
+        )
 
     def append_messages_with_receipts(
         self,
@@ -548,7 +537,7 @@ class SessionStore:
 
     def delivery_receipt(
         self, address: SessionAddress, *, generation_id: str, owner_name: str, receipt_id: str
-    ) -> sqlite3.Row | None:
+    ) -> DeliveryReceipt | None:
         with self._runtime.read_ctx() as connection:
             return _store_owned.delivery_receipt(
                 connection,
@@ -651,7 +640,7 @@ class SessionStore:
         with self._runtime.read_ctx() as connection:
             return _store_owned.owned_run_by_input(connection, address, input_id)
 
-    def run_start_boundaries(self, addresses: Sequence[SessionAddress]) -> list[sqlite3.Row]:
+    def run_start_boundaries(self, addresses: Sequence[SessionAddress]) -> list[RunStartBoundary]:
         with self._runtime.read_ctx() as connection:
             return _store_owned.run_start_boundaries(connection, addresses)
 
@@ -899,54 +888,47 @@ class SessionStore:
                 connection, project_id, exclude_owner_managed=exclude_owner_managed
             )
 
-    def list_summary_rows_for_scope(
+    def list_summaries(
         self,
         project_id: str | None,
         agent_id: str,
         *,
         metadata_keys: Sequence[str] = (),
-    ) -> list[sqlite3.Row]:
-        with self._runtime.read_ctx() as connection:
-            return _store_queries.list_summary_rows_for_scope(
+    ) -> list[JsonObject]:
+        return self._read_decoded(
+            lambda connection: _store_queries.list_summaries(
                 connection, project_id, agent_id, metadata_keys=metadata_keys
             )
+        )
 
-    def list_summary_rows(
+    def list_summaries_page(
         self,
         scopes: Sequence[tuple[str | None, str]],
         *,
         limit: int,
-        cursor: tuple[float, str, str, str] | None,
-        include_subagents: bool,
-        include_memory_reflections: bool,
-        include_skill_reflections: bool,
-        include_cron: bool,
-        include_channels: bool,
+        cursor: SessionListCursor | None,
+        filters: SessionListFilters,
         required_address: SessionAddress | None,
-    ) -> tuple[list[sqlite3.Row], sqlite3.Row | None, int, bool]:
-        with self._runtime.read_ctx() as connection:
-            return _store_queries.list_summary_rows(
+    ) -> SessionListPage:
+        return self._read_decoded(
+            lambda connection: _store_queries.list_summaries_page(
                 connection,
                 scopes,
                 limit=limit,
                 cursor=cursor,
-                include_subagents=include_subagents,
-                include_memory_reflections=include_memory_reflections,
-                include_skill_reflections=include_skill_reflections,
-                include_cron=include_cron,
-                include_channels=include_channels,
+                filters=filters,
                 required_address=required_address,
             )
+        )
 
-    def summary_row(self, address: SessionAddress) -> sqlite3.Row | None:
-        with self._runtime.read_ctx() as connection:
-            return _store_queries.summary_row(connection, address)
+    def summary(self, address: SessionAddress) -> JsonObject | None:
+        return self._read_decoded(lambda connection: _store_queries.summary(connection, address))
 
-    def list_completion_activity_rows(
+    def list_completion_activity(
         self, scopes: Sequence[tuple[str | None, str]]
-    ) -> list[sqlite3.Row]:
+    ) -> dict[tuple[str | None, str], list[JsonObject]]:
         with self._runtime.read_ctx() as connection:
-            return _store_queries.list_completion_activity_rows(connection, scopes)
+            return _store_queries.list_completion_activity(connection, scopes)
 
     def session_ids_with_messages(
         self,
