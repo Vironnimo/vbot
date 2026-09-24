@@ -16,7 +16,12 @@
     setDesktopClipboardText,
   } from '$lib/desktopBridge.js';
 
-  let { active = true, onToast = () => {}, ...chatProps } = $props();
+  let {
+    active = true,
+    onToast = () => {},
+    sessionDeletion = null,
+    ...chatProps
+  } = $props();
   const id = $props.id();
   const paneIds = [0, 1];
   let root = $state(null);
@@ -56,6 +61,25 @@
       requestId: deletionSequence,
     };
   }
+
+  // A Session deleted in another window (or this window's own deletion echoed
+  // by the server) reaches every Chat area the same way, so each releases its
+  // pointer and follows the landing if it still displays that Session. A
+  // deletion reported before this workspace mounted is already reflected in
+  // the Session data it loads.
+  let handledServerDeletion = untrack(() => sessionDeletion);
+  $effect(() => {
+    const deletion = sessionDeletion;
+    if (!deletion || deletion === handledServerDeletion) {
+      return;
+    }
+    handledServerDeletion = deletion;
+    const chatAreas = untrack(() => (secondChatCreated ? paneIds : [0]));
+    for (const index of chatAreas) {
+      deletionSequence += 1;
+      siblingDeletions[index] = { ...deletion, requestId: deletionSequence };
+    }
+  });
   let ratio = $state(50);
   let width = $state(0);
   let dragging = $state(false);

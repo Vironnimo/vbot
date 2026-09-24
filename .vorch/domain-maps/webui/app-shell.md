@@ -54,7 +54,7 @@ AppShell's optional `sidebarFooter` snippet precedes the existing microphone and
 
 - `resource_changed` events carry a resource family and optional scope. `resourceInvalidation.js` converts them into refresh tokens or targeted callbacks rather than copying RPC-specific branching into every component.
 - `commands` invalidation bumps the App-owned Command refresh token forwarded to Chat. Replay gaps and epoch changes bump it with the other server-backed projections so the active autocomplete catalog is re-fetched after uncertain continuity.
-- Queue invalidation is scoped to the addressed Agent and Session. Other resource families refresh the controller that owns their displayed projection.
+- Queue invalidation is scoped to the addressed Agent and Session. A `sessions` event whose scope names a `deleted_session_id` additionally sets the App-owned `sessionDeletion` (a fresh object per event) that Chat turns into Session release and landing follow; see `webui/chat.md`. Other resource families refresh the controller that owns their displayed projection.
 - `terminals` invalidation bumps the App-owned terminal refresh token. The mounted Terminals controller re-fetches the active catalog without replacing a still-valid selection; PTY output is not an invalidation and remains on the selected terminal's dedicated stream.
 - `session_store` invalidation refreshes the App-owned health and incident projection without touching Chat selection or Session content.
 - Refresh completion does not automatically replace an active editing surface. A controller can retain the visible snapshot while a modal, picker, or draft is busy, then adopt the newest server result at the safe boundary.

@@ -492,8 +492,13 @@ describe('ChatWorkspace', () => {
       },
     };
     let deleted;
+    const serverDeletion = () => ({
+      agentAddress: 'alpha',
+      deletedSessionId: 'session-1',
+      nextSessionId: 'session-2',
+    });
 
-    function mountDeletableWorkspace() {
+    function mountDeletableWorkspace({ beforeDeleteResponse } = {}) {
       deleted = false;
       const baseRpc = createChatRpcMock({
         sessionMessages: {
@@ -509,6 +514,7 @@ describe('ChatWorkspace', () => {
       rpcMock.mockImplementation(async (method, params) => {
         if (method === 'session.delete') {
           deleted = true;
+          await beforeDeleteResponse?.();
           return { ...params, next_session_id: 'session-2' };
         }
         if (method === 'agent.list') {
@@ -538,6 +544,8 @@ describe('ChatWorkspace', () => {
         sharedAgents: [createAgent()],
         sharedSelectedAgentId: 'alpha',
         agentsRefreshToken: 0,
+        sessionDeletion: null,
+        onSessionNavigation: vi.fn(),
       });
       harness.mount(
         {
@@ -551,6 +559,12 @@ describe('ChatWorkspace', () => {
             },
             get agentsRefreshToken() {
               return props.agentsRefreshToken;
+            },
+            get sessionDeletion() {
+              return props.sessionDeletion;
+            },
+            get onSessionNavigation() {
+              return props.onSessionNavigation;
             },
           },
         },
@@ -650,6 +664,111 @@ describe('ChatWorkspace', () => {
 
       expect(deletedHistoryReads()).toBe(readsAtDeletion);
       expect(pane(1).textContent).toContain('Second conversation sentinel');
+    });
+
+    it('follows a Session another window deleted in every area', async () => {
+      const props = mountDeletableWorkspace();
+      await waitForCondition(() => deletedHistoryReads() > 0, 100);
+      action(0, 'Split view');
+      await waitForCondition(() => testChatStateRefs.length === 2, 100);
+      await waitForCondition(() => deletedHistoryReads() > 1, 100);
+      const navigationReports = props.onSessionNavigation.mock.calls.length;
+
+      // Another window archived the Session both areas display.
+      deleted = true;
+      props.sessionDeletion = serverDeletion();
+      flushSync();
+
+      await waitForCondition(
+        () =>
+          [0, 1].every(
+            (index) =>
+              pane(index).textContent.includes(
+                'Second conversation sentinel',
+              ) &&
+              testChatStateRefs[index].agents[0].current_session_id ===
+                'session-2',
+          ),
+        100,
+      );
+      const readsAtDeletion = deletedHistoryReads();
+      await settle();
+
+      expect(deletedHistoryReads()).toBe(readsAtDeletion);
+      // A passive follow: no browser-history entry for another window's act.
+      expect(props.onSessionNavigation.mock.calls.length).toBe(
+        navigationReports,
+      );
+      expect(
+        rpcMock.mock.calls.some(([method]) => method === 'session.delete'),
+      ).toBe(false);
+    });
+
+    it('ignores a deletion reported before the workspace mounted', async () => {
+      const props = reactiveProps({ sessionDeletion: serverDeletion() });
+      rpcMock.mockImplementation(createChatRpcMock());
+      listSessionsMock.mockResolvedValue({ sessions: [rows['session-1']] });
+      const navigation = vi.fn();
+      harness.mount(
+        {
+          target: document.body,
+          props: {
+            sharedAgents: [createAgent()],
+            sharedSelectedAgentId: 'alpha',
+            onSessionNavigation: navigation,
+            get sessionDeletion() {
+              return props.sessionDeletion;
+            },
+          },
+        },
+        ChatWorkspace,
+      );
+      await waitForCondition(() => deletedHistoryReads() > 0, 100);
+      await settle();
+
+      expect(testChatStateRefs[0].agents[0].current_session_id).toBe(
+        'session-1',
+      );
+      expect(
+        rpcMock.mock.calls.filter(
+          ([method, params]) =>
+            method === 'chat.history' && params.session_id === 'session-2',
+        ),
+      ).toEqual([]);
+    });
+
+    it('completes its own deletion when the server event arrives first', async () => {
+      let props;
+      props = mountDeletableWorkspace({
+        beforeDeleteResponse: async () => {
+          // The WebSocket echo overtakes the delete response.
+          props.sessionDeletion = serverDeletion();
+          flushSync();
+          await waitForCondition(
+            () => pane(0).textContent.includes('Second conversation sentinel'),
+            100,
+          );
+        },
+      });
+      await waitForCondition(() => deletedHistoryReads() > 0, 100);
+      const navigationReports = props.onSessionNavigation.mock.calls.length;
+
+      await deleteFromDrawer(0, 'First topic');
+      await waitForCondition(
+        () =>
+          props.onSessionNavigation.mock.calls.length > navigationReports &&
+          document.activeElement?.tagName === 'TEXTAREA' &&
+          pane(0).contains(document.activeElement),
+        100,
+      );
+      const readsAtDeletion = deletedHistoryReads();
+      await settle();
+
+      expect(deletedHistoryReads()).toBe(readsAtDeletion);
+      expect(testChatStateRefs[0].agents[0].current_session_id).toBe(
+        'session-2',
+      );
+      expect(pane(0).textContent).toContain('Second conversation sentinel');
     });
   });
 

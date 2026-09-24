@@ -1,3 +1,4 @@
+import { formatAgentAddress } from './agentAddress.js';
 import {
   CONNECTION_REPLAY_STATUS_EPOCH_CHANGED,
   CONNECTION_REPLAY_STATUS_GAP,
@@ -99,6 +100,26 @@ function activeRunFromStartedEvent(payload) {
   };
 }
 
+// A `session.delete` names the archived Session and its landing in the
+// `sessions` scope. Every event yields a fresh object so a repeated deletion
+// still reaches the Chat areas.
+function sessionDeletionFromScope(scope) {
+  const agentId = typeof scope?.agent_id === 'string' ? scope.agent_id : '';
+  const deletedSessionId =
+    typeof scope?.deleted_session_id === 'string'
+      ? scope.deleted_session_id
+      : '';
+  if (!agentId || !deletedSessionId) {
+    return null;
+  }
+  return {
+    agentAddress: formatAgentAddress(agentId, scope.project_id),
+    deletedSessionId,
+    nextSessionId:
+      typeof scope.next_session_id === 'string' ? scope.next_session_id : '',
+  };
+}
+
 export function createAppControllerState(activeViewId) {
   return {
     activeViewId,
@@ -123,6 +144,7 @@ export function createAppControllerState(activeViewId) {
     runServerEvents: [],
     serverNoticeState: '',
     serverRecoveryGeneration: 0,
+    sessionDeletion: null,
     sessionsRefreshToken: 0,
     sessionStoreHealth: null,
     sessionStoreIncident: null,
@@ -594,6 +616,10 @@ export function createAppController({
     }
     if (tokenKeys.includes(RESOURCE_TOKEN_SESSIONS)) {
       state.sessionsRefreshToken += 1;
+      const deletion = sessionDeletionFromScope(event.payload?.scope);
+      if (deletion) {
+        state.sessionDeletion = deletion;
+      }
     }
     if (kind === 'queue') {
       const scope = event.payload?.scope ?? {};
