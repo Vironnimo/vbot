@@ -33,6 +33,7 @@ _INSPECTIONS = {
     "config": ("config", "list"),
     "log": ("log", "list"),
     "debug": ("debug", "status"),
+    "performance": ("performance", "status"),
     "statistics": ("log", "list"),
     "session-store": ("session-store", "status"),
     "server": ("server", "status"),
@@ -64,6 +65,10 @@ _CODE_GUIDANCE = {
     "session_capability_expired": "The Session capability expired. Reload the Extension page "
     "to obtain a current capability.",
     "channel_config_error": "Inspect the Channel configuration and the reported invalid field.",
+    "performance_recording_active": "A performance recording is already running. Inspect it "
+    "and stop it before starting another.",
+    "performance_recording_inactive": "No performance recording is running. Inspect the "
+    "current status or list stored recordings.",
 }
 
 

@@ -46,6 +46,7 @@ from cli._parser_operations import (
     _add_config_parsers,
     _add_cron_parsers,
     _add_debug_parsers,
+    _add_performance_parsers,
     _add_statistics_parsers,
 )
 from cli._progress import status_line
@@ -63,6 +64,7 @@ AREA_ALIASES = {
     "skills": "skill",
     "task-models": "task-model",
     "extension": "extensions",
+    "perf": "performance",
 }
 
 
@@ -180,6 +182,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_statistics_parsers(subparsers)
     _add_config_parsers(subparsers)
     _add_debug_parsers(subparsers)
+    _add_performance_parsers(subparsers)
     _add_doctor_parsers(subparsers)
     help_parser = subparsers.add_parser("help", help="Show help for any command path")
     help_parser.add_argument("path", nargs="*")

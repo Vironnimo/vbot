@@ -50,6 +50,7 @@ COMMAND_PATHS: dict[str, dict[str, tuple[str, ...]]] = {
         "targets": ("target", "list"),
     },
     "skill": {"write-file": ("file", "write"), "remove-file": ("file", "remove")},
+    "performance": {"record-start": ("record", "start"), "record-stop": ("record", "stop")},
 }
 
 SERVER_COMMANDS = ("start", "stop", "restart", "status")
@@ -120,6 +121,7 @@ AREA_HELP = {
     "statistics": "Inspect usage statistics computed from persisted sessions",
     "config": "Inspect and update public Settings paths",
     "debug": "Inspect debug mode state and stored traces",
+    "performance": "Inspect server performance metrics and record Perfetto timelines",
     "doctor": "Run local configuration health checks",
 }
 
@@ -302,6 +304,14 @@ DEBUG_HELP = {
     "trace": "Show one stored debug trace as JSON",
     "clear": "Delete all stored debug traces",
     "probe": "Fetch one provider's models endpoint and preview the response",
+}
+
+
+PERFORMANCE_HELP = {
+    "status": "Show slowest operations, key gauges, recent Event Loop stalls and recording",
+    "record-start": "Start recording a performance timeline",
+    "record-stop": "Stop the active recording and write its trace file",
+    "recordings": "List stored performance recordings, newest first",
 }
 
 
