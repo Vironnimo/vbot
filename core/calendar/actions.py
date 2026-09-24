@@ -18,10 +18,32 @@ from core.calendar.errors import (
     CalendarStorageError,
     CalendarValidationError,
 )
+from core.config_validation import (
+    JsonConfigValidationError,
+    JsonDiagnostic,
+    JsonValidationReport,
+    add_error,
+    child_path,
+    error_diagnostic,
+    load_validated_json_file,
+    validate_json_file,
+    validate_required_fields,
+)
+from core.json_documents import (
+    JsonDocumentFormat,
+    JsonDocumentWriteError,
+    json_document,
+    json_list,
+    json_map,
+    json_object,
+    strip_unknown_fields,
+    validate_format_version,
+    warn_unknown_fields,
+    write_json_document,
+)
 from core.projects.address import parse_agent_address
 from core.runs import RunKind
 from core.sessions import SessionAddress
-from core.utils.atomic import atomic_write_text
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
@@ -40,6 +62,33 @@ _MAX_ACTIONS = 16
 # Finished history is kept this long after expiry, then pruned once the scan
 # window no longer reaches its occurrence (it can then never become due again).
 _RETENTION = timedelta(days=30)
+_EXECUTION_STATUSES = _TERMINAL | {"pending", "claimed", "running"}
+
+CALENDAR_ACTIONS_FORMAT_VERSION = 1
+_ACTION_FIELDS = frozenset(
+    ("id", "event_id", "when", "prompt", "target", "session", "created_at", "scanned_until")
+)
+_EXECUTION_FIELDS = frozenset(
+    (
+        "id",
+        "action_id",
+        "event_id",
+        "occurrence_start",
+        "scheduled_at",
+        "expires_at",
+        "target",
+        "session",
+        "run_id",
+        "status",
+    )
+)
+CALENDAR_ACTIONS_SHAPE = json_document(
+    {"actions", "executions"},
+    {
+        "actions": json_list(json_object(_ACTION_FIELDS), key="id"),
+        "executions": json_map(json_object(_EXECUTION_FIELDS)),
+    },
+)
 
 
 def parse_action_when(value: object) -> tuple[str, int, str]:
@@ -58,6 +107,96 @@ def parse_action_when(value: object) -> tuple[str, int, str]:
         -minutes if sign == "-" else minutes,
         f"{anchor} {sign} {count}{unit}" if sign else anchor,
     )
+
+
+def validate_calendar_actions_file(actions_path: str | Path) -> JsonValidationReport:
+    """Validate persisted ``calendar/actions.json`` without consuming it."""
+    return validate_json_file(actions_path, validate_calendar_actions_data, missing_ok=True)
+
+
+def validate_calendar_actions_data(data: Any) -> list[JsonDiagnostic]:
+    """Validate a decoded raw ``calendar/actions.json`` document.
+
+    Actions and their execution history load as a whole: any error disables the
+    action store, and a document that fails to load is never overwritten.
+    """
+    diagnostics: list[JsonDiagnostic] = []
+    if not isinstance(data, dict):
+        return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
+    if not validate_format_version(diagnostics, data, CALENDAR_ACTIONS_FORMAT_VERSION):
+        return diagnostics
+    warn_unknown_fields(
+        diagnostics, "$", data, CALENDAR_ACTIONS_SHAPE, label="calendar action field"
+    )
+    validate_required_fields(diagnostics, "$", data, frozenset(("actions", "executions")))
+    actions = data.get("actions", [])
+    if not isinstance(actions, list):
+        add_error(diagnostics, "$.actions", "must be an array")
+        actions = []
+    action_ids: set[str] = set()
+    for index, action in enumerate(actions):
+        path = f"$.actions[{index}]"
+        try:
+            _validate_action_record(action)
+        except (CalendarValidationError, ValueError) as error:
+            add_error(diagnostics, path, str(error))
+            continue
+        if action["id"] in action_ids:
+            add_error(diagnostics, f"{path}.id", f"duplicate action id: {action['id']}")
+        action_ids.add(action["id"])
+    executions = data.get("executions", {})
+    if not isinstance(executions, dict):
+        add_error(diagnostics, "$.executions", "must be an object")
+        executions = {}
+    for key, row in executions.items():
+        try:
+            _validate_execution_record(key, row)
+        except ValueError as error:
+            add_error(diagnostics, child_path("$.executions", key), str(error))
+    return diagnostics
+
+
+CALENDAR_ACTIONS_FORMAT = JsonDocumentFormat(
+    name="Calendar actions",
+    version=CALENDAR_ACTIONS_FORMAT_VERSION,
+    shape=CALENDAR_ACTIONS_SHAPE,
+    validate=validate_calendar_actions_data,
+)
+
+
+def _validate_action_record(action: Any) -> None:
+    """Check the stored fields of one action, without resolving its target."""
+    if not isinstance(action, dict):
+        raise CalendarValidationError("action must be an object")
+    for field in ("id", "event_id", "target", "prompt", "created_at", "scanned_until"):
+        if not isinstance(action.get(field), str) or not action[field].strip():
+            raise CalendarValidationError(f"{field} must be a non-empty string")
+    if len(action["prompt"]) > 10000:
+        raise CalendarValidationError("prompt must not exceed 10000 characters")
+    parse_action_when(action.get("when"))
+    _instant(action["created_at"])
+    _instant(action["scanned_until"])
+    parse_agent_address(action["target"])
+    session = action.get("session")
+    if session is not None and (not isinstance(session, str) or not session.strip()):
+        raise CalendarValidationError("session must be a non-empty string or null")
+
+
+def _validate_execution_record(key: str, row: Any) -> None:
+    if not isinstance(row, dict):
+        raise ValueError("execution must be an object")
+    if row.get("status") not in _EXECUTION_STATUSES:
+        raise ValueError(f"status must be one of: {', '.join(sorted(_EXECUTION_STATUSES))}")
+    if row.get("id") != key:
+        raise ValueError("id must equal the execution key")
+    for field in ("action_id", "event_id", "occurrence_start", "target"):
+        if not isinstance(row.get(field), str):
+            raise ValueError(f"{field} must be a string")
+    parse_agent_address(row["target"])
+    for field in ("scheduled_at", "expires_at"):
+        if not isinstance(row.get(field), str):
+            raise ValueError(f"{field} must be a timestamp string")
+        _instant(row[field])
 
 
 class CalendarActions:
@@ -100,77 +239,43 @@ class CalendarActions:
     def _load(self) -> None:
         if not self._loaded:
             try:
-                if self._path.exists():
-                    data = json.loads(self._path.read_text(encoding="utf-8"))
-                    if not isinstance(data, dict) or set(data) != {"actions", "executions"}:
-                        raise ValueError("invalid action store")
-                    if not isinstance(data["actions"], list):
-                        raise ValueError("invalid action store")
-                    for item in data["actions"]:
-                        if not isinstance(item, dict):
-                            raise ValueError("invalid action store")
-                        self._validate(item, references=False)
-                        if item["id"] in self._actions:
-                            raise ValueError("duplicate action id")
-                        self._actions[item["id"]] = item
-                    if not isinstance(data["executions"], dict):
-                        raise ValueError("invalid execution store")
-                    for key, row in data["executions"].items():
-                        if not isinstance(row, dict) or row.get("status") not in _TERMINAL | {
-                            "pending",
-                            "claimed",
-                            "running",
-                        }:
-                            raise ValueError("invalid execution")
-                        if row.get("id") != key or any(
-                            not isinstance(row.get(field), str)
-                            for field in ("action_id", "event_id", "occurrence_start", "target")
-                        ):
-                            raise ValueError("invalid execution")
-                        parse_agent_address(row["target"])
-                        for field in ("scheduled_at", "expires_at"):
-                            _instant(row[field])
-                        if row["status"] in {"claimed", "running"}:
-                            row["status"] = "interrupted"
-                            self._recovery_pending.add(key)
-                        self._executions[key] = row
-            except (OSError, ValueError, TypeError, KeyError, CalendarValidationError) as error:
+                data = load_validated_json_file(
+                    self._path, validate_calendar_actions_data, missing_ok=True
+                )
+            except (OSError, JsonConfigValidationError) as error:
                 self._storage_error = CalendarStorageError(f"Cannot load calendar actions: {error}")
-                self._actions.clear()
-                self._executions.clear()
                 _LOGGER.error("Calendar action storage is unavailable: %s", error)
+            else:
+                if data is not None:
+                    self._adopt(strip_unknown_fields(data, CALENDAR_ACTIONS_SHAPE))
             self._loaded = True
         if self._storage_error is not None:
             raise self._storage_error
 
+    def _adopt(self, data: dict[str, Any]) -> None:
+        """Take over a validated document's modeled fields as the in-memory store."""
+        for action in data["actions"]:
+            self._actions[action["id"]] = action
+        for key, row in data["executions"].items():
+            if row["status"] in {"claimed", "running"}:
+                row["status"] = "interrupted"
+                self._recovery_pending.add(key)
+            self._executions[key] = row
+
     def _save(self) -> None:
+        """Write actions and history, keeping the unknown fields of the file on disk."""
+        payload = {"actions": list(self._actions.values()), "executions": self._executions}
         try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_text(
-                self._path,
-                json.dumps(
-                    {"actions": list(self._actions.values()), "executions": self._executions},
-                    ensure_ascii=False,
-                    indent=2,
-                )
-                + "\n",
-            )
+            write_json_document(self._path, payload, CALENDAR_ACTIONS_FORMAT)
+        except JsonDocumentWriteError as error:
+            raise CalendarStorageError(str(error)) from error
         except OSError as error:
             raise CalendarStorageError(f"Cannot save calendar actions: {error}") from error
 
     def _validate(self, action: dict[str, Any], *, references: bool = True) -> None:
-        for field in ("id", "event_id", "target", "prompt", "created_at", "scanned_until"):
-            if not isinstance(action.get(field), str) or not action[field].strip():
-                raise CalendarValidationError(f"{field} must be a non-empty string")
-        if len(action["prompt"]) > 10000:
-            raise CalendarValidationError("prompt must not exceed 10000 characters")
-        parse_action_when(action.get("when"))
-        _instant(action["created_at"])
-        _instant(action["scanned_until"])
+        _validate_action_record(action)
         agent, project = parse_agent_address(action["target"])
         session = action.get("session")
-        if session is not None and (not isinstance(session, str) or not session.strip()):
-            raise CalendarValidationError("session must be a non-empty string or null")
         if references and self._resolver is not None:
             try:
                 self._resolver.resolve_agent(project, agent)

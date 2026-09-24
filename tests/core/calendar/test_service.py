@@ -409,17 +409,57 @@ class TestPersistence:
             "duration_minutes": 30,
             "created_at": "2026-08-27T00:00:00+00:00",
         }
-        events_path.write_text(json.dumps([{"bogus": "entry"}, valid]), encoding="utf-8")
+        events_path.write_text(
+            json.dumps({"format_version": 1, "events": [{"bogus": "entry"}, valid]}),
+            encoding="utf-8",
+        )
         service = CalendarService(tmp_path)
         assert [event.id for event in service.list_events()] == ["valid-1"]
         # The invalid entry survives saves so no data is silently destroyed.
         other = service.create_event(title="New", start="2026-09-15T10:00:00+00:00")
-        raw = json.loads(events_path.read_text(encoding="utf-8"))
+        raw = json.loads(events_path.read_text(encoding="utf-8"))["events"]
         assert {"bogus": "entry"} in [
             entry for entry in raw if isinstance(entry, dict) and "bogus" in entry
         ]
         assert len([item for item in raw if isinstance(item, dict) and item.get("id")]) == 2
         assert other.id
+
+    def test_unknown_fields_are_kept_when_events_are_saved(self, tmp_path: Path) -> None:
+        service = CalendarService(tmp_path, tz="Europe/Berlin")
+        event = service.create_event(
+            title="Standup",
+            start="2026-08-31T09:00:00",
+            rrule={"freq": "weekly", "by_weekday": ["mo"]},
+        )
+        events_path = tmp_path / "calendar" / "events.json"
+        raw = json.loads(events_path.read_text(encoding="utf-8"))
+        raw["future_setting"] = "kept"
+        raw["events"][0]["color"] = "blue"
+        raw["events"][0]["rrule"]["by_month_day"] = [1]
+        events_path.write_text(json.dumps(raw), encoding="utf-8")
+
+        reloaded = CalendarService(tmp_path, tz="Europe/Berlin")
+        assert reloaded.get_event(event.id).rrule == event.rrule
+        reloaded.update_event(event.id, title="Weekly standup")
+
+        rewritten = json.loads(events_path.read_text(encoding="utf-8"))
+        assert rewritten["format_version"] == 1
+        assert rewritten["future_setting"] == "kept"
+        assert rewritten["events"][0]["title"] == "Weekly standup"
+        assert rewritten["events"][0]["color"] == "blue"
+        assert rewritten["events"][0]["rrule"]["by_month_day"] == [1]
+
+    def test_events_written_by_a_newer_vbot_are_never_overwritten(self, tmp_path: Path) -> None:
+        events_path = tmp_path / "calendar" / "events.json"
+        events_path.parent.mkdir(parents=True)
+        original = json.dumps({"format_version": 2, "events": []})
+        events_path.write_text(original, encoding="utf-8")
+        service = CalendarService(tmp_path)
+
+        assert service.list_events() == []
+        with pytest.raises(CalendarStorageError, match="written by a newer vBot"):
+            service.create_event(title="X", start="2026-09-14")
+        assert events_path.read_text(encoding="utf-8") == original
 
     def test_malformed_storage_degrades_and_blocks_mutations(self, tmp_path: Path) -> None:
         events_path = tmp_path / "calendar" / "events.json"
