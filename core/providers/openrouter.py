@@ -91,10 +91,12 @@ from core.providers.openai_compatible import (
 from core.providers.providers import ProviderConfig
 from core.providers.reasoning import (
     ReasoningIntent,
+    closest_supported_effort,
     model_reasoning_budget_max,
     model_reasoning_control,
     model_reasoning_levels,
     model_reasoning_supported,
+    normalize_thinking_effort,
     resolve_reasoning_intent,
 )
 from core.settings.settings import parse_openrouter_routing
@@ -136,6 +138,22 @@ def _openrouter_usage_extras(raw: Any) -> dict[str, Any]:
         if isinstance(write, int) and not isinstance(write, bool) and write >= 0:
             extras["cache_write_tokens"] = write
     return extras
+
+
+def _effective_reasoning_effort(
+    model_lookup: ModelLookup | None, model_id: str, effort: Any
+) -> Any:
+    """Use the cheapest supported effort when the catalog forbids disabling reasoning."""
+    if normalize_thinking_effort(effort) != "none" or model_lookup is None:
+        return effort
+    model = model_lookup(model_id.split("::", 1)[0])
+    if model is None:
+        return effort
+    metadata = model.metadata.get("openrouter")
+    if not isinstance(metadata, Mapping) or metadata.get("reasoning_mandatory") is not True:
+        return effort
+    levels = model_reasoning_levels(model_lookup, model_id) or tuple(OPENROUTER_REASONING_EFFORTS)
+    return closest_supported_effort("minimal", levels) or effort
 
 
 class OpenRouterAdapter(OpenAICompatibleAdapter):
@@ -676,7 +694,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             # a fake fact; the read-side default chain fills it at use time.
             context_window=_parse_optional_int(raw.get("context_length")) or None,
             max_output_tokens=_parse_optional_int(top_provider.get("max_completion_tokens")),
-            metadata=_openrouter_runtime_metadata(architecture),
+            metadata=_openrouter_runtime_metadata(architecture, raw.get("reasoning")),
         )
 
     def _build_payload(
@@ -705,7 +723,9 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                     model_reasoning_levels(self._model_lookup, model_id)
                     or tuple(OPENROUTER_REASONING_EFFORTS)
                 ),
-                effort=thinking_effort or reasoning_effort,
+                effort=_effective_reasoning_effort(
+                    self._model_lookup, model_id, thinking_effort or reasoning_effort
+                ),
                 budget_max=model_reasoning_budget_max(self._model_lookup, model_id),
                 # OpenRouter resolves a budget from the effort internally, so vBot
                 # deliberately never sends a token budget here (no ``max_tokens``).
@@ -747,7 +767,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             control=model_reasoning_control(model_lookup, model_id),
             levels=model_reasoning_levels(model_lookup, model_id)
             or tuple(OPENROUTER_REASONING_EFFORTS),
-            effort=effort,
+            effort=_effective_reasoning_effort(model_lookup, model_id, effort),
             budget_max=model_reasoning_budget_max(model_lookup, model_id),
             max_tokens=None,
         )

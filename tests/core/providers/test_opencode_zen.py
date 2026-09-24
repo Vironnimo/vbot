@@ -320,6 +320,64 @@ async def test_chat_model_uses_chat_completions_wire_and_bearer_auth(
 
 @respx.mock
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("selected_effort", "wire_effort"),
+    [("none", "low"), ("high", "high")],
+)
+async def test_space_bunny_uses_zen_chat_and_supported_reasoning_effort(
+    selected_effort: str,
+    wire_effort: str,
+) -> None:
+    registry = ModelRegistry.load(Path(__file__).resolve().parents[3] / "resources")
+    adapter = OpenCodeZenAdapter(
+        _config(),
+        "zen-secret",
+        model_lookup=lambda selected: registry.get("opencode-zen", selected),
+    )
+    route = respx.post(CHAT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "done",
+                            "reasoning_content": "worked",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+        )
+    )
+
+    try:
+        response = await adapter.send(
+            [{"role": "user", "content": "hello"}],
+            model_id="space-bunny-free",
+            thinking_effort=selected_effort,
+        )
+        payload = json.loads(route.calls.last.request.content)
+        assert payload["model"] == "space-bunny-free"
+        assert payload["reasoning_effort"] == wire_effort
+        assert (
+            adapter.normalize_response(response, model_id="space-bunny-free")["reasoning"]
+            == "worked"
+        )
+        description = adapter.describe_reasoning_render(
+            model_lookup=lambda selected: registry.get("opencode-zen", selected),
+            model_id="space-bunny-free",
+            effort=selected_effort,
+            provider_config=_config(),
+        )
+        assert description.effort_level == wire_effort
+    finally:
+        await adapter.aclose()
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_gemini_request_preserves_native_tools_media_thinking_and_replay(
     adapter: OpenCodeZenAdapter,
 ) -> None:

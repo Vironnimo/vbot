@@ -1,202 +1,214 @@
 {
-  "fetched_at": "2026-09-22T19:30:32.336486+00:00",
+  "fetched_at": "2026-09-24T09:13:42.162377+00:00",
   "provider_id": "opencode-go",
   "raw_response": {
     "data": [
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "deepseek-v4-flash",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "deepseek-v4-flash-vision-exp",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "deepseek-flash",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "deepseek-v4.1-flash",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "deepseek-v4-pro",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "glm-5.1",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "glm-5.2",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "glm-5.3",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "grok-4.6",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "grok-4.7",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "muse-spark-1.2-contributor",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "muse-spark-1.3-contributor",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "glm-5.3-flash",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "omen-alpha",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "gpt-5.6-luna",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
+        "id": "gpt-6-luna",
+        "object": "model",
+        "owned_by": "opencode"
+      },
+      {
+        "created": 1790241224,
         "id": "hy3",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "hy4-preview",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "kimi-k2.6",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "kimi-k2.7-code",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "kimi-k3",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "mimo-v2.5",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "mimo-v2.6-flash",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "mimo-v2.5-pro",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "mimo-v2.6-pro",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "minimax-m2.5",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "minimax-m2.7",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "minimax-m3",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
+        "id": "space-bunny-free",
+        "object": "model",
+        "owned_by": "opencode"
+      },
+      {
+        "created": 1790241224,
         "id": "longcat-2.0",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "qwen3.6-plus",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "qwen3.7-max",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "qwen3.8-max",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "qwen3.8-flash",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1790105432,
+        "created": 1790241224,
         "id": "qwen3.7-plus",
         "object": "model",
         "owned_by": "opencode"
