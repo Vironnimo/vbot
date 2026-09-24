@@ -278,21 +278,25 @@ describe('App', () => {
     expect(mountedComponent.getDebugTracesRefreshToken()).toBe(1);
   });
 
-  it('bumps the sessions refresh token on resource_changed(sessions)', () => {
+  it('forwards the scope of resource_changed(sessions) without a full refresh', () => {
     mountedComponent = mount(App, { target: document.body });
     flushSync();
 
     const [handlers] = subscribeServerEventsMock.mock.calls[0];
-    expect(mountedComponent.getSessionsRefreshToken()).toBe(0);
+    expect(mountedComponent.getSessionInvalidations()).toEqual([]);
 
+    const scope = { project_id: null, agent_id: 'alpha', session_id: 's1' };
     handlers.onEvent({
       type: 'resource_changed',
       sequence: 1,
-      payload: { kind: 'sessions', scope: { agent_id: 'alpha' } },
+      payload: { kind: 'sessions', scope },
     });
     flushSync();
-    expect(mountedComponent.getSessionsRefreshToken()).toBe(1);
-    // Sessions invalidation must not touch the models token.
+    expect(mountedComponent.getSessionInvalidations()).toEqual([
+      { id: 1, scope },
+    ]);
+    // Only replay gaps and server restarts refresh every Session list.
+    expect(mountedComponent.getSessionsRefreshToken()).toBe(0);
     expect(mountedComponent.getModelsRefreshToken()).toBe(0);
   });
 

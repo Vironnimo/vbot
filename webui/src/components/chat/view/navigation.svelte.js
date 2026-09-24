@@ -13,6 +13,8 @@ import {
   setAgents,
 } from '../../../lib/chatState.js';
 import { t } from '$lib/i18n.js';
+import { untrack } from 'svelte';
+import { takeSessionInvalidations } from '$lib/sessionInvalidation.js';
 
 export function createChatViewNavigation(context) {
   let creatingSession = $state(false);
@@ -44,12 +46,57 @@ export function createChatViewNavigation(context) {
 
   let sessionParentFetchKey = '';
 
+  // Bumped when a Session invalidation names the displayed Session or its
+  // resolved Parent Session (a title, provenance, or deletion change).
+  let sessionParentRevision = $state(0);
+
+  let sessionParentAddresses = [];
+
+  let lastSessionInvalidationId = null;
+
+  $effect(() => {
+    const entries = context.sessionInvalidations;
+    untrack(() => {
+      const { targets, lastId, overflowed } = takeSessionInvalidations(
+        entries,
+        lastSessionInvalidationId,
+      );
+      lastSessionInvalidationId = lastId;
+      if (overflowed || targets.some(namesSessionLineage)) {
+        sessionParentRevision += 1;
+      }
+    });
+  });
+
+  function namesSessionLineage(target) {
+    if (target.all) {
+      return true;
+    }
+    if (target.renamedAgent) {
+      return sessionParentAddresses.some(
+        ({ agentAddress }) =>
+          agentAddress === target.renamedAgent.oldAgentId ||
+          agentAddress === target.renamedAgent.newAgentId,
+      );
+    }
+    // Run completion and read acknowledgement leave titles and provenance
+    // unchanged.
+    if (target.runId || target.readRunId) {
+      return false;
+    }
+    return sessionParentAddresses.some(
+      ({ agentAddress, sessionId }) =>
+        agentAddress === target.agentAddress && sessionId === target.sessionId,
+    );
+  }
+
   $effect(() => {
     const addressing = context.target.activeAddressing();
     const displayKey = context.target.displayedSessionKey();
-    const fetchKey = `${displayKey}::${context.sessionsRefreshToken}`;
+    const fetchKey = `${displayKey}::${context.sessionsRefreshToken}::${sessionParentRevision}`;
     if (!displayKey || !addressing.agentAddress || !addressing.sessionId) {
       sessionParentFetchKey = '';
+      sessionParentAddresses = [];
       subAgentParentTarget = null;
       sessionParentLink = null;
       return;
@@ -58,13 +105,21 @@ export function createChatViewNavigation(context) {
       return;
     }
     sessionParentFetchKey = fetchKey;
+    sessionParentAddresses = [
+      {
+        agentAddress: addressing.agentAddress,
+        sessionId: addressing.sessionId,
+      },
+    ];
     subAgentParentTarget = null;
     sessionParentLink = null;
-    loadSessionParent(
-      fetchKey,
-      displayKey,
-      addressing.agentAddress,
-      addressing.sessionId,
+    untrack(() =>
+      loadSessionParent(
+        fetchKey,
+        displayKey,
+        addressing.agentAddress,
+        addressing.sessionId,
+      ),
     );
   });
 
@@ -77,26 +132,20 @@ export function createChatViewNavigation(context) {
     if (!childAddress || !childSessionId) {
       return;
     }
+    const superseded = () =>
+      context.target.displayedSessionKey() !== displayKey ||
+      sessionParentFetchKey !== fetchKey;
     try {
-      const listed = await context.chatController.listSessions(childAddress, {
-        limit: 1,
-        requiredSession: {
-          agentId: childAddress,
-          sessionId: childSessionId,
-        },
-      });
+      const child = await context.chatController.getSession(
+        childAddress,
+        childSessionId,
+      );
       // A newer navigation or Session invalidation may have superseded this
       // request mid-flight.
-      if (
-        context.target.displayedSessionKey() !== displayKey ||
-        sessionParentFetchKey !== fetchKey
-      ) {
+      if (superseded()) {
         return;
       }
-      const childSession = (listed?.sessions ?? []).find(
-        (session) => String(session?.id ?? '').trim() === childSessionId,
-      );
-      const parent = sessionParentReference(childSession);
+      const parent = sessionParentReference(child?.session);
       if (!parent) {
         return;
       }
@@ -113,6 +162,10 @@ export function createChatViewNavigation(context) {
         parentAgentId,
         parentProjectId,
       );
+      sessionParentAddresses = [
+        ...sessionParentAddresses,
+        { agentAddress: parentAgentAddress, sessionId: parentSessionId },
+      ];
       const target = {
         agentAddress: parentAgentAddress,
         sessionId: parentSessionId,
@@ -122,29 +175,16 @@ export function createChatViewNavigation(context) {
         subAgentParentTarget = target;
       }
 
-      // The exact Parent Session may be outside the child's first list page,
-      // including same-Agent forks, so resolve it through requiredSession.
       let parentSession = null;
       try {
-        const parentListed = await context.chatController.listSessions(
+        const parentRead = await context.chatController.getSession(
           parentAgentAddress,
-          {
-            limit: 1,
-            requiredSession: {
-              agentId: parentAgentAddress,
-              sessionId: parentSessionId,
-            },
-          },
+          parentSessionId,
         );
-        if (
-          context.target.displayedSessionKey() !== displayKey ||
-          sessionParentFetchKey !== fetchKey
-        ) {
+        if (superseded()) {
           return;
         }
-        parentSession = (parentListed?.sessions ?? []).find(
-          (session) => String(session?.id ?? '').trim() === parentSessionId,
-        );
+        parentSession = parentRead?.session ?? null;
       } catch {
         // Provenance still supports the existing Sub-Agent return path, but
         // Session info must not present an unresolved link.

@@ -112,9 +112,14 @@ export function loadHistory(sessionState, messages, options = {}) {
   if (isRecord(options.compactionPolicy)) {
     sessionState.compactionPolicy = options.compactionPolicy;
   }
-  sessionState.backgroundBashStatuses = isRecord(options.backgroundBashStatuses)
-    ? { ...options.backgroundBashStatuses }
+  // An incremental response reports the statuses its appended records
+  // changed (none when absent); any other response reports them all.
+  const backgroundBashStatuses = isRecord(options.backgroundBashStatuses)
+    ? options.backgroundBashStatuses
     : {};
+  sessionState.backgroundBashStatuses = incremental
+    ? { ...sessionState.backgroundBashStatuses, ...backgroundBashStatuses }
+    : { ...backgroundBashStatuses };
   return sessionState;
 }
 

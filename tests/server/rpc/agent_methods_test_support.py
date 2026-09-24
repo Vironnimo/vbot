@@ -55,6 +55,7 @@ class _FakeSessions:
             }
         ]
         self.activity_error: Exception | None = None
+        self.activity_reads: list[list[tuple[str | None, str]]] = []
         self.list_page_calls: list[dict[str, Any]] = []
         # Sidecar the source carries; ``fork`` strips the requested keys off it so
         # fork tests can assert what the fork retains. Fork tests override it.
@@ -110,11 +111,13 @@ class _FakeSessions:
             )
         return SimpleNamespace(sessions=tuple(rows), next_cursor=None, total_count=len(rows))
 
-    def list_completion_activity(self, agent_id: str, project_id: str | None = None) -> list[Any]:
-        self.listed.append((agent_id, project_id))
+    def list_completion_activity(
+        self, scopes: list[tuple[str | None, str]]
+    ) -> dict[tuple[str | None, str], list[Any]]:
+        self.activity_reads.append(list(scopes))
         if self.activity_error is not None:
             raise self.activity_error
-        return self.activity_rows
+        return dict.fromkeys(scopes, self.activity_rows)
 
     def mark_terminal_run_read(self, address: Any, run_id: str) -> dict[str, Any]:
         self.marked_read.append((address.agent_id, address.session_id, run_id, address.project_id))

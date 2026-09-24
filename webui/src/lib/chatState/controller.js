@@ -5,6 +5,7 @@ import {
   controlRun as requestControlRun,
   createSession as requestCreateSession,
   editChatMessage as requestEditChatMessage,
+  getSession as requestGetSession,
   inspectSubAgentWork as requestInspectSubAgentWork,
   listAgents as requestListAgents,
   listChatCommands as requestListChatCommands,
@@ -21,6 +22,7 @@ import {
   updateQueueItem as requestUpdateQueueItem,
   steerQueueItem as requestSteerQueueItem,
 } from '../api.js';
+import { createChatActivity } from './activity.js';
 import { createChatChildTasks } from './childTasks.js';
 import { formatAgentAddress, parseAgentAddress } from '../agentAddress.js';
 import { isReflectionRunKind } from '../chatTimelinePresentation.js';
@@ -31,8 +33,6 @@ import {
   selectedAgent,
   sessionKey,
   ensureSessionState,
-  syncAgentSessionActivity,
-  applySessionCompletionActivity,
   sessionHasTerminalRun,
   syncQueueFromServer,
   addServerQueuedMessage,
@@ -57,6 +57,36 @@ const HISTORY_INITIAL_LIMIT = 100;
 
 const HISTORY_OLDER_LIMIT = 50;
 
+// `chat.history` omits what an unchanged read did not recompute; an absent
+// field keeps the Session's current value. `context_usage` is present (possibly
+// null) whenever it was read.
+function historyLoadOptions(history) {
+  return {
+    hasMore: history?.has_more === true,
+    nextBefore: history?.next_before,
+    nextAfter: history?.next_after,
+    generation: history?.history_generation,
+    runs: history?.runs,
+    incremental: history?.incremental,
+    reset: history?.history_reset,
+    activeRunId: history?.active_run?.run_id,
+    sessionUsage: history?.session_usage,
+    ...(isRecord(history) && Object.hasOwn(history, 'context_usage')
+      ? { contextUsage: history.context_usage }
+      : {}),
+    compactionPolicy: history?.compaction_policy,
+    backgroundBashStatuses: history?.background_bash_statuses,
+  };
+}
+
+// Background status deltas fold in order; a later status wins.
+function mergeBackgroundStatuses(earlier, later) {
+  if (!isRecord(later)) {
+    return earlier;
+  }
+  return { ...(isRecord(earlier) ? earlier : {}), ...later };
+}
+
 function defaultChatOperations() {
   return {
     cancelProcess: (...args) => requestCancelProcess(...args),
@@ -72,6 +102,7 @@ function defaultChatOperations() {
     listQueue: (...args) => requestListQueue(...args),
     listSessionActivity: (...args) => requestListSessionActivity(...args),
     listSessions: (...args) => requestListSessions(...args),
+    getSession: (...args) => requestGetSession(...args),
     loadChatHistory: (...args) => requestLoadChatHistory(...args),
     loadReflectionRuns: (...args) => requestLoadReflectionRuns(...args),
     markSessionRead: (...args) => requestMarkSessionRead(...args),
@@ -101,7 +132,6 @@ export function createChatController({
 }) {
   let handledConnectionSnapshot = null;
   let handledQueueInvalidation = null;
-  let activityRefreshVersion = 0;
   let commandsLoadVersion = 0;
   let agentsLoadVersion = 0;
   let initialHistoryPending = false;
@@ -124,6 +154,13 @@ export function createChatController({
     verifySubAgentStatus,
     applyBackgroundBashStatusEvents,
   } = childTasks;
+  const activity = createChatActivity({ chatState, operations, errorMessage });
+  const {
+    applySessionInvalidations,
+    markSessionCompletionRead,
+    refreshAgentActivity,
+    syncAgentActivity,
+  } = activity;
 
   function errorMessage(error) {
     return typeof error?.message === 'string' && error.message
@@ -252,16 +289,24 @@ export function createChatController({
           next_before: result.next_before,
           history_reset: result.history_reset,
           messages: [...(result.messages ?? []), ...(page.messages ?? [])],
+          background_bash_statuses: mergeBackgroundStatuses(
+            result.background_bash_statuses,
+            page.background_bash_statuses,
+          ),
         };
       after = page.next_after;
     } while (result?.has_newer);
     return result;
   }
 
+  // Only a read without `after` carries reflection Runs; live Run events keep
+  // them current in between, so an incremental read leaves them alone.
   async function loadHistoryForSession(agentId, sessionId) {
     const sessionState = ensureSessionState(chatState, agentId, sessionId);
     const request = beginHistoryRequest(sessionState);
-    const reflectionRequest = beginReflectionRequest(sessionState);
+    const reflectionRequest = sessionState.historyAfter
+      ? null
+      : beginReflectionRequest(sessionState);
     const isLatestRequest = request.isLatest;
     const isDisplayed = () => isDisplayedSession(agentId, sessionId);
     const startedDisplayed = isDisplayed();
@@ -291,21 +336,12 @@ export function createChatController({
         sessionState.currentRun.runId !== staleRunId &&
         history?.active_run?.run_id !== sessionState.currentRun.runId
       );
-      loadHistory(sessionState, history?.messages ?? [], {
-        hasMore: history?.has_more === true,
-        nextBefore: history?.next_before,
-        nextAfter: history?.next_after,
-        generation: history?.history_generation,
-        runs: history?.runs,
-        incremental: history?.incremental,
-        reset: history?.history_reset,
-        activeRunId: history?.active_run?.run_id,
-        sessionUsage: history?.session_usage,
-        contextUsage: history?.context_usage,
-        compactionPolicy: history?.compaction_policy,
-        backgroundBashStatuses: history?.background_bash_statuses,
-      });
-      reflectionRequest.apply(history?.reflection_runs);
+      loadHistory(
+        sessionState,
+        history?.messages ?? [],
+        historyLoadOptions(history),
+      );
+      reflectionRequest?.apply(history?.reflection_runs);
       sessionState.markReadFailedRunId = '';
       if (
         !history?.active_run &&
@@ -357,7 +393,9 @@ export function createChatController({
     }
 
     const request = beginHistoryRequest(sessionState);
-    const reflectionRequest = beginReflectionRequest(sessionState);
+    const reflectionRequest = sessionState.historyAfter
+      ? null
+      : beginReflectionRequest(sessionState);
     const isLatestRequest = request.isLatest;
     try {
       const history = await readCurrentHistory(sessionState);
@@ -372,21 +410,12 @@ export function createChatController({
         return true;
       }
 
-      loadHistory(sessionState, history?.messages ?? [], {
-        hasMore: history?.has_more === true,
-        nextBefore: history?.next_before,
-        nextAfter: history?.next_after,
-        generation: history?.history_generation,
-        runs: history?.runs,
-        incremental: history?.incremental,
-        reset: history?.history_reset,
-        activeRunId: history?.active_run?.run_id,
-        sessionUsage: history?.session_usage,
-        contextUsage: history?.context_usage,
-        compactionPolicy: history?.compaction_policy,
-        backgroundBashStatuses: history?.background_bash_statuses,
-      });
-      reflectionRequest.apply(history?.reflection_runs);
+      loadHistory(
+        sessionState,
+        history?.messages ?? [],
+        historyLoadOptions(history),
+      );
+      reflectionRequest?.apply(history?.reflection_runs);
       sessionState.markReadFailedRunId = '';
       const activeRun = attachableHistoryRun(sessionState, history?.active_run);
       if (activeRun) {
@@ -916,94 +945,6 @@ export function createChatController({
     return true;
   }
 
-  async function refreshAgentActivity(agentAddresses) {
-    const addresses = [
-      ...new Set(
-        (Array.isArray(agentAddresses) ? agentAddresses : [])
-          .filter((value) => typeof value === 'string')
-          .map((value) => value.trim())
-          .filter(Boolean),
-      ),
-    ];
-    const requestVersion = ++activityRefreshVersion;
-    chatState.loadingAgentActivity = addresses.length > 0;
-    chatState.agentActivityError = '';
-    if (addresses.length === 0) {
-      return true;
-    }
-    try {
-      const response = await operations.listSessionActivity(addresses);
-      if (requestVersion !== activityRefreshVersion) {
-        return false;
-      }
-      const requestedAddresses = new Set(addresses);
-      for (const agentActivity of Array.isArray(response?.agents)
-        ? response.agents
-        : []) {
-        const agentAddress = formatAgentAddress(
-          agentActivity?.agent_id,
-          agentActivity?.project_id,
-        );
-        if (!requestedAddresses.has(agentAddress)) {
-          continue;
-        }
-        syncAgentSessionActivity(
-          chatState,
-          agentAddress,
-          agentActivity?.sessions ?? [],
-        );
-      }
-      return true;
-    } catch (error) {
-      if (requestVersion === activityRefreshVersion) {
-        chatState.agentActivityError = errorMessage(error);
-      }
-      return false;
-    } finally {
-      if (requestVersion === activityRefreshVersion) {
-        chatState.loadingAgentActivity = false;
-      }
-    }
-  }
-
-  async function markSessionCompletionRead(sessionState) {
-    const runId = sessionState?.unreadRunId;
-    if (
-      !sessionState?.agentId ||
-      !sessionState?.sessionId ||
-      !runId ||
-      sessionState.markReadPendingRunId === runId
-    ) {
-      return false;
-    }
-    sessionState.markReadPendingRunId = runId;
-    try {
-      const result = await operations.markSessionRead(
-        sessionState.agentId,
-        sessionState.sessionId,
-        runId,
-      );
-      // Any Session listings that started before this acknowledgement may
-      // still carry the old unread bit. Retire those responses before applying
-      // the authoritative acknowledgement so blue cannot briefly resurrect.
-      activityRefreshVersion += 1;
-      chatState.loadingAgentActivity = false;
-      applySessionCompletionActivity(sessionState, result);
-      sessionState.markReadFailedRunId = '';
-      return result?.marked_read === true;
-    } catch {
-      // Read acknowledgement is best-effort from the current view. Keeping the
-      // local unread marker visible makes the failure recoverable on a later
-      // selection/reconnect instead of surfacing a disruptive Chat error.
-      sessionState.markReadFailedRunId = runId;
-      return false;
-    } finally {
-      if (sessionState.markReadPendingRunId === runId) {
-        sessionState.markReadPendingRunId = '';
-      }
-    }
-  }
-
   function applyQueueInvalidation(scope) {
     if (!scope || scope === handledQueueInvalidation) {
       return false;
@@ -1032,6 +973,7 @@ export function createChatController({
     historyLoadVersions.clear();
     queueSyncVersions.clear();
     childTasks.dispose();
+    activity.dispose();
     displayedHistoryLoad = null;
     chatState.loadingHistory = false;
   }
@@ -1041,6 +983,7 @@ export function createChatController({
     applyConnectionSnapshot,
     applyQueueInvalidation,
     applySessionCompactionPolicy,
+    applySessionInvalidations,
     applySubAgentStatusUpdates,
     cancelActiveRun,
     cancelBackgroundProcess,
@@ -1053,6 +996,7 @@ export function createChatController({
     handleServerEvents,
     startFromServerState,
     listFiles: (agentAddress) => operations.listFiles(agentAddress),
+    getSession: (...args) => operations.getSession(...args),
     listSessions: (...args) => operations.listSessions(...args),
     loadAdoptedSelectionHistory,
     loadAgents,
@@ -1068,6 +1012,7 @@ export function createChatController({
     removeQueued,
     steerQueued,
     sendMessage,
+    syncAgentActivity,
     syncSessionQueue,
     updateQueued,
     verifySubAgentStatus,

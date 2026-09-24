@@ -20,6 +20,8 @@ from core.tools._bash_environment import (
     reset_shell_env_cache,
 )
 from core.tools._bash_results import (
+    BACKGROUND_STATUS_NOTE_MARKER,
+    BACKGROUND_STATUS_TOOL_NAMES,
     BACKGROUND_USER_CANCELLED_MESSAGE,
     BASH_COMPLETION_PROCESS_ID_PREFIX,
     BASH_COMPLETION_STATUS_PREFIX,
@@ -965,5 +967,7 @@ __all__ = [
     "USER_CANCELLED_FAILURE_CODE",
     "USER_CANCELLED_FAILURE_MESSAGE",
     "BACKGROUND_USER_CANCELLED_MESSAGE",
+    "BACKGROUND_STATUS_NOTE_MARKER",
+    "BACKGROUND_STATUS_TOOL_NAMES",
     "background_bash_statuses",
 ]

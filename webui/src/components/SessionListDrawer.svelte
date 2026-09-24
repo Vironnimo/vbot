@@ -27,8 +27,13 @@
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import Modal from './ui/Modal.svelte';
   import CompactionPolicyEditor from './compaction/CompactionPolicyEditor.svelte';
-  import { untrack } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import { listSessions } from '$lib/api.js';
+  import {
+    createCoalescedRefresh,
+    sessionInvalidationListsTarget,
+    takeSessionInvalidations,
+  } from '$lib/sessionInvalidation.js';
   import { createSessionActions } from './sessions/actions.svelte.js';
   import { createSessionMenus } from './sessions/menus.svelte.js';
   import './sessions/sessions.css';
@@ -40,9 +45,13 @@
     headerControls,
     agentId = '',
     currentSessionId = '',
-    // Bumped by ChatView on `resource_changed(kind:"sessions")` so a new or
-    // switched session created in another window appears here automatically.
+    // Bumped when Session-list continuity is uncertain (replay gap or server
+    // restart): the list reloads whatever it shows.
     reloadToken = 0,
+    // App's bounded window of `resource_changed(kind:"sessions")` scopes. The
+    // list reloads (coalesced) only for scopes naming an Agent it lists, so a
+    // new or renamed Session from another window appears automatically.
+    invalidations = [],
     // Roster of addressable agents ({ address, name }) the "All agents"
     // filter lists sessions for — the same set the Chat agent bars show.
     agents = [],
@@ -227,9 +236,12 @@
     );
   });
 
-  // Reload the list when another window creates/switches a session
-  // (`resource_changed(kind:"sessions")`, forwarded by ChatView). The viewed
-  // conversation stays put — only the list refreshes.
+  // Reload the list when continuity is uncertain or another window changes a
+  // Session of a listed Agent. The viewed conversation stays put — only the
+  // list refreshes. A read acknowledgement changes only completion activity,
+  // which the live Chat overlay already shows.
+  const listReloads = createCoalescedRefresh(() => loadSessions());
+  onDestroy(() => listReloads.destroy());
   let lastReloadToken = null;
   $effect(() => {
     if (lastReloadToken === null) {
@@ -238,8 +250,36 @@
     }
     if (reloadToken !== lastReloadToken) {
       lastReloadToken = reloadToken;
-      loadSessions();
+      void listReloads.run();
     }
+  });
+
+  let lastInvalidationId = null;
+  $effect(() => {
+    const entries = invalidations;
+    untrack(() => {
+      const { targets, lastId, overflowed } = takeSessionInvalidations(
+        entries,
+        lastInvalidationId,
+      );
+      lastInvalidationId = lastId;
+      const listedAddresses = [
+        asText(agentId),
+        ...(filters.allAgents
+          ? rosterAgents.map((entry) => entry.address)
+          : []),
+      ];
+      if (
+        overflowed ||
+        targets.some(
+          (target) =>
+            !target.readRunId &&
+            sessionInvalidationListsTarget(target, listedAddresses),
+        )
+      ) {
+        listReloads.schedule();
+      }
+    });
   });
 
   const loadSessions = async (targetAgentId = asText(agentId)) => {

@@ -4,6 +4,7 @@ import {
   cancelProcess,
   cancelRun,
   cancelToolCall,
+  getSession,
   listSessionActivity,
   listSessions,
   deleteSession,
@@ -146,6 +147,33 @@ describe('listSessionActivity()', () => {
       expect.objectContaining({
         code: RPC_ERROR_INVALID_CLIENT_REQUEST,
         method: 'session.activity_list',
+      }),
+    );
+  });
+});
+
+describe('getSession()', () => {
+  it('reads one Session by exact address through session.get', async () => {
+    const session = { id: 'session-1', agent_address: 'builder@vbot' };
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ ok: true, result: { session } }));
+
+    await expect(
+      getSession('builder@vbot', 'session-1', { fetch: fetchFunction }),
+    ).resolves.toEqual({ session });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'session.get',
+      params: { agent_id: 'builder@vbot', session_id: 'session-1' },
+    });
+  });
+
+  it('rejects a missing address locally', () => {
+    expect(() => getSession('alpha', '')).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'session.get',
       }),
     );
   });

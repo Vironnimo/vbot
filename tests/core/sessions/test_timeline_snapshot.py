@@ -8,6 +8,7 @@ import pytest
 
 from core.chat import ChatMessage
 from core.chat.errors import ChatSessionError
+from tests.core.sessions.history_fixtures import append_tool_fixture
 from tests.core.sessions.sessions_test_support import manager as manager
 
 
@@ -181,3 +182,64 @@ def test_takeover_replaces_snapshot_to_refresh_prior_user_editability(manager):
     assert not refreshed.incremental
     assert user.id not in refreshed.page.editable_message_ids
     assert [message.role for message in refreshed.page.messages] == ["user", "agent_takeover"]
+
+
+def test_unchanged_after_read_skips_whole_session_facts_on_request(manager):
+    session = manager.create("coder")
+    session.append_many(
+        [
+            ChatMessage.user("question"),
+            ChatMessage.assistant(
+                content="answer", model="test", usage={"input_tokens": 4, "output_tokens": 2}
+            ),
+        ]
+    )
+    baseline = read(session)
+
+    unchanged = read(session, after=baseline.after_cursor, skip_unchanged=True)
+    assert unchanged.unchanged and unchanged.incremental and not unchanged.has_newer
+    assert unchanged.page.messages == ()
+    assert unchanged.after_cursor == baseline.after_cursor
+    assert unchanged.session_usage == {} and unchanged.context_messages == ()
+    # Without the request, an empty append still carries the facts.
+    kept = read(session, after=baseline.after_cursor)
+    assert not kept.unchanged
+    assert kept.session_usage["input_tokens"] == 4
+    # Anything appended is read as usual.
+    session.append(ChatMessage.note("hidden"))
+    advanced = read(session, after=baseline.after_cursor, skip_unchanged=True)
+    assert not advanced.unchanged and advanced.incremental
+    assert advanced.session_usage["input_tokens"] == 4
+
+
+def test_background_candidates_are_narrow_and_follow_the_read_range(manager):
+    session = manager.create("coder")
+
+    def tool(name, call_id):
+        append_tool_fixture(
+            session, ChatMessage.tool(tool_call_id=call_id, name=name, content=f"{name} result")
+        )
+
+    def candidates(snapshot):
+        return [
+            (record.role, record.name, record.content) for record in snapshot.background_records
+        ]
+
+    marker = "### Bash process — "
+    background = {"background_tool_names": ("bash",), "background_note_marker": marker}
+    tool("bash", "call-one")
+    tool("read", "call-two")
+    session.append_many(
+        [ChatMessage.note("Skill context: unrelated"), ChatMessage.note(f"done\n{marker}completed")]
+    )
+    baseline = read(session, **background)
+    assert candidates(baseline) == [
+        ("tool", "bash", "bash result"),
+        ("note", None, f"done\n{marker}completed"),
+    ]
+
+    tool("bash", "call-three")
+    delta = read(session, after=baseline.after_cursor, **background)
+    assert delta.incremental
+    assert candidates(delta) == [("tool", "bash", "bash result")]
+    assert read(session, after=delta.after_cursor, **background).background_records == ()

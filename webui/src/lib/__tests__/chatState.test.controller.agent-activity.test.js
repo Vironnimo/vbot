@@ -432,8 +432,9 @@ describe('chat controller', () => {
       ],
     });
 
-    expect(await refresh).toBe(false);
+    await refresh;
     expect(sessionState.hasUnreadCompletion).toBe(false);
+    expect(sessionState.latestCompletionRunId).toBe('run-one');
   });
 
   it('retains known activity when the batched refresh fails', async () => {
@@ -456,5 +457,251 @@ describe('chat controller', () => {
     expect(sessionState.unreadRunId).toBe('run-one');
     expect(chatState.loadingAgentActivity).toBe(false);
     expect(chatState.agentActivityError).toBe('activity unavailable');
+  });
+});
+
+describe('scoped completion activity', () => {
+  const unreadRow = (id, runId, at = '2026-07-20T10:00:00+00:00') => ({
+    id,
+    latest_completion_run_id: runId,
+    has_unread_completion: true,
+    unread_run_id: runId,
+    unread_run_status: 'completed',
+    unread_run_at: at,
+  });
+  const activityResponse = (addresses, rows = {}) => ({
+    agents: addresses.map((address) => ({
+      agent_id: address,
+      project_id: null,
+      sessions: rows[address] ?? [],
+    })),
+  });
+  const entry = (id, scope) => ({ id, scope });
+
+  function activitySetup(rows = {}) {
+    const listSessionActivity = vi.fn(async (addresses) =>
+      activityResponse(addresses, rows),
+    );
+    return {
+      listSessionActivity,
+      ...setup({ operationOverrides: { listSessionActivity } }),
+    };
+  }
+
+  it('reads every displayed address once and only joining addresses later', async () => {
+    const { controller, listSessionActivity } = activitySetup();
+
+    controller.syncAgentActivity(['alpha', 'beta'], 'full-1');
+    await vi.waitFor(() => expect(listSessionActivity).toHaveBeenCalledOnce());
+    controller.syncAgentActivity(['alpha', 'beta'], 'full-1');
+    controller.syncAgentActivity(['alpha', 'beta', 'gamma'], 'full-1');
+    await vi.waitFor(() =>
+      expect(listSessionActivity).toHaveBeenLastCalledWith(['gamma']),
+    );
+    controller.syncAgentActivity(['alpha', 'beta', 'gamma'], 'full-2');
+    await vi.waitFor(() =>
+      expect(listSessionActivity).toHaveBeenLastCalledWith([
+        'alpha',
+        'beta',
+        'gamma',
+      ]),
+    );
+
+    expect(listSessionActivity.mock.calls).toEqual([
+      [['alpha', 'beta']],
+      [['gamma']],
+      [['alpha', 'beta', 'gamma']],
+    ]);
+  });
+
+  it('applies terminal and read facts it already holds without reading', async () => {
+    vi.useFakeTimers();
+    try {
+      const { chatState, controller, listSessionActivity } = activitySetup();
+      controller.syncAgentActivity(['alpha'], 'full');
+      await vi.runAllTimersAsync();
+      controller.applySessionInvalidations([], []);
+      listSessionActivity.mockClear();
+      const sessionState = ensureSessionState(chatState, 'alpha', 'one');
+      sessionState.latestCompletionRunId = 'run-one';
+      sessionState.hasUnreadCompletion = true;
+      sessionState.unreadRunId = 'run-one';
+      const terminalScope = {
+        project_id: null,
+        agent_id: 'alpha',
+        session_id: 'one',
+        run_id: 'run-one',
+      };
+      const runServerEvents = [
+        { type: 'run_completed', payload: { run_id: 'run-one' } },
+      ];
+
+      controller.applySessionInvalidations(
+        [
+          entry(1, terminalScope),
+          entry(2, { agent_id: 'alpha', session_id: 'one' }),
+          entry(3, {
+            project_id: null,
+            agent_id: 'alpha',
+            session_id: 'one',
+            read_run_id: 'run-one',
+          }),
+        ],
+        runServerEvents,
+      );
+      await vi.runAllTimersAsync();
+
+      expect(listSessionActivity).not.toHaveBeenCalled();
+      expect(sessionState).toMatchObject({
+        latestCompletionRunId: 'run-one',
+        hasUnreadCompletion: false,
+        unreadRunId: '',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('adopts the window it was created with instead of replaying it', async () => {
+    vi.useFakeTimers();
+    try {
+      const { controller, listSessionActivity } = activitySetup();
+      controller.syncAgentActivity(['alpha'], 'full');
+      await vi.runAllTimersAsync();
+      listSessionActivity.mockClear();
+
+      controller.applySessionInvalidations([entry(7, null)], []);
+      await vi.runAllTimersAsync();
+
+      expect(listSessionActivity).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('coalesces unmatched facts into one read of the named displayed Agents', async () => {
+    vi.useFakeTimers();
+    try {
+      const { chatState, controller, listSessionActivity } = activitySetup({
+        alpha: [unreadRow('one', 'run-newer', '2026-07-20T12:00:00+00:00')],
+        beta: [unreadRow('two', 'run-two')],
+      });
+      controller.syncAgentActivity(['alpha', 'beta', 'gamma'], 'full');
+      await vi.runAllTimersAsync();
+      controller.applySessionInvalidations([], []);
+      listSessionActivity.mockClear();
+      const held = ensureSessionState(chatState, 'alpha', 'one');
+      held.latestCompletionRunId = 'run-newer';
+      held.hasUnreadCompletion = true;
+      held.unreadRunId = 'run-newer';
+      held.unreadRunAt = '2026-07-20T12:00:00+00:00';
+
+      controller.applySessionInvalidations(
+        [
+          // The terminal event left the retained window: read Beta.
+          entry(1, { agent_id: 'beta', session_id: 'two', run_id: 'run-two' }),
+          // A read of another Run than the held one: read Alpha.
+          entry(2, {
+            agent_id: 'alpha',
+            session_id: 'one',
+            read_run_id: 'run-old',
+          }),
+          // Not displayed here: nothing to read.
+          entry(3, { agent_id: 'delta', session_id: 'x', run_id: 'run-x' }),
+        ],
+        [],
+      );
+      expect(listSessionActivity).not.toHaveBeenCalled();
+      await vi.runAllTimersAsync();
+
+      expect(listSessionActivity.mock.calls).toEqual([[['beta', 'alpha']]]);
+      // Acknowledging an older Run leaves the newer unread result.
+      expect(held.hasUnreadCompletion).toBe(true);
+      expect(held.unreadRunId).toBe('run-newer');
+      expect(ensureSessionState(chatState, 'beta', 'two')).toMatchObject({
+        hasUnreadCompletion: true,
+        unreadRunId: 'run-two',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reads every displayed address after an unscoped signal or a dropped window', async () => {
+    vi.useFakeTimers();
+    try {
+      const { controller, listSessionActivity } = activitySetup();
+      controller.syncAgentActivity(['alpha', 'beta'], 'full');
+      await vi.runAllTimersAsync();
+      controller.applySessionInvalidations([entry(1, null)], []);
+      listSessionActivity.mockClear();
+
+      controller.applySessionInvalidations(
+        [entry(1, null), entry(2, null)],
+        [],
+      );
+      await vi.runAllTimersAsync();
+      controller.applySessionInvalidations(
+        [entry(9, { agent_id: 'alpha', session_id: 'one' })],
+        [],
+      );
+      await vi.runAllTimersAsync();
+
+      expect(listSessionActivity.mock.calls).toEqual([
+        [['alpha', 'beta']],
+        [['alpha', 'beta']],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops the unread marker of a deleted Session', () => {
+    const { chatState, controller } = activitySetup();
+    controller.applySessionInvalidations([], []);
+    const sessionState = ensureSessionState(chatState, 'builder@vbot', 'gone');
+    sessionState.latestCompletionRunId = 'run-one';
+    sessionState.hasUnreadCompletion = true;
+    sessionState.unreadRunId = 'run-one';
+
+    controller.applySessionInvalidations(
+      [
+        entry(1, {
+          agent_id: 'builder',
+          project_id: 'vbot',
+          deleted_session_id: 'gone',
+          next_session_id: 'next',
+        }),
+      ],
+      [],
+    );
+
+    expect(sessionState.hasUnreadCompletion).toBe(false);
+    expect(sessionState.latestCompletionRunId).toBe('');
+  });
+
+  it('keeps a completion that arrived while the read was in flight', async () => {
+    const pending = deferred();
+    const listSessionActivity = vi.fn(() => pending.promise);
+    const { chatState, controller } = setup({
+      operationOverrides: { listSessionActivity },
+    });
+    const stale = ensureSessionState(chatState, 'alpha', 'stale');
+    stale.latestCompletionRunId = 'run-archived';
+    const fresh = ensureSessionState(chatState, 'alpha', 'fresh');
+
+    const refresh = controller.refreshAgentActivity(['alpha']);
+    await Promise.resolve();
+    fresh.latestCompletionRunId = 'run-live';
+    fresh.hasUnreadCompletion = true;
+    fresh.unreadRunId = 'run-live';
+    pending.resolve(activityResponse(['alpha']));
+    await refresh;
+
+    // The server snapshot predates Run live; an omitted Session whose
+    // completion did not change has none.
+    expect(fresh.hasUnreadCompletion).toBe(true);
+    expect(fresh.unreadRunId).toBe('run-live');
+    expect(stale.latestCompletionRunId).toBe('');
   });
 });
