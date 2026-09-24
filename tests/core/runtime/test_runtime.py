@@ -23,6 +23,7 @@ from core.runtime._configuration import _VBOT_ROOT, _detect_vbot_version
 from core.runtime.runtime import Runtime
 from core.sessions import ChatSessionManager, SessionAddress
 from core.skills.skills import SkillRegistry
+from core.statistics import StatisticsIndex
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 from core.storage.storage import StorageManager
 from core.storage.temp_files import TemporaryFileManager
@@ -379,6 +380,8 @@ def test_phase_two_services_available_after_start(config: Config):
     assert isinstance(runtime.terminal_manager, TerminalManager)
     assert isinstance(runtime.skills, SkillRegistry)
     assert isinstance(runtime.chat_sessions, ChatSessionManager)
+    assert isinstance(runtime.statistics_index, StatisticsIndex)
+    assert runtime.statistics_index.data_dir == runtime.storage.data_dir
     assert isinstance(runtime.system_prompts, SystemPromptManager)
 
 
