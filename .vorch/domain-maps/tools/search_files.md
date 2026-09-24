@@ -88,7 +88,8 @@ Windows junctions count as links (`is_link_entry`), like ripgrep's own walker
 Default content ordering is path ascending; path discovery uses newest modification
 first, with path tie-breaks. Explicit sorts cover path, modified, accessed, created,
 and unsorted discovery; unsupported creation timestamps reject. A call-scoped
-SQLite spool keeps union, deduplication, and sorting off unbounded Python lists.
+SQLite spool keeps union, deduplication, and sorting off unbounded Python lists;
+it is discarded with the call, so it runs without fsync or an on-disk journal.
 
 ## Results and Resource Bounds
 
