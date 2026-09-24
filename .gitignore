@@ -5,6 +5,8 @@
 .opencode/
 .agents/
 .venv/
+# Written by uv run/sync in the uv-managed .venv; dependencies live in pyproject.toml
+/uv.lock
 .tmp/
 .worktrees/
 .vbot-worktree
