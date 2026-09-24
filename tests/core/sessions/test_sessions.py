@@ -21,6 +21,7 @@ from core.sessions import (
     ChatSession,
 )
 from core.sessions import _store_values as store_values
+from core.sessions.errors import SessionNotFoundError
 from core.sessions.history import skill_tool_activation
 from tests.core.sessions.sessions_test_support import (
     _address,
@@ -191,6 +192,25 @@ def test_fork_copies_history_but_not_activity_or_continuation(manager) -> None:
     assert metadata[PROMPT_CACHE_AFFINITY_META_KEY] != manager.prompt_cache_affinity_id(
         source_address
     )
+
+
+def test_prompt_cache_affinity_id_reads_only_its_stored_value(manager, monkeypatch) -> None:
+    address = _address("coder", "affinity")
+    manager.create(address.agent_id, session_id=address.session_id)
+    default = manager.prompt_cache_affinity_id(address)
+    rotated = manager.rotate_prompt_cache_affinity_id(address)
+
+    def no_metadata_decode(_address):
+        raise AssertionError("the affinity id must not decode the complete metadata")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(manager._store, "metadata", no_metadata_decode)
+        assert manager.prompt_cache_affinity_id(address) == rotated != default
+    manager.set_metadata(address, {PROMPT_CACHE_AFFINITY_META_KEY: {"nested": "value"}})
+    with pytest.raises(ChatSessionError, match="invalid prompt cache affinity id"):
+        manager.prompt_cache_affinity_id(address)
+    with pytest.raises(SessionNotFoundError):
+        manager.prompt_cache_affinity_id(_address("coder", "missing"))
 
 
 def test_role_specific_relational_message_storage_round_trips(

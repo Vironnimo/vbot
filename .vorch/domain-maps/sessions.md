@@ -29,7 +29,7 @@ Core terms (Session, Agent, Run, Project) live in `.vorch/GLOSSARY.md`.
 **Not:** An append-only event journal, canonical Message history, or Run events.
 
 ### Prompt-cache affinity id
-**Definition:** An opaque per-Session lineage value Chat passes separately from Session identity; Provider adapters decide whether their wire can use it.
+**Definition:** An opaque per-Session lineage value Chat passes separately from Session identity; Provider adapters decide whether their wire can use it. It lives in residual metadata; `prompt_cache_affinity_id` reads only that value (`json_extract`) and derives a deterministic default when none is stored.
 **Not:** A Session id or generation id. Compaction rotates it to break prior prompt prefixes.
 
 ## Extension-owned execution

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from core.chat.errors import ChatSessionError
 from core.sessions import _store_codec, _store_values
-from core.sessions._types import JsonObject
+from core.sessions._types import PROMPT_CACHE_AFFINITY_META_KEY, JsonObject
 from core.sessions.errors import SessionNotFoundError
 
 if TYPE_CHECKING:
@@ -135,6 +135,18 @@ def list_state_rows(
         (project_id or "", agent_id),
     ).fetchall()
     return cast(list[sqlite3.Row], rows)
+
+
+def prompt_cache_affinity_value(connection: sqlite3.Connection, address: SessionAddress) -> Any:
+    """Read the live Session's stored affinity value without decoding its metadata."""
+    row = connection.execute(
+        "SELECT json_extract(metadata_json, ?) FROM sessions "
+        "WHERE project_id = ? AND agent_id = ? AND session_id = ? AND status = 'live'",
+        (f"$.{PROMPT_CACHE_AFFINITY_META_KEY}", *_store_values._scope(address)),
+    ).fetchone()
+    if row is None:
+        raise SessionNotFoundError(f"session does not exist: {address.session_id}")
+    return row[0]
 
 
 def list_summary_rows_for_scope(
