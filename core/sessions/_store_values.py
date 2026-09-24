@@ -22,8 +22,6 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger("vbot.sessions")
 _DESCRIPTOR_SOURCE_BATCH_SIZE = 900
 JsonObject = dict[str, Any]
-_SESSION_METADATA_PROJECTION_VERSION_KEY = "session_metadata_projection_version"
-_SESSION_METADATA_PROJECTION_VERSION = "3"
 _SESSION_METADATA_SCALAR_COLUMNS = (
     ("title", "title"),
     ("auto_title", "auto_title"),

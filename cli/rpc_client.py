@@ -15,15 +15,15 @@ RPC_PATH = "/api/rpc"
 RPC_TIMEOUT_SECONDS = 10.0
 
 # Methods that legitimately run far longer than the default cap. Model refreshes
-# fan out across Provider endpoints, while Session snapshots copy and verify a
-# database whose size is user-controlled. These calls leave the read phase
+# fan out across Provider endpoints, while data snapshots copy and verify
+# databases whose size is user-controlled. These calls leave the read phase
 # unbounded after the local server accepts them, while the ordinary connect,
 # write, and pool limits still fail fast when the server cannot be reached.
 _LONG_RUNNING_METHODS: frozenset[str] = frozenset(
     {
         "model.refresh_db",
         "performance.recording_stop",
-        "session_store.snapshot_create",
+        "data_store.snapshot_create",
         "skill.install",
     }
 )
@@ -32,7 +32,7 @@ RPC_LONG_RUNNING_TIMEOUT = httpx.Timeout(RPC_TIMEOUT_SECONDS, read=None)
 _PROGRESS_PHASES = {
     "skill.install": "Preparing and validating the Skill package",
     "model.refresh_db": "Refreshing Model catalogs from Providers",
-    "session_store.snapshot_create": "Creating and verifying a Session-store snapshot",
+    "data_store.snapshot_create": "Creating and verifying a data snapshot",
     "extensions.reload": "Reloading Extensions and checking their load results",
     "provider.usage": "Checking live Provider usage limits",
     "performance.recording_stop": "Writing the performance trace file",

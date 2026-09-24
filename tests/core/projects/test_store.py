@@ -11,6 +11,7 @@ from threading import Event
 
 import pytest
 
+from core.database import write_bootstrap_marker
 from core.projects.paths import cwd_exists
 from core.projects.projects import (
     PROJECT_DEFAULT_ALLOWED_TOOLS,
@@ -20,7 +21,6 @@ from core.projects.projects import (
 )
 from core.projects.store import ProjectStore, _validate_agent_id, _validate_project_id
 from core.sessions import ChatSessionManager, SessionAddress
-from core.sessions.format import write_bootstrap_marker
 
 
 @pytest.fixture

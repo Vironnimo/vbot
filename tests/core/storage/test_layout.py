@@ -71,7 +71,7 @@ def test_initialize_creates_exact_canonical_layout(tmp_path: Path) -> None:
     }
     actual_files = {path.relative_to(data_dir) for path in data_dir.rglob("*") if path.is_file()}
     assert actual_directories == set(DATA_DIRECTORY_RELATIVE_PATHS)
-    assert actual_files == {Path(".env"), Path("settings.json"), Path("session-store.json")}
+    assert actual_files == {Path(".env"), Path("settings.json"), Path("data-store.json")}
     assert (data_dir / ".env").read_bytes() == RESOURCE_TEMPLATE.read_bytes()
     assert (data_dir / "settings.json").read_bytes() == b"{}\n"
     assert result.layout.root == data_dir
@@ -133,8 +133,8 @@ def test_initialize_losing_root_creation_race_never_writes_marker(
 
     # The concurrent creator owns the root and publishes its marker; the loser
     # treats the root as existing and never manufactures authorization.
-    assert not (data_dir / "session-store.json").exists()
-    assert data_dir / "session-store.json" not in result.created_files
+    assert not (data_dir / "data-store.json").exists()
+    assert data_dir / "data-store.json" not in result.created_files
     assert data_dir not in result.created_directories
     assert all((data_dir / path).is_dir() for path in DATA_DIRECTORY_RELATIVE_PATHS)
 
@@ -151,7 +151,7 @@ def test_initialize_tolerates_concurrently_created_canonical_directory(
     assert contested.is_dir()
     assert contested not in result.created_directories
     assert data_dir in result.created_directories
-    assert data_dir / "session-store.json" in result.created_files
+    assert data_dir / "data-store.json" in result.created_files
 
 
 def test_initialize_rejects_concurrently_created_non_directory(
@@ -189,7 +189,7 @@ def test_initialize_uses_empty_environment_when_template_is_unavailable(
     assert (data_dir / ".env").read_bytes() == b""
     assert (data_dir / "settings.json").read_bytes() == b"{}\n"
     assert result.created_files == (
-        data_dir / "session-store.json",
+        data_dir / "data-store.json",
         data_dir / ".env",
         data_dir / "settings.json",
     )

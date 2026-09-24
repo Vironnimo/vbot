@@ -9,11 +9,11 @@ from typing import Any, cast
 
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
+from core.database import write_bootstrap_marker
 from core.providers.accounts import ConnectionRef
 from core.providers.adapter import ProviderAdapter
 from core.runtime import Runtime
 from core.sessions._metadata import _decode_chat_history_cursor
-from core.sessions.format import write_bootstrap_marker
 from core.settings.normalizers import normalize_compaction_settings
 from core.utils.config import Config
 from server.app import create_app

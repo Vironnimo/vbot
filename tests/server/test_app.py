@@ -14,12 +14,12 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from core.automation import _cron_claims as cron_claims
 from core.automation.cron import CronService
 from core.chat import ChatLoop
+from core.database import write_bootstrap_marker
 from core.extensions import ExtensionRegistrationIdentity
 from core.extensions.extensions import ExtensionUnavailableError
 from core.runs import ChatRunManager, Run
 from core.runtime import Runtime
 from core.sessions import ChatSessionManager
-from core.sessions.format import write_bootstrap_marker
 from core.statistics import StatisticsIndex
 from core.utils.config import Config
 from core.utils.server_control import CONTROL_SHUTDOWN_PATH, CONTROL_TOKEN_HEADER

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from core.sessions.format import write_bootstrap_marker
+from core.database import write_bootstrap_marker
 
 
 @pytest.fixture(autouse=True)

@@ -26,12 +26,12 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
         TemporaryExecutionGroups,
     )
     from core.chat import ChatMessage
+    from core.database import write_bootstrap_marker
     from core.extensions import ExtensionRegistry
     from core.extensions.extensions import purge_extension_modules
     from core.extensions.operations import ExtensionHost
     from core.runs import ChatRunManager, RunExecutionOwner
     from core.sessions import ChatSessionManager
-    from core.sessions.format import write_bootstrap_marker
     from core.tools import ToolContext, ToolRegistry
     from core.tools.availability import ToolAccess
 

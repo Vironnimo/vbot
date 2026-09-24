@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from core.database import write_bootstrap_marker
 from core.runtime.runtime import Runtime
-from core.sessions.format import write_bootstrap_marker
 
 
 def _authorize_session_store(data_dir: Path) -> None:

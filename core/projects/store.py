@@ -450,7 +450,7 @@ class ProjectStore:
                 from core.sessions import ChatSessionManager
                 from core.storage.layout import initialize_data_directory
 
-                marker = self._data_dir / "session-store.json"
+                marker = self._data_dir / "data-store.json"
                 if not marker.exists():
                     with suppress(Exception):
                         initialize_data_directory(self._data_dir)

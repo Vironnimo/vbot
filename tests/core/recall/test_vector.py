@@ -135,7 +135,7 @@ async def test_typed_vector_search_has_no_literal_fallback_or_distance_cutoff(
 
     none_dir = tmp_path / "none"
     none_dir.mkdir()
-    from core.sessions.format import write_bootstrap_marker
+    from core.database import write_bootstrap_marker
 
     write_bootstrap_marker(none_dir)
     unavailable = backend(none_dir, ChatSessionManager(none_dir))

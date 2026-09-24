@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from core.sessions.format import read_session_store_marker
+from core.database import DataStoreMarker, read_marker
 from core.utils.config import Config
 from core.utils.logging import ManagedLoggerProxyHandler, QuietLogsWebSocketLifecycleFilter
 from server import main as server_main
@@ -245,14 +245,14 @@ def test_main_initializes_only_a_missing_data_directory(
     data_dir = tmp_path / "data"
     if existing:
         data_dir.mkdir()
-    markers: list[dict[str, Any] | None] = []
+    markers: list[DataStoreMarker | None] = []
 
     class FakeServer:
         def __init__(self, config: object) -> None:
             self.config = config
 
         def run(self) -> None:
-            markers.append(read_session_store_marker(data_dir))
+            markers.append(read_marker(data_dir))
 
     monkeypatch.setattr(
         server_main,
@@ -271,7 +271,7 @@ def test_main_initializes_only_a_missing_data_directory(
         assert not (data_dir / "agents").exists()
     else:
         assert markers[0] is not None
-        assert markers[0]["state"] == "bootstrap"
+        assert markers[0].databases == {}
 
 
 def test_managed_logger_proxy_handler_routes_records_into_vbot_namespace() -> None:

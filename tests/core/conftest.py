@@ -6,8 +6,8 @@ import shutil
 
 import pytest
 
+from core.database import write_bootstrap_marker
 from core.sessions import ChatSessionManager
-from core.sessions.format import write_bootstrap_marker
 
 
 @pytest.fixture(scope="session")
@@ -23,5 +23,5 @@ def current_session_store_template(tmp_path_factory):
 @pytest.fixture
 def current_format_data_directory(tmp_path, current_session_store_template):
     """Clone an empty current-format store for tests that consume Sessions."""
-    shutil.copy2(current_session_store_template / "session-store.json", tmp_path)
+    shutil.copy2(current_session_store_template / "data-store.json", tmp_path)
     shutil.copy2(current_session_store_template / "sessions.db", tmp_path)

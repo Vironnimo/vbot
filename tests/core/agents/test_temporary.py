@@ -10,6 +10,7 @@ import pytest
 from core.agents import TemporaryAgentConfig, TemporaryAgentRegistry
 from core.agents.temporary import TemporaryExecutionGroups, TemporaryRunInput
 from core.chat import ChatError, ChatMessage, ChatSessionError
+from core.database import write_bootstrap_marker
 from core.runs import (
     ChatRunManager,
     RunAdmission,
@@ -18,7 +19,6 @@ from core.runs import (
     RunNotFoundError,
 )
 from core.sessions import ChatSessionManager, SessionAddress
-from core.sessions.format import write_bootstrap_marker
 from core.storage import TemporaryFileManager
 from core.tools.availability import ToolAccess
 from tests.core.chat.chat_loop_support import (
