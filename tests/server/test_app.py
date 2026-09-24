@@ -232,7 +232,9 @@ def test_create_app_starts_when_a_once_fire_claim_is_invalid(tmp_path: Path) -> 
 
     with TestClient(app) as client:
         response = client.get("/health")
-        assert runtime.cron_service.list_jobs() == []
+        # Only the once job with the unreadable claim is held; Cron stays available.
+        assert [job.id for job in runtime.cron_service.list_jobs()] == [once.id]
+        assert once.id not in runtime.cron_service._job_tasks
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
