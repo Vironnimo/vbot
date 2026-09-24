@@ -884,6 +884,48 @@ def test_own_global_skill_wins_over_extension_skill(config: Config) -> None:
     assert runtime.skills.get("shared").description == "My own global skill."
 
 
+def test_global_skill_sources_win_over_bundled_in_documented_order(
+    config: Config, tmp_path: Path
+) -> None:
+    # Global precedence: <data_dir>/skills > skill_directories > Extension skills,
+    # and every global source outranks a same-named bundled Skill.
+    logging.getLogger("vbot").handlers = []
+    bundled_root = Path(__file__).resolve().parents[3] / "resources" / "skills"
+    extra = tmp_path / "external"
+    _write_test_skill(extra, "weather", "From skill_directories.")
+    _write_test_skill(extra, "shared", "From skill_directories.")
+    _write_extension_with_skill(config.data_dir, "ext-a", "pdf", "From the extension.")
+    _write_test_skill(config.data_dir / "extensions" / "ext-a" / "skills", "shared", "Ext.")
+    _write_test_skill(config.data_dir / "skills", "coding-agents", "My own global skill.")
+    config.data_dir.joinpath("settings.json").write_text(
+        json.dumps({"skill_directories": [str(extra)]}), encoding="utf-8"
+    )
+    runtime = Runtime(config)
+    runtime.start()
+
+    for name, description in (
+        ("weather", "From skill_directories."),
+        ("pdf", "From the extension."),
+        ("coding-agents", "My own global skill."),
+        ("shared", "From skill_directories."),
+    ):
+        skill = runtime.skills.get(name)
+        assert (skill.description, skill.origin) == (description, SKILL_ORIGIN_GLOBAL)
+    rejected = {
+        (diagnostic.name, diagnostic.path)
+        for diagnostic in runtime.skills.diagnostics()
+        if not diagnostic.loadable
+        and any("Duplicate skill name" in warning for warning in diagnostic.warnings)
+    }
+    extension_shared = config.data_dir / "extensions" / "ext-a" / "skills" / "shared"
+    assert {
+        ("weather", (bundled_root / "weather" / "SKILL.md").resolve()),
+        ("pdf", (bundled_root / "pdf" / "SKILL.md").resolve()),
+        ("coding-agents", (bundled_root / "coding-agents" / "SKILL.md").resolve()),
+        ("shared", (extension_shared / "SKILL.md").resolve()),
+    } <= rejected
+
+
 def test_disabling_extension_live_drops_its_skill(config: Config) -> None:
     # Live-deactivating an extension refreshes the skill registry, so its bundled
     # skill disappears without a restart.

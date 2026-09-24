@@ -41,6 +41,14 @@ def _scan_roots(
     extensions: ExtensionRegistry | None,
     logger: Any,
 ) -> list[Path]:
+    """Return the global Skill scan roots in first-found-wins precedence order.
+
+    Every global source outranks the bundled Skills: the user's own global home
+    (``<data_dir>/skills``) first, then the configured ``skill_directories`` in
+    their listed order, then each loaded Extension's ``skills/`` folder, and the
+    bundled ``resources/skills`` last. :func:`_origin_layers` relies on the bundled
+    root being the final entry.
+    """
     raw_directories = settings.get("skill_directories", [])
     extra_directories: list[Path] = []
     if not isinstance(raw_directories, list):
@@ -62,15 +70,16 @@ def _scan_roots(
     )
     return [
         storage.data_dir / _SKILLS_DIRNAME,
-        resources_path / _SKILLS_DIRNAME,
         *extra_directories,
         *extension_directories,
+        resources_path / _SKILLS_DIRNAME,
     ]
 
 
 def _origin_layers(scan_roots: list[Path]) -> list[str | None]:
-    origins: list[str | None] = [SKILL_ORIGIN_GLOBAL, SKILL_ORIGIN_BUNDLED]
-    origins.extend(SKILL_ORIGIN_GLOBAL for _ in scan_roots[2:])
+    """Return the origin tags parallel to :func:`_scan_roots` (bundled last)."""
+    origins: list[str | None] = [SKILL_ORIGIN_GLOBAL for _ in scan_roots[:-1]]
+    origins.append(SKILL_ORIGIN_BUNDLED)
     return origins
 
 
