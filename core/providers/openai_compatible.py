@@ -59,6 +59,7 @@ from core.providers._chat_completions_wire import (
     _extract_openai_usage,
     _first_choice_message,
     _merge_stream_usage_options,
+    _openai_response_carries_reasoning,
     _selected_thinking_effort,
     _to_openai_assistant_message,
     _to_openai_message,
@@ -767,6 +768,15 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         # Capture the agent-selected effort before ``_build_payload`` consumes the
         # reasoning kwargs, so the observability signals below can name it.
         selected_effort = _selected_thinking_effort(kwargs)
+        # The swallowed-effort signal judges what this request actually renders
+        # (catalog support, ladder snapping, Adapter mapping), not the raw
+        # selection: a catalog non-reasoning Model has its effort stripped.
+        rendered_reasoning = type(self).describe_reasoning_render(
+            model_lookup=self._model_lookup,
+            model_id=model_id,
+            effort=selected_effort or None,
+            provider_config=self._config,
+        )
         # Built before the retry loop so the sampling fallback below can strip a
         # rejected parameter from the exact payload — provider ``defaults`` would
         # otherwise refill the key on a rebuild.
@@ -809,11 +819,14 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 response_headers=response.headers,
             )
             parsed = dict(decode_response_json(response, "OpenAI-compatible provider"))
-            # A non-``none`` effort that comes back with 0 reasoning tokens was
-            # effectively swallowed by the provider — surface it.
+            # Requested reasoning that comes back with 0 reasoning tokens and no
+            # returned Reasoning was effectively swallowed — surface it.
             warn_effort_swallowed(
-                selected_effort=selected_effort,
+                rendered=rendered_reasoning,
                 usage=parsed.get("usage"),
+                returned_reasoning=_openai_response_carries_reasoning(
+                    parsed, preferred_field=self._reasoning_response_field(model_id)
+                ),
                 model_id=model_id,
                 provider_logger=_LOGGER,
             )
