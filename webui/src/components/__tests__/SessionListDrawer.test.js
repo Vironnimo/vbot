@@ -120,6 +120,52 @@ describe('SessionListDrawer', () => {
     expect(listSessionsMock.mock.calls.length).toBe(1);
   });
 
+  it('reloads once per burst of Session changes that name a listed Agent', async () => {
+    const { createChatViewParentHarness } =
+      await import('./chatViewParentHarness.svelte.js');
+    const harness = createChatViewParentHarness();
+    // A signal that predates the drawer is already reflected by its first load.
+    harness.pushSessionInvalidation({ agent_id: 'alpha', session_id: 'old' });
+
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: 'session-1',
+        get invalidations() {
+          return harness.sessionInvalidations;
+        },
+      },
+    });
+    flushSync();
+    await waitForCondition(() => listSessionsMock.mock.calls.length === 1);
+
+    vi.useFakeTimers();
+    // Another Agent's Session and a read acknowledgement leave this list as is.
+    harness.pushSessionInvalidation({ agent_id: 'beta', session_id: 'b1' });
+    harness.pushSessionInvalidation({
+      agent_id: 'alpha',
+      session_id: 'session-1',
+      read_run_id: 'run-1',
+    });
+    flushSync();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(listSessionsMock).toHaveBeenCalledTimes(1);
+
+    // A burst naming the listed Agent collapses into one reload.
+    harness.pushSessionInvalidation({ agent_id: 'alpha', session_id: 'new' });
+    flushSync();
+    harness.pushSessionInvalidation({
+      agent_id: 'alpha',
+      session_id: 'session-1',
+      run_id: 'run-2',
+    });
+    flushSync();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(listSessionsMock).toHaveBeenCalledTimes(2);
+    expect(listSessionsMock.mock.calls.at(-1)[0]).toBe('alpha');
+  });
+
   it('hides the permanent refresh action and offers Retry only after a load failure', async () => {
     listSessionsMock
       .mockRejectedValueOnce(new Error('session list unavailable'))

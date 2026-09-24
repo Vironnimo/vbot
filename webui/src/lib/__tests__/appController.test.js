@@ -8,6 +8,7 @@ import {
   CONNECTION_STATUS_CONNECTED,
   CONNECTION_STATUS_DISCONNECTED,
 } from '../connectionState.js';
+import { MAX_SESSION_INVALIDATIONS } from '../sessionInvalidation.js';
 
 function setup(overrides = {}) {
   const state = createAppControllerState('chat');
@@ -212,6 +213,41 @@ describe('App controller', () => {
     expect(actions.onReloadAgents).toHaveBeenCalledOnce();
   });
 
+  it('records each sessions invalidation scope without a full refresh', async () => {
+    const { controller, state } = setup();
+    const sessionsEvent = (scope) => ({
+      type: 'resource_changed',
+      payload: { kind: 'sessions', scope },
+    });
+    const terminalScope = {
+      project_id: null,
+      agent_id: 'alpha',
+      session_id: 'session-one',
+      run_id: 'run-one',
+    };
+
+    await controller.handleServerEvent(sessionsEvent(terminalScope));
+    await controller.handleServerEvent({
+      type: 'resource_changed',
+      payload: { kind: 'sessions' },
+    });
+
+    expect(state.sessionsRefreshToken).toBe(0);
+    expect(state.sessionInvalidations).toEqual([
+      { id: 1, scope: terminalScope },
+      { id: 2, scope: null },
+    ]);
+
+    for (let index = 0; index < MAX_SESSION_INVALIDATIONS; index += 1) {
+      await controller.handleServerEvent(sessionsEvent(terminalScope));
+    }
+    expect(state.sessionInvalidations).toHaveLength(MAX_SESSION_INVALIDATIONS);
+    expect(state.sessionInvalidations[0].id).toBe(3);
+    expect(state.sessionInvalidations.at(-1).id).toBe(
+      MAX_SESSION_INVALIDATIONS + 2,
+    );
+  });
+
   it('turns a sessions deletion event into a Session deletion for Chat', async () => {
     const { controller, state } = setup();
     const deletionEvent = (scope) => ({
@@ -220,8 +256,10 @@ describe('App controller', () => {
     });
 
     // A plain list change (create/rename) names no deleted Session.
-    await controller.handleServerEvent(deletionEvent({ agent_id: 'alpha' }));
-    expect(state.sessionsRefreshToken).toBe(1);
+    await controller.handleServerEvent(
+      deletionEvent({ agent_id: 'alpha', session_id: 'session-zero' }),
+    );
+    expect(state.sessionInvalidations).toHaveLength(1);
     expect(state.sessionDeletion).toBeNull();
 
     await controller.handleServerEvent(
@@ -232,7 +270,7 @@ describe('App controller', () => {
         next_session_id: 'session-two',
       }),
     );
-    expect(state.sessionsRefreshToken).toBe(2);
+    expect(state.sessionInvalidations).toHaveLength(2);
     expect(state.sessionDeletion).toEqual({
       agentAddress: 'builder@vbot',
       deletedSessionId: 'session-one',

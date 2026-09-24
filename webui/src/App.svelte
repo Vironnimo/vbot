@@ -218,6 +218,7 @@
   let memoriesRefreshToken = $derived(appControllerState.memoriesRefreshToken);
   let projectsRefreshToken = $derived(appControllerState.projectsRefreshToken);
   let sessionsRefreshToken = $derived(appControllerState.sessionsRefreshToken);
+  let sessionInvalidations = $derived(appControllerState.sessionInvalidations);
   let sessionStoreIncident = $derived(appControllerState.sessionStoreIncident);
   let commandsRefreshToken = $derived(appControllerState.commandsRefreshToken);
   let queueInvalidation = $derived(appControllerState.queueInvalidation);
@@ -546,6 +547,10 @@
     return appControllerState.sessionsRefreshToken;
   }
 
+  export function getSessionInvalidations() {
+    return appControllerState.sessionInvalidations;
+  }
+
   export function getQueueInvalidation() {
     return appControllerState.queueInvalidation;
   }
@@ -721,6 +726,7 @@
         {connectionSnapshot}
         {activeRuns}
         {sessionsRefreshToken}
+        {sessionInvalidations}
         {commandsRefreshToken}
         {queueInvalidation}
         {sessionDeletion}

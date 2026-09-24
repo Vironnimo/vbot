@@ -370,22 +370,93 @@ def test_session_list_page_is_bounded_filtered_and_keeps_required_session(manage
     assert second.next_cursor is None
 
 
-def test_completion_activity_projection_reads_only_activity_columns(manager) -> None:
-    address = _address("coder", "activity-projection")
-    manager.create(address.agent_id, session_id=address.session_id)
-    manager.set_metadata(address, {"pinned_memory_files": "large" * 10_000})
-    manager.record_terminal_run(address, "run-1", "completed", "2026-08-29T12:00:00Z")
+def test_completion_activity_reads_completed_sessions_for_many_scopes(manager) -> None:
+    unread = _address("coder", "unread")
+    read = _address("coder", "read")
+    idle = _address("coder", "idle")
+    project = _address("coder", "team", "vbot")
+    for address in (unread, read, idle, project):
+        manager.create(
+            address.agent_id, session_id=address.session_id, project_id=address.project_id
+        )
+    manager.set_metadata(unread, {"pinned_memory_files": "large" * 10_000})
+    manager.record_terminal_run(unread, "run-1", "failed", "2026-08-29T12:00:00Z")
+    manager.record_terminal_run(read, "run-2", "completed", "2026-08-29T12:01:00Z")
+    manager.mark_terminal_run_read(read, "run-2")
+    manager.record_terminal_run(project, "run-3", "completed", "2026-08-29T12:02:00Z")
 
-    rows = manager._store.list_activity_rows(None, address.agent_id)
+    activity = manager.list_completion_activity(
+        [(None, "coder"), ("vbot", "coder"), (None, "unknown"), (None, "coder")]
+    )
 
+    assert activity == {
+        (None, "coder"): [
+            {
+                "id": "read",
+                "latest_completion_run_id": "run-2",
+                "has_unread_completion": False,
+                "unread_run_id": None,
+                "unread_run_status": None,
+                "unread_run_at": None,
+            },
+            {
+                "id": "unread",
+                "latest_completion_run_id": "run-1",
+                "has_unread_completion": True,
+                "unread_run_id": "run-1",
+                "unread_run_status": "failed",
+                "unread_run_at": "2026-08-29T12:00:00Z",
+            },
+        ],
+        ("vbot", "coder"): [
+            {
+                "id": "team",
+                "latest_completion_run_id": "run-3",
+                "has_unread_completion": True,
+                "unread_run_id": "run-3",
+                "unread_run_status": "completed",
+                "unread_run_at": "2026-08-29T12:02:00Z",
+            }
+        ],
+        (None, "unknown"): [],
+    }
+    rows = manager._store.list_completion_activity_rows([(None, "coder")])
     assert set(rows[0].keys()) == {
+        "project_id",
+        "agent_id",
         "session_id",
         "latest_completion_run_id",
         "latest_completion_status",
         "latest_completion_at",
         "read_completion_run_id",
     }
-    assert manager.list_completion_activity(address.agent_id)[0]["unread_run_id"] == "run-1"
+
+
+def test_completion_activity_reads_all_scopes_in_one_snapshot(manager, monkeypatch) -> None:
+    from core.sessions import _store_queries
+
+    monkeypatch.setattr(_store_queries, "_COMPLETION_ACTIVITY_SCOPE_BATCH_SIZE", 2)
+    scopes = [(None, f"agent-{index}") for index in range(5)]
+    for _project_id, agent_id in scopes:
+        address = _address(agent_id, "done")
+        manager.create(agent_id, session_id="done")
+        manager.record_terminal_run(address, f"run-{agent_id}", "completed", "2026-08-29T12:00:00Z")
+    snapshots = 0
+    read_ctx = manager._store._runtime.read_ctx
+
+    def counting_read_ctx(*args, **kwargs):
+        nonlocal snapshots
+        snapshots += 1
+        return read_ctx(*args, **kwargs)
+
+    monkeypatch.setattr(manager._store._runtime, "read_ctx", counting_read_ctx)
+
+    activity = manager.list_completion_activity(scopes)
+
+    assert snapshots == 1
+    assert {scope: [row["id"] for row in rows] for scope, rows in activity.items()} == {
+        scope: ["done"] for scope in scopes
+    }
 
 
 def test_session_list_cursor_is_stable_when_a_newer_session_is_inserted(manager) -> None:

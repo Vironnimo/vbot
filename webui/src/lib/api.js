@@ -156,6 +156,7 @@ export {
   startChatRun,
   editChatMessage,
   listSessions,
+  getSession,
   listSessionActivity,
   markSessionRead,
   renameSession,

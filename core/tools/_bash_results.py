@@ -30,6 +30,10 @@ BASH_HANDOFF_OUTPUT_MAX_LINES = 20
 USER_CANCELLED_FAILURE_CODE = "cancelled_by_user"
 USER_CANCELLED_FAILURE_MESSAGE = "Command aborted by the user"
 BACKGROUND_USER_CANCELLED_MESSAGE = "Background process was aborted by the user."
+# The durable records `background_bash_statuses` reads: results of these Tools
+# and Notes that contain this marker. Every other record leaves the fold as is.
+BACKGROUND_STATUS_TOOL_NAMES = (BASH_TOOL_NAME, "process")
+BACKGROUND_STATUS_NOTE_MARKER = BASH_COMPLETION_STATUS_PREFIX
 
 
 def _format_elapsed_duration(seconds: float) -> str:
@@ -114,7 +118,8 @@ def background_bash_statuses(messages: Sequence[Any]) -> JsonObject:
     Background Bash results are immutable handoff records, so their terminal
     state arrives later in either an automatic completion note or a manually
     persisted Process Tool Result. The WebUI history response uses this folded
-    projection without exposing internal notes themselves.
+    projection without exposing internal notes themselves. Folding a later
+    range of records onto an earlier fold equals folding both ranges at once.
     """
     statuses: JsonObject = {}
     for message in messages:

@@ -154,7 +154,7 @@ async def test_list_rejects_required_session_from_an_unlisted_agent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_activity_list_batches_identity_and_project_addresses_in_order() -> None:
+async def test_activity_list_reads_every_address_in_one_store_call_without_resolving() -> None:
     state, resolver, sessions = _make_state()
 
     result = await _list_session_activity(
@@ -182,8 +182,9 @@ async def test_activity_list_batches_identity_and_project_addresses_in_order() -
             },
         ]
     }
-    assert resolver.resolved == [(None, "builder"), ("vbot", "reviewer")]
-    assert sessions.listed == [("builder", None), ("reviewer", "vbot")]
+    # Activity is a Session-store projection: no per-Agent resolution, one read.
+    assert resolver.resolved == []
+    assert sessions.activity_reads == [[(None, "builder"), ("vbot", "reviewer")]]
 
 
 @pytest.mark.asyncio
@@ -194,7 +195,7 @@ async def test_activity_list_accepts_an_empty_address_batch() -> None:
 
     assert result == {"agents": []}
     assert resolver.resolved == []
-    assert sessions.listed == []
+    assert sessions.activity_reads == []
 
 
 @pytest.mark.asyncio
@@ -209,7 +210,7 @@ async def test_activity_list_rejects_a_malformed_address_before_storage() -> Non
 
     assert exc_info.value.code == "invalid_request"
     assert resolver.resolved == []
-    assert sessions.listed == []
+    assert sessions.activity_reads == []
 
 
 @pytest.mark.asyncio
@@ -221,7 +222,7 @@ async def test_activity_list_maps_session_storage_failures() -> None:
         await _list_session_activity(state, {"agent_ids": ["builder"]})
 
     assert exc_info.value.code == "domain_error"
-    assert sessions.listed == [("builder", None)]
+    assert sessions.activity_reads == [[(None, "builder")]]
 
 
 @pytest.mark.asyncio
@@ -307,9 +308,12 @@ async def test_create_session_publishes_sessions_resource_changed() -> None:
     await _create_session(state, {"agent_id": "builder", "make_current": True})
 
     # The single sessions emit point: other windows refresh this agent's session
-    # list/marking. Scoped to the agent so windows on a different agent ignore it.
+    # list/marking. Scoped to the new Session so unrelated windows ignore it.
     assert _sessions_resource_events(state) == [
-        {"kind": "sessions", "scope": {"agent_id": "builder"}}
+        {
+            "kind": "sessions",
+            "scope": {"project_id": None, "agent_id": "builder", "session_id": "new-session"},
+        }
     ]
 
 
@@ -322,7 +326,10 @@ async def test_create_session_scope_uses_bare_agent_id_for_project_address() -> 
     # The scope carries the bare agent id (the project rides separately), matching
     # how the queue/session channels are keyed on the client.
     assert _sessions_resource_events(state) == [
-        {"kind": "sessions", "scope": {"agent_id": "builder"}}
+        {
+            "kind": "sessions",
+            "scope": {"project_id": "vbot", "agent_id": "builder", "session_id": "new-session"},
+        }
     ]
 
 
@@ -368,7 +375,10 @@ async def test_rename_publishes_sessions_resource_changed() -> None:
     await _rename_session(state, {"agent_id": "builder", "session_id": "s1", "title": "Hi"})
 
     assert _sessions_resource_events(state) == [
-        {"kind": "sessions", "scope": {"agent_id": "builder"}}
+        {
+            "kind": "sessions",
+            "scope": {"project_id": None, "agent_id": "builder", "session_id": "s1"},
+        }
     ]
 
 

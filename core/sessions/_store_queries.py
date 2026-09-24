@@ -311,16 +311,48 @@ def list_summary_rows(
     return cast(list[sqlite3.Row], rows), required_row, total, has_more
 
 
-def list_activity_rows(
-    connection: sqlite3.Connection, project_id: str | None, agent_id: str
+def summary_row(connection: sqlite3.Connection, address: SessionAddress) -> sqlite3.Row | None:
+    """Select one live Session's list columns by its exact address."""
+    row = connection.execute(
+        f"SELECT {_store_values._SESSION_LIST_COLUMNS} FROM sessions "
+        "WHERE status = 'live' AND project_id = ? AND agent_id = ? AND session_id = ?",
+        _store_values._scope(address),
+    ).fetchone()
+    return cast("sqlite3.Row | None", row)
+
+
+# Two bound values per scope; the chunk stays far below SQLite's variable limit.
+_COMPLETION_ACTIVITY_SCOPE_BATCH_SIZE = 400
+
+
+def list_completion_activity_rows(
+    connection: sqlite3.Connection, scopes: Sequence[tuple[str | None, str]]
 ) -> list[sqlite3.Row]:
-    rows = connection.execute(
-        "SELECT session_id, latest_completion_run_id, latest_completion_status, "
-        "latest_completion_at, read_completion_run_id FROM sessions "
-        "WHERE status = 'live' AND project_id = ? AND agent_id = ? ORDER BY session_id",
-        (project_id or "", agent_id),
-    ).fetchall()
-    return cast(list[sqlite3.Row], rows)
+    """Select live Sessions with a latest completion for many Agent scopes.
+
+    Sessions without a completion are not selected. The scopes join the live
+    address index, so each scope is one index search in the caller's snapshot.
+    """
+    normalized = tuple(
+        dict.fromkeys((project_id or "", agent_id) for project_id, agent_id in scopes)
+    )
+    rows: list[sqlite3.Row] = []
+    for start in range(0, len(normalized), _COMPLETION_ACTIVITY_SCOPE_BATCH_SIZE):
+        chunk = normalized[start : start + _COMPLETION_ACTIVITY_SCOPE_BATCH_SIZE]
+        values = ", ".join("(?, ?)" for _scope in chunk)
+        rows.extend(
+            connection.execute(
+                f"WITH scopes(project_id, agent_id) AS (VALUES {values}) "
+                "SELECT s.project_id, s.agent_id, s.session_id, s.latest_completion_run_id, "
+                "s.latest_completion_status, s.latest_completion_at, s.read_completion_run_id "
+                "FROM scopes JOIN sessions AS s "
+                "ON s.project_id = scopes.project_id AND s.agent_id = scopes.agent_id "
+                "WHERE s.status = 'live' AND s.latest_completion_run_id IS NOT NULL "
+                "ORDER BY s.project_id, s.agent_id, s.session_id",
+                [value for scope in chunk for value in scope],
+            ).fetchall()
+        )
+    return rows
 
 
 def session_ids_with_messages(
