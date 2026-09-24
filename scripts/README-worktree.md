@@ -387,6 +387,17 @@ Important behavior:
 - if the worktree is dirty, delete fails unless you explicitly use `--force`;
   the error output lists each blocking file as an `uncommitted:` line so you
   can decide whether to commit the work or discard it with `--force`
+- before removing anything it stops the worktree's managed server and fake
+  Provider with `scripts/test-env.py stop` for the recorded data dir and port;
+  when the worktree no longer has that script, the copy in the checkout running
+  `worktree.py` is used, which still refuses to kill a fake Provider it cannot
+  verify as its own
+- a directory without `.git` is a leftover whose checkout is already gone (see
+  "Merge succeeded but cleanup failed"); it holds no uncommitted work, so both
+  modes remove it and prune Git's registration. Its branch is read from
+  `git worktree list`, never from the enclosing repository; a managed branch is
+  still deleted with `git branch -d` without `--force`, so unmerged commits keep
+  their branch
 
 Ignored files never block a non-force delete. Build artifacts such as
 `node_modules/`, `webui/dist/`, `coverage/`, plan files under `docs/plans/`,
@@ -480,6 +491,8 @@ A keeper process exits when its release signal appears, when its window expires,
 ### Merge succeeded but cleanup failed
 
 The output prints `status: merged` with the commit and then an explicit cleanup error. The landed commit is safe; finish the removal manually with `python scripts/worktree.py delete <name>` (add `--force` only to discard worktree-local leftovers).
+
+The usual cause is a shell whose working directory is still inside the worktree: the held directory cannot be removed, and the merge restores the `.vbot-worktree` marker for a retry, so only the marker remains (typically while `git worktree list` still shows the entry as `prunable`). Move that shell out in a separate command (a `cd` inside the merge command does not release it), then run `delete <name>` without `--force`. It removes the leftover directory, the data dir, Git's registration, and the merged managed branch. If Git no longer registers the leftover, its branch cannot be verified and is kept; delete it with `git branch -d <name>`.
 
 ## Recommended team workflow
 
