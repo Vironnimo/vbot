@@ -142,6 +142,8 @@ python scripts/quality-frontend.py --check <paths...>  # Frontend feedback
 # Omit paths for full gates on the affected side(s).
 ```
 
+**Performance:** Manual, outside the gates. `python scripts/perf_load.py` (concurrent-Agent load test on a disposable server with a scripted fake Provider), `python scripts/perf_bench.py` (hot-path microbenchmarks), and the always-on server metrics/Recordings (`vbot performance`, `performance.md`). Prove optimizations with `--compare` against a baseline from the same machine; results stay in the git-ignored `perf-results/`. Usage and interpretation: `scripts/README-perf.md`.
+
 ## Live Testing
 
 Before live tests, fully read `.vorch/workflows/web-test-workflow.md` for browser WebUI testing, `.vorch/workflows/cli-test-workflow.md` for CLI testing; both for tasks spanning both accessors.
