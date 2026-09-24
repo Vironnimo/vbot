@@ -420,7 +420,6 @@ class CompactionRunCoordinator:
         usage: JsonObject | None,
         *,
         continuation_request_messages: list[JsonObject] | None = None,
-        context_usage: JsonObject | None = None,
         allow_continuation: bool = False,
         continue_same_run: bool = True,
     ) -> RequestState:
