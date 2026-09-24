@@ -6,7 +6,7 @@ import inspect
 from typing import Any
 
 from core.channels import ChannelConfigError
-from core.compaction import COMPACTION_POLICY_META_KEY
+from core.compaction import COMPACTION_POLICY_META_KEY, effective_compaction_policy
 from core.projects import (
     InvalidAgentAddressError,
     format_agent_address,
@@ -21,7 +21,6 @@ from core.sessions import (
     SessionListCursor,
     SessionListFilters,
 )
-from core.settings.normalizers import normalize_compaction_settings
 from core.tools.terminal_manager import TerminalOwner
 from core.utils.errors import StorageError
 from core.utils.logging import get_logger
@@ -40,6 +39,7 @@ from server.rpc.errors import (
     RpcError,
 )
 from server.rpc.event_bridge import publish_resource_changed
+from server.rpc.payloads import _global_compaction_policy_loader
 from server.rpc.runtime_access import _state_chat_runs
 from server.rpc.validation import (
     _optional_bool,
@@ -323,7 +323,7 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
     def load_sessions() -> tuple[list[JsonObject], SessionListCursor | None, int]:
         resolver = getattr(state.runtime, "agent_resolver", None)
         agents = getattr(state.runtime, "agents", None)
-        inherited_policies: dict[tuple[str | None, str], JsonObject] = {}
+        agent_policies: dict[tuple[str | None, str], Any] = {}
         for _address, agent_id, project_id in parsed_addresses:
             if resolver is not None:
                 agent = resolver.resolve_agent(project_id, agent_id)
@@ -331,16 +331,8 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
                 agent = agents.get(agent_id)
             else:
                 agent = None
-            own_policy = getattr(agent, "compaction_policy", None)
-            inherited_policies[(project_id, agent_id)] = (
-                dict(own_policy)
-                if isinstance(own_policy, dict)
-                else (
-                    state.runtime.storage.load_compaction_settings()
-                    if getattr(state.runtime, "storage", None) is not None
-                    else normalize_compaction_settings(None)
-                )
-            )
+            agent_policies[(project_id, agent_id)] = getattr(agent, "compaction_policy", None)
+        load_global_policy = _global_compaction_policy_loader(state)
         page = state.runtime.chat_sessions.list_summaries_page(
             [(project_id, agent_id) for _address, agent_id, project_id in parsed_addresses],
             limit=limit,
@@ -372,7 +364,7 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
             else:
                 session["has_active_run"] = False
             override = session.pop(COMPACTION_POLICY_META_KEY, None)
-            inherited_policy = inherited_policies[
+            agent_policy = agent_policies[
                 (
                     session_project_id if isinstance(session_project_id, str) else None,
                     session_agent_id,
@@ -381,8 +373,8 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
             session["compaction_policy_override"] = (
                 dict(override) if isinstance(override, dict) else None
             )
-            session["compaction_policy_effective"] = (
-                dict(override) if isinstance(override, dict) else dict(inherited_policy)
+            session["compaction_policy_effective"] = effective_compaction_policy(
+                override, agent_policy, load_global_policy
             )
         return sessions, page.next_cursor, page.total_count
 
@@ -715,13 +707,12 @@ async def _set_session_compaction_policy(state: Any, params: JsonObject) -> Json
             project_id,
             agent_id,
         )
-        own_policy = getattr(agent, "compaction_policy", None)
-        inherited = (
-            dict(own_policy)
-            if isinstance(own_policy, dict)
-            else await _SESSION_RPC_WORKERS.run(state.runtime.storage.load_compaction_settings)
+        effective = await _SESSION_RPC_WORKERS.run(
+            effective_compaction_policy,
+            normalized,
+            getattr(agent, "compaction_policy", None),
+            state.runtime.storage.load_compaction_settings,
         )
-        effective = normalized or inherited
 
         def set_policy(metadata: JsonObject) -> None:
             if normalized is None:

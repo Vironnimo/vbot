@@ -11,6 +11,7 @@ import pytest
 
 from core.channels import ChannelConfig, ChannelConfigError, DeniedChatFacts
 from core.sessions import SessionAddress
+from core.settings.normalizers import normalize_compaction_settings
 from server.events import ServerEventBus
 from server.rpc.methods import dispatch_rpc
 
@@ -112,7 +113,7 @@ class _CredentialStorage:
         return self.credentials.pop(key, None) is not None
 
     def load_compaction_settings(self) -> dict[str, object]:
-        return {}
+        return normalize_compaction_settings(None)
 
 
 def _channel_config(
@@ -748,7 +749,7 @@ async def test_session_list_happy_path_returns_bounded_session_summaries() -> No
                     "agent_address": "assistant",
                     "has_active_run": False,
                     "compaction_policy_override": None,
-                    "compaction_policy_effective": {},
+                    "compaction_policy_effective": normalize_compaction_settings(None),
                 }
             ],
             "next_cursor": None,
