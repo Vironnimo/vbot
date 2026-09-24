@@ -14,6 +14,7 @@ from core.extensions.interactions import (
 )
 from core.extensions.operations import ExtensionOperations
 from core.extensions.settings_schema import SettingsFieldDeclaration
+from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("extensions")
@@ -189,6 +190,14 @@ class SessionCapability:
 
 class SessionCapabilityExpiredError(RuntimeError):
     """A bound Session callback outlived its Extension registration."""
+
+
+class ExtensionUnavailableError(VBotError):
+    """The Extension layer or an owner's host cannot serve a request right now.
+
+    Expected while the runtime shuts down or an Extension Reload swaps the
+    registry; callers retry after the layer is available again.
+    """
 
 
 @dataclass(frozen=True)

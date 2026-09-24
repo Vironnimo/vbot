@@ -15,6 +15,7 @@ from core.automation import _cron_claims as cron_claims
 from core.automation.cron import CronService
 from core.chat import ChatLoop
 from core.extensions import ExtensionRegistrationIdentity
+from core.extensions.extensions import ExtensionUnavailableError
 from core.runs import ChatRunManager, Run
 from core.runtime import Runtime
 from core.sessions import ChatSessionManager
@@ -110,6 +111,7 @@ def test_extension_run_events_streams_only_the_current_owned_page_run(tmp_path: 
 
     class Registry:
         current = True
+        host_bound = True
 
         def is_registration_current(self, candidate: Any) -> bool:
             return self.current and candidate == identity
@@ -120,6 +122,8 @@ def test_extension_run_events_streams_only_the_current_owned_page_run(tmp_path: 
         def host_for(self, candidate: Any) -> Any:
             if not self.is_registration_current(candidate):
                 raise ValueError("stale owner")
+            if not self.host_bound:
+                raise ExtensionUnavailableError("Extension host is not bound")
             return SimpleNamespace(temporary_agents=groups)
 
     groups = Groups()
@@ -139,12 +143,16 @@ def test_extension_run_events_streams_only_the_current_owned_page_run(tmp_path: 
         response = client.get(url)
         runtime.extensions.current = False
         stale_response = client.get(url)
+        runtime.extensions.current = True
+        runtime.extensions.host_bound = False
+        reloading_response = client.get(url)
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     assert "event: model.response" in response.text
     assert '"text":"visible"' in response.text
     assert stale_response.status_code == 404
+    assert reloading_response.status_code == 404
 
 
 def test_control_shutdown_requires_secret_and_requests_uvicorn_exit(tmp_path: Path) -> None:

@@ -11,10 +11,12 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from core.attachments.attachments import (
+    AttachmentError,
     AttachmentNotFoundError,
     AttachmentTooLargeError,
     AttachmentTypeNotAllowedError,
 )
+from core.extensions.extensions import ExtensionUnavailableError
 from core.model_tasks import (
     SpeechConfigurationError,
     SpeechError,
@@ -417,6 +419,13 @@ def create_app(
             record = attachment_store.get(attachment_id)
         except AttachmentNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except AttachmentError as exc:
+            # Unreadable stored metadata is an expected storage failure: report the
+            # attachment as unavailable without exposing its internal path.
+            logging.getLogger("vbot.server.app").warning(
+                "Attachment is unavailable (attachment=%s): %s", attachment_id, exc
+            )
+            raise HTTPException(status_code=404, detail="Attachment is unavailable") from exc
         return FileResponse(
             record.file_path,
             media_type=record.media_type,
@@ -676,7 +685,7 @@ def create_app(
             verified = await verified_groups.owned_run(claims["group_id"], claims["run_id"])
             if inspection.run is None or verified.run is None:
                 raise ValueError("Extension Run is not live")
-        except (KeyError, ValueError):
+        except (KeyError, ValueError, ExtensionUnavailableError):
             raise HTTPException(status_code=404, detail="Extension Run is unavailable") from None
         return StreamingResponse(
             _sse_run_events(
