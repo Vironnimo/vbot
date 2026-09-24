@@ -352,6 +352,35 @@ async def test_chunk_retry_never_replays_delivered_text(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("platform", ["slack", "mattermost"])
+async def test_long_markdown_is_split_without_breaking_code_fences(
+    tmp_path: Path, platform: str
+) -> None:
+    adapter = make_adapter(tmp_path, platform)
+    delivered: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("conversations.info"):
+            return httpx.Response(200, json={"ok": True, "channel": {"is_im": True}})
+        if request.url.path.endswith("/channels/C1"):
+            return httpx.Response(200, json={"type": "D"})
+        delivered.append(json.loads(request.content)["text" if platform == "slack" else "message"])
+        return httpx.Response(200, json={"ok": True})
+
+    adapter._http_client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    code = "\n".join(f"print({index})" for index in range(600))
+    try:
+        await adapter.send_text("C1", f"Intro\n\n```python\n{code}\n```\n\nOutro")
+    finally:
+        await adapter.stop()
+
+    assert len(delivered) > 1
+    assert all(len(chunk) <= 3500 for chunk in delivered)
+    assert all(chunk.startswith("```python\n") for chunk in delivered[1:])
+    assert all(chunk.endswith("\n```") for chunk in delivered[:-1])
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["upload", "complete"])
 @pytest.mark.parametrize("status", [429, 500])
 async def test_slack_file_failure_preserves_prior_delivery_and_upload(

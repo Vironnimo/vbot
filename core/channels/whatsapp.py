@@ -202,10 +202,8 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
         if platform_target != "self" or thread_id is not None:
             raise ChannelError("WhatsApp supports only platform_target 'self', without threads")
         self.remember(self.self_facts())
-        for start in range(0, len(message or ""), 3500):
-            await self.call_bridge(
-                {"action": "send", "target": "self", "text": (message or "")[start : start + 3500]}
-            )
+        for chunk in self.message_chunks(message):
+            await self.call_bridge({"action": "send", "target": "self", "text": chunk})
         for file in files or []:
             if self._attachment_store:
                 self._attachment_store.ensure_within_limit(len(file.data))
