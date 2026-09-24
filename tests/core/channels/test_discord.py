@@ -31,7 +31,7 @@ from tests.core.channels.discord_helpers import (
     make_message,
 )
 
-from .engine_test_support import assert_member_trigger
+from .engine_test_support import QUEUE_DRAIN_TIMEOUT_SECONDS, assert_member_trigger
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
@@ -55,9 +55,7 @@ async def drain_chat_queue(adapter: DiscordChannelAdapter, target_id: int) -> No
     if queue is None:
         await asyncio.sleep(0)
         return
-    # The suite-wide timeout remains the deadlock guard. A shorter nested timeout
-    # flakes under xdist load even though the queue is still making progress.
-    await queue.join()
+    await asyncio.wait_for(queue.join(), timeout=QUEUE_DRAIN_TIMEOUT_SECONDS)
 
 
 def test_channel_config_normalizes_discord_snowflakes_to_strings() -> None:
