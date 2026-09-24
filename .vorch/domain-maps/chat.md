@@ -52,6 +52,7 @@ New public Message ids use `msg_` plus 16 lowercase base32 characters (80 random
 - Chat never infers or injects foreign Project Context from filesystem paths used by a Tool. An Identity Agent loads that context explicitly through the `project` Tool; the resulting ordinary Tool message persists in Session history without separate Chat metadata or reminder state. Chat reads the latest successful Project Tool Result to route Skill activation through that Project for the Identity Session, including later Runs, while the prompt-epoch Skill catalog continues to represent the admitted Working Project/private scope and changes only on Session initialization or successful Compaction (see `tools/project.md`).
 - Visible output, canonical Assistant/Tool messages, and Run annotations persist at stable boundaries. At each stable Assistant boundary Chat resolves eligible file-path lines before persistence and stable event emission; transient streaming deltas are never Session records.
 - Timestamps are persisted as UTC ISO 8601 with an explicit offset; readers accept `+00:00` and `Z`. Public Session-id/path validation remains in `core/sessions/`.
+- Run phases are measured on the Session's performance Track: `chat.run`, `chat.request_build`, `provider.response`, `provider.first_token`, `chat.persist`, `chat.tool_round` and `tool.<name>` (semantics in `performance.md`). Measurement never changes Run behavior; span args carry ids and counts only, and a Tool name the registry does not know is discarded rather than becoming a metric.
 
 ## Constraints & Gotchas
 

@@ -56,6 +56,7 @@ from core.chat.usage import (
 )
 from core.chat.wire_shaping import _strip_assistant_reasoning_fields
 from core.extensions import HookContext, SessionRequestContext
+from core.performance import measure, session_track
 from core.runs import (
     MODEL_FALLBACK_ACTIVATED_EVENT,
     USER_MESSAGE_EVENT,
@@ -111,6 +112,19 @@ class RunExecution:
         self._session_title_service = session_title_service
 
     async def _execute_run(
+        self,
+        run: Run,
+        request: _RunRequest,
+    ) -> ChatMessage:
+        with measure(
+            "chat.run",
+            track=session_track(run.agent_id, run.session_id, run.project_id),
+            name="run",
+            args={"run_id": run.id, "run_kind": str(run.run_kind)},
+        ):
+            return await self._execute_admitted_run(run, request)
+
+    async def _execute_admitted_run(
         self,
         run: Run,
         request: _RunRequest,
@@ -408,6 +422,7 @@ class RunExecution:
                     finally:
                         await session.flush_deferred_notes_async()
             run.raise_if_cancelled()
+            request_build_started: float | None = time.perf_counter()
             try:
                 context.request_state = await self._requests.build_request_state(
                     agent,
@@ -439,12 +454,18 @@ class RunExecution:
                 )
 
             if self._compaction_service is not None:
+                built_state = context.request_state
                 context.request_state = await self._compaction_runs.maybe_auto_compact_state(
                     context,
                     target,
                     usage=None,
                     allow_continuation=True,
                 )
+                if context.request_state is not built_state:
+                    # A Compaction ran and is measured on its own; the first
+                    # step's request build then starts in the progression.
+                    request_build_started = None
+            context.request_build_started = request_build_started
 
             try:
                 completed_assistant = await self._progression._send_until_final(context, target)

@@ -5,19 +5,30 @@ default executor and submits work before any application-level backpressure can
 apply.  This module owns the stronger cross-domain boundary: a named dedicated
 executor, a per-Event-Loop admission limit, and cancellation that does not report
 completion while an already-started worker is still mutating process state.
+
+Every pool records its admission wait and run durations
+(``worker_pool.<name>.wait`` / ``.run``) and its ``.active`` / ``.waiting``
+gauges; during a performance recording they also appear on the
+``worker pool <name>`` track.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import threading
 import weakref
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from time import perf_counter
 from typing import Any, TypeVar
 
+from core.performance.performance import measure, record_span, set_gauge
+
 _WorkerResult = TypeVar("_WorkerResult")
+# Admission waits shorter than this stay histogram-only in recordings.
+_WAIT_SPAN_MIN_MS = 1.0
 
 
 class BoundedWorkerPool:
@@ -34,6 +45,14 @@ class BoundedWorkerPool:
         if max_workers < 1:
             raise ValueError("Worker pool max_workers must be at least 1")
         self._max_workers = max_workers
+        self._track = f"worker pool {name}"
+        self._wait_metric = f"worker_pool.{name}.wait"
+        self._run_metric = f"worker_pool.{name}.run"
+        self._active_gauge = f"worker_pool.{name}.active"
+        self._waiting_gauge = f"worker_pool.{name}.waiting"
+        self._counts_lock = threading.Lock()
+        self._active = 0
+        self._waiting = 0
         self._executor = ThreadPoolExecutor(
             max_workers=max_workers,
             thread_name_prefix=f"vbot-{name}",
@@ -61,29 +80,69 @@ class BoundedWorkerPool:
         prevents callers from treating an in-flight mutation as abandoned.
         """
         semaphore = self._semaphore()
-        async with semaphore:
-            loop = asyncio.get_running_loop()
-            call = partial(function, *arguments, **keyword_arguments)
-            future = loop.run_in_executor(self._executor, call)
+        entered = perf_counter()
+        self._count_waiting(1)
+        try:
+            await semaphore.acquire()
+        finally:
+            self._count_waiting(-1)
+        try:
+            record_span(
+                self._wait_metric,
+                entered,
+                track=self._track,
+                name="wait",
+                min_span_ms=_WAIT_SPAN_MIN_MS,
+            )
+            self._count_active(1)
             try:
-                return await asyncio.shield(future)
-            except asyncio.CancelledError as cancellation:
-                # Cancellation must win over a late worker failure, but only after
-                # the worker has actually settled.  A caller may cancel the Task
-                # more than once, so keep shielding until the executor Future is
-                # done instead of allowing a repeated cancellation to release the
-                # semaphore early.
-                while not future.done():
-                    try:
-                        await asyncio.shield(future)
-                    except asyncio.CancelledError:
-                        continue
-                    except BaseException:
-                        break
-                if future.done() and not future.cancelled():
-                    with contextlib.suppress(BaseException):
-                        future.exception()
-                raise cancellation
+                with measure(self._run_metric, track=self._track, name=_callable_name(function)):
+                    return await self._run_admitted(function, arguments, keyword_arguments)
+            finally:
+                self._count_active(-1)
+        finally:
+            semaphore.release()
+
+    async def _run_admitted(
+        self,
+        function: Callable[..., _WorkerResult],
+        arguments: tuple[Any, ...],
+        keyword_arguments: dict[str, Any],
+    ) -> _WorkerResult:
+        loop = asyncio.get_running_loop()
+        call = partial(function, *arguments, **keyword_arguments)
+        future = loop.run_in_executor(self._executor, call)
+        try:
+            return await asyncio.shield(future)
+        except asyncio.CancelledError as cancellation:
+            # Cancellation must win over a late worker failure, but only after
+            # the worker has actually settled.  A caller may cancel the Task
+            # more than once, so keep shielding until the executor Future is
+            # done instead of allowing a repeated cancellation to release the
+            # semaphore early.
+            while not future.done():
+                try:
+                    await asyncio.shield(future)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            if future.done() and not future.cancelled():
+                with contextlib.suppress(BaseException):
+                    future.exception()
+            raise cancellation
+
+    def _count_waiting(self, delta: int) -> None:
+        with self._counts_lock:
+            self._waiting += delta
+            waiting = self._waiting
+        set_gauge(self._waiting_gauge, waiting, track=self._track)
+
+    def _count_active(self, delta: int) -> None:
+        with self._counts_lock:
+            self._active += delta
+            active = self._active
+        set_gauge(self._active_gauge, active, track=self._track)
 
     def _semaphore(self) -> asyncio.Semaphore:
         loop = asyncio.get_running_loop()
@@ -96,3 +155,10 @@ class BoundedWorkerPool:
     def shutdown(self, *, wait: bool = True) -> None:
         """Reject new submissions and release an owner's executor on shutdown."""
         self._executor.shutdown(wait=wait, cancel_futures=True)
+
+
+def _callable_name(function: Callable[..., Any]) -> str:
+    """Return a code identifier for span names; never arguments or content."""
+    while isinstance(function, partial):
+        function = function.func
+    return getattr(function, "__qualname__", None) or type(function).__name__
