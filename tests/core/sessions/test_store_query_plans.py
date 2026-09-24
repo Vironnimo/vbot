@@ -266,3 +266,18 @@ def test_session_catalog_reads_scope_history_by_session_index(history) -> None:
     sources = _store_queries.descriptor_sources(recorder, [address])()
     assert sources[address][2] is not None
     _assert_indexed(connection, statements)
+
+
+def test_completion_activity_searches_each_scope_by_live_address_index(history) -> None:
+    _address, _anchor, connection = history
+    recorder, statements = _recording(connection)
+    _store_queries.list_completion_activity_rows(recorder, [("project", "agent"), (None, "other")])
+    plans = [
+        str(row[3])
+        for sql, params in statements
+        for row in connection.execute("EXPLAIN QUERY PLAN " + sql, params)
+    ]
+    assert any(
+        re.match(r"SEARCH s USING INDEX \w+ \(project_id=\? AND agent_id=\?", p) for p in plans
+    )
+    assert not any(re.match(r"SCAN s\b", plan) for plan in plans)

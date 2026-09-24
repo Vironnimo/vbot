@@ -186,7 +186,7 @@ def test_fork_copies_history_but_not_activity_or_continuation(manager) -> None:
 
     assert forked.load() == source.load()
     assert forked.load_continuation() is None
-    assert manager.list_completion_activity("reviewer")[0]["has_unread_completion"] is False
+    assert manager.list_completion_activity([(None, "reviewer")]) == {(None, "reviewer"): []}
     metadata = manager.get_metadata(forked.address)
     assert metadata[FORK_SOURCE_META_KEY]["session_id"] == "source"
     assert metadata[PROMPT_CACHE_AFFINITY_META_KEY] != manager.prompt_cache_affinity_id(

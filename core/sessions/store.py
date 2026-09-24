@@ -881,9 +881,15 @@ class SessionStore:
                 required_address=required_address,
             )
 
-    def list_activity_rows(self, project_id: str | None, agent_id: str) -> list[sqlite3.Row]:
+    def summary_row(self, address: SessionAddress) -> sqlite3.Row | None:
         with self._runtime.read_ctx() as connection:
-            return _store_queries.list_activity_rows(connection, project_id, agent_id)
+            return _store_queries.summary_row(connection, address)
+
+    def list_completion_activity_rows(
+        self, scopes: Sequence[tuple[str | None, str]]
+    ) -> list[sqlite3.Row]:
+        with self._runtime.read_ctx() as connection:
+            return _store_queries.list_completion_activity_rows(connection, scopes)
 
     def session_ids_with_messages(
         self,
