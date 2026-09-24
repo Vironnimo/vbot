@@ -10,7 +10,11 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
-from core.projects import AgentResolutionError
+from core.projects import (
+    AgentResolutionError,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
+)
 from core.subagents.subagents import _handle_subagent as _handle_subagent_impl
 from core.subagents.tracker import SubAgentBatchTracker
 from tests.core.subagents.subagents_test_support import (
@@ -409,26 +413,69 @@ async def test_subagent_unresolvable_target_returns_failure_envelope(tmp_path: P
     assert manager.started == []
 
 
-async def test_resolver_failure_maps_to_tool_failure_not_raised() -> None:
-    # Guard the contract directly: a resolver raise becomes a failure envelope.
+class _RaisingResolver:
+    def __init__(self, error: AgentResolutionError) -> None:
+        self.error = error
+
+    def resolve_agent(
+        self,
+        _project_id: str | None,
+        _agent_id: str,
+        *,
+        run_overrides: Any | None = None,
+    ) -> Any:
+        del run_overrides
+        raise self.error
+
+
+@pytest.mark.parametrize(
+    ("resolver_error", "expected_code"),
+    [
+        (
+            ResolutionAgentNotFoundError("agent 'ghost' is not on project 'acme' team"),
+            "agent_not_found",
+        ),
+        (ResolutionProjectNotFoundError("Project not found: acme"), "project_not_found"),
+    ],
+)
+async def test_missing_target_maps_to_its_not_found_code(
+    resolver_error: AgentResolutionError, expected_code: str
+) -> None:
+    # Guard the contract directly: a resolver raise becomes a failure envelope, and
+    # only a missing Agent or Project reports a not-found code.
     from core.subagents.subagents import _validate_target_agent
 
-    class _RaisingResolver:
-        def resolve_agent(
-            self,
-            _project_id: str | None,
-            _agent_id: str,
-            *,
-            run_overrides: Any | None = None,
-        ) -> Any:
-            del run_overrides
-            raise AgentResolutionError("off team")
-
-    runtime = SimpleNamespace(agent_resolver=_RaisingResolver())
+    runtime = SimpleNamespace(agent_resolver=_RaisingResolver(resolver_error))
     failure = _validate_target_agent(runtime, "ghost", "acme")
 
     assert failure is not None
-    assert failure["error"]["code"] == "agent_not_found"
+    assert failure["error"]["code"] == expected_code
+
+
+async def test_target_that_cannot_run_reports_agent_unavailable(tmp_path: Path) -> None:
+    # An existing target without a usable Model is not "not found": the failure
+    # names the target and keeps the resolver's reason, before any Session work.
+    reason = "agent 'stranded' has no usable model"
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    runtime.agent_resolver = _RaisingResolver(AgentResolutionError(reason))
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(project_id="acme")
+
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn", "agent_id": "stranded"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "agent_unavailable"
+    assert result["error"]["retryable"] is False
+    assert reason in result["error"]["message"]
+    assert "stranded@acme" in result["error"]["message"]
+    assert manager.started == []
+    assert runtime.chat_sessions.list("stranded", project_id="acme") == []
 
 
 async def test_subagent_blank_session_id_is_rejected(tmp_path: Path) -> None:

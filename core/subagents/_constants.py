@@ -39,6 +39,12 @@ SUBAGENT_QUEUED_TIMEOUT_MESSAGE_TEMPLATE = (
     "Queue; it was removed before it started and did not run."
 )
 SUBAGENT_START_FAILED_MESSAGE_TEMPLATE = "The queued Sub-Agent work could not start: {error}"
+# ``target`` is the address the Tool accepts; ``reason`` is the resolver's explanation.
+SUBAGENT_TARGET_UNAVAILABLE_MESSAGE_TEMPLATE = (
+    "Agent {target} cannot run: {reason}. Repeating this call fails the same way until "
+    "that is fixed. Delegate to another Agent you are allowed to use instead, or tell "
+    "the user that {target} cannot run and why."
+)
 # ``agent_id`` is the address the Tool accepts: ``agent@project`` for a Project Agent.
 SUBAGENT_CONTINUATION_CALL_TEMPLATE = (
     "call subagent with agent_id `{agent_id}`, session_id `{session_id}` and a "
