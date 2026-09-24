@@ -432,14 +432,14 @@ def test_completion_activity_reads_all_scopes_in_one_snapshot(manager, monkeypat
         manager.create(agent_id, session_id="done")
         manager.record_terminal_run(address, f"run-{agent_id}", "completed", "2026-08-29T12:00:00Z")
     snapshots = 0
-    read_ctx = manager._store._runtime.read_ctx
+    read = manager._store.database.read
 
     def counting_read_ctx(*args, **kwargs):
         nonlocal snapshots
         snapshots += 1
-        return read_ctx(*args, **kwargs)
+        return read(*args, **kwargs)
 
-    monkeypatch.setattr(manager._store._runtime, "read_ctx", counting_read_ctx)
+    monkeypatch.setattr(manager._store.database, "read", counting_read_ctx)
 
     activity = manager.list_completion_activity(scopes)
 

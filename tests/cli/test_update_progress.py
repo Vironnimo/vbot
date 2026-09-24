@@ -43,7 +43,7 @@ def test_update_restart_state_and_progress(tmp_path, monkeypatch, mode):
         _instance(),
         root=tmp_path,
         runner=runner,
-        session_snapshot_fn=snapshot,
+        data_snapshot_fn=snapshot,
         platform_name="posix",
         progress=emit,
         restart=mode != "skipped",
@@ -115,7 +115,7 @@ def test_snapshot_failure_is_reported_before_any_checkout_mutation(tmp_path):
         root=tmp_path,
         runner=runner,
         platform_name="posix",
-        session_snapshot_fn=lambda instance: _Step(False, "test-owned snapshot failure"),
+        data_snapshot_fn=lambda instance: _Step(False, "test-owned snapshot failure"),
         progress=lambda status, message: progress.append((status, message)),
     )
     assert not result.ok

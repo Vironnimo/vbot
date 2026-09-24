@@ -15,11 +15,11 @@ from core.chat import (
     ChatSessionManager,
 )
 from core.chat.continuation import CONTINUATION_RECORD_VERSION
+from core.database import write_bootstrap_marker
 from core.runs import (
     ChatRunManager,
 )
 from core.sessions import ChatSession
-from core.sessions.format import write_bootstrap_marker
 from core.settings.normalizers import normalize_compaction_settings
 from core.tools.tools import tool_success
 from server.rpc import chat_methods

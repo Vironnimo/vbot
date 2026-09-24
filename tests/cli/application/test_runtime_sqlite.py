@@ -15,7 +15,7 @@ from cli.application.runtime_sqlite import (
     RuntimeSQLiteError,
     provision_runtime_sqlite,
 )
-from core.sessions.schema import is_wal_reset_vulnerable
+from core.database import is_wal_reset_vulnerable
 
 _REPO_ROOT = Path(__file__).parents[3]
 _LIBRARY = b"pinned sqlite library"

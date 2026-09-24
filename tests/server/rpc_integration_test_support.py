@@ -10,12 +10,12 @@ from pathlib import Path
 from typing import Any, cast
 
 from core.chat import ChatSessionManager, CommandDispatcher
+from core.database import write_bootstrap_marker
 from core.models import Capabilities, Model, ReasoningCapabilities
 from core.models.query import ModelQuery
 from core.projects.resolver import ResolutionAgentNotFoundError
 from core.providers.accounts import ConnectionRef, ProviderAccount
 from core.runs import ChatRunManager
-from core.sessions.format import write_bootstrap_marker
 from core.settings.normalizers import normalize_compaction_settings
 from core.skills.skills import SkillRegistry
 from core.tools import FileReadState, ToolRegistry
@@ -424,7 +424,7 @@ class IntegrationRuntime:
         )
         self.agent_resolver = IntegrationAgentResolver(self.agents)
         self.projects = IntegrationProjects()
-        marker = tmp_path / "session-store.json"
+        marker = tmp_path / "data-store.json"
         if not marker.exists():
             write_bootstrap_marker(tmp_path)
         self.chat_sessions = ChatSessionManager(tmp_path)

@@ -14,6 +14,7 @@ from core.chat import (
     ChatMessage,
     ChatSessionManager,
 )
+from core.database import write_bootstrap_marker
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.projects import AgentResolutionError, ConfigAgent
 from core.providers.accounts import ConnectionRef
@@ -21,7 +22,6 @@ from core.runs import (
     ChatRunManager,
 )
 from core.sessions import SessionAddress
-from core.sessions.format import write_bootstrap_marker
 from core.tools import (
     ToolRegistry,
 )
@@ -514,7 +514,7 @@ class StubRuntime:
         projects: Any | None = None,
         available_task_models: set[str] | None = None,
     ) -> None:
-        if not (data_dir / "session-store.json").exists():
+        if not (data_dir / "data-store.json").exists():
             write_bootstrap_marker(data_dir)
         self.agents = StubAgents(agent)
         self.agent_resolver = StubAgentResolver(self.agents, project_agents, unresolvable_agents)

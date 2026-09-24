@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 
+from ._store_database import ALIASED_POST_COLUMNS, DISCUSSION_COLUMNS, PARTICIPANT_COLUMNS
 from ._store_values import (
     _MUTABLE_SWARM_STATES,
     Json,
@@ -79,7 +80,7 @@ def _pending_rows(
     # Keep ordered reads on outstanding deliveries; scanning posts in sequence
     # can otherwise revisit the entire delivered history before reaching LIMIT.
     candidates = connection.execute(
-        "SELECT p.*,r.route_class,d.title AS discussion_title "
+        f"SELECT {ALIASED_POST_COLUMNS},r.route_class,d.title AS discussion_title "
         "FROM recipients r INDEXED BY recipients_pending_participant JOIN posts p ON p.id=r.post_id "
         "JOIN discussions d ON d.id=p.discussion_id "
         "WHERE p.swarm_id=? AND r.participant_id=? AND r.delivered_at IS NULL ORDER BY p.sequence LIMIT ?",
@@ -127,7 +128,8 @@ def _human_posts(connection: sqlite3.Connection, rows: list[sqlite3.Row]) -> lis
 
 def _participant(connection: sqlite3.Connection, swarm_id: str, participant_id: str) -> sqlite3.Row:
     row = connection.execute(
-        "SELECT * FROM participants WHERE swarm_id=? AND id=?", (swarm_id, participant_id)
+        f"SELECT {PARTICIPANT_COLUMNS} FROM participants WHERE swarm_id=? AND id=?",
+        (swarm_id, participant_id),
     ).fetchone()
     if row is None:
         raise SwarmStoreError("participant_not_found")
@@ -166,7 +168,8 @@ def _assert_epoch(connection: sqlite3.Connection, swarm_id: str, expected_epoch:
 
 def _discussion(connection: sqlite3.Connection, swarm_id: str, discussion_id: str) -> sqlite3.Row:
     row = connection.execute(
-        "SELECT * FROM discussions WHERE swarm_id=? AND id=?", (swarm_id, discussion_id)
+        f"SELECT {DISCUSSION_COLUMNS} FROM discussions WHERE swarm_id=? AND id=?",
+        (swarm_id, discussion_id),
     ).fetchone()
     if row is None:
         raise SwarmStoreError("discussion_not_found")

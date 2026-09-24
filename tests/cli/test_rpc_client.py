@@ -72,7 +72,7 @@ def test_rpc_call_uses_ipv6_safe_url(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 @pytest.mark.parametrize(
     "method",
-    ["model.refresh_db", "session_store.snapshot_create"],
+    ["model.refresh_db", "data_store.snapshot_create"],
 )
 def test_rpc_call_uses_unbounded_read_timeout_for_long_running_method(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str

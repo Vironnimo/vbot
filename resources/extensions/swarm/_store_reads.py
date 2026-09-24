@@ -8,6 +8,9 @@ from __future__ import annotations
 import sqlite3
 
 from ._store_database import (
+    ALIASED_DISCUSSION_COLUMNS,
+    ALIASED_POST_COLUMNS,
+    POST_COLUMNS,
     SwarmDatabase,
 )
 from ._store_records import (
@@ -44,7 +47,7 @@ def _list_discussions(
     else:
         offset = 0
     rows = connection.execute(
-        "SELECT d.*, EXISTS(SELECT 1 FROM memberships m WHERE m.discussion_id=d.id AND m.participant_id=?) AS joined, (SELECT COUNT(*) FROM memberships m WHERE m.discussion_id=d.id) AS member_count, "
+        f"SELECT {ALIASED_DISCUSSION_COLUMNS}, EXISTS(SELECT 1 FROM memberships m WHERE m.discussion_id=d.id AND m.participant_id=?) AS joined, (SELECT COUNT(*) FROM memberships m WHERE m.discussion_id=d.id) AS member_count, "
         "(SELECT COUNT(*) FROM recipients r JOIN posts p ON p.id=r.post_id WHERE p.discussion_id=d.id AND r.participant_id=? AND r.delivered_at IS NULL) AS pending_count "
         "FROM discussions d WHERE d.swarm_id=? AND d.sequence<=? ORDER BY d.is_main DESC,d.sequence LIMIT ? OFFSET ?",
         (participant_id, participant_id, swarm_id, high_water, limit + 1, offset),
@@ -82,7 +85,7 @@ def _list_human_discussions(
     else:
         offset = 0
     rows = connection.execute(
-        "SELECT d.*, (SELECT COUNT(*) FROM memberships m WHERE m.discussion_id=d.id) AS member_count "
+        f"SELECT {ALIASED_DISCUSSION_COLUMNS}, (SELECT COUNT(*) FROM memberships m WHERE m.discussion_id=d.id) AS member_count "
         "FROM discussions d WHERE d.swarm_id=? AND d.sequence<=? "
         "ORDER BY d.is_main DESC,d.sequence LIMIT ? OFFSET ?",
         (swarm_id, high_water, limit + 1, offset),
@@ -114,7 +117,7 @@ def _read_posts(
     _participant(connection, swarm_id, participant_id)
     if message_id is not None:
         row = connection.execute(
-            "SELECT p.*,d.title AS discussion_title,r.route_class FROM posts p "
+            f"SELECT {ALIASED_POST_COLUMNS},d.title AS discussion_title,r.route_class FROM posts p "
             "JOIN discussions d ON d.id=p.discussion_id "
             "LEFT JOIN recipients r ON r.post_id=p.id AND r.participant_id=? "
             "WHERE p.id=? AND p.swarm_id=?",
@@ -141,7 +144,7 @@ def _read_human_posts(
         raise SwarmStoreError("swarm_not_found")
     if message_id is not None:
         row = connection.execute(
-            "SELECT * FROM posts WHERE id=? AND swarm_id=?", (message_id, swarm_id)
+            f"SELECT {POST_COLUMNS} FROM posts WHERE id=? AND swarm_id=?", (message_id, swarm_id)
         ).fetchone()
         if row is None:
             raise SwarmStoreError("message_not_found")
@@ -175,7 +178,7 @@ def _post_page(
         ).fetchone()[0]
     )["batch_chars"]
     rows = connection.execute(
-        "SELECT p.*,d.title AS discussion_title,r.route_class FROM posts p "
+        f"SELECT {ALIASED_POST_COLUMNS},d.title AS discussion_title,r.route_class FROM posts p "
         "JOIN discussions d ON d.id=p.discussion_id "
         "LEFT JOIN recipients r ON r.post_id=p.id AND r.participant_id=? "
         "WHERE p.swarm_id=? AND p.discussion_id=? AND p.sequence>0 AND p.sequence<=? "
@@ -215,7 +218,7 @@ def _human_post_page(
         ).fetchone()[0]
     )["batch_chars"]
     rows = connection.execute(
-        "SELECT * FROM posts WHERE swarm_id=? AND discussion_id=? AND sequence>0 AND sequence<=? "
+        f"SELECT {POST_COLUMNS} FROM posts WHERE swarm_id=? AND discussion_id=? AND sequence>0 AND sequence<=? "
         "ORDER BY sequence DESC LIMIT ? OFFSET ?",
         (swarm_id, discussion_id, high_water, limit + 1, offset),
     ).fetchall()

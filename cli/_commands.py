@@ -11,9 +11,9 @@ from cli._dispatch_agents import (
     _project_add_fields_from_args,
     _project_set_changes_from_args,
     dispatch_agent_command,
+    dispatch_data_store_command,
     dispatch_project_command,
     dispatch_session_command,
-    dispatch_session_store_command,
 )
 from cli._dispatch_connections import (
     _channel_changes_from_args,
@@ -336,8 +336,8 @@ def run(
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
-    if args.area == "session-store":
-        result = dispatch_session_store_command(args, instance)
+    if args.area == "data-store":
+        result = dispatch_data_store_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 

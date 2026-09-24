@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
+from core.database import data_store_status
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.schema import (
     FTS_COMPLETED_HIGH_WATER_KEY,
@@ -103,7 +104,9 @@ def test_empty_internal_fts_index_never_reports_healthy_or_hides_matches(tmp_pat
 
         health = sessions.fts_health()
         assert health.state == "degraded"
-        assert sessions.status_projection()["state"] == "search_degraded"
+        status = data_store_status(tmp_path, databases=(sessions.database,))
+        assert status["state"] == "degraded"
+        assert status["databases"]["sessions"]["details"]["fts"]["state"] == "degraded"
         hits = sessions.search_messages(
             "needle", project_id=None, agent_id=address.agent_id, session_id=address.session_id
         ).hits

@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 import sqlite_vec  # type: ignore[import-untyped]
 
+from core.database import JOURNAL_MODE_DELETE
 from core.recall.passages import Passage
 from core.recall.vector_store import (
     RefreshPlan,
@@ -20,7 +21,6 @@ from core.recall.vector_store import (
     VectorStore,
     VectorStoreError,
 )
-from core.sessions.schema import JOURNAL_MODE_DELETE
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 

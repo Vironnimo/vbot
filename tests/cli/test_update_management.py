@@ -23,8 +23,8 @@ from cli.update_management import (
     run_update,
 )
 from core.chat import ChatMessage, ChatSessionManager
-from core.sessions.errors import SessionStoreSchemaMismatchError
-from core.sessions.format import write_bootstrap_marker
+from core.database import MarkerEntry, write_bootstrap_marker
+from core.database.marker import register_database
 from tests.cli.update_management_test_support import (
     ScriptedRunner,
     _err,
@@ -46,7 +46,22 @@ def test_update_refuses_non_git_checkout(tmp_path: Path) -> None:
     assert events == []
 
 
-def test_update_snapshot_preflight_captures_current_format_store_when_server_is_down(
+def _stopped_instance(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> ServerInstance:
+    monkeypatch.setattr(
+        update_management,
+        "probe_health",
+        lambda _instance: HealthProbeResult(reachable=False, is_vbot=False),
+    )
+    return ServerInstance(
+        host="127.0.0.1",
+        port=8420,
+        data_dir=data_dir,
+        url="http://127.0.0.1:8420",
+        log_path=data_dir / "server.log",
+    )
+
+
+def test_update_snapshot_preflight_captures_current_format_data_when_server_is_down(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     write_bootstrap_marker(tmp_path)
@@ -55,30 +70,58 @@ def test_update_snapshot_preflight_captures_current_format_store_when_server_is_
     manager.close()
 
     # An updater still runs the previous release after an offline conversion.
-    # Its Runtime must not inspect/reconcile the converted database to back it up.
-    def incompatible_runtime(*_args, **_kwargs):
-        raise SessionStoreSchemaMismatchError("The loaded Runtime uses a different shape")
+    # It must copy the databases without opening them through its own owners.
+    def refuse_open(*_args, **_kwargs):
+        raise AssertionError("the updater must not open a database to back it up")
 
-    monkeypatch.setattr(
-        "core.sessions.store.SessionStore._reconcile_open_database", incompatible_runtime
-    )
-    instance = ServerInstance(
-        host="127.0.0.1",
-        port=8420,
-        data_dir=tmp_path,
-        url="http://127.0.0.1:8420",
-        log_path=tmp_path / "server.log",
-    )
-    monkeypatch.setattr(
-        update_management,
-        "probe_health",
-        lambda _instance: HealthProbeResult(reachable=False, is_vbot=False),
-    )
+    monkeypatch.setattr("core.database.database.open_database", refuse_open)
+    monkeypatch.setattr("core.database.database.open_offline_database", refuse_open)
+    instance = _stopped_instance(tmp_path, monkeypatch)
 
-    result = update_management._ensure_update_session_snapshot(instance)
+    result = update_management._ensure_update_data_snapshot(instance)
 
     assert result.ok is True
-    assert "pre-update Session snapshot:" in result.message
+    assert "pre-update data snapshot:" in result.message
+
+
+def test_update_snapshot_preflight_skips_a_bootstrap_data_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_bootstrap_marker(tmp_path)
+
+    result = update_management._ensure_update_data_snapshot(
+        _stopped_instance(tmp_path, monkeypatch)
+    )
+
+    assert result.ok is True
+    assert result.message == ""
+
+
+def test_update_snapshot_preflight_refuses_databases_without_a_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "sessions.db").write_bytes(b"")
+
+    result = update_management._ensure_update_data_snapshot(
+        _stopped_instance(tmp_path, monkeypatch)
+    )
+
+    assert result.ok is False
+    assert "without a current-format data-store marker" in result.message
+
+
+def test_update_snapshot_preflight_refuses_a_missing_registered_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_bootstrap_marker(tmp_path)
+    register_database(tmp_path, "sessions", MarkerEntry(database_id="a" * 32, format_generation=1))
+
+    result = update_management._ensure_update_data_snapshot(
+        _stopped_instance(tmp_path, monkeypatch)
+    )
+
+    assert result.ok is False
+    assert "registers missing databases: sessions" in result.message
 
 
 def test_update_refuses_dirty_without_flags(tmp_path: Path) -> None:
