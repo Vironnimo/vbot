@@ -319,6 +319,46 @@ describe('chat state helpers', () => {
     ]);
   });
 
+  it('appends each stable Run event once against the currently retained events', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    const event = (runId, sequence, type = 'tool_call_started') => ({
+      type,
+      run_id: runId,
+      sequence,
+      payload: {},
+    });
+
+    appendRunEvent(sessionState, event('run-a', 1, 'run_started'));
+    appendRunEvent(sessionState, event('run-a', 2));
+    appendRunEvent(sessionState, event('run-a', 2));
+    appendRunEvent(sessionState, event('run-b', 2));
+    expect(
+      sessionState.runEvents.map(({ run_id, sequence }) => [run_id, sequence]),
+    ).toEqual([
+      ['run-a', 1],
+      ['run-a', 2],
+      ['run-b', 2],
+    ]);
+
+    // Another owner (History reconciliation, edits) replaces the retained
+    // events; deduplication follows the replacement, not the old contents.
+    sessionState.runEvents = sessionState.runEvents.filter(
+      (runEvent) => runEvent.run_id === 'run-b',
+    );
+    appendRunEvent(sessionState, event('run-a', 2));
+    appendRunEvent(sessionState, event('run-b', 2));
+    expect(
+      sessionState.runEvents.map(({ run_id, sequence }) => [run_id, sequence]),
+    ).toEqual([
+      ['run-b', 2],
+      ['run-a', 2],
+    ]);
+  });
+
   it('marks a session running when a run_started event arrives from server push', () => {
     const sessionState = ensureSessionState(
       createChatState(),
