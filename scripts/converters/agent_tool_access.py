@@ -99,7 +99,7 @@ def convert_agent_tool_access(
             already_converted += 1
             continue
 
-        policy = _convert_legacy_policy(
+        policy = convert_legacy_allowed_tools(
             payload.get("allowed_tools"),
             agent_path,
             retired_tools=retired_tools,
@@ -146,12 +146,16 @@ def _load_agent(path: Path) -> JsonObject:
     return payload
 
 
-def _convert_legacy_policy(
+def convert_legacy_allowed_tools(
     value: Any,
     path: Path,
     *,
     retired_tools: frozenset[str] = frozenset(),
 ) -> ToolAccess:
+    """Return the ``tool_access`` policy equivalent to a legacy ``allowed_tools`` value.
+
+    ``path`` only names the Agent file in errors.
+    """
     if value is None:
         return normalize_tool_access({"mode": "all"})
     if not isinstance(value, list) or not all(
