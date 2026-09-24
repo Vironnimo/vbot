@@ -138,6 +138,7 @@ def statistics_service(state: Any) -> StatisticsService:
         state.runtime.projects,
         _RuntimeSkillInventory(state.runtime),
         pricing_lookup=state.runtime.models.pricing_for,
+        index=state.runtime.statistics_index,
     )
     state.statistics_service = service
     return service

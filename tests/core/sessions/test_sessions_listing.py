@@ -79,6 +79,63 @@ def test_append_returns_every_record_since_the_cursor_and_commits_its_journal(ma
     assert session.load_continuation() is not None
 
 
+def test_an_append_commits_its_metadata_mutation_in_the_same_transaction(manager) -> None:
+    session = manager.create("coder", session_id="session-one")
+
+    session.append_many(
+        [ChatMessage.user("first")],
+        metadata_mutation=lambda metadata: metadata.__setitem__("marker", "kept"),
+    )
+    with pytest.raises(RuntimeError, match="mutation failed"):
+
+        def failing(_metadata: dict) -> None:
+            raise RuntimeError("mutation failed")
+
+        session.append_many([ChatMessage.user("lost")], metadata_mutation=failing)
+
+    assert [message.content for message in session.load()] == ["first"]
+    assert manager.get_metadata(session.address)["marker"] == "kept"
+
+
+def test_compaction_checkpoint_commits_only_while_its_cursor_is_current(manager) -> None:
+    session = manager.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("first"))
+    snapshot = session.load_since()
+    assert snapshot is not None
+    affinity = manager.prompt_cache_affinity_id(session.address)
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Summary.", projection=[], compacted_token_count=1
+    )
+    manager.get(session.address).append(ChatMessage.note("written by another accessor"))
+
+    stale = session.commit_compaction_checkpoint(
+        checkpoint,
+        since=snapshot.cursor,
+        metadata_mutation=lambda metadata: metadata.__setitem__("pins", "new"),
+    )
+
+    assert stale is None
+    assert [message.role for message in session.load()] == ["user", "note"]
+    assert "pins" not in manager.get_metadata(session.address)
+    assert manager.prompt_cache_affinity_id(session.address) == affinity
+
+    current = session.load_since()
+    assert current is not None
+    committed = session.commit_compaction_checkpoint(
+        checkpoint,
+        since=current.cursor,
+        metadata_mutation=lambda metadata: metadata.__setitem__("pins", "new"),
+    )
+
+    assert committed is not None
+    delta, rotated = committed
+    assert [message.id for message in delta.messages] == [checkpoint.id]
+    latest = session.load_since()
+    assert latest is not None and delta.cursor == latest.cursor
+    assert manager.get_metadata(session.address)["pins"] == "new"
+    assert manager.prompt_cache_affinity_id(session.address) == rotated != affinity
+
+
 def test_a_rejected_journal_record_rolls_back_its_history_append(manager) -> None:
     session = manager.create("coder", session_id="session-one")
     session.append(ChatMessage.user("first"))

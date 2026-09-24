@@ -56,7 +56,7 @@ class _QueueOnBusyLoop:
             future.set_result(self._run_started_during_enqueue)
         return SimpleNamespace(future=future, to_dict=lambda: {"id": "q-1"})
 
-    def build_queue_update(
+    async def build_queue_update(
         self, agent_id: str, session_id: str, content: Any, queued_item: Any, **kwargs: Any
     ) -> tuple[str, object, str]:
         self.build_calls.append(

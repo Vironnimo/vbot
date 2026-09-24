@@ -11,11 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from core.chat.errors import ChatSessionError
 from core.sessions import _store_codec, _store_values
-from core.sessions._types import (
-    PROMPT_CACHE_AFFINITY_META_KEY,
-    JsonObject,
-    SessionHistoryRevision,
-)
+from core.sessions._types import JsonObject, SessionHistoryRevision
 from core.sessions.errors import SessionNotFoundError
 
 if TYPE_CHECKING:
@@ -151,16 +147,26 @@ def list_state_rows(
     return cast(list[sqlite3.Row], rows)
 
 
-def prompt_cache_affinity_value(connection: sqlite3.Connection, address: SessionAddress) -> Any:
-    """Read the live Session's stored affinity value without decoding its metadata."""
+def metadata_value(connection: sqlite3.Connection, address: SessionAddress, key: str) -> Any:
+    """Read one live Session metadata value without decoding the complete metadata.
+
+    A projected key reads its dedicated column; any other key (or a projected key
+    whose value did not fit its column) reads only its member of the open-ended
+    metadata JSON. A missing key reads as ``None``.
+    """
+    if not key.isidentifier():
+        raise ValueError(f"unsupported Session metadata key: {key!r}")
+    column = _store_values._PROJECTED_METADATA_COLUMNS.get(key, "NULL")
     row = connection.execute(
-        "SELECT json_extract(metadata_json, ?) FROM sessions "
+        f"SELECT {column}, json_quote(json_extract(metadata_json, ?)) FROM sessions "
         "WHERE project_id = ? AND agent_id = ? AND session_id = ? AND status = 'live'",
-        (f"$.{PROMPT_CACHE_AFFINITY_META_KEY}", *_store_values._scope(address)),
+        (f"$.{key}", *_store_values._scope(address)),
     ).fetchone()
     if row is None:
         raise SessionNotFoundError(f"session does not exist: {address.session_id}")
-    return row[0]
+    if row[0] is not None:
+        return _store_values._projected_metadata_value(key, row[0])
+    return json.loads(row[1])
 
 
 def list_summary_rows_for_scope(
