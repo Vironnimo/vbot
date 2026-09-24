@@ -302,12 +302,23 @@ async def lifecycle(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
     temporary = TemporaryAgentRegistry(runtime.chat_sessions)
     runtime.agent_resolver.temporary_agents = temporary
     identity = extensions.registration_identity("swarm")
+    titled: list[tuple[str, str]] = []
+
+    async def title(group_id: str, source_text: str) -> str:
+        # Stands in for the shared title generator without a Model request.
+        titled.append((group_id, source_text))
+        await runtime.chat_sessions.set_temporary_group_title_async(
+            owner_name="swarm", group_id=group_id, title="Generated Run title"
+        )
+        return "Generated Run title"
+
     groups = TemporaryExecutionGroups(
         temporary,
         build_chat_loop(runtime),
         extensions.is_registration_current,
         identity,
         run_manager=runtime.chat_run_manager,
+        title=title,
     )
 
     async def catalog() -> dict[str, Any]:
@@ -328,7 +339,9 @@ async def lifecycle(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
     await api.operations.startup[0](host)
     service = cast(Any, declarations.tools[0].handler).__self__
     try:
-        yield SimpleNamespace(service=service, runtime=runtime, groups=groups, tools=tools)
+        yield SimpleNamespace(
+            service=service, runtime=runtime, groups=groups, tools=tools, titled=titled
+        )
     finally:
         await service.close()
         await runtime.chat_run_manager.aclose()
@@ -819,6 +832,34 @@ async def test_replaying_start_preserves_the_active_run(lifecycle, tmp_path, con
     assert replay == {**first, "replayed": True}
     assert run.status.value == "running"
     assert len(adapter.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_started_run_is_titled_in_the_background_and_listed_by_title(lifecycle, tmp_path):
+    adapter = PausedSwarmAdapter(pause_at=1)
+    lifecycle.runtime.adapter = adapter
+    changes = []
+    # Each change records how many titles existed when the page was told to refresh.
+    lifecycle.service.host = replace(
+        lifecycle.service.host,
+        publish_change=lambda *args: changes.append((args[0:2], len(lifecycle.titled))),
+    )
+    profile = await single_participant_profile(lifecycle, tmp_path)
+
+    started = await lifecycle.service.operation(
+        "swarms.start",
+        {"profile_id": profile["id"], "prompt": "Review the parser", "request_id": "titled"},
+    )
+    swarm_id = started["swarm_id"]
+    async with asyncio.timeout(5):
+        while not lifecycle.titled or lifecycle.service._title_tasks:  # noqa: SLF001
+            await asyncio.sleep(0.01)
+    listed = await lifecycle.service.operation("swarms.list", {})
+
+    assert lifecycle.titled == [(swarm_id, "Review the parser")]
+    assert [entry["title"] for entry in listed["entries"]] == ["Generated Run title"]
+    assert (("swarms", [swarm_id]), 1) in changes
+    adapter.release.set()
 
 
 @pytest.mark.asyncio
