@@ -1,6 +1,7 @@
 <script>
   import Button from './ui/Button.svelte';
   import Banner from './ui/Banner.svelte';
+  import { tick } from 'svelte';
   import { floatingHoverCard } from '$lib/tooltip.js';
   import { t } from '$lib/i18n.js';
 
@@ -25,22 +26,55 @@
 
   let editingId = $state('');
   let editedContent = $state('');
+  let editOriginal = '';
   let editError = $state('');
+  let editNotice = $state('');
   let editSaving = $state(false);
+  let editorElement = $state(null);
+
+  // Edits save only through an explicit Save, so opening another item must not
+  // silently drop a modified draft: the open editor keeps focus until it is
+  // saved or cancelled. An unmodified editor simply moves to the new item.
+  const hasUnsavedDraft = () =>
+    editingId !== '' &&
+    editedContent !== editOriginal &&
+    queuedMessages.some((message) => message.id === editingId);
+
+  const focusEditor = async () => {
+    await tick();
+    editorElement?.focus();
+  };
 
   const beginEdit = (message) => {
     if (editSaving || message?.editable !== true) {
       return;
     }
+    if (message.id === editingId) {
+      focusEditor();
+      return;
+    }
+    if (hasUnsavedDraft()) {
+      editNotice = t(
+        'queue.editPending',
+        'Save or cancel this edit before editing another message.',
+      );
+      focusEditor();
+      return;
+    }
     editingId = message.id;
     editedContent = message.content ?? '';
+    editOriginal = editedContent;
     editError = '';
+    editNotice = '';
+    focusEditor();
   };
 
   const cancelEdit = () => {
     editingId = '';
     editedContent = '';
+    editOriginal = '';
     editError = '';
+    editNotice = '';
     editSaving = false;
   };
 
@@ -97,6 +131,7 @@
             <textarea
               aria-label={t('queue.editMessage', 'Edit queued message')}
               class="queued-messages__editor"
+              bind:this={editorElement}
               value={editedContent}
               oninput={(event) => {
                 editedContent = event.currentTarget.value;
@@ -131,6 +166,8 @@
             </div>
             {#if editError}
               <p class="queued-messages__error">{editError}</p>
+            {:else if editNotice}
+              <p class="queued-messages__notice" role="status">{editNotice}</p>
             {/if}
           {:else}
             <div class="queued-messages__preview">
@@ -293,9 +330,15 @@
     outline: none;
     box-shadow: var(--field-focus-ring);
   }
-  .queued-messages__error {
+  .queued-messages__error,
+  .queued-messages__notice {
     margin: 0;
-    color: var(--red);
     font-size: var(--fs-label-sm);
+  }
+  .queued-messages__error {
+    color: var(--red);
+  }
+  .queued-messages__notice {
+    color: var(--text-med);
   }
 </style>
