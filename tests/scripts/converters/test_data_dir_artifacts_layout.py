@@ -76,7 +76,7 @@ def test_apply_moves_complete_tree_and_preserves_independent_roots(tmp_path: Pat
     assert (data_dir / "settings.json").read_bytes() == b'{"preserve":true}'
     for mapping in LEGACY_DIRECTORY_MAPPINGS:
         source_root = data_dir / mapping.source_relative
-        destination_root = getattr(layout, mapping.destination_attribute)
+        destination_root = mapping.destination_root(layout)
         original = (
             source_root / "nested" / (f"payload-{LEGACY_DIRECTORY_MAPPINGS.index(mapping)}.bin")
         )

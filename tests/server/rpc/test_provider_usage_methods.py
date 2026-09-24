@@ -12,12 +12,16 @@ A fake transport keeps every test off the live network.
 
 from __future__ import annotations
 
+import threading
+from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import pytest_asyncio
 
+from core.database import write_bootstrap_marker
 from core.providers.accounts import ConnectionRef
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.usage import ProviderUsageService
@@ -171,14 +175,19 @@ def _openai_state() -> SimpleNamespace:
     return SimpleNamespace(runtime=runtime, usage_service=service)
 
 
-def _openai_history_state(tmp_path: Path) -> SimpleNamespace:
+@pytest_asyncio.fixture
+async def history_state(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
+    write_bootstrap_marker(tmp_path)
     state = _openai_state()
     state.usage_service = ProviderUsageService(
         state.runtime,
         transport=_FakeTransport(_OPENAI_BODY),
         data_root=tmp_path,
     )
-    return state
+    try:
+        yield state
+    finally:
+        await state.usage_service.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -249,28 +258,77 @@ async def test_provider_usage_uses_runtime_owned_service() -> None:
 
 
 @pytest.mark.asyncio
-async def test_provider_usage_history_returns_only_automatic_samples(tmp_path: Path) -> None:
-    state = _openai_history_state(tmp_path)
-    await state.usage_service.collect_history_sample()
+async def test_provider_usage_history_returns_only_automatic_samples(
+    history_state: SimpleNamespace,
+) -> None:
+    await _provider_usage(history_state, {})
+    await history_state.usage_service.collect_history_sample()
 
-    result = _provider_usage_history(
-        state,
+    result = await _provider_usage_history(
+        history_state,
         {"since": "2020-01-01T00:00:00Z", "until": "2099-01-01T00:00:00Z"},
     )
 
+    assert set(result) == {"generated_at", "samples"}
     assert len(result["samples"]) == 1
+    assert set(result["samples"][0]) == {"sampled_at", "providers"}
     assert result["samples"][0]["providers"][0]["account"] == "default"
 
 
 @pytest.mark.asyncio
-async def test_provider_usage_history_clear_is_explicit(tmp_path: Path) -> None:
-    state = _openai_history_state(tmp_path)
-    await state.usage_service.collect_history_sample()
+async def test_provider_usage_history_window_excludes_samples_outside_it(
+    history_state: SimpleNamespace,
+) -> None:
+    await history_state.usage_service.collect_history_sample()
 
-    result = _provider_usage_history_clear(state, {})
+    result = await _provider_usage_history(history_state, {"until": "2020-01-01T00:00:00Z"})
+
+    assert result["samples"] == []
+
+
+@pytest.mark.asyncio
+async def test_provider_usage_history_rejects_an_inverted_window(
+    history_state: SimpleNamespace,
+) -> None:
+    with pytest.raises(RpcError) as exc_info:
+        await _provider_usage_history(
+            history_state,
+            {"since": "2026-08-02T00:00:00Z", "until": "2026-08-01T00:00:00Z"},
+        )
+
+    assert exc_info.value.code == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_provider_usage_history_clear_is_explicit(history_state: SimpleNamespace) -> None:
+    await history_state.usage_service.collect_history_sample()
+
+    result = await _provider_usage_history_clear(history_state, {})
+    repeated = await _provider_usage_history_clear(history_state, {})
 
     assert result == {"deleted_samples": 1, "deleted_files": 1}
-    assert _provider_usage_history(state, {})["samples"] == []
+    assert repeated == {"deleted_samples": 0, "deleted_files": 0}
+    assert (await _provider_usage_history(history_state, {}))["samples"] == []
+
+
+@pytest.mark.asyncio
+async def test_provider_usage_history_reads_off_the_event_loop(
+    history_state: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = history_state.usage_service._history  # noqa: SLF001
+    read_samples = store._read_samples  # noqa: SLF001
+    reader_threads: list[int] = []
+
+    def recording_read(*arguments: Any) -> Any:
+        reader_threads.append(threading.get_ident())
+        return read_samples(*arguments)
+
+    monkeypatch.setattr(store, "_read_samples", recording_read)
+
+    await _provider_usage_history(history_state, {})
+
+    assert reader_threads
+    assert threading.get_ident() not in reader_threads
 
 
 def test_provider_usage_is_registered() -> None:

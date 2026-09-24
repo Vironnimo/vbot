@@ -534,13 +534,9 @@ def provider_usage_history_clear(instance: ServerInstance, confirm: bool) -> Com
     if not payload.ok:
         return payload.to_command_result()
     deleted_samples = _value_text(payload.data.get("deleted_samples"))
-    deleted_files = _value_text(payload.data.get("deleted_files"))
     return CommandResult(
         ok=True,
-        message=(
-            f"deleted provider usage history: {deleted_samples} samples "
-            f"across {deleted_files} files"
-        ),
+        message=f"deleted provider usage history: {deleted_samples} samples",
         instance=instance,
     )
 
