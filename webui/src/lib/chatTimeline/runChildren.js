@@ -397,8 +397,15 @@ function upsertToolRow(assistantRun, key, event, toolCall = {}) {
   }
 
   const sequence = event?.sequence ?? assistantRun.items.length;
+  // The id must not depend on which event created the row: a streamed Tool
+  // preview is dropped when its Run ends, and the stable start then creates
+  // the same row. Rows repeating a Provider Tool-call id count up instead.
+  const occurrence = assistantRun.items.filter(
+    (item) => item.type === 'tool_call' && item.identityKey === key,
+  ).length;
   const tool = {
-    id: `tool-${assistantRun.id}-${key}-${sequence}`,
+    id: `tool-${assistantRun.id}-${key}-${occurrence}`,
+    identityKey: key,
     assistantMessageId,
     type: 'tool_call',
     key,

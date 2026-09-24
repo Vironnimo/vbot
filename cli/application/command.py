@@ -376,17 +376,11 @@ def dispatch(args: argparse.Namespace) -> int | None:
         else:
             package = Path(args.package) if args.package else None
         handoff = os.environ.get("VBOT_UPDATE_HANDOFF") if not args.no_restart else None
-        if handoff:
-            from core.tools._bash_update_handoff import read_handoff_ticket
-
-            if not install.owns_server:
-                # An Agent on another server updating a client has no local Run to resume.
-                handoff = None
-            else:
-                assert install.server_data_directory is not None
-                read_handoff_ticket(Path(install.server_data_directory), Path(handoff).stem)
+        if handoff and not install.owns_server:
+            # An Agent on another server updating a client has no local Run to resume.
+            handoff = None
         operation = operations.request_update(
-            install, package=package, restart=not args.no_restart, handoff_ticket=handoff
+            install, package=package, restart=not args.no_restart, handoff_token=handoff
         )
         if args.detach or handoff:
             _print_update_result(install, operation, handoff=bool(handoff))
@@ -428,7 +422,7 @@ def dispatch(args: argparse.Namespace) -> int | None:
         elif args.command == "activate":
             archive = customize.activation_archive(install)
             operation = operations.request_update(
-                install, package=archive, handoff_ticket=os.environ.get("VBOT_UPDATE_HANDOFF")
+                install, package=archive, handoff_token=os.environ.get("VBOT_UPDATE_HANDOFF")
             )
             if not args.detach and not operation.handoff_ticket:
                 operation = _wait_update(install, operation)

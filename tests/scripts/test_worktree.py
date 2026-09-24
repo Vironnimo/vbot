@@ -9,9 +9,13 @@ from pathlib import Path
 
 import pytest
 
+from core.model_tasks import TaskModelService
+from core.models.models import ModelRegistry
+from core.providers.providers import ProviderRegistry
 from core.sessions.format import read_session_store_marker
 from core.sessions.schema import SCHEMA_VERSION
 from core.sessions.store import SessionStore
+from core.storage import StorageManager
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 from scripts import _worktree_ports as worktree_ports
 from tests.scripts.worktree_helpers import MODULE_PATH, PROJECT_ROOT, _load_worktree_module
@@ -315,6 +319,36 @@ def test_seed_worktree_settings_preserves_existing_user_values(tmp_path):
     assert settings["defaults"]["agent"]["fallback_models"] == ["fake/e2e-fallback::default"]
     assert settings["providers"]["custom"]["private"] == {"name": "Private"}
     assert settings["providers"]["custom"]["fake"]["base_url"] == ("http://127.0.0.1:18422/v1")
+
+
+def test_seeded_task_model_options_validate_against_loaded_option_schemas(tmp_path):
+    """Saving seeded Specialized Models must not fail on an untouched fixture option."""
+
+    module = _load_worktree_module()
+    resources_path = PROJECT_ROOT / "resources"
+    storage = StorageManager(tmp_path, resources_dir=resources_path)
+    module.seed_worktree_settings(storage.settings_path, server_port=8422)
+    custom_providers = storage.load_custom_providers_settings()
+    model_tasks = TaskModelService(
+        ProviderRegistry.load(resources_path, custom_providers=custom_providers),
+        ModelRegistry.load(
+            resources_path,
+            runtime_models_dir=storage.layout.models,
+            custom_providers=custom_providers,
+        ),
+        None,
+        storage,
+    )
+    fixture = json.loads(
+        (PROJECT_ROOT / "tests" / "e2e" / "fake-provider-settings.json").read_text(encoding="utf-8")
+    )
+
+    bindings = storage.load_model_task_settings()
+
+    assert set(bindings) == set(fixture["model_tasks"])
+    for task_type, binding in bindings.items():
+        # The same complete-binding check Settings runs when any option changes.
+        model_tasks.validate_binding(task_type, binding)
 
 
 def test_seed_worktree_settings_reads_fixture_from_running_checkout(tmp_path, monkeypatch):

@@ -12,10 +12,12 @@ from cli._parser_common import (
     CRON_HELP,
     CRON_STATUSES,
     DEBUG_HELP,
+    PERFORMANCE_HELP,
     STATISTICS_HELP,
     STATISTICS_SECTIONS,
     _add_command_parser,
 )
+from core.performance import DEFAULT_RECORDING_SECONDS, MAX_LABEL_LENGTH, MAX_RECORDING_SECONDS
 from core.utils.config import DEFAULT_HOST
 
 
@@ -371,4 +373,62 @@ def _add_debug_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         required=True,
         metavar="<provider:connection-id>",
         help="Compositional connection id used for credentials",
+    )
+
+
+def _add_performance_parsers(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    performance_parser = subparsers.add_parser(
+        "performance",
+        help=AREA_HELP["performance"],
+        description=f"{AREA_HELP['performance']}. Alias: vbot perf",
+    )
+    performance_subparsers = performance_parser.add_subparsers(dest="command", required=True)
+
+    _add_command_parser(
+        performance_subparsers,
+        "status",
+        PERFORMANCE_HELP["status"],
+        example="performance status",
+    )
+    start_parser = _add_command_parser(
+        performance_subparsers,
+        "record-start",
+        PERFORMANCE_HELP["record-start"],
+        example="performance record-start --label baseline --max-seconds 120",
+    )
+    start_parser.add_argument(
+        "--label",
+        metavar="<text>",
+        help=f"Short label stored with the recording (at most {MAX_LABEL_LENGTH} characters)",
+    )
+    start_parser.add_argument(
+        "--max-seconds",
+        type=int,
+        default=DEFAULT_RECORDING_SECONDS,
+        metavar="<seconds>",
+        help=(
+            "Stop automatically after this many seconds "
+            f"(1-{MAX_RECORDING_SECONDS}, default: {DEFAULT_RECORDING_SECONDS})"
+        ),
+    )
+    _add_command_parser(
+        performance_subparsers,
+        "record-stop",
+        PERFORMANCE_HELP["record-stop"],
+        example="performance record-stop",
+    )
+    recordings_parser = _add_command_parser(
+        performance_subparsers,
+        "recordings",
+        PERFORMANCE_HELP["recordings"],
+        example="performance recordings --limit 5",
+    )
+    recordings_parser.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        metavar="<count>",
+        help="Maximum recordings to list (1-100, default: 20)",
     )

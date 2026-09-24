@@ -12,6 +12,7 @@ from core.channels import ChannelConfigError, ChannelNotFoundError
 from core.chat import ChatError, ChatSessionError
 from core.extensions.extensions import SessionCapabilityExpiredError
 from core.model_tasks import TaskModelError, TaskModelValidationError
+from core.performance import RecordingActiveError, RecordingInactiveError
 from core.projects import (
     AgentResolutionError,
     ModelConfigurationError,
@@ -44,6 +45,8 @@ from server.rpc.errors import (
     RPC_ERROR_CHANNEL_NOT_FOUND,
     RPC_ERROR_DOMAIN,
     RPC_ERROR_INVALID_REQUEST,
+    RPC_ERROR_PERFORMANCE_RECORDING_ACTIVE,
+    RPC_ERROR_PERFORMANCE_RECORDING_INACTIVE,
     RPC_ERROR_PROJECT_ALREADY_EXISTS,
     RPC_ERROR_PROJECT_NOT_FOUND,
     RPC_ERROR_RUN_NOT_FOUND,
@@ -104,6 +107,10 @@ def _map_expected_error(error: Exception) -> RpcError:
         ),
     ):
         return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
+    if isinstance(error, RecordingActiveError):
+        return RpcError(RPC_ERROR_PERFORMANCE_RECORDING_ACTIVE, str(error))
+    if isinstance(error, RecordingInactiveError):
+        return RpcError(RPC_ERROR_PERFORMANCE_RECORDING_INACTIVE, str(error))
     if isinstance(error, ProjectError):
         return RpcError(RPC_ERROR_DOMAIN, str(error))
     if isinstance(

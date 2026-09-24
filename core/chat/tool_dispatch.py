@@ -17,6 +17,7 @@ from core.chat._skill_activation import _active_skill_env_keys
 from core.chat.events import _emit_tool_context_event, _timing_payload
 from core.chat.messages import ChatMessage, JsonObject, ToolCall, ToolCallRejection
 from core.extensions import ExtensionRegistry, HookContext
+from core.performance import measure, session_track
 from core.runs import TOOL_CALL_RESULT_EVENT, TOOL_CALL_STARTED_EVENT, Run
 from core.sessions import ChatSession
 from core.tools import (
@@ -502,8 +503,20 @@ class _EmittingToolRegistry(ToolRegistry):
         arguments: JsonObject,
         allowed_tools: Sequence[str] | None,
     ) -> JsonObject:
-        result = await self._registry.dispatch(context, arguments, allowed_tools)
-        return self.validate_result(context.tool_name, result)
+        run = self._run
+        with measure(
+            f"tool.{context.tool_name}",
+            track=session_track(run.agent_id, run.session_id, run.project_id),
+            name=context.tool_name,
+            args={"run_id": run.id},
+        ) as timer:
+            try:
+                result = await self._registry.dispatch(context, arguments, allowed_tools)
+            except ToolNotFoundError:
+                # A Model-invented Tool name must not create a metric of its own.
+                timer.discard()
+                raise
+            return self.validate_result(context.tool_name, result)
 
 
 def _safe_schema_fingerprint(registry: Any, tool_name: str) -> str:

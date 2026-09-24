@@ -34,9 +34,9 @@ def test_human_packaged_update_waits_for_its_terminal_result(
     terminal = Operation(id="upd_human", phase="completed")
 
     def request(_install: Installation, **kwargs: object) -> Operation:
-        ticket = kwargs["handoff_ticket"]
-        assert ticket is None or isinstance(ticket, str)
-        requested.append((bool(kwargs["restart"]), ticket))
+        token = kwargs["handoff_token"]
+        assert token is None or isinstance(token, str)
+        requested.append((bool(kwargs["restart"]), token))
         return operation
 
     def wait(_install: Installation, operation_id: str, **_kwargs: object) -> Operation:
@@ -45,7 +45,7 @@ def test_human_packaged_update_waits_for_its_terminal_result(
 
     monkeypatch.setattr(command, "discover", lambda: install)
     # A packaged update can run inside an Agent's handoff child process, so the
-    # ambient environment may carry the ticket this human path must ignore.
+    # ambient environment may carry the token this human path must ignore.
     monkeypatch.delenv("VBOT_UPDATE_HANDOFF", raising=False)
     monkeypatch.setattr(operations, "request_update", request)
     monkeypatch.setattr(operations, "wait", wait)
@@ -59,27 +59,23 @@ def test_agent_handoff_update_returns_after_acceptance_without_waiting(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     install = _install(tmp_path)
-    ticket = install.root / "data" / "handoff.json"
-    ticket.parent.mkdir(parents=True)
     operation = Operation(id="upd_agent", phase="queued")
     captured: list[str | None] = []
 
     def request(_install: Installation, **kwargs: object) -> Operation:
-        value = kwargs["handoff_ticket"]
+        value = kwargs["handoff_token"]
         assert value is None or isinstance(value, str)
         captured.append(value)
         return operation
 
     monkeypatch.setattr(command, "discover", lambda: install)
-    monkeypatch.setenv("VBOT_UPDATE_HANDOFF", str(ticket))
-    monkeypatch.setattr(
-        "core.tools._bash_update_handoff.read_handoff_ticket", lambda *_args: {"acknowledged": True}
-    )
+    # The CLI forwards the opaque token; only the running server can claim it.
+    monkeypatch.setenv("VBOT_UPDATE_HANDOFF", "opaque-token")
     monkeypatch.setattr(operations, "request_update", request)
     monkeypatch.setattr(operations, "wait", lambda *_args, **_kwargs: pytest.fail("must not wait"))
 
     assert command.dispatch(parse_args(["update"])) == 0
-    assert captured == [str(ticket)]
+    assert captured == ["opaque-token"]
 
 
 def test_tray_style_no_restart_update_does_not_forward_handoff_or_detach(
@@ -91,13 +87,13 @@ def test_tray_style_no_restart_update_does_not_forward_handoff_or_detach(
     captured: list[tuple[bool, str | None]] = []
 
     def request(_install: Installation, **kwargs: object) -> Operation:
-        ticket = kwargs["handoff_ticket"]
-        assert ticket is None or isinstance(ticket, str)
-        captured.append((bool(kwargs["restart"]), ticket))
+        token = kwargs["handoff_token"]
+        assert token is None or isinstance(token, str)
+        captured.append((bool(kwargs["restart"]), token))
         return operation
 
     monkeypatch.setattr(command, "discover", lambda: install)
-    monkeypatch.setenv("VBOT_UPDATE_HANDOFF", str(tmp_path / "handoff.json"))
+    monkeypatch.setenv("VBOT_UPDATE_HANDOFF", "opaque-token")
     monkeypatch.setattr(operations, "request_update", request)
     monkeypatch.setattr(operations, "wait", lambda *_args, **_kwargs: prepared)
 
