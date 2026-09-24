@@ -111,7 +111,7 @@ class TestValidateDebug:
     def test_valid_debug_section_has_no_errors(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps({"debug": {"enabled": True, "trace_limit": 100}}),
+            json.dumps({"format_version": 1, "debug": {"enabled": True, "trace_limit": 100}}),
             encoding="utf-8",
         )
 
@@ -124,7 +124,7 @@ class TestValidateDebug:
     def test_omitting_debug_section_is_valid(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps({"server_port": 8500}),
+            json.dumps({"format_version": 1, "server_port": 8500}),
             encoding="utf-8",
         )
 
@@ -135,7 +135,7 @@ class TestValidateDebug:
     def test_debug_section_with_only_enabled(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps({"debug": {"enabled": False}}),
+            json.dumps({"format_version": 1, "debug": {"enabled": False}}),
             encoding="utf-8",
         )
 
@@ -147,7 +147,7 @@ class TestValidateDebug:
     def test_debug_section_with_only_trace_limit(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps({"debug": {"trace_limit": 200}}),
+            json.dumps({"format_version": 1, "debug": {"trace_limit": 200}}),
             encoding="utf-8",
         )
 
@@ -159,7 +159,7 @@ class TestValidateDebug:
     def test_debug_not_an_object(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps({"debug": []}),
+            json.dumps({"format_version": 1, "debug": []}),
             encoding="utf-8",
         )
 
@@ -173,7 +173,7 @@ class TestValidateDebug:
     def test_non_boolean_enabled(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps({"debug": {"enabled": "yes"}}),
+            json.dumps({"format_version": 1, "debug": {"enabled": "yes"}}),
             encoding="utf-8",
         )
 
@@ -187,7 +187,7 @@ class TestValidateDebug:
     def test_non_integer_trace_limit(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps({"debug": {"trace_limit": "fifty"}}),
+            json.dumps({"format_version": 1, "debug": {"trace_limit": "fifty"}}),
             encoding="utf-8",
         )
 
@@ -201,7 +201,7 @@ class TestValidateDebug:
     def test_zero_trace_limit(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps({"debug": {"trace_limit": 0}}),
+            json.dumps({"format_version": 1, "debug": {"trace_limit": 0}}),
             encoding="utf-8",
         )
 
@@ -215,7 +215,7 @@ class TestValidateDebug:
     def test_negative_trace_limit(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps({"debug": {"trace_limit": -5}}),
+            json.dumps({"format_version": 1, "debug": {"trace_limit": -5}}),
             encoding="utf-8",
         )
 
@@ -229,7 +229,7 @@ class TestValidateDebug:
     def test_trace_limit_exceeds_500(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps({"debug": {"trace_limit": 501}}),
+            json.dumps({"format_version": 1, "debug": {"trace_limit": 501}}),
             encoding="utf-8",
         )
 
@@ -243,7 +243,7 @@ class TestValidateDebug:
     def test_boolean_trace_limit(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps({"debug": {"trace_limit": True}}),
+            json.dumps({"format_version": 1, "debug": {"trace_limit": True}}),
             encoding="utf-8",
         )
 
@@ -257,7 +257,7 @@ class TestValidateDebug:
     def test_unknown_debug_field_warns(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps({"debug": {"enabled": True, "extra": 1}}),
+            json.dumps({"format_version": 1, "debug": {"enabled": True, "extra": 1}}),
             encoding="utf-8",
         )
 
@@ -273,11 +273,12 @@ class TestValidateDebug:
         settings_path.write_text(
             json.dumps(
                 {
+                    "format_version": 1,
                     "debug": {
                         "enabled": "yes",
                         "trace_limit": 0,
                         "unknown": True,
-                    }
+                    },
                 }
             ),
             encoding="utf-8",
@@ -294,7 +295,7 @@ class TestValidateDebug:
     def test_debug_with_trace_limit_at_500_is_valid(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps({"debug": {"trace_limit": 500}}),
+            json.dumps({"format_version": 1, "debug": {"trace_limit": 500}}),
             encoding="utf-8",
         )
 
@@ -306,7 +307,7 @@ class TestValidateDebug:
     def test_debug_with_trace_limit_at_1_is_valid(self, tmp_path: Path) -> None:
         settings_path = tmp_path / "settings.json"
         settings_path.write_text(
-            json.dumps({"debug": {"trace_limit": 1}}),
+            json.dumps({"format_version": 1, "debug": {"trace_limit": 1}}),
             encoding="utf-8",
         )
 

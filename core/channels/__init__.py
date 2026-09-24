@@ -23,6 +23,7 @@ from core.channels.config import (
     load_validated_channel_json,
     managed_channel_token_env_var,
     validate_channel_data,
+    validate_channel_document,
     validate_channel_file,
 )
 from core.channels.storage import ChannelStorage
@@ -49,5 +50,6 @@ __all__ = [
     "load_validated_channel_json",
     "managed_channel_token_env_var",
     "validate_channel_data",
+    "validate_channel_document",
     "validate_channel_file",
 ]

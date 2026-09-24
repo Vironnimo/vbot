@@ -3,18 +3,87 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
+from typing import Any
 
+from core.config_validation import (
+    JsonConfigValidationError,
+    JsonDiagnostic,
+    JsonValidationReport,
+    add_error,
+    error_diagnostic,
+    load_validated_json_file,
+    validate_json_file,
+    validate_non_empty_string,
+    warn_unknown_keys,
+)
+from core.json_documents import (
+    JsonDocumentFormat,
+    JsonDocumentWriteError,
+    json_document,
+    validate_format_version,
+    write_json_document,
+)
 from core.providers.accounts import ACCOUNT_ID_PATTERN, DEFAULT_ACCOUNT_ID, sorted_account_ids
-from core.utils.atomic import atomic_write_text
+from core.utils.errors import ConfigError
+from core.utils.logging import get_logger
 
 TOKEN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _ACCOUNT_FILE_SEPARATOR = "--"
+OAUTH_TOKEN_FORMAT_VERSION = 1
+# ``extra`` is keyed by data (Provider-specific metadata), so only the root has fields.
+OAUTH_TOKEN_SHAPE = json_document({"access_token", "refresh_token", "expires_at", "extra"})
+_RESET_HINT = "Disconnecting the Provider account removes the file; then connect it again."
+
+_LOGGER = get_logger("providers.token_store")
+
+
+class OAuthTokenFileError(ConfigError):
+    """Raised when a stored OAuth token file fails to load or must not be overwritten."""
+
+
+def validate_oauth_token_file(token_path: str | Path) -> JsonValidationReport:
+    """Validate one persisted OAuth token file without consuming it."""
+    return validate_json_file(token_path, validate_oauth_token_data, missing_ok=False)
+
+
+def validate_oauth_token_data(data: Any) -> list[JsonDiagnostic]:
+    """Validate a decoded raw OAuth token document."""
+    if not isinstance(data, dict):
+        return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
+    diagnostics: list[JsonDiagnostic] = []
+    if not validate_format_version(diagnostics, data, OAUTH_TOKEN_FORMAT_VERSION):
+        return diagnostics
+    warn_unknown_keys(diagnostics, "$", data, OAUTH_TOKEN_SHAPE.fields, "OAuth token field")
+    validate_non_empty_string(
+        diagnostics, "$.access_token", data.get("access_token"), required=True
+    )
+    refresh_token = data.get("refresh_token")
+    if refresh_token is not None and not isinstance(refresh_token, str):
+        add_error(diagnostics, "$.refresh_token", "must be a string or null")
+    expires_at = data.get("expires_at")
+    if expires_at is not None:
+        try:
+            _parse_datetime(expires_at)
+        except (TypeError, ValueError):
+            add_error(diagnostics, "$.expires_at", "must be an ISO 8601 timestamp or null")
+    extra = data.get("extra", {})
+    if not isinstance(extra, dict) or any(not isinstance(value, str) for value in extra.values()):
+        add_error(diagnostics, "$.extra", "must be an object with string values")
+    return diagnostics
+
+
+OAUTH_TOKEN_FORMAT = JsonDocumentFormat(
+    name="OAuth token",
+    version=OAUTH_TOKEN_FORMAT_VERSION,
+    shape=OAUTH_TOKEN_SHAPE,
+    validate=validate_oauth_token_data,
+    sort_keys=True,
+)
 
 
 @dataclass(frozen=True)
@@ -64,15 +133,23 @@ class TokenStore:
         *,
         account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> None:
-        """Persist *token* atomically for the provider connection account."""
+        """Persist *token* atomically for the provider connection account.
+
+        Raises :class:`OAuthTokenFileError` instead of overwriting a stored token
+        file that fails to load.
+        """
 
         token_path = self._token_path(provider_id, local_connection_id, account_id)
         with self._mutation_lock:
-            atomic_write_text(
-                token_path,
-                json.dumps(self._token_to_dict(token), sort_keys=True),
-                data_dir=self._data_dir,
-            )
+            try:
+                write_json_document(
+                    token_path,
+                    self._token_to_dict(token),
+                    OAUTH_TOKEN_FORMAT,
+                    data_dir=self._data_dir,
+                )
+            except JsonDocumentWriteError as error:
+                raise OAuthTokenFileError(f"{error} {_RESET_HINT}") from error
 
     def load(
         self,
@@ -81,19 +158,37 @@ class TokenStore:
         *,
         account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> OAuthToken | None:
-        """Load a token for the provider connection account, if one exists."""
+        """Load a token for the provider connection account, if one exists.
+
+        Raises :class:`OAuthTokenFileError` when the stored file fails to load.
+        """
 
         token_path = self._token_path(provider_id, local_connection_id, account_id)
-        if not token_path.exists():
+        try:
+            data = load_validated_json_file(token_path, validate_oauth_token_data, missing_ok=True)
+        except (JsonConfigValidationError, OSError) as error:
+            raise OAuthTokenFileError(
+                f"OAuth token file failed to load: {error}. {_RESET_HINT}"
+            ) from error
+        if data is None:
             return None
-
-        data = json.loads(token_path.read_text(encoding="utf-8"))
         return OAuthToken(
             access_token=data["access_token"],
             refresh_token=data.get("refresh_token"),
-            expires_at=self._parse_datetime(data.get("expires_at")),
+            expires_at=_parse_datetime(data.get("expires_at")),
             extra=dict(data.get("extra", {})),
         )
+
+    def exists(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        *,
+        account_id: str = DEFAULT_ACCOUNT_ID,
+    ) -> bool:
+        """Return whether a token file is stored, without loading it."""
+
+        return self._token_path(provider_id, local_connection_id, account_id).exists()
 
     def delete(
         self,
@@ -142,9 +237,16 @@ class TokenStore:
         *,
         account_id: str = DEFAULT_ACCOUNT_ID,
     ) -> bool:
-        """Return whether a token exists and is usable without user interaction."""
+        """Return whether a token exists and is usable without user interaction.
 
-        token = self.load(provider_id, local_connection_id, account_id=account_id)
+        A token file that fails to load is not usable; the failure is logged.
+        """
+
+        try:
+            token = self.load(provider_id, local_connection_id, account_id=account_id)
+        except OAuthTokenFileError as error:
+            _LOGGER.warning("Stored OAuth token is unusable: %s", error)
+            return False
         if token is None:
             return False
         if token.expires_at is None:
@@ -223,10 +325,11 @@ class TokenStore:
             return None
         return value.astimezone(UTC).isoformat()
 
-    def _parse_datetime(self, value: str | None) -> datetime | None:
-        if value is None:
-            return None
-        parsed = datetime.fromisoformat(value)
-        if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=UTC)
-        return parsed.astimezone(UTC)
+
+def _parse_datetime(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)

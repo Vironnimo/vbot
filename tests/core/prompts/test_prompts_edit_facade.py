@@ -354,7 +354,15 @@ def test_edit_facade_rejects_disabled_agent_scope(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("scope", [None, "coder"])
 @pytest.mark.parametrize(
-    "body", [b"{broken", b"{}", b"[null]", b"\xff", b'[{"id":"core:tools","enabled":"false"}]']
+    "body",
+    [
+        b"{broken",
+        b"{}",
+        b"[null]",
+        b"\xff",
+        b'[{"id":"core:tools","enabled":false}]',
+        b'{"format_version":1,"entries":[{"id":"core:tools","enabled":"false"}]}',
+    ],
 )
 def test_corrupt_persisted_layout_builds_with_defaults(tmp_path, scope, body):
     from core.runtime._prompt_blocks import _StorageManagerBlockStore
@@ -374,3 +382,28 @@ def test_corrupt_persisted_layout_builds_with_defaults(tmp_path, scope, body):
     path.write_bytes(body)
     assert manager.build_system_prompt(agent) == baseline
     assert path.read_bytes() == body
+
+
+def test_corrupt_persisted_layout_is_kept_until_the_layout_is_reset(tmp_path):
+    import json
+
+    from core.runtime._prompt_blocks import _StorageManagerBlockStore
+    from core.storage import StorageError, StorageManager
+
+    storage = StorageManager(data_dir=tmp_path / "data")
+    manager = _facade_manager(tmp_path, store=_StorageManagerBlockStore(storage))
+    path = storage.data_dir / "prompts" / "layout.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"{broken")
+
+    with pytest.raises(StorageError, match="Reset the layout of this prompt scope"):
+        manager.set_layout([{"id": "core:tools", "enabled": False}])
+    assert path.read_bytes() == b"{broken"
+
+    result = manager.reset_layout()
+
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert document["format_version"] == 1
+    assert [entry["id"] for entry in document["entries"]] == [
+        entry["id"] for entry in result["layout"]
+    ]

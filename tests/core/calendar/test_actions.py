@@ -479,7 +479,14 @@ async def test_recurrences_each_request_a_fresh_session(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "payload", [{"actions": {}, "executions": {}}, {"actions": [None], "executions": {}}]
+    "payload",
+    [
+        {"actions": [], "executions": {}},
+        {"format_version": 2, "actions": [], "executions": {}},
+        {"format_version": 1, "actions": {}, "executions": {}},
+        {"format_version": 1, "actions": [None], "executions": {}},
+        {"format_version": 1, "actions": [], "executions": {"x": {"id": "y"}}},
+    ],
 )
 def test_malformed_action_rows_disable_store(tmp_path, payload):
     service = CalendarService(tmp_path, tz="UTC")
@@ -488,6 +495,29 @@ def test_malformed_action_rows_disable_store(tmp_path, payload):
     path.write_text(json.dumps(payload))
     assert service.actions.list_actions() == []
     assert service.actions.storage_error
+    with pytest.raises(CalendarStorageError):
+        service.actions.delete("unused")
+    assert json.loads(path.read_text()) == payload
+
+
+def test_unknown_action_fields_are_hidden_and_kept_on_save(tmp_path):
+    service, event, _, _ = setup(tmp_path)
+    action = service.actions.add(event.id, when="start", prompt="prepare", target="main")
+    path = tmp_path / "calendar" / "actions.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["future_setting"] = 1
+    payload["actions"][0]["priority"] = "high"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    reopened = CalendarService(tmp_path, tz="Europe/Berlin")
+    assert "priority" not in reopened.actions.list_actions()[0]
+    reopened.actions.update(action["id"], prompt="prepare slides")
+
+    rewritten = json.loads(path.read_text(encoding="utf-8"))
+    assert rewritten["format_version"] == 1
+    assert rewritten["future_setting"] == 1
+    assert rewritten["actions"][0]["prompt"] == "prepare slides"
+    assert rewritten["actions"][0]["priority"] == "high"
 
 
 @pytest.mark.asyncio
@@ -496,7 +526,9 @@ async def test_invalid_event_storage_never_deletes_action_definitions(tmp_path, 
     service, event, _, now = setup(tmp_path)
     action = service.actions.add(event.id, when="start", prompt="prepare", target="main")
     path = tmp_path / "calendar" / "events.json"
-    path.write_text("broken" if whole_file else json.dumps([{"id": event.id}]))
+    path.write_text(
+        "broken" if whole_file else json.dumps({"format_version": 1, "events": [{"id": event.id}]})
+    )
     reloaded = CalendarService(tmp_path, tz="UTC")
     if whole_file:
         with pytest.raises(CalendarStorageError):

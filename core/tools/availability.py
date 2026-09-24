@@ -46,6 +46,9 @@ TOOL_CONSTRAINT_IDENTITY_AGENT = "identity_agent"
 TOOL_CONSTRAINT_IMAGE_FALLBACK_ROUTE = "image_fallback_route"
 
 
+TOOL_ACCESS_FIELDS = frozenset({"mode", "allowed", "denied", "granted"})
+
+
 @dataclass(frozen=True, slots=True)
 class ToolAccess:
     """One Agent's explicit Tool policy, independent of runtime availability."""
@@ -103,7 +106,7 @@ def normalize_tool_access(value: ToolAccess | Mapping[str, Any] | None) -> ToolA
     if not isinstance(value, Mapping):
         raise ValueError("tool_access must be an object")
 
-    unsupported = sorted(set(value) - {"mode", "allowed", "denied", "granted"})
+    unsupported = sorted(set(value) - TOOL_ACCESS_FIELDS)
     if unsupported:
         raise ValueError(f"unsupported tool_access fields: {', '.join(unsupported)}")
     mode = value.get("mode")

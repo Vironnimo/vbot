@@ -1,5 +1,6 @@
 """Tests for storage."""
 
+import json
 import os
 import sys
 import time
@@ -28,12 +29,74 @@ def test_load_settings_returns_empty_when_missing(tmp_path: Path) -> None:
 
 def test_save_and_load_settings_round_trip(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
-    settings = {"port": 8420, "feature": True, "name": "vBot"}
+    settings = {"port": 8420, "keep_awake": True, "timezone": "Europe/Berlin"}
 
     storage.save_settings(settings)
 
     assert storage.load_settings() == settings
-    assert storage.settings_path.read_text(encoding="utf-8").endswith("\n")
+    text = storage.settings_path.read_text(encoding="utf-8")
+    assert text.endswith("\n")
+    assert list(json.loads(text)) == ["format_version", "keep_awake", "port", "timezone"]
+    assert json.loads(text)["format_version"] == 1
+
+
+def test_settings_updates_keep_unknown_fields_on_disk_at_every_modeled_level(
+    tmp_path: Path,
+) -> None:
+    storage = StorageManager(tmp_path)
+    storage.ensure_directories()
+    storage.settings_path.write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "future_top_level": {"kept": True},
+                "appearance": {"language": "en", "future_appearance": 1},
+                "providers": {
+                    "custom": {
+                        "local": {
+                            "name": "Local",
+                            "adapter": "openai_compatible",
+                            "base_url": "http://127.0.0.1:1234/v1",
+                            "auth": "none",
+                            "future_provider_field": "x",
+                            "models": {"m": {"name": "M", "future_model_field": 2}},
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = storage.load_settings()
+    storage.update_settings_sections({"appearance": {"language": "en", "chat_width": "wide"}})
+    storage.update_settings(lambda settings: settings.update({"keep_awake": True}))
+
+    assert "future_top_level" not in loaded
+    assert loaded["appearance"] == {"language": "en"}
+    assert "future_provider_field" not in loaded["providers"]["custom"]["local"]
+    on_disk = json.loads(storage.settings_path.read_text(encoding="utf-8"))
+    assert on_disk["future_top_level"] == {"kept": True}
+    assert on_disk["appearance"]["future_appearance"] == 1
+    assert on_disk["appearance"]["chat_width"] == "wide"
+    assert on_disk["keep_awake"] is True
+    local = on_disk["providers"]["custom"]["local"]
+    assert local["future_provider_field"] == "x"
+    assert local["models"]["m"]["future_model_field"] == 2
+
+
+def test_settings_written_by_a_newer_vbot_are_not_used_or_overwritten(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.ensure_directories()
+    original = '{"format_version": 2, "keep_awake": true}'
+    storage.settings_path.write_text(original, encoding="utf-8")
+
+    assert storage.load_settings() == {}
+    with pytest.raises(StorageError, match="written by a newer vBot"):
+        storage.update_settings(lambda settings: settings.update({"keep_awake": False}))
+    with pytest.raises(StorageError, match="Refusing to overwrite Settings file"):
+        storage.save_settings({"keep_awake": False})
+    assert storage.settings_path.read_text(encoding="utf-8") == original
 
 
 def test_load_settings_ignores_non_object_json(
@@ -71,7 +134,7 @@ def test_load_settings_ignores_invalid_schema_fields(
 ) -> None:
     storage = StorageManager(tmp_path)
     storage.ensure_directories()
-    original = '{"server_port": 8500, "compaction": {"enabled": "yes"}}'
+    original = '{"format_version": 1, "server_port": 8500, "compaction": {"enabled": "yes"}}'
     storage.settings_path.write_text(original, encoding="utf-8")
 
     with caplog.at_level("WARNING"):
@@ -122,12 +185,12 @@ def test_settings_changes_are_read_after_every_kind_of_write(
 ) -> None:
     storage = StorageManager(tmp_path)
     storage.ensure_directories()
-    storage.settings_path.write_text('{"port": 8421}', encoding="utf-8")
+    storage.settings_path.write_text('{"format_version": 1, "port": 8421}', encoding="utf-8")
     _age(storage.settings_path)
     assert storage.load_settings() == {"port": 8421}
 
     # An external in-place edit of the same size keeps the file identity.
-    storage.settings_path.write_text('{"port": 8422}', encoding="utf-8")
+    storage.settings_path.write_text('{"format_version": 1, "port": 8422}', encoding="utf-8")
     assert storage.load_settings() == {"port": 8422}
 
     _age(storage.settings_path)
@@ -146,11 +209,11 @@ def test_recently_written_settings_are_reread_even_with_an_identical_stamp(
     storage = StorageManager(tmp_path)
     storage.ensure_directories()
     path = storage.settings_path
-    path.write_text('{"port": 8421}', encoding="utf-8")
+    path.write_text('{"format_version": 1, "port": 8421}', encoding="utf-8")
     stamp = path.stat().st_mtime_ns
     assert storage.load_settings() == {"port": 8421}
 
-    path.write_text('{"port": 8422}', encoding="utf-8")
+    path.write_text('{"format_version": 1, "port": 8422}', encoding="utf-8")
     os.utime(path, ns=(stamp, stamp))
 
     assert storage.load_settings() == {"port": 8422}
@@ -161,7 +224,7 @@ def test_load_settings_logs_unchanged_degradation_only_once(
 ) -> None:
     storage = StorageManager(tmp_path)
     storage.ensure_directories()
-    storage.settings_path.write_text('{"debug": []}', encoding="utf-8")
+    storage.settings_path.write_text('{"format_version": 1, "debug": []}', encoding="utf-8")
 
     with caplog.at_level("WARNING"):
         storage.load_settings()
@@ -225,7 +288,7 @@ def test_settings_json_integer_limit_is_reported_without_overwriting(tmp_path: P
 def test_update_settings_rejects_invalid_file_without_overwriting_it(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
     storage.ensure_directories()
-    original = '{"server_port": 8420, "compaction": {"enabled": "yes"}}'
+    original = '{"format_version": 1, "server_port": 8420, "compaction": {"enabled": "yes"}}'
     storage.settings_path.write_text(original, encoding="utf-8")
 
     with pytest.raises(StorageError):
@@ -326,7 +389,7 @@ def test_save_settings_rejects_unserializable_values(tmp_path: Path) -> None:
     with pytest.raises(StorageError):
         storage.save_settings({"path": object()})
 
-    assert not storage.settings_path.exists()
+    assert "path" not in json.loads(storage.settings_path.read_text(encoding="utf-8"))
 
 
 def test_load_appearance_settings_returns_default_language_when_missing(tmp_path: Path) -> None:
@@ -658,7 +721,7 @@ def test_model_task_target_update_resets_only_changed_target_options(
 def test_load_recall_settings_defaults_invalid_section(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
     storage.ensure_directories()
-    storage.settings_path.write_text('{"recall": []}', encoding="utf-8")
+    storage.settings_path.write_text('{"format_version": 1, "recall": []}', encoding="utf-8")
 
     assert storage.load_recall_settings() == {"backend": "sqlite_fts"}
 

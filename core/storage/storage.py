@@ -18,7 +18,9 @@ from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
 
+from core.json_documents import JsonDocumentWriteError, write_json_document
 from core.settings import (
+    SETTINGS_FORMAT,
     SettingsValidationError,
     load_runtime_settings_json,
     load_validated_settings_json,
@@ -666,24 +668,28 @@ class StorageManager:
         )
 
     def save_settings(self, settings: Mapping[str, Any]) -> None:
-        """Atomically write ``settings.json`` as UTF-8 JSON."""
+        """Atomically write ``settings.json``, keeping the unknown fields on disk.
+
+        Refuses to overwrite a file that fails to load (see
+        :func:`core.json_documents.write_json_document`).
+        """
 
         if not isinstance(settings, Mapping):
             raise StorageError("Settings must be a mapping")
 
         with self._settings_lock:
-            try:
-                serialized = (
-                    json.dumps(dict(settings), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-                )
-            except TypeError as exc:
-                raise StorageError(
-                    f"Settings contain a value that cannot be serialized: {exc}"
-                ) from exc
             self.ensure_directories()
             self._settings_cache = None
             try:
-                atomic_write_text(self.settings_path, serialized, data_dir=self.data_dir)
+                write_json_document(
+                    self.settings_path, settings, SETTINGS_FORMAT, data_dir=self.data_dir
+                )
+            except JsonDocumentWriteError as exc:
+                raise StorageError(str(exc)) from exc
+            except (TypeError, ValueError) as exc:
+                raise StorageError(
+                    f"Settings contain a value that cannot be serialized: {exc}"
+                ) from exc
             except OSError as exc:
                 raise StorageError(f"Cannot write {self.settings_path}: {exc}") from exc
 
@@ -712,10 +718,19 @@ class StorageManager:
 
         return self._prompt_blocks.read_layout(scope)
 
-    def write_block_layout(self, scope: str | None, entries: Sequence[LayoutEntry]) -> Path:
-        """Atomically write a scope's ordered block layout."""
+    def write_block_layout(
+        self,
+        scope: str | None,
+        entries: Sequence[LayoutEntry],
+        *,
+        reset: bool = False,
+    ) -> Path:
+        """Atomically write a scope's ordered block layout.
 
-        return self._prompt_blocks.write_layout(scope, entries)
+        ``reset`` replaces a layout file that fails to load instead of refusing.
+        """
+
+        return self._prompt_blocks.write_layout(scope, entries, reset=reset)
 
     def prune_block_layout(
         self,

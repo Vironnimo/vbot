@@ -31,7 +31,9 @@ class TestLoadLocalModelsSettings:
     def test_defaults_non_object_section(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
-        storage.settings_path.write_text(json.dumps({"local_models": []}), encoding="utf-8")
+        storage.settings_path.write_text(
+            json.dumps({"format_version": 1, "local_models": []}), encoding="utf-8"
+        )
 
         assert storage.load_local_models_settings() == {"context_windows": {}}
 
@@ -39,7 +41,7 @@ class TestLoadLocalModelsSettings:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
-            json.dumps({"local_models": {"context_windows": {"ollama/m": 0}}}),
+            json.dumps({"format_version": 1, "local_models": {"context_windows": {"ollama/m": 0}}}),
             encoding="utf-8",
         )
 

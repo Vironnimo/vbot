@@ -483,7 +483,9 @@ class StubStorage:
     def read_block_layout(self, scope: str | None) -> list[LayoutEntry]:
         return list(self._block_layouts.get(scope, []))
 
-    def write_block_layout(self, scope: str | None, entries: list[LayoutEntry]) -> Path:
+    def write_block_layout(
+        self, scope: str | None, entries: list[LayoutEntry], *, reset: bool = False
+    ) -> Path:
         self._block_layouts[scope] = list(entries)
         return self._layout_path(scope)
 

@@ -9,8 +9,11 @@ from pathlib import Path
 
 import pytest
 
+from core.json_documents import render_json_document
+from core.settings import SETTINGS_FORMAT_VERSION, validate_settings_file
 from core.storage.layout import (
     DATA_DIRECTORY_RELATIVE_PATHS,
+    INITIAL_SETTINGS_DOCUMENT,
     DataDirectoryLayout,
     initialize_data_directory,
 )
@@ -73,8 +76,18 @@ def test_initialize_creates_exact_canonical_layout(tmp_path: Path) -> None:
     assert actual_directories == set(DATA_DIRECTORY_RELATIVE_PATHS)
     assert actual_files == {Path(".env"), Path("settings.json"), Path("session-store.json")}
     assert (data_dir / ".env").read_bytes() == RESOURCE_TEMPLATE.read_bytes()
-    assert (data_dir / "settings.json").read_bytes() == b"{}\n"
+    assert (data_dir / "settings.json").read_text(encoding="utf-8") == INITIAL_SETTINGS_DOCUMENT
     assert result.layout.root == data_dir
+
+
+def test_initial_settings_document_is_an_empty_current_settings_document(tmp_path: Path) -> None:
+    assert render_json_document({}, version=SETTINGS_FORMAT_VERSION) == INITIAL_SETTINGS_DOCUMENT
+    initialize_data_directory(tmp_path, resources_dir=PROJECT_ROOT / "resources")
+
+    report = validate_settings_file(tmp_path / "settings.json")
+
+    assert report.exists
+    assert report.diagnostics == ()
 
 
 def test_initialize_preserves_existing_configuration_bytes(tmp_path: Path) -> None:
@@ -187,7 +200,7 @@ def test_initialize_uses_empty_environment_when_template_is_unavailable(
         )
 
     assert (data_dir / ".env").read_bytes() == b""
-    assert (data_dir / "settings.json").read_bytes() == b"{}\n"
+    assert (data_dir / "settings.json").read_text(encoding="utf-8") == INITIAL_SETTINGS_DOCUMENT
     assert result.created_files == (
         data_dir / "session-store.json",
         data_dir / ".env",

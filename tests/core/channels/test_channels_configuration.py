@@ -195,19 +195,49 @@ def test_channel_access_migration_merges_groups_and_removes_old_scope(tmp_path: 
     ] == [("50", "Alice"), ("51", "Bob")]
 
 
-def test_retired_owner_ids_are_rejected_without_rewriting_files(tmp_path: Path) -> None:
+def test_unknown_config_fields_are_kept_when_the_channel_is_saved(tmp_path: Path) -> None:
     storage = ChannelStorage(tmp_path)
     config_dir = tmp_path / "channels" / "tg-assistant"
     config_dir.mkdir(parents=True)
     config_path = config_dir / "channel.json"
-    original = json.dumps(make_config_payload(allowed_chat_ids=["-100"], owner_user_ids=[50]))
-    config_path.write_text(original, encoding="utf-8")
+    payload = {
+        "format_version": 1,
+        **make_config_payload(allowed_chat_ids=["-100"], owner_user_ids=[50]),
+    }
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(ChannelConfigError, match="owner_user_ids.*retired"):
-        storage.get("tg-assistant")
-    assert storage.load_all() == []
-    assert config_path.read_text(encoding="utf-8") == original
+    config = storage.get("tg-assistant")
+    assert [loaded.id for loaded in storage.load_all()] == ["tg-assistant"]
+    storage.save(replace(config, enabled=False))
+
+    rewritten = json.loads(config_path.read_text(encoding="utf-8"))
+    assert rewritten["format_version"] == 1
+    assert rewritten["enabled"] is False
+    assert rewritten["owner_user_ids"] == [50]
     assert not (config_dir / "access.json").exists()
+
+
+@pytest.mark.parametrize("stored", ["{", '{"format_version": 2}'])
+def test_channel_config_that_fails_to_load_is_never_overwritten(
+    tmp_path: Path, stored: str
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    config_dir = tmp_path / "channels" / "tg-assistant"
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "channel.json"
+    config_path.write_text(stored, encoding="utf-8")
+
+    with pytest.raises(ChannelConfigError, match="Refusing to overwrite Channel config"):
+        storage.save(make_config())
+    assert config_path.read_text(encoding="utf-8") == stored
+
+
+def test_validate_channel_document_requires_the_current_format_version() -> None:
+    from core.channels import validate_channel_document
+
+    payload = make_config_payload()
+    assert [item.path for item in validate_channel_document(payload)] == ["$.format_version"]
+    assert validate_channel_document({"format_version": 1, **payload}) == []
 
 
 @pytest.mark.parametrize(
@@ -267,7 +297,8 @@ def test_channel_storage_validates_channel_json_on_read(tmp_path: Path) -> None:
     config_dir = tmp_path / "channels" / "tg-assistant"
     config_dir.mkdir(parents=True)
     config_dir.joinpath("channel.json").write_text(
-        json.dumps({**make_config().to_dict(), "enabled": "true"}), encoding="utf-8"
+        json.dumps({"format_version": 1, **make_config().to_dict(), "enabled": "true"}),
+        encoding="utf-8",
     )
 
     with pytest.raises(ChannelConfigError):
@@ -279,7 +310,9 @@ def test_channel_storage_read_rejects_invalid_mention_pattern(tmp_path: Path) ->
     config_dir = tmp_path / "channels" / "tg-assistant"
     config_dir.mkdir(parents=True)
     config_dir.joinpath("channel.json").write_text(
-        json.dumps({**make_config().to_dict(), "mention_patterns": ["[unclosed"]}),
+        json.dumps(
+            {"format_version": 1, **make_config().to_dict(), "mention_patterns": ["[unclosed"]}
+        ),
         encoding="utf-8",
     )
 
@@ -292,7 +325,7 @@ def test_channel_storage_read_rejects_invalid_response_mode(tmp_path: Path) -> N
     config_dir = tmp_path / "channels" / "tg-assistant"
     config_dir.mkdir(parents=True)
     config_dir.joinpath("channel.json").write_text(
-        json.dumps({**make_config().to_dict(), "response_mode": "sometimes"}),
+        json.dumps({"format_version": 1, **make_config().to_dict(), "response_mode": "sometimes"}),
         encoding="utf-8",
     )
 
@@ -308,7 +341,9 @@ def test_channel_storage_load_all_skips_invalid_configs(
     broken_dir = tmp_path / "channels" / "tg-broken"
     broken_dir.mkdir(parents=True)
     broken_dir.joinpath("channel.json").write_text(
-        json.dumps({**make_config("tg-broken").to_dict(), "enabled": "not-a-bool"}),
+        json.dumps(
+            {"format_version": 1, **make_config("tg-broken").to_dict(), "enabled": "not-a-bool"}
+        ),
         encoding="utf-8",
     )
 

@@ -17,7 +17,7 @@ Domain-specific vocabulary for System Prompt assembly. These are all prompt-doma
 **Not:** A prompt fragment - the old closed set of five fragment files is gone. A block is fragment-sized but reorderable, toggleable, gated, and contributable from any source.
 
 ### Block Layout
-**Definition:** The persisted per-scope ordered list of `{id, enabled, source}` owning order and on/off state (`layout.json` per scope). A block absent from the layout inserts at its definition's `default_rank` with `default_enabled`; an entry whose definition is gone is inert - skipped at build, pruned on next write.
+**Definition:** The persisted per-scope ordered list of `{id, enabled, source}` owning order and on/off state (`layout.json` per scope, `{"format_version": 1, "entries": [...]}`). A saved layout that fails to load reads as no layout and refuses edits; only `reset_layout` (`prompt.reset_layout`) replaces it. A block absent from the layout inserts at its definition's `default_rank` with `default_enabled`; an entry whose definition is gone is inert - skipped at build, pruned on next write.
 **Not:** Definitions or text - the layout owns order + enabled only.
 
 ### Block Owner (three-gate filter)
