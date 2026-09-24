@@ -58,6 +58,20 @@ public System Prompt block metadata. The bundled Swarm uses these capabilities
 for explicit prompt composition; see `extensions/swarm.md` and
 `tests/core/runtime/test_runtime_extension_host.py`.
 
+Group titles: `temporary_agents.title_group(group_id, source_text)` stores a local
+title immediately, then lets the Runtime's shared Session title generator replace it
+(configured Title Model, else the approximately cheapest group participant Model by
+catalog input+output rate, else the first participant; one attempt, failures keep
+the local title). It awaits the Model call, so owners run it in the background.
+`group_titles(group_ids)` reads stored titles within the caller's owner namespace.
+Titles are canonical Session data (see `sessions.md`), so Statistics keeps showing
+them after the Extension is disabled. Evidence: `test_titles.py`,
+`test_runtime_extension_host.py`.
+
+Every live Extension-owned Session counts in global Statistics under the reserved
+actor key `extension:<owner>`, never under its synthetic participant Agent id; see
+`statistics.md`.
+
 ## Ownership and source routing
 
 - Public API, registration identity, hooks, and lifecycle: `core/extensions/extensions.py`. Internal `_declarations.py` owns declaration/record values and diagnostics; `_api.py` collects declarations; `_loading.py` owns filesystem discovery/import and registration deadlines; `_callbacks.py` owns bounded callback execution.
