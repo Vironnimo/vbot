@@ -1,10 +1,12 @@
-"""Live voice options: spoken voice and the delegating backend Model.
+"""Live voice options: spoken voice, the delegating backend Model, and its reasoning.
 
-Both fields render from the ``live_voice`` facts in
+The fields render from the ``live_voice`` facts in
 ``capabilities.task_options``. A ``model``-typed ``backend_model`` parameter
 offers the tool-capable chat Models of the same Provider that the target's
 Connection allows; the Live runtime re-checks the configured backend with
-:func:`live_backend_candidates` when a call starts.
+:func:`live_backend_candidates` when a call starts. The backend's reasoning
+effort accompanies that field and narrows its visible choices to each
+candidate's published reasoning ladder.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from typing import Any, Protocol
 from core.model_tasks._option_types import (
     TaskModelOptionChoice,
     TaskModelOptionField,
+    TaskModelOptionsBy,
     _string_values,
     _task_options,
 )
@@ -23,6 +26,16 @@ from core.models import Model, ModelQuery
 
 _BACKEND_MODEL_QUERY_TASKS = ("chat",)
 _BACKEND_MODEL_QUERY_CAPABILITIES = ("tools",)
+
+BACKEND_THINKING_EFFORT_DEFAULT = "low"
+"""Default backend reasoning effort: spoken answers need low latency."""
+
+# "" requests no explicit effort, so the Provider default of the Model applies.
+_MODEL_DEFAULT_EFFORT = ""
+_MODEL_DEFAULT_EFFORT_LABEL = "Model default"
+# Efforts that stay available for every published ladder: the Model default
+# and reasoning off. The Agent editor offers the same set.
+_ALWAYS_ALLOWED_EFFORTS = (_MODEL_DEFAULT_EFFORT, "none")
 
 
 class ModelCatalog(Protocol):
@@ -80,6 +93,7 @@ def _live_voice_fields(
             else ()
         )
         fields.append(_backend_model_field(backend_spec, candidates))
+        fields.append(_backend_thinking_effort_field(candidates))
     return tuple(fields)
 
 
@@ -120,6 +134,54 @@ def _backend_model_field(
         options=tuple(
             TaskModelOptionChoice(value=candidate.model_id, label=candidate.name)
             for candidate in candidates
+        ),
+    )
+
+
+def backend_thinking_efforts() -> tuple[str, ...]:
+    """Return every backend reasoning effort in canonical order, ``""`` first."""
+
+    # Deferred: ``core.settings.settings`` imports this module (through
+    # ``core.model_tasks.options``) while it loads. A module-level import of
+    # ``core.providers`` would load every Provider Adapter at that point, and
+    # the OpenRouter Adapter imports the half-initialized settings module.
+    from core.providers.reasoning import THINKING_EFFORT_ORDER
+
+    return (_MODEL_DEFAULT_EFFORT, *THINKING_EFFORT_ORDER)
+
+
+def _backend_thinking_effort_field(candidates: tuple[Model, ...]) -> TaskModelOptionField:
+    efforts = backend_thinking_efforts()
+    allowed_by_backend: dict[str, tuple[str, ...]] = {}
+    for candidate in candidates:
+        # Without a published ladder the Adapter applies a Provider-specific
+        # floor that the UI cannot see, so every effort stays visible.
+        levels = candidate.capabilities.reasoning.levels
+        if levels:
+            allowed = {*_ALWAYS_ALLOWED_EFFORTS, *levels}
+            allowed_by_backend[candidate.model_id] = tuple(
+                effort for effort in efforts if effort in allowed
+            )
+    return TaskModelOptionField(
+        name="backend_thinking_effort",
+        type="select",
+        label="Backend reasoning",
+        default=BACKEND_THINKING_EFFORT_DEFAULT,
+        description=(
+            "Reasoning effort of the backend model for each request. "
+            "Higher effort can make spoken answers slower."
+        ),
+        options=tuple(
+            TaskModelOptionChoice(
+                value=effort,
+                label=_MODEL_DEFAULT_EFFORT_LABEL if effort == _MODEL_DEFAULT_EFFORT else effort,
+            )
+            for effort in efforts
+        ),
+        options_by=(
+            TaskModelOptionsBy(field="backend_model", values=allowed_by_backend)
+            if allowed_by_backend
+            else None
         ),
     )
 

@@ -17,8 +17,10 @@ import {
   normalizeTargets,
   normalizeTaskModelSettings,
   parseJsonFieldValue,
+  reconcileDependentOptions,
   stringifyJsonFieldValue,
   taskModelBindingsMatch,
+  visibleFieldOptions,
 } from '../taskModelSettings.js';
 
 describe('taskModelSettings helpers', () => {
@@ -261,5 +263,163 @@ describe('JSON option field helpers', () => {
 
     expect(fields).toHaveLength(1);
     expect(fields[0].type).toBe('json');
+  });
+});
+
+describe('select choices narrowed by another option', () => {
+  const EFFORTS = ['', 'none', 'low', 'medium', 'high', 'max'];
+  const fields = normalizeOptionSchema({
+    fields: [
+      {
+        name: 'backend_model',
+        type: 'select',
+        default: 'terra',
+        options: [
+          { value: 'terra', label: 'Terra' },
+          { value: 'astra', label: 'Astra' },
+          { value: 'luna', label: 'Luna' },
+        ],
+      },
+      {
+        name: 'backend_thinking_effort',
+        type: 'select',
+        default: 'low',
+        options: EFFORTS.map((value) => ({
+          value,
+          label: value || 'Model default',
+        })),
+        options_by: {
+          field: 'backend_model',
+          values: {
+            terra: ['', 'none', 'low', 'high'],
+            astra: ['', 'none', 'medium', 'max'],
+            luna: ['medium', 'max'],
+          },
+        },
+      },
+    ],
+  });
+  const [backendField, effortField] = fields;
+  const shownValues = (options) =>
+    visibleFieldOptions(effortField, fields, options).map(
+      (choice) => choice.value,
+    );
+
+  it('keeps empty-value choices and normalizes the narrowing', () => {
+    expect(effortField.options[0]).toEqual({
+      value: '',
+      label: 'Model default',
+    });
+    expect(effortField.optionsBy).toEqual({
+      field: 'backend_model',
+      values: {
+        terra: ['', 'none', 'low', 'high'],
+        astra: ['', 'none', 'medium', 'max'],
+        luna: ['medium', 'max'],
+      },
+    });
+    expect(backendField.optionsBy).toBeNull();
+    const [malformed] = normalizeOptionSchema({
+      fields: [
+        {
+          name: 'tier',
+          type: 'select',
+          options: [{ value: null, label: 'Broken' }, { value: 'fast' }],
+          options_by: { field: '', values: {} },
+        },
+      ],
+    });
+    expect(malformed.options).toEqual([{ value: 'fast', label: 'fast' }]);
+    expect(malformed.optionsBy).toBeNull();
+  });
+
+  it('filters by the stored or default value of the referenced option', () => {
+    expect(shownValues({})).toEqual(['', 'none', 'low', 'high']);
+    expect(shownValues({ backend_model: 'astra' })).toEqual([
+      '',
+      'none',
+      'medium',
+      'max',
+    ]);
+    expect(shownValues({ backend_model: 'unlisted' })).toEqual(EFFORTS);
+    expect(visibleFieldOptions(backendField, fields, {})).toBe(
+      backendField.options,
+    );
+  });
+
+  it('keeps a value that stays visible after the referenced option changes', () => {
+    const options = { backend_model: 'astra', backend_thinking_effort: 'none' };
+
+    expect(reconcileDependentOptions(fields, options, 'backend_model')).toBe(
+      options,
+    );
+    expect(
+      reconcileDependentOptions(fields, options, 'backend_thinking_effort'),
+    ).toBe(options);
+  });
+
+  it.each([
+    ['the default when shown', { backend_model: 'terra' }, 'medium', 'low'],
+    [
+      'Model default when the default is hidden',
+      { backend_model: 'astra' },
+      'high',
+      '',
+    ],
+    [
+      'the first choice when neither is shown',
+      { backend_model: 'luna' },
+      'none',
+      'medium',
+    ],
+  ])('moves a hidden value to %s', (_label, backend, current, expected) => {
+    const next = reconcileDependentOptions(
+      fields,
+      { ...backend, backend_thinking_effort: current },
+      'backend_model',
+    );
+
+    expect(next).toEqual({ ...backend, backend_thinking_effort: expected });
+  });
+
+  it('moves an unstored default that the new choice hides', () => {
+    expect(
+      reconcileDependentOptions(
+        fields,
+        { backend_model: 'astra' },
+        'backend_model',
+      ),
+    ).toEqual({ backend_model: 'astra', backend_thinking_effort: '' });
+  });
+
+  it('follows chains of narrowed options', () => {
+    const chained = normalizeOptionSchema({
+      fields: [
+        {
+          name: 'engine',
+          type: 'select',
+          default: 'big',
+          options: [{ value: 'big' }, { value: 'small' }],
+        },
+        {
+          name: 'mode',
+          type: 'select',
+          default: 'deep',
+          options: [{ value: 'deep' }, { value: 'fast' }],
+          options_by: { field: 'engine', values: { small: ['fast'] } },
+        },
+        {
+          name: 'depth',
+          type: 'select',
+          default: '3',
+          options: [{ value: '3' }, { value: '1' }],
+          options_by: { field: 'mode', values: { fast: ['1'] } },
+        },
+      ],
+    });
+
+    expect(
+      reconcileDependentOptions(chained, { engine: 'small' }, 'engine'),
+    ).toEqual({ engine: 'small', mode: 'fast', depth: '1' });
   });
 });
