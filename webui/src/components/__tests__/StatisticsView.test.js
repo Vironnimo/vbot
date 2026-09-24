@@ -455,6 +455,133 @@ describe('StatisticsView', () => {
     expect(document.querySelector('.stats-panel .empty-state')).toBeTruthy();
   });
 
+  it('breaks Extension activity down by group and participant', async () => {
+    const activity = (overrides = {}) => ({
+      sessions: 1,
+      runs: 2,
+      run_status: { completed: 1, failed: 1, cancelled: 0, interrupted: 0 },
+      errors: 0,
+      tool_calls: 3,
+      model_calls: 2,
+      measured_input_tokens: 100,
+      measured_output_tokens: 20,
+      estimated_input_tokens: 0,
+      estimated_output_tokens: 0,
+      costs: {
+        calls: 2,
+        reported_calls: 0,
+        estimated_calls: 2,
+        unpriced_calls: 0,
+        retrospective_calls: 0,
+        reported_usd: null,
+        estimated_usd: 0.5,
+      },
+      last_activity: '2026-06-13T09:00:00+00:00',
+      ...overrides,
+    });
+    const participant = (name, model) => ({
+      participant_id: `prt_${name}`,
+      name,
+      model,
+      session_id: `ses_${name}`,
+      activity: activity(),
+    });
+    const report = makeReport({
+      extensions: {
+        extensions: [
+          {
+            name: 'swarm',
+            actor_key: 'extension:swarm',
+            total_groups: 2,
+            groups_truncated: false,
+            activity: activity({ sessions: 3, runs: 6 }),
+            groups: [
+              {
+                group_id: 'swr_titled',
+                title: 'Parser rework',
+                started_at: '2026-06-13T08:00:00+00:00',
+                activity: activity({ sessions: 2, runs: 4 }),
+                participants: [
+                  participant('Walross', 'prov/a'),
+                  participant('Xenia', 'prov/b'),
+                ],
+              },
+              {
+                group_id: 'swr_0000untitled',
+                title: null,
+                started_at: '2026-06-12T08:00:00+00:00',
+                activity: activity(),
+                participants: [participant('Ada', 'prov/a')],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    report.tools.by_agent.push({ key: 'extension:swarm', count: 3 });
+    rpcMock.mockResolvedValue(report);
+
+    suite.mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForOverview();
+
+    // Report tabs name the Extension instead of a synthetic participant id.
+    [...document.querySelectorAll('.tab-list__tab')]
+      .find((button) => button.textContent.trim() === 'Tools')
+      .click();
+    flushSync();
+    const extensionCell = [...document.querySelectorAll('.stats-agent')].find(
+      (cell) => cell.textContent.includes('swarm'),
+    );
+    expect(extensionCell.textContent).toContain('Extension');
+    expect(document.body.textContent).not.toContain('extension:swarm');
+
+    const extensionsTab = [...document.querySelectorAll('.tab-list__tab')].find(
+      (button) => button.textContent.trim() === 'Extensions',
+    );
+    extensionsTab.click();
+    flushSync();
+
+    const groups = [...document.querySelectorAll('.stats-extension-group')];
+    expect(groups).toHaveLength(2);
+    expect(groups[0].querySelector('summary').textContent).toContain(
+      'Parser rework',
+    );
+    expect(groups[0].querySelector('summary').textContent).toContain(
+      '2 participants · 4 Runs',
+    );
+    // An untitled group is labelled by its start and a short id.
+    expect(groups[1].querySelector('summary').textContent).toMatch(
+      /Started .+ · titled/,
+    );
+    groups[0].querySelector('summary').click();
+    flushSync();
+    const rows = [...groups[0].querySelectorAll('tbody tr')].map(
+      (row) => row.textContent,
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toContain('Walross');
+    expect(rows[0]).toContain('prov/a');
+    expect(cardValue('statistics.extensions.groups')).toBe('2');
+  });
+
+  it('shows an Extensions empty state without Extension activity', async () => {
+    rpcMock.mockResolvedValue(makeReport());
+
+    suite.mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForOverview();
+
+    const extensionsTab = [...document.querySelectorAll('.tab-list__tab')].find(
+      (button) => button.textContent.trim() === 'Extensions',
+    );
+    extensionsTab.click();
+    flushSync();
+
+    expect(document.querySelector('.stats-panel .empty-state')).toBeTruthy();
+    expect(document.body.textContent).toContain(
+      'No Extension activity in this time range.',
+    );
+  });
+
   it('shows an error message and retries on failure', async () => {
     rpcMock.mockRejectedValueOnce(new Error('boom'));
 

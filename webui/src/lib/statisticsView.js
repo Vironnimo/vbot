@@ -14,6 +14,7 @@ export const STATISTICS_SUB_VIEWS = Object.freeze([
   'runs',
   'tools',
   'skills',
+  'extensions',
 ]);
 
 export const DAILY_GRANULARITIES = Object.freeze(['day', 'week', 'month']);
@@ -481,16 +482,37 @@ export function cacheHitRate(record) {
   return toFiniteNumber(record?.cache_read_tokens) / cacheInput;
 }
 
+// Report rows attribute Extension-owned Sessions (for example Swarm
+// participants) to `extension:<name>`; Agent ids never contain `:`.
+const EXTENSION_ACTOR_PREFIX = 'extension:';
+
 // Split a statistics `agent_id` into display parts. The `statistics.report`
 // keys project agents as `agent@projekt` (and identity agents as a bare id), so
 // every agent cell parses the address once and renders the bare name plus, for a
 // project agent, a small project badge — instead of the raw `builder@vbot`
 // string. An identity agent (no `@`) gets `projectId: null`, so the component
 // renders it exactly as before (no badge), keeping the identity display
-// byte-identical.
+// byte-identical. An Extension key renders its Extension name with a badge.
 export function agentDisplay(agentId) {
+  if (
+    typeof agentId === 'string' &&
+    agentId.startsWith(EXTENSION_ACTOR_PREFIX) &&
+    agentId.length > EXTENSION_ACTOR_PREFIX.length
+  ) {
+    return {
+      name: agentId.slice(EXTENSION_ACTOR_PREFIX.length),
+      projectId: null,
+      extension: true,
+    };
+  }
   const { agentId: bareId, projectId } = parseAgentAddress(agentId);
-  return { name: bareId, projectId };
+  return { name: bareId, projectId, extension: false };
+}
+
+// Short, stable suffix identifying an untitled Extension group in its label.
+export function shortGroupId(groupId) {
+  const value = typeof groupId === 'string' ? groupId : '';
+  return value.slice(-6);
 }
 
 export function topN(list, count) {
