@@ -354,7 +354,8 @@ class RunExecution:
                             *session.take_deferred_notes(),
                             user_message,
                         ]
-                    await session.append_many_async(persisted_messages)
+                    if persisted_messages:
+                        await context.session_snapshot.append(session, persisted_messages)
                     if request.edit_message_id is not None:
                         context.session_snapshot.commit_edit()
                         if context.continuation_tracker is not None:
@@ -376,7 +377,8 @@ class RunExecution:
                                     "Failed to reset generated Session title after history edit",
                                     exc_info=True,
                                 )
-                    await context.session_snapshot.refresh(session)
+                    if not persisted_messages or request.edit_message_id is not None:
+                        await context.session_snapshot.refresh(session)
                     if not internal and not request.input_already_persisted:
                         _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
                     if request.input_persisted_hook is not None:
@@ -417,8 +419,7 @@ class RunExecution:
                             context.skill_registry,
                         )
                         async with self._dependencies.sessions.write_lock(session_address):
-                            await session.flush_deferred_notes_async()
-                            await context.session_snapshot.refresh(session)
+                            await context.session_snapshot.flush_deferred_notes(session)
                     finally:
                         await session.flush_deferred_notes_async()
             run.raise_if_cancelled()
@@ -628,8 +629,7 @@ class RunExecution:
                     )
                 finally:
                     async with self._dependencies.sessions.write_lock(session_address):
-                        await session.flush_deferred_notes_async()
-                        await context.session_snapshot.refresh(session)
+                        await context.session_snapshot.flush_deferred_notes(session)
 
             # Background reflection accounting. Fire-and-forget on the service's
             # side; a failure here must never mask the run outcome.

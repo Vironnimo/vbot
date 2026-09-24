@@ -65,6 +65,8 @@ if TYPE_CHECKING:
 
 
 _WriteResult = TypeVar("_WriteResult")
+# Records selected inside a write transaction and decoded after commit.
+_HistoryDelta = tuple[list[sqlite3.Row], "SessionReadCursor"] | None
 
 
 class SessionStore:
@@ -324,17 +326,40 @@ class SessionStore:
         *,
         run_id: str | None = None,
         assistant_message_id: str | None = None,
-    ) -> None:
-        return self._execute_write(
-            lambda connection: _store_mutations.append_messages(
+        continuation_records: Sequence[JsonObject] = (),
+        since: SessionReadCursor | None = None,
+    ) -> SessionReadBatch | None:
+        """Append Messages plus any Continuation records in one transaction.
+
+        With *since*, the same transaction also selects every record after that
+        cursor (this append and any concurrent writer's), so the caller needs no
+        follow-up read. ``None`` then means the cursor cannot be continued.
+        """
+
+        def _fn(connection: sqlite3.Connection) -> _HistoryDelta:
+            _store_mutations.append_messages(
                 connection,
                 address,
                 messages,
                 run_id=run_id,
                 assistant_message_id=assistant_message_id,
-            ),
-            patience_s=TRANSCRIPT_WRITE_PATIENCE_S,
-        )
+            )
+            return self._journal_and_select(connection, address, continuation_records, since)
+
+        delta = self._execute_write(_fn, patience_s=TRANSCRIPT_WRITE_PATIENCE_S)
+        return None if delta is None else _store_history.read_batch(delta)
+
+    @staticmethod
+    def _journal_and_select(
+        connection: sqlite3.Connection,
+        address: SessionAddress,
+        continuation_records: Sequence[JsonObject],
+        since: SessionReadCursor | None,
+    ) -> _HistoryDelta:
+        _store_continuation.append_continuation(connection, address, continuation_records)
+        if since is None:
+            return None
+        return _store_history.message_rows_since(connection, address, since)
 
     def start_tool(
         self,
@@ -447,9 +472,13 @@ class SessionStore:
         deduplicate_carrier: bool = False,
         run_id: str | None = None,
         assistant_message_id: str | None = None,
-    ) -> None:
-        return self._execute_write(
-            lambda connection: _store_owned.append_messages_with_receipts(
+        continuation_records: Sequence[JsonObject] = (),
+        since: SessionReadCursor | None = None,
+    ) -> SessionReadBatch | None:
+        """Receipt-carrying variant of :meth:`append_messages` with the same options."""
+
+        def _fn(connection: sqlite3.Connection) -> _HistoryDelta:
+            _store_owned.append_messages_with_receipts(
                 connection,
                 address,
                 generation_id=generation_id,
@@ -459,9 +488,11 @@ class SessionStore:
                 deduplicate_carrier=deduplicate_carrier,
                 run_id=run_id,
                 assistant_message_id=assistant_message_id,
-            ),
-            patience_s=TRANSCRIPT_WRITE_PATIENCE_S,
-        )
+            )
+            return self._journal_and_select(connection, address, continuation_records, since)
+
+        delta = self._execute_write(_fn, patience_s=TRANSCRIPT_WRITE_PATIENCE_S)
+        return None if delta is None else _store_history.read_batch(delta)
 
     def delivery_receipt(
         self, address: SessionAddress, *, generation_id: str, owner_name: str, receipt_id: str

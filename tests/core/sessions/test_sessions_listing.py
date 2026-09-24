@@ -10,6 +10,7 @@ import pytest
 import core.sessions._store_codec as session_store_module
 from core.chat import ChatMessage
 from core.chat.continuation import fold_continuation_records
+from core.chat.errors import ChatSessionError
 from core.runs import RunKind
 from core.sessions import (
     SESSION_FORK_ALWAYS_STRIP_META_KEYS,
@@ -49,6 +50,41 @@ def test_cursor_reads_only_messages_appended_after_the_snapshot(manager) -> None
     appended = session.load_since(initial.cursor)
     assert appended is not None
     assert [message.content for message in appended.messages] == ["second"]
+
+
+def test_append_returns_every_record_since_the_cursor_and_commits_its_journal(manager) -> None:
+    session = manager.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("first"))
+    initial = session.load_since()
+    assert initial is not None
+    manager.get(session.address).append(ChatMessage.note("written by another accessor"))
+
+    delta = session.append_many(
+        [ChatMessage.assistant(model="test", content="second")],
+        continuation_records=[_continuation_start()],
+        since=initial.cursor,
+    )
+
+    assert delta is not None
+    assert [message.role for message in delta.messages] == ["note", "assistant"]
+    assert [message.role for message in delta.active_messages] == ["note", "assistant"]
+    latest = session.load_since()
+    assert latest is not None and delta.cursor == latest.cursor
+    assert fold_continuation_records(session.load_continuation_records()) is not None
+
+
+def test_a_rejected_journal_record_rolls_back_its_history_append(manager) -> None:
+    session = manager.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("first"))
+
+    with pytest.raises(ChatSessionError):
+        session.append_many(
+            [ChatMessage.assistant(model="test", content="lost")],
+            continuation_records=[{**_continuation_start(), "version": 2}],
+        )
+
+    assert [message.role for message in session.load()] == ["user"]
+    assert session.load_continuation_records() == []
 
 
 @pytest.mark.asyncio
