@@ -21,6 +21,8 @@ from core.subagents._constants import (
     SESSION_RESULT_RETRY_ATTEMPTS,
     SESSION_RESULT_RETRY_DELAY_SECONDS,
     SUBAGENT_ACTIVITY_NOTE_TEMPLATE,
+    SUBAGENT_REMOVED_FROM_QUEUE_MESSAGE,
+    SUBAGENT_START_FAILED_MESSAGE_TEMPLATE,
     SUBAGENT_USER_CANCEL_MESSAGE,
     USER_CANCEL_REASON,
 )
@@ -34,10 +36,13 @@ from core.tools.tools import (
     JsonObject,
     ToolContext,
 )
+from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
 if TYPE_CHECKING:
     from core.runtime.interfaces import RuntimeServices
+
+_LOGGER = get_logger("subagents")
 
 
 def _register_result_acknowledgement_after_parent_persistence(
@@ -96,20 +101,49 @@ def _track_queued_subagent_completion(
     item: Any,
     activity: SubAgentActivity | None,
     activity_file: str | None,
+    *,
+    background: bool,
 ) -> None:
+    """Watch one queued child until it starts and finishes, or never starts.
+
+    A foreground Parent learns inline why queued work never started. A background
+    Parent was promised automatic delivery, so unstarted work that the
+    coordinator did not remove itself (for example a user removing the Queue item)
+    completes with an explanatory result through the ordinary completion notice.
+    """
+
     async def complete_when_started_and_terminal() -> None:
         try:
             run = await item.future
         except asyncio.CancelledError:
             if activity is not None:
                 activity.finish_unstarted()
-            batch_tracker.remove_queued(parent_key, item.item_id)
+            if not background or not batch_tracker.complete_unstarted(
+                parent_key,
+                item.item_id,
+                _unstarted_result_dict(activity_file, note=SUBAGENT_REMOVED_FROM_QUEUE_MESSAGE),
+            ):
+                batch_tracker.remove_queued(parent_key, item.item_id)
             return
-        except Exception:
+        except Exception as error:
             if activity is not None:
                 activity.finish_unstarted("failed before start")
-            batch_tracker.remove_queued(parent_key, item.item_id)
-            raise
+            _LOGGER.warning(
+                "Queued sub-agent failed before start (queue_item=%s): %s",
+                item.item_id,
+                error,
+            )
+            if not background or not batch_tracker.complete_unstarted(
+                parent_key,
+                item.item_id,
+                _unstarted_result_dict(
+                    activity_file,
+                    status=RunStatus.FAILED.value,
+                    note=SUBAGENT_START_FAILED_MESSAGE_TEMPLATE.format(error=error),
+                ),
+            ):
+                batch_tracker.remove_queued(parent_key, item.item_id)
+            return
         if activity is not None:
             activity.attach(run)
         if not batch_tracker.mark_started(parent_key, item.item_id, run.id):
@@ -125,6 +159,22 @@ def _track_queued_subagent_completion(
             f"queue_item={item.item_id} parent={parent_key[0]}/{parent_key[1]}/{parent_key[2]}",
         )
     )
+
+
+def _unstarted_result_dict(
+    activity_file: str | None,
+    *,
+    note: str,
+    status: str = RunStatus.CANCELLED.value,
+) -> JsonObject:
+    return {
+        "run_id": None,
+        "status": status,
+        "result": None,
+        "usage": None,
+        "activity_file": activity_file,
+        "note": note,
+    }
 
 
 async def _wait_for_subagent_result(

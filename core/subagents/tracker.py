@@ -262,6 +262,7 @@ class SubAgentBatchTracker:
             if (
                 entry.session_id == sub_session_id
                 and entry.run_id is None
+                and not entry.complete
                 and _entry_matches_target(entry, sub_agent_id, project_id)
             ):
                 return entry
@@ -284,6 +285,43 @@ class SubAgentBatchTracker:
         if entry is None or entry.complete:
             return
 
+        self._complete_entry(parent_key, batch, entry, result_dict)
+
+    def complete_unstarted(
+        self,
+        parent_key: ParentKey,
+        queue_item_id: str,
+        result_dict: JsonObject,
+    ) -> bool:
+        """Complete queued work that will never start and submit its automatic notice.
+
+        Used when the Queue item disappears without the coordinator removing it,
+        for example when a user removes it or its admission fails. The entry stays
+        answerable through ``status`` until the Parent has received the notice.
+        """
+        batch = self._batches.get(parent_key)
+        if batch is None:
+            return False
+        entry = next(
+            (
+                candidate
+                for candidate in batch.entries.values()
+                if candidate.queue_item_id == queue_item_id and candidate.run_id is None
+            ),
+            None,
+        )
+        if entry is None or entry.complete:
+            return False
+        self._complete_entry(parent_key, batch, entry, result_dict)
+        return True
+
+    def _complete_entry(
+        self,
+        parent_key: ParentKey,
+        batch: _SubAgentBatch,
+        entry: _SubAgentEntry,
+        result_dict: JsonObject,
+    ) -> None:
         entry.complete = True
         entry.result = dict(result_dict)
         if entry.fetched:
@@ -405,6 +443,18 @@ class SubAgentBatchTracker:
             or entry.session_id != sub_session_id
             or not _entry_matches_target(entry, sub_agent_id, project_id)
         ):
+            return
+        self._cancel_completion_notice(parent_key, batch, entry)
+        entry.fetched = True
+        self._prune_if_finished(parent_key, batch)
+
+    def mark_work_fetched(self, parent_key: ParentKey, work_id: str) -> None:
+        """Mark one completed entry fetched by public id after durable Parent persistence."""
+        batch = self._batches.get(parent_key)
+        if batch is None:
+            return
+        entry = batch.entries.get(work_id)
+        if entry is None or not entry.complete:
             return
         self._cancel_completion_notice(parent_key, batch, entry)
         entry.fetched = True
