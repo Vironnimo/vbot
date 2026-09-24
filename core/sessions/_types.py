@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from core.runs import RunExecutionOwner
 
@@ -264,11 +264,33 @@ class SessionHistorySectionStats:
     end_timestamp: str | None
 
 
+# How Session Recall treats one live Session: an ordinary conversation, a
+# delegated Sub-Agent Session searched only on request, or an internal Session
+# (reflection, system-only) that search never returns.
+SessionRecallVisibility = Literal["conversation", "subagent", "hidden"]
+
+
+def recall_visibilities(*, include_subagents: bool) -> tuple[SessionRecallVisibility, ...]:
+    """Return the Recall visibilities one search admits."""
+    return ("conversation", "subagent") if include_subagents else ("conversation",)
+
+
 @dataclass(frozen=True)
 class SessionDescriptorSource:
     metadata: JsonObject
     message_count: int
     first_user_message: ChatMessage | None
+    recall_visibility: SessionRecallVisibility
+
+
+@dataclass(frozen=True)
+class SessionHistoryRevision:
+    """Canonical history version and Recall visibility of one live Session."""
+
+    address: SessionAddress
+    generation_id: str
+    history_revision: int
+    recall_visibility: SessionRecallVisibility
 
 
 @dataclass(frozen=True)

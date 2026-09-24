@@ -106,6 +106,7 @@ async def test_visibility_filters_still_apply_to_search_and_context(tmp_path: Pa
     sessions = ChatSessionManager(tmp_path)
     for name, kinds in [
         ("user", ["user"]),
+        ("calendar", ["calendar"]),
         ("sub", ["subagent"]),
         ("reflection", ["user", "skill_reflection"]),
         ("system", ["system"]),
@@ -127,8 +128,8 @@ async def test_visibility_filters_still_apply_to_search_and_context(tmp_path: Pa
             make_context(tmp_path), {"query": "needle", "include_subagents": True}, backend
         )
     )
-    assert {hit["session_id"] for hit in normal["items"]} == {"user"}
-    assert {hit["session_id"] for hit in delegated["items"]} == {"user", "sub"}
+    assert {hit["session_id"] for hit in normal["items"]} == {"user", "calendar"}
+    assert {hit["session_id"] for hit in delegated["items"]} == {"user", "calendar", "sub"}
     assert (
         next(hit for hit in delegated["items"] if hit["session_id"] == "sub")["include_subagents"]
         is True

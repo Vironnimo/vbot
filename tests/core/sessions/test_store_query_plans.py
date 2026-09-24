@@ -147,6 +147,7 @@ def _assert_indexed(connection: sqlite3.Connection, statements: _Statements) -> 
     [
         {},
         {"roles": ("user",)},
+        {"roles": ("user",), "include_subagents": True},
         {"roles": ("user", "assistant"), "since": "2026-01-01T00:00:00Z"},
         {"roles": ("tool",), "until": "2100-01-01T00:00:00Z", "excluded_session_ids": ("one",)},
     ],
@@ -265,4 +266,5 @@ def test_session_catalog_reads_scope_history_by_session_index(history) -> None:
     ) == {"one", "two"}
     sources = _store_queries.descriptor_sources(recorder, [address])()
     assert sources[address][2] is not None
+    assert sources[address][3] == "conversation"
     _assert_indexed(connection, statements)

@@ -20,6 +20,7 @@ import pytest
 from core.chat import ChatMessage
 from core.model_tasks import EmbeddingResult, EmbeddingSpaceIdentity
 from core.recall import RecallBackendContext, RecallSearchPage, RecallSearchRequest, hybrid
+from core.recall.canonical import RecallScope
 from core.recall.hybrid import (
     HybridRecallBackend,
 )
@@ -201,12 +202,12 @@ async def test_hybrid_arms_run_concurrently(
     literal_ranked = asyncio.Event()
     semantic_ranked = asyncio.Event()
 
-    async def literal(request: RecallSearchRequest) -> _WaitingArm:
+    async def literal(request: RecallSearchRequest, scope: RecallScope) -> _WaitingArm:
         literal_prepared.set()
         await semantic_prepared.wait()
         return _WaitingArm("literal", literal_ranked, semantic_ranked)
 
-    async def semantic(request: RecallSearchRequest) -> _WaitingArm:
+    async def semantic(request: RecallSearchRequest, scope: RecallScope) -> _WaitingArm:
         semantic_prepared.set()
         await literal_prepared.wait()
         return _WaitingArm("semantic", semantic_ranked, literal_ranked)
