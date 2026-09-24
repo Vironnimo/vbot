@@ -231,7 +231,7 @@ def _cancelled_result_dict(run: Run, activity_file: str | None = None) -> JsonOb
     )
 
 
-def _result_from_session(
+async def _result_from_session(
     runtime: RuntimeServices,
     agent_id: str,
     session_id: str,
@@ -242,10 +242,12 @@ def _result_from_session(
     try:
         # Read the child session under its target project anchor;
         # ``None`` keeps the identity layout.
-        session = runtime.chat_sessions.get(
+        session = await runtime.chat_sessions.get_async(
             SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
         )
-        run_result = session.load_run_result(run_id=run_id, require_latest=run_id is None)
+        run_result = await session.load_run_result_async(
+            run_id=run_id, require_latest=run_id is None
+        )
     except ChatSessionError as error:
         return (
             _with_target_project(
@@ -314,7 +316,7 @@ async def _poll_result_from_session(
     delay_seconds: float = SESSION_RESULT_RETRY_DELAY_SECONDS,
 ) -> tuple[JsonObject, bool]:
     bounded_attempts = max(1, attempts)
-    result, terminal = _result_from_session(
+    result, terminal = await _result_from_session(
         runtime,
         agent_id,
         session_id,
@@ -326,7 +328,7 @@ async def _poll_result_from_session(
         if terminal:
             return result, True
         await asyncio.sleep(delay_seconds)
-        result, terminal = _result_from_session(
+        result, terminal = await _result_from_session(
             runtime,
             agent_id,
             session_id,
