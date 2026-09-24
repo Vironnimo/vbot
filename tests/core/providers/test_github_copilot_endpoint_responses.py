@@ -114,7 +114,7 @@ async def test_stream_responses_rebuilds_headers_per_connect_attempt() -> None:
         ]
     )
 
-    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
         async for _ in adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5-mini"):
             pass
 

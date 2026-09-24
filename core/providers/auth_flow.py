@@ -43,6 +43,9 @@ from core.utils.tls import shared_ssl_context
 
 _LOGGER = get_logger("providers.auth_flow")
 
+# Tests patch this seam instead of the process-wide ``asyncio.sleep``.
+_sleep = asyncio.sleep
+
 DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
 DEFAULT_DEVICE_FLOW_INTERVAL_SECONDS = 5
 DEFAULT_OPENAI_DEVICE_FLOW_EXPIRES_IN_SECONDS = 600
@@ -390,7 +393,7 @@ class DeviceFlowEngine:
                 )
                 if self._is_pending_response(data):
                     poll_interval = self._next_interval(data, poll_interval)
-                    await asyncio.sleep(self._bounded_poll_sleep(poll_interval, expires_at))
+                    await _sleep(self._bounded_poll_sleep(poll_interval, expires_at))
                     continue
 
                 if self._is_terminal_error(data):

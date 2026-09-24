@@ -605,7 +605,7 @@ async def test_openrouter_embed_retries_529_overload() -> None:
     ]
     client = _openrouter_embedding_client("google/gemini-embedding-2")
 
-    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
         response = await client.embed(["alpha"], options={})
 
     assert response.vectors == ([0.1, 0.2],)

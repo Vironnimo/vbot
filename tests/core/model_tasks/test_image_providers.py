@@ -358,7 +358,7 @@ async def test_openrouter_image_generate_retries_documented_503() -> None:
     ]
     client = _openrouter_image_client("black-forest-labs/flux.2-pro")
 
-    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
         result = await client.generate("a cat", options={})
 
     assert result.images == (b"img",)

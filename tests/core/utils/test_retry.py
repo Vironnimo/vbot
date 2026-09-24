@@ -139,7 +139,7 @@ async def test_retry_stops_after_max_retries_rate_limit():
 
     # Act / Assert
     with (
-        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+        patch("core.utils.retry._sleep", new_callable=AsyncMock),
         pytest.raises(ProviderRateLimitError, match="Rate limited") as error,
     ):
         await retry_async(mock_fn)
@@ -156,7 +156,7 @@ async def test_retry_stops_after_max_retries_timeout():
 
     # Act / Assert
     with (
-        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+        patch("core.utils.retry._sleep", new_callable=AsyncMock),
         pytest.raises(ProviderTimeoutError, match="Connection timed out"),
     ):
         await retry_async(mock_fn)
@@ -174,7 +174,7 @@ async def test_retry_succeeds_after_transient_rate_limit():
     mock_fn = AsyncMock(side_effect=[ProviderRateLimitError("Rate limited"), "ok"])
 
     # Act
-    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
         result = await retry_async(mock_fn)
 
     # Assert
@@ -189,7 +189,7 @@ async def test_retry_succeeds_after_transient_timeout():
     mock_fn = AsyncMock(side_effect=[ProviderTimeoutError("Timeout"), "ok"])
 
     # Act
-    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
         result = await retry_async(mock_fn)
 
     # Assert
@@ -204,7 +204,7 @@ async def test_retry_custom_retryable_provider_error():
     mock_fn = AsyncMock(side_effect=[ProviderError("Transient", retryable=True), "ok"])
 
     # Act
-    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
         result = await retry_async(mock_fn)
 
     # Assert
@@ -227,7 +227,7 @@ async def test_retry_exponential_backoff_increases_delay():
 
     # Act / Assert
     with (
-        patch("core.utils.retry.asyncio.sleep", side_effect=mock_sleep),
+        patch("core.utils.retry._sleep", side_effect=mock_sleep),
         patch("core.utils.retry.random.uniform", return_value=0.0),
         pytest.raises(ProviderRateLimitError),
     ):
@@ -254,7 +254,7 @@ async def test_retry_jitter_is_bounded():
 
     # Act / Assert
     with (
-        patch("core.utils.retry.asyncio.sleep", side_effect=mock_sleep),
+        patch("core.utils.retry._sleep", side_effect=mock_sleep),
         pytest.raises(ProviderRateLimitError),
     ):
         await retry_async(mock_fn)
@@ -290,7 +290,7 @@ async def test_retry_honors_retry_after_as_floor_over_backoff():
 
     # Act / Assert
     with (
-        patch("core.utils.retry.asyncio.sleep", side_effect=mock_sleep),
+        patch("core.utils.retry._sleep", side_effect=mock_sleep),
         patch("core.utils.retry.random.uniform", return_value=0.0),
         pytest.raises(ProviderRateLimitError),
     ):
@@ -313,7 +313,7 @@ async def test_retry_after_smaller_than_backoff_keeps_exponential():
 
     # Act / Assert
     with (
-        patch("core.utils.retry.asyncio.sleep", side_effect=mock_sleep),
+        patch("core.utils.retry._sleep", side_effect=mock_sleep),
         patch("core.utils.retry.random.uniform", return_value=0.0),
         pytest.raises(ProviderRateLimitError),
     ):
@@ -336,7 +336,7 @@ async def test_retry_after_is_capped_at_maximum():
 
     # Act / Assert
     with (
-        patch("core.utils.retry.asyncio.sleep", side_effect=mock_sleep),
+        patch("core.utils.retry._sleep", side_effect=mock_sleep),
         patch("core.utils.retry.random.uniform", return_value=0.0),
         pytest.raises(ProviderRateLimitError),
     ):
@@ -356,7 +356,7 @@ async def test_retry_logs_when_honoring_retry_after(
 
     # Act
     with (
-        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+        patch("core.utils.retry._sleep", new_callable=AsyncMock),
         patch("core.utils.retry.random.uniform", return_value=0.0),
     ):
         result = await retry_async(mock_fn)
@@ -385,7 +385,7 @@ async def test_retry_logs_warning_on_each_retry_attempt(
     caplog.set_level(logging.WARNING, logger="vbot.utils.retry")
 
     # Act
-    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.utils.retry._sleep", new_callable=AsyncMock):
         result = await retry_async(mock_fn)
 
     # Assert
@@ -412,7 +412,7 @@ async def test_retry_logs_warning_when_retries_exhausted(
 
     # Act / Assert
     with (
-        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+        patch("core.utils.retry._sleep", new_callable=AsyncMock),
         pytest.raises(ProviderRateLimitError),
     ):
         await retry_async(mock_fn)

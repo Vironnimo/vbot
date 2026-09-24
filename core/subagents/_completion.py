@@ -49,6 +49,9 @@ if TYPE_CHECKING:
 
 _LOGGER = get_logger("subagents")
 
+# Tests patch this seam instead of the process-wide ``asyncio.sleep``.
+_sleep = asyncio.sleep
+
 
 def _register_result_acknowledgement_after_parent_persistence(
     context: ToolContext,
@@ -327,7 +330,7 @@ async def _poll_result_from_session(
     for _ in range(1, bounded_attempts):
         if terminal:
             return result, True
-        await asyncio.sleep(delay_seconds)
+        await _sleep(delay_seconds)
         result, terminal = await _result_from_session(
             runtime,
             agent_id,

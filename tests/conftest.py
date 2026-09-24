@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 
@@ -81,3 +84,47 @@ def _isolate_vbot_loggers() -> Iterator[None]:
     yield
     for name, logger in _vbot_loggers().items():
         snapshot.get(name, _PRISTINE_LOGGER_STATE).apply(logger)
+
+
+@pytest.fixture(autouse=True)
+def _require_loop_started_runtimes_closed(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Fail a test that leaves a ``Runtime`` started inside an Event Loop running.
+
+    Such a ``Runtime`` leaves periodic service tasks, such as the performance
+    Event Loop monitor, on the session-scoped test Event Loop, where they keep
+    running during later tests on the same worker. Close it with ``await
+    runtime.aclose()`` before the test ends.
+
+    Only an already imported ``Runtime`` class is guarded, which covers every
+    test module that imports ``Runtime`` at module level.
+    """
+    runtime_module = sys.modules.get("core.runtime.runtime")
+    if runtime_module is None:
+        yield
+        return
+    runtime_class = runtime_module.Runtime
+    original_start = runtime_class.start
+    started: dict[int, Any] = {}
+
+    def start(runtime: Any) -> None:
+        original_start(runtime)
+        if _event_loop_running():
+            started[id(runtime)] = runtime
+
+    monkeypatch.setattr(runtime_class, "start", start)
+    yield
+    leaked = sum(1 for runtime in started.values() if runtime._started)
+    if leaked:
+        pytest.fail(
+            f"{leaked} Runtime(s) started inside the Event Loop are still running; "
+            "await runtime.aclose() before the test ends",
+            pytrace=False,
+        )
+
+
+def _event_loop_running() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True

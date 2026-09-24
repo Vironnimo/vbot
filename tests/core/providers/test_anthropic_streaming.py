@@ -56,7 +56,7 @@ class TestStreamConnectRetryRebuildsHeaders:
             ]
         )
 
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
             async for _ in adapter.stream(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"):
                 pass
 
@@ -713,7 +713,7 @@ class TestStreamSSE:
 
         # Act / Assert
         with (
-            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            patch("core.utils.retry._sleep", new_callable=AsyncMock),
             pytest.raises(ProviderTimeoutError),
         ):
             async for _ in anthropic_adapter.stream(
@@ -730,7 +730,7 @@ class TestStreamSSE:
 
         # Act / Assert
         with (
-            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            patch("core.utils.retry._sleep", new_callable=AsyncMock),
             pytest.raises(NetworkError, match="connection failed"),
         ):
             async for _ in anthropic_adapter.stream(
@@ -888,7 +888,7 @@ class TestStreamSSE:
         )
 
         # Act
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        with patch("core.utils.retry._sleep", new_callable=AsyncMock):
             chunks = []
             async for chunk in anthropic_adapter.stream(
                 SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"

@@ -167,7 +167,7 @@ async def test_xai_flow_accepts_http_400_pending_then_saves_rotated_token(
     ]
     route = respx.post(XAI_TOKEN_URL).mock(side_effect=responses)
 
-    with patch("core.providers.auth_flow.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.providers.auth_flow._sleep", new_callable=AsyncMock):
         await engine._poll_for_token(
             "xai",
             "subscription",
@@ -229,7 +229,7 @@ async def test_nous_flow_uses_inference_scope_and_accepts_http_400_pending(
     )
 
     session = await engine._request_device_session("nous", "subscription", _nous_oauth_config())
-    with patch("core.providers.auth_flow.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.providers.auth_flow._sleep", new_callable=AsyncMock):
         await engine._poll_for_token(
             "nous",
             "subscription",
@@ -320,7 +320,7 @@ async def test_opencode_flow_posts_json_accepts_pending_and_stores_rotating_toke
         "account",
         _opencode_oauth_config(),
     )
-    with patch("core.providers.auth_flow.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.providers.auth_flow._sleep", new_callable=AsyncMock):
         await engine._poll_for_token(
             "opencode-zen",
             "account",
@@ -509,7 +509,7 @@ async def test_minimax_flow_polls_pending_then_saves_rotatable_token(tmp_path: P
     )
     on_complete = AsyncMock()
 
-    with patch("core.providers.auth_flow.asyncio.sleep", new_callable=AsyncMock):
+    with patch("core.providers.auth_flow._sleep", new_callable=AsyncMock):
         await engine._poll_for_token(
             "minimax",
             "subscription",

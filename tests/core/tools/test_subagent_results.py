@@ -602,7 +602,7 @@ async def test_subagent_result_polls_persisted_run_until_assistant_output_appear
         )
         await real_sleep(0)
 
-    monkeypatch.setattr(subagent_completion.asyncio, "sleep", append_after_first_poll)
+    monkeypatch.setattr(subagent_completion, "_sleep", append_after_first_poll)
 
     # Act
     result = await _handle_subagent_result(
@@ -752,7 +752,7 @@ async def test_subagent_result_reports_failed_after_bounded_jsonl_poll(
     async def record_sleep(delay_seconds: float) -> None:
         sleeps.append(delay_seconds)
 
-    monkeypatch.setattr(subagent_completion.asyncio, "sleep", record_sleep)
+    monkeypatch.setattr(subagent_completion, "_sleep", record_sleep)
 
     # Act
     result = await _handle_subagent_result(

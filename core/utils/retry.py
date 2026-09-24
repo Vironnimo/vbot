@@ -34,6 +34,9 @@ T = TypeVar("T")
 
 _LOGGER = get_logger("utils.retry")
 
+# Tests patch this seam instead of the process-wide ``asyncio.sleep``.
+_sleep = asyncio.sleep
+
 MAX_RETRIES = 3
 INITIAL_DELAY_SECONDS = 1.0
 BACKOFF_FACTOR = 2
@@ -132,7 +135,7 @@ async def sleep_for_retry(attempt: int, retry_after: float | None = None) -> Non
     each spelling out ``compute_retry_delay`` + ``asyncio.sleep``.
     """
     delay, _ = compute_retry_delay(attempt, retry_after=retry_after)
-    await asyncio.sleep(delay)
+    await _sleep(delay)
 
 
 async def retry_async(
@@ -189,7 +192,7 @@ async def retry_async(
                     " (honoring server Retry-After)" if honored_retry_after else "",
                 )
                 _notify_retry(RetryNotice(error, attempt + 2, max_retries + 1, delay, True))
-                await asyncio.sleep(delay)
+                await _sleep(delay)
                 _notify_retry(RetryNotice(error, attempt + 2, max_retries + 1, 0, False))
 
     # Should be unreachable when max_retries >= 0, but satisfies type checkers.

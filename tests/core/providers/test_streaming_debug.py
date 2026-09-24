@@ -363,7 +363,7 @@ async def test_error_status_stream_persists_response_body(
     adapter.set_debug_context(streaming_ctx)
 
     with (
-        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock) as sleep_mock,
+        patch("core.utils.retry._sleep", new_callable=AsyncMock) as sleep_mock,
         pytest.raises(ProviderRateLimitError),
     ):
         await _drain(adapter)
