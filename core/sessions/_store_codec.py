@@ -552,12 +552,12 @@ def message_from_row(row: sqlite3.Row) -> ChatMessage:
 
 
 def _message_payload(row: sqlite3.Row) -> str:
+    return _message_json(message_from_row(row))
+
+
+def _message_json(message: ChatMessage) -> str:
     try:
-        return json.dumps(
-            message_from_row(row).to_dict(),
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
+        return json.dumps(message.to_dict(), ensure_ascii=False, separators=(",", ":"))
     except (TypeError, ValueError) as exc:
         raise SessionStoreCorruptError("invalid canonical Session message") from exc
 

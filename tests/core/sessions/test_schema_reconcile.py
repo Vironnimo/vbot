@@ -120,6 +120,29 @@ def test_reconcile_is_a_noop_on_the_current_schema(tmp_path) -> None:
         connection.close()
 
 
+def test_reconcile_adds_missing_session_read_indexes(tmp_path) -> None:
+    connection = _create_current_database(tmp_path / "sessions.db")
+    indexes = (
+        "sessions_archived_address",
+        "compaction_checkpoints_by_session",
+        "history_edits_by_session",
+    )
+    try:
+        for name in indexes:
+            connection.execute(f"DROP INDEX {name}")
+
+        applied = reconcile_schema(connection)
+
+        assert applied == [f"created index {name}" for name in indexes]
+        live = {
+            str(row[0])
+            for row in connection.execute("SELECT name FROM sqlite_schema WHERE type = 'index'")
+        }
+        assert set(indexes) <= live
+    finally:
+        connection.close()
+
+
 def test_reconcile_heals_a_missing_column_and_table_and_keeps_rows(tmp_path) -> None:
     connection = _create_current_database(tmp_path / "sessions.db")
     try:
