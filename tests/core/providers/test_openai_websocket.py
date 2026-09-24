@@ -325,6 +325,8 @@ async def test_codex_websocket_exchange_keeps_canonical_debug_trace(
     assert trace["request"]["url"] == "wss://chatgpt.com/backend-api/codex/responses"
     assert json.loads(trace["request"]["body"])["type"] == "response.create"
     assert trace["request"]["headers"]["Authorization"] == "[REDACTED]"
+    assert trace["request"]["headers"]["chatgpt-account-id"] == "[REDACTED]"
+    assert "acct_openai" not in json.dumps(trace["request"]["headers"])
     assert trace["response"]["status_code"] == 101
     assert json.loads(trace["response"]["body"])["type"] == "response.completed"
     await adapter.aclose()

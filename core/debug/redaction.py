@@ -1,6 +1,7 @@
 """Sensitive-data redaction utilities for debug traces.
 
-Redacts credentials and secrets from provider wire captures before they
+Redacts credentials, secrets, and identifying values (Provider Account
+ids, organization ids, cookies) from provider wire captures before they
 are written to disk.  The rules are intentionally conservative: exact
 header-name matches plus whole-word patterns on header names, URL query
 parameters, and JSON object keys.
@@ -18,8 +19,19 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 _SENSITIVE_HEADERS = {"authorization", "x-api-key"}
 
 # Header/keyword fragments that trigger redaction when they appear as
-# a whole word inside a header name, query-param name, or JSON key.
-_SENSITIVE_WORDS = {"token", "secret", "key", "password", "credential"}
+# a whole word inside a header name, query-param name, or JSON key:
+# credential-like words plus identifying words (``chatgpt-account-id``,
+# ``openai-organization``, ``cookie``/``set-cookie``, ``account_id``).
+_SENSITIVE_WORDS = {
+    "token",
+    "secret",
+    "key",
+    "password",
+    "credential",
+    "account",
+    "organization",
+    "cookie",
+}
 
 _REDACTED = "[REDACTED]"
 
@@ -30,11 +42,13 @@ def redact_headers(headers: dict[str, str]) -> dict[str, str]:
     A header is considered sensitive when its name (case-insensitive)
     is ``Authorization``, ``x-api-key``, or contains any whole word
     from the sensitive-word list: ``token``, ``secret``, ``key``,
-    ``password``, ``credential``.
+    ``password``, ``credential``, ``account``, ``organization``,
+    ``cookie``.
 
     Whole-word matching splits on hyphens, underscores, and dots so
-    that ``x-api-key``, ``x_token_header``, and ``auth.token`` all
-    match while ``donkey`` does not.
+    that ``x-api-key``, ``x_token_header``, ``auth.token``,
+    ``chatgpt-account-id``, and ``set-cookie`` all match while
+    ``donkey`` and ``accounting`` do not.
     """
     return {
         name: _REDACTED if _is_sensitive_key(name) else value for name, value in headers.items()
