@@ -8,15 +8,12 @@
   "model_tasks": {
     "image_generation": {
       "target": "fake/e2e-image::default",
-      "options": {
-        "output_format": "png",
-        "response_format": "b64_json"
-      }
+      "options": {}
     },
     "text_to_speech": {
       "target": "fake/e2e-tts::default",
       "options": {
-        "response_format": "wav",
+        "response_format": "mp3",
         "voice": "alloy"
       }
     }
