@@ -16,6 +16,6 @@ def test_skills_is_a_allowed_resource_kind() -> None:
 def test_publish_accepts_the_skills_kind() -> None:
     bus = ServerEventBus()
 
-    event = bus.publish(RESOURCE_CHANGED_EVENT, {"kind": RESOURCE_KIND_SKILLS})
+    bus.publish(RESOURCE_CHANGED_EVENT, {"kind": RESOURCE_KIND_SKILLS})
 
-    assert event["payload"] == {"kind": "skills"}
+    assert bus.events[-1]["payload"] == {"kind": "skills"}
