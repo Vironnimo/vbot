@@ -1,6 +1,8 @@
 """Tests for storage."""
 
+import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +17,7 @@ from core.storage import (
     StorageError,
     StorageManager,
 )
+from core.storage import storage as storage_module
 
 
 def test_load_settings_returns_empty_when_missing(tmp_path: Path) -> None:
@@ -77,6 +80,80 @@ def test_load_settings_ignores_invalid_schema_fields(
     assert loaded == {"server_port": 8500}
     assert caplog.records
     assert storage.settings_path.read_text(encoding="utf-8") == original
+
+
+def _age(path: Path, *, seconds: float = 60.0) -> None:
+    """Move a file's mtime out of the racy window, as if written a while ago."""
+    past = time.time_ns() - int(seconds * 1_000_000_000)
+    os.utime(path, ns=(past, past))
+
+
+def _count_settings_reads(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    reads: list[Path] = []
+    load = storage_module.load_runtime_settings_json
+
+    def counting(path: Path) -> Any:
+        reads.append(path)
+        return load(path)
+
+    monkeypatch.setattr(storage_module, "load_runtime_settings_json", counting)
+    return reads
+
+
+def test_unchanged_settings_are_served_from_memory_as_independent_copies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings({"defaults": {"agent": {"temperature": 0.5}}, "keep_awake": True})
+    _age(storage.settings_path)
+    reads = _count_settings_reads(monkeypatch)
+
+    first = storage.load_settings()
+    first["defaults"]["agent"]["temperature"] = 1.0
+    first["keep_awake"] = False
+    second = storage.load_settings()
+
+    assert second == {"defaults": {"agent": {"temperature": 0.5}}, "keep_awake": True}
+    assert len(reads) == 1
+
+
+def test_settings_changes_are_read_after_every_kind_of_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = StorageManager(tmp_path)
+    storage.ensure_directories()
+    storage.settings_path.write_text('{"port": 8421}', encoding="utf-8")
+    _age(storage.settings_path)
+    assert storage.load_settings() == {"port": 8421}
+
+    # An external in-place edit of the same size keeps the file identity.
+    storage.settings_path.write_text('{"port": 8422}', encoding="utf-8")
+    assert storage.load_settings() == {"port": 8422}
+
+    _age(storage.settings_path)
+    storage.load_settings()
+    storage.save_settings({"keep_awake": True, "port": 8426})
+    assert storage.load_settings() == {"keep_awake": True, "port": 8426}
+
+    storage.settings_path.unlink()
+    assert storage.load_settings() == {}
+
+
+def test_recently_written_settings_are_reread_even_with_an_identical_stamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two writes in one filesystem timestamp tick must not look unchanged."""
+    storage = StorageManager(tmp_path)
+    storage.ensure_directories()
+    path = storage.settings_path
+    path.write_text('{"port": 8421}', encoding="utf-8")
+    stamp = path.stat().st_mtime_ns
+    assert storage.load_settings() == {"port": 8421}
+
+    path.write_text('{"port": 8422}', encoding="utf-8")
+    os.utime(path, ns=(stamp, stamp))
+
+    assert storage.load_settings() == {"port": 8422}
 
 
 def test_load_settings_logs_unchanged_degradation_only_once(

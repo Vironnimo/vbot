@@ -580,6 +580,79 @@ def test_growing_wire_reuses_unchanged_message_counts(monkeypatch):
     assert len(encoded) == 3
 
 
+def _structured_items() -> list[Any]:
+    payload = _image_payload(64, 64)
+    blob = "X" * 5_000
+    return [
+        {"role": "user", "content": "plain prose"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": '{"data": 1, "signature": "s"}'},
+        {"role": "tool", "tool_call_id": "c2", "content": 'see "image_url" and "base64"'},
+        {
+            "name": "search",
+            "description": "Search files.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+        },
+        {"name": "store", "parameters": {"properties": {"data": {"type": "string"}}}},
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{payload}"}},
+        {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+        {"type": "input_image", "image_url": "https://example.com/cat.png", "detail": "low"},
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": payload},
+        },
+        {"type": "media", "media_type": "image/png", "base64": payload},
+        {"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "wav"}},
+        {"type": "file", "file": {"file_data": f"data:application/pdf;base64,{blob}"}},
+        {"type": "reasoning", "id": "rs_1", "encrypted_content": blob},
+        {"type": "thinking", "thinking": "visible", "signature": blob},
+        {"type": "redacted_thinking", "data": blob},
+        {
+            "role": "assistant",
+            "reasoning_details": [
+                {"type": "reasoning.text", "format": "unknown", "index": 0, "text": "ab"},
+                {"type": "reasoning.text", "format": "unknown", "index": 0, "text": "cd"},
+                {"type": "reasoning.encrypted", "data": blob},
+            ],
+        },
+        {"nested": [[{"k": ("tuple", 1)}], {"signature": ["short", blob]}]},
+        f"data:image/png;base64,{payload}",
+        "plain string",
+        None,
+        42,
+    ]
+
+
+@pytest.mark.parametrize("model_id", [None, "gpt-4o", "claude-sonnet-4-6"])
+def test_structured_items_count_like_their_normalized_copy(model_id):
+    """Skipping normalization never changes an item's count."""
+    for item in _structured_items():
+        assert estimate_structured_tokens(item, model_id=model_id)[0] == (
+            token_utils._estimate_normalized(item, model_id=model_id)
+        ), item
+
+
+def test_items_without_media_or_opaque_reasoning_are_counted_without_copies(monkeypatch):
+    """Plain messages and Tool definitions skip the normalization walks entirely."""
+
+    def fail(*_args, **_kwargs):
+        raise AssertionError("normalization walk")
+
+    monkeypatch.setattr(token_utils, "_normalize_native_media", fail)
+    monkeypatch.setattr(token_utils, "_normalize_opaque_reasoning_blobs", fail)
+    plain = [item for item in _structured_items()[:6] if "store" not in str(item)]
+
+    count, _ = estimate_structured_tokens(plain)
+
+    assert count > 0
+
+
 def test_count_cache_is_bounded_and_does_not_retain_text(monkeypatch):
     monkeypatch.setattr(token_utils, "_COUNT_CACHE_SIZE", 3)
     for index in range(10):

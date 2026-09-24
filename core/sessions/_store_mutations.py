@@ -99,7 +99,12 @@ def mutate_metadata(
         updated = deepcopy(previous)
         mutation(updated)
         _store_values._json_object(updated, "session metadata")
-        payload, projection = _store_values._session_metadata_storage(updated)
+        storage = _store_values._session_metadata_storage(updated)
+        result = (previous, updated)
+        # Compare persisted forms: an unchanged row needs no write or revision.
+        if storage == _store_values._session_metadata_storage(previous):
+            return
+        payload, projection = storage
         connection.execute(
             "UPDATE sessions SET metadata_json = ?, "
             + ", ".join(
@@ -108,7 +113,6 @@ def mutate_metadata(
             + ", state_revision = state_revision + 1 WHERE session_key = ?",
             (payload, *projection, state["session_key"]),
         )
-        result = (previous, updated)
 
     _fn(connection)
     assert result is not None
@@ -145,11 +149,13 @@ def mutate_activity(
         updated = deepcopy(previous)
         mutation(updated)
         payload = _store_values._json_object(updated, "session activity")
+        result = (previous, updated)
+        if payload == _store_values._json_object(previous, "session activity"):
+            return
         connection.execute(
             "UPDATE sessions SET activity_json = ?, state_revision = state_revision + 1 WHERE session_key = ?",
             (payload, state["session_key"]),
         )
-        result = (previous, updated)
 
     _fn(connection)
     assert result is not None

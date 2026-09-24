@@ -391,4 +391,4 @@ async def test_stop_during_post_answer_compaction_keeps_the_answer_resolved(
     assistant = next(message for message in session.load() if message.role == "assistant")
     assert assistant.content == "Complete answer"
     assert not assistant.interrupted
-    assert session.load_continuation_records() == []
+    assert session.load_continuation() is None

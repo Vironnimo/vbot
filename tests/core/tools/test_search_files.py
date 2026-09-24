@@ -299,10 +299,18 @@ def test_invalid_calls_preserve_constraints(tree: Path, arguments) -> None:
     assert result["data"] is None
 
 
-def test_native_validation_even_with_no_candidates(tmp_path: Path) -> None:
-    result = search_files_handler(context(tmp_path), {"args": ["["]})
+@pytest.mark.parametrize("candidates", [False, True])
+@pytest.mark.parametrize("args", [["["], ["-P", "(?<"]])
+def test_native_validation_with_and_without_candidates(
+    tmp_path: Path, args: list[str], candidates: bool
+) -> None:
+    if candidates:
+        (tmp_path / "a.txt").write_text("[(?<")
+    result = search_files_handler(context(tmp_path), {"args": args})
     assert result["ok"] is False
-    assert "regex" in result["error"]["message"]
+    message = result["error"]["message"]
+    assert "regex parse error" in message or "PCRE2: error compiling pattern" in message
+    assert "If you meant literal text, add -F to args." in message
 
 
 def test_timeout_and_user_cancel(tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:

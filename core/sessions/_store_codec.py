@@ -171,16 +171,8 @@ def _deactivate_history_tail(
     ).fetchone()
     if target is None:
         raise ChatSessionError(f"history edit target is not active: {target_message_id}")
-    keys = [
-        int(row[0])
-        for row in connection.execute(
-            "SELECT message_key FROM history_records WHERE session_key = ? AND seq >= ? AND active = 1",
-            (session_key, int(target["seq"])),
-        ).fetchall()
-    ]
-    for message_key in keys:
-        _store_fts._delete_fts_message(connection, message_key)
     floor = int(target["seq"])
+    _store_fts._delete_fts_session(connection, session_key, from_sequence=floor)
     connection.execute(
         "UPDATE messages SET active=0 WHERE session_key=? AND seq>=?", (session_key, floor)
     )

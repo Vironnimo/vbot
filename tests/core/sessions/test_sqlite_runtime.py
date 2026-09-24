@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,10 @@ from core.sessions import sqlite_runtime
 from core.sessions.errors import SessionStoreUnavailableError
 from core.sessions.sqlite_runtime import (
     READ_CONNECTION_LIMIT,
+    READER_CACHE_KIB,
+    WRITER_CACHE_KIB,
     SQLiteRuntime,
+    copy_database,
     readonly_sqlite_uri,
     tracked_connection_count,
 )
@@ -153,6 +157,22 @@ def test_reader_permits_are_bounded_and_released_on_failure(tmp_path: Path) -> N
     assert runtime.live_connection_count() == 0
 
 
+def test_writer_and_readers_keep_bounded_page_caches(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    reader = runtime._checkout_reader()
+    try:
+        assert reader is not None
+        assert runtime.writer.execute("PRAGMA cache_size").fetchone()[0] == -WRITER_CACHE_KIB
+        assert reader.execute("PRAGMA cache_size").fetchone()[0] == -READER_CACHE_KIB
+        # The documented ceiling: every pooled reader plus the writer, full.
+        assert WRITER_CACHE_KIB + READ_CONNECTION_LIMIT * READER_CACHE_KIB == 192 * 1024
+    finally:
+        if reader is not None:
+            runtime._close_reader(reader)
+        runtime.close()
+    assert runtime.live_connection_count() == 0
+
+
 def test_reader_open_failure_releases_permit_and_can_retry(tmp_path: Path, monkeypatch) -> None:
     runtime = _runtime(tmp_path)
     real_connect = sqlite_runtime.connect_tracked
@@ -213,11 +233,106 @@ def test_readonly_connections_escape_special_path_characters(tmp_path: Path) -> 
         assert reader.execute("SELECT 1").fetchone()[0] == 1
         runtime._close_reader(reader)
         reader = None
-        assert runtime.backup(tmp_path / "backup.db") is True
+        backup = data_dir / "backup#%copy.db"
+        assert runtime.backup(backup) is True
+        with closing(sqlite3.connect(readonly_sqlite_uri(backup), uri=True)) as copy:
+            assert copy.execute("PRAGMA quick_check").fetchone()[0] == "ok"
     finally:
         if reader is not None:
             runtime._close_reader(reader)
         runtime.close()
+
+
+def _filled_database(path: Path) -> None:
+    # Many small rows give the copy many progress-handler polls.
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute("CREATE TABLE filler(value BLOB NOT NULL)")
+        connection.execute(
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50000) "
+            "INSERT INTO filler SELECT randomblob(64) FROM n"
+        )
+        connection.commit()
+
+
+def test_copy_database_cancelled_mid_copy_removes_partial_output(tmp_path: Path) -> None:
+    source_path = tmp_path / "source.db"
+    _filled_database(source_path)
+    destination = tmp_path / "copy.db"
+    polls = 0
+    partial_output_seen = False
+
+    def cancelled() -> bool:
+        nonlocal polls, partial_output_seen
+        polls += 1
+        if polls == 2:
+            partial_output_seen = destination.exists()
+        return polls >= 2
+
+    with closing(
+        sqlite3.connect(readonly_sqlite_uri(source_path), uri=True, isolation_level=None)
+    ) as source:
+        assert copy_database(source, destination, cancelled=cancelled) is False
+        assert partial_output_seen is True
+        assert destination.exists() is False
+        polls_after_cancel = polls
+        # The connection stays usable and no longer consults the cancelled progress handler.
+        assert copy_database(source, destination) is True
+        assert polls == polls_after_cancel
+    with closing(sqlite3.connect(readonly_sqlite_uri(destination), uri=True)) as copy:
+        assert copy.execute("SELECT COUNT(*) FROM filler").fetchone()[0] == 50000
+        assert copy.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert copy.execute("PRAGMA freelist_count").fetchone()[0] == 0
+
+
+def test_copy_database_is_one_read_that_concurrent_commits_neither_restart_nor_tear(
+    tmp_path: Path,
+) -> None:
+    # A stepped backup restarts whenever another connection commits between steps;
+    # this copy must finish from its first snapshot while the writer keeps committing.
+    source_path = tmp_path / "source.db"
+    _filled_database(source_path)
+    polls = 0
+    # One writing connection only, so WAL is safe even on a WAL-reset-vulnerable build.
+    with closing(sqlite3.connect(source_path, isolation_level=None)) as writer:
+        assert writer.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        writer.execute("PRAGMA busy_timeout=0")
+
+        def commit_during_copy() -> bool:
+            nonlocal polls
+            polls += 1
+            writer.execute("INSERT INTO filler(value) VALUES (x'00')")
+            return False
+
+        destination = tmp_path / "copy.db"
+        with closing(
+            sqlite3.connect(readonly_sqlite_uri(source_path), uri=True, isolation_level=None)
+        ) as source:
+            assert copy_database(source, destination, cancelled=commit_during_copy) is True
+        committed = writer.execute("SELECT COUNT(*) FROM filler").fetchone()[0]
+
+    assert polls >= 2
+    assert committed == 50000 + polls
+    with closing(sqlite3.connect(readonly_sqlite_uri(destination), uri=True)) as copy:
+        assert copy.execute("SELECT COUNT(*) FROM filler").fetchone()[0] == 50000
+        assert copy.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+
+
+def test_copy_database_refuses_an_existing_destination(tmp_path: Path) -> None:
+    source_path = tmp_path / "source.db"
+    _filled_database(source_path)
+    destination = tmp_path / "copy.db"
+    Path(f"{destination}-journal").write_bytes(b"evidence")
+
+    with (
+        closing(
+            sqlite3.connect(readonly_sqlite_uri(source_path), uri=True, isolation_level=None)
+        ) as source,
+        pytest.raises(FileExistsError),
+    ):
+        copy_database(source, destination)
+
+    assert Path(f"{destination}-journal").read_bytes() == b"evidence"
+    assert destination.exists() is False
 
 
 @pytest.mark.asyncio

@@ -56,7 +56,7 @@ Durations are milliseconds. Names are dotted lowercase words with low cardinalit
 - On the Session Track, with `run_id` args: `chat.run` (whole Run, `run_kind` arg; `_run_execution.py`), `chat.request_build` (first step: from request-state build to send, or from the loop top when a pre-request Compaction ran; later steps: loop top to send), `provider.response` (each send attempt incl. the too-large retry, `iteration` arg), `provider.first_token` (streaming: first non-heartbeat delta; non-streaming: the whole `adapter.send`), `chat.persist` (spans `persist assistant` / `persist tool results`), `chat.tool_round` (`tool_calls` arg) and `tool.<name>` (one Tool dispatch; discarded for unknown Tool names). Sources: `core/chat/_agentic_progression.py`, `request_runner.py`, `tool_dispatch.py`.
 - `chat.compaction` - whole automatic attempt or manual Compaction Run (`trigger` arg `auto`/`manual`), `core/compaction/run_coordination.py`.
 - `event_loop.lag` - how late each 100 ms monitor tick woke.
-- Gauges sampled about once per second: `event_loop.utilization` (loop-thread CPU / wall time), `process.cpu_percent`, `process.rss_mb`, `process.threads`, `asyncio.tasks`, and the Runtime-injected `runs.active` / `runs.queued`. `performance.dropped_metrics` counts observations dropped by the name cap.
+- Gauges sampled about once per second: `event_loop.utilization` (loop-thread CPU / wall time), `process.cpu_percent`, `process.rss_mb`, `process.python_threads` (Python threads only: the OS thread count needs a system-wide process scan on Windows, milliseconds of GIL time per sample), `asyncio.tasks`, and the Runtime-injected `runs.active` / `runs.queued`. `performance.dropped_metrics` counts observations dropped by the name cap.
 
 ## Conventions
 
