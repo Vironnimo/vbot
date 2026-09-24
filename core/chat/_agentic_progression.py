@@ -50,6 +50,7 @@ from core.chat.wire_shaping import (
 )
 from core.debug import DebugContext
 from core.extensions import HookContext, SessionRequestContext
+from core.performance import measure, record_span, session_track
 from core.providers.adapter import (
     TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
     TERMINAL_OUTCOME_TOOL_CALLS,
@@ -158,7 +159,12 @@ class AgenticProgression:
         tool_catalog_revision = -1
         # Set when a final answer is followed by selected steering input.
         awaiting_steering = False
+        track = session_track(run.agent_id, run.session_id, project_id)
+        run_args = {"run_id": run.id}
         while True:
+            # Step 1 began before the Run assembled its initial request state.
+            build_started = context.request_build_started or time.perf_counter()
+            context.request_build_started = None
             run.raise_if_cancelled()
             async with self._dependencies.sessions.write_lock(session_address):
 
@@ -340,6 +346,14 @@ class AgenticProgression:
             )
             request_tools = [] if context.tool_progress.finalization_reason is not None else tools
             step_started_perf = time.perf_counter()
+            record_span(
+                "chat.request_build",
+                build_started,
+                ended=step_started_perf,
+                track=track,
+                name="request build",
+                args=run_args,
+            )
             workspace = getattr(agent, "workspace", None)
             output_cwd = (
                 context.project_cwd
@@ -368,8 +382,14 @@ class AgenticProgression:
                     context_usage=request_context_usage,
                 )
                 try:
-                    with request_input_budget(
-                        target.model_id, int(request_context_usage["tokens"])
+                    with (
+                        request_input_budget(target.model_id, int(request_context_usage["tokens"])),
+                        measure(
+                            "provider.response",
+                            track=track,
+                            name="provider response",
+                            args={**run_args, "iteration": request_iteration_number},
+                        ),
                     ):
                         assistant_step = await self._wire_requests.send_assistant_request(
                             agent,
@@ -534,11 +554,19 @@ class AgenticProgression:
                 preserve_after_cancel=preserve_after_cancel,
             ):
                 preserved_cancelled_output = run.cancel_requested and preserve_after_cancel
+                persist_started = time.perf_counter()
                 await _finish_visible_boundary(
                     session.append_async(assistant_message), run, preserve_after_cancel
                 )
                 session.assistant_message_id = assistant_message.id
                 await context.session_snapshot.refresh(session)
+                record_span(
+                    "chat.persist",
+                    persist_started,
+                    track=track,
+                    name="persist assistant",
+                    args=run_args,
+                )
                 run.terminal_payload_extras["context_usage"] = assistant_context_usage
                 session_usage = add_session_turn_usage(session_usage, assistant_message.usage)
                 run.terminal_payload_extras["session_usage"] = session_usage
@@ -695,11 +723,17 @@ class AgenticProgression:
                             media_outputs = []
                         else:
                             context.tool_progress.iteration_count += 1
-                            tool_messages, media_outputs = await _dispatch_tool_calls(
-                                tool_dispatch_context,
-                                assistant_message.tool_calls,
-                                continuation_tracker=context.continuation_tracker,
-                            )
+                            with measure(
+                                "chat.tool_round",
+                                track=track,
+                                name="tool round",
+                                args={**run_args, "tool_calls": len(assistant_message.tool_calls)},
+                            ):
+                                tool_messages, media_outputs = await _dispatch_tool_calls(
+                                    tool_dispatch_context,
+                                    assistant_message.tool_calls,
+                                    continuation_tracker=context.continuation_tracker,
+                                )
                     else:
                         failure_code, failure_message = _terminal_tool_failure(terminal_outcome)
                         tool_messages = _fail_tool_calls_without_dispatch(
@@ -732,6 +766,7 @@ class AgenticProgression:
                     deferred_notes = session.take_deferred_notes()
                     session.assistant_message_id = assistant_message.id
                     batch_messages = [*tool_messages, *deferred_notes]
+                    persist_started = time.perf_counter()
                     binding = context.request.temporary_binding
                     extension_registry = self._dependencies.get_extension_registry()
                     if binding is not None and tool_dispatch_context.delivery_receipts:
@@ -766,6 +801,13 @@ class AgenticProgression:
                     else:
                         await session.append_many_async(batch_messages)
                     await context.session_snapshot.refresh(session)
+                    record_span(
+                        "chat.persist",
+                        persist_started,
+                        track=track,
+                        name="persist tool results",
+                        args=run_args,
+                    )
                     for tool_message in tool_messages:
                         assert tool_message.tool_call_id is not None
                         tool_dispatch_context.notify_result_persisted(tool_message.tool_call_id)

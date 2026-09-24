@@ -24,6 +24,7 @@ from core.compaction.compaction import (
     CompactionSettings,
     effective_compaction_policy,
 )
+from core.performance import record_span, session_track
 from core.providers.adapter import estimate_wire_request_input_tokens
 from core.runs import (
     COMPACTION_ABORTED_EVENT,
@@ -370,6 +371,14 @@ class CompactionRunCoordinator:
         except Exception:
             run.emit(COMPACTION_ABORTED_EVENT, {"reason": "failed"})
             raise
+        finally:
+            record_span(
+                "chat.compaction",
+                compaction_started_perf,
+                track=session_track(run.agent_id, run.session_id, run.project_id),
+                name="compaction",
+                args={"run_id": run.id, "trigger": "manual"},
+            )
 
     async def _load_compaction_snapshot(
         self,
@@ -515,174 +524,184 @@ class CompactionRunCoordinator:
         )
         close_summary_adapter = summary_adapter is not target.adapter
         compaction_started_perf = time.perf_counter()
-        run.emit(
-            COMPACTION_STARTED_EVENT,
-            {
-                "context_tokens_before": input_tokens,
-                "context_usage": effective_context_usage,
-            },
-        )
+        compaction_track = session_track(run.agent_id, run.session_id, run.project_id)
         try:
-            checkpoint = await self._host.compaction_service.compact(
-                session_messages,
-                session_address=session.address,
-                prompt_cache_affinity_id=context.prompt_cache_affinity_id,
-                summary_adapter=summary_adapter,
-                summary_model_id=summary_model_id,
-                summary_model_reference=f"{summary_provider_id}/{summary_model_id}",
-                active_model_reference=f"{target.provider_id}/{target.model_id}",
-                storage=self._host.storage,
-                settings=settings,
-                request_messages=continuation_request_messages or messages,
-                active_adapter=target.adapter,
-                active_model_id=target.model_id,
-                active_tools=tools,
-                minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
-                summary_temperature=self._host.resolve_temperature(
-                    summary_provider_id,
-                    summary_model_id,
-                ),
-                active_temperature=self._host.resolve_temperature(
-                    target.provider_id,
-                    target.model_id,
-                ),
-            )
-        except CompactionInsufficientReclaimError as exc:
             run.emit(
-                COMPACTION_ABORTED_EVENT,
-                {"reason": "insufficient_reclaim"},
+                COMPACTION_STARTED_EVENT,
+                {
+                    "context_tokens_before": input_tokens,
+                    "context_usage": effective_context_usage,
+                },
             )
-            _LOGGER.info(
-                "Auto-compaction skipped because projected reclaim was too small "
-                "(run=%s session=%s reason=%s)",
-                run.id,
-                run.session_id,
-                exc,
-            )
-            return current_state
-        except Exception:
-            run.emit(
-                COMPACTION_ABORTED_EVENT,
-                {"reason": "failed"},
-            )
-            _LOGGER.warning("Compaction failed; continuing without compaction", exc_info=True)
-            return current_state
-        finally:
-            if close_summary_adapter:
-                await self._host.close_adapter(summary_adapter)
-
-        checkpoint = await self._host.finalize_checkpoint(
-            checkpoint,
-            session_messages,
-        )
-        checkpoint = checkpoint.with_compaction_duration_ms(
-            duration_ms=round((time.perf_counter() - compaction_started_perf) * 1000)
-        )
-        prompt_refresh: object | None = None
-        try:
             try:
-                prompt_refresh = await self._host.prepare_prompt_refresh(
-                    agent_id=run.agent_id,
-                    session_id=run.session_id,
-                    agent=agent,
-                    project_id=run.project_id,
-                    working_project_id=run.working_project_id,
-                    project_cwd=context.project_cwd,
-                    activation_skill_project_id=context.skill_project_id,
+                checkpoint = await self._host.compaction_service.compact(
+                    session_messages,
+                    session_address=session.address,
+                    prompt_cache_affinity_id=context.prompt_cache_affinity_id,
+                    summary_adapter=summary_adapter,
+                    summary_model_id=summary_model_id,
+                    summary_model_reference=f"{summary_provider_id}/{summary_model_id}",
+                    active_model_reference=f"{target.provider_id}/{target.model_id}",
+                    storage=self._host.storage,
+                    settings=settings,
+                    request_messages=continuation_request_messages or messages,
+                    active_adapter=target.adapter,
+                    active_model_id=target.model_id,
+                    active_tools=tools,
+                    minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
+                    summary_temperature=self._host.resolve_temperature(
+                        summary_provider_id,
+                        summary_model_id,
+                    ),
+                    active_temperature=self._host.resolve_temperature(
+                        target.provider_id,
+                        target.model_id,
+                    ),
                 )
-            except Exception:
-                _LOGGER.warning(
-                    "Prompt context refresh failed after automatic Compaction "
-                    "(run=%s agent=%s session=%s)",
+            except CompactionInsufficientReclaimError as exc:
+                run.emit(
+                    COMPACTION_ABORTED_EVENT,
+                    {"reason": "insufficient_reclaim"},
+                )
+                _LOGGER.info(
+                    "Auto-compaction skipped because projected reclaim was too small "
+                    "(run=%s session=%s reason=%s)",
                     run.id,
-                    run.agent_id,
                     run.session_id,
-                    exc_info=True,
+                    exc,
                 )
-
-            if continue_same_run:
-                await self._host.refresh_continuation_reminder(
-                    context,
-                    context_window=self._host.resolve_context_window(agent, target),
+                return current_state
+            except Exception:
+                run.emit(
+                    COMPACTION_ABORTED_EVENT,
+                    {"reason": "failed"},
                 )
-            checkpoint, rebuilt_state = await self._host.project_automatic_compaction_request(
-                context=context,
-                target=target,
-                session_messages=session_messages,
-                checkpoint=checkpoint,
-                context_tokens_before=input_tokens,
-                prompt_refresh=prompt_refresh,
-                live_request_messages=messages if continue_same_run else None,
-                continuation_reminder=(
-                    context.continuation_reminder if continue_same_run else None
-                ),
-            )
-        except Exception:
-            run.emit(COMPACTION_ABORTED_EVENT, {"reason": "failed"})
-            _LOGGER.warning(
-                "Post-compaction request projection failed; continuing without Compaction",
-                exc_info=True,
-            )
-            return current_state
+                _LOGGER.warning("Compaction failed; continuing without compaction", exc_info=True)
+                return current_state
+            finally:
+                if close_summary_adapter:
+                    await self._host.close_adapter(summary_adapter)
 
-        checkpoint_committed = await self._append_compaction_checkpoint_if_current(
-            run,
-            session,
-            checkpoint,
-            snapshot_cursor,
-        )
-        if not checkpoint_committed:
-            run.emit(COMPACTION_ABORTED_EVENT, {"reason": "stale_context"})
-            _LOGGER.info(
-                "Auto-compaction discarded because the Session changed during its Model call "
-                "(run=%s session=%s)",
-                run.id,
-                run.session_id,
+            checkpoint = await self._host.finalize_checkpoint(
+                checkpoint,
+                session_messages,
             )
-            if continue_same_run:
+            checkpoint = checkpoint.with_compaction_duration_ms(
+                duration_ms=round((time.perf_counter() - compaction_started_perf) * 1000)
+            )
+            prompt_refresh: object | None = None
+            try:
                 try:
-                    return await self._host.rebuild_after_stale_compaction(
-                        context,
-                        target,
-                        messages,
+                    prompt_refresh = await self._host.prepare_prompt_refresh(
+                        agent_id=run.agent_id,
+                        session_id=run.session_id,
+                        agent=agent,
+                        project_id=run.project_id,
+                        working_project_id=run.working_project_id,
+                        project_cwd=context.project_cwd,
+                        activation_skill_project_id=context.skill_project_id,
                     )
                 except Exception:
                     _LOGGER.warning(
-                        "Request rebuild after stale auto-compaction failed; continuing with "
-                        "the existing request state",
+                        "Prompt context refresh failed after automatic Compaction "
+                        "(run=%s agent=%s session=%s)",
+                        run.id,
+                        run.agent_id,
+                        run.session_id,
                         exc_info=True,
                     )
-            return current_state
-        await context.session_snapshot.refresh(session)
-        accounting.reset()
-        context.prompt_cache_affinity_id = await self._host.rotate_prompt_cache_affinity(run)
-        if prompt_refresh is not None:
-            try:
-                await self._host.commit_prompt_refresh(
-                    agent_id=run.agent_id,
-                    session_id=run.session_id,
-                    project_id=run.project_id,
-                    refresh=prompt_refresh,
+
+                if continue_same_run:
+                    await self._host.refresh_continuation_reminder(
+                        context,
+                        context_window=self._host.resolve_context_window(agent, target),
+                    )
+                checkpoint, rebuilt_state = await self._host.project_automatic_compaction_request(
+                    context=context,
+                    target=target,
+                    session_messages=session_messages,
+                    checkpoint=checkpoint,
+                    context_tokens_before=input_tokens,
+                    prompt_refresh=prompt_refresh,
+                    live_request_messages=messages if continue_same_run else None,
+                    continuation_reminder=(
+                        context.continuation_reminder if continue_same_run else None
+                    ),
                 )
             except Exception:
+                run.emit(COMPACTION_ABORTED_EVENT, {"reason": "failed"})
                 _LOGGER.warning(
-                    "Prompt context persistence failed after automatic Compaction "
-                    "(run=%s agent=%s session=%s)",
-                    run.id,
-                    run.agent_id,
-                    run.session_id,
+                    "Post-compaction request projection failed; continuing without Compaction",
                     exc_info=True,
                 )
-            self._host.apply_prompt_refresh(context, prompt_refresh)
-        self._emit_compaction_completed(run, context.session_snapshot.messages, checkpoint)
-        checkpoint_usage = checkpoint.usage or {}
-        _LOGGER.info(
-            "Auto-compaction completed (run=%s session=%s estimated_tokens_after=%d)",
-            run.id,
-            run.session_id,
-            checkpoint_usage.get("context_tokens_after", 0),
-        )
-        return rebuilt_state
+                return current_state
+
+            checkpoint_committed = await self._append_compaction_checkpoint_if_current(
+                run,
+                session,
+                checkpoint,
+                snapshot_cursor,
+            )
+            if not checkpoint_committed:
+                run.emit(COMPACTION_ABORTED_EVENT, {"reason": "stale_context"})
+                _LOGGER.info(
+                    "Auto-compaction discarded because the Session changed during its Model call "
+                    "(run=%s session=%s)",
+                    run.id,
+                    run.session_id,
+                )
+                if continue_same_run:
+                    try:
+                        return await self._host.rebuild_after_stale_compaction(
+                            context,
+                            target,
+                            messages,
+                        )
+                    except Exception:
+                        _LOGGER.warning(
+                            "Request rebuild after stale auto-compaction failed; continuing with "
+                            "the existing request state",
+                            exc_info=True,
+                        )
+                return current_state
+            await context.session_snapshot.refresh(session)
+            accounting.reset()
+            context.prompt_cache_affinity_id = await self._host.rotate_prompt_cache_affinity(run)
+            if prompt_refresh is not None:
+                try:
+                    await self._host.commit_prompt_refresh(
+                        agent_id=run.agent_id,
+                        session_id=run.session_id,
+                        project_id=run.project_id,
+                        refresh=prompt_refresh,
+                    )
+                except Exception:
+                    _LOGGER.warning(
+                        "Prompt context persistence failed after automatic Compaction "
+                        "(run=%s agent=%s session=%s)",
+                        run.id,
+                        run.agent_id,
+                        run.session_id,
+                        exc_info=True,
+                    )
+                self._host.apply_prompt_refresh(context, prompt_refresh)
+            self._emit_compaction_completed(run, context.session_snapshot.messages, checkpoint)
+            checkpoint_usage = checkpoint.usage or {}
+            _LOGGER.info(
+                "Auto-compaction completed (run=%s session=%s estimated_tokens_after=%d)",
+                run.id,
+                run.session_id,
+                checkpoint_usage.get("context_tokens_after", 0),
+            )
+            return rebuilt_state
+        finally:
+            record_span(
+                "chat.compaction",
+                compaction_started_perf,
+                track=compaction_track,
+                name="compaction",
+                args={"run_id": run.id, "trigger": "auto"},
+            )
 
     @staticmethod
     def _emit_compaction_completed(
