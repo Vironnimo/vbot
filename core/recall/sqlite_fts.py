@@ -11,14 +11,12 @@ from pathlib import Path
 from typing import Any
 
 from core.recall.canonical import (
-    CANONICAL_FALLBACK_PARTIAL_REASON,
     CanonicalSessionRecallBackend,
     RecallScope,
     _check_snapshot,
     _session_address,
     compact_text,
     first_match_span,
-    message_hit,
     parse_persisted_timestamp,
     query_terms,
     text_matches_search_request,
@@ -36,15 +34,6 @@ from core.sessions.schema import required_journal_mode
 _INDEX_DIR_NAME = "recall"
 _INDEX_FILE_NAME = "session_index.sqlite"
 _SQLITE_BUSY_TIMEOUT_MS = 1000
-_FTS_FALLBACK_REASON = (
-    "Keyword search used a fallback scan with substring matching and newest-first order. "
-    "Relevance ranking was unavailable."
-)
-_FTS_PARTIAL_FALLBACK_REASON = (
-    "Keyword search used a fallback scan and could not check all eligible Messages. "
-    "Results are incomplete and newest-first. Narrow period or session_id; an empty result "
-    "does not establish that no matching text exists."
-)
 
 
 # Bump when the on-disk index schema changes; mismatched indexes are dropped and rebuilt.
@@ -86,52 +75,6 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
         self.logger = context.logger
         self._index_lock = asyncio.Lock()
 
-    def _search_page_with_canonical_fts(
-        self, request: RecallSearchRequest, scope: RecallScope
-    ) -> RecallSearchPage:
-        result = self.sessions.search_messages(
-            request.query,
-            project_id=request.project_id,
-            agent_id=request.agent_id,
-            session_id=request.session_id,
-            match_mode=request.match_mode,
-            order=request.order,
-            limit=request.offset + request.limit + 1,
-            roles=request.roles,
-            since=None if request.since is None else request.since.isoformat(),
-            until=None if request.until is None else request.until.isoformat(),
-            excluded_session_ids=request.excluded_session_ids,
-            include_subagents=request.include_subagents,
-        )
-        # Every returned hit already matched literally, so one extra hit proves more.
-        selected = result.hits[request.offset : request.offset + request.limit]
-        fts_failed = result.fallback_reason in {"fts_unavailable", "fts_error"}
-        scan_order = "newest" if request.order == "relevance" else request.order
-        return RecallSearchPage(
-            hits=tuple(message_hit(hit, request) for hit in selected),
-            result_type="message",
-            ranking=(
-                f"substring_scan_{scan_order}"
-                if result.method == "scan"
-                else "bm25"
-                if request.order == "relevance"
-                else f"message_time_{request.order}"
-            ),
-            snapshot_id=scope.snapshot_id,
-            has_more=len(result.hits) > request.offset + request.limit,
-            total_candidate_sessions=len(scope.candidates),
-            degraded=fts_failed or not result.complete,
-            degradation_reason=(
-                _FTS_PARTIAL_FALLBACK_REASON
-                if fts_failed and not result.complete
-                else _FTS_FALLBACK_REASON
-                if fts_failed
-                else CANONICAL_FALLBACK_PARTIAL_REASON
-                if not result.complete
-                else None
-            ),
-        )
-
     @staticmethod
     def search_capabilities() -> RecallSearchCapabilities:
         query_description = (
@@ -153,9 +96,7 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
         )
 
     async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
-        scope = await asyncio.to_thread(self._read_scope, request)
-        _check_snapshot(request, scope.snapshot_id)
-        return await asyncio.to_thread(self._search_page_with_canonical_fts, request, scope)
+        return await asyncio.to_thread(self._search_page, request, use_fts=True)
 
     async def search_passages(self, request: RecallSearchRequest) -> RecallSearchPage:
         """Return Passage-level literal ranking for Hybrid fusion."""

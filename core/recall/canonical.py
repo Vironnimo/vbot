@@ -4,16 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import heapq
 import json
 import re
-from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from core.chat.content_blocks import FileBlock, FileMentionBlock, MediaBlock, TextBlock
-from core.chat.messages import ChatMessage
 from core.recall.recall import (
     RecallMatchMode,
     RecallOrder,
@@ -27,7 +24,6 @@ from core.sessions import (
     ChatSessionManager,
     SessionAddress,
     SessionSearchHit,
-    is_skill_context_note,
     recall_visibilities,
 )
 
@@ -55,6 +51,15 @@ SESSION_RECALL_SORT_MODES: tuple[RecallOrder, ...] = ("newest", "oldest")
 CANONICAL_FALLBACK_PARTIAL_REASON = (
     "Search could not check all eligible Messages. Results are incomplete. Narrow period or "
     "session_id; an empty result does not establish that no matching text exists."
+)
+FTS_FALLBACK_REASON = (
+    "Keyword search used a fallback scan with substring matching and newest-first order. "
+    "Relevance ranking was unavailable."
+)
+FTS_PARTIAL_FALLBACK_REASON = (
+    "Keyword search used a fallback scan and could not check all eligible Messages. "
+    "Results are incomplete and newest-first. Narrow period or session_id; an empty result "
+    "does not establish that no matching text exists."
 )
 
 
@@ -104,18 +109,15 @@ class RecallScope:
 
 
 class CanonicalSessionRecallBackend:
-    """Recall backend that scans canonical Session history on demand."""
+    """Recall backend that scans canonical Session history in the Session store.
 
-    def __init__(
-        self,
-        sessions: ChatSessionManager,
-        *,
-        search_scan_limit: int | None = None,
-    ) -> None:
-        if search_scan_limit is not None and search_scan_limit <= 0:
-            raise ValueError("search scan limit must be positive")
+    Its Message pages come from ``ChatSessionManager.search_messages``, which
+    checks eligible Messages by Message time in SQL within a candidate budget;
+    subclasses reuse the same page shaping with FTS candidates.
+    """
+
+    def __init__(self, sessions: ChatSessionManager) -> None:
         self.sessions = sessions
-        self._search_scan_limit = search_scan_limit
 
     def search_capabilities(self) -> RecallSearchCapabilities:
         return RecallSearchCapabilities(
@@ -131,77 +133,60 @@ class CanonicalSessionRecallBackend:
         )
 
     async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
-        return await asyncio.to_thread(self._search_page, request)
+        return await asyncio.to_thread(self._search_page, request, use_fts=False)
 
-    def _search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
+    def _search_page(self, request: RecallSearchRequest, *, use_fts: bool) -> RecallSearchPage:
+        """Return one Message page of exact literal matches.
+
+        One hit beyond the page proves ``has_more``. With ``use_fts`` the
+        Session store enumerates FTS candidates; otherwise, or when FTS is
+        unavailable, it scans eligible Messages by Message time.
+        """
+
         scope = self._read_scope(request)
         _check_snapshot(request, scope.snapshot_id)
-
-        candidates = self._search_candidates(request, sorted(scope.candidates))
-        scan_complete = True
-        if self._search_scan_limit is not None:
-            # Budget eligible Messages globally by canonical time, before matching
-            # text. Session list order and ineligible rows must not consume it.
-            selected = heapq.nlargest(
-                self._search_scan_limit + 1, candidates, key=lambda item: item[:3]
-            )
-            scan_complete = len(selected) <= self._search_scan_limit
-            candidates = iter(selected[: self._search_scan_limit])
-
-        ranked: list[tuple[datetime, str, int, RecallSearchHit]] = []
-        for timestamp, session_id, message_index, message in candidates:
-            text = message_search_text(message)
-            if not text_matches_search_request(text, request):
-                continue
-            match_start, match_end = first_match_span(text, request.query, request.match_mode)
-            ranked.append(
-                (
-                    timestamp,
-                    session_id,
-                    message_index,
-                    RecallSearchHit(
-                        result_type="message",
-                        session_id=session_id,
-                        message_id=str(message.id),
-                        role=str(message.role),
-                        timestamp=str(message.timestamp),
-                        text=text,
-                        score=0.0,
-                        match_start=match_start,
-                        match_end=match_end,
-                    ),
-                )
-            )
-        ranked.sort(
-            key=lambda item: (item[0], item[1], item[2]),
-            reverse=request.order == "newest",
+        result = self.sessions.search_messages(
+            request.query,
+            project_id=request.project_id,
+            agent_id=request.agent_id,
+            session_id=request.session_id,
+            match_mode=request.match_mode,
+            order=request.order,
+            limit=request.offset + request.limit + 1,
+            roles=request.roles,
+            since=None if request.since is None else request.since.isoformat(),
+            until=None if request.until is None else request.until.isoformat(),
+            excluded_session_ids=request.excluded_session_ids,
+            include_subagents=request.include_subagents,
+            use_fts=use_fts,
         )
-        start = request.offset
-        end = min(start + request.limit, len(ranked))
+        selected = result.hits[request.offset : request.offset + request.limit]
+        time_order = "newest" if request.order == "relevance" else request.order
+        fts_failed = result.fallback_reason in {"fts_unavailable", "fts_error"}
+        if result.method == "fts":
+            ranking = "bm25" if request.order == "relevance" else f"message_time_{time_order}"
+        elif use_fts:
+            ranking = f"substring_scan_{time_order}"
+        else:
+            ranking = f"message_time_{time_order}"
         return RecallSearchPage(
-            hits=tuple(item[3] for item in ranked[start:end]),
+            hits=tuple(message_hit(hit, request) for hit in selected),
             result_type="message",
-            ranking=f"message_time_{request.order}",
+            ranking=ranking,
             snapshot_id=scope.snapshot_id,
-            has_more=end < len(ranked),
+            has_more=len(result.hits) > request.offset + request.limit,
             total_candidate_sessions=len(scope.candidates),
-            degraded=not scan_complete,
-            degradation_reason=(CANONICAL_FALLBACK_PARTIAL_REASON if not scan_complete else None),
+            degraded=fts_failed or not result.complete,
+            degradation_reason=(
+                FTS_PARTIAL_FALLBACK_REASON
+                if fts_failed and not result.complete
+                else FTS_FALLBACK_REASON
+                if fts_failed
+                else CANONICAL_FALLBACK_PARTIAL_REASON
+                if not result.complete
+                else None
+            ),
         )
-
-    def _search_candidates(
-        self, request: RecallSearchRequest, session_ids: list[str]
-    ) -> Iterator[tuple[datetime, str, int, ChatMessage]]:
-        for session_id in session_ids:
-            messages = self.sessions.get(_session_address(request, session_id)).load_active()
-            for message_index, message in enumerate(messages):
-                if message_matches_search_request(message, request):
-                    yield (
-                        timestamp_sort_key(message.timestamp),
-                        session_id,
-                        message_index,
-                        message,
-                    )
 
     def _read_scope(self, request: RecallSearchRequest) -> RecallScope:
         """Read every live Session version of the scope in one Session-store query.
@@ -298,17 +283,6 @@ def is_recall_artifact_message(message: Any) -> bool:
     )
 
 
-def message_matches_search_request(message: Any, request: RecallSearchRequest) -> bool:
-    if message.role not in request.roles:
-        return False
-    if is_skill_context_note(message) or is_recall_artifact_message(message):
-        return False
-    timestamp = parse_persisted_timestamp(message.timestamp)
-    if request.since is not None and timestamp is not None and timestamp < request.since:
-        return False
-    return not (request.until is not None and timestamp is not None and timestamp > request.until)
-
-
 def message_search_text(message: Any) -> str:
     return content_to_text(message.content)
 
@@ -377,10 +351,6 @@ def parse_persisted_timestamp(value: object) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
-
-
-def timestamp_sort_key(value: object) -> datetime:
-    return parse_persisted_timestamp(value) or datetime.min.replace(tzinfo=UTC)
 
 
 def compact_text(text: str) -> str:
