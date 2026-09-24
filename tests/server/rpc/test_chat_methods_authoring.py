@@ -292,14 +292,21 @@ def _make_reflect_state(
         set_title=lambda address, title: title_log.append((address.session_id, title)),
         record_run_kind=lambda address, run_kind: None,
     )
+
+    def resolve_agent(project_id: str | None, agent_id: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            id=agent_id,
+            name="Builder",
+            workspace=workspace,
+            memory_prompt_mode=memory_prompt_mode,
+        )
+
+    async def resolve_agent_async(project_id: str | None, agent_id: str) -> SimpleNamespace:
+        return resolve_agent(project_id, agent_id)
+
     runtime = SimpleNamespace(
         agent_resolver=SimpleNamespace(
-            resolve_agent=lambda project_id, agent_id: SimpleNamespace(
-                id=agent_id,
-                name="Builder",
-                workspace=workspace,
-                memory_prompt_mode=memory_prompt_mode,
-            )
+            resolve_agent=resolve_agent, resolve_agent_async=resolve_agent_async
         ),
         chat_sessions=chat_sessions,
         storage=_fragment_storage(),

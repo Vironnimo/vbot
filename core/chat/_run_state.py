@@ -500,15 +500,15 @@ async def create_run_execution_context(
                 "This Session no longer matches this Run. "
                 "Ask the user to resume it through its Extension."
             )
-        agent = dependencies.agent_resolver.resolve_temporary_agent(
+        agent = await dependencies.agent_resolver.resolve_temporary_agent_async(
             parent.address,
             generation_id=parent.generation_id,
             run_overrides=request.agent_overrides,
         )
     elif request.agent_overrides is None:
-        agent = dependencies.agent_resolver.resolve_agent(project_id, run.agent_id)
+        agent = await dependencies.agent_resolver.resolve_agent_async(project_id, run.agent_id)
     else:
-        agent = dependencies.agent_resolver.resolve_agent(
+        agent = await dependencies.agent_resolver.resolve_agent_async(
             project_id,
             run.agent_id,
             run_overrides=request.agent_overrides,

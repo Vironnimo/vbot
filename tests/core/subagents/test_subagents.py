@@ -417,7 +417,7 @@ class _RaisingResolver:
     def __init__(self, error: AgentResolutionError) -> None:
         self.error = error
 
-    def resolve_agent(
+    async def resolve_agent_async(
         self,
         _project_id: str | None,
         _agent_id: str,
@@ -446,7 +446,7 @@ async def test_missing_target_maps_to_its_not_found_code(
     from core.subagents.subagents import _validate_target_agent
 
     runtime = SimpleNamespace(agent_resolver=_RaisingResolver(resolver_error))
-    failure = _validate_target_agent(runtime, "ghost", "acme")
+    failure = await _validate_target_agent(runtime, "ghost", "acme")
 
     assert failure is not None
     assert failure["error"]["code"] == expected_code
