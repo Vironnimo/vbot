@@ -17,6 +17,7 @@ from core.sessions._types import (
     JsonObject,
     SessionAddress,
     SessionChatHistorySnapshot,
+    SessionContinuationState,
     SessionHistoryCheckpoint,
     SessionHistoryRecord,
     SessionHistorySectionStats,
@@ -142,11 +143,12 @@ class ChatSession:
         if records:
             await _run_session_io(self.append_continuation_records, list(records))
 
-    def load_continuation_records(self) -> list[JsonObject]:
+    def load_continuation(self) -> SessionContinuationState | None:
+        """Return the current Continuation state folded from its records."""
         return self._store.continuation(self.address)
 
-    async def load_continuation_records_async(self) -> list[JsonObject]:
-        return await _run_session_io(self.load_continuation_records)
+    async def load_continuation_async(self) -> SessionContinuationState | None:
+        return await _run_session_io(self.load_continuation)
 
     def clear_continuation(self) -> None:
         self._store.clear_continuation(self.address)

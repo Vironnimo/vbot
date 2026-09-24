@@ -11,7 +11,6 @@ import pytest
 import core.sessions._store_codec as session_store_module
 from core.chat import ChatMessage
 from core.chat.content_blocks import FileMentionBlock, TextBlock
-from core.chat.continuation import fold_continuation_records
 from core.chat.errors import ChatSessionError
 from core.chat.messages import MessageSender, ToolCall, ToolCallRejection
 from core.chat.output_files import AssistantFileReference
@@ -79,12 +78,15 @@ def test_continuation_events_update_one_normalized_current_state(manager) -> Non
         ]
     )
 
-    state = fold_continuation_records(session.load_continuation_records())
+    state = session.load_continuation()
     assert state is not None
-    assert state.reasoning == "first second"
-    assert state.partial_output == "partial answer"
-    assert state.operations["call-one"]["status"] == "completed"
-    assert state.cause == "user"
+    assert [(step.reasoning, step.content) for step in state.steps] == [
+        ("first second", "partial answer")
+    ]
+    assert [(op.tool_call_id, op.completed, op.ok) for op in state.operations] == [
+        ("call-one", True, True)
+    ]
+    assert (state.active, state.cause) == (False, "user")
     with sqlite3.connect(manager._store.path) as connection:
         tables = {
             row[0]
@@ -114,9 +116,9 @@ def test_continuation_steps_start_at_one_and_a_rejected_record_rolls_back_its_ap
         session.append_many([ChatMessage.user("not committed")], continuation_records=[step_zero])
 
     assert session.load() == []
-    state = fold_continuation_records(session.load_continuation_records())
+    state = session.load_continuation()
     assert state is not None
-    assert state.partial_output == ""
+    assert state.steps == ()
 
 
 def test_fork_copies_history_but_not_activity_or_continuation(manager) -> None:
@@ -131,7 +133,7 @@ def test_fork_copies_history_but_not_activity_or_continuation(manager) -> None:
     forked = asyncio.run(manager.fork(source_address, target_agent_id="reviewer"))
 
     assert forked.load() == source.load()
-    assert forked.load_continuation_records() == []
+    assert forked.load_continuation() is None
     assert manager.list_completion_activity("reviewer")[0]["has_unread_completion"] is False
     metadata = manager.get_metadata(forked.address)
     assert metadata[FORK_SOURCE_META_KEY]["session_id"] == "source"

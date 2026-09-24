@@ -25,7 +25,7 @@ Core terms (Session, Agent, Run, Project) live in `.vorch/GLOSSARY.md`.
 **Not:** The public Session id or its append revision.
 
 ### Continuation state
-**Definition:** Current recoverable work state materialized in `continuations`, `continuation_requests`, `continuation_steps`, and `continuation_operations`. Chat owns event semantics; Sessions folds each event transactionally into replaceable state. A step is identified by Run id plus a positive Run-local step number (Chat numbers a Run's first Model step 1); the store rejects any other step and rolls back the whole append. Stream deltas append to their step in SQL without reading it back, but each flush still rewrites the step's whole stored text (`_store_continuation.py`).
+**Definition:** Current recoverable work state materialized in `continuations`, `continuation_requests`, `continuation_steps`, and `continuation_operations`. Chat owns event semantics; Sessions folds each event transactionally into replaceable state and returns it as one typed read model, `SessionContinuationState` (`ChatSession.load_continuation`). A step is identified by Run id plus a positive Run-local step number (Chat numbers a Run's first Model step 1); the store rejects any other step and rolls back the whole append. Stream deltas append to their step in SQL without reading it back, but each flush still rewrites the step's whole stored text (`_store_continuation.py`).
 **Not:** An append-only event journal, canonical Message history, or Run events.
 
 ### Prompt-cache affinity id

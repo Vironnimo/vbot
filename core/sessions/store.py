@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from core.runs import RunExecutionOwner
     from core.sessions._types import (
         SessionAddress,
+        SessionContinuationState,
         SessionIdentityReferenceUpdate,
         SessionReadBatch,
         SessionReadCursor,
@@ -762,7 +763,7 @@ class SessionStore:
         with self._runtime.read_ctx() as connection:
             return _store_history.messages_since(connection, address, cursor)
 
-    def continuation(self, address: SessionAddress) -> list[JsonObject]:
+    def continuation(self, address: SessionAddress) -> SessionContinuationState | None:
         with self._runtime.read_ctx() as connection:
             return _store_continuation.continuation(connection, address)
 

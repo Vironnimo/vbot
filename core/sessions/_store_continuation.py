@@ -1,4 +1,4 @@
-"""Canonical Continuation records and operation materialization."""
+"""Continuation state: fold Chat's records transactionally, read one typed state."""
 
 from __future__ import annotations
 
@@ -7,11 +7,16 @@ import sqlite3
 from collections.abc import Sequence
 
 from core.chat.errors import ChatSessionError
-from core.sessions import _store_continuation, _store_values
-from core.sessions._types import JsonObject, SessionAddress
+from core.sessions import _store_values
+from core.sessions._types import (
+    JsonObject,
+    SessionAddress,
+    SessionContinuationOperation,
+    SessionContinuationState,
+    SessionContinuationStep,
+)
 
 _CONTINUATION_RECORD_VERSION = 1
-_CONTINUATION_SYNTHETIC_TIMESTAMP = "1970-01-01T00:00:00+00:00"
 
 
 def _continuation_step(record: JsonObject) -> int:
@@ -261,79 +266,58 @@ def _apply_continuation_record(
         connection.execute("DELETE FROM continuations WHERE session_key = ?", (session_key,))
 
 
-def _continuation_records(connection: sqlite3.Connection, session_key: int) -> list[JsonObject]:
+def _continuation_state(
+    connection: sqlite3.Connection, session_key: int
+) -> SessionContinuationState | None:
     continuation = connection.execute(
         "SELECT * FROM continuations WHERE session_key = ?", (session_key,)
     ).fetchone()
     if continuation is None:
-        return []
-    requests = connection.execute(
-        "SELECT request_json FROM continuation_requests WHERE session_key = ? ORDER BY ordinal",
-        (session_key,),
-    ).fetchall()
-    base: JsonObject = {
-        "version": _CONTINUATION_RECORD_VERSION,
-        "type": "run_started",
-        "run_id": str(continuation["latest_run_id"]),
-        "timestamp": _CONTINUATION_SYNTHETIC_TIMESTAMP,
-        "checkpoint_id": str(continuation["checkpoint_id"]),
-        "origin_run_id": str(continuation["origin_run_id"]),
-    }
-    records: list[JsonObject] = []
-    if requests:
-        for request in requests:
-            records.append({**base, "request": json.loads(str(request[0]))})
-    else:
-        records.append(base)
-    for step in connection.execute(
-        "SELECT * FROM continuation_steps WHERE session_key = ? ORDER BY ordinal",
-        (session_key,),
-    ):
-        records.append(
-            {
-                "version": _CONTINUATION_RECORD_VERSION,
-                "type": "assistant_boundary",
-                "run_id": str(step["run_id"]),
-                "timestamp": _CONTINUATION_SYNTHETIC_TIMESTAMP,
-                "step": int(step["step"]),
-                "message_id": step["assistant_message_id"],
-                "reasoning": str(step["reasoning"]),
-                "content": str(step["content"]),
-                "interrupted": bool(step["interrupted"]),
-            }
+        return None
+    requests = tuple(
+        json.loads(str(row[0]))
+        for row in connection.execute(
+            "SELECT request_json FROM continuation_requests WHERE session_key = ? ORDER BY ordinal",
+            (session_key,),
         )
-    for operation in connection.execute(
-        "SELECT * FROM continuation_operations WHERE session_key = ? ORDER BY ordinal",
-        (session_key,),
-    ):
-        common: JsonObject = {
-            "version": _CONTINUATION_RECORD_VERSION,
-            "run_id": str(operation["run_id"]),
-            "timestamp": _CONTINUATION_SYNTHETIC_TIMESTAMP,
-            "tool_call_id": str(operation["tool_call_id"]),
-            "name": str(operation["name"]),
-        }
-        records.append({**common, "type": "tool_started"})
-        if operation["status"] == "completed":
-            records.append({**common, "type": "tool_result", "ok": bool(operation["ok"])})
-    if not bool(continuation["active"]):
-        records.append(
-            {
-                "version": _CONTINUATION_RECORD_VERSION,
-                "type": "run_interrupted",
-                "run_id": str(continuation["latest_run_id"]),
-                "timestamp": _CONTINUATION_SYNTHETIC_TIMESTAMP,
-                "cause": str(continuation["cause"]),
-            }
+    )
+    steps = tuple(
+        SessionContinuationStep(
+            run_id=str(row["run_id"]),
+            step=int(row["step"]),
+            reasoning=str(row["reasoning"]),
+            content=str(row["content"]),
+            assistant_message_id=row["assistant_message_id"],
+            interrupted=bool(row["interrupted"]),
         )
-    return records
-
-
-def continuation_from_connection(
-    connection: sqlite3.Connection, session_key: int
-) -> list[JsonObject]:
-    """Project normalized current continuation state through the legacy-shaped facade."""
-    return _store_continuation._continuation_records(connection, session_key)
+        for row in connection.execute(
+            "SELECT * FROM continuation_steps WHERE session_key = ? ORDER BY ordinal",
+            (session_key,),
+        )
+    )
+    operations = tuple(
+        SessionContinuationOperation(
+            tool_call_id=str(row["tool_call_id"]),
+            name=str(row["name"]),
+            run_id=str(row["run_id"]),
+            completed=row["status"] == "completed",
+            ok=None if row["status"] != "completed" else bool(row["ok"]),
+        )
+        for row in connection.execute(
+            "SELECT * FROM continuation_operations WHERE session_key = ? ORDER BY ordinal",
+            (session_key,),
+        )
+    )
+    return SessionContinuationState(
+        checkpoint_id=str(continuation["checkpoint_id"]),
+        origin_run_id=str(continuation["origin_run_id"]),
+        latest_run_id=str(continuation["latest_run_id"]),
+        cause=None if continuation["cause"] is None else str(continuation["cause"]),
+        active=bool(continuation["active"]),
+        requests=requests,
+        steps=steps,
+        operations=operations,
+    )
 
 
 def _continuation_string(record: JsonObject, key: str) -> str:
@@ -343,9 +327,12 @@ def _continuation_string(record: JsonObject, key: str) -> str:
     return value
 
 
-def continuation(connection: sqlite3.Connection, address: SessionAddress) -> list[JsonObject]:
+def continuation(
+    connection: sqlite3.Connection, address: SessionAddress
+) -> SessionContinuationState | None:
+    """Return the Session's current Continuation state, or ``None`` without one."""
     state = _store_values._require_live(connection, address)
-    return _store_continuation._continuation_records(connection, int(state["session_key"]))
+    return _continuation_state(connection, int(state["session_key"]))
 
 
 def append_continuation(
@@ -362,7 +349,7 @@ def append_continuation(
         state = _store_values._require_live(connection, address)
         session_key = int(state["session_key"])
         for record in records:
-            _store_continuation._apply_continuation_record(connection, session_key, record)
+            _apply_continuation_record(connection, session_key, record)
         _store_values._touch_state(connection, int(state["session_key"]))
 
     _fn(connection)
