@@ -413,6 +413,11 @@ it('keeps speech playing when its finished Run is rebuilt from Session history',
     });
   startRun(sessionState, { run_id: 'run-speech', status: 'running' });
   appendEvent('user_message_persisted', { message: messages[0] });
+  // A streamed Tool preview is dropped when the Run ends.
+  appendEvent('tool_call_delta', {
+    tool_call_id: toolCall.id,
+    name_delta: toolCall.name,
+  });
   appendEvent('tool_call_started', {
     assistant_message_id: 'assistant-one',
     tool_call: toolCall,
@@ -432,6 +437,10 @@ it('keeps speech playing when its finished Run is rebuilt from Session history',
 
   appendEvent('assistant_output', { message: messages[3] });
   appendEvent('run_completed', { status: 'completed' });
+  await flush();
+  expect(sessionState.streamingRunEvents).toEqual([]);
+  expect(document.querySelector('audio')).toBe(audio);
+
   loadHistory(
     sessionState,
     messages.map((message, index) => ({
