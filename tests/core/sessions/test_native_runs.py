@@ -161,3 +161,28 @@ async def test_settled_run_rejects_late_output_and_duplicate_completion(manager)
     with pytest.raises(ChatSessionError, match="running Run"):
         await manager.finish_run(run, "completed", run.events[-1].payload)
     await runs.aclose()
+
+
+def test_snapshot_lists_page_runs_in_start_order(manager):
+    session = manager.create("coder")
+    for run_id in ("run-b", "run-a"):
+        run = session.start_run(run_id)
+        run.append(ChatMessage.user(run_id))
+        run.append(ChatMessage.assistant(model="test", content="done"))
+        run.append(
+            ChatMessage.run_summary(
+                run_id=run_id,
+                status="completed",
+                iteration_count=1,
+                timing={
+                    "started_at": "2026-09-19T10:00:00Z",
+                    "completed_at": "2026-09-19T10:00:01Z",
+                    "duration_ms": 1000,
+                },
+            )
+        )
+    snapshot = session.read_chat_history_snapshot(limit=50)
+    assert [(run["run_id"], run["complete"]) for run in snapshot.runs] == [
+        ("run-b", True),
+        ("run-a", True),
+    ]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import replace
 
 import pytest
 
@@ -45,11 +46,17 @@ def test_cursor_reads_only_messages_appended_after_the_snapshot(manager) -> None
     assert initial is not None
     assert len(initial.messages) == 1
 
-    assert session.load_since(initial.cursor) is not None
+    unchanged = session.load_since(initial.cursor)
+    assert unchanged is not None
+    assert unchanged.messages == () and unchanged.cursor == initial.cursor
     session.append(ChatMessage.assistant(model="test", content="second"))
     appended = session.load_since(initial.cursor)
     assert appended is not None
     assert [message.content for message in appended.messages] == ["second"]
+    # A cursor whose anchor names another record belongs to a different history.
+    assert session.load_since(replace(initial.cursor, last_message_id="other")) is None
+    assert session.load_since(replace(appended.cursor, last_message_id="other")) is None
+    assert session.load_since(replace(appended.cursor, next_seq=3)) is None
 
 
 def test_append_returns_every_record_since_the_cursor_and_commits_its_journal(manager) -> None:
