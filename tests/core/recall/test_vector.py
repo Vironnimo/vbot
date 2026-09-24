@@ -96,23 +96,24 @@ async def test_vector_search_skips_session_deleted_during_reconciliation(
         agent_id="coder",
         session_id=session.id,
     )
-    list_history_versions = sessions.list_history_versions
+    list_history_revisions = sessions.list_history_revisions
     deleted = False
 
-    def list_then_delete(addresses):
+    def list_then_delete(agent_id: str, project_id: str | None = None):
         nonlocal deleted
-        versions = list_history_versions(addresses)
+        versions = list_history_revisions(agent_id, project_id)
         if not deleted:
             sessions.delete(address)
             deleted = True
         return versions
 
-    monkeypatch.setattr(sessions, "list_history_versions", list_then_delete)
+    monkeypatch.setattr(sessions, "list_history_revisions", list_then_delete)
     recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
 
     page = await recall.search_page(search_request("fruit"))
 
     assert page.hits == ()
+    assert recall.store.list_indexed_sessions("coder") == {}
 
 
 async def test_typed_vector_search_has_no_literal_fallback_or_distance_cutoff(
@@ -245,7 +246,9 @@ async def test_typed_search_embeds_documents_and_query_with_explicit_purposes(
 
     await recall.search_page(search_request("fruit"))
 
-    assert embeddings.embed_purposes == ["document", "query"]
+    # The query embeds first: it pins the live dimension and served model
+    # that every document vector of the search must match.
+    assert embeddings.embed_purposes == ["query", "document"]
 
 
 async def test_typed_search_rebuilds_when_provider_response_model_changes(

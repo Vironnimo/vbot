@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
 import pytest
-import sqlite_vec  # type: ignore[import-untyped]
 
 from core.chat import ChatMessage
+from core.recall.passages import build_session_passages
 from core.sessions import ChatSessionManager
 from tests.core.recall.vector_helpers import (
     _count_vec_rows,
+    _passage_rows,
     _StubEmbeddings,
     backend,
     request,
@@ -78,62 +78,45 @@ async def test_vector_backend_mid_session_match_anchors_at_matching_chunk(
     assert "fruit" in match.text.lower()
 
 
-async def test_vector_backend_chunk_count_resets_when_session_is_appended(
+async def test_vector_backend_append_embeds_only_new_or_changed_passages(
     tmp_path: Path,
 ) -> None:
-    """Appending messages to a session reindexes wholesale — the row count reflects the new content.
+    """Appending to an indexed Session embeds only Passages that did not exist before.
 
-    The recall backend re-chunks the **entire** session on every canonical
-    change (chunks are not deltas). After appending new content the
-    chunk table must hold rows whose chunk text comes from the
-    up-to-date message list, with no rows left over from the prior
-    pass — ``upsert_many_chunks`` wipes the session's chunks before
-    inserting the fresh batch.
+    Unchanged Passages keep their rows and vectors. The former tail Passage may
+    grow, and new Passages cover the appended turn; only texts without a stored
+    vector reach the embedding provider.
     """
 
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="growing")
-    for day in range(1, 4):
-        session.append(ChatMessage.user("lorem ipsum " * 200, timestamp=timestamp(day)))
-
-    backend_ = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+    for day in range(1, 8):
+        session.append(ChatMessage.user(f"turn {day} lorem ipsum " * 150, timestamp=timestamp(day)))
+    embeddings = _StubEmbeddings()
+    backend_ = backend(tmp_path, sessions, embeddings=embeddings)
     await backend_.search_page(request(query="lorem", limit=2))
-    first_chunk_count = _count_vec_rows(backend_.store.path, "coder", "growing")
-    assert first_chunk_count > 0
+    old_passages = build_session_passages(session.load_active())
+    before = _passage_rows(backend_.store.path, "coder", "growing")
+    assert sorted(before.values()) == sorted(passage.text for passage in old_passages)
 
-    # Append more content; the reindex must reflect the new total.
-    for day in range(4, 8):
-        session.append(ChatMessage.user("brand new content " * 200, timestamp=timestamp(day)))
+    session.append(ChatMessage.user("brand new content " * 20, timestamp=timestamp(8)))
+    documents_before = len(embeddings.document_inputs)
     await backend_.search_page(request(query="brand new", limit=2))
-    second_chunk_count = _count_vec_rows(backend_.store.path, "coder", "growing")
-    assert second_chunk_count > 0
-    # The new total message count is higher, so the reindexed chunk
-    # count must be at least as large (the chunker produces the same
-    # number of chunks for a uniform message stream regardless of
-    # message count, but never fewer).
-    assert second_chunk_count >= first_chunk_count
 
-    # Read every chunk's text to confirm the reindex covered the new
-    # content. The chunk table must not hold a row referencing only
-    # the old "lorem ipsum" stream — the wholesale delete-then-insert
-    # in ``upsert_many_chunks`` is what guarantees that.
-    connection = sqlite3.connect(backend_.store.path)
-    try:
-        connection.row_factory = sqlite3.Row
-        connection.enable_load_extension(True)
-        sqlite_vec.load(connection)
-        connection.enable_load_extension(False)
-        chunk_texts = [
-            str(row["snippet"])
-            for row in connection.execute(
-                "SELECT snippet FROM chunks WHERE agent_id = ? AND session_id = ?",
-                ("coder", "growing"),
-            ).fetchall()
-        ]
-    finally:
-        connection.close()
-    # At least one chunk's snippet must reference the new content.
-    assert any("brand new" in snippet.lower() for snippet in chunk_texts)
+    new_passages = build_session_passages(session.load_active())
+    added = [passage for passage in new_passages if passage not in old_passages]
+    vanished = [passage for passage in old_passages if passage not in new_passages]
+    embedded = embeddings.document_inputs[documents_before:]
+    assert sorted(embedded) == sorted(
+        {passage.text for passage in added} - {passage.text for passage in old_passages}
+    )
+    assert 0 < len(embedded) < len(new_passages)
+    after = _passage_rows(backend_.store.path, "coder", "growing")
+    assert sorted(after.values()) == sorted(passage.text for passage in new_passages)
+    # Every unchanged Passage keeps its row; only vanished Passages lose theirs.
+    kept = set(before.items()) & set(after.items())
+    assert len(kept) == len(old_passages) - len(vanished)
+    assert any("brand new" in text for text in after.values())
 
 
 # Staleness — sessions that stop producing chunks must drop their old rows
@@ -141,14 +124,9 @@ async def test_vector_backend_drops_chunks_when_session_no_longer_produces_any(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A session whose canonical no longer yields chunks is purged from the index.
+    """A Session whose canonical history no longer yields Passages is purged.
 
-    Regression: ``upsert_many_chunks`` only wipes sessions that appear in
-    its ``records`` parameter. If a stale session's
-    ``build_session_passages`` call returns an empty list, the session is
-    not in ``records`` and its old rows survive a reindex, leaving
-    stale hits in subsequent searches. The fix calls
-    ``store.delete_session`` for any session with zero chunks.
+    Its stale rows must not survive the refresh and surface in later searches.
     """
 
     sessions = ChatSessionManager(tmp_path)
@@ -180,14 +158,10 @@ async def test_vector_backend_search_succeeds_when_first_indexed_session_yields_
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A zero-chunk session on a brand-new index must not crash the search.
+    """A zero-Passage Session on a brand-new index must not crash the search.
 
-    Regression for ``no such table: chunks``: on a fresh index the eager
-    backfill calls ``store.delete_session`` for any candidate session
-    whose ``build_session_passages`` returns nothing — and that happens
-    *before* any upsert has created the chunk table. The delete must be
-    a no-op on a schema-less store rather than raising a bare
-    ``sqlite3.OperationalError`` that escapes the canonical fallback.
+    The first refresh creates the schema for a Session that contributes no
+    rows, then records its freshness stamp so later searches skip it.
     """
 
     sessions = ChatSessionManager(tmp_path)
@@ -199,11 +173,11 @@ async def test_vector_backend_search_succeeds_when_first_indexed_session_yields_
     # Must not raise. With nothing indexed the KNN has no candidates, so the
     # semantic search returns zero matches gracefully (an empty index is a
     # valid state, not an error — the bug was the bare ``no such table``).
-    data = await backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search_page(
-        request(query="carrot")
-    )
+    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+    data = await recall.search_page(request(query="carrot"))
 
     assert data.hits == ()
+    assert set(recall.store.list_indexed_sessions("coder")) == {"empty-ish"}
 
 
 async def test_vector_backend_never_surfaces_run_summary_as_a_match(tmp_path: Path) -> None:
