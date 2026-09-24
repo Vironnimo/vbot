@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -19,6 +20,9 @@ SERVER_PORT_KEY = "server_port"
 
 
 UNKNOWN_VALUE = "unknown"
+
+
+BRANCH_REF_PREFIX = "refs/heads/"
 
 
 def _read_worktree_marker(marker_path: Path) -> dict[str, object] | None:
@@ -99,7 +103,13 @@ def _list_uncommitted_paths(worktree_path: Path) -> list[str]:
 
 
 def _read_worktree_branch_name(worktree_path: Path) -> str | None:
-    """Read the currently checked-out branch in a worktree."""
+    """Read the currently checked-out branch in a worktree.
+
+    Returns ``None`` when *worktree_path* has no ``.git`` entry: ``git -C``
+    would otherwise climb to the enclosing repository and report its branch.
+    """
+    if not (worktree_path / ".git").exists():
+        return None
     try:
         result = subprocess.run(
             ["git", "-C", str(worktree_path), "rev-parse", "--abbrev-ref", "HEAD"],
@@ -117,3 +127,71 @@ def _read_worktree_branch_name(worktree_path: Path) -> str | None:
     if not branch or branch == "HEAD":
         return None
     return branch
+
+
+def _read_worktree_registrations(repo_root: Path) -> list[dict[str, str]] | None:
+    """Return Git's worktree registrations as attribute maps, or ``None`` if unknown.
+
+    Each map holds the ``git worktree list --porcelain`` attributes of one
+    registration (``worktree``, ``HEAD``, ``branch``, ``prunable``, ...), which
+    Git keeps reporting for a registered checkout whose files are gone.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain", "-z"],
+            capture_output=True,
+            text=True,
+            cwd=repo_root,
+            check=False,
+        )
+    except OSError:
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    registrations: list[dict[str, str]] = []
+    current: dict[str, str] = {}
+    for field in result.stdout.split("\0"):
+        if not field:
+            # An empty field ends a registration record.
+            if current:
+                registrations.append(current)
+                current = {}
+            continue
+        key, _, value = field.partition(" ")
+        current[key] = value
+    if current:
+        registrations.append(current)
+    return registrations
+
+
+def _find_worktree_registration(
+    registrations: list[dict[str, str]], worktree_path: Path
+) -> dict[str, str] | None:
+    """Return the registration whose path is *worktree_path*, if any."""
+    target = os.path.normcase(str(worktree_path.resolve()))
+    for registration in registrations:
+        registered = registration.get("worktree")
+        if registered and os.path.normcase(str(Path(registered).resolve())) == target:
+            return registration
+    return None
+
+
+def _read_registered_branch_name(repo_root: Path, worktree_path: Path) -> str | None:
+    """Read the branch Git records for *worktree_path* without entering it.
+
+    Unlike ``_read_worktree_branch_name`` this also answers for a registered
+    worktree whose checkout is gone, and never falls through to *repo_root*'s
+    own branch.
+    """
+    registrations = _read_worktree_registrations(repo_root)
+    if registrations is None:
+        return None
+    registration = _find_worktree_registration(registrations, worktree_path)
+    if registration is None:
+        return None
+    branch_ref = registration.get("branch", "")
+    if not branch_ref.startswith(BRANCH_REF_PREFIX):
+        return None
+    return branch_ref.removeprefix(BRANCH_REF_PREFIX) or None
