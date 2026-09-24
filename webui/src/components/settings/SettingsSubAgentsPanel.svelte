@@ -130,78 +130,83 @@
   }
 </script>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.subagents.maxDepth', 'Max sub-agent depth')}
+<div class="s-group">
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.subagents.maxDepth', 'Max sub-agent depth')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.subagents.maxDepthDescription',
+          'Maximum nesting level allowed when sub-agents spawn their own sub-agents.',
+        )}
+      </div>
     </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.subagents.maxDepthDescription',
-        'Maximum nesting level allowed when sub-agents spawn their own sub-agents.',
-      )}
+    <div class="s-row-control s-row-control--number">
+      <TextField
+        type="number"
+        min="1"
+        step="1"
+        value={subAgentSettings.max_subagent_depth}
+        ariaLabel={t('settings.subagents.maxDepth', 'Max sub-agent depth')}
+        onInput={(_next, event) =>
+          handleSubAgentSettingChange('max_subagent_depth', event)}
+      />
     </div>
   </div>
-  <div class="s-row-control s-row-control--number">
-    <TextField
-      type="number"
-      min="1"
-      step="1"
-      value={subAgentSettings.max_subagent_depth}
-      ariaLabel={t('settings.subagents.maxDepth', 'Max sub-agent depth')}
-      onInput={(_next, event) =>
-        handleSubAgentSettingChange('max_subagent_depth', event)}
-    />
-  </div>
-</div>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.subagents.maxPerTurn', 'Max sub-agents per turn')}
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.subagents.maxPerTurn', 'Max sub-agents per turn')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.subagents.maxPerTurnDescription',
+          'Maximum number of sub-agent sessions one parent run may spawn.',
+        )}
+      </div>
     </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.subagents.maxPerTurnDescription',
-        'Maximum number of sub-agent sessions one parent run may spawn.',
-      )}
+    <div class="s-row-control s-row-control--number">
+      <TextField
+        type="number"
+        min="1"
+        step="1"
+        value={subAgentSettings.max_subagents_per_turn}
+        ariaLabel={t(
+          'settings.subagents.maxPerTurn',
+          'Max sub-agents per turn',
+        )}
+        onInput={(_next, event) =>
+          handleSubAgentSettingChange('max_subagents_per_turn', event)}
+      />
     </div>
   </div>
-  <div class="s-row-control s-row-control--number">
-    <TextField
-      type="number"
-      min="1"
-      step="1"
-      value={subAgentSettings.max_subagents_per_turn}
-      ariaLabel={t('settings.subagents.maxPerTurn', 'Max sub-agents per turn')}
-      onInput={(_next, event) =>
-        handleSubAgentSettingChange('max_subagents_per_turn', event)}
-    />
-  </div>
-</div>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.subagents.timeoutMinutes', 'Timeout minutes')}
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.subagents.timeoutMinutes', 'Timeout minutes')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.subagents.timeoutMinutesDescription',
+          'Maximum wait time for foreground sub-agent calls before they fail.',
+        )}
+      </div>
     </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.subagents.timeoutMinutesDescription',
-        'Maximum wait time for foreground sub-agent calls before they fail.',
-      )}
+    <div class="s-row-control s-row-control--number">
+      <TextField
+        type="number"
+        min="1"
+        step="1"
+        value={subAgentSettings.subagent_timeout_minutes}
+        ariaLabel={t('settings.subagents.timeoutMinutes', 'Timeout minutes')}
+        onInput={(_next, event) =>
+          handleSubAgentSettingChange('subagent_timeout_minutes', event)}
+      />
     </div>
-  </div>
-  <div class="s-row-control s-row-control--number">
-    <TextField
-      type="number"
-      min="1"
-      step="1"
-      value={subAgentSettings.subagent_timeout_minutes}
-      ariaLabel={t('settings.subagents.timeoutMinutes', 'Timeout minutes')}
-      onInput={(_next, event) =>
-        handleSubAgentSettingChange('subagent_timeout_minutes', event)}
-    />
   </div>
 </div>
 

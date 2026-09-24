@@ -1,0 +1,496 @@
+/* Configuration page grammar, shared by Settings, Agents, Projects and
+   Schedules:
+
+   - A page is a sequence of titled sections (`.s-section`). Sections are
+     separated by whitespace and their heading, never by a line.
+   - A section holds one or more groups (`.s-group`): a single bordered panel
+     per topic. Rows inside a group are divided by hairlines. Hairlines exist
+     only inside groups, so a line always means "next item of the same topic".
+   - Setting rows (`.s-row`) put label and description on the left and the
+     control in one fixed-width column on the right, so controls align across
+     every group of a page.
+   - More of the same topic opens inside the group through a disclosure row
+     (`.s-disclosure`, `.s-disclosure-row`), never as a nested card.
+   - A section's save state or single quiet action sits on its heading line
+     (`.s-section__aside`), not on a row of its own. */
+.s-section {
+  position: relative;
+  min-width: 0;
+  scroll-margin-top: 8px;
+}
+
+.s-section + .s-section {
+  margin-top: 44px;
+}
+
+.s-section__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 32px;
+  margin-bottom: 8px;
+}
+
+.s-section__title {
+  margin: 0;
+  color: var(--text-hi);
+  font: 600 var(--fs-heading-sm) / 1.4 var(--font-ui);
+  letter-spacing: -0.01em;
+}
+
+.s-section__title:focus {
+  outline: none;
+}
+
+.s-section__aside {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.s-section__desc {
+  max-width: 66ch;
+  margin: -4px 0 12px;
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+}
+
+.s-section__body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* A settings panel renders its save state as the body's trailing `.s-footer`;
+   it moves onto the heading line and stays after the fields in keyboard
+   order. (Settings pages place it the same way in pages.css.) */
+.s-section:has(> .s-section__body > .s-footer) > .s-section__head {
+  padding-right: 96px;
+}
+
+.s-section > .s-section__body > .s-footer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+}
+
+.s-section > .s-section__body > .s-footer .s-save-button--inline {
+  width: auto;
+}
+
+/* Group panel: one bordered surface per topic. Every direct child after the
+   first is separated by a hairline, so rows, disclosures and nested option
+   blocks inside the same group read as one list. */
+.s-group {
+  --s-control-width: 300px;
+  --s-number-width: 148px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+
+.s-group > * + * {
+  border-top: 1px solid var(--border);
+}
+
+:is(.s-group, .s-group__rows) > .s-row {
+  padding: 14px 18px;
+}
+
+:is(.s-group, .s-group__rows) > .s-row:not(.s-row--stacked) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, var(--s-control-width));
+  column-gap: 32px;
+  row-gap: 12px;
+  align-items: center;
+}
+
+/* Rows whose control is a compact switch, button or number keep it at the
+   end of the row instead of reserving the full control column. */
+:is(.s-group, .s-group__rows) > .s-row--compact:not(.s-row--stacked) {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+:is(.s-group, .s-group__rows) > .s-row > .s-row-control {
+  width: 100%;
+  min-width: 0;
+  margin-left: 0;
+  justify-content: flex-end;
+}
+
+/* Number fields share one width that fits their placeholder next to the
+   spinner. */
+:is(.s-group, .s-group__rows) > .s-row > .s-row-control--number {
+  justify-self: end;
+  width: var(--s-number-width);
+  min-width: 0;
+}
+
+:is(.s-group, .s-group__rows) > .s-row > .s-row-control > .dropdown,
+:is(.s-group, .s-group__rows) > .s-row > .s-row-control > .searchable-dropdown {
+  width: 100%;
+}
+
+.s-group .s-row-info {
+  max-width: 60ch;
+}
+
+.s-group .s-row-desc {
+  margin-top: 3px;
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+}
+
+/* Full-width content that belongs to the row above it (option fields, a
+   disclosure body, a note) sits in the same group with the row padding. */
+.s-group > .s-group__block {
+  padding: 14px 18px;
+}
+
+/* A block that only explains the row above (an API key hint for the chosen
+   service) continues that row instead of starting a new item. */
+.s-group > .s-row + .s-group__block--attached {
+  margin-top: -6px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.s-group__note {
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+}
+
+.s-group__note p {
+  margin: 0;
+}
+
+.s-group__note p + p {
+  margin-top: 6px;
+}
+
+.s-group__note code {
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+}
+
+/* Disclosure rows open more of the same topic inside the group. Either a
+   native `<details class="s-disclosure">` whose plain `<summary>` is the row
+   (it gets the shared chevron) and whose `.s-disclosure__body` continues
+   below it, or a button `.s-row.s-disclosure-row` carrying a
+   `.disclosure-chevron` whose body is the group's next item. */
+.s-group .s-disclosure > summary {
+  display: flex;
+  align-items: center;
+  padding: 14px 18px;
+  color: var(--text-hi);
+  font-size: var(--fs-body-md);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.s-group > .s-disclosure-row {
+  width: 100%;
+  margin: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.s-disclosure-row .s-row-label {
+  display: inline-flex;
+  align-items: center;
+}
+
+.s-group .s-disclosure > summary:hover,
+.s-group > .s-disclosure-row:hover {
+  background: var(--surface-2);
+}
+
+.s-group .s-disclosure > summary:focus-visible,
+.s-group > .s-disclosure-row:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* A closed disclosure that ends its group keeps the group's corners. */
+.s-group > .s-disclosure:last-child:not([open]) > summary,
+.s-group > .s-disclosure-row:last-child,
+.s-group > .s-disclosure-row:has(+ [hidden]:last-child) {
+  border-radius: 0 0 calc(var(--r-lg) - 1px) calc(var(--r-lg) - 1px);
+}
+
+.s-disclosure__body {
+  margin: 0;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border);
+}
+
+/* Quiet count or state at the end of a disclosure row. */
+.s-disclosure__meta {
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Setting rows opened by a disclosure: they keep the group's control column
+   and indent their labels to the disclosure label. */
+.s-group__rows > .s-row {
+  padding-left: 33px;
+}
+
+.s-group__rows > .s-row + .s-row {
+  border-top: 1px solid var(--border);
+}
+
+/* A line of context or actions directly above a group (counts, add buttons),
+   without a divider of its own. */
+.s-group-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-width: 0;
+}
+
+.s-group-toolbar__meta {
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+}
+
+.s-group-toolbar__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Entity lists (Providers, Channels, Extensions, MCP connections) are one
+   `.s-group` with one `.s-entity` per entity. The head carries name and
+   description on the left and status plus the entity's own actions at its
+   end; details open inside the same entity, never as a nested card. A
+   `.s-group-toolbar.s-list-toolbar` above the group carries the quiet count
+   and the list's add action at its far end. */
+.s-entity {
+  min-width: 0;
+}
+
+.s-entity__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 18px;
+}
+
+.s-entity__end {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.s-list-toolbar__end {
+  margin-left: auto;
+}
+
+/* Checkbox groups select the members of a list inside one group (Tool
+   families, an Agent's Skills and Sub-Agent targets, Project Skill
+   ceilings). The head carries the group Checkbox (mixed when partly
+   selected), the title and a selected/total count on `--surface-2`; every
+   member is a full-width Checkbox row (`.s-check-row`) whose Mono name is an
+   identifier, with optional detail lines below it and an optional state at
+   its end. `.s-check-groups` flows several groups through two balanced
+   columns without splitting one. */
+.s-check-groups {
+  columns: 2;
+  column-gap: 16px;
+}
+
+.s-check-groups > .s-check-group {
+  display: block;
+  margin-bottom: 16px;
+  break-inside: avoid;
+}
+
+.s-check-group {
+  overflow: hidden;
+}
+
+.s-check-group__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 14px;
+  background: var(--surface-2);
+}
+
+.s-check-group__title {
+  margin: 0;
+  color: var(--text-hi);
+  font: 600 var(--fs-body-md) / 1.4 var(--font-ui);
+}
+
+.s-check-group__count {
+  margin-left: auto;
+  color: var(--text-lo);
+  font: var(--fs-label-sm) var(--font-ui);
+  font-variant-numeric: tabular-nums;
+}
+
+.s-check-group__rows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 4px 0;
+}
+
+.s-check-group__rows[hidden] {
+  display: none;
+}
+
+.s-check-group__note {
+  margin: 0;
+  padding: 8px 14px;
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+}
+
+/* The whole row is the Checkbox; the box aligns with the name's first line
+   when detail lines follow. */
+.s-check-group .s-check-row {
+  align-items: flex-start;
+  min-height: 34px;
+  padding: 7px 14px;
+  border-radius: 0;
+}
+
+.s-check-group .s-check-row .checkbox__box {
+  margin-top: 1px;
+}
+
+.s-check-group .s-check-row:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.s-check-group .s-check-row:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.s-check-row__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.s-check-row__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-hi);
+  font: var(--fs-mono-sm) / 1.5 var(--font-mono);
+}
+
+.s-check-row__detail {
+  overflow-wrap: anywhere;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  line-height: 1.4;
+}
+
+.s-check-row__detail--warn {
+  color: var(--amber);
+}
+
+/* One short state at the row end (Automatic, unavailable, ...). */
+.s-check-row__state {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  line-height: 1.5;
+  text-align: right;
+}
+
+/* A named sub-topic inside a section (for example Connected clients under
+   Server info): a smaller heading with optional description above its own
+   group. */
+.s-subhead {
+  margin-top: 16px;
+}
+
+.s-subhead__title {
+  margin: 0;
+  color: var(--text-hi);
+  font: 600 var(--fs-body-md) / 1.4 var(--font-ui);
+}
+
+.s-subhead__desc {
+  margin: 2px 0 0;
+  max-width: 66ch;
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+}
+
+@media (max-width: 760px) {
+  .s-check-groups {
+    columns: 1;
+  }
+}
+
+@media (max-width: 640px) {
+  :is(.s-group, .s-group__rows) > .s-row {
+    padding: 14px;
+  }
+
+  .s-group__rows > .s-row {
+    padding-left: 29px;
+  }
+
+  :is(.s-group, .s-group__rows)
+    > .s-row:not(.s-row--stacked):not(.s-row--compact) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  :is(.s-group, .s-group__rows) > .s-row > .s-row-control--number {
+    justify-self: start;
+  }
+
+  .s-group > .s-group__block,
+  .s-group .s-disclosure > summary,
+  .s-disclosure__body {
+    padding-inline: 14px;
+  }
+
+  .s-group > .s-group__block {
+    padding-block: 14px;
+  }
+
+  /* Taller touch targets for Checkbox rows. */
+  .s-check-group .s-check-row {
+    min-height: 40px;
+    padding-block: 10px;
+  }
+
+  /* Entity rows use the group's narrow padding; wide heads let their end
+     controls wrap under the name. */
+  .s-entity__head {
+    flex-wrap: wrap;
+    padding: 14px;
+  }
+}

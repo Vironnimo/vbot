@@ -215,76 +215,67 @@
 </script>
 
 <div class="management-topic" id="project-detail-panel-team">
-  <!-- Section 3: Team -->
-  <div class="detail-section">
-    <h3 class="detail-section-title">
-      <span class="projects-section-title-copy">
+  <section class="s-section" aria-labelledby="project-section-team">
+    <header class="s-section__head">
+      <h3 class="s-section__title" id="project-section-team">
         {t('projects.detail.sectionTeam', 'Team')}
-        {@render scanAction?.()}
-        <InfoHint
-          text={t(
-            'projects.detail.teamInfo',
-            'Agents discovered live in the project repository — where they are read from depends on the source format. The list is re-derived on open and re-scan; the repository is the source of truth, so vBot never copies or edits these agents.',
-          )}
-        />
-      </span>
-    </h3>
-    <div class="detail-section-body">
+      </h3>
+      <InfoHint
+        text={t(
+          'projects.detail.teamInfo',
+          'Agents discovered live in the project repository — where they are read from depends on the source format. The list is re-derived on open and re-scan; the repository is the source of truth, so vBot never copies or edits these agents.',
+        )}
+      />
+      <div class="s-section__aside">{@render scanAction?.()}</div>
+    </header>
+    <div class="s-section__body">
       {#if projectsState.activeReport && !projectsState.activeReport.clean}
-        <div class="projects-field">
-          <Banner variant="warn" role="status">
-            <span>
-              {t('projects.report.findingCount', '{count} issues found', {
-                count: projectsState.activeReport.findingCount,
-              })}
-            </span>
-            <Button
-              variant="tertiary"
-              aria-expanded={findingsExpanded}
-              onClick={toggleFindings}
-            >
-              {findingsExpanded
-                ? t('projects.report.hideDetails', 'Hide details')
-                : t('projects.report.showDetails', 'Show details')}
-            </Button>
-          </Banner>
-          {#if findingsExpanded}
-            {#each projectsState.activeReport.groups as group (group.type)}
-              <div class="projects-finding-group">
-                <h4 class="projects-finding-title">
-                  {groupLabel(group.type)}
-                </h4>
-                <ul class="projects-findings">
-                  {#each group.findings as finding, index (`${group.type}-${index}`)}
-                    <li class="projects-finding">
-                      <span class="projects-finding-detail">
-                        {finding.detail}
-                      </span>
-                      {#if finding.agent_id}
-                        <span class="projects-finding-meta">
-                          {t(
-                            'projects.report.finding.agent',
-                            'Agent {agentId}',
-                            { agentId: finding.agent_id },
-                          )}
-                        </span>
-                      {/if}
-                      {#if finding.source_path}
-                        <span class="projects-finding-meta">
-                          {t(
-                            'projects.report.finding.source',
-                            'Source: {source}',
-                            { source: finding.source_path },
-                          )}
-                        </span>
-                      {/if}
-                    </li>
-                  {/each}
-                </ul>
-              </div>
-            {/each}
-          {/if}
-        </div>
+        <Banner variant="warn" role="status">
+          <span>
+            {t('projects.report.findingCount', '{count} issues found', {
+              count: projectsState.activeReport.findingCount,
+            })}
+          </span>
+          <Button
+            variant="tertiary"
+            aria-expanded={findingsExpanded}
+            onClick={toggleFindings}
+          >
+            {findingsExpanded
+              ? t('projects.report.hideDetails', 'Hide details')
+              : t('projects.report.showDetails', 'Show details')}
+          </Button>
+        </Banner>
+        {#if findingsExpanded}
+          {#each projectsState.activeReport.groups as group (group.type)}
+            <div class="s-subhead projects-finding-head">
+              <h4 class="s-subhead__title">{groupLabel(group.type)}</h4>
+            </div>
+            <ul class="s-group projects-findings">
+              {#each group.findings as finding, index (`${group.type}-${index}`)}
+                <li class="projects-finding">
+                  <span class="projects-finding-detail">
+                    {finding.detail}
+                  </span>
+                  {#if finding.agent_id}
+                    <span class="projects-finding-meta">
+                      {t('projects.report.finding.agent', 'Agent {agentId}', {
+                        agentId: finding.agent_id,
+                      })}
+                    </span>
+                  {/if}
+                  {#if finding.source_path}
+                    <span class="projects-finding-meta">
+                      {t('projects.report.finding.source', 'Source: {source}', {
+                        source: finding.source_path,
+                      })}
+                    </span>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          {/each}
+        {/if}
       {/if}
 
       {#if projectsState.scanLoading}
@@ -300,7 +291,7 @@
           )}
         />
       {:else}
-        <ul class="projects-team">
+        <ul class="s-group projects-team">
           {#each projectsState.activeTeam as member (member.agent_id)}
             {@const expanded =
               projectsState.expandedMembers[member.agent_id] === true}
@@ -320,16 +311,12 @@
                   .join('\n\n')}
                 onclick={() => toggleMember(member.agent_id)}
               >
-                <svg
-                  class="projects-team-chevron"
+                <span
+                  class="disclosure-chevron projects-team-chevron"
+                  class:disclosure-chevron--open={expanded}
                   class:projects-team-chevron--open={expanded}
-                  viewBox="0 0 12 12"
-                  width="11"
-                  height="11"
                   aria-hidden="true"
-                >
-                  <path d="M4 2l4 4-4 4" />
-                </svg>
+                ></span>
                 <span class="projects-team-name">
                   {member.display_name}
                 </span>
@@ -364,15 +351,44 @@
                     {/each}
                   </ul>
 
-                  <div class="projects-overrides">
-                    <!-- Model override -->
-                    <div class="projects-override-row">
-                      <span class="projects-label">
-                        {t('projects.team.overrideLabel', 'Override')} ·
-                        {t('projects.team.effectiveModel', 'Model')}
-                      </span>
-                      <div class="projects-override-controls">
-                        <div class="projects-override-input">
+                  <div class="projects-member-block">
+                    <div class="s-subhead">
+                      <h4 class="s-subhead__title">
+                        {t('projects.team.overridesTitle', 'Overrides')}
+                      </h4>
+                      <p class="s-subhead__desc">
+                        {t(
+                          'projects.team.overrideHelp',
+                          'An override replaces the agent file and all defaults for this agent in this project. The model override can also be set with /model in chat.',
+                        )}
+                      </p>
+                    </div>
+
+                    <div class="projects-member-fields">
+                      <div class="projects-member-field">
+                        <div class="projects-member-field__info">
+                          <label
+                            class="s-row-label"
+                            for={`project-override-model-${member.agent_id}`}
+                          >
+                            {t('projects.team.effectiveModel', 'Model')}
+                          </label>
+                          {#if memberFieldIsOverridden(member, 'model')}
+                            <Button
+                              variant="tertiary"
+                              class="projects-clear-override"
+                              data-testid={`project-override-clear-model-${member.agent_id}`}
+                              onClick={() =>
+                                applyClearOverride(member.agent_id, 'model')}
+                            >
+                              {t(
+                                'projects.team.clearOverride',
+                                'Clear override',
+                              )}
+                            </Button>
+                          {/if}
+                        </div>
+                        <div class="projects-member-field__control">
                           <SearchableDropdown
                             id={`project-override-model-${member.agent_id}`}
                             value={selectModelValue(
@@ -411,75 +427,93 @@
                               )}
                           />
                         </div>
-
-                        {#if memberFieldIsOverridden(member, 'model')}
-                          <Button
-                            variant="tertiary"
-                            data-testid={`project-override-clear-model-${member.agent_id}`}
-                            onClick={() =>
-                              applyClearOverride(member.agent_id, 'model')}
-                          >
-                            {t('projects.team.clearOverride', 'Clear override')}
-                          </Button>
-                        {/if}
                       </div>
-                    </div>
 
-                    <!-- Temperature override -->
-                    <div class="projects-override-row">
-                      <span class="projects-label">
-                        {t('projects.team.overrideLabel', 'Override')} ·
-                        {t('projects.team.effectiveTemperature', 'Temperature')}
-                      </span>
-                      <div class="projects-override-controls">
-                        <TextField
-                          id={`project-override-temperature-${member.agent_id}`}
-                          class="projects-override-input"
-                          inputmode="decimal"
-                          value={overrideDraft(member.agent_id).temperature}
-                          placeholder={t(
-                            'projects.team.overrideTemperaturePlaceholder',
-                            'e.g. 0.7',
-                          )}
-                          ariaLabel={t(
-                            'projects.team.effectiveTemperature',
-                            'Temperature',
-                          )}
-                          onInput={(next) =>
-                            updateOverrideDraft(
-                              member.agent_id,
-                              'temperature',
-                              next,
+                      <div class="projects-member-field">
+                        <div class="projects-member-field__info">
+                          <label
+                            class="s-row-label"
+                            for={`project-override-temperature-${member.agent_id}`}
+                          >
+                            {t(
+                              'projects.team.effectiveTemperature',
+                              'Temperature',
                             )}
-                        />
-
-                        {#if memberFieldIsOverridden(member, 'temperature')}
-                          <Button
-                            variant="tertiary"
-                            data-testid={`project-override-clear-temperature-${member.agent_id}`}
-                            onClick={() =>
-                              applyClearOverride(
+                          </label>
+                          {#if memberFieldIsOverridden(member, 'temperature')}
+                            <Button
+                              variant="tertiary"
+                              class="projects-clear-override"
+                              data-testid={`project-override-clear-temperature-${member.agent_id}`}
+                              onClick={() =>
+                                applyClearOverride(
+                                  member.agent_id,
+                                  'temperature',
+                                )}
+                            >
+                              {t(
+                                'projects.team.clearOverride',
+                                'Clear override',
+                              )}
+                            </Button>
+                          {/if}
+                        </div>
+                        <div
+                          class="projects-member-field__control projects-number-control"
+                        >
+                          <TextField
+                            id={`project-override-temperature-${member.agent_id}`}
+                            class="projects-number-input"
+                            inputmode="decimal"
+                            value={overrideDraft(member.agent_id).temperature}
+                            placeholder={t(
+                              'projects.team.overrideTemperaturePlaceholder',
+                              'e.g. 0.7',
+                            )}
+                            ariaLabel={t(
+                              'projects.team.effectiveTemperature',
+                              'Temperature',
+                            )}
+                            onInput={(next) =>
+                              updateOverrideDraft(
                                 member.agent_id,
                                 'temperature',
+                                next,
                               )}
-                          >
-                            {t('projects.team.clearOverride', 'Clear override')}
-                          </Button>
-                        {/if}
+                          />
+                        </div>
                       </div>
-                    </div>
 
-                    <!-- Thinking-effort override -->
-                    <div class="projects-override-row">
-                      <span class="projects-label">
-                        {t('projects.team.overrideLabel', 'Override')} ·
-                        {t(
-                          'projects.team.effectiveThinkingEffort',
-                          'Thinking effort',
-                        )}
-                      </span>
-                      <div class="projects-override-controls">
-                        <div class="projects-override-input">
+                      <div class="projects-member-field">
+                        <div class="projects-member-field__info">
+                          <label
+                            class="s-row-label"
+                            for={`project-override-thinking-${member.agent_id}`}
+                          >
+                            {t(
+                              'projects.team.effectiveThinkingEffort',
+                              'Thinking effort',
+                            )}
+                          </label>
+                          {#if memberFieldIsOverridden(member, 'thinking_effort')}
+                            <Button
+                              variant="tertiary"
+                              class="projects-clear-override"
+                              data-testid={`project-override-clear-thinking-${member.agent_id}`}
+                              onClick={() =>
+                                applyClearOverride(
+                                  member.agent_id,
+                                  'thinking_effort',
+                                )}
+                            >
+                              {t(
+                                'projects.team.clearOverride',
+                                'Clear override',
+                              )}
+                            </Button>
+                          {/if}
+                        </div>
+                        <div class="projects-member-field__control">
                           <Dropdown
                             id={`project-override-thinking-${member.agent_id}`}
                             value={overrideDraft(member.agent_id)
@@ -498,157 +532,134 @@
                               )}
                           />
                         </div>
-
-                        {#if memberFieldIsOverridden(member, 'thinking_effort')}
-                          <Button
-                            variant="tertiary"
-                            data-testid={`project-override-clear-thinking-${member.agent_id}`}
-                            onClick={() =>
-                              applyClearOverride(
-                                member.agent_id,
-                                'thinking_effort',
-                              )}
-                          >
-                            {t('projects.team.clearOverride', 'Clear override')}
-                          </Button>
-                        {/if}
                       </div>
-                    </div>
 
-                    <div
-                      class="projects-override-row projects-override-row--policy"
-                    >
-                      <span class="projects-label">
-                        {t(
-                          'projects.team.compactionPolicy',
-                          'Compaction Policy',
-                        )}
-                      </span>
-                      {#if overrideDraft(member.agent_id).compaction_policy}
-                        <CompactionPolicyEditor
-                          value={overrideDraft(member.agent_id)
-                            .compaction_policy}
-                          onChange={(value) =>
-                            updateOverrideDraft(
-                              member.agent_id,
-                              'compaction_policy',
-                              value,
+                      <div
+                        class="projects-member-field projects-override-row--policy"
+                      >
+                        <div class="projects-member-field__info">
+                          <span class="s-row-label">
+                            {t(
+                              'projects.team.compactionPolicy',
+                              'Compaction Policy',
                             )}
-                          idPrefix={`project-compaction-${member.agent_id}`}
-                        />
-                        <div class="projects-override-controls">
-                          <Button
-                            variant="tertiary"
-                            onClick={() =>
-                              memberFieldIsOverridden(
+                          </span>
+                          {#if overrideDraft(member.agent_id).compaction_policy}
+                            <Button
+                              variant="tertiary"
+                              class="projects-clear-override"
+                              onClick={() =>
+                                memberFieldIsOverridden(
+                                  member,
+                                  'compaction_policy',
+                                )
+                                  ? applyClearOverride(
+                                      member.agent_id,
+                                      'compaction_policy',
+                                    )
+                                  : updateOverrideDraft(
+                                      member.agent_id,
+                                      'compaction_policy',
+                                      null,
+                                    )}
+                            >
+                              {memberFieldIsOverridden(
                                 member,
                                 'compaction_policy',
                               )
-                                ? applyClearOverride(
-                                    member.agent_id,
-                                    'compaction_policy',
+                                ? t(
+                                    'projects.team.clearOverride',
+                                    'Clear override',
                                   )
-                                : updateOverrideDraft(
-                                    member.agent_id,
-                                    'compaction_policy',
-                                    null,
-                                  )}
-                          >
-                            {memberFieldIsOverridden(
-                              member,
-                              'compaction_policy',
-                            )
-                              ? t(
-                                  'projects.team.clearOverride',
-                                  'Clear override',
-                                )
-                              : t('common.cancel', 'Cancel')}
-                          </Button>
+                                : t('common.cancel', 'Cancel')}
+                            </Button>
+                          {/if}
                         </div>
-                      {:else}
-                        <Button
-                          variant="secondary"
-                          onClick={() =>
-                            updateOverrideDraft(
-                              member.agent_id,
-                              'compaction_policy',
-                              structuredClone(
-                                projectsState.globalCompactionPolicy ?? {},
-                              ),
-                            )}
-                        >
-                          {t(
-                            'projects.team.customizeCompaction',
-                            'Customize for this agent',
-                          )}
-                        </Button>
-                      {/if}
-                    </div>
-
-                    <div class="projects-tool-access-override">
-                      <div class="projects-tool-access-heading">
-                        <div>
-                          <span class="projects-label">
-                            {t(
-                              'projects.team.toolAccessOverride',
-                              'Tool access override',
-                            )}
-                          </span>
-                          <p class="projects-tools-follow">
-                            {t(
-                              'projects.team.toolAccessOverrideHelp',
-                              'This replaces the repository Agent policy completely. It may allow a Tool blocked by the Agent file, but it can never exceed the Project Tool Whitelist.',
-                            )}
-                          </p>
-                        </div>
-                        <StatusChip
-                          variant={memberFieldIsOverridden(
-                            member,
-                            'tool_access',
-                          )
-                            ? 'info'
-                            : 'neutral'}
-                        >
-                          {memberFieldIsOverridden(member, 'tool_access')
-                            ? t(
-                                'projects.team.toolOverrideActive',
-                                'Override active',
-                              )
-                            : t(
-                                'projects.team.repositoryPolicyActive',
-                                'Repository policy',
+                        {#if overrideDraft(member.agent_id).compaction_policy}
+                          <div class="projects-member-field__wide">
+                            <CompactionPolicyEditor
+                              value={overrideDraft(member.agent_id)
+                                .compaction_policy}
+                              onChange={(value) =>
+                                updateOverrideDraft(
+                                  member.agent_id,
+                                  'compaction_policy',
+                                  value,
+                                )}
+                              idPrefix={`project-compaction-${member.agent_id}`}
+                            />
+                          </div>
+                        {:else}
+                          <div class="projects-member-field__control">
+                            <Button
+                              variant="secondary"
+                              onClick={() =>
+                                updateOverrideDraft(
+                                  member.agent_id,
+                                  'compaction_policy',
+                                  $state.snapshot(
+                                    projectsState.globalCompactionPolicy ?? {},
+                                  ),
+                                )}
+                            >
+                              {t(
+                                'projects.team.customizeCompaction',
+                                'Customize for this agent',
                               )}
-                        </StatusChip>
+                            </Button>
+                          </div>
+                        {/if}
                       </div>
-                      <ToolAccessEditor
-                        value={overrideDraft(member.agent_id).tool_access}
-                        tools={projectsState.toolCatalog}
-                        ceiling={projectsState.editForm.allowed_tools}
-                        disabled={isOverrideBusy(
-                          member.agent_id,
-                          'tool_access',
-                        )}
-                        showReset={memberFieldIsOverridden(
-                          member,
-                          'tool_access',
-                        )}
-                        onChange={(value) =>
-                          updateToolAccessOverride(member.agent_id, value)}
-                        onReset={() =>
-                          applyClearOverride(member.agent_id, 'tool_access')}
-                        onOpenExtensions={navigateToExtensions}
-                      />
                     </div>
-
-                    <p class="projects-override-help">
-                      {t(
-                        'projects.team.overrideHelp',
-                        'An override replaces the agent file and all defaults for this agent in this project. The model override can also be set with /model in chat.',
-                      )}
-                    </p>
                   </div>
 
-                  <div>
+                  <div class="projects-member-block">
+                    <div class="s-subhead projects-member-subhead">
+                      <div class="projects-member-subhead__copy">
+                        <h4 class="s-subhead__title">
+                          {t(
+                            'projects.team.toolAccessOverride',
+                            'Tool access override',
+                          )}
+                        </h4>
+                        <p class="s-subhead__desc">
+                          {t(
+                            'projects.team.toolAccessOverrideHelp',
+                            'This replaces the repository Agent policy completely. It may allow a Tool blocked by the Agent file, but it can never exceed the Project Tool Whitelist.',
+                          )}
+                        </p>
+                      </div>
+                      <StatusChip
+                        variant={memberFieldIsOverridden(member, 'tool_access')
+                          ? 'info'
+                          : 'neutral'}
+                      >
+                        {memberFieldIsOverridden(member, 'tool_access')
+                          ? t(
+                              'projects.team.toolOverrideActive',
+                              'Override active',
+                            )
+                          : t(
+                              'projects.team.repositoryPolicyActive',
+                              'Repository policy',
+                            )}
+                      </StatusChip>
+                    </div>
+                    <ToolAccessEditor
+                      value={overrideDraft(member.agent_id).tool_access}
+                      tools={projectsState.toolCatalog}
+                      ceiling={projectsState.editForm.allowed_tools}
+                      disabled={isOverrideBusy(member.agent_id, 'tool_access')}
+                      showReset={memberFieldIsOverridden(member, 'tool_access')}
+                      onChange={(value) =>
+                        updateToolAccessOverride(member.agent_id, value)}
+                      onReset={() =>
+                        applyClearOverride(member.agent_id, 'tool_access')}
+                      onOpenExtensions={navigateToExtensions}
+                    />
+                  </div>
+
+                  <div class="projects-member-block projects-member-facts">
                     <p class="projects-tools-line">
                       {agentTargetPolicyText(member)}
                     </p>
@@ -658,10 +669,7 @@
                         'Defined by the repository Agent config and read-only in vBot. Even full access stays inside this Project Team.',
                       )}
                     </p>
-                  </div>
-
-                  {#if member.denied_tools.length > 0}
-                    <div>
+                    {#if member.denied_tools.length > 0}
                       <p class="projects-tools-line">
                         {t(
                           'projects.team.deniedToolsBaseline',
@@ -675,21 +683,20 @@
                           'These blocks apply only while the repository policy is active. A vBot Tool override replaces them.',
                         )}
                       </p>
-                    </div>
-                  {/if}
-
-                  {#if member.source_path}
-                    <p class="projects-source-line">
-                      {t(
-                        'projects.team.sourceFile',
-                        'Source: {path} ({format})',
-                        {
-                          path: member.source_path,
-                          format: member.source_format,
-                        },
-                      )}
-                    </p>
-                  {/if}
+                    {/if}
+                    {#if member.source_path}
+                      <p class="projects-source-line">
+                        {t(
+                          'projects.team.sourceFile',
+                          'Source: {path} ({format})',
+                          {
+                            path: member.source_path,
+                            format: member.source_format,
+                          },
+                        )}
+                      </p>
+                    {/if}
+                  </div>
                 </div>
               {/if}
             </li>
@@ -697,5 +704,5 @@
         </ul>
       {/if}
     </div>
-  </div>
+  </section>
 </div>

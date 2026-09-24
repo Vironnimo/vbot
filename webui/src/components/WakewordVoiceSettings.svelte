@@ -165,6 +165,19 @@
   let dirty = $derived(
     !calibrationSessionActive && voiceSettingsDirty(voiceState, lastSaved),
   );
+  let transcriptionSaveStatus = $state('idle');
+  let wakewordSaveStatus = $derived(
+    saveState === 'saved' && dirty ? 'idle' : saveState,
+  );
+  // The section shows one save state for its two autosaved parts; a write in
+  // flight wins over a failure, and a failure over a confirmation.
+  let voiceSaveStatus = $derived.by(() => {
+    const states = [transcriptionSaveStatus, wakewordSaveStatus];
+    for (const candidate of ['saving', 'error', 'saved']) {
+      if (states.includes(candidate)) return candidate;
+    }
+    return 'idle';
+  });
   let enableToggleDisabled = $derived(
     !loaded ||
       enableActionBusy ||
@@ -555,37 +568,48 @@
 </script>
 
 <div class="voice-settings">
-  <div class="s-row">
-    <div class="s-row-info">
-      <div class="s-row-label">{t('live.settings.label', 'Live voice')}</div>
-      <div class="s-row-desc">
-        {t(
-          'live.settings.description',
-          'Show Start Live in the sidebar. Requires an OpenAI API key with GPT-Live access. OpenAI charges for connected voice time and backend usage.',
-        )}
-      </div>
-    </div>
-    <div class="s-row-control">
-      <Toggle
-        checked={settings?.live_voice?.enabled === true}
-        onChange={changeLiveVoice}
-        disabled={!settings || savingLiveVoice}
-        ariaLabel={t('live.settings.label', 'Live voice')}
-      />
-    </div>
-  </div>
-  <TranscriptionAudioSettings {settings} {onCommit} {onError} />
-  {#if !desktopMode}
-    <div class="s-row">
-      <div class="s-row-info" style="max-width: 100%">
-        <div class="s-row-label">
-          {t('settings.voice.enabled', 'Wakeword listening')}
-        </div>
+  <div class="s-group">
+    <div class="s-row s-row--compact">
+      <div class="s-row-info">
+        <div class="s-row-label">{t('live.settings.label', 'Live voice')}</div>
         <div class="s-row-desc">
           {t(
-            'settings.voice.desktopOnly',
-            'Wakeword listening is configured in the vBot Desktop app. The transcription audio settings above are server-wide.',
+            'live.settings.description',
+            'Show Start Live in the sidebar. Requires an OpenAI API key with GPT-Live access. OpenAI charges for connected voice time and backend usage.',
           )}
+        </div>
+      </div>
+      <div class="s-row-control">
+        <Toggle
+          checked={settings?.live_voice?.enabled === true}
+          onChange={changeLiveVoice}
+          disabled={!settings || savingLiveVoice}
+          ariaLabel={t('live.settings.label', 'Live voice')}
+        />
+      </div>
+    </div>
+  </div>
+
+  <TranscriptionAudioSettings
+    {settings}
+    {onCommit}
+    {onError}
+    onSaveStatusChange={(status) => (transcriptionSaveStatus = status)}
+  />
+
+  {#if !desktopMode}
+    <div class="s-group">
+      <div class="s-row">
+        <div class="s-row-info">
+          <div class="s-row-label">
+            {t('settings.voice.enabled', 'Wakeword listening')}
+          </div>
+          <div class="s-row-desc">
+            {t(
+              'settings.voice.desktopOnly',
+              'Wakeword listening is configured in the vBot Desktop app. The transcription audio settings above are server-wide.',
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -609,335 +633,351 @@
       </Banner>
     {/if}
 
-    <!-- Enable/disable toggle -->
-    <div class="s-row">
-      <div class="s-row-info">
-        <div class="s-row-label">
-          {t('settings.voice.enabled', 'Wakeword listening')}
-        </div>
-        <div class="s-row-desc">
-          {t(
-            'settings.voice.subtitle',
-            'Wakeword detection and voice command settings.',
-          )}
-        </div>
-      </div>
-      <div class="s-row-control">
-        <Toggle
-          checked={voiceState.enabled}
-          onChange={handleEnabledChange}
-          disabled={enableToggleDisabled}
-          ariaLabel={t(
-            'settings.voice.enabledAria',
-            'Enable wakeword listening',
-          )}
-        />
-      </div>
-    </div>
-
-    {#if voiceState.mock}
-      <div class="voice-mock-warning" role="alert">
-        {t(
-          'settings.voice.mockWarning',
-          'Voice is running in demo mode. State changes are simulated; no microphone is heard and no command is sent. Restart Desktop without --mock-wakeword for real detection.',
-        )}
-      </div>
-    {/if}
-
-    <!-- Live state indicator -->
-    <div class="s-row">
-      <div class="s-row-info">
-        <div class="s-row-label">
-          {t('settings.voice.state', 'Status')}
-        </div>
-      </div>
-      <div class="s-row-control">
-        <span class="voice-state" aria-live="polite">
-          <span class="voice-state-dot {liveStateDotClass}" aria-hidden="true"
-          ></span>
-          <span class="voice-state-label">{liveStateLabel}</span>
-        </span>
-      </div>
-    </div>
-
-    {#if voiceState.liveState === 'error' || voiceState.liveState === 'microphone_disconnected' || voiceState.mode === 'unavailable'}
-      {@const microphoneDisconnected =
-        voiceState.liveState === 'microphone_disconnected'}
-      <Banner
-        variant={microphoneDisconnected ? 'warn' : 'error'}
-        class="voice-attention-banner"
-        role={microphoneDisconnected ? 'status' : 'alert'}
-      >
-        <div class="voice-attention-copy">
-          <strong>
-            {microphoneDisconnected
-              ? t(
-                  'settings.voice.microphoneDisconnectedTitle',
-                  'Microphone disconnected',
-                )
-              : t('settings.voice.errorTitle', 'Voice needs attention')}
-          </strong>
-          <p>
-            {errorMessage(
-              voiceState.mode === 'unavailable'
-                ? 'voice_stack_unavailable'
-                : voiceState.errorCode,
-            )}
-          </p>
-        </div>
-        {#if voiceState.errorCode !== 'missing_target_agent' && voiceState.errorCode !== 'target_agent_unavailable' && voiceState.errorCode !== 'speech_to_text_unconfigured' && voiceState.mode !== 'unavailable'}
-          <Button variant="secondary" class="voice-retry" onClick={handleRetry}>
-            {t('settings.voice.retry', 'Retry listening')}
-          </Button>
-        {/if}
-      </Banner>
-    {/if}
-
-    <!-- Active wakeword models and local model management -->
-    <div class="s-row s-row--stacked">
-      <div class="s-row-info">
-        <div class="s-row-label">
-          {t('settings.voice.models', 'Wakeword phrases')}
-        </div>
-        <div class="s-row-desc">
-          {t(
-            'settings.voice.modelDescription',
-            'Choose one or two phrases to listen for at the same time. Each model keeps its own sensitivity.',
-          )}
-        </div>
-      </div>
-      <div class="s-row-control voice-model-control">
-        <div class="voice-model-list">
-          {#each wakewordModels as model (model.id)}
-            {@const active = voiceState.active_model_ids.includes(model.id)}
-            {@const sensitivity =
-              voiceState.model_sensitivities[model.id] ?? 0.5}
-            <div
-              class:voice-model-card--active={active}
-              class="voice-model-card"
-            >
-              <div class="voice-model-card__header">
-                <div class="voice-model-card__identity">
-                  <span class="voice-model-card__name">{model.label}</span>
-                  <Badge
-                    variant={model.source === 'built_in' ? 'info' : 'neutral'}
-                  >
-                    {model.source === 'built_in'
-                      ? t('settings.voice.modelBuiltIn', 'Built-in')
-                      : t('settings.voice.modelImported', 'Imported TFLite')}
-                  </Badge>
-                </div>
-                <Toggle
-                  size="sm"
-                  checked={active}
-                  onChange={(checked) =>
-                    handleWakewordModelToggle(model, checked)}
-                  disabled={!loaded ||
-                    modelActionBusy ||
-                    enableActionBusy ||
-                    calibrationSessionActive ||
-                    (active && voiceState.active_model_ids.length === 1) ||
-                    (!active && voiceState.active_model_ids.length === 2)}
-                  ariaLabel={t(
-                    'settings.voice.modelToggleAria',
-                    'Listen for {name}',
-                    { name: model.label },
-                  )}
-                />
-              </div>
-              {#if active}
-                <div class="voice-model-card__tuning">
-                  <div class="voice-model-card__sensitivity">
-                    <label for={`voice-sensitivity-${model.id}`}>
-                      {t('settings.voice.sensitivity', 'Sensitivity')}
-                    </label>
-                    <span>{Math.round(sensitivity * 100)}%</span>
-                  </div>
-                  <input
-                    id={`voice-sensitivity-${model.id}`}
-                    type="range"
-                    min="0.05"
-                    max="0.95"
-                    step="0.05"
-                    value={sensitivity}
-                    oninput={(event) => handleSensitivityInput(model.id, event)}
-                    onchange={handleSensitivityChange}
-                    disabled={!loaded ||
-                      modelActionBusy ||
-                      enableActionBusy ||
-                      calibrationActionBusy ||
-                      calibrationSessionActive}
-                  />
-                  <div class="voice-slider-labels">
-                    <span
-                      >{t(
-                        'settings.voice.lessSensitive',
-                        'Less sensitive',
-                      )}</span
-                    >
-                    <span
-                      >{t(
-                        'settings.voice.moreSensitive',
-                        'More sensitive',
-                      )}</span
-                    >
-                  </div>
-                </div>
-              {/if}
-              {#if model.removable && !active}
-                <div class="voice-model-card__actions">
-                  <Button
-                    variant="tertiary"
-                    disabled={!loaded ||
-                      modelActionBusy ||
-                      enableActionBusy ||
-                      calibrationSessionActive}
-                    onClick={() => (deleteConfirmModel = model)}
-                  >
-                    {t('settings.voice.removeModel', 'Remove imported model')}
-                  </Button>
-                </div>
-              {/if}
-            </div>
-          {/each}
-        </div>
-        <div class="voice-model-actions">
-          <span class="voice-model-limit">
+    <!-- Wakeword listening: detection, the phrases it listens for, and where
+         a recognised command goes. -->
+    <div class="s-group">
+      <div class="s-row s-row--compact">
+        <div class="s-row-info">
+          <div class="s-row-label">
+            {t('settings.voice.enabled', 'Wakeword listening')}
+          </div>
+          <div class="s-row-desc">
             {t(
-              'settings.voice.modelLimit',
-              '{count} of 2 wakeword models active',
-              { count: voiceState.active_model_ids.length },
+              'settings.voice.subtitle',
+              'Wakeword detection and voice command settings.',
             )}
-          </span>
-          <input
-            bind:this={modelFileInput}
-            class="voice-model-file"
-            type="file"
-            accept=".tflite,application/octet-stream"
-            onchange={handleWakewordModelFile}
+          </div>
+        </div>
+        <div class="s-row-control">
+          <Toggle
+            checked={voiceState.enabled}
+            onChange={handleEnabledChange}
+            disabled={enableToggleDisabled}
+            ariaLabel={t(
+              'settings.voice.enabledAria',
+              'Enable wakeword listening',
+            )}
           />
-          <Button
-            variant="secondary"
-            loading={modelActionState === 'importing'}
+        </div>
+      </div>
+
+      {#if voiceState.mock}
+        <div class="s-group__block s-group__block--attached">
+          <div class="voice-mock-warning" role="alert">
+            {t(
+              'settings.voice.mockWarning',
+              'Voice is running in demo mode. State changes are simulated; no microphone is heard and no command is sent. Restart Desktop without --mock-wakeword for real detection.',
+            )}
+          </div>
+        </div>
+      {/if}
+
+      <div class="s-row s-row--compact">
+        <div class="s-row-info">
+          <div class="s-row-label">
+            {t('settings.voice.state', 'Status')}
+          </div>
+        </div>
+        <div class="s-row-control">
+          <span class="voice-state" aria-live="polite">
+            <span class="voice-state-dot {liveStateDotClass}" aria-hidden="true"
+            ></span>
+            <span class="voice-state-label">{liveStateLabel}</span>
+          </span>
+        </div>
+      </div>
+
+      {#if voiceState.liveState === 'error' || voiceState.liveState === 'microphone_disconnected' || voiceState.mode === 'unavailable'}
+        {@const microphoneDisconnected =
+          voiceState.liveState === 'microphone_disconnected'}
+        <div class="s-group__block s-group__block--attached">
+          <Banner
+            variant={microphoneDisconnected ? 'warn' : 'error'}
+            class="voice-attention-banner"
+            role={microphoneDisconnected ? 'status' : 'alert'}
+          >
+            <div class="voice-attention-copy">
+              <strong>
+                {microphoneDisconnected
+                  ? t(
+                      'settings.voice.microphoneDisconnectedTitle',
+                      'Microphone disconnected',
+                    )
+                  : t('settings.voice.errorTitle', 'Voice needs attention')}
+              </strong>
+              <p>
+                {errorMessage(
+                  voiceState.mode === 'unavailable'
+                    ? 'voice_stack_unavailable'
+                    : voiceState.errorCode,
+                )}
+              </p>
+            </div>
+            {#if voiceState.errorCode !== 'missing_target_agent' && voiceState.errorCode !== 'target_agent_unavailable' && voiceState.errorCode !== 'speech_to_text_unconfigured' && voiceState.mode !== 'unavailable'}
+              <Button
+                variant="secondary"
+                class="voice-retry"
+                onClick={handleRetry}
+              >
+                {t('settings.voice.retry', 'Retry listening')}
+              </Button>
+            {/if}
+          </Banner>
+        </div>
+      {/if}
+
+      <!-- Active wakeword models and local model management -->
+      <div class="s-row s-row--stacked">
+        <div class="s-row-info">
+          <div class="s-row-label">
+            {t('settings.voice.models', 'Wakeword phrases')}
+          </div>
+          <div class="s-row-desc">
+            {t(
+              'settings.voice.modelDescription',
+              'Choose one or two phrases to listen for at the same time. Each model keeps its own sensitivity.',
+            )}
+          </div>
+        </div>
+        <div class="s-row-control voice-model-control">
+          <div class="voice-model-list">
+            {#each wakewordModels as model (model.id)}
+              {@const active = voiceState.active_model_ids.includes(model.id)}
+              {@const sensitivity =
+                voiceState.model_sensitivities[model.id] ?? 0.5}
+              <div
+                class:voice-model-card--active={active}
+                class="voice-model-card"
+              >
+                <div class="voice-model-card__header">
+                  <div class="voice-model-card__identity">
+                    <span class="voice-model-card__name">{model.label}</span>
+                    <Badge
+                      variant={model.source === 'built_in' ? 'info' : 'neutral'}
+                    >
+                      {model.source === 'built_in'
+                        ? t('settings.voice.modelBuiltIn', 'Built-in')
+                        : t('settings.voice.modelImported', 'Imported TFLite')}
+                    </Badge>
+                  </div>
+                  <Toggle
+                    size="sm"
+                    checked={active}
+                    onChange={(checked) =>
+                      handleWakewordModelToggle(model, checked)}
+                    disabled={!loaded ||
+                      modelActionBusy ||
+                      enableActionBusy ||
+                      calibrationSessionActive ||
+                      (active && voiceState.active_model_ids.length === 1) ||
+                      (!active && voiceState.active_model_ids.length === 2)}
+                    ariaLabel={t(
+                      'settings.voice.modelToggleAria',
+                      'Listen for {name}',
+                      { name: model.label },
+                    )}
+                  />
+                </div>
+                {#if active}
+                  <div class="voice-model-card__tuning">
+                    <div class="voice-model-card__sensitivity">
+                      <label for={`voice-sensitivity-${model.id}`}>
+                        {t('settings.voice.sensitivity', 'Sensitivity')}
+                      </label>
+                      <span>{Math.round(sensitivity * 100)}%</span>
+                    </div>
+                    <input
+                      id={`voice-sensitivity-${model.id}`}
+                      type="range"
+                      min="0.05"
+                      max="0.95"
+                      step="0.05"
+                      value={sensitivity}
+                      oninput={(event) =>
+                        handleSensitivityInput(model.id, event)}
+                      onchange={handleSensitivityChange}
+                      disabled={!loaded ||
+                        modelActionBusy ||
+                        enableActionBusy ||
+                        calibrationActionBusy ||
+                        calibrationSessionActive}
+                    />
+                    <div class="voice-slider-labels">
+                      <span
+                        >{t(
+                          'settings.voice.lessSensitive',
+                          'Less sensitive',
+                        )}</span
+                      >
+                      <span
+                        >{t(
+                          'settings.voice.moreSensitive',
+                          'More sensitive',
+                        )}</span
+                      >
+                    </div>
+                  </div>
+                {/if}
+                {#if model.removable && !active}
+                  <div class="voice-model-card__actions">
+                    <Button
+                      variant="tertiary"
+                      disabled={!loaded ||
+                        modelActionBusy ||
+                        enableActionBusy ||
+                        calibrationSessionActive}
+                      onClick={() => (deleteConfirmModel = model)}
+                    >
+                      {t('settings.voice.removeModel', 'Remove imported model')}
+                    </Button>
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+          <div class="voice-model-actions">
+            <span class="voice-model-limit">
+              {t(
+                'settings.voice.modelLimit',
+                '{count} of 2 wakeword models active',
+                { count: voiceState.active_model_ids.length },
+              )}
+            </span>
+            <input
+              bind:this={modelFileInput}
+              class="voice-model-file"
+              type="file"
+              accept=".tflite,application/octet-stream"
+              onchange={handleWakewordModelFile}
+            />
+            <Button
+              variant="secondary"
+              loading={modelActionState === 'importing'}
+              disabled={!loaded ||
+                modelActionBusy ||
+                enableActionBusy ||
+                calibrationSessionActive}
+              onClick={chooseWakewordModelFile}
+            >
+              {t('settings.voice.importModel', 'Import TFLite model')}
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <WakewordCalibration
+        {onToast}
+        bind:voiceState
+        {loaded}
+        {wakewordModels}
+        {modelActionBusy}
+        {enableActionBusy}
+        bind:calibrationBaselineSensitivities
+        bind:calibrationActionState
+        {calibrationActionBusy}
+        {calibrationSessionActive}
+        {voiceConfigHasChanges}
+        {saveConfig}
+        {restoreCalibrationDraft}
+      />
+
+      <!-- Target Agent dropdown -->
+      <div class="s-row">
+        <div class="s-row-info">
+          <div class="s-row-label">
+            {t('settings.voice.targetAgent', 'Personal Agent')}
+          </div>
+          <div class="s-row-desc">
+            {t(
+              'settings.voice.targetAgentDescription',
+              'The Personal Agent that receives spoken commands on this server. Project Agents and other servers use separate routing.',
+            )}
+          </div>
+        </div>
+        <div class="s-row-control">
+          <Dropdown
+            value={selectedAgentValue}
+            options={[
+              { value: '', label: t('settings.voice.noAgent', '— (none)') },
+              ...agentOptions,
+            ]}
+            placeholder={t('settings.voice.noAgent', '— (none)')}
+            onValueChange={handleAgentChange}
             disabled={!loaded ||
-              modelActionBusy ||
+              agentOptions.length === 0 ||
               enableActionBusy ||
               calibrationSessionActive}
-            onClick={chooseWakewordModelFile}
-          >
-            {t('settings.voice.importModel', 'Import TFLite model')}
-          </Button>
+          />
         </div>
       </div>
-    </div>
 
-    <WakewordCalibration
-      {onToast}
-      bind:voiceState
-      {loaded}
-      {wakewordModels}
-      {modelActionBusy}
-      {enableActionBusy}
-      bind:calibrationBaselineSensitivities
-      bind:calibrationActionState
-      {calibrationActionBusy}
-      {calibrationSessionActive}
-      {voiceConfigHasChanges}
-      {saveConfig}
-      {restoreCalibrationDraft}
-    />
-    <!-- Target Agent dropdown -->
-    <div class="s-row">
-      <div class="s-row-info">
-        <div class="s-row-label">
-          {t('settings.voice.targetAgent', 'Personal Agent')}
+      <!-- Session behavior -->
+      <div class="s-row">
+        <div class="s-row-info">
+          <div class="s-row-label">
+            {t('settings.voice.sessionBehavior', 'Session')}
+          </div>
         </div>
-        <div class="s-row-desc">
+        <div class="s-row-control">
+          <Dropdown
+            value={voiceState.session_behavior}
+            options={SESSION_BEHAVIOR_OPTIONS}
+            onValueChange={handleSessionBehaviorChange}
+            disabled={!loaded || enableActionBusy || calibrationSessionActive}
+          />
+        </div>
+      </div>
+
+      <!-- Microphone picker -->
+      <div class="s-row">
+        <div class="s-row-info">
+          <div class="s-row-label">
+            {t('settings.voice.microphone', 'Microphone')}
+          </div>
+        </div>
+        <div class="s-row-control">
+          <Dropdown
+            value={selectedMicrophoneValue}
+            options={microphoneOptions}
+            ariaLabel={t('settings.voice.microphone', 'Microphone')}
+            triggerClass="voice-microphone-dropdown"
+            onValueChange={handleMicrophoneChange}
+            disabled={!loaded ||
+              microphones.length === 0 ||
+              enableActionBusy ||
+              calibrationSessionActive}
+          />
+        </div>
+      </div>
+
+      <!-- Privacy note -->
+      <div class="s-group__block s-group__note">
+        <p>
           {t(
-            'settings.voice.targetAgentDescription',
-            'The Personal Agent that receives spoken commands on this server. Project Agents and other servers use separate routing.',
+            'settings.voice.privacyNote',
+            'While listening is enabled, microphone audio is analyzed continuously on this device. Nothing is sent unless a wake phrase matches. After a match, the command recording—including up to 320 ms of locally buffered audio immediately before detection—is sent to your configured vBot speech backend for transcription.',
           )}
-        </div>
-      </div>
-      <div class="s-row-control">
-        <Dropdown
-          value={selectedAgentValue}
-          options={[
-            { value: '', label: t('settings.voice.noAgent', '— (none)') },
-            ...agentOptions,
-          ]}
-          placeholder={t('settings.voice.noAgent', '— (none)')}
-          onValueChange={handleAgentChange}
-          disabled={!loaded ||
-            agentOptions.length === 0 ||
-            enableActionBusy ||
-            calibrationSessionActive}
-        />
+        </p>
+        <p>
+          {t(
+            'settings.voice.cancelPhrases',
+            'Say “abbrechen” or “vergiss es” at the end of the same recording to discard the entire command before it starts a Run.',
+          )}
+        </p>
       </div>
     </div>
+  {/if}
+</div>
 
-    <!-- Session behavior -->
-    <div class="s-row">
-      <div class="s-row-info">
-        <div class="s-row-label">
-          {t('settings.voice.sessionBehavior', 'Session')}
-        </div>
-      </div>
-      <div class="s-row-control">
-        <Dropdown
-          value={voiceState.session_behavior}
-          options={SESSION_BEHAVIOR_OPTIONS}
-          onValueChange={handleSessionBehaviorChange}
-          disabled={!loaded || enableActionBusy || calibrationSessionActive}
-        />
-      </div>
-    </div>
-
-    <!-- Microphone picker -->
-    <div class="s-row">
-      <div class="s-row-info">
-        <div class="s-row-label">
-          {t('settings.voice.microphone', 'Microphone')}
-        </div>
-      </div>
-      <div class="s-row-control voice-microphone-control">
-        <Dropdown
-          value={selectedMicrophoneValue}
-          options={microphoneOptions}
-          ariaLabel={t('settings.voice.microphone', 'Microphone')}
-          triggerClass="voice-microphone-dropdown"
-          onValueChange={handleMicrophoneChange}
-          disabled={!loaded ||
-            microphones.length === 0 ||
-            enableActionBusy ||
-            calibrationSessionActive}
-        />
-      </div>
-    </div>
-
-    <!-- Privacy note -->
-    <div class="voice-privacy-note">
-      {t(
-        'settings.voice.privacyNote',
-        'While listening is enabled, microphone audio is analyzed continuously on this device. Nothing is sent unless a wake phrase matches. After a match, the command recording—including up to 320 ms of locally buffered audio immediately before detection—is sent to your configured vBot speech backend for transcription.',
-      )}
-      <p>
-        {t(
-          'settings.voice.cancelPhrases',
-          'Say “abbrechen” or “vergiss es” at the end of the same recording to discard the entire command before it starts a Run.',
-        )}
-      </p>
-    </div>
-
-    <div class="voice-save-state" aria-live="polite">
-      {#if saveState === 'saving'}
-        {t('common.saving', 'Saving…')}
-      {:else if saveState === 'saved' && !dirty}
-        {t('common.saved', 'Saved')}
-      {:else if saveState === 'error'}
-        {t('common.saveFailed', 'Not saved')}
-      {/if}
-    </div>
+<!-- One save state for the whole section: transcription audio and the
+     Desktop wakeword configuration both save as they change. -->
+<div class="s-footer voice-save-state" aria-live="polite">
+  {#if voiceSaveStatus === 'saving'}
+    {t('common.saving', 'Saving…')}
+  {:else if voiceSaveStatus === 'error'}
+    {t('common.saveFailed', 'Not saved')}
+  {:else if voiceSaveStatus === 'saved'}
+    {t('common.saved', 'Saved')}
   {/if}
 </div>
 

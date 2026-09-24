@@ -72,67 +72,29 @@
 .settings-editor[hidden] {
   display: none;
 }
-.settings-editor + .settings-editor {
-  margin-top: 24px;
-  padding-top: 28px;
-  border-top: 1px solid var(--border);
-}
+/* Settings sections use the shared `.s-section` grammar (sections.css).
+   Panels render their save state as the section body's `.s-footer`; on a
+   titled section it moves onto the heading line and stays after the fields
+   in keyboard order. */
 .settings-section-heading {
-  margin-bottom: 18px;
+  /* Leaves room for the save state on this line. */
+  padding-right: 96px;
 }
-.settings-section-heading h3 {
-  margin: 0;
-  color: var(--text-hi);
-  font: 600 var(--fs-heading-md) / 1.4 var(--font-ui);
-  letter-spacing: -0.015em;
-}
-.settings-section-heading h3:focus {
-  outline: none;
-}
-.settings-editor-body {
-  min-width: 0;
-}
-.settings-editor-body > .s-row,
-.settings-editor-body > .s-task-model-list > .s-row {
-  padding-block: 20px;
-}
-.settings-editor-body > .s-row:not(.s-row--stacked) {
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(0, 1fr);
-  gap: 28px;
+.settings-editor:has(> .settings-section-heading)
+  > .settings-editor-body
+  > .s-footer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
   align-items: center;
-}
-.settings-editor-body > .s-row:first-child,
-.settings-editor-body > .s-task-model-list:first-child > .s-row:first-child {
-  padding-top: 0;
-}
-.settings-editor-body .s-row-info {
-  max-width: 48ch;
-}
-.settings-editor-body .s-row-control {
-  min-width: 0;
-  max-width: 100%;
-}
-.settings-editor-body > .s-row > .s-row-control {
-  width: 100%;
-}
-.settings-editor-body > .s-row > .s-row-control--number {
-  width: 132px;
-}
-.settings-editor-body .s-row-control > .dropdown,
-.settings-editor-body .s-row-control > .searchable-dropdown {
-  width: 100%;
-}
-.settings-editor-body .s-row-desc {
-  color: var(--text-med);
-  font-size: var(--fs-body-sm);
-  line-height: 1.6;
-  margin-top: 5px;
+  height: 32px;
+  margin: 0;
+  padding: 0;
 }
 .settings-editor-body .s-footer {
-  margin-top: 6px;
-  padding-top: 0;
   justify-content: flex-end;
+  padding-top: 0;
 }
 .settings-editor-body .s-save-button--inline {
   width: auto;
@@ -142,10 +104,8 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 4px 8px;
-  margin-bottom: 24px;
-  padding-bottom: 20px;
-  border-bottom: 1px solid var(--border);
-  color: var(--text-med);
+  margin: -12px 0 28px;
+  color: var(--text-lo);
   font-size: var(--fs-body-sm);
 }
 .settings-search-results {
@@ -174,20 +134,6 @@
   font-size: var(--fs-body-sm);
   line-height: 1.5;
   font-weight: 400;
-}
-.settings-editor-body .s-list-head {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-}
-.settings-editor-body .s-list-head-info {
-  color: var(--text-med);
-}
-.settings-editor-body .s-list-head-actions {
-  flex-wrap: wrap;
-}
-.settings-editor-body .s-task-model-row > button {
-  align-self: flex-start;
 }
 .s-task-model-advanced {
   grid-column: 1 / -1;
@@ -264,13 +210,5 @@
   }
   .settings-page-heading {
     margin-bottom: 24px;
-  }
-  .settings-editor-body > .s-row:not(.s-row--stacked) {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 12px;
-  }
-  .settings-editor-body > .s-row > .s-row-control {
-    margin-left: 0;
-    justify-content: flex-start;
   }
 }

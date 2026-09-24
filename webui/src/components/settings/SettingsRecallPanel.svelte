@@ -115,43 +115,43 @@
   }
 </script>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.recall.backend', 'Recall backend')}
-    </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.recall.backendDescription',
-        'How the session search looks through stored conversations.',
-      )}
-    </div>
-  </div>
-  <div class="s-row-control s-row-control--recall">
-    <Dropdown
-      id="settings-recall-backend"
-      value={recallSettings.backend}
-      options={recallBackendOptions}
-      ariaLabel={t('settings.recall.backend', 'Recall backend')}
-      triggerClass="settings-view__dropdown"
-      listClass="settings-view__thinking-list"
-      onValueChange={handleRecallBackendChange}
-    />
-  </div>
-</div>
-
-{#if recallSettings.backend === 'vector'}
-  <div class="s-row s-row--stacked">
+<div class="s-group">
+  <div class="s-row">
     <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.recall.backend', 'Recall backend')}
+      </div>
       <div class="s-row-desc">
+        {t(
+          'settings.recall.backendDescription',
+          'How the session search looks through stored conversations.',
+        )}
+      </div>
+    </div>
+    <div class="s-row-control">
+      <Dropdown
+        id="settings-recall-backend"
+        value={recallSettings.backend}
+        options={recallBackendOptions}
+        ariaLabel={t('settings.recall.backend', 'Recall backend')}
+        triggerClass="settings-view__dropdown"
+        listClass="settings-view__thinking-list"
+        onValueChange={handleRecallBackendChange}
+      />
+    </div>
+  </div>
+
+  {#if recallSettings.backend === 'vector'}
+    <div class="s-group__block s-group__block--attached s-group__note">
+      <p>
         {t(
           'settings.recall.vectorHint',
           'Semantic search uses the embedding model configured below.',
         )}
-      </div>
+      </p>
     </div>
-  </div>
-{/if}
+  {/if}
+</div>
 
 <div class="s-footer">
   <SaveButton

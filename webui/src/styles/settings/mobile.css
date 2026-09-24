@@ -36,6 +36,11 @@
     flex-direction: column;
   }
 
+  /* Stacked rows keep stretching their content to the full width. */
+  .s-row.s-row--stacked {
+    align-items: stretch;
+  }
+
   .settings-content {
     min-height: 0;
     overflow-y: auto;
@@ -45,9 +50,7 @@
   .s-row-control,
   .s-row-control--input,
   .s-row-control--model,
-  .s-row-control--input-actions,
   .s-row-control--number,
-  .s-row-control--recall,
   .s-row-control--web-search,
   .s-row-control--web-search-url,
   .s-row-control--task-model {
@@ -56,10 +59,19 @@
     max-width: none;
   }
 
-  .s-provider-connection-head,
-  .s-row-actions--provider {
-    align-items: stretch;
-    flex-direction: column;
+  .s-disclosure-sub {
+    padding: 2px 14px 16px 24px;
+  }
+
+  .s-provider-connection-head {
+    flex-wrap: wrap;
+  }
+
+  /* Heads with long descriptions and several end controls put the controls
+     on their own line. */
+  .s-provider-connection-head > .s-row-info,
+  .s-ext-head > .s-row-info {
+    flex-basis: 100%;
   }
 
   .s-connection-account-row {
@@ -91,7 +103,6 @@
     align-items: stretch;
   }
 
-  .s-row-control--input-actions,
   .device-flow-code-row {
     align-items: stretch;
     flex-direction: column;
@@ -115,10 +126,6 @@
     width: 40px;
   }
 
-  .s-row-actions--channel-header {
-    justify-content: flex-start;
-  }
-
   .s-channel-form-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -130,27 +137,29 @@
 
   .s-channel-head,
   .s-channel-controls,
-  .s-channel-access-row,
-  .s-task-model-head,
-  .s-row-actions--channel {
+  .s-channel-access-row {
     align-items: stretch;
     flex-direction: column;
     width: 100%;
+  }
+
+  .s-channel-controls > .s-entity__end {
+    justify-content: flex-start;
+  }
+
+  .s-channel-body {
+    padding: 0 14px 14px;
   }
 
   .s-task-model-options {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .s-channel-chips {
-    justify-content: flex-start;
-  }
-
   .s-channel-access-row {
     display: flex;
   }
 
-  .s-row-actions--channel-access {
+  .s-channel-access-row > .s-entity__end {
     justify-content: flex-start;
   }
 }

@@ -190,76 +190,81 @@
   }
 </script>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.appearance.language', 'Language')}
+<div class="s-group">
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.appearance.language', 'Language')}
+      </div>
+      <div class="s-row-desc">
+        {t('settings.appearance.languageDescription', 'Interface language.')}
+      </div>
     </div>
-    <div class="s-row-desc">
-      {t('settings.appearance.languageDescription', 'Interface language.')}
+    <div class="s-row-control s-row-control--appearance">
+      <Dropdown
+        id="settings-appearance-language"
+        value={selectedLanguageId}
+        options={languageDropdownOptions}
+        ariaLabel={t('settings.appearance.language', 'Language')}
+        disabled={availableLanguageOptions.length <= 1}
+        triggerClass="settings-view__dropdown"
+        listClass="settings-view__thinking-list"
+        onValueChange={handleLanguageChange}
+      />
     </div>
   </div>
-  <div class="s-row-control s-row-control--appearance">
-    <Dropdown
-      id="settings-appearance-language"
-      value={selectedLanguageId}
-      options={languageDropdownOptions}
-      ariaLabel={t('settings.appearance.language', 'Language')}
-      disabled={availableLanguageOptions.length <= 1}
-      triggerClass="settings-view__dropdown"
-      listClass="settings-view__thinking-list"
-      onValueChange={handleLanguageChange}
-    />
-  </div>
-</div>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.appearance.chatWidth.label', 'Chat width')}
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.appearance.chatWidth.label', 'Chat width')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.appearance.chatWidth.description',
+          'Reading width of the chat column on wide screens.',
+        )}
+      </div>
     </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.appearance.chatWidth.description',
-        'Reading width of the chat column on wide screens.',
-      )}
+    <div class="s-row-control s-row-control--appearance">
+      <Dropdown
+        id="settings-appearance-chat-width"
+        value={selectedChatWidth}
+        options={chatWidthDropdownOptions}
+        ariaLabel={t('settings.appearance.chatWidth.label', 'Chat width')}
+        triggerClass="settings-view__dropdown"
+        listClass="settings-view__thinking-list"
+        onValueChange={handleChatWidthChange}
+      />
     </div>
   </div>
-  <div class="s-row-control s-row-control--appearance">
-    <Dropdown
-      id="settings-appearance-chat-width"
-      value={selectedChatWidth}
-      options={chatWidthDropdownOptions}
-      ariaLabel={t('settings.appearance.chatWidth.label', 'Chat width')}
-      triggerClass="settings-view__dropdown"
-      listClass="settings-view__thinking-list"
-      onValueChange={handleChatWidthChange}
-    />
-  </div>
-</div>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.appearance.chatWorkingMode.label', 'Work details')}
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.appearance.chatWorkingMode.label', 'Work details')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.appearance.chatWorkingMode.description',
+          'Show Thinking and Tool activity inline or group it into Working blocks.',
+        )}
+      </div>
     </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.appearance.chatWorkingMode.description',
-        'Show Thinking and Tool activity inline or group it into Working blocks.',
-      )}
+    <div class="s-row-control s-row-control--appearance">
+      <Dropdown
+        id="settings-appearance-chat-working-mode"
+        value={selectedChatWorkingMode}
+        options={chatWorkingModeDropdownOptions}
+        ariaLabel={t(
+          'settings.appearance.chatWorkingMode.label',
+          'Work details',
+        )}
+        triggerClass="settings-view__dropdown"
+        listClass="settings-view__thinking-list"
+        onValueChange={handleChatWorkingModeChange}
+      />
     </div>
-  </div>
-  <div class="s-row-control s-row-control--appearance">
-    <Dropdown
-      id="settings-appearance-chat-working-mode"
-      value={selectedChatWorkingMode}
-      options={chatWorkingModeDropdownOptions}
-      ariaLabel={t('settings.appearance.chatWorkingMode.label', 'Work details')}
-      triggerClass="settings-view__dropdown"
-      listClass="settings-view__thinking-list"
-      onValueChange={handleChatWorkingModeChange}
-    />
   </div>
 </div>
 

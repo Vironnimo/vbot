@@ -109,66 +109,66 @@
   }
 </script>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.webFetch.provider', 'Page extraction service')}
-    </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.webFetch.description',
-        'Read pages directly, or use an optional service for difficult websites and JavaScript content.',
-      )}
-    </div>
-  </div>
-  <div class="s-row-control s-row-control--web-search">
-    <Dropdown
-      id="settings-web-fetch-provider"
-      value={draft.provider}
-      options={providers}
-      ariaLabel={t('settings.webFetch.provider', 'Page extraction service')}
-      triggerClass="settings-view__dropdown"
-      listClass="settings-view__thinking-list"
-      onValueChange={(value) => change('provider', value)}
-    />
-  </div>
-</div>
-
-{#if draft.provider !== 'direct'}
+<div class="s-group">
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.webFetch.mode', 'When to use it')}
+        {t('settings.webFetch.provider', 'Page extraction service')}
       </div>
       <div class="s-row-desc">
         {t(
-          'settings.webFetch.modeDescription',
-          'Fallback uses the service for blocked, failed or unreadable pages. Prefer uses it first for page URLs and tries direct fetch if it fails.',
+          'settings.webFetch.description',
+          'Read pages directly, or use an optional service for difficult websites and JavaScript content.',
         )}
       </div>
     </div>
     <div class="s-row-control s-row-control--web-search">
       <Dropdown
-        id="settings-web-fetch-mode"
-        value={draft.mode}
-        options={modes}
-        ariaLabel={t('settings.webFetch.mode', 'When to use it')}
+        id="settings-web-fetch-provider"
+        value={draft.provider}
+        options={providers}
+        ariaLabel={t('settings.webFetch.provider', 'Page extraction service')}
         triggerClass="settings-view__dropdown"
         listClass="settings-view__thinking-list"
-        onValueChange={(value) => change('mode', value)}
+        onValueChange={(value) => change('provider', value)}
       />
     </div>
   </div>
-  <div class="s-row s-row--stacked">
-    <div class="s-row-info">
-      <div class="s-row-desc">
+
+  {#if draft.provider !== 'direct'}
+    <div class="s-row">
+      <div class="s-row-info">
+        <div class="s-row-label">
+          {t('settings.webFetch.mode', 'When to use it')}
+        </div>
+        <div class="s-row-desc">
+          {t(
+            'settings.webFetch.modeDescription',
+            'Fallback uses the service for blocked, failed or unreadable pages. Prefer uses it first for page URLs and tries direct fetch if it fails.',
+          )}
+        </div>
+      </div>
+      <div class="s-row-control s-row-control--web-search">
+        <Dropdown
+          id="settings-web-fetch-mode"
+          value={draft.mode}
+          options={modes}
+          ariaLabel={t('settings.webFetch.mode', 'When to use it')}
+          triggerClass="settings-view__dropdown"
+          listClass="settings-view__thinking-list"
+          onValueChange={(value) => change('mode', value)}
+        />
+      </div>
+    </div>
+    <div class="s-group__block s-group__note">
+      <p>
         {t(
           'settings.webFetch.cost',
           'The selected service receives requested URLs and may charge per page. Free allowances and prices vary. Reading or searching an already saved page makes no additional service request.',
         )}
-      </div>
+      </p>
       {#if service}
-        <div class="s-row-desc">
+        <p>
           {service.configured
             ? t('settings.webFetch.keyPresent', 'API key configured.')
             : t('settings.webFetch.keyMissing', 'API key required:')}
@@ -183,11 +183,11 @@
           <a href={service.pricing_url} target="_blank" rel="noreferrer"
             >{t('settings.webFetch.pricing', 'Service pricing')}</a
           >
-        </div>
+        </p>
       {/if}
     </div>
-  </div>
-{/if}
+  {/if}
+</div>
 
 <div class="s-footer">
   <SaveButton

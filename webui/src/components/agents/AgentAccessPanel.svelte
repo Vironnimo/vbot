@@ -1,10 +1,9 @@
 <script>
   import { t } from '$lib/i18n.js';
-  import InfoHint from '../ui/InfoHint.svelte';
   import ToolAccessEditor from '../tools/ToolAccessEditor.svelte';
-  import ToggleChipList from '../ui/ToggleChipList.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
-  import Button from '../ui/Button.svelte';
+  import TextField from '../ui/TextField.svelte';
+  import AgentSelectionGroup from './AgentSelectionGroup.svelte';
   import {
     withSubagentAllowedAgents,
     subagentAllowedAgents,
@@ -24,31 +23,40 @@
 
   let projectAgentsOpen = $state(false);
 
+  // Filter text shared by the groups of the Skills and Sub-Agent sections.
+  let skillQuery = $state('');
+
+  let agentQuery = $state('');
+
   let visibleSkillItems = $derived(skillAccessItems());
 
   let visibleAgentTargetItems = $derived(agentTargetAccessItems());
 
-  let skillChipItems = $derived(
-    visibleSkillItems.map((skill) => ({ ...skill, allowed: skill.isAllowed })),
-  );
-
-  let agentTargetChipItems = $derived(
-    visibleAgentTargetItems.map((target) => ({
-      ...target,
-      allowed: target.isAllowed,
+  let skillItems = $derived(
+    visibleSkillItems.map((skill) => ({
+      name: skill.name,
+      allowed: skill.isAllowed,
+      detail: skill.description,
+      warnings: skill.warnings,
     })),
   );
 
-  let identityAgentChipItems = $derived(
-    agentTargetChipItems.filter((target) => target.kind !== 'project'),
+  let agentTargetItems = $derived(
+    visibleAgentTargetItems.map((target) => ({
+      name: target.name,
+      kind: target.kind,
+      allowed: target.isAllowed,
+      detail: target.description,
+      unavailable: Boolean(target.unavailable),
+    })),
   );
 
-  let projectAgentChipItems = $derived(
-    agentTargetChipItems.filter((target) => target.kind === 'project'),
+  let identityAgentItems = $derived(
+    agentTargetItems.filter((target) => target.kind !== 'project'),
   );
 
-  let selectedProjectAgentCount = $derived(
-    projectAgentChipItems.filter((target) => target.allowed).length,
+  let projectAgentItems = $derived(
+    agentTargetItems.filter((target) => target.kind === 'project'),
   );
 
   let skillsAreWildcard = $derived(isWildcardAccess(formValues.allowed_skills));
@@ -78,7 +86,7 @@
     if (items.every((item) => item.allowed === isAllowed)) return;
     const groupNames = new Set(items.map((item) => item.name));
     const selectedNames = agentsAreWildcard
-      ? agentTargetChipItems.map((item) => item.name)
+      ? agentTargetItems.map((item) => item.name)
       : configuredAgentTargets;
     const nextNames = selectedNames.filter((name) => !groupNames.has(name));
     if (isAllowed) nextNames.push(...groupNames);
@@ -130,6 +138,7 @@
     }));
   }
 
+  // The row's secondary line; the group already names the target kind.
   function agentTargetDescription(target) {
     if (target.unavailable) {
       return t(
@@ -138,18 +147,16 @@
       );
     }
     if (target.kind === 'project') {
-      return t(
-        'agents.access.projectAgentTarget',
-        'Project Agent · {agent} · {project}',
-        {
-          agent: target.displayName || target.name,
-          project: target.projectName || target.projectId,
-        },
-      );
+      return t('agents.access.projectAgentDetail', '{agent} · {project}', {
+        agent: target.displayName || target.name,
+        project: target.projectName || target.projectId,
+      });
     }
-    return t('agents.access.identityAgentTarget', 'Identity Agent · {agent}', {
-      agent: target.displayName || target.name,
-    });
+    return target.displayName || '';
+  }
+
+  function agentToggleLabel(name) {
+    return t('agents.access.toggleAgent', 'Toggle agent {name}', { name });
   }
 
   function updateAgentTargetAccessItem(itemName, isAllowed) {
@@ -230,186 +237,192 @@
   }
 </script>
 
-<div class="management-topic" id="agent-detail-panel-access">
-  <div class="agent-capabilities">
-    <div class="tl-section">
-      <div class="tl-section-header">
-        <h3 class="tl-section-label">
-          {t('agents.form.toolAccess', 'Tool access')}
-        </h3>
-        <InfoHint
-          text={t(
-            'agents.form.toolAccessHelp',
-            'Choose which Tools this Agent may use. Automatic Tools become available when their condition is met; permission does not guarantee current availability.',
-          )}
-        />
-      </div>
-      <div class="agents-view__tool-access-content">
-        <ToolAccessEditor
-          value={formValues.tool_access}
-          tools={availableTools}
-          memoryPromptMode={formValues.memory_prompt_mode}
-          onChange={(next) => (formValues.tool_access = next)}
-          onOpenExtensions={navigateToExtensions}
-        />
-      </div>
+<div class="agents-view__part" id="agent-detail-panel-access">
+  <section class="s-section" aria-labelledby="agent-section-tools">
+    <header class="s-section__head">
+      <h3 class="s-section__title" id="agent-section-tools">
+        {t('agents.form.toolAccess', 'Tool access')}
+      </h3>
+    </header>
+    <p class="s-section__desc">
+      {t(
+        'agents.form.toolAccessHelp',
+        'Choose which Tools this Agent may use. Automatic Tools become available when their condition is met; permission does not guarantee current availability.',
+      )}
+    </p>
+    <div class="s-section__body">
+      <ToolAccessEditor
+        value={formValues.tool_access}
+        tools={availableTools}
+        memoryPromptMode={formValues.memory_prompt_mode}
+        onChange={(next) => (formValues.tool_access = next)}
+        onOpenExtensions={navigateToExtensions}
+      />
     </div>
+  </section>
 
-    <div class="tl-section">
-      <div class="tl-section-header">
-        <h3 class="tl-section-label">
-          {t('agents.form.allowedSkills', 'Allowed skills')}
-        </h3>
-      </div>
-      <ToggleChipList
-        items={skillChipItems}
+  <section class="s-section" aria-labelledby="agent-section-skills">
+    <header class="s-section__head">
+      <h3 class="s-section__title" id="agent-section-skills">
+        {t('agents.form.skills', 'Skills')}
+      </h3>
+    </header>
+    <p class="s-section__desc">
+      {skillsAreWildcard && skillItems.length > 0
+        ? t(
+            'agents.form.wildcardNote',
+            'Currently all are allowed, including ones added in the future. Turning any single item off switches to a fixed list.',
+          )
+        : t(
+            'agents.form.skillsDescription',
+            'Skills this Agent may load. Selecting all also allows Skills added later.',
+          )}
+    </p>
+    <div class="s-section__body">
+      {#if skillItems.length > 1}
+        {@render filterToolbar(
+          skillQuery,
+          (next) => (skillQuery = next),
+          t('agents.access.filterSkills', 'Filter Skills'),
+          t('agents.access.filterSkillsPlaceholder', 'Filter Skills…'),
+        )}
+      {/if}
+      <AgentSelectionGroup
+        title={t('agents.form.allowedSkills', 'Allowed skills')}
+        titleId="agent-skills-label"
+        items={skillItems}
+        query={skillQuery}
+        allLabel={t('agents.access.allSkills', 'All Skills')}
+        toggleLabel={(name) =>
+          t('agents.access.toggleSkill', 'Toggle skill {name}', { name })}
         emptyLabel={t(
           'agents.access.noSkills',
           'No loadable skills are available.',
         )}
-        note={skillsAreWildcard && visibleSkillItems.length > 0
-          ? t(
-              'agents.form.wildcardNote',
-              'Currently all are allowed, including ones added in the future. Turning any single item off switches to a fixed list.',
-            )
-          : ''}
-        ariaToggleLabel={(name) =>
-          t('agents.access.toggleSkill', 'Toggle skill {name}', { name })}
         onToggle={(name, next) =>
           updateAccessItem('allowed_skills', name, next)}
         onSetAll={(next) =>
           (formValues.allowed_skills = next ? [WILDCARD_ACCESS] : [])}
       />
       {#if invalidSkills.length > 0}
-        <div class="agents-view__invalid-skills">
-          <div class="agents-view__invalid-skills-title">
+        <div class="s-subhead">
+          <h4 class="s-subhead__title">
             {t('agents.access.invalidSkillsTitle', 'Unavailable skills')}
-          </div>
-          <div class="agents-view__invalid-skills-list">
-            {#each invalidSkills as item (item.path || item.name)}
-              <div class="agents-view__invalid-skill">
-                <div class="agents-view__access-copy">
-                  <span class="tl-item-name">
-                    {item.name ||
-                      t('agents.access.unknownSkillName', 'Unknown skill')}
-                  </span>
-                  {#if item.path}
-                    <span class="agents-view__invalid-skill-path">
-                      {item.path}
-                    </span>
-                  {/if}
-                  {#if Array.isArray(item.warnings) && item.warnings.length > 0}
-                    <div class="agents-view__skill-warnings">
-                      <span class="agents-view__warning-label">
-                        {t('agents.access.skillWarnings', 'Warnings')}
-                      </span>
-                      <ul>
-                        {#each item.warnings as warning, index (`${item.path || item.name}-warning-${index}`)}
-                          <li>{warning}</li>
-                        {/each}
-                      </ul>
-                    </div>
-                  {/if}
+          </h4>
+        </div>
+        <div class="s-group agents-view__invalid-skills">
+          {#each invalidSkills as item (item.path || item.name)}
+            <div class="s-row s-row--compact">
+              <div class="s-row-info">
+                <div class="agents-view__invalid-skill-name">
+                  {item.name ||
+                    t('agents.access.unknownSkillName', 'Unknown skill')}
                 </div>
+                {#if item.path}
+                  <div class="agents-view__invalid-skill-path">
+                    {item.path}
+                  </div>
+                {/if}
+                {#if Array.isArray(item.warnings) && item.warnings.length > 0}
+                  <ul class="agents-view__skill-warnings">
+                    {#each item.warnings as warning, index (`${item.path || item.name}-warning-${index}`)}
+                      <li>{warning}</li>
+                    {/each}
+                  </ul>
+                {/if}
+              </div>
+              <div class="s-row-control">
                 <StatusChip variant="warn">
                   {t('agents.access.notLoadable', 'not loadable')}
                 </StatusChip>
               </div>
-            {/each}
-          </div>
+            </div>
+          {/each}
         </div>
       {/if}
     </div>
+  </section>
 
-    {#if subagentToolEnabled}
-      <div class="tl-section">
-        <div class="tl-section-header">
-          <h3 class="tl-section-label">
-            {t('agents.form.subagentSettings', 'Sub-Agent settings')}
-            <InfoHint
-              text={t(
-                'agents.form.allowedAgentsHelp',
-                'Additional targets for subagent. The calling Agent is always available by omitting agent_id and is not listed here. Project Agents use agent@project ids. Rooting does not narrow this permission.',
-              )}
-            />
-          </h3>
-        </div>
-        <section aria-labelledby="agent-identity-targets-label">
-          <h4
-            id="agent-identity-targets-label"
-            class="agents-view__access-group-label"
-          >
-            {t('agents.access.identityAgents', 'Identity Agents')}
-          </h4>
-          <ToggleChipList
-            items={identityAgentChipItems}
-            emptyLabel={t(
-              'agents.access.noIdentityAgentTargets',
-              'No additional Identity Agents are available.',
+  {#if subagentToolEnabled}
+    <section class="s-section" aria-labelledby="agent-section-subagents">
+      <header class="s-section__head">
+        <h3 class="s-section__title" id="agent-section-subagents">
+          {t('agents.form.subagentTargets', 'Sub-Agent targets')}
+        </h3>
+      </header>
+      <p class="s-section__desc">
+        {agentsAreWildcard && visibleAgentTargetItems.length > 0
+          ? t(
+              'agents.form.agentWildcardNote',
+              'Additional Agents: all other Identity Agents and all Agents on every registered Project, including ones added later. The calling Agent remains implicit. Rooting does not narrow this.',
+            )
+          : t(
+              'agents.form.agentAddressNote',
+              'Additional Agents use bare Identity ids or agent@project ids. The calling Agent remains implicit. Rooting does not change this list.',
             )}
-            note={agentsAreWildcard && visibleAgentTargetItems.length > 0
-              ? t(
-                  'agents.form.agentWildcardNote',
-                  'Additional Agents: all other Identity Agents and all Agents on every registered Project, including ones added later. The calling Agent remains implicit. Rooting does not narrow this.',
-                )
-              : t(
-                  'agents.form.agentAddressNote',
-                  'Additional Agents use bare Identity ids or agent@project ids. The calling Agent remains implicit. Rooting does not change this list.',
-                )}
-            ariaToggleLabel={(name) =>
-              t('agents.access.toggleAgent', 'Toggle agent {name}', {
-                name,
-              })}
+      </p>
+      <div class="s-section__body">
+        {#if agentTargetItems.length > 1}
+          {@render filterToolbar(
+            agentQuery,
+            (next) => (agentQuery = next),
+            t('agents.access.filterAgents', 'Filter Agents'),
+            t('agents.access.filterAgentsPlaceholder', 'Filter Agents…'),
+          )}
+        {/if}
+        <AgentSelectionGroup
+          title={t('agents.access.identityAgents', 'Identity Agents')}
+          titleId="agent-identity-targets-label"
+          items={identityAgentItems}
+          query={agentQuery}
+          allLabel={t('agents.access.allIdentityAgents', 'All Identity Agents')}
+          toggleLabel={agentToggleLabel}
+          emptyLabel={t(
+            'agents.access.noIdentityAgentTargets',
+            'No additional Identity Agents are available.',
+          )}
+          onToggle={(name, next) =>
+            updateAccessItem('allowed_agents', name, next)}
+          onSetAll={(next) => setAgentGroupAccess(identityAgentItems, next)}
+        />
+        {#if projectAgentItems.length > 0}
+          <AgentSelectionGroup
+            class="agents-view__project-targets"
+            title={t('agents.access.projectAgents', 'Project Agents')}
+            titleId="agent-project-targets-label"
+            items={projectAgentItems}
+            query={agentQuery}
+            allLabel={t('agents.access.allProjectAgents', 'All Project Agents')}
+            toggleLabel={agentToggleLabel}
+            collapsible
+            open={projectAgentsOpen}
+            toggleId="agent-project-targets-toggle"
+            contentId="agent-project-targets"
+            onOpenChange={(next) => (projectAgentsOpen = next)}
             onToggle={(name, next) =>
               updateAccessItem('allowed_agents', name, next)}
-            onSetAll={(next) =>
-              setAgentGroupAccess(identityAgentChipItems, next)}
+            onSetAll={(next) => setAgentGroupAccess(projectAgentItems, next)}
           />
-        </section>
-        {#if projectAgentChipItems.length > 0}
-          <section
-            class="agents-view__project-targets"
-            aria-labelledby="agent-project-targets-toggle"
-          >
-            <Button
-              id="agent-project-targets-toggle"
-              variant="tertiary"
-              class="agents-view__access-group-toggle"
-              aria-expanded={projectAgentsOpen}
-              aria-controls="agent-project-targets"
-              onClick={() => (projectAgentsOpen = !projectAgentsOpen)}
-            >
-              <span
-                class="disclosure-chevron"
-                class:disclosure-chevron--open={projectAgentsOpen}
-                aria-hidden="true"
-              ></span>
-              <span>{t('agents.access.projectAgents', 'Project Agents')}</span>
-              <span class="agents-view__access-group-count"
-                >({selectedProjectAgentCount}/{projectAgentChipItems.length})</span
-              >
-            </Button>
-            <div id="agent-project-targets" hidden={!projectAgentsOpen}>
-              <ToggleChipList
-                items={projectAgentChipItems}
-                ariaToggleLabel={(name) =>
-                  t('agents.access.toggleAgent', 'Toggle agent {name}', {
-                    name,
-                  })}
-                onToggle={(name, next) =>
-                  updateAccessItem('allowed_agents', name, next)}
-                onSetAll={(next) =>
-                  setAgentGroupAccess(projectAgentChipItems, next)}
-              />
-            </div>
-          </section>
         {/if}
         {#if agentTargetCatalogError}
-          <p class="agents-view__placeholder-row" role="status">
+          <p class="agents-view__catalog-error" role="status">
             {agentTargetCatalogError}
           </p>
         {/if}
       </div>
-    {/if}
-  </div>
+    </section>
+  {/if}
 </div>
+
+{#snippet filterToolbar(value, onInput, label, placeholder)}
+  <div class="s-group-toolbar agents-view__filter-toolbar">
+    <TextField
+      type="search"
+      class="agents-view__filter"
+      {value}
+      {placeholder}
+      ariaLabel={label}
+      {onInput}
+    />
+  </div>
+{/snippet}

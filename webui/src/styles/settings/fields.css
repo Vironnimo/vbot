@@ -1,3 +1,6 @@
+/* A setting row: label and description on the left, its control on the
+   right. Rows carry no lines of their own; inside a `.s-group` the group
+   divides them. */
 .s-row {
   display: flex;
   align-items: center;
@@ -5,27 +8,6 @@
   justify-content: space-between;
   gap: 16px;
   padding: 12px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.s-row:last-child {
-  border-bottom: 0;
-}
-
-.s-provider-card {
-  border-bottom: 1px solid var(--border);
-}
-
-.s-provider-card:last-of-type {
-  border-bottom: 0;
-}
-
-.s-provider-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 13px 0;
 }
 
 .s-row--stacked {

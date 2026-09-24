@@ -176,64 +176,66 @@
   }
 </script>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.sessionTitles.enabled', 'Automatic Session titles')}
+<div class="s-group">
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.sessionTitles.enabled', 'Automatic Session titles')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.sessionTitles.enabledDescription',
+          'Creates one additional Model request from a bounded excerpt of the first message in each new Session. When off, the first 40 normalized characters remain as the local title.',
+        )}
+      </div>
     </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.sessionTitles.enabledDescription',
-        'Creates one additional Model request from a bounded excerpt of the first message in each new Session. When off, the first 40 normalized characters remain as the local title.',
-      )}
+    <div class="s-row-control">
+      <Toggle
+        checked={formValues.enabled}
+        ariaLabel={t(
+          'settings.sessionTitles.enabled',
+          'Automatic Session titles',
+        )}
+        onChange={(enabled) => update({ enabled })}
+      />
     </div>
   </div>
-  <div class="s-row-control">
-    <Toggle
-      checked={formValues.enabled}
-      ariaLabel={t(
-        'settings.sessionTitles.enabled',
-        'Automatic Session titles',
-      )}
-      onChange={(enabled) => update({ enabled })}
-    />
-  </div>
-</div>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.sessionTitles.model', 'Title model')}
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.sessionTitles.model', 'Title model')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.sessionTitles.modelDescription',
+          'Uses the active Agent Model when no separate Model is selected. A failed request keeps the local title and never triggers another paid Model request.',
+        )}
+      </div>
     </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.sessionTitles.modelDescription',
-        'Uses the active Agent Model when no separate Model is selected. A failed request keeps the local title and never triggers another paid Model request.',
-      )}
+    <div class="s-row-control s-row-control--model">
+      <SearchableDropdown
+        id="settings-session-title-model"
+        value={modelSelectValue}
+        options={modelOptions}
+        disabled={!formValues.enabled}
+        placeholder={t(
+          'settings.sessionTitles.agentModel',
+          'Agent Model (default)',
+        )}
+        searchPlaceholder={t(
+          'agents.form.modelSearchPlaceholder',
+          'Filter models…',
+        )}
+        emptyLabel={t('agents.form.modelSearchEmpty', 'No models match')}
+        ariaLabel={t('settings.sessionTitles.model', 'Title model')}
+        triggerClass="settings-view__dropdown"
+        panelClass="settings-view__model-panel"
+        footerActionLabel={modelFilterFooter}
+        onFooterAction={() => (showAllModels = !showAllModels)}
+        onValueChange={selectModel}
+      />
     </div>
-  </div>
-  <div class="s-row-control s-row-control--model">
-    <SearchableDropdown
-      id="settings-session-title-model"
-      value={modelSelectValue}
-      options={modelOptions}
-      disabled={!formValues.enabled}
-      placeholder={t(
-        'settings.sessionTitles.agentModel',
-        'Agent Model (default)',
-      )}
-      searchPlaceholder={t(
-        'agents.form.modelSearchPlaceholder',
-        'Filter models…',
-      )}
-      emptyLabel={t('agents.form.modelSearchEmpty', 'No models match')}
-      ariaLabel={t('settings.sessionTitles.model', 'Title model')}
-      triggerClass="settings-view__dropdown"
-      panelClass="settings-view__model-panel"
-      footerActionLabel={modelFilterFooter}
-      onFooterAction={() => (showAllModels = !showAllModels)}
-      onValueChange={selectModel}
-    />
   </div>
 </div>
 

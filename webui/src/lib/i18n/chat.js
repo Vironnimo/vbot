@@ -372,7 +372,19 @@ export default Object.freeze({
   'compaction.strategy.summaryTail': 'With tail',
   'compaction.strategy.continuation': 'Classic',
   'compaction.strategy.tailTokens': 'Verbatim tail tokens',
+  'compaction.strategy.tailTokensDescription':
+    'Recent conversation kept word for word instead of summarized.',
   'compaction.strategy.summaryModel': 'Summary model',
+  'compaction.strategy.summaryModelDescription':
+    'Model that writes the summary. Empty uses the active Model.',
+  'compaction.trigger.description':
+    'The limit that starts automatic compaction.',
+  'compaction.trigger.tokensDescription':
+    'Compacts when a request reaches this many input tokens.',
+  'compaction.trigger.thresholdDescription':
+    'Share of the context window, between 0 and 1. 0.8 compacts at 80%.',
+  'compaction.trigger.maxTokensDescription':
+    'Also compacts at this many input tokens, even below the ratio.',
   'compaction.strategy.activeModel': 'Active Model',
   'compaction.strategy.continuationDescription':
     'Summarize the conversation with the active Model. Continue from the summary.',
