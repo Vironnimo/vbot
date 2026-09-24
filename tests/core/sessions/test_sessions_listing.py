@@ -169,6 +169,35 @@ def test_metadata_activity_and_continuation_change_state_not_history(manager) ->
     assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is True
 
 
+def test_unchanged_metadata_and_activity_mutations_write_nothing(manager) -> None:
+    address = _address("coder", "unchanged-mutations")
+    manager.create(address.agent_id, session_id=address.session_id)
+    manager.set_metadata(address, {"title": "Kept", "seen_skills": ["alpha"]})
+    manager.record_run_kind(address, RunKind.USER)
+    manager.record_terminal_run(address, "run-1", "completed", "2026-08-29T12:00:00Z")
+    assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is True
+    writer = manager._store._writer
+    revision = manager._store.state(address)["state_revision"]
+    changes = writer.total_changes
+
+    manager.record_run_kind(address, RunKind.USER)
+    previous, updated = manager.mutate_metadata_with_previous(
+        address, lambda metadata: metadata.update(title="Kept", seen_skills=["alpha"])
+    )
+    assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is False
+
+    assert previous == updated
+    assert writer.total_changes == changes
+    assert manager._store.state(address)["state_revision"] == revision
+
+    manager.record_run_kind(address, RunKind.CRON)
+    assert manager._store.state(address)["state_revision"] == revision + 1
+    assert manager.get_metadata(address)[SESSION_RUN_KINDS_META_KEY] == [
+        RunKind.USER.value,
+        RunKind.CRON.value,
+    ]
+
+
 def test_listable_metadata_is_normalized_out_of_open_ended_metadata(manager) -> None:
     address = _address("coder", "normalized-metadata")
     manager.create(address.agent_id, session_id=address.session_id)
