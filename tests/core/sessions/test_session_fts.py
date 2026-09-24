@@ -19,6 +19,7 @@ from core.sessions.schema import (
     FTS_STORAGE_VERSION_KEY,
     FTS_TARGET_HIGH_WATER_KEY,
 )
+from tests.core.sessions.history_fixtures import seed_history
 
 
 def test_empty_store_bootstrap_does_not_enter_resumable_fts_backfill(
@@ -329,6 +330,93 @@ def test_history_edit_materializes_active_lineage_and_removes_stale_fts_rows(
         ]
         assert connection.execute("SELECT COUNT(*) FROM messages_fts_docsize").fetchone()[0] == 2
     sessions.close()
+
+
+def test_session_delete_and_history_edit_remove_exactly_their_indexed_rows(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    seeded: dict[str, list[ChatMessage]] = {}
+    for session_id in ("kept", "removed"):
+        messages = [
+            ChatMessage.user(f"alpha needle question {session_id}"),
+            ChatMessage.assistant(model="model", content=f"alpha needle answer {session_id}"),
+            ChatMessage.tool(
+                tool_call_id=f"call-{session_id}",
+                name="read",
+                content='{"ok": true, "data": "tool needle payload"}',
+            ),
+            ChatMessage.user(f"beta needle follow-up {session_id}"),
+            ChatMessage.assistant(model="model", content=f"beta needle reply {session_id}"),
+        ]
+        seed_history(sessions.create("agent", session_id=session_id), messages)
+        seeded[session_id] = messages
+    kept = sessions.get(SessionAddress(project_id=None, agent_id="agent", session_id="kept"))
+    kept.append(ChatMessage.history_edit(seeded["kept"][3].id))
+
+    sessions.delete(SessionAddress(project_id=None, agent_id="agent", session_id="removed"))
+
+    try:
+        with sqlite3.connect(tmp_path / "sessions.db") as connection:
+            # rank=1 compares every indexed row with its external content.
+            connection.execute(
+                "INSERT INTO messages_fts(messages_fts, rank) VALUES('integrity-check', 1)"
+            )
+            connection.execute(
+                "INSERT INTO messages_fts_trigram(messages_fts_trigram, rank) "
+                "VALUES('integrity-check', 1)"
+            )
+            base_rows = connection.execute("SELECT COUNT(*) FROM messages_fts_docsize").fetchone()
+            trigram_rows = connection.execute(
+                "SELECT COUNT(*) FROM messages_fts_trigram_docsize"
+            ).fetchone()
+        assert base_rows == (3,)
+        assert trigram_rows == (2,)
+        assert sessions.fts_health().state == "healthy"
+        hits = sessions.fts_search(
+            "needle", project_id=None, agent_id="agent", roles=("user", "assistant", "tool")
+        )
+        assert {(hit[0].session_id, hit[1]) for hit in hits} == {
+            ("kept", message.id) for message in seeded["kept"][:3]
+        }
+    finally:
+        sessions.close()
+
+
+def test_failed_fts_delete_detaches_the_index_and_still_deletes_the_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.sessions import _store_fts as store_module
+
+    address = SessionAddress(project_id=None, agent_id="agent", session_id="doomed")
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create(address.agent_id, session_id=address.session_id).append(
+        ChatMessage.user("indexed words")
+    )
+    real_delete = store_module._delete_fts_session
+    failures: list[int] = []
+
+    def fail_once(connection: sqlite3.Connection, session_key: int, **kwargs: object) -> None:
+        if not failures:
+            failures.append(session_key)
+            raise sqlite3.OperationalError("fts5: simulated index write failure")
+        real_delete(connection, session_key, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(store_module, "_delete_fts_session", fail_once)
+    try:
+        sessions.delete(address)
+
+        assert failures
+        assert not sessions.exists(address)
+        health = sessions.fts_health()
+        assert health.state == "unavailable"
+        with sqlite3.connect(tmp_path / "sessions.db") as connection:
+            stale = connection.execute(
+                "SELECT value FROM store_meta WHERE key = 'fts_stale'"
+            ).fetchone()
+        assert stale == ("1",)
+    finally:
+        sessions.close()
 
 
 def test_malformed_fts_progress_uses_canonical_search_without_hiding_matches(
