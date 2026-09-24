@@ -287,25 +287,11 @@ export const toolResultValueForEvent = (event) =>
   event.payload?.error ??
   messageFromEvent(event)?.content;
 
-export const isTextToSpeechResult = (event) => {
-  if (toolNameForEvent(event) !== 'text_to_speech') {
-    return false;
-  }
-  const result = event.payload?.result;
+// Live Run events carry the Tool result envelope as an object, while Session
+// history carries the persisted Tool message content as its JSON text.
+function speechArtifactFromEnvelope(rawResult) {
+  const result = parseJsonValue(rawResult);
   if (!isPlainObject(result) || result.ok !== true) {
-    return false;
-  }
-  const artifact = result.data?.artifact;
-  return (
-    isPlainObject(artifact) &&
-    artifact.kind === 'speech' &&
-    typeof artifact.url === 'string'
-  );
-};
-
-export const speechArtifactFromResult = (event) => {
-  const result = event.payload?.result;
-  if (!isPlainObject(result)) {
     return null;
   }
   const artifact = result.data?.artifact;
@@ -317,39 +303,24 @@ export const speechArtifactFromResult = (event) => {
     return null;
   }
   return artifact;
-};
+}
 
-export const isTextToSpeechTool = (tool) => {
-  if (toolNameForRunTool(tool) !== 'text_to_speech') {
-    return false;
-  }
-  const result = tool.result;
-  if (!isPlainObject(result) || result.ok !== true) {
-    return false;
-  }
-  const artifact = result.data?.artifact;
-  return (
-    isPlainObject(artifact) &&
-    artifact.kind === 'speech' &&
-    typeof artifact.url === 'string'
-  );
-};
+const speechResultForEvent = (event) =>
+  event.payload?.result ?? messageFromEvent(event)?.content;
 
-export const speechArtifactFromTool = (tool) => {
-  const result = tool.result;
-  if (!isPlainObject(result)) {
-    return null;
-  }
-  const artifact = result.data?.artifact;
-  if (
-    !isPlainObject(artifact) ||
-    artifact.kind !== 'speech' ||
-    typeof artifact.url !== 'string'
-  ) {
-    return null;
-  }
-  return artifact;
-};
+export const isTextToSpeechResult = (event) =>
+  toolNameForEvent(event) === 'text_to_speech' &&
+  speechArtifactFromEnvelope(speechResultForEvent(event)) !== null;
+
+export const speechArtifactFromResult = (event) =>
+  speechArtifactFromEnvelope(speechResultForEvent(event));
+
+export const isTextToSpeechTool = (tool) =>
+  toolNameForRunTool(tool) === 'text_to_speech' &&
+  speechArtifactFromEnvelope(tool.result) !== null;
+
+export const speechArtifactFromTool = (tool) =>
+  speechArtifactFromEnvelope(tool.result);
 
 export function timestampForItem(item) {
   if (item.type === 'message') {

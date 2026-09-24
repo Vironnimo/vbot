@@ -21,4 +21,4 @@ Runtime registers the tool at startup with the runtime-owned `SpeechService`. Th
 
 - Do not add provider/model/voice fields to the tool schema.
 - The tool should remain a normal user-visible tool, not an internal tool.
-- The Chat UI auto-renders a `kind: "speech"` artifact as an autoplaying `<audio controls>` element outside the collapsible tool `<details>` so the spoken reply plays immediately; full rendering detail lives in `webui.md`.
+- The Chat UI renders a `kind: "speech"` artifact in the shared audio player outside the collapsible tool `<details>`; a live Run starts it automatically so the spoken reply plays immediately, while a Run rebuilt from Session history shows it paused. Full rendering detail lives in `webui/chat.md`.

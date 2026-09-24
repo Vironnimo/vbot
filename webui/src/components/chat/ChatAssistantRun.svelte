@@ -616,10 +616,12 @@
           {#if isTextToSpeechTool(child)}
             {@const speechArtifact = speechArtifactFromTool(child)}
             {#if speechArtifact}
+              <!-- Only a live Run starts its fresh speech; a Run rebuilt from
+                   Session history keeps the player paused. -->
               <AudioPlayer
                 class="speech-audio-player"
                 src={speechArtifact.url}
-                autoplay
+                autoplay={item.source === 'live'}
               />
             {/if}
           {/if}
