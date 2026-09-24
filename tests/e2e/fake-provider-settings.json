@@ -75,7 +75,7 @@
               "json_mode": false,
               "output_modalities": ["image"],
               "reasoning": false,
-              "supported_parameters": ["response_format", "output_format"],
+              "supported_parameters": [],
               "supported_voices": [],
               "task_types": ["image_generation"],
               "tools": false,
