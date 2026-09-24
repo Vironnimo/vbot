@@ -136,8 +136,10 @@ function itemRunId(item) {
 }
 
 function mergeRun(messages, liveRun) {
+  // History-built children get their own id namespace: live and History rows
+  // derive ids independently, so sharing the Run id prefix could collide.
   const historyRun = createAssistantRunItem({
-    id: liveRun.id,
+    id: `${liveRun.id}-history`,
     runId: liveRun.runId,
     source: 'history',
   });
