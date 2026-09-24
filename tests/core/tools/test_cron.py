@@ -15,6 +15,11 @@ from core.automation.cron import (
     CronJobValidationError,
     ParsedSchedule,
 )
+from core.projects import (
+    AgentResolutionError,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
+)
 from core.tools.cron import CRON_TOOL_NAME, CRON_TOOL_PARAMETERS, register_cron_tool
 from core.tools.tools import ToolContext, ToolRegistry, tool_failure
 
@@ -564,6 +569,48 @@ def test_past_one_time_schedule_is_rejected_with_future_time_guidance(tmp_path: 
         assert error["code"] == "invalid_arguments"
         assert error["retryable"] is False
     assert [job.id for job in cron_service.list_jobs()] == [job_id]
+    trigger_service.trigger_run.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("resolver_error", "reason"),
+    [
+        (ResolutionAgentNotFoundError("agent 'ghost' is not on project 'vbot' team"), None),
+        (ResolutionProjectNotFoundError("Project not found: vbot"), None),
+        (
+            AgentResolutionError("agent 'ghost' has no usable model"),
+            "agent 'ghost' has no usable model",
+        ),
+    ],
+)
+def test_unresolvable_target_is_rejected_as_invalid_arguments(
+    tmp_path: Path, resolver_error: AgentResolutionError, reason: str | None
+) -> None:
+    from tests.core.automation.cron_test_support import make_service
+
+    resolver = Mock()
+    resolver.resolve_agent.side_effect = resolver_error
+    cron_service, trigger_service = make_service(tmp_path, agent_resolver=resolver)
+    registry = ToolRegistry()
+    register_cron_tool(registry, cron_service)
+
+    # Dispatch directly: the Tool itself must turn the failure into a result.
+    result = asyncio.run(
+        registry.dispatch(
+            _context(tmp_path),
+            {"action": "create", "prompt": "Ping", "schedule": "every 2h", "target": "ghost@vbot"},
+            [CRON_TOOL_NAME],
+        )
+    )
+
+    assert result["ok"] is False
+    error = cast(dict[str, Any], result["error"])
+    assert error["code"] == "invalid_arguments"
+    assert error["retryable"] is False
+    if reason is not None:
+        assert reason in error["message"]
+    resolver.resolve_agent.assert_called_once_with("vbot", "ghost")
+    assert cron_service.list_jobs() == []
     trigger_service.trigger_run.assert_not_called()
 
 
