@@ -343,6 +343,8 @@ export default Object.freeze({
   'queue.saveEdit': 'Save',
   'queue.cancelEdit': 'Cancel',
   'queue.editError': 'Queued message could not be edited.',
+  'queue.editPending':
+    'Save or cancel this edit before editing another message.',
   'queue.removeError': 'Queued message could not be removed.',
   'queue.syncError': 'Queued messages could not be synced.',
   'queue.restartDiscardedOne':

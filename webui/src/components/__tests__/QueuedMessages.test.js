@@ -167,6 +167,54 @@ describe('QueuedMessages', () => {
     );
   });
 
+  it('focuses the editor it opens and keeps a modified draft open', async () => {
+    mountedComponent = mount(QueuedMessages, {
+      target: document.body,
+      props: {
+        queuedMessages: [
+          { id: 'queue-one', content: 'First', editable: true },
+          { id: 'queue-two', content: 'Second', editable: true },
+        ],
+      },
+    });
+    flushSync();
+
+    const previews = () =>
+      document.body.querySelectorAll('.queued-messages__content');
+    const editor = () =>
+      document.body.querySelector('.queued-messages__editor');
+
+    previews()[0].click();
+    await vi.waitFor(() => expect(document.activeElement).toBe(editor()));
+    expect(editor().value).toBe('First');
+
+    // An unmodified editor moves to the newly chosen item.
+    previews()[0].click();
+    await vi.waitFor(() => expect(editor().value).toBe('Second'));
+    await vi.waitFor(() => expect(document.activeElement).toBe(editor()));
+
+    editor().value = 'Second, revised';
+    editor().dispatchEvent(new InputEvent('input', { bubbles: true }));
+    flushSync();
+
+    previews()[0].click();
+    flushSync();
+    button('Edit queued message').click();
+    await vi.waitFor(() => expect(document.activeElement).toBe(editor()));
+    expect(
+      document.body.querySelectorAll('.queued-messages__editor'),
+    ).toHaveLength(1);
+    expect(editor().value).toBe('Second, revised');
+    expect(
+      document.body.querySelector('.queued-messages__notice'),
+    ).toBeTruthy();
+
+    button('Cancel').click();
+    flushSync();
+    previews()[0].click();
+    await vi.waitFor(() => expect(editor().value).toBe('First'));
+  });
+
   it('does not offer text editing for a Queue item with attachments', () => {
     mountedComponent = mount(QueuedMessages, {
       target: document.body,
