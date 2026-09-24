@@ -9,6 +9,7 @@ from core.chat import (
     ChatMessage,
     ChatSessionError,
 )
+from core.projects import format_agent_address
 from core.runs import (
     Run,
     RunCancelledError,
@@ -21,6 +22,10 @@ from core.subagents._constants import (
     SESSION_RESULT_RETRY_ATTEMPTS,
     SESSION_RESULT_RETRY_DELAY_SECONDS,
     SUBAGENT_ACTIVITY_NOTE_TEMPLATE,
+    SUBAGENT_CANCELLED_NOTE_TEMPLATE,
+    SUBAGENT_CONTINUATION_CALL_TEMPLATE,
+    SUBAGENT_INTERRUPTED_WITHOUT_OUTPUT_NOTE_TEMPLATE,
+    SUBAGENT_PARTIAL_RESULT_NOTE_TEMPLATE,
     SUBAGENT_REMOVED_FROM_QUEUE_MESSAGE,
     SUBAGENT_START_FAILED_MESSAGE_TEMPLATE,
     SUBAGENT_USER_CANCEL_MESSAGE,
@@ -374,12 +379,31 @@ def _result_dict(
     if status == RunStatus.FAILED.value and not content:
         data["note"] = "No assistant output found in sub-agent session."
     if status == RunStatus.INTERRUPTED.value and not content:
-        data["note"] = (
-            "The Sub-Agent Run was interrupted before it produced Assistant output. "
-            "Continue the same Session by passing both agent_id and session_id from this "
-            "result to subagent."
+        data["note"] = SUBAGENT_INTERRUPTED_WITHOUT_OUTPUT_NOTE_TEMPLATE.format(
+            continuation=_continuation_call(run.agent_id, run.project_id, run.session_id)
         )
+    if status == RunStatus.CANCELLED.value and not content and not cancelled_by_user:
+        data["note"] = _cancelled_continuation_note(run.agent_id, run.project_id, run.session_id)
     return data
+
+
+def _continuation_call(agent_id: str, project_id: str | None, session_id: str) -> str:
+    """Name the exact ``subagent`` arguments that continue one child Session.
+
+    Results carry the bare ``agent_id`` beside ``project_id``, while the Tool
+    resolves a bare id in the caller's scope; the qualified address stays
+    correct for every caller.
+    """
+    return SUBAGENT_CONTINUATION_CALL_TEMPLATE.format(
+        agent_id=format_agent_address(agent_id, project_id),
+        session_id=session_id,
+    )
+
+
+def _cancelled_continuation_note(agent_id: str, project_id: str | None, session_id: str) -> str:
+    return SUBAGENT_CANCELLED_NOTE_TEMPLATE.format(
+        continuation=_continuation_call(agent_id, project_id, session_id)
+    )
 
 
 def _add_interruption_details(data: JsonObject, message: ChatMessage) -> None:
@@ -392,9 +416,11 @@ def _add_interruption_details(data: JsonObject, message: ChatMessage) -> None:
         cause_text = f" by {message.interruption_cause}"
     else:
         cause_text = ""
-    data["note"] = (
-        f"Result is partial: the Sub-Agent Run was interrupted{cause_text}. Continue the "
-        "same Session by passing both agent_id and session_id from this result to subagent."
+    data["note"] = SUBAGENT_PARTIAL_RESULT_NOTE_TEMPLATE.format(
+        cause=cause_text,
+        continuation=_continuation_call(
+            data["agent_id"], data.get("project_id"), data["session_id"]
+        ),
     )
 
 

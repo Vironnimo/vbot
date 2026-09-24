@@ -637,7 +637,43 @@ async def test_status_cannot_read_unowned_subagent_work(tmp_path: Path) -> None:
     )
 
     assert result["ok"] is False
-    assert result["error"]["code"] == "subagent_not_owned"
+    assert result["error"]["code"] == "subagent_not_found"
+    assert "sub_unowned" in result["error"]["message"]
+
+
+async def test_status_after_delivery_and_prune_reports_untracked_work(tmp_path: Path) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    persisted_callbacks: list[Any] = []
+    context = make_context(nesting_depth=1, result_persisted_hook=persisted_callbacks.append)
+    task = asyncio.create_task(
+        _handle_subagent(
+            context,
+            {"content": "spawn", "agent_id": "worker"},
+            runtime=runtime,
+            batch_tracker=tracker,
+        )
+    )
+    await asyncio.sleep(0)
+    manager.started[0]["run"].mark_completed(
+        ChatMessage.assistant(model="openai/gpt-5.2", content="child output")
+    )
+    delivered = await task
+    work_id = delivered["data"]["id"]
+    persisted_callbacks[0]()
+    assert tracker.owned_entry("parent", "parent-session", None, work_id) is None
+
+    status = await _handle_subagent_result(
+        make_context(run_id="parent-run-two"),
+        {"id": work_id},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert status["ok"] is False
+    assert status["error"]["code"] == "subagent_not_found"
+    assert work_id in status["error"]["message"]
 
 
 async def test_malformed_qualified_subagent_address_fails_cleanly(

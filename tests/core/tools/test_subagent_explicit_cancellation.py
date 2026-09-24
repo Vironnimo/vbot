@@ -58,17 +58,17 @@ async def test_later_parent_run_can_cancel_its_surviving_background_child(
         batch_tracker=tracker,
     )
 
-    assert cancelled == {
-        "ok": True,
-        "error": None,
-        "data": {
-            "id": spawned["data"]["id"],
-            "agent_id": "parent",
-            "session_id": spawned["data"]["session_id"],
-            "status": "cancelled",
-        },
-        "artifacts": [],
+    assert cancelled["ok"] is True
+    cancelled_data = dict(cancelled["data"])
+    note = cancelled_data.pop("note")
+    assert cancelled_data == {
+        "id": spawned["data"]["id"],
+        "agent_id": "parent",
+        "session_id": spawned["data"]["session_id"],
+        "status": "cancelled",
     }
+    assert "`parent`" in note
+    assert f"`{spawned['data']['session_id']}`" in note
     assert child_run.status.value == "cancelled"
     assert child_run.cancel_reason == subagent_constants.PARENT_AGENT_CANCEL_REASON
     assert emitted_events == [
@@ -81,12 +81,42 @@ async def test_later_parent_run_can_cancel_its_surviving_background_child(
                     "name": "subagent",
                 },
                 "data": {
-                    **cancelled["data"],
+                    **cancelled_data,
                     "run_id": child_run.id,
                 },
             },
         )
     ]
+
+
+async def test_cancelled_background_child_notice_carries_resume_note(
+    tmp_path: Path,
+) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    trigger_service = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger_service)
+    spawned = await _handle_subagent(
+        make_context(project_id="vbot"),
+        {"content": "keep working", "agent_id": "worker"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    cancelled = await _handle_subagent(
+        make_context(run_id="parent-run-two", project_id="vbot"),
+        {"action": "cancel", "id": spawned["data"]["id"]},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+    for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
+        await asyncio.sleep(0)
+
+    note = cancelled["data"]["note"]
+    assert "`worker@vbot`" in note
+    assert f"`{spawned['data']['session_id']}`" in note
+    assert len(trigger_service.calls) == 1
+    assert note in trigger_service.calls[0][1]
 
 
 async def test_parent_cannot_cancel_another_parent_sessions_child(
@@ -111,7 +141,7 @@ async def test_parent_cannot_cancel_another_parent_sessions_child(
     )
 
     assert result["ok"] is False
-    assert result["error"]["code"] == "subagent_not_owned"
+    assert result["error"]["code"] == "subagent_not_found"
     assert child_run.status.value == "running"
     child_run.mark_cancelled()
 

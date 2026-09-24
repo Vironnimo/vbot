@@ -55,10 +55,11 @@ TOP_LEVEL_EXECUTION_GUIDANCE = (
     "returns immediately; vBot monitors it and notifies you with the result once the "
     "Sub-Agent finishes. Continue other work, or finish your turn to wait for a result."
 )
-NESTED_EXECUTION_GUIDANCE = (
+NESTED_EXECUTION_GUIDANCE_TEMPLATE = (
     "You are a Sub-Agent. Every `run` action executes in the foreground and the Tool "
-    "Call returns only when that work finishes. Sibling calls issued together still "
-    "run concurrently."
+    "Call returns when that work finishes, or after {timeout}, including any time spent "
+    "queued; vBot then cancels the work and returns a timeout failure. Sibling calls "
+    "issued together still run concurrently."
 )
 
 _SUBAGENT_ID_PARAMETER: JsonObject = {
@@ -209,11 +210,14 @@ def _subagent_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...
 def _render_subagent_prompt_block(context: Any, coordinator: SubAgentCoordinator) -> str:
     targets = coordinator.prompt_targets(context.agent, context.agent_project_id)
     rendered_targets = _format_subagent_targets(targets)
-    execution_guidance = (
-        NESTED_EXECUTION_GUIDANCE
-        if getattr(context, "nesting_depth", 0) > 0
-        else TOP_LEVEL_EXECUTION_GUIDANCE
-    )
+    if getattr(context, "nesting_depth", 0) > 0:
+        # Read per prompt build like the target catalog, so a changed setting
+        # reaches the next request of every nested Agent.
+        minutes = coordinator.foreground_timeout_minutes()
+        timeout = f"{minutes} minute" if minutes == 1 else f"{minutes} minutes"
+        execution_guidance = NESTED_EXECUTION_GUIDANCE_TEMPLATE.replace("{timeout}", timeout)
+    else:
+        execution_guidance = TOP_LEVEL_EXECUTION_GUIDANCE
     return SUBAGENT_PROMPT_BLOCK_TEMPLATE.replace("{subagent_list}", rendered_targets).replace(
         "{execution_guidance}", execution_guidance
     )
