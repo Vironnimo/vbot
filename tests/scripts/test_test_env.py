@@ -116,6 +116,31 @@ def test_start_server_uses_direct_cli_lifecycle(monkeypatch, tmp_path, capsys):
     ]
 
 
+def test_start_server_launches_vbot_from_this_checkout(monkeypatch, tmp_path):
+    module = _load_test_env_module()
+    instance = ServerInstance(
+        host="127.0.0.1",
+        port=8420,
+        data_dir=tmp_path,
+        url="http://127.0.0.1:8420",
+        log_path=tmp_path / "vbot.log",
+    )
+    launch_directories = []
+
+    def fake_start_server(resolved_instance, **_kwargs):
+        # `python -m server.main` imports from the directory it starts in.
+        launch_directories.append(Path.cwd())
+        return CommandResult(ok=True, message="started", instance=resolved_instance)
+
+    monkeypatch.setattr(module, "resolve_instance", lambda **_kwargs: instance)
+    monkeypatch.setattr(module, "start_server_command", fake_start_server)
+    monkeypatch.chdir(tmp_path)
+
+    assert module.start_server("127.0.0.1", 8420, None) == 0
+    assert launch_directories == [PROJECT_ROOT]
+    assert Path.cwd() == tmp_path
+
+
 def test_stop_server_uses_direct_cli_lifecycle(monkeypatch, tmp_path, capsys):
     module = _load_test_env_module()
     instance = ServerInstance(

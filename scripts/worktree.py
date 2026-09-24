@@ -20,7 +20,7 @@ from pathlib import Path
 
 # Direct execution loads helper modules from this checkout.
 _checkout_root = Path(__file__).resolve().parents[1]
-if str(_checkout_root) not in sys.path:
+if sys.path[:1] != [str(_checkout_root)]:
     sys.path.insert(0, str(_checkout_root))
 
 from scripts._worktree_args import parse_args  # noqa: E402

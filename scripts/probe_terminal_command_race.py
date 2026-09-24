@@ -15,12 +15,20 @@ Usage: python scripts/probe_terminal_command_race.py
 from __future__ import annotations
 
 import asyncio
+import sys
+from collections.abc import Callable
 from pathlib import Path
 
-from core.tools.terminal_manager import TerminalManager
+# Import this checkout's packages first; from a linked worktree `core` would
+# otherwise resolve through the editable install to the main checkout's code.
+_CHECKOUT_ROOT = str(Path(__file__).resolve().parents[1])
+if sys.path[:1] != [_CHECKOUT_ROOT]:
+    sys.path.insert(0, _CHECKOUT_ROOT)
+
+from core.tools.terminal_manager import TerminalManager  # noqa: E402
 
 
-async def eventually(predicate: object, *, attempts: int = 150) -> None:
+async def eventually(predicate: Callable[[], bool], *, attempts: int = 150) -> None:
     for _ in range(attempts):
         if predicate():
             return
