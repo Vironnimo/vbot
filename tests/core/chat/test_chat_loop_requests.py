@@ -555,7 +555,7 @@ async def test_queue_edit_preserves_sender_reply_surface_and_tool_restriction(
         reply_surface=channel_surface,
         tool_restriction=("memory",),
     )
-    resolved_session_id, updated_executor, updated_display = loop.build_queue_update(
+    resolved_session_id, updated_executor, updated_display = await loop.build_queue_update(
         "coder",
         "session-one",
         "edited channel text",
