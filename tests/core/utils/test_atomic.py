@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 
 from core.storage.layout import DataDirectoryLayout
-from core.utils.atomic import atomic_write_bytes, atomic_write_text, temporary_path
+from core.utils.atomic import (
+    atomic_write_bytes,
+    atomic_write_stream,
+    atomic_write_text,
+    temporary_path,
+)
 
 
 def test_temporary_path_uses_canonical_atomic_directory(tmp_path: Path) -> None:
@@ -94,3 +99,32 @@ def test_atomic_write_applies_requested_mode_to_target(
     assert target.read_bytes() == b"{}"
     if os.name == "posix":
         assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_atomic_write_stream_replaces_target_with_streamed_chunks(tmp_path: Path) -> None:
+    target = tmp_path / "trace.json"
+    target.write_bytes(b"old")
+
+    def write(handle) -> None:
+        for chunk in (b"[", b"1,", b"2", b"]"):
+            handle.write(chunk)
+
+    atomic_write_stream(target, write)
+
+    assert target.read_bytes() == b"[1,2]"
+    assert [path.name for path in tmp_path.iterdir()] == ["trace.json"]
+
+
+def test_atomic_write_stream_removes_staging_file_when_writer_fails(tmp_path: Path) -> None:
+    target = tmp_path / "trace.json"
+    target.write_bytes(b"old")
+
+    def write(handle) -> None:
+        handle.write(b"partial")
+        raise TypeError("not serializable")
+
+    with pytest.raises(TypeError, match="not serializable"):
+        atomic_write_stream(target, write)
+
+    assert target.read_bytes() == b"old"
+    assert [path.name for path in tmp_path.iterdir()] == ["trace.json"]
