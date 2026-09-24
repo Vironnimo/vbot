@@ -159,7 +159,9 @@ def test_default_workspace_matches_created_agent_workspace(store: AgentStore) ->
 def test_minimal_agent_config_loads_all_optional_field_defaults(store: AgentStore) -> None:
     agent_dir = store.data_dir / "agents" / "minimal"
     agent_dir.mkdir(parents=True)
-    (agent_dir / "agent.json").write_text('{"id": "minimal"}\n', encoding="utf-8")
+    (agent_dir / "agent.json").write_text(
+        '{"format_version": 1, "id": "minimal"}\n', encoding="utf-8"
+    )
 
     agent = store.get("minimal")
 
@@ -187,7 +189,9 @@ def test_list_skips_invalid_agent_without_hiding_valid_agents(
     store.create("valid", "Valid")
     invalid_dir = store.data_dir / "agents" / "invalid"
     invalid_dir.mkdir(parents=True)
-    (invalid_dir / "agent.json").write_text('{"name": "Missing id"}\n', encoding="utf-8")
+    (invalid_dir / "agent.json").write_text(
+        '{"format_version": 1, "name": "Missing id"}\n', encoding="utf-8"
+    )
 
     agents = store.list()
 
@@ -487,6 +491,7 @@ def test_create_appends_agents_to_persisted_order(store: AgentStore) -> None:
 
     assert [agent.id for agent in listing.agents] == ["beta", "alpha"]
     assert persisted == {
+        "format_version": 1,
         "revision": listing.order_revision,
         "agent_ids": ["beta", "alpha"],
     }
@@ -540,3 +545,71 @@ def test_reorder_rejects_changed_roster(store: AgentStore) -> None:
         store.reorder(["alpha"], expected_revision=initial.order_revision)
 
     assert [agent.id for agent in store.list()] == ["alpha", "beta"]
+
+
+def test_agent_update_keeps_unknown_fields_of_every_modeled_level(store: AgentStore) -> None:
+    store.create("coder", "Coder")
+    agent_path = store.data_dir / "agents" / "coder" / "agent.json"
+    persisted = json.loads(agent_path.read_text(encoding="utf-8"))
+    persisted["future_field"] = {"kept": True}
+    persisted["allowed_tools"] = ["bash"]
+    persisted["tool_access"] = {"mode": "all", "future_access": 1}
+    persisted["tools"] = {
+        "bash": {"allowed_env": ["HOME"], "future_bash": 2},
+        "subagent": {"allowed_agents": ["*"], "future_subagent": 3},
+        "custom": {"anything": 4},
+    }
+    persisted["compaction_policy"] = {
+        "enabled": True,
+        "trigger": {"type": "input_tokens", "tokens": 1000, "future_trigger": 5},
+        "strategy": {"type": "continuation"},
+        "future_policy": 6,
+    }
+    agent_path.write_text(json.dumps(persisted), encoding="utf-8")
+
+    loaded = store.get("coder")
+    store.update("coder", name="Renamed")
+
+    assert loaded.tools["bash"] == {"allowed_env": ["HOME"]}
+    assert loaded.compaction_policy is not None
+    assert "future_policy" not in loaded.compaction_policy
+    rewritten = json.loads(agent_path.read_text(encoding="utf-8"))
+    assert rewritten["format_version"] == 1
+    assert rewritten["name"] == "Renamed"
+    assert rewritten["future_field"] == {"kept": True}
+    assert rewritten["allowed_tools"] == ["bash"]
+    assert rewritten["tool_access"] == {"mode": "all", "future_access": 1}
+    assert rewritten["tools"]["bash"]["future_bash"] == 2
+    assert rewritten["tools"]["subagent"]["future_subagent"] == 3
+    assert rewritten["tools"]["custom"] == {"anything": 4}
+    assert rewritten["compaction_policy"]["future_policy"] == 6
+    assert rewritten["compaction_policy"]["trigger"]["future_trigger"] == 5
+
+
+def test_agent_written_by_a_newer_vbot_is_refused_and_left_unchanged(store: AgentStore) -> None:
+    store.create("coder", "Coder")
+    agent_path = store.data_dir / "agents" / "coder" / "agent.json"
+    persisted = json.loads(agent_path.read_text(encoding="utf-8"))
+    persisted["format_version"] = 2
+    original = json.dumps(persisted)
+    agent_path.write_text(original, encoding="utf-8")
+
+    with pytest.raises(AgentError, match="written by a newer vBot"):
+        store.get("coder")
+    with pytest.raises(AgentError, match="written by a newer vBot"):
+        store.update("coder", name="Renamed")
+    assert agent_path.read_text(encoding="utf-8") == original
+
+
+def test_invalid_agent_order_is_never_overwritten(store: AgentStore) -> None:
+    store.create("beta", "Beta Agent")
+    store.create("alpha", "Alpha Agent")
+    order_path = store.data_dir / "agents" / "order.json"
+    original = '{"format_version": 2, "revision": 9, "agent_ids": ["alpha", "beta"]}'
+    order_path.write_text(original, encoding="utf-8")
+
+    listing = store.list_with_order()
+    with pytest.raises(AgentError, match="Refusing to overwrite Agent order"):
+        store.reorder(["alpha", "beta"], expected_revision=listing.order_revision)
+
+    assert order_path.read_text(encoding="utf-8") == original
