@@ -61,7 +61,7 @@ Read only when your task matches:
 
 - Adding or changing editable settings, existing-record forms, save controls, input handling, or editor-replacing navigation (including Extension pages) -> `webui/autosave.md`
 
-- Global voice companion, GPT-Live WebRTC, voice Chat/Terminal actions, or spoken Run updates -> `model_tasks/live.md`
+- Live voice control, call media/owner socket, UI requests from a Live call, or spoken Run updates -> `model_tasks/live.md`
 
 - Understanding or changing shared appearance, assessing an existing layout, or needing visual context for a redesign -> relevant sections of `webui/design.md` (current state, not a mandatory template)
 - Finding the owning file/component/controller/style/test -> `webui/source-map.md`

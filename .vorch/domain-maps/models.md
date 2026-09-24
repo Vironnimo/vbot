@@ -73,7 +73,7 @@ Pricing selects Context tiers from the complete input of each request (including
 
 ## Interfaces
 
-- Frozen dataclasses (`Model`, `Capabilities`, `ReasoningCapabilities`); `Capabilities.task_options` holds typed task option specs merged one level deep like other capabilities sub-fields, consumed by `model_tasks.md` option builders.
+- Frozen dataclasses (`Model`, `Capabilities`, `ReasoningCapabilities`); `Capabilities.task_options` holds typed task option specs merged one level deep like other capabilities sub-fields, consumed by `model_tasks.md` option builders. Parameter spec types: `enum`, `range`, `boolean`, and `model` (a tool-capable chat Model of the same Provider on the selected Connection); a spec may carry an optional `default`.
 - `Model.model_id` is the exact wire string - no remapping anywhere. `Model.connections` binds a model to a subset of connection ids (empty = all); `allows_connection(id)` is the single source read by target expansion, WebUI filtering, and save guards. `Model.connection_context_windows` is a frozen positive-int map for the rare case where those allowed Connections expose different Context limits.
 - `ModelRegistry.load/reload` select one root, assemble with overrides, overlay Custom Provider models (a manual Custom Model wins same-id collisions). **Reload updates in place** so services holding the registry see refreshed catalogs without restart - do **not** rebind `runtime._models` to a fresh `load()`; that rebind was the bug (chat fresh, specialized targets stale).
 - `query(model_query)` is the pure filtered read path; credential gating happens outside it (RPC `model.list`, task-target discovery). `get(provider, model)` raises on unknown pairs; `list_for_provider` sorts ascending.
@@ -81,7 +81,7 @@ Pricing selects Context tiers from the complete input of each request (including
 
 ## Capabilities & Tasks
 
-Capabilities are facts about one model through one provider. `task_types` derives from modalities for coarse routing; sparse catalogs default text-in/text-out so conservative providers stay selectable. Speech/audio aliases are intentionally strict: `transcription` -> text+STT, `speech` -> TTS+audio-generation, generic `audio` -> `audio_generation` only (never `text_to_speech`), `embeddings` -> `text_embedding`.
+Capabilities are facts about one model through one provider. `task_types` derives from modalities for coarse routing; sparse catalogs default text-in/text-out so conservative providers stay selectable. Speech/audio aliases are intentionally strict: `transcription` -> text+STT, `speech` -> TTS+audio-generation, generic `audio` -> `audio_generation` only (never `text_to_speech`), `embeddings` -> `text_embedding`. `live_voice` is explicit-only: no modality combination derives it, so voice Models declare it in `task_types` through overrides.
 
 ## Constraints & Gotchas
 

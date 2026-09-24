@@ -4,6 +4,7 @@ import {
   JSON_OPTION_TYPE,
   TASK_IMAGE_GENERATION,
   TASK_IMAGE_UNDERSTANDING,
+  TASK_LIVE_VOICE,
   TASK_MUSIC_GENERATION,
   TASK_SPEECH_TO_TEXT,
   TASK_TEXT_EMBEDDING,
@@ -74,6 +75,7 @@ describe('taskModelSettings helpers', () => {
       expect.arrayContaining([
         TASK_SPEECH_TO_TEXT,
         TASK_TEXT_TO_SPEECH,
+        TASK_LIVE_VOICE,
         TASK_IMAGE_UNDERSTANDING,
         TASK_IMAGE_GENERATION,
         TASK_VIDEO_GENERATION,
@@ -81,6 +83,10 @@ describe('taskModelSettings helpers', () => {
         TASK_TEXT_EMBEDDING,
       ]),
     );
+    expect(TASK_LIVE_VOICE).toBe('live_voice');
+    expect(
+      TASK_MODEL_ROWS.find((row) => row.taskType === TASK_LIVE_VOICE).titleKey,
+    ).toBe('settings.specializedModels.liveVoice');
     const embeddingRow = TASK_MODEL_ROWS.find(
       (row) => row.taskType === TASK_TEXT_EMBEDDING,
     );

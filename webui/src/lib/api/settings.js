@@ -417,23 +417,6 @@ export function listClients(options = {}) {
   return rpc('client.list', {}, options);
 }
 
-export function getLiveVoiceStatus(options = {}) {
-  return rpc('live.status', {}, options);
-}
-
-export async function setLiveVoiceEnabled(enabled, options = {}) {
-  await rpc(
-    'settings.patch',
-    { operations: [{ op: 'set', path: 'live_voice.enabled', value: enabled }] },
-    options,
-  );
-  return getSettings(options);
-}
-
-export function createLiveVoiceSession(sdp, options = {}) {
-  return rpc('live.create', { sdp }, options);
-}
-
 export function deleteChannel(channelId, options = {}) {
   requireNonEmptyString(
     channelId,

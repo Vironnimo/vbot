@@ -459,7 +459,9 @@ class TaskModelService:
         Recraft/Sourceful image profiles and aspect-ratio/image-size
         exceptions) to the schema builder. If the model is missing from
         the registry we fall back to the provider-level conservative
-        schema that the model-aware branches extend.
+        schema that the model-aware branches extend. The registry and the
+        target's local Connection id also reach the builder, so live voice
+        backend choices match between the Settings UI and save validation.
 
         Local targets get the schema declared by the registered
         descriptor — future user-configured local engines advertise their
@@ -482,6 +484,8 @@ class TaskModelService:
             target_ref.provider_id,
             target_ref.target,
             model=model,
+            models=self._models,
+            connection_id=target_ref.local_connection_id,
         )
 
     def model_for_target(self, target_ref: TaskModelTargetRef) -> Any | None:
