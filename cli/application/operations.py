@@ -109,9 +109,9 @@ def _claimed_handoff(install: Installation, handoff_token: str | None) -> str | 
         detail = (result.message or "the server returned no handoff ticket").splitlines()[0]
         raise ApplicationError(
             "No update was started: the vBot server did not accept this command's "
-            f"VBOT_UPDATE_HANDOFF value ({detail}). It is valid only while the vBot Tool "
-            "call that started this command is still running on this installation's server. "
-            "Start the update again from a new Tool call."
+            f"VBOT_UPDATE_HANDOFF value ({detail}). The value is valid only while the Bash "
+            "Tool call that started this command is still running on this installation's "
+            "server. Run the command again directly in a new Bash Tool call."
         )
     return _normalized_handoff(install, ticket)
 
