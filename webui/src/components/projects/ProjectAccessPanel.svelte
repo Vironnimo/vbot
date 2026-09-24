@@ -268,28 +268,28 @@
             title={t('projects.manage.skillsNoMatch', 'No matching skills.')}
           />
         {/if}
-        <div class="projects-skill-groups">
+        <div class="s-check-groups">
           {#each visibleSkillGroups as group (group.id)}
             {@const state = groupState(group)}
-            <section class="s-group projects-skill-group">
-              <header class="projects-skill-group-header">
+            <section class="s-group s-check-group">
+              <header class="s-check-group__head">
                 <Checkbox
                   checked={state === 'on'}
                   indeterminate={state === 'mixed'}
                   ariaLabel={group.allLabel}
                   onChange={(next) => group.setAll(next)}
                 />
-                <h4>{group.title}</h4>
-                <span class="projects-skill-count">
+                <h4 class="s-check-group__title">{group.title}</h4>
+                <span class="s-check-group__count">
                   {group.items.filter((skill) => skill.enabled).length}/{group
                     .items.length}
                 </span>
               </header>
-              <div class="projects-skill-rows">
+              <div class="s-check-group__rows">
                 {#each group.visible as skill (skill.name)}
                   <div class="projects-skill-row">
                     <Checkbox
-                      class="projects-skill-check"
+                      class="s-check-row"
                       checked={skill.enabled}
                       ariaLabel={t(
                         'projects.manage.toggleSkill',
@@ -298,7 +298,7 @@
                       )}
                       onChange={(next) => group.toggle(skill.name, next)}
                     >
-                      <span class="projects-skill-name">{skill.name}</span>
+                      <span class="s-check-row__name">{skill.name}</span>
                     </Checkbox>
                     {#if skill.description}
                       <div

@@ -307,6 +307,125 @@
   margin-left: auto;
 }
 
+/* Checkbox groups select the members of a list inside one group (Tool
+   families, an Agent's Skills and Sub-Agent targets, Project Skill
+   ceilings). The head carries the group Checkbox (mixed when partly
+   selected), the title and a selected/total count on `--surface-2`; every
+   member is a full-width Checkbox row (`.s-check-row`) whose Mono name is an
+   identifier, with optional detail lines below it and an optional state at
+   its end. `.s-check-groups` flows several groups through two balanced
+   columns without splitting one. */
+.s-check-groups {
+  columns: 2;
+  column-gap: 16px;
+}
+
+.s-check-groups > .s-check-group {
+  display: block;
+  margin-bottom: 16px;
+  break-inside: avoid;
+}
+
+.s-check-group {
+  overflow: hidden;
+}
+
+.s-check-group__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 14px;
+  background: var(--surface-2);
+}
+
+.s-check-group__title {
+  margin: 0;
+  color: var(--text-hi);
+  font: 600 var(--fs-body-md) / 1.4 var(--font-ui);
+}
+
+.s-check-group__count {
+  margin-left: auto;
+  color: var(--text-lo);
+  font: var(--fs-label-sm) var(--font-ui);
+  font-variant-numeric: tabular-nums;
+}
+
+.s-check-group__rows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 4px 0;
+}
+
+.s-check-group__rows[hidden] {
+  display: none;
+}
+
+.s-check-group__note {
+  margin: 0;
+  padding: 8px 14px;
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+}
+
+/* The whole row is the Checkbox; the box aligns with the name's first line
+   when detail lines follow. */
+.s-check-group .s-check-row {
+  align-items: flex-start;
+  min-height: 34px;
+  padding: 7px 14px;
+  border-radius: 0;
+}
+
+.s-check-group .s-check-row .checkbox__box {
+  margin-top: 1px;
+}
+
+.s-check-group .s-check-row:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.s-check-group .s-check-row:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.s-check-row__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.s-check-row__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-hi);
+  font: var(--fs-mono-sm) / 1.5 var(--font-mono);
+}
+
+.s-check-row__detail {
+  overflow-wrap: anywhere;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  line-height: 1.4;
+}
+
+.s-check-row__detail--warn {
+  color: var(--amber);
+}
+
+/* One short state at the row end (Automatic, unavailable, ...). */
+.s-check-row__state {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  line-height: 1.5;
+  text-align: right;
+}
+
 /* A named sub-topic inside a section (for example Connected clients under
    Server info): a smaller heading with optional description above its own
    group. */
@@ -326,6 +445,12 @@
   color: var(--text-lo);
   font-size: var(--fs-body-sm);
   line-height: 1.5;
+}
+
+@media (max-width: 760px) {
+  .s-check-groups {
+    columns: 1;
+  }
 }
 
 @media (max-width: 640px) {
@@ -354,6 +479,12 @@
 
   .s-group > .s-group__block {
     padding-block: 14px;
+  }
+
+  /* Taller touch targets for Checkbox rows. */
+  .s-check-group .s-check-row {
+    min-height: 40px;
+    padding-block: 10px;
   }
 
   /* Entity rows use the group's narrow padding; wide heads let their end
