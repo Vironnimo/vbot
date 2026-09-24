@@ -29,7 +29,7 @@ from cli.application.state import (
 )
 from cli.rpc_client import rpc_call
 from cli.server_management import probe_health
-from cli.update_management import _ensure_update_session_snapshot
+from cli.update_management import _ensure_update_data_snapshot
 from core.utils.server_control import read_server_control
 
 _LOGGER = logging.getLogger("vbot.application.update")
@@ -232,8 +232,8 @@ def execute(install: Installation, operation: Operation) -> None:
         operation.save(install)
         if operation.server_was_running:
             quiesce(install, operation)
-        operation.transition(install, "waiting_for_idle", "Saving a recovery snapshot of Sessions")
-        snapshot = _ensure_update_session_snapshot(processes.target(install))
+        operation.transition(install, "waiting_for_idle", "Saving a recovery snapshot of the data")
+        snapshot = _ensure_update_data_snapshot(processes.target(install))
         if not snapshot.ok:
             raise ApplicationError(snapshot.message)
         operation.transition(

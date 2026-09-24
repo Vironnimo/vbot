@@ -1,4 +1,4 @@
-"""CLI grammar for Agents, Projects, Sessions, and Session-store maintenance."""
+"""CLI grammar for Agents, Projects, Sessions, and data-store maintenance."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ import argparse
 from cli._parser_common import (
     AGENT_HELP,
     AREA_HELP,
+    DATA_STORE_HELP,
+    DATA_STORE_SNAPSHOT_HELP,
     PROJECT_HELP,
     SESSION_HELP,
-    SESSION_STORE_HELP,
-    SESSION_STORE_SNAPSHOT_HELP,
     THINKING_EFFORTS,
     _add_command_parser,
     _json_object_argument,
@@ -576,40 +576,40 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     )
 
 
-def _add_session_store_parsers(
+def _add_data_store_parsers(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
-    session_store_parser = subparsers.add_parser(
-        "session-store",
-        help=AREA_HELP["session-store"],
-        description=AREA_HELP["session-store"],
+    data_store_parser = subparsers.add_parser(
+        "data-store",
+        help=AREA_HELP["data-store"],
+        description=AREA_HELP["data-store"],
     )
-    commands = session_store_parser.add_subparsers(dest="command", required=True)
+    commands = data_store_parser.add_subparsers(dest="command", required=True)
 
     _add_command_parser(
         commands,
         "status",
-        SESSION_STORE_HELP["status"],
-        example="session-store status",
+        DATA_STORE_HELP["status"],
+        example="data-store status",
     )
 
     snapshot_parser = commands.add_parser(
         "snapshot",
-        help=SESSION_STORE_HELP["snapshot"],
-        description=SESSION_STORE_HELP["snapshot"],
+        help=DATA_STORE_HELP["snapshot"],
+        description=DATA_STORE_HELP["snapshot"],
     )
     snapshot_commands = snapshot_parser.add_subparsers(dest="snapshot_command", required=True)
     _add_command_parser(
         snapshot_commands,
         "list",
-        SESSION_STORE_SNAPSHOT_HELP["list"],
-        example="session-store snapshot list",
+        DATA_STORE_SNAPSHOT_HELP["list"],
+        example="data-store snapshot list",
     )
     create_parser = _add_command_parser(
         snapshot_commands,
         "create",
-        SESSION_STORE_SNAPSHOT_HELP["create"],
-        example="session-store snapshot create --reason manual",
+        DATA_STORE_SNAPSHOT_HELP["create"],
+        example="data-store snapshot create --reason manual",
     )
     create_parser.add_argument(
         "--reason",
@@ -620,17 +620,24 @@ def _add_session_store_parsers(
     verify_parser = _add_command_parser(
         snapshot_commands,
         "verify",
-        SESSION_STORE_SNAPSHOT_HELP["verify"],
-        example="session-store snapshot verify <snapshot-id>",
+        DATA_STORE_SNAPSHOT_HELP["verify"],
+        example="data-store snapshot verify <snapshot-id>",
     )
     verify_parser.add_argument("snapshot_id", metavar="<snapshot-id>")
     restore_parser = _add_command_parser(
         snapshot_commands,
         "restore",
-        SESSION_STORE_SNAPSHOT_HELP["restore"],
-        example="session-store snapshot restore <snapshot-id> --yes",
+        DATA_STORE_SNAPSHOT_HELP["restore"],
+        example="data-store snapshot restore <snapshot-id> --yes",
     )
     restore_parser.add_argument("snapshot_id", metavar="<snapshot-id>")
+    restore_parser.add_argument(
+        "--database",
+        action="append",
+        default=[],
+        metavar="<name>",
+        help="Restore only this database (repeatable); default: every database in the snapshot",
+    )
     restore_parser.add_argument(
         "--yes",
         action="store_true",
@@ -639,14 +646,14 @@ def _add_session_store_parsers(
 
     incident_parser = commands.add_parser(
         "incident",
-        help=SESSION_STORE_HELP["incident"],
-        description=SESSION_STORE_HELP["incident"],
+        help=DATA_STORE_HELP["incident"],
+        description=DATA_STORE_HELP["incident"],
     )
     incident_commands = incident_parser.add_subparsers(dest="incident_command", required=True)
     acknowledge_parser = _add_command_parser(
         incident_commands,
         "acknowledge",
-        "Acknowledge one durable Session-store recovery incident",
-        example="session-store incident acknowledge <incident-id>",
+        "Acknowledge one durable database recovery incident",
+        example="data-store incident acknowledge <incident-id>",
     )
     acknowledge_parser.add_argument("incident_id", metavar="<incident-id>")

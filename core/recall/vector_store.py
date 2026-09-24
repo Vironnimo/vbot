@@ -29,8 +29,8 @@ from pathlib import Path
 
 import sqlite_vec  # type: ignore[import-untyped]
 
+from core.database import required_journal_mode
 from core.recall.passages import Passage
-from core.sessions.schema import required_journal_mode
 
 _INDEX_DIR_NAME = "recall"
 _INDEX_FILE_NAME = "session_passage_vectors.sqlite"

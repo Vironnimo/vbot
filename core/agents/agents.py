@@ -1070,7 +1070,7 @@ class AgentStore:
                 # authorization for an already-initialized root that deliberately
                 # lacks one. ``initialize_data_directory`` only writes the bootstrap
                 # marker when it created the root itself.
-                marker = self._data_dir / "session-store.json"
+                marker = self._data_dir / "data-store.json"
                 if not marker.exists():
                     with suppress(Exception):
                         initialize_data_directory(self._data_dir)

@@ -8,7 +8,12 @@ from typing import cast
 from core.tools.fuzzy_match import FuzzyReplacement, replace_fuzzy
 from core.utils.ids import new_id
 
-from ._store_database import SwarmDatabase
+from ._store_database import (
+    ALIASED_WIKI_REVISION_COLUMNS,
+    WIKI_PAGE_COLUMNS,
+    WIKI_REVISION_COLUMNS,
+    SwarmDatabase,
+)
 from ._store_records import _assert_epoch, _assert_mutable, _participant
 from ._store_values import Json, SwarmStoreError, _dump, _hash, _load, _now, _request_id
 
@@ -94,12 +99,13 @@ def _page(
     connection: sqlite3.Connection, swarm_id: str, page_id: str, revision: int | None = None
 ) -> sqlite3.Row:
     page = connection.execute(
-        "SELECT * FROM wiki_pages WHERE id=? AND swarm_id=?", (page_id, swarm_id)
+        f"SELECT {WIKI_PAGE_COLUMNS} FROM wiki_pages WHERE id=? AND swarm_id=?",
+        (page_id, swarm_id),
     ).fetchone()
     if page is None:
         raise SwarmStoreError("wiki_page_not_found")
     row = connection.execute(
-        "SELECT * FROM wiki_revisions WHERE page_id=? AND revision=?",
+        f"SELECT {WIKI_REVISION_COLUMNS} FROM wiki_revisions WHERE page_id=? AND revision=?",
         (page_id, page["revision"] if revision is None else revision),
     ).fetchone()
     if row is None:
@@ -183,15 +189,15 @@ def wiki(
         limit = arguments.get("limit", 20)
         if action == "history":
             rows = connection.execute(
-                "SELECT * FROM wiki_revisions WHERE swarm_id=? AND page_id=? "
-                "AND id<=? ORDER BY id DESC LIMIT ? OFFSET ?",
+                f"SELECT {WIKI_REVISION_COLUMNS} FROM wiki_revisions "
+                "WHERE swarm_id=? AND page_id=? AND id<=? ORDER BY id DESC LIMIT ? OFFSET ?",
                 (swarm_id, arguments["page_id"], high, limit + 1, offset),
             ).fetchall()
         else:
             rows = connection.execute(
-                "SELECT r.* FROM wiki_revisions r JOIN (SELECT page_id,MAX(id) "
-                "AS latest FROM wiki_revisions WHERE swarm_id=? AND id<=? GROUP"
-                " BY page_id) p ON r.id=p.latest "
+                f"SELECT {ALIASED_WIKI_REVISION_COLUMNS} FROM wiki_revisions r "
+                "JOIN (SELECT page_id,MAX(id) AS latest FROM wiki_revisions "
+                "WHERE swarm_id=? AND id<=? GROUP BY page_id) p ON r.id=p.latest "
                 "WHERE (? OR r.deleted=0) AND (instr(casefold(r.title),?)>0 OR "
                 "instr(casefold(r.content),?)>0) ORDER BY r.id DESC LIMIT ? "
                 "OFFSET ?",

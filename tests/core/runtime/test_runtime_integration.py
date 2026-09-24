@@ -13,6 +13,7 @@ import pytest
 
 from core.chat.errors import ChatError
 from core.chat.model_resolution import _resolve_agent_connection
+from core.database import write_bootstrap_marker
 from core.model_tasks import EmbeddingService
 from core.model_tasks.live import LiveVoiceService
 from core.providers.accounts import ConnectionRef
@@ -31,7 +32,6 @@ from core.recall import (
 )
 from core.runtime.runtime import Runtime
 from core.sessions import SessionAddress
-from core.sessions.format import write_bootstrap_marker
 from core.tools.read import READ_TOOL_DESCRIPTION, READ_TOOL_PARAMETERS
 from core.utils.config import Config
 from core.utils.errors import ConfigError

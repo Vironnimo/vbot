@@ -7,6 +7,14 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from cli.agent_management import agent_reorder
+from cli.data_store_management import (
+    data_store_incident_acknowledge,
+    data_store_snapshot_create,
+    data_store_snapshot_list,
+    data_store_snapshot_restore,
+    data_store_snapshot_verify,
+    data_store_status,
+)
 from cli.project_management import (
     project_add,
     project_clear_override,
@@ -26,14 +34,6 @@ from cli.session_management import (
     session_list,
     session_rename,
     session_set_compaction_policy,
-)
-from cli.session_store_management import (
-    session_store_incident_acknowledge,
-    session_store_snapshot_create,
-    session_store_snapshot_list,
-    session_store_snapshot_restore,
-    session_store_snapshot_verify,
-    session_store_status,
 )
 
 
@@ -293,26 +293,22 @@ def dispatch_session_command(
     raise ValueError(f"Unsupported session command: {args.command}")
 
 
-def dispatch_session_store_command(
+def dispatch_data_store_command(
     args: argparse.Namespace,
     instance: ServerInstance,
     *,
-    status_fn: Callable[[ServerInstance], CommandResult] = session_store_status,
-    snapshot_list_fn: Callable[[ServerInstance], CommandResult] = session_store_snapshot_list,
-    snapshot_create_fn: Callable[
-        [ServerInstance, str], CommandResult
-    ] = session_store_snapshot_create,
-    snapshot_verify_fn: Callable[
-        [ServerInstance, str], CommandResult
-    ] = session_store_snapshot_verify,
+    status_fn: Callable[[ServerInstance], CommandResult] = data_store_status,
+    snapshot_list_fn: Callable[[ServerInstance], CommandResult] = data_store_snapshot_list,
+    snapshot_create_fn: Callable[[ServerInstance, str], CommandResult] = data_store_snapshot_create,
+    snapshot_verify_fn: Callable[[ServerInstance, str], CommandResult] = data_store_snapshot_verify,
     snapshot_restore_fn: Callable[
-        [ServerInstance, str, bool], CommandResult
-    ] = session_store_snapshot_restore,
+        [ServerInstance, str, bool, list[str]], CommandResult
+    ] = data_store_snapshot_restore,
     incident_acknowledge_fn: Callable[
         [ServerInstance, str], CommandResult
-    ] = session_store_incident_acknowledge,
+    ] = data_store_incident_acknowledge,
 ) -> CommandResult:
-    """Dispatch operator controls for the current-format SQLite Session store."""
+    """Dispatch operator controls for the data directory's canonical databases."""
 
     if args.command == "status":
         return status_fn(instance)
@@ -324,7 +320,7 @@ def dispatch_session_store_command(
         if args.snapshot_command == "verify":
             return snapshot_verify_fn(instance, args.snapshot_id)
         if args.snapshot_command == "restore":
-            return snapshot_restore_fn(instance, args.snapshot_id, args.yes)
+            return snapshot_restore_fn(instance, args.snapshot_id, args.yes, args.database)
     if args.command == "incident" and args.incident_command == "acknowledge":
         return incident_acknowledge_fn(instance, args.incident_id)
-    raise ValueError(f"Unsupported Session-store command: {args.command}")
+    raise ValueError(f"Unsupported data-store command: {args.command}")

@@ -9,7 +9,7 @@ import pytest
 
 def _clone_current_store(template, destination) -> None:
     destination.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(template / "session-store.json", destination / "session-store.json")
+    shutil.copy2(template / "data-store.json", destination / "data-store.json")
     shutil.copy2(template / "sessions.db", destination / "sessions.db")
 
 

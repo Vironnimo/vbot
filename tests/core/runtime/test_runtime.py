@@ -19,7 +19,7 @@ from core.chat import ChatMessage
 from core.prompts import SystemPromptManager
 from core.providers.credentials import ProviderCredentialResolver
 from core.runs import Run, RunStatus
-from core.runtime._configuration import _VBOT_ROOT, _detect_vbot_version
+from core.runtime._configuration import _VBOT_ROOT
 from core.runtime.runtime import Runtime
 from core.sessions import ChatSessionManager, SessionAddress
 from core.skills.skills import SkillRegistry
@@ -36,6 +36,7 @@ from core.tools.process_manager import ProcessManager
 from core.tools.terminal_manager import TerminalManager, TerminalManagerError
 from core.tools.tools import ToolRegistry
 from core.utils.config import Config
+from core.utils.version import detect_vbot_version
 from tests.core.runtime.runtime_test_support import (
     _authorize_session_store,
 )
@@ -199,7 +200,7 @@ def test_detect_vbot_version_matches_pyproject_single_source() -> None:
     with (_VBOT_ROOT / "pyproject.toml").open("rb") as handle:
         expected = tomllib.load(handle)["project"]["version"]
 
-    assert _detect_vbot_version() == expected
+    assert detect_vbot_version() == expected
 
 
 def test_runtime_feeds_detected_version_into_system_prompt(config: Config) -> None:
@@ -209,7 +210,7 @@ def test_runtime_feeds_detected_version_into_system_prompt(config: Config) -> No
 
     runtime.start()
 
-    assert runtime.system_prompts._vbot_version == _detect_vbot_version()
+    assert runtime.system_prompts._vbot_version == detect_vbot_version()
 
 
 def test_runtime_start_no_error(tmp_path: Path):
@@ -322,13 +323,13 @@ def test_runtime_wires_trigger_service_to_streaming_chat_loop(config: Config) ->
     assert getattr(availability, "__self__", None) is runtime._image  # noqa: SLF001
 
 
-def test_runtime_never_creates_automatic_session_snapshots(config: Config, monkeypatch) -> None:
-    from core.sessions import snapshots
+def test_runtime_never_creates_automatic_data_snapshots(config: Config, monkeypatch) -> None:
+    from core.database import snapshots
 
     def reject_snapshot(*_args, **_kwargs):
-        raise AssertionError("normal Runtime operation must not create a Session snapshot")
+        raise AssertionError("normal Runtime operation must not create a data snapshot")
 
-    monkeypatch.setattr(snapshots, "create_snapshot", reject_snapshot)
+    monkeypatch.setattr(snapshots, "create_data_snapshot", reject_snapshot)
     runtime = Runtime(config)
     runtime.start()
     try:

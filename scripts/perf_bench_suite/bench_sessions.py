@@ -12,7 +12,7 @@ import sqlite3
 from collections.abc import Callable
 
 from core.chat.messages import ChatMessage
-from core.sessions.schema import required_journal_mode
+from core.database import required_journal_mode
 from scripts.perf_bench_suite.fixtures import (
     AGENT_ID,
     AGENT_MODEL,

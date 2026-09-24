@@ -18,10 +18,10 @@ from types import SimpleNamespace
 import pytest
 
 from core.chat.messages import ChatMessage
+from core.database import write_bootstrap_marker
 from core.projects import ProjectStore
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions._types import SKILL_CONTEXT_NOTE_PREFIX
-from core.sessions.format import write_bootstrap_marker
 from core.statistics import StatisticsIndex, StatisticsUnavailableError
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RpcError

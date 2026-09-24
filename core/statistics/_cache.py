@@ -81,7 +81,8 @@ def load_cache_facts(scan: UnitScan, *, top_incidents: int) -> CacheFacts:
                 AND r.role IN ('assistant', 'compaction_checkpoint', 'agent_takeover')
         ),
         turns AS (
-            SELECT *,
+            SELECT unit, seq, timestamp, instant, model_key, has_cache, input_tokens,
+                cache_read_tokens, cache_write_tokens, measured,
                 LAG(measured) OVER turn_order AS previous_measured,
                 LAG(has_cache) OVER turn_order AS previous_has_cache,
                 LAG(model_key) OVER turn_order AS previous_model_key,
@@ -91,7 +92,8 @@ def load_cache_facts(scan: UnitScan, *, top_incidents: int) -> CacheFacts:
             WINDOW turn_order AS (PARTITION BY unit ORDER BY seq)
         ),
         judged AS (
-            SELECT *, COALESCE(
+            SELECT unit, seq, timestamp, instant, model_key, input_tokens,
+                cache_read_tokens, cache_write_tokens, previous_input_tokens, COALESCE(
                 previous_measured = 1
                 AND previous_has_cache = 1
                 AND previous_model_key = model_key

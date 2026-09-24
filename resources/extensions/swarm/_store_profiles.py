@@ -15,6 +15,7 @@ from ._participant_names import (
     _PARTICIPANT_NAMES,
 )
 from ._store_database import (
+    SWARM_COLUMNS,
     SwarmDatabase,
 )
 from ._store_lifecycle import (
@@ -313,7 +314,9 @@ def _delete_swarm(db: SwarmDatabase, swarm_id: str) -> None:
 
 def _get_swarm(db: SwarmDatabase, swarm_id: str) -> Json:
     connection = db._require_connection()
-    row = connection.execute("SELECT * FROM swarms WHERE id=?", (swarm_id,)).fetchone()
+    row = connection.execute(
+        f"SELECT {SWARM_COLUMNS} FROM swarms WHERE id=?", (swarm_id,)
+    ).fetchone()
     if row is None:
         raise SwarmStoreError("swarm_not_found")
     participants = connection.execute(

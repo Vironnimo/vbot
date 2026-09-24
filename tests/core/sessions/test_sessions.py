@@ -265,15 +265,15 @@ def test_tool_result_persisted_needs_the_call_and_its_result_in_that_session(man
 
 
 def _count_writes(manager, monkeypatch) -> list[object]:
-    runtime = manager._store._runtime
-    original = runtime.execute_write
+    database = manager._store.database
+    original = database.write
     writes: list[object] = []
 
     def counted(fn, **kwargs):
         writes.append(fn)
         return original(fn, **kwargs)
 
-    monkeypatch.setattr(runtime, "execute_write", counted)
+    monkeypatch.setattr(database, "write", counted)
     return writes
 
 
