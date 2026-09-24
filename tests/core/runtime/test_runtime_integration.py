@@ -14,6 +14,7 @@ import pytest
 from core.chat.errors import ChatError
 from core.chat.model_resolution import _resolve_agent_connection
 from core.model_tasks import EmbeddingService
+from core.model_tasks.live import LiveVoiceService
 from core.providers.accounts import ConnectionRef
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
@@ -700,6 +701,19 @@ def test_runtime_embeddings_is_none_after_stop(
     assert runtime_with_openrouter_key._embeddings is None  # type: ignore[attr-defined]
     with pytest.raises(RuntimeError):
         _ = runtime_with_openrouter_key.embeddings
+
+
+def test_runtime_exposes_the_live_voice_service_only_while_started(
+    runtime_with_openrouter_key: Runtime, config: Config
+) -> None:
+    """``runtime.live_voice`` follows the lifecycle of the other task services."""
+
+    assert isinstance(runtime_with_openrouter_key.live_voice, LiveVoiceService)
+    runtime_with_openrouter_key.stop()
+    with pytest.raises(RuntimeError):
+        _ = runtime_with_openrouter_key.live_voice
+    with pytest.raises(RuntimeError):
+        _ = Runtime(config).live_voice
 
 
 def test_provider_credential_access_before_start_raises_runtime_error(config: Config) -> None:

@@ -38,6 +38,7 @@ from core.model_tasks import (
     VideoService,
 )
 from core.model_tasks.decisions import DecisionService
+from core.model_tasks.live import LiveVoiceService
 from core.models.models import Model, ModelRegistry
 from core.performance import PerformanceService
 from core.projects import (
@@ -162,6 +163,7 @@ class Runtime:
         self._music: MusicService | None = None
         self._embeddings: EmbeddingService | None = None
         self._decisions: DecisionService | None = None
+        self._live_voice: LiveVoiceService | None = None
         self._storage: StorageManager | None = None
         self._attachment_store: AttachmentStore | None = None
         self._keep_awake: KeepAwakeController | None = None
@@ -903,6 +905,10 @@ class Runtime:
 
     decisions: _StartedService[DecisionService] = _StartedService(
         lambda runtime: runtime._decisions, "Decision service not available"
+    )
+
+    live_voice: _StartedService[LiveVoiceService] = _StartedService(
+        lambda runtime: runtime._live_voice, "Live voice service not available"
     )
 
     embeddings: _StartedService[EmbeddingService] = _StartedService(

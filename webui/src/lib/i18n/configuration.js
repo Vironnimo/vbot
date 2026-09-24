@@ -13,7 +13,7 @@ export default Object.freeze({
   'settings.pages.providersDescription':
     'Connect the services and local runtimes that supply your Models.',
   'settings.pages.voiceDescription':
-    'Speaking, listening, and voice activation.',
+    'Speaking, listening, live conversations, and voice activation.',
   'settings.pages.memory': 'Memory',
   'settings.pages.memoryDescription':
     'Find past conversations and learn from them.',
@@ -28,6 +28,7 @@ export default Object.freeze({
     'Server information, connections, and diagnostics.',
   'settings.sections.voiceControls': 'Voice controls',
   'settings.sections.speechModels': 'Speech models',
+  'settings.sections.liveVoice': 'Live voice',
   'settings.sections.recall': 'Conversation search',
   'settings.sections.mediaModels': 'Images, video & music',
   'settings.sections.evaluation': 'Evaluation',
@@ -390,7 +391,7 @@ export default Object.freeze({
     'Optional names or terminology to help recognize your recording.',
   'settings.localSpeech.choices.auto': 'Automatic',
   'settings.specializedModels.subtitle':
-    'Task-specific model bindings for speech, images, video, music, embeddings, and decisions. These bindings are independent of agent and project defaults.',
+    'Task-specific model bindings for speech, live voice, images, video, music, embeddings, and decisions. These bindings are independent of agent and project defaults.',
   'settings.specializedModels.loading': 'Loading specialized model targets…',
   'settings.specializedModels.loadError':
     'Specialized model targets could not be loaded.',
@@ -404,6 +405,9 @@ export default Object.freeze({
   'settings.specializedModels.textToSpeech': 'Text to speech',
   'settings.specializedModels.textToSpeechDescription':
     'Used by the agent text_to_speech tool.',
+  'settings.specializedModels.liveVoice': 'Live voice',
+  'settings.specializedModels.liveVoiceDescription':
+    'Realtime voice model for spoken conversations with vBot. Delegating models also use a backend model to operate the app.',
   'settings.specializedModels.imageUnderstanding': 'Image understanding',
   'settings.specializedModels.imageUnderstandingDescription':
     'Used by analyze_image. Available by default for Agents without vision, or with vision when explicitly enabled in the Agent’s Tool settings.',

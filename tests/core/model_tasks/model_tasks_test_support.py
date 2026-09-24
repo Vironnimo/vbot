@@ -9,7 +9,7 @@ from typing import cast
 from core.model_tasks import (
     TASK_SPEECH_TO_TEXT,
 )
-from core.models import Model, ModelQuery
+from core.models import Capabilities, Model, ModelQuery, ModelRegistry, ReasoningCapabilities
 
 
 def _model(
@@ -148,3 +148,85 @@ class _Storage:
             else:
                 self._settings.pop(task_type, None)
         return dict(self._settings)
+
+
+LIVE_VOICE_TASK_OPTIONS = {
+    "live_voice": {
+        "parameters": {
+            "voice": {"type": "enum", "values": ["cove", "juniper", "maple"], "default": "juniper"},
+            "backend_model": {"type": "model", "default": "terra"},
+        }
+    }
+}
+
+
+def _registry_model(
+    model_id: str,
+    name: str,
+    *,
+    task_types: tuple[str, ...],
+    tools: bool = False,
+    connections: tuple[str, ...] = (),
+    task_options: Mapping[str, object] | None = None,
+) -> Model:
+    return Model(
+        model_id=model_id,
+        name=name,
+        capabilities=Capabilities(
+            vision=False,
+            tools=tools,
+            json_mode=False,
+            reasoning=ReasoningCapabilities(supported=False),
+            task_types=task_types,
+            task_options=task_options or {},
+        ),
+        context_window=128000,
+        max_output_tokens=None,
+        connections=connections,
+    )
+
+
+def _live_voice_registry() -> ModelRegistry:
+    """Two live voice Models plus backend candidates spread over two Connections.
+
+    ``live-sub`` only runs on ``subscription``; ``live-key`` only on
+    ``api-key``. ``terra`` runs on both, ``astra`` only on ``subscription``
+    and ``platform`` only on ``api-key``. ``quiet`` is chat-only without Tools,
+    ``painter`` is tool-capable but not a chat Model, and ``foreign`` belongs to
+    another Provider.
+    """
+
+    chat = ("chat", "text_output")
+    entries = {
+        ("openai", "live-sub"): _registry_model(
+            "live-sub",
+            "Live Sub",
+            task_types=("live_voice",),
+            connections=("subscription",),
+            task_options=LIVE_VOICE_TASK_OPTIONS,
+        ),
+        ("openai", "live-key"): _registry_model(
+            "live-key",
+            "Live Key",
+            task_types=("live_voice",),
+            connections=("api-key",),
+            task_options=LIVE_VOICE_TASK_OPTIONS,
+        ),
+        ("openai", "terra"): _registry_model(
+            "terra", "Terra", task_types=chat, tools=True, connections=("api-key", "subscription")
+        ),
+        ("openai", "astra"): _registry_model(
+            "astra", "Astra", task_types=chat, tools=True, connections=("subscription",)
+        ),
+        ("openai", "platform"): _registry_model(
+            "platform", "Platform", task_types=chat, tools=True, connections=("api-key",)
+        ),
+        ("openai", "quiet"): _registry_model("quiet", "Quiet", task_types=chat),
+        ("openai", "painter"): _registry_model(
+            "painter", "Painter", task_types=("image_generation",), tools=True
+        ),
+        ("openrouter", "foreign"): _registry_model(
+            "foreign", "Foreign", task_types=chat, tools=True
+        ),
+    }
+    return ModelRegistry(entries)

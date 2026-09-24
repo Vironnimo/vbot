@@ -1,31 +1,51 @@
 export default Object.freeze({
-  'live.error.wakeword':
-    'Turn off wakeword Voice in Settings before starting the voice companion.',
-  'live.error.apiKey':
-    'Add and enable your OpenAI API key in Providers. GPT-Live access is required.',
-  'live.error.access':
-    'OpenAI rejected access. Check your API key and GPT-Live availability for your account.',
-  'live.error.microphone':
-    'Live voice needs microphone access over HTTPS or localhost.',
-  'live.error.permission': 'Allow microphone access, then start again.',
-  'live.error.unknown':
-    'OpenAI may have created the conversation, but its connection could not be confirmed. The request was not repeated.',
-  'live.error.finalization':
-    'Voice stopped. Final usage could not be confirmed.',
-  'live.error.notification':
-    'An Agent update could not be read. Check Chat for its latest reply.',
-  'live.error.backend':
-    'The voice companion could not finish that request. Check the action before repeating it.',
-  'live.error.limit': 'Start a new voice conversation to continue.',
-  'live.error.connection':
-    'Live voice could not continue. Check the connection and GPT-Live access. Actions were not automatically repeated.',
-  'live.settings.label': 'Live voice',
-  'live.settings.description':
-    'Show Start Live in the sidebar. Requires an OpenAI API key with GPT-Live access. OpenAI charges for connected voice time and backend usage.',
-  'live.error.playback':
-    'Audio playback was blocked. Allow audio for this app and start Live again.',
+  'live.title': 'Live voice',
   'live.startButton': 'Start Live',
   'live.stopButton': 'Stop Live',
+  'live.mute': 'Mute microphone',
+  'live.busy': 'Working…',
+  'live.state.connecting': 'Connecting…',
+  'live.state.listening': 'Listening…',
+  'live.state.closing': 'Stopping…',
+  'live.notice.replaced': 'Live voice continues in another window.',
+  'live.notice.ended': 'Live voice ended.',
+  'live.error.notConfigured':
+    'Choose a Live voice Model in Settings → Voice first.',
+  'live.error.notUsable':
+    'The Live voice Model cannot be used right now. Check its Provider connection in Settings.',
+  'live.error.invalidOffer':
+    'The browser audio setup was rejected. Reload the page and start again.',
+  'live.error.access':
+    'The Provider rejected access to the Live voice Model. Check your account and its access to this Model.',
+  'live.error.rateLimited':
+    'The Provider is limiting requests. Wait a moment, then start again.',
+  'live.error.unknown':
+    'The Provider may have started the call, but it could not be confirmed. The request was not repeated.',
+  'live.error.provider':
+    'The Provider could not start or continue the call. Try again later.',
+  'live.error.control':
+    'vBot could not take control of the call, so it was ended. Start again.',
+  'live.error.permission': 'Allow microphone access, then start again.',
+  'live.error.microphone':
+    'Live voice needs a working microphone and a page opened over HTTPS or localhost.',
+  'live.error.timeout':
+    'Live voice did not connect in time. Check your network and start again.',
+  'live.error.connection':
+    'Live voice could not connect. Check your network and start again.',
+  'live.error.connectionLost':
+    'The Live voice connection was lost. Start again to continue.',
+  'live.error.callFailed':
+    'Live voice stopped because of a problem. Start again to continue.',
+  'live.error.playback':
+    'Audio playback was blocked. Allow audio for this app and start Live again.',
+  'live.error.wakeword':
+    'Turn off wakeword Voice in Settings before starting Live voice.',
+  'live.error.desktop':
+    'The Desktop app did not respond. Restart it and try again.',
+  'live.error.uiAction': 'Live voice could not change the view as requested.',
+  'live.error.notification':
+    'Live voice could not announce a finished Run. Check the chat for its result.',
+  'live.error.generic': 'Live voice reported a problem ({code}).',
   'app.title': 'vBot',
   'navigation.primary': 'Primary navigation',
   'navigation.sections': 'Sections',

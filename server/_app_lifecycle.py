@@ -22,12 +22,15 @@ from server.events import (
     ServerEventBus,
 )
 from server.file_delivery import FileDelivery
+from server.live import LiveCallRegistry
+from server.rpc.dispatcher import dispatch_method
 from server.rpc.event_bridge import (
     bridge_run_to_event_bus,
     publish_bash_process_status_changed,
     publish_resource_changed,
     publish_session_changed,
 )
+from server.rpc.methods import METHODS
 from server.rpc.statistics_methods import statistics_service
 
 if TYPE_CHECKING:
@@ -35,6 +38,9 @@ if TYPE_CHECKING:
 
 
 JsonObject = dict[str, Any]
+
+# Bounds ending Live calls at shutdown; each call also bounds its own close.
+LIVE_CALLS_SHUTDOWN_TIMEOUT_SECONDS = 10.0
 
 # The Session methods a Statistics index warmup reads through.
 _STATISTICS_SESSION_METHODS = (
@@ -85,6 +91,24 @@ def _initialize_app_state(
     app.state.log_viewer = LogViewer(runtime.storage.data_dir)
     app.state.agent_delete_lock = asyncio.Lock()
     app.state.server_bind = dict(server_bind)
+    app.state.live_calls = _build_live_call_registry(app.state)
+
+
+def _build_live_call_registry(state: Any) -> LiveCallRegistry:
+    """Live calls run their app Tools through the canonical RPC handlers."""
+
+    async def dispatch(method: str, params: JsonObject) -> JsonObject:
+        return await dispatch_method(state, method, params, METHODS)
+
+    return LiveCallRegistry(events=state.event_bus, rpc=dispatch)
+
+
+async def _shutdown_live_calls(state: Any, logger: logging.Logger) -> None:
+    """End Live calls before the runtime their Tools and providers rely on closes."""
+    try:
+        await asyncio.wait_for(state.live_calls.aclose(), LIVE_CALLS_SHUTDOWN_TIMEOUT_SECONDS)
+    except TimeoutError:
+        logger.warning("Timed out while ending Live calls")
 
 
 def _register_run_event_bridge(state: Any) -> Any:

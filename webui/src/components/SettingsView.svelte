@@ -66,6 +66,7 @@
     ['providers', 'settings.providers.title', 'Providers'],
     ['voice_controls', 'settings.sections.voiceControls', 'Voice controls'],
     ['speech_models', 'settings.sections.speechModels', 'Speech models'],
+    ['live_voice_model', 'settings.sections.liveVoice', 'Live voice'],
     ['recall', 'settings.sections.recall', 'Conversation search'],
     [
       'embedding_model',
@@ -87,6 +88,7 @@
   const panelById = new Map(sections.map((section) => [section.id, section]));
   const modelTasksBySection = {
     speech_models: ['speech_to_text', 'text_to_speech'],
+    live_voice_model: ['live_voice'],
     embedding_model: ['text_embedding'],
     media_models: [
       'image_understanding',
@@ -123,9 +125,9 @@
       description: () =>
         t(
           'settings.pages.voiceDescription',
-          'Speaking, listening, and voice activation.',
+          'Speaking, listening, live conversations, and voice activation.',
         ),
-      sections: ['speech_models', 'voice_controls'],
+      sections: ['speech_models', 'live_voice_model', 'voice_controls'],
     },
     {
       id: 'memory',
@@ -529,7 +531,9 @@
   {:else if modelTasksBySection[panelId]}
     <SettingsSpecializedModelsPanel
       taskTypes={modelTasksBySection[panelId]}
-      showTaskLabels={panelId !== 'embedding_model'}
+      showTaskLabels={!['embedding_model', 'live_voice_model'].includes(
+        panelId,
+      )}
       {settings}
       onCommit={commitSettings}
       {onToast}
