@@ -1,4 +1,4 @@
-# Logs, Debug Traces, and Statistics
+# Logs, Debug Traces, Statistics, and Performance
 
 ## Logs
 
@@ -23,6 +23,21 @@ vbot debug clear
 
 - `probe`, `traces`, and `trace` need debug mode enabled server-side: `vbot config set debug.enabled true`. `status` and `clear` always work.
 - `probe` fetches the provider's models endpoint with the connection's credentials and prints status, duration, and a model preview; the full raw response is stored as a trace and read with `debug trace <trace-id>`.
+
+## Performance — server responsiveness and timelines
+
+Use when vBot itself seems slow: delayed replies, stalled streams, slow Tool rounds, or an unresponsive interface.
+
+```bash
+vbot performance status
+vbot performance record start [--label <text>] [--max-seconds <seconds>]
+vbot performance record stop
+vbot performance recordings [--limit <count>]
+```
+
+- Measurement is always on. `status` reports since server start: the slowest operations by p99 and by total time, key gauges (Event Loop utilization, process CPU and memory, active and queued Runs), and recent Event Loop stalls with the code locations that blocked the server.
+- To examine a specific slowdown, start a recording, let the slow behavior happen, then stop it. `record stop` prints the trace file path and the slowest operations of exactly the recorded window. Only one recording runs at a time; it stops automatically after `--max-seconds`, and `recordings` still lists it. Give the user the trace path: the file opens in https://ui.perfetto.dev, with one track per Session.
+- Measurements, traces and summaries contain timings, ids and code locations, never message content.
 
 ## Statistics — usage aggregated from persisted sessions
 
