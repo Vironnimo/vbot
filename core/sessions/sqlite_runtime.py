@@ -29,6 +29,12 @@ WRITE_PATIENCE_S = 20.0
 TRANSCRIPT_WRITE_PATIENCE_S = 60.0
 ACTIVITY_WRITE_PATIENCE_S = 0.5
 READ_CONNECTION_LIMIT = 8
+# Page cache per connection, in KiB. The writer also serves every read in
+# rollback-journal mode; pooled readers exist only in WAL mode. Ceiling per
+# Session store: 64 MiB + READ_CONNECTION_LIMIT x 16 MiB = 192 MiB, reached only
+# when every connection has read that many distinct pages.
+WRITER_CACHE_KIB = 64 * 1024
+READER_CACHE_KIB = 16 * 1024
 CHECKPOINT_EVERY_N_WRITES = 50
 READ_OPEN_RETRY_SECONDS = 60.0
 BUSY_TIMEOUT_MS = 1_000
@@ -577,6 +583,7 @@ class SQLiteRuntime:
                 connection.row_factory = sqlite3.Row
                 connection.execute("PRAGMA foreign_keys=ON")
                 connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+                connection.execute(f"PRAGMA cache_size=-{WRITER_CACHE_KIB}")
                 if not create or existed:
                     app_id = int(connection.execute("PRAGMA application_id").fetchone()[0])
                     version = int(connection.execute("PRAGMA user_version").fetchone()[0])
@@ -792,6 +799,7 @@ class SQLiteRuntime:
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA query_only=ON")
             connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute(f"PRAGMA cache_size=-{READER_CACHE_KIB}")
             from core.sessions.schema import APPLICATION_ID, SCHEMA_VERSION
 
             if int(connection.execute("PRAGMA application_id").fetchone()[0]) != APPLICATION_ID:
