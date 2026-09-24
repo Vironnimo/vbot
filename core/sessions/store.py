@@ -636,9 +636,10 @@ class SessionStore:
         expected_generation_id: str | None,
         excluded_roles: Sequence[str],
         complete_run_segment: bool,
-        background_roles: Sequence[str],
         background_tool_names: Sequence[str],
+        background_note_marker: str | None,
         after: tuple[str, int] | None = None,
+        skip_unchanged: bool = False,
     ) -> SessionChatHistorySnapshot:
         return self._read_decoded(
             lambda connection: _store_history.chat_history_snapshot(
@@ -650,9 +651,10 @@ class SessionStore:
                 expected_generation_id=expected_generation_id,
                 excluded_roles=excluded_roles,
                 complete_run_segment=complete_run_segment,
-                background_roles=background_roles,
                 background_tool_names=background_tool_names,
+                background_note_marker=background_note_marker,
                 after=after,
+                skip_unchanged=skip_unchanged,
             )
         )
 

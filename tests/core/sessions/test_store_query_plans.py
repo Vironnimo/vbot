@@ -247,14 +247,53 @@ def test_chat_history_snapshot_reads_by_session_index(history, complete_run_segm
         expected_generation_id=None,
         excluded_roles=("note", "history_edit"),
         complete_run_segment=complete_run_segment,
-        background_roles=("tool",),
         background_tool_names=("read",),
+        background_note_marker="needle",
         after=None,
     )()
     assert [(run["run_id"], run["complete"]) for run in snapshot.runs] == [
         ("run-two", complete_run_segment)
     ]
+    assert [(record.role, record.name) for record in snapshot.background_records] == [
+        ("tool", "read")
+    ]
     _assert_indexed(connection, statements)
+
+
+def test_unchanged_history_cursor_reads_only_the_session_row(history) -> None:
+    address, _anchor, connection = history
+    full = _store_history.chat_history_snapshot(
+        connection,
+        address,
+        limit=6,
+        before_message_id=None,
+        before_sequence=None,
+        expected_generation_id=None,
+        excluded_roles=("note", "history_edit"),
+        complete_run_segment=True,
+    )()
+    state = _store_values._require_live(connection, address)
+    recorder, statements = _recording(connection)
+    unchanged = _store_history.chat_history_snapshot(
+        recorder,
+        address,
+        limit=6,
+        before_message_id=None,
+        before_sequence=None,
+        expected_generation_id=None,
+        excluded_roles=("note", "history_edit"),
+        complete_run_segment=True,
+        background_tool_names=("read",),
+        background_note_marker="needle",
+        after=(full.generation_id, int(state["message_count"])),
+        skip_unchanged=True,
+    )()
+    assert unchanged.unchanged and unchanged.incremental
+    assert unchanged.page.messages == ()
+    assert unchanged.after_cursor == full.after_cursor
+    assert unchanged.background_records == ()
+    assert len(statements) == 1
+    assert "history_records" not in statements[0][0]
 
 
 def test_session_catalog_reads_scope_history_by_session_index(history) -> None:
