@@ -89,6 +89,7 @@ from core.tools.availability import (
     ToolAccess,
 )
 from core.utils.atomic import atomic_write_text
+from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
 
 __all__ = [
@@ -273,13 +274,9 @@ class AgentStore:
             return _apply_defaults(agent, self._agent_defaults())
 
     def get(self, agent_id: str) -> Agent:
-        """Load an agent from disk."""
+        """Load an agent from disk by its exact id."""
         with self._write_lock:
-            _validate_agent_id(agent_id)
-            agent_path = self._agent_path(agent_id)
-            if not agent_path.exists():
-                raise AgentNotFoundError(f"Agent not found: {agent_id}")
-
+            agent_path = self._require_agent_path(agent_id)
             raw_agent = self._load_raw_agent(agent_path)
             return _apply_defaults(raw_agent, self._agent_defaults())
 
@@ -295,27 +292,24 @@ class AgentStore:
         keep baking for every other consumer.
         """
         with self._write_lock:
-            _validate_agent_id(agent_id)
-            agent_path = self._agent_path(agent_id)
-            if not agent_path.exists():
-                raise AgentNotFoundError(f"Agent not found: {agent_id}")
-
+            agent_path = self._require_agent_path(agent_id)
             return self._load_raw_agent(agent_path)
 
     def exists(self, agent_id: str) -> bool:
-        """Return whether a valid identity Agent with this id can be loaded.
+        """Return whether a valid identity Agent with exactly this id can be loaded.
 
-        The probe never raises. Invalid ids, missing files, malformed configs, and
-        configs whose persisted id disagrees with their directory all yield
-        ``False`` so a broken Agent is never treated as an available target.
+        The probe never raises. Invalid ids, missing files, case variants of a
+        stored id, malformed configs, and configs whose persisted id disagrees with
+        their directory all yield ``False`` so a broken Agent is never treated as
+        an available target.
         """
         with self._write_lock:
             if not is_valid_agent_id(agent_id):
                 return False
-            agent_path = self._agent_path(agent_id)
-            if not agent_path.exists():
-                return False
             try:
+                agent_path = self._stored_agent_path(agent_id)
+                if agent_path is None:
+                    return False
                 self._read_agent_config(agent_path)
             except (AgentError, OSError):
                 return False
@@ -482,10 +476,7 @@ class AgentStore:
                 raise AgentError("Agent id is immutable")
 
             changes.pop("id", None)
-            agent_path = self._agent_path(agent_id)
-            if not agent_path.exists():
-                raise AgentNotFoundError(f"Agent not found: {agent_id}")
-
+            agent_path = self._require_agent_path(agent_id)
             agent = self._load_raw_agent(agent_path)
             if not changes:
                 if copy_workspace_identity_files:
@@ -614,8 +605,7 @@ class AgentStore:
 
             source_dir = self._agent_dir(agent_id)
             destination_dir = self._agent_dir(new_agent_id)
-            if not self._agent_path(agent_id).is_file():
-                raise AgentNotFoundError(f"Agent not found: {agent_id}")
+            self._require_agent_path(agent_id)
             if destination_dir.exists() and not _paths_are_same_location(
                 source_dir, destination_dir
             ):
@@ -833,11 +823,7 @@ class AgentStore:
         last-active landing this method exists to provide.
         """
         with self._write_lock:
-            _validate_agent_id(agent_id)
-            agent_path = self._agent_path(agent_id)
-            if not agent_path.exists():
-                raise AgentNotFoundError(f"Agent not found: {agent_id}")
-
+            agent_path = self._require_agent_path(agent_id)
             agent = self._read_agent_config(agent_path)
             if agent.current_session_id != removed_session_id:
                 return _apply_defaults(agent, self._agent_defaults())
@@ -869,6 +855,25 @@ class AgentStore:
 
     def _agent_path(self, agent_id: str) -> Path:
         return self._agent_dir(agent_id) / "agent.json"
+
+    def _stored_agent_path(self, agent_id: str) -> Path | None:
+        """Return ``agent.json`` of the Agent stored under exactly ``agent_id``, or ``None``.
+
+        Ids are exact on every platform. A case-insensitive filesystem would open
+        the stored ``main`` tree for ``MAIN``; that different id names no Agent.
+        """
+        agent_path = self._agent_path(agent_id)
+        if not has_id_entry(agent_path.parent.parent, agent_id) or not agent_path.is_file():
+            return None
+        return agent_path
+
+    def _require_agent_path(self, agent_id: str) -> Path:
+        """Validate ``agent_id`` and return its stored config path or raise not-found."""
+        _validate_agent_id(agent_id)
+        agent_path = self._stored_agent_path(agent_id)
+        if agent_path is None:
+            raise AgentNotFoundError(f"Agent not found: {agent_id}")
+        return agent_path
 
     def _agent_order_path(self) -> Path:
         return self._data_dir / "agents" / _AGENT_ORDER_FILE_NAME

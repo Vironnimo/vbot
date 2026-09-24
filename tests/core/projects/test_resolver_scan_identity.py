@@ -270,3 +270,27 @@ def test_resolve_unknown_project_agent_raises(
 
     with pytest.raises(AgentResolutionError):
         resolver.resolve_agent(project.project_id, "ghost")
+
+
+def test_case_variant_addresses_resolve_as_unknown(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # Ids are exact. On a case-insensitive filesystem ``VBot`` and ``MAIN`` open the
+    # stored ``vbot``/``main`` trees; resolution must still treat them as unknown.
+    from core.agents import AgentNotFoundError
+    from core.projects import ProjectNotFoundError, parse_agent_address
+
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    agents.create("main", "Main")
+    resolver = _resolver(agents, projects, _openai_configured())
+    agent_id, project_id = parse_agent_address("Builder@VBot")
+
+    with pytest.raises(AgentResolutionError) as project_error:
+        resolver.resolve_agent(project_id, agent_id)
+    with pytest.raises(AgentResolutionError) as identity_error:
+        resolver.resolve_agent(None, "MAIN")
+
+    assert isinstance(project_error.value.__cause__, ProjectNotFoundError)
+    assert isinstance(identity_error.value.__cause__, AgentNotFoundError)
+    assert resolver.resolve_agent("vbot", "builder").id == "builder"

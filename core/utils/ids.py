@@ -7,6 +7,7 @@ identify the object kind without a second, session-local alias namespace.
 
 from __future__ import annotations
 
+import os
 import re
 import secrets
 from collections.abc import Callable
@@ -43,6 +44,22 @@ def is_safe_id(value: object) -> bool:
         and _OPAQUE_ID.fullmatch(value) is not None
         and _WINDOWS_DEVICE_ID.fullmatch(value) is None
     )
+
+
+def has_id_entry(directory: Path, identifier: str) -> bool:
+    """Return whether ``directory`` holds an entry spelled exactly ``identifier``.
+
+    Ids are exact, but a case-insensitive filesystem (Windows) opens a stored
+    ``vbot`` entry for ``directory / "VBOT"``. Path-backed owners use this check
+    before treating a requested id as present, so a case variant names no object
+    on every platform. A missing directory holds no entries; other filesystem
+    errors propagate to the owner.
+    """
+    try:
+        with os.scandir(directory) as entries:
+            return any(entry.name == identifier for entry in entries)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
 
 
 def write_id_file(directory: Path, prefix: str, suffix: str, data: bytes) -> Path:
