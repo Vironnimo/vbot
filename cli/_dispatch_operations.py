@@ -40,6 +40,12 @@ from cli.debug_management import (
 )
 from cli.log_management import log_read
 from cli.memory_management import memory_add, memory_list, memory_remove, memory_replace
+from cli.performance_management import (
+    performance_record_start,
+    performance_record_stop,
+    performance_recordings,
+    performance_status,
+)
 from cli.prompt_management import (
     prompt_create,
     prompt_remove,
@@ -453,6 +459,22 @@ def dispatch_debug_command(
     if args.command == "probe":
         return model_probe_fn(instance, args.provider, args.connection)
     raise ValueError(f"Unsupported debug command: {args.command}")
+
+
+def dispatch_performance_command(
+    args: argparse.Namespace, instance: ServerInstance
+) -> CommandResult:
+    """Dispatch one parsed performance command against the server RPC client."""
+
+    if args.command == "status":
+        return performance_status(instance)
+    if args.command == "record-start":
+        return performance_record_start(instance, args.label, args.max_seconds)
+    if args.command == "record-stop":
+        return performance_record_stop(instance)
+    if args.command == "recordings":
+        return performance_recordings(instance, args.limit)
+    raise ValueError(f"Unsupported performance command: {args.command}")
 
 
 def dispatch_config_command(
