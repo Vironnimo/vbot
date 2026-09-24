@@ -319,9 +319,17 @@ class ChatSession:
         after: str | None = None,
         excluded_roles: Sequence[str] = (),
         complete_run_segment: bool = False,
-        background_roles: Sequence[str] = (),
         background_tool_names: Sequence[str] = (),
+        background_note_marker: str | None = None,
+        skip_unchanged: bool = False,
     ) -> SessionChatHistorySnapshot:
+        """Read one History page with whole-Session facts from one snapshot.
+
+        Background candidates are the Tool Results of ``background_tool_names``
+        and the Notes containing ``background_note_marker``. With
+        ``skip_unchanged``, an ``after`` cursor at the Session's end returns an
+        empty ``unchanged`` snapshot without reading those facts.
+        """
         decoded_cursor = None if before is None else _decode_chat_history_cursor(before)
         if before is not None and after is not None:
             raise ChatSessionError("before and after cannot be combined")
@@ -339,9 +347,10 @@ class ChatSession:
             expected_generation_id=expected_generation_id,
             excluded_roles=excluded_roles,
             complete_run_segment=complete_run_segment,
-            background_roles=background_roles,
             background_tool_names=background_tool_names,
+            background_note_marker=background_note_marker,
             after=after_cursor,
+            skip_unchanged=skip_unchanged,
         )
 
     def status_snapshot(self) -> SessionStatusSnapshot:

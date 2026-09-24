@@ -210,6 +210,110 @@ describe('chat controller', () => {
     expect(source.reflectionTasks).toEqual({});
   });
 
+  it('keeps Session facts and an in-flight reflection read across an unchanged incremental read', async () => {
+    const policy = { enabled: true, trigger: { type: 'context_ratio' } };
+    const loadChatHistory = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ id: 'reply', role: 'assistant', content: 'Hello' }],
+        history_generation: 'g1',
+        next_after: 'cursor-1',
+        incremental: false,
+        session_usage: { input_tokens: 10 },
+        context_usage: { used_tokens: 5 },
+        compaction_policy: policy,
+        background_bash_statuses: { 'process-one': 'running' },
+        reflection_runs: [],
+      })
+      .mockResolvedValueOnce({
+        messages: [],
+        history_generation: 'g1',
+        next_after: 'cursor-1',
+        incremental: true,
+        history_reset: false,
+        runs: [],
+      });
+    const reflections = deferred();
+    const { chatState, controller } = setup({
+      operationOverrides: {
+        loadChatHistory,
+        loadReflectionRuns: vi.fn().mockReturnValue(reflections.promise),
+      },
+      isDisplayedSession: () => true,
+    });
+    await controller.loadHistoryForSession('alpha', 'source');
+    const source = chatState.sessions['alpha::source'];
+    controller.applyConnectionSnapshot({ active_runs: [] });
+
+    await controller.loadHistoryForSession('alpha', 'source');
+    reflections.resolve({ reflection_runs: [review()] });
+    await vi.waitFor(() =>
+      expect(source.reflectionTasks['review-one']?.status).toBe('completed'),
+    );
+
+    expect(loadChatHistory).toHaveBeenLastCalledWith({
+      agent_id: 'alpha',
+      session_id: 'source',
+      limit: 500,
+      after: 'cursor-1',
+    });
+    expect(source.messages.map((message) => message.id)).toEqual(['reply']);
+    expect(source.sessionUsage).toEqual({ input_tokens: 10 });
+    expect(source.contextUsage).toEqual({ used_tokens: 5 });
+    expect(source.compactionPolicy).toBe(policy);
+    expect(source.backgroundBashStatuses).toEqual({
+      'process-one': 'running',
+    });
+  });
+
+  it('folds background status deltas across incremental pages', async () => {
+    const loadChatHistory = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [],
+        history_generation: 'g1',
+        next_after: 'cursor-1',
+        incremental: false,
+        context_usage: { used_tokens: 5 },
+        background_bash_statuses: {
+          'process-one': 'running',
+          'process-two': 'running',
+        },
+      })
+      .mockResolvedValueOnce({
+        messages: [],
+        history_generation: 'g1',
+        next_after: 'cursor-2',
+        incremental: true,
+        has_newer: true,
+        context_usage: { used_tokens: 7 },
+        background_bash_statuses: { 'process-one': 'completed' },
+      })
+      .mockResolvedValueOnce({
+        messages: [],
+        history_generation: 'g1',
+        next_after: 'cursor-3',
+        incremental: true,
+        context_usage: null,
+        background_bash_statuses: { 'process-two': 'failed' },
+      });
+    const { chatState, controller } = setup({
+      operationOverrides: { loadChatHistory },
+    });
+    await controller.loadHistoryForSession('alpha', 'source');
+    await controller.loadHistoryForSession('alpha', 'source');
+
+    const source = chatState.sessions['alpha::source'];
+    expect(loadChatHistory).toHaveBeenCalledTimes(3);
+    expect(source.historyAfter).toBe('cursor-3');
+    expect(source.backgroundBashStatuses).toEqual({
+      'process-one': 'completed',
+      'process-two': 'failed',
+    });
+    // A page that read the context and found none clears it.
+    expect(source.contextUsage).toBeNull();
+  });
+
   it('reloads a stale active-run snapshot without replacing a newer live Run', async () => {
     const older = deferred();
     const loadChatHistory = vi

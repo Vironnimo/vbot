@@ -57,6 +57,36 @@ const HISTORY_INITIAL_LIMIT = 100;
 
 const HISTORY_OLDER_LIMIT = 50;
 
+// `chat.history` omits what an unchanged read did not recompute; an absent
+// field keeps the Session's current value. `context_usage` is present (possibly
+// null) whenever it was read.
+function historyLoadOptions(history) {
+  return {
+    hasMore: history?.has_more === true,
+    nextBefore: history?.next_before,
+    nextAfter: history?.next_after,
+    generation: history?.history_generation,
+    runs: history?.runs,
+    incremental: history?.incremental,
+    reset: history?.history_reset,
+    activeRunId: history?.active_run?.run_id,
+    sessionUsage: history?.session_usage,
+    ...(isRecord(history) && Object.hasOwn(history, 'context_usage')
+      ? { contextUsage: history.context_usage }
+      : {}),
+    compactionPolicy: history?.compaction_policy,
+    backgroundBashStatuses: history?.background_bash_statuses,
+  };
+}
+
+// Background status deltas fold in order; a later status wins.
+function mergeBackgroundStatuses(earlier, later) {
+  if (!isRecord(later)) {
+    return earlier;
+  }
+  return { ...(isRecord(earlier) ? earlier : {}), ...later };
+}
+
 function defaultChatOperations() {
   return {
     cancelProcess: (...args) => requestCancelProcess(...args),
@@ -259,16 +289,24 @@ export function createChatController({
           next_before: result.next_before,
           history_reset: result.history_reset,
           messages: [...(result.messages ?? []), ...(page.messages ?? [])],
+          background_bash_statuses: mergeBackgroundStatuses(
+            result.background_bash_statuses,
+            page.background_bash_statuses,
+          ),
         };
       after = page.next_after;
     } while (result?.has_newer);
     return result;
   }
 
+  // Only a read without `after` carries reflection Runs; live Run events keep
+  // them current in between, so an incremental read leaves them alone.
   async function loadHistoryForSession(agentId, sessionId) {
     const sessionState = ensureSessionState(chatState, agentId, sessionId);
     const request = beginHistoryRequest(sessionState);
-    const reflectionRequest = beginReflectionRequest(sessionState);
+    const reflectionRequest = sessionState.historyAfter
+      ? null
+      : beginReflectionRequest(sessionState);
     const isLatestRequest = request.isLatest;
     const isDisplayed = () => isDisplayedSession(agentId, sessionId);
     const startedDisplayed = isDisplayed();
@@ -298,21 +336,12 @@ export function createChatController({
         sessionState.currentRun.runId !== staleRunId &&
         history?.active_run?.run_id !== sessionState.currentRun.runId
       );
-      loadHistory(sessionState, history?.messages ?? [], {
-        hasMore: history?.has_more === true,
-        nextBefore: history?.next_before,
-        nextAfter: history?.next_after,
-        generation: history?.history_generation,
-        runs: history?.runs,
-        incremental: history?.incremental,
-        reset: history?.history_reset,
-        activeRunId: history?.active_run?.run_id,
-        sessionUsage: history?.session_usage,
-        contextUsage: history?.context_usage,
-        compactionPolicy: history?.compaction_policy,
-        backgroundBashStatuses: history?.background_bash_statuses,
-      });
-      reflectionRequest.apply(history?.reflection_runs);
+      loadHistory(
+        sessionState,
+        history?.messages ?? [],
+        historyLoadOptions(history),
+      );
+      reflectionRequest?.apply(history?.reflection_runs);
       sessionState.markReadFailedRunId = '';
       if (
         !history?.active_run &&
@@ -364,7 +393,9 @@ export function createChatController({
     }
 
     const request = beginHistoryRequest(sessionState);
-    const reflectionRequest = beginReflectionRequest(sessionState);
+    const reflectionRequest = sessionState.historyAfter
+      ? null
+      : beginReflectionRequest(sessionState);
     const isLatestRequest = request.isLatest;
     try {
       const history = await readCurrentHistory(sessionState);
@@ -379,21 +410,12 @@ export function createChatController({
         return true;
       }
 
-      loadHistory(sessionState, history?.messages ?? [], {
-        hasMore: history?.has_more === true,
-        nextBefore: history?.next_before,
-        nextAfter: history?.next_after,
-        generation: history?.history_generation,
-        runs: history?.runs,
-        incremental: history?.incremental,
-        reset: history?.history_reset,
-        activeRunId: history?.active_run?.run_id,
-        sessionUsage: history?.session_usage,
-        contextUsage: history?.context_usage,
-        compactionPolicy: history?.compaction_policy,
-        backgroundBashStatuses: history?.background_bash_statuses,
-      });
-      reflectionRequest.apply(history?.reflection_runs);
+      loadHistory(
+        sessionState,
+        history?.messages ?? [],
+        historyLoadOptions(history),
+      );
+      reflectionRequest?.apply(history?.reflection_runs);
       sessionState.markReadFailedRunId = '';
       const activeRun = attachableHistoryRun(sessionState, history?.active_run);
       if (activeRun) {
