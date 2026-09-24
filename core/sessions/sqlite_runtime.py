@@ -11,6 +11,7 @@ import sqlite3
 import sys
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,8 @@ _WAL_INCOMPAT_MARKERS = ("locking protocol", "not authorized", "disk i/o error")
 _SQLITE_PRIMARY_CODE_MASK = 0xFF
 _PERFORMANCE_TRACK = "sqlite"
 _LOCK_WAIT_SPAN_MIN_MS = 1.0
+_COPY_PROGRESS_OPCODES = 10_000
+_SIDECAR_SUFFIXES = ("-journal", "-wal", "-shm")
 _SQLITE_CORRUPTION_CODES = frozenset(
     {
         sqlite3.SQLITE_CORRUPT,
@@ -86,10 +89,6 @@ _wal_fallback_warned: set[str] = set()
 _wal_reset_warned: set[str] = set()
 _wal_reset_info_logged: set[str] = set()
 _diagnostic_lock = threading.Lock()
-
-
-class _BackupCancelledError(Exception):
-    """Internal cooperative stop signal for a chunked SQLite backup."""
 
 
 class UntrackableConnectionError(RuntimeError):
@@ -252,6 +251,53 @@ def offline_file_access(path: Path | str, *, what: str = "read"):
                 f"Refusing to {what} {path}: a tracked SQLite connection is still open"
             )
         yield
+
+
+def _database_files(path: Path) -> tuple[Path, ...]:
+    return (path, *(Path(f"{path}{suffix}") for suffix in _SIDECAR_SUFFIXES))
+
+
+def _remove_database_files(path: Path) -> None:
+    for candidate in _database_files(path):
+        with contextlib.suppress(OSError):
+            candidate.unlink()
+
+
+def copy_database(
+    source: sqlite3.Connection,
+    destination: Path,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> bool:
+    """Write one consistent, standalone copy of ``source`` to a new file.
+
+    ``VACUUM INTO`` copies the whole database inside a single read transaction,
+    so commits on other connections can neither restart nor tear the copy, as
+    they do with a stepped ``Connection.backup``. The copy keeps rowids, the
+    application id and the schema version, drops the freelist, and is always a
+    rollback-journal file without WAL sidecars. ``source`` must be outside a
+    transaction and must not use ``query_only``, which rejects ``VACUUM INTO``;
+    open it with ``mode=ro`` instead. The caller owns the output's durability.
+    Returns ``False`` when ``cancelled`` stopped the copy. The destination and
+    its sidecars must not exist; partial output is removed on every failure.
+    """
+    destination = Path(destination)
+    existing = [path for path in _database_files(destination) if path.exists()]
+    if existing:
+        raise FileExistsError(f"database copy destination already exists: {existing[0]}")
+    if cancelled is not None:
+        source.set_progress_handler(lambda: int(cancelled()), _COPY_PROGRESS_OPCODES)
+    try:
+        source.execute("VACUUM INTO ?", (str(destination),))
+        return True
+    except BaseException as exc:
+        _remove_database_files(destination)
+        if isinstance(exc, sqlite3.Error) and cancelled is not None and cancelled():
+            return False
+        raise
+    finally:
+        if cancelled is not None:
+            source.set_progress_handler(None, 0)
 
 
 def sqlite_source_id() -> str:
@@ -800,66 +846,56 @@ class SQLiteRuntime:
         *,
         cancel_event: threading.Event | None = None,
     ) -> bool:
-        """Create a cancellable online backup without monopolizing the writer."""
+        """Write one consistent, durable copy of the live database to ``destination``.
+
+        The copy is a single ``copy_database`` pass from a read-only connection,
+        so committing Runs can neither restart nor tear it. With WAL the reader
+        works from its own snapshot while writers and readers continue. In
+        rollback-journal mode that reader's lock would block every commit and
+        let short-budget writes fail as busy, so the copy holds this runtime's
+        connection lock instead: writes and reads queue in Python until the copy
+        finishes. Returns ``False`` when ``cancel_event`` stopped the copy.
+        """
         destination = Path(destination).expanduser().resolve()
         if destination.exists():
             raise RuntimeError(f"backup destination already exists: {destination}")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
-        source: sqlite3.Connection | None = None
+        temporary = destination.with_name(
+            f".{destination.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
+        )
+        cancelled = None if cancel_event is None else cancel_event.is_set
+        admission: contextlib.AbstractContextManager[Any] = (
+            contextlib.nullcontext() if self.wal_active() else self._lock
+        )
         try:
-            with self._lock:
-                if self._writer is None or self._closed:
-                    raise RuntimeError("SQLite runtime is closed")
-            source = connect_tracked(
-                readonly_sqlite_uri(self.db_path),
-                tracking_path=self.db_path,
-                uri=True,
-                isolation_level=None,
-                check_same_thread=False,
-                timeout=1.0,
-            )
-            source.execute("PRAGMA query_only=ON")
-            source.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
-            target = sqlite3.connect(temporary)
-            try:
-
-                def progress(_status: int, _remaining: int, _total: int) -> None:
-                    if cancel_event is not None and cancel_event.is_set():
-                        raise _BackupCancelledError
-
-                source.backup(target, pages=256, progress=progress, sleep=0.01)
-                target.commit()
-            finally:
-                target.close()
-                source.close()
-                source = None
-            with contextlib.suppress(OSError):
-                descriptor = os.open(temporary, os.O_RDONLY)
+            with admission:
+                with self._lock:
+                    if self._writer is None or self._closed:
+                        raise RuntimeError("SQLite runtime is closed")
+                source = connect_tracked(
+                    readonly_sqlite_uri(self.db_path),
+                    tracking_path=self.db_path,
+                    uri=True,
+                    isolation_level=None,
+                    check_same_thread=False,
+                    timeout=BUSY_TIMEOUT_MS / 1000,
+                )
                 try:
-                    os.fsync(descriptor)
+                    copied = copy_database(source, temporary, cancelled=cancelled)
                 finally:
-                    os.close(descriptor)
-            if cancel_event is not None and cancel_event.is_set():
-                raise _BackupCancelledError
+                    source.close()
+            if not copied or (cancelled is not None and cancelled()):
+                _remove_database_files(temporary)
+                return False
+            with temporary.open("r+b") as handle:
+                os.fsync(handle.fileno())
             os.replace(temporary, destination)
             return True
-        except _BackupCancelledError:
-            for candidate in (temporary, Path(f"{temporary}-wal"), Path(f"{temporary}-journal")):
-                with contextlib.suppress(OSError):
-                    candidate.unlink()
-            return False
         except (sqlite3.Error, OSError) as exc:
-            for candidate in (temporary, Path(f"{temporary}-wal"), Path(f"{temporary}-journal")):
-                with contextlib.suppress(OSError):
-                    candidate.unlink()
+            _remove_database_files(temporary)
             raise SessionStoreUnavailableError(
                 f"Session database backup failed: {destination}"
             ) from exc
-        finally:
-            if source is not None:
-                with contextlib.suppress(BaseException):
-                    source.close()
 
     def close(self) -> None:
         """Close pooled readers and writer, releasing all tracking entries."""
