@@ -35,7 +35,7 @@ Domain-specific vocabulary for skills. The core Skill term lives in `.vorch/GLOS
 `SkillRuntime.invalidate_agent_skills(owner_id)` owns the dependency from a private home to its shared receivers and invalidates their cached registries across every Project context. Tool and Accessor writes identify the owner without duplicating that dependency. This includes creating, changing or deleting a package named by an existing share, and archiving or renaming the owning Agent; unrelated Agent caches remain intact (`test_runtime_shared_skills.py`).
 
 ### Prompt-Epoch Catalog
-**Definition:** The System Prompt Skill catalog **text** (`<available_skills>`) snapshotted on a Session's first build and reused until successful Compaction (persisted as `PinnedSkillCatalog`). Compaction rescans every source and replaces the snapshot, so the next epoch advertises current additions/removals/descriptions/availability while unchanged content stays byte-identical.
+**Definition:** The System Prompt Skill catalog **text** (`<available_skills>`) snapshotted on a Session's first build and reused until successful Compaction (persisted as `PinnedSkillCatalog`, qualified with the Run's Skill-scope Project so re-rooting an Identity Agent re-renders it at the next Run). Compaction rescans every source and replaces the snapshot, so the next epoch advertises current additions/removals/descriptions/availability while unchanged content stays byte-identical.
 **Not:** A freeze on activation - the `skill` Tool and triggers resolve the live registry; only the advertised text pins between Compactions, and activated content is canonical conversation Context outside this snapshot.
 
 ### Skill Availability Announcement

@@ -10,7 +10,7 @@ those snapshots through the narrow dependency slice declared by
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -37,6 +37,11 @@ PINNED_WORKING_PROJECT_CONTEXT_META_KEY = "pinned_working_project_context"
 # Compaction replaces all three snapshots when the new epoch starts.
 PINNED_SOUL_CONTEXT_META_KEY = "pinned_soul_context"
 PINNED_MEMORY_FILES_META_KEY = "pinned_memory_files"
+# Qualifies the Project-dependent snapshots (Working Project Context and Skill
+# catalog) with the Project they were rendered for. The working Project is
+# re-resolved at every Run admission (a Rooted Identity Agent may be re-rooted
+# mid-Session), so a pin rendered for another Project, or for none, re-renders.
+PINNED_PROJECT_ATTRIBUTE = "working_project_id"
 
 
 class PinnedContextDependencies(Protocol):
@@ -87,6 +92,8 @@ def pinned_skill_catalog(
     agent: Any,
     skill_registry: SkillRegistry,
     project_id: str | None,
+    *,
+    skill_project_id: str | None,
 ) -> PinnedSkillCatalog:
     """Return the current prompt epoch's Skill catalog, snapshotting on first build.
 
@@ -94,31 +101,64 @@ def pinned_skill_catalog(
     Session metadata under the Session's own ``project_id`` anchor), so an
     ordinary mid-epoch Skill write leaves the System Prompt prefix unchanged.
     Skill activation and ``/``-``$`` triggers still resolve the live registry.
+    The snapshot is qualified with ``skill_project_id``, the Project whose Skill
+    pool *skill_registry* resolves: when a re-rooted Identity Agent's Run resolves
+    another Project (or none), the catalog re-renders from the current registry.
     A successful Compaction rescans every Skill source and replaces the snapshot;
     a new Session starts with a fresh snapshot too.
     """
-    # Local import: core.sessions transitively imports core.chat at module load,
-    # and core.chat imports this package back (runtime cycle).
-    from core.sessions import SessionAddress
+    text = _pinned_epoch_text(
+        dependencies,
+        PINNED_SKILL_CATALOG_META_KEY,
+        agent_id,
+        session_id,
+        project_id,
+        lambda: (
+            dependencies.get_system_prompts()
+            .render_skill_catalog(agent, skill_registry)
+            .catalog_text
+        ),
+        attributes={PINNED_PROJECT_ATTRIBUTE: skill_project_id},
+        text_key="catalog_text",
+    )
+    return PinnedSkillCatalog(catalog_text=text)
 
-    address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
-    metadata = dependencies.sessions.get_metadata(address)
-    pinned = metadata.get(PINNED_SKILL_CATALOG_META_KEY)
-    if isinstance(pinned, dict) and isinstance(pinned.get("catalog_text"), str):
-        return PinnedSkillCatalog(catalog_text=pinned["catalog_text"])
-    snapshot = dependencies.get_system_prompts().render_skill_catalog(agent, skill_registry)
-    selected = snapshot
 
-    def update(current: dict[str, Any]) -> None:
-        nonlocal selected
-        pinned = current.get(PINNED_SKILL_CATALOG_META_KEY)
-        if isinstance(pinned, dict) and isinstance(pinned.get("catalog_text"), str):
-            selected = PinnedSkillCatalog(catalog_text=pinned["catalog_text"])
+def replace_prompt_epoch_pins(
+    metadata: dict[str, Any],
+    *,
+    skill_catalog: PinnedSkillCatalog,
+    skill_project_id: str | None,
+    working_project_context: str | None,
+    working_project_id: str | None,
+    soul_context: str | None,
+    memory_files_context: str | None,
+    memory_prompt_mode: str | None,
+) -> None:
+    """Replace every prompt-epoch pin in *metadata* when a new epoch starts.
+
+    Called inside a Session metadata mutation after a successful Compaction. Pins
+    are stored with the same qualifiers the per-Run readers check, so the next Run
+    reuses them exactly; a ``None`` text removes that pin.
+    """
+    metadata[PINNED_SKILL_CATALOG_META_KEY] = {
+        "catalog_text": skill_catalog.catalog_text,
+        PINNED_PROJECT_ATTRIBUTE: skill_project_id,
+    }
+    pins: tuple[tuple[str, str | None, dict[str, str | None]], ...] = (
+        (
+            PINNED_WORKING_PROJECT_CONTEXT_META_KEY,
+            working_project_context,
+            {PINNED_PROJECT_ATTRIBUTE: working_project_id},
+        ),
+        (PINNED_SOUL_CONTEXT_META_KEY, soul_context, {}),
+        (PINNED_MEMORY_FILES_META_KEY, memory_files_context, {"mode": memory_prompt_mode}),
+    )
+    for meta_key, text, qualifiers in pins:
+        if text is None:
+            metadata.pop(meta_key, None)
         else:
-            current[PINNED_SKILL_CATALOG_META_KEY] = {"catalog_text": snapshot.catalog_text}
-
-    dependencies.sessions.mutate_metadata(address, update)
-    return selected
+            metadata[meta_key] = {"text": text, **qualifiers}
 
 
 def _pinned_epoch_text(
@@ -129,7 +169,8 @@ def _pinned_epoch_text(
     project_id: str | None,
     render: Callable[[], str],
     *,
-    attributes: dict[str, str] | None = None,
+    attributes: Mapping[str, str | None] | None = None,
+    text_key: str = "text",
 ) -> str:
     """Return the prompt epoch's pinned text under *meta_key*, snapshotting on first build.
 
@@ -137,39 +178,40 @@ def _pinned_epoch_text(
     Session metadata under the Session's own ``project_id`` anchor), so an
     ordinary mid-epoch file change leaves the System Prompt prefix unchanged.
     A successful Compaction replaces the snapshot; a new Session starts with a
-    fresh snapshot too. Attributes qualify the snapshot; a changed attribute
-    replaces only this text (used for the Memory rendering mode).
+    fresh snapshot too. Attributes qualify the snapshot; a pin lacking an
+    attribute or carrying a different value is replaced, re-rendering only this
+    text (the Memory rendering mode, the Project of Project-dependent pins).
     """
     # Local import: core.sessions transitively imports core.chat at module load,
     # and core.chat imports this package back (runtime cycle).
     from core.sessions import SessionAddress
 
     address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
-    metadata = dependencies.sessions.get_metadata(address)
-    pinned = metadata.get(meta_key)
-    pinned_text = pinned.get("text") if isinstance(pinned, dict) else None
-    attributes = attributes or {}
-    if (
-        isinstance(pinned, dict)
-        and isinstance(pinned_text, str)
-        and all(pinned.get(key) == value for key, value in attributes.items())
-    ):
+    qualifiers = dict(attributes or {})
+
+    def matching_text(pinned: object) -> str | None:
+        if not isinstance(pinned, dict):
+            return None
+        pinned_text = pinned.get(text_key)
+        if not isinstance(pinned_text, str):
+            return None
+        if any(key not in pinned or pinned[key] != value for key, value in qualifiers.items()):
+            return None
         return pinned_text
+
+    reused = matching_text(dependencies.sessions.get_metadata(address).get(meta_key))
+    if reused is not None:
+        return reused
     text = render()
     selected = text
 
     def update(current: dict[str, Any]) -> None:
         nonlocal selected
-        pinned = current.get(meta_key)
-        pinned_text = pinned.get("text") if isinstance(pinned, dict) else None
-        if (
-            isinstance(pinned, dict)
-            and isinstance(pinned_text, str)
-            and all(pinned.get(key) == value for key, value in attributes.items())
-        ):
-            selected = pinned_text
+        concurrent = matching_text(current.get(meta_key))
+        if concurrent is not None:
+            selected = concurrent
         else:
-            current[meta_key] = {"text": text, **attributes}
+            current[meta_key] = {text_key: text, **qualifiers}
 
     dependencies.sessions.mutate_metadata(address, update)
     return selected
@@ -189,7 +231,10 @@ def pinned_working_project_context(
     Rooted Identity Agents and Project Config Agents alike. The rest of the
     System Prompt keeps its existing live assembly behavior. A successful
     Compaction replaces the snapshot from the current Project and auto-load
-    files. An unrooted Identity Agent has no Working Project block and no pin.
+    files. The snapshot is qualified with the working Project id, so a Rooted
+    Identity Agent re-rooted to another Project re-renders it at its next Run.
+    An unrooted Identity Agent has no Working Project block: a stale pin from an
+    earlier Rooting is ignored (never shown) and replaced by the next Project's.
     """
     if prompt_project is None or project_context is None:
         return None
@@ -205,6 +250,7 @@ def pinned_working_project_context(
             project_context,
             on_read=read_paths.append,
         ),
+        attributes={PINNED_PROJECT_ATTRIBUTE: project_context.project_id},
     )
     stamp_prompt_files_read(dependencies.file_read_state, session_id, read_paths)
     return text
