@@ -204,6 +204,23 @@ def test_tool_result_probe_reads_one_call_by_its_public_id(history) -> None:
     assert any("tool_calls_by_public_id" in detail for detail in details), details
 
 
+def test_existing_addresses_probe_the_live_address_index_in_one_statement(history) -> None:
+    address, _anchor, connection = history
+    other = SessionAddress("project", "agent", "one")
+    missing = SessionAddress(None, "agent", "two")
+    recorder, statements = _recording(connection)
+    found = _store_queries.existing_addresses(recorder, [address, other, missing, address])
+    assert found == {address, other}
+    assert len(statements) == 1
+    _assert_indexed(connection, statements)
+    details = [
+        str(plan[3])
+        for sql, params in statements
+        for plan in connection.execute("EXPLAIN QUERY PLAN " + sql, params)
+    ]
+    assert any("sessions_one_live_address" in detail for detail in details), details
+
+
 def test_delta_read_uses_one_indexed_read_from_the_anchor(history) -> None:
     address, _anchor, connection = history
     state = _store_values._require_live(connection, address)
