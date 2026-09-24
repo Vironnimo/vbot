@@ -837,28 +837,7 @@ class ChatSessionManager:
             after=after,
             limit=limit,
         )
-        return [
-            OwnedRunRecord(
-                record_key=int(row["record_key"]),
-                address=SessionAddress(
-                    row["project_id"] or None, row["agent_id"], row["session_id"]
-                ),
-                generation_id=str(row["generation_id"]),
-                run_id=str(row["run_id"]),
-                owner=RunExecutionOwner(
-                    str(row["owner_name"]),
-                    str(row["group_id"]),
-                    str(row["participant_id"]),
-                    str(row["participant_generation_id"]),
-                    str(row["epoch"]),
-                ),
-                start_sequence=int(row["start_sequence"]),
-                terminal_status=row["terminal_status"],
-                terminal_sequence=row["terminal_sequence"],
-                input_id=row["input_id"],
-            )
-            for row in rows
-        ]
+        return [_owned_run_record(row) for row in rows]
 
     async def owned_runs_async(
         self,
@@ -878,6 +857,38 @@ class ChatSessionManager:
                 limit=limit,
             )
         )
+
+    def owned_runs_by_id(
+        self, *, owner_name: str, group_id: str, run_ids: Sequence[str]
+    ) -> dict[str, OwnedRunRecord]:
+        """Read the execution records of exact Run ids in one owner group.
+
+        Ids without a record in that group, including Runs of deleted Sessions,
+        are absent from the result. Each id is one index probe regardless of how
+        much Run history the group retains.
+        """
+        rows = self._store.owned_runs_by_id(
+            owner_name=owner_name, group_id=group_id, run_ids=run_ids
+        )
+        records = (_owned_run_record(row) for row in rows)
+        return {record.run_id: record for record in records}
+
+    async def owned_runs_by_id_async(
+        self, *, owner_name: str, group_id: str, run_ids: Sequence[str]
+    ) -> dict[str, OwnedRunRecord]:
+        return await _run_session_io(
+            lambda: self.owned_runs_by_id(owner_name=owner_name, group_id=group_id, run_ids=run_ids)
+        )
+
+    def owned_run_by_input(self, address: SessionAddress, input_id: str) -> OwnedRunRecord | None:
+        """Read the execution record admitted for one input of a live Session."""
+        row = self._store.owned_run_by_input(address, input_id)
+        return None if row is None else _owned_run_record(row)
+
+    async def owned_run_by_input_async(
+        self, address: SessionAddress, input_id: str
+    ) -> OwnedRunRecord | None:
+        return await _run_session_io(lambda: self.owned_run_by_input(address, input_id))
 
     def run_start_boundaries(
         self, addresses: Sequence[SessionAddress]
@@ -1057,3 +1068,23 @@ class ChatSessionManager:
                 callback(address)
             except Exception:
                 logging.getLogger(__name__).exception("Session callback failed")
+
+
+def _owned_run_record(row: Any) -> OwnedRunRecord:
+    return OwnedRunRecord(
+        record_key=int(row["record_key"]),
+        address=SessionAddress(row["project_id"] or None, row["agent_id"], row["session_id"]),
+        generation_id=str(row["generation_id"]),
+        run_id=str(row["run_id"]),
+        owner=RunExecutionOwner(
+            str(row["owner_name"]),
+            str(row["group_id"]),
+            str(row["participant_id"]),
+            str(row["participant_generation_id"]),
+            str(row["epoch"]),
+        ),
+        start_sequence=int(row["start_sequence"]),
+        terminal_status=row["terminal_status"],
+        terminal_sequence=row["terminal_sequence"],
+        input_id=row["input_id"],
+    )
