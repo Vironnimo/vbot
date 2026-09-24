@@ -10,6 +10,8 @@ from core.chat.errors import ChatSessionError
 from core.sessions import _store_codec, _store_timeline, _store_values
 from core.sessions._io import _encode_chat_history_cursor
 from core.sessions._types import (
+    SKILL_CONTEXT_NOTE_PREFIX,
+    SKILL_TOOL_MESSAGE_NAME,
     JsonObject,
     SessionChatHistorySnapshot,
     SessionMessagePage,
@@ -238,6 +240,42 @@ def _context_usage_rows_from_connection(
         ),
         (state["session_key"], anchor["seq"]),
     ).fetchall()
+
+
+def current_skill_activation_messages(
+    connection: sqlite3.Connection, address: SessionAddress
+) -> list[ChatMessage]:
+    """Load the active Skill activation candidates the current context can still see.
+
+    Candidates are ``[skill-context]`` Notes and ``skill`` Tool Results after the
+    newest active Compaction checkpoint; the caller decides which of them carry
+    a valid activation. Rows a history edit deactivated never qualify.
+    """
+    state = _store_values._require_live(connection, address)
+    checkpoint = connection.execute(
+        "SELECT MAX(seq) FROM compaction_checkpoints WHERE session_key = ? AND active = 1",
+        (state["session_key"],),
+    ).fetchone()
+    floor = -1 if checkpoint is None or checkpoint[0] is None else int(checkpoint[0])
+    rows = connection.execute(
+        _store_values._message_records_sql(
+            where=(
+                "m.session_key = ? AND m.active = 1 AND m.seq > ? "
+                "AND m.role IN ('note', 'tool') "
+                "AND (m.role = 'tool' OR substr(m.content, 1, ?) = ?) "
+                "AND (m.role = 'note' OR t.name = ?)"
+            ),
+            order_by="ORDER BY m.seq",
+        ),
+        (
+            state["session_key"],
+            floor,
+            len(SKILL_CONTEXT_NOTE_PREFIX),
+            SKILL_CONTEXT_NOTE_PREFIX,
+            SKILL_TOOL_MESSAGE_NAME,
+        ),
+    ).fetchall()
+    return [_store_codec.message_from_row(row) for row in rows]
 
 
 def _history_record_filter(

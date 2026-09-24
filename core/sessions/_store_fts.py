@@ -490,41 +490,43 @@ def _insert_fts_session(connection: sqlite3.Connection, session_key: int) -> Non
         )
 
 
-def _delete_fts_message(connection: sqlite3.Connection, message_key: int) -> None:
-    """Delete one still-visible projection before canonical state changes hide it."""
+def _delete_fts_session(
+    connection: sqlite3.Connection, session_key: int, *, from_sequence: int | None = None
+) -> None:
+    """Delete one Session's indexed projections set-wise before canonical state hides them.
+
+    With *from_sequence*, only records at or after that history sequence are
+    removed. External-content deletes must repeat the indexed values, which the
+    source views still expose because canonical rows change only afterwards.
+    """
     if not _fts_table_exists(connection) or _fts_meta(connection, FTS_STALE_KEY) is not None:
         return
+    scope = "session_key = ?" if from_sequence is None else "session_key = ? AND seq >= ?"
+    params = (session_key,) if from_sequence is None else (session_key, from_sequence)
     connection.execute(
-        """
+        f"""
         INSERT INTO messages_fts(
             messages_fts, rowid, content, content_search, reasoning, name, error_kind, tool_calls
         )
-        SELECT 'delete', message_key, content, content_search, reasoning, name, error_kind, tool_calls
-        FROM messages_fts_source
-        WHERE message_key = ?
+        SELECT 'delete', source.message_key, source.content, source.content_search,
+               source.reasoning, source.name, source.error_kind, source.tool_calls
+        FROM messages_fts_source AS source
+        WHERE source.message_key IN (SELECT message_key FROM history_records WHERE {scope})
         """,
-        (message_key,),
+        params,
     )
     if _fts_table_exists(connection, FTS_TRIGRAM_TABLE):
         connection.execute(
-            """
+            f"""
             INSERT INTO messages_fts_trigram(
                 messages_fts_trigram, rowid, content, content_search, name, error_kind, tool_calls
             )
-            SELECT 'delete', message_key, content, content_search, name, error_kind, tool_calls
-            FROM messages_fts_source
-            WHERE message_key = ? AND message_key IN (
-                SELECT message_key FROM history_records WHERE message_key = ? AND role <> 'tool'
+            SELECT 'delete', source.message_key, source.content, source.content_search,
+                   source.name, source.error_kind, source.tool_calls
+            FROM messages_fts_source AS source
+            WHERE source.message_key IN (
+                SELECT message_key FROM history_records WHERE {scope} AND role <> 'tool'
             )
             """,
-            (message_key, message_key),
+            params,
         )
-
-
-def _delete_fts_session(connection: sqlite3.Connection, session_key: int) -> None:
-    rows = connection.execute(
-        "SELECT message_key FROM history_records WHERE session_key=? AND active=1 AND searchable=1",
-        (session_key,),
-    ).fetchall()
-    for row in rows:
-        _delete_fts_message(connection, int(row[0]))
