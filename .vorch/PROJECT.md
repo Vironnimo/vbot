@@ -76,10 +76,11 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 | webui.md | `webui/` | Frontend accessor boundary, shared invariants |
 | logs.md | log viewer subsystem | Log parsing, RPC/socket contract, Logs tab |
 | debug.md | `core/debug/` | Debug Mode, traces, redaction, recorder |
+| performance.md | `core/performance/` | Always-on metrics, Event Loop stalls, Perfetto Recordings, metric catalog |
 
 ## Conventions
 
-**Dependency injection:** Constructors (`__init__`) and `typing.Protocol` interfaces; no service locator or global singletons.
+**Dependency injection:** Constructors (`__init__`) and `typing.Protocol` interfaces; no service locator or global singletons. Sole exception: performance measurement records through module-level functions into one process-wide sink, like logging; it holds only measurements, never state that decides behavior (`performance.md`).
 
 **Object IDs:** Use `core/utils/ids.py` for vBot-owned references: short type prefix + 12 lowercase base32 characters (60 random bits) with atomic owner-side uniqueness claims; 16 characters (80 bits) for pre-persistence/high-volume identities lacking a complete allocation catalog (Messages, Runs, Queue items). Storage and Tool results use the same id; no display aliases or abbreviated incoming ids. Preserve existing opaque ids exactly. Path-backed readers validate safe basenames, not generator format; exact-id stores confirm the stored spelling with `has_id_entry` so case-insensitive filesystems cannot alias case variants. Owners authorize access; prefixes/randomness do not. Provider/protocol ids, credentials, hashes, and private storage generations keep their own contracts. Tests: `tests/core/utils/test_ids.py` and owner collision/round-trip tests.
 
