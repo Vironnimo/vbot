@@ -127,6 +127,19 @@ def normalize_rrule(payload: object) -> dict[str, Any] | None:
     }
 
 
+def resolve_local_span(
+    naive_start: datetime, tz: ZoneInfo, duration: timedelta
+) -> tuple[datetime, datetime]:
+    """Return one wall-clock occurrence's UTC (start, end).
+
+    A start in a DST gap is shifted forward by the gap (round-trip through the
+    pre-transition offset, RFC 5545 section 3.3.5 / erratum 4271); ambiguous
+    starts use the first occurrence (fold=0). The duration is wall-clock time.
+    """
+    local_start = naive_start.replace(tzinfo=tz).astimezone(UTC).astimezone(tz)
+    return local_start.astimezone(UTC), (local_start + duration).astimezone(UTC)
+
+
 def expand_recurring_timed(
     *,
     start_local: datetime,
@@ -161,14 +174,9 @@ def expand_recurring_timed(
             continue
         if naive_start < start_local:
             continue
-        # Round-trip using the pre-transition offset to resolve imaginary times
-        # before duration arithmetic (RFC 5545 section 3.3.5 / erratum 4271).
-        local_start = naive_start.replace(tzinfo=tz).astimezone(UTC).astimezone(tz)
-        if local_start.replace(tzinfo=None).isoformat() in exdates:
+        start_utc, end_utc = resolve_local_span(naive_start, tz, duration)
+        if start_utc.astimezone(tz).replace(tzinfo=None).isoformat() in exdates:
             continue
-        local_end = local_start + duration
-        start_utc = local_start.astimezone(UTC)
-        end_utc = local_end.astimezone(UTC)
         if end_utc <= window_start_utc or start_utc >= window_end_utc:
             continue
         occurrences.append((start_utc, end_utc))

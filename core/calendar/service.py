@@ -63,6 +63,7 @@ from core.calendar.recurrence import (
     expand_recurring_timed,
     normalize_rrule,
     parse_date_string,
+    resolve_local_span,
 )
 from core.calendar.when import looks_like_date, parse_when
 from core.config_validation import (
@@ -311,6 +312,23 @@ class CalendarService:
             event, window_start, window_end, self._timezone, MAX_OCCURRENCES_PER_EVENT
         )
 
+    def event_span(self, event: CalendarEvent) -> tuple[datetime, datetime]:
+        """Return the UTC span of a timed event's anchor instance.
+
+        Uses the same arithmetic as occurrence expansion: single events last their
+        duration in real time; recurring events add it to the wall-clock start.
+        """
+        if event.all_day:
+            raise CalendarValidationError("event_span requires a timed event")
+        duration = timedelta(minutes=event.duration_minutes or DEFAULT_EVENT_DURATION_MINUTES)
+        if event.rrule is None:
+            start_utc = _parse_utc_instant(event.start_utc or "", field_name="start_utc")
+            return start_utc, start_utc + duration
+        assert event.start_local is not None and event.tz_name is not None
+        return resolve_local_span(
+            datetime.fromisoformat(event.start_local), _resolve_zone(event.tz_name), duration
+        )
+
     def find_free_slots(
         self,
         window_start_utc: datetime,
@@ -434,8 +452,7 @@ class CalendarService:
         window_end: datetime,
     ) -> list[tuple[datetime, datetime]]:
         if event.rrule is None:
-            start_utc = _parse_utc_instant(event.start_utc or "", field_name="start_utc")
-            end_utc = start_utc + timedelta(minutes=event.duration_minutes or 0)
+            start_utc, end_utc = self.event_span(event)
             if end_utc <= window_start or start_utc >= window_end:
                 return []
             return [(start_utc, end_utc)]
