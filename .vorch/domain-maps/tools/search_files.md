@@ -122,7 +122,9 @@ context omission is explicit and never prevents continuation progress.
 The shared 30-second SearchBudget polls traversal and native output, including
 silent children. User cancellation kills the child and returns cancelled_by_user;
 timeouts, Run cancellation, and unreadable entries make results incomplete with
-bounded warnings. Regex errors fail even when selection is empty. Native exit 1
+bounded warnings. Regex errors fail even when selection is empty: the native content
+run reports pattern and option errors itself, and a separate native check against an
+empty file runs only when no candidate file was selected. Native exit 1
 means no match; native diagnostics cannot become a successful empty search.
 Invalid-regex diagnostics suggest `-F` only as an explicit caller correction;
 the Tool never changes regex semantics automatically. A child that exits before

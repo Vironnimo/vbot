@@ -163,9 +163,16 @@ def validate_patterns(
     for pattern in patterns:
         args.extend(["-e", pattern])
     args.extend(["--", str(empty_file)])
-    try:
+    with _explained_pattern_errors():
         for _ in native_lines(binary, args, context, budget):
             pass
+
+
+@contextlib.contextmanager
+def _explained_pattern_errors() -> Iterator[None]:
+    """Add the literal-text correction to native pattern compilation errors."""
+    try:
+        yield
     except RuntimeError as error:
         if "regex parse error" in str(error) or "PCRE2: error compiling pattern" in str(error):
             raise RuntimeError(
@@ -223,9 +230,12 @@ def content_events(
 
     def execute() -> Generator[dict[str, Any], None, None]:
         buffer = b""
-        with contextlib.closing(
-            native_lines(binary, [*base, "--", *batch], context, budget)
-        ) as lines:
+        with (
+            _explained_pattern_errors(),
+            contextlib.closing(
+                native_lines(binary, [*base, "--", *batch], context, budget)
+            ) as lines,
+        ):
             for line in lines:
                 if not mode:
                     yield json.loads(line)
