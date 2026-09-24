@@ -23,7 +23,7 @@ from core.prompts.blocks import (
     apply_replacements,
     assemble_system_prompt,
     dedupe_definitions,
-    expand_generated_markers,
+    expand_block_template,
     expand_workspace_includes,
     normalize_blocks,
     parse_block_source,
@@ -331,7 +331,7 @@ def test_normalize_empty_input_is_empty_string() -> None:
 def test_generated_marker_expands_known_producer() -> None:
     producers = {"tool_list": lambda ctx: "- bash: run"}
 
-    result = expand_generated_markers("Tools:\n{generated:tool_list}", producers, _context())
+    result = expand_block_template("Tools:\n{generated:tool_list}", _context(), producers=producers)
 
     assert result == "Tools:\n- bash: run"
 
@@ -340,7 +340,7 @@ def test_generated_marker_unknown_renders_empty_and_warns(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     with caplog.at_level(logging.WARNING):
-        result = expand_generated_markers("a{generated:nope}b", {}, _context())
+        result = expand_block_template("a{generated:nope}b", _context(), producers={})
 
     assert result == "ab"
     assert "nope" in caplog.text
@@ -349,7 +349,7 @@ def test_generated_marker_unknown_renders_empty_and_warns(
 def test_generated_marker_empty_producer_leaves_no_residue() -> None:
     producers = {"skill_catalog": lambda ctx: ""}
 
-    result = expand_generated_markers("{generated:skill_catalog}", producers, _context())
+    result = expand_block_template("{generated:skill_catalog}", _context(), producers=producers)
 
     assert result == ""
 
@@ -361,8 +361,8 @@ def test_generated_marker_failing_producer_renders_empty_and_warns(
         raise RuntimeError("producer broke")
 
     with caplog.at_level(logging.WARNING):
-        result = expand_generated_markers(
-            "before{generated:broken}after", {"broken": fail}, _context()
+        result = expand_block_template(
+            "before{generated:broken}after", _context(), producers={"broken": fail}
         )
 
     assert result == "beforeafter"
@@ -377,7 +377,9 @@ def test_generated_producer_receives_context() -> None:
         seen.append(context.agent.id)
         return "ok"
 
-    expand_generated_markers("{generated:x}", {"x": producer}, _context(StubAgent(id="builder")))
+    expand_block_template(
+        "{generated:x}", _context(StubAgent(id="builder")), producers={"x": producer}
+    )
 
     assert seen == ["builder"]
 
@@ -488,6 +490,97 @@ def test_apply_replacements_is_exact_and_non_recursive() -> None:
     )
 
     assert result == "Known {second}; second resolved; unknown {other}."
+
+
+# --- single-pass template expansion ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "inserted",
+    [
+        "{include:../etc/passwd}",
+        "{include:USER.md}",
+        "{generated:tool_list}",
+        "{model} at {data_root}",
+    ],
+)
+def test_template_expansion_inserts_producer_output_verbatim(tmp_path: Path, inserted: str) -> None:
+    # Producer output (Memory entries, Skill descriptions, Tool list) is data, not
+    # template: markers inside it are never expanded, never read files, and an
+    # unsafe include inside it never fails the build.
+    (tmp_path / "USER.md").write_text("PRIVATE-USER-FILE", encoding="utf-8")
+    context = _context(StubAgent(workspace=str(tmp_path)))
+
+    result = expand_block_template(
+        "<memory>{generated:memory_files}</memory> {model}",
+        context,
+        producers={
+            "memory_files": lambda ctx: f"- entry {inserted}",
+            "tool_list": lambda ctx: "TOOL-LIST",
+        },
+        replacements={"{model}": "openai/gpt-5.2", "{data_root}": "/data"},
+    )
+
+    assert result == f"<memory>- entry {inserted}</memory> openai/gpt-5.2"
+
+
+def test_template_expansion_inserts_included_file_verbatim(tmp_path: Path) -> None:
+    # Included workspace content is inserted verbatim: nested includes, generated
+    # markers and runtime variables inside the file stay literal.
+    nested = "{include:USER.md} {generated:x} {model} {include:../secret.md}"
+    (tmp_path / "EXTRA.md").write_text(nested, encoding="utf-8")
+    (tmp_path / "USER.md").write_text("PRIVATE-USER-FILE", encoding="utf-8")
+    seen: list[Path] = []
+    context = BlockRenderContext(
+        agent=StubAgent(workspace=str(tmp_path)), scope="default", read_observer=seen.append
+    )
+
+    result = expand_block_template(
+        "{include:EXTRA.md}",
+        context,
+        producers={"x": lambda ctx: "PRODUCED"},
+        replacements={"{model}": "openai/gpt-5.2"},
+    )
+
+    assert result == wrap_include_file("EXTRA.md", nested)
+    assert seen == [(tmp_path / "EXTRA.md").resolve()]
+
+
+def test_template_expansion_inserts_replacement_values_verbatim(tmp_path: Path) -> None:
+    (tmp_path / "USER.md").write_text("PRIVATE-USER-FILE", encoding="utf-8")
+    context = _context(StubAgent(workspace=str(tmp_path)))
+
+    result = expand_block_template(
+        "{model} | {generated:x}",
+        context,
+        producers={"x": lambda ctx: "{model}"},
+        replacements={"{model}": "{include:USER.md}{generated:x}"},
+    )
+
+    assert result == "{include:USER.md}{generated:x} | {model}"
+
+
+def test_template_expansion_still_expands_all_template_markers(tmp_path: Path) -> None:
+    (tmp_path / "EXTRA.md").write_text("extra", encoding="utf-8")
+    context = _context(StubAgent(workspace=str(tmp_path)))
+
+    result = expand_block_template(
+        "{generated:x} {include:EXTRA.md} {model} {unknown}",
+        context,
+        producers={"x": lambda ctx: "PRODUCED"},
+        replacements={"{model}": "openai/gpt-5.2"},
+    )
+
+    assert result == 'PRODUCED <file name="EXTRA.md">\nextra\n</file> openai/gpt-5.2 {unknown}'
+
+
+def test_template_expansion_unsafe_template_include_still_raises(tmp_path: Path) -> None:
+    with pytest.raises(PromptError):
+        expand_block_template(
+            "{include:../secret.md}",
+            _context(StubAgent(workspace=str(tmp_path))),
+            producers={},
+        )
 
 
 # --- resolve_block_text -----------------------------------------------------
