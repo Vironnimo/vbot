@@ -66,7 +66,7 @@ Agent rename/delete likewise enter through the reference lock before cancellatio
 - A stale control record is not authority: while the listener exists its PID must match, and after the listener closes both PID and process creation time must match the live process. Startup replaces the record atomically; cleanup requires PID and secret ownership. Never expose the token through health/RPC/logs/payloads.
 - Runtime stubs must provide the services the server reads directly - no silent fallback construction. Secrets, tokens, and opaque metadata never enter logs or payloads. Endpoint-specific business logic in `app.py` or dispatcher helpers is an ownership error.
 
-Server startup holds `core.utils.server_control.server_control_claim` for the lifetime of its exact data-directory/port target. A competing launch cannot publish or remove the existing process's shutdown authority, including when the existing process predates this lock. Regression coverage lives in `tests/core/utils/test_server_control.py`.
+Server startup holds `core.utils.server_control.server_control_claim` for the lifetime of its exact data-directory/port target. Because the claim writes into the data directory, `server/main.py` first creates a missing data root with `initialize_data_directory` (Session bootstrap marker included); an existing root is left to Runtime startup, which refuses it without a marker (`tests/server/test_main.py`). A competing launch cannot publish or remove the existing process's shutdown authority, including when the existing process predates this lock. Regression coverage lives in `tests/core/utils/test_server_control.py`.
 
 ## References
 
