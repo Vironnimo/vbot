@@ -78,7 +78,7 @@ class ChatSessionManager:
         self._store = store or SessionStore(store_path or data_dir / "sessions.db")
         self._owns_store = store is None
         self._title_changed_callbacks: list[Callable[[SessionAddress], None]] = []
-        self._completion_read_callbacks: list[Callable[[SessionAddress], None]] = []
+        self._completion_read_callbacks: list[Callable[[SessionAddress, str], None]] = []
         self._write_locks: dict[SessionAddress, _SessionWriteLock] = {}
         self._write_locks_guard = threading.Lock()
 
@@ -126,7 +126,7 @@ class ChatSessionManager:
         )
 
     def add_completion_read_callback(
-        self, callback: Callable[[SessionAddress], None]
+        self, callback: Callable[[SessionAddress, str], None]
     ) -> Callable[[], None]:
         self._completion_read_callbacks.append(callback)
         return lambda: (
@@ -335,7 +335,7 @@ class ChatSessionManager:
         result = _completion_activity_payload(activity)
         result["marked_read"] = marked
         if marked:
-            self._notify_callbacks(self._completion_read_callbacks, address)
+            self._notify_callbacks(self._completion_read_callbacks, address, run_id)
         return result
 
     async def mark_terminal_run_read_async(
@@ -508,6 +508,11 @@ class ChatSessionManager:
             total_count=total_count,
         )
 
+    def summary(self, address: SessionAddress) -> JsonObject | None:
+        """Read one live Session's list row by exact address; ``None`` if absent."""
+        row = self._store.summary_row(address)
+        return None if row is None else _session_list_summary_from_state(row)
+
     def session_ids_with_messages(
         self,
         agent_id: str,
@@ -525,17 +530,17 @@ class ChatSessionManager:
         )
 
     def list_completion_activity(
-        self, agent_id: str, project_id: str | None = None
-    ) -> builtins.list[JsonObject]:
-        result: builtins.list[JsonObject] = []
-        for state in self._store.list_activity_rows(project_id, agent_id):
-            result.append({"id": state["session_id"], **_completion_activity_from_state(state)})
+        self, scopes: Sequence[tuple[str | None, str]]
+    ) -> dict[tuple[str | None, str], builtins.list[JsonObject]]:
+        """Map every ``(project_id, agent_id)`` scope to its live Sessions with a completion."""
+        result: dict[tuple[str | None, str], builtins.list[JsonObject]] = {
+            (project_id or None, agent_id): [] for project_id, agent_id in scopes
+        }
+        for state in self._store.list_completion_activity_rows(builtins.list(result)):
+            result[(state["project_id"] or None, state["agent_id"])].append(
+                {"id": state["session_id"], **_completion_activity_from_state(state)}
+            )
         return result
-
-    async def list_completion_activity_async(
-        self, agent_id: str, project_id: str | None = None
-    ) -> builtins.list[JsonObject]:
-        return await _run_session_io(self.list_completion_activity, agent_id, project_id)
 
     def list_history_revisions(
         self, agent_id: str, project_id: str | None = None
@@ -1083,12 +1088,10 @@ class ChatSessionManager:
         )
 
     @staticmethod
-    def _notify_callbacks(
-        callbacks: Sequence[Callable[[SessionAddress], None]], address: SessionAddress
-    ) -> None:
+    def _notify_callbacks(callbacks: Sequence[Callable[..., None]], *args: Any) -> None:
         for callback in list(callbacks):
             try:
-                callback(address)
+                callback(*args)
             except Exception:
                 logging.getLogger(__name__).exception("Session callback failed")
 

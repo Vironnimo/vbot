@@ -395,11 +395,10 @@ async def test_chat_history_includes_tool_timing_and_run_summary(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("finish_during", ["read_chat_history_snapshot", "_project_chat_history"])
-async def test_history_completion_cannot_pair_earlier_page_with_idle_run(
-    tmp_path, monkeypatch, finish_during
-):
+async def test_history_completion_cannot_pair_earlier_page_with_idle_run(tmp_path, monkeypatch):
     from server.rpc import chat_methods
+
+    finish_during = "_read_chat_history"
 
     state = make_state(tmp_path, StubAdapter())
     session = state.runtime.chat_sessions.create("coder", session_id="coherent")
@@ -429,6 +428,7 @@ async def test_history_completion_cannot_pair_earlier_page_with_idle_run(
         response = await dispatch_rpc(
             state, {"method": "chat.history", "params": {"agent_id": "coder"}}
         )
+        assert injected
         assert response["ok"] is True
         result = response["result"]
         assert result.get("active_run", {}).get("run_id") == run.id or any(
@@ -562,3 +562,73 @@ async def test_chat_history_omits_the_policy_when_the_agent_no_longer_resolves(
     assert response["ok"] is True
     assert response["result"]["messages"]
     assert "compaction_policy" not in response["result"]
+
+
+@pytest.mark.asyncio
+async def test_unchanged_after_read_returns_only_the_cursor_in_one_worker_hop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from server.rpc import chat_methods
+
+    state = make_state(tmp_path, StubAdapter())
+    session = state.runtime.chat_sessions.create("coder", session_id="quiet")
+    session.append(ChatMessage.user("Hello"))
+
+    async def history(**params: Any) -> dict[str, Any]:
+        response = await dispatch_rpc(
+            state,
+            {
+                "method": "chat.history",
+                "params": {"agent_id": "coder", "session_id": session.id, **params},
+            },
+        )
+        assert response["ok"] is True
+        result: dict[str, Any] = response["result"]
+        return result
+
+    first = await history()
+    assert {"session_usage", "background_bash_statuses", "compaction_policy"} <= set(first)
+    assert first["reflection_runs"] == []
+    # Read but absent: an explicit null clears the caller's value.
+    assert first["context_usage"] is None
+
+    hops: list[str] = []
+    original = chat_methods._CHAT_RPC_WORKERS.run
+
+    async def counted(function: Any, *args: Any, **kwargs: Any) -> Any:
+        hops.append(function.__name__)
+        return await original(function, *args, **kwargs)
+
+    def unexpected(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("an unchanged read must not recompute Session facts")
+
+    monkeypatch.setattr(chat_methods._CHAT_RPC_WORKERS, "run", counted)
+    monkeypatch.setattr(chat_methods, "_session_compaction_policy", unexpected)
+    monkeypatch.setattr(chat_methods, "_read_reflection_runs", unexpected)
+    monkeypatch.setattr(chat_methods, "background_bash_statuses", unexpected)
+
+    unchanged = await history(after=first["next_after"])
+
+    assert hops == ["_read_chat_history"]
+    assert unchanged == {
+        "agent_id": "coder",
+        "session_id": session.id,
+        "messages": [],
+        "history_generation": first["history_generation"],
+        "runs": [],
+        "next_after": first["next_after"],
+        "incremental": True,
+        "history_reset": False,
+        "has_newer": False,
+        "has_more": False,
+    }
+
+    monkeypatch.undo()
+    session.append(ChatMessage.assistant(model="test", content="Reply"))
+    appended = await history(after=first["next_after"])
+    assert [message["content"] for message in appended["messages"]] == ["Reply"]
+    assert appended["incremental"] is True
+    assert {"session_usage", "context_usage", "compaction_policy"} <= set(appended)
+    assert appended["background_bash_statuses"] == {}
+    # Reflection Runs arrive with a full read; live events keep them current.
+    assert "reflection_runs" not in appended

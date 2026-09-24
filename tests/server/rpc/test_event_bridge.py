@@ -384,8 +384,36 @@ async def test_terminal_run_event_invalidates_debug_traces_and_sessions() -> Non
 
     assert [event["payload"] for event in event_bus.events[-2:]] == [
         {"kind": "debug_traces"},
-        {"kind": "sessions", "scope": {"agent_id": "agent-1"}},
+        {
+            "kind": "sessions",
+            "scope": {
+                "project_id": None,
+                "agent_id": "agent-1",
+                "session_id": "session-1",
+                "run_id": "run-one",
+            },
+        },
     ]
+
+
+@pytest.mark.asyncio
+async def test_project_run_invalidates_its_exact_session() -> None:
+    event_bus = ServerEventBus()
+    run = Run(run_id="run-team", agent_id="builder", session_id="team", project_id="vbot")
+    run.emit(RUN_STARTED_EVENT, {"status": "running"})
+    run.emit(RUN_FAILED_EVENT, {"status": "failed"})
+
+    await _publish_run_events(event_bus, run)
+
+    assert event_bus.events[-1]["payload"] == {
+        "kind": "sessions",
+        "scope": {
+            "project_id": "vbot",
+            "agent_id": "builder",
+            "session_id": "team",
+            "run_id": "run-team",
+        },
+    }
 
 
 @pytest.mark.asyncio
@@ -409,7 +437,15 @@ async def test_excluded_run_still_invalidates_debug_traces_and_sessions() -> Non
     )
     assert [event["payload"] for event in event_bus.events[-2:]] == [
         {"kind": "debug_traces"},
-        {"kind": "sessions", "scope": {"agent_id": "agent-1"}},
+        {
+            "kind": "sessions",
+            "scope": {
+                "project_id": None,
+                "agent_id": "agent-1",
+                "session_id": "session-1",
+                "run_id": "run-system",
+            },
+        },
     ]
 
 

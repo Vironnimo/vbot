@@ -214,6 +214,62 @@ async def test_chat_history_projects_durable_background_bash_statuses(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_chat_history_reports_background_statuses_of_appended_records_only(
+    tmp_path: Path,
+) -> None:
+    state, chat_sessions = _history_state(tmp_path)
+    session = chat_sessions.create("parent", session_id="session-one")
+
+    def handoff(call_id: str, process_id: str) -> None:
+        append_tool_fixture(
+            session,
+            ChatMessage.tool(
+                tool_call_id=call_id,
+                name="bash",
+                content=json.dumps(
+                    tool_success(
+                        {"process_id": process_id, "status": "running", "delivery": "automatic"}
+                    )
+                ),
+            ),
+        )
+
+    async def history(**params: Any) -> dict[str, Any]:
+        response = await dispatch_rpc(
+            state,
+            {
+                "method": "chat.history",
+                "params": {"agent_id": "parent", "session_id": "session-one", **params},
+            },
+        )
+        assert response["ok"] is True
+        result: dict[str, Any] = response["result"]
+        return result
+
+    handoff("bash-one", "process-one")
+    handoff("bash-two", "process-two")
+    session.add_note("Skill context: unrelated")
+    first = await history(limit=1)
+    assert first["background_bash_statuses"] == {
+        "process-one": "running",
+        "process-two": "running",
+    }
+
+    session.add_note(
+        "Automatic completion delivery\n\n"
+        "### Bash process — completed\n"
+        "Process ID: process-one\n"
+        "Command: make"
+    )
+    delta = await history(after=first["next_after"])
+    assert delta["incremental"] is True
+    assert delta["background_bash_statuses"] == {"process-one": "completed"}
+
+    older = await history(before=first["next_before"])
+    assert "background_bash_statuses" not in older
+
+
+@pytest.mark.asyncio
 async def test_chat_history_limit_returns_newest_visible_messages(tmp_path: Path) -> None:
     state, chat_sessions = _history_state(tmp_path)
     session = chat_sessions.create("parent", session_id="session-one")

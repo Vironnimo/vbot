@@ -15,6 +15,7 @@ from core.sessions._types import (
     SKILL_CONTEXT_NOTE_PREFIX,
     SKILL_TOOL_MESSAGE_NAME,
     JsonObject,
+    SessionBackgroundRecord,
     SessionChatHistorySnapshot,
     SessionMessagePage,
     SessionReadBatch,
@@ -207,28 +208,48 @@ def _active_message_page_from_connection(
     return rows, has_more, editable_ids, page_floor
 
 
-def _active_message_subset_from_connection(
+def _background_records_from_connection(
     connection: sqlite3.Connection,
     state: sqlite3.Row,
     *,
-    roles: Sequence[str],
-    tool_names: Sequence[str] = (),
-) -> list[sqlite3.Row]:
-    selected_roles = tuple(dict.fromkeys(roles))
-    if not selected_roles:
-        return []
-    role_placeholders = ", ".join("?" for _ in selected_roles)
-    where = f"m.session_key = ? AND m.active = 1 AND m.role IN ({role_placeholders})"
-    params: list[Any] = [state["session_key"], *selected_roles]
+    tool_names: Sequence[str],
+    note_marker: str | None,
+    lower_sequence: int,
+    upper_sequence: int,
+) -> list[SessionBackgroundRecord]:
+    """Read the active Tool Results of ``tool_names`` and Notes holding ``note_marker``.
+
+    Only the columns a status fold reads are selected, in sequence order within
+    ``[lower_sequence, upper_sequence)``.
+    """
     selected_tool_names = tuple(dict.fromkeys(tool_names))
+    candidates: list[str] = []
+    params: list[Any] = [state["session_key"], lower_sequence, upper_sequence]
+    if note_marker:
+        candidates.append("(m.role = 'note' AND instr(m.content, ?) > 0)")
+        params.append(note_marker)
     if selected_tool_names:
-        name_placeholders = ", ".join("?" for _ in selected_tool_names)
-        where += f" AND (m.role <> 'tool' OR t.name IN ({name_placeholders}))"
+        placeholders = ", ".join("?" for _ in selected_tool_names)
+        candidates.append(f"(m.role = 'tool' AND t.name IN ({placeholders}))")
         params.extend(selected_tool_names)
-    return connection.execute(
-        _store_values._message_records_sql(where=where, order_by="ORDER BY m.seq"),
+    if not candidates:
+        return []
+    rows = connection.execute(
+        "SELECT m.role, t.name, m.content FROM history_records AS m "
+        "LEFT JOIN tool_calls AS t ON t.result_key = m.message_key "
+        "WHERE m.session_key = ? AND m.active = 1 AND m.seq >= ? AND m.seq < ? "
+        f"AND m.role IN ('note', 'tool') AND ({' OR '.join(candidates)}) "
+        "ORDER BY m.seq",
         params,
     ).fetchall()
+    return [
+        SessionBackgroundRecord(
+            role=str(row["role"]),
+            name=None if row["name"] is None else str(row["name"]),
+            content=None if row["content"] is None else str(row["content"]),
+        )
+        for row in rows
+    ]
 
 
 def _context_usage_rows_from_connection(
@@ -425,16 +446,24 @@ def chat_history_snapshot(
     expected_generation_id: str | None,
     excluded_roles: Sequence[str],
     complete_run_segment: bool,
-    background_roles: Sequence[str],
-    background_tool_names: Sequence[str],
+    background_tool_names: Sequence[str] = (),
+    background_note_marker: str | None = None,
     after: tuple[str, int] | None = None,
+    skip_unchanged: bool = False,
 ) -> Callable[[], SessionChatHistorySnapshot]:
-    """Read one WebUI history projection from a single SQLite snapshot."""
+    """Read one WebUI history projection from a single SQLite snapshot.
+
+    With ``skip_unchanged``, an ``after`` cursor already at the Session's end
+    reads only the Session row and returns an empty ``unchanged`` snapshot.
+    """
     if limit is not None and (not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0):
         raise ChatSessionError("message page limit must be a positive integer")
     state = _store_values._require_live(connection, address)
     incremental = _store_timeline.can_append(connection, state, after)
     through = int(state["message_count"])
+    if skip_unchanged and incremental and after is not None and after[1] == through:
+        unchanged = _unchanged_history_snapshot(str(state["generation_id"]), through)
+        return lambda: unchanged
     if incremental:
         assert after is not None
         page_rows, through = _store_timeline.appended_rows(
@@ -465,11 +494,13 @@ def chat_history_snapshot(
         connection, int(state["session_key"])
     )
     context_rows = _context_usage_rows_from_connection(connection, state)
-    background_rows = _active_message_subset_from_connection(
+    background_records = _background_records_from_connection(
         connection,
         state,
-        roles=background_roles,
         tool_names=background_tool_names,
+        note_marker=background_note_marker,
+        lower_sequence=after[1] if incremental and after is not None else 0,
+        upper_sequence=through,
     )
     generation = str(state["generation_id"])
     has_newer = through < int(state["message_count"])
@@ -493,9 +524,7 @@ def chat_history_snapshot(
             ),
             session_usage=usage,
             context_messages=tuple(_store_codec.message_from_row(row) for row in context_rows),
-            background_messages=tuple(
-                _store_codec.message_from_row(row) for row in background_rows
-            ),
+            background_records=tuple(background_records),
             generation_id=generation,
             after_cursor=_encode_chat_history_cursor(generation, through),
             incremental=incremental,
@@ -504,6 +533,19 @@ def chat_history_snapshot(
         )
 
     return decode
+
+
+def _unchanged_history_snapshot(generation: str, through: int) -> SessionChatHistorySnapshot:
+    return SessionChatHistorySnapshot(
+        page=SessionMessagePage(messages=(), has_more=False),
+        session_usage={},
+        context_messages=(),
+        background_records=(),
+        generation_id=generation,
+        after_cursor=_encode_chat_history_cursor(generation, through),
+        incremental=True,
+        unchanged=True,
+    )
 
 
 def status_snapshot(

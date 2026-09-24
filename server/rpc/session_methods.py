@@ -38,7 +38,7 @@ from server.rpc.errors import (
     RPC_ERROR_SESSION_BUSY,
     RpcError,
 )
-from server.rpc.event_bridge import publish_resource_changed
+from server.rpc.event_bridge import publish_resource_changed, publish_session_changed
 from server.rpc.payloads import _global_compaction_policy_loader
 from server.rpc.runtime_access import _state_chat_runs
 from server.rpc.validation import (
@@ -113,9 +113,9 @@ async def _create_session(state: Any, params: JsonObject) -> JsonObject:
     # Session creation is the single emit point for the sessions channel: it also
     # covers /new and /handoff, which create their session through here. Other
     # windows refresh their session list (and the make-current marking) for this
-    # agent; they do NOT switch to the new session. Scoped to the agent so windows
-    # on a different agent ignore it.
-    publish_resource_changed(state, RESOURCE_KIND_SESSIONS, scope={"agent_id": agent_id})
+    # agent; they do NOT switch to the new session. Scoped to the new Session so
+    # windows not listing this Agent ignore it.
+    publish_session_changed(state, project_id, agent_id, session.id)
     return {"agent_id": agent_id, "session_id": session.id}
 
 
@@ -399,6 +399,34 @@ async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
     }
 
 
+async def _get_session(state: Any, params: JsonObject) -> JsonObject:
+    """Return one live Session's list summary by exact address, or ``None``.
+
+    A point read for callers that need one Session's titles and provenance
+    (such as its Parent Session link) without paging the Agent's Session list.
+    The row matches a ``session.list`` row except that Compaction Policy and
+    active-Run fields are not resolved.
+    """
+    _reject_unsupported(params, {"agent_id", "session_id"}, "session.get")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    try:
+        summary = await _SESSION_RPC_WORKERS.run(
+            state.runtime.chat_sessions.summary,
+            _session_address(agent_id, session_id, project_id),
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    if summary is None:
+        return {"session": None}
+    session = dict(summary)
+    session.pop("agent_id", None)
+    session.pop("project_id", None)
+    session.pop(COMPACTION_POLICY_META_KEY, None)
+    session["agent_address"] = format_agent_address(agent_id, project_id)
+    return {"session": session}
+
+
 def _session_list_cursor(value: Any) -> SessionListCursor | None:
     if value is None:
         return None
@@ -452,43 +480,37 @@ def _session_list_required_address(value: Any) -> SessionAddress | None:
 
 
 async def _list_session_activity(state: Any, params: JsonObject) -> JsonObject:
-    """Return completion-only Session activity for a batch of Agent addresses."""
+    """Return completion-only Session activity for a batch of Agent addresses.
+
+    One Session-store read covers every address. An address without live
+    completed Sessions, including an unknown Agent, returns an empty list.
+    """
     _reject_unsupported(params, {"agent_ids"}, "session.activity_list")
     requested_addresses = _validate_string_list("agent_ids", params.get("agent_ids"))
-    parsed_addresses: list[tuple[str, str, str | None]] = []
-    seen_addresses: set[str] = set()
+    scopes: list[tuple[str | None, str]] = []
     for requested_address in requested_addresses:
         agent_id, project_id = _required_agent_address({"agent_id": requested_address}, "agent_id")
-        canonical_address = format_agent_address(agent_id, project_id)
-        if canonical_address in seen_addresses:
-            continue
-        seen_addresses.add(canonical_address)
-        parsed_addresses.append((canonical_address, agent_id, project_id))
-
-    def load_activity() -> list[JsonObject]:
-        activity_by_agent: list[JsonObject] = []
-        resolver = getattr(state.runtime, "agent_resolver", None)
-        agents = getattr(state.runtime, "agents", None)
-        for _address, agent_id, project_id in parsed_addresses:
-            if resolver is not None:
-                resolver.resolve_agent(project_id, agent_id)
-            elif agents is not None:
-                agents.get(agent_id)
-            sessions = state.runtime.chat_sessions.list_completion_activity(agent_id, project_id)
-            activity_by_agent.append(
-                {
-                    "agent_id": agent_id,
-                    "project_id": project_id,
-                    "sessions": sessions,
-                }
-            )
-        return activity_by_agent
+        scopes.append((project_id, agent_id))
+    scopes = list(dict.fromkeys(scopes))
+    if not scopes:
+        return {"agents": []}
 
     try:
-        activity = await _SESSION_RPC_WORKERS.run(load_activity)
+        activity = await _SESSION_RPC_WORKERS.run(
+            state.runtime.chat_sessions.list_completion_activity, scopes
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"agents": activity}
+    return {
+        "agents": [
+            {
+                "agent_id": agent_id,
+                "project_id": project_id,
+                "sessions": activity[(project_id, agent_id)],
+            }
+            for project_id, agent_id in scopes
+        ]
+    }
 
 
 async def _mark_session_read(state: Any, params: JsonObject) -> JsonObject:
@@ -572,7 +594,7 @@ async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
 
     # Same emit point as session.create: other windows on the *target* agent
     # refresh their session list so the fork shows immediately.
-    publish_resource_changed(state, RESOURCE_KIND_SESSIONS, scope={"agent_id": target_agent_id})
+    publish_session_changed(state, target_project_id, target_agent_id, fork.id)
     _LOGGER.info(
         "Session forked (source_agent=%s source_session=%s target_agent=%s target_session=%s)",
         format_agent_address(source_agent_id, source_project_id),
@@ -684,8 +706,8 @@ async def _rename_session(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     # A rename changes the session's list display, so other windows on this agent
-    # refresh their session list — scoped to the agent like session.create.
-    publish_resource_changed(state, RESOURCE_KIND_SESSIONS, scope={"agent_id": agent_id})
+    # refresh their session list — scoped to the Session like session.create.
+    publish_session_changed(state, project_id, agent_id, session_id)
     return {"agent_id": agent_id, "session_id": session_id, "title": stored_title}
 
 
@@ -730,7 +752,7 @@ async def _set_session_compaction_policy(state: Any, params: JsonObject) -> Json
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    publish_resource_changed(state, RESOURCE_KIND_SESSIONS, scope={"agent_id": agent_id})
+    publish_session_changed(state, project_id, agent_id, session_id)
     if previous_override != normalized:
         _LOGGER.info(
             "Session compaction policy %s (agent=%s session=%s)",
@@ -766,6 +788,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "session.create": _create_session,
         "session.activity_list": _list_session_activity,
         "session.list": _list_sessions,
+        "session.get": _get_session,
         "session.mark_read": _mark_session_read,
         "session.fork": _fork_session,
         "session.delete": _delete_session,

@@ -20,10 +20,15 @@ from core.compaction import COMPACTION_POLICY_META_KEY, effective_compaction_pol
 from core.projects import AgentResolutionError, format_agent_address
 from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run, RunCancelledError
 from core.sessions import (
+    ChatSession,
     SessionAddress,
-    SessionMessagePage,
+    SessionChatHistorySnapshot,
 )
-from core.tools.bash import background_bash_statuses
+from core.tools.bash import (
+    BACKGROUND_STATUS_NOTE_MARKER,
+    BACKGROUND_STATUS_TOOL_NAMES,
+    background_bash_statuses,
+)
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_QUEUE
@@ -74,11 +79,21 @@ WEBUI_REPLY_SURFACE = ReplySurface.webui()
 @dataclass(frozen=True)
 class _ChatHistoryProjection:
     messages: list[JsonObject]
-    has_more: bool
-    before_cursor: str | None
     background_bash_statuses: JsonObject
-    session_usage: JsonObject
     context_usage: JsonObject | None
+
+
+@dataclass(frozen=True)
+class _ChatHistoryRead:
+    """One `chat.history` read: the snapshot and what the response adds to it.
+
+    An ``unchanged`` snapshot carries no projection, policy or reflection Runs.
+    """
+
+    history: SessionChatHistorySnapshot
+    projection: _ChatHistoryProjection | None
+    compaction_policy: JsonObject | None
+    reflection_runs: list[JsonObject] | None
 
 
 def _publish_queue_changed(state: Any, agent_id: str, session_id: str) -> None:
@@ -122,6 +137,18 @@ async def _chat_run_result(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
+    """Read one History page of a Session.
+
+    Without ``before`` or ``after`` the response is the newest page with the
+    Session's whole-Session facts, reflection Runs and Compaction Policy. An
+    ``after`` read appends to the caller's page (``incremental``); its
+    ``background_bash_statuses`` then cover only the appended records, for the
+    caller to merge. An ``after`` read with nothing appended returns an empty
+    page without ``session_usage``, ``context_usage``,
+    ``background_bash_statuses`` or ``compaction_policy``: the caller's values
+    stay current. A ``before`` page carries neither background statuses nor
+    the Compaction Policy.
+    """
     supported_fields = {"agent_id", "session_id", "limit", "before", "after"}
     _reject_unsupported(params, supported_fields, "chat.history")
 
@@ -131,43 +158,39 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     before = _optional_string(params, "before")
     after = _optional_string(params, "after")
     try:
-        active_session_id = await _CHAT_RPC_WORKERS.run(
-            _resolve_history_session_id,
-            state,
-            agent_id,
-            session_id,
-            project_id,
-        )
-        session = await _CHAT_RPC_WORKERS.run(
-            state.runtime.chat_sessions.get,
-            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=active_session_id),
-        )
-        reflection_runs = await _reflection_runs(state, session) if before is None else None
-        compaction_policy = (
-            await _CHAT_RPC_WORKERS.run(_session_compaction_policy, state, session.address)
-            if before is None
-            else None
-        )
+        if session_id is None:
+            # A project Session has no anchor-level current pointer (the config
+            # agent carries none), so it must be named.
+            if project_id is not None:
+                raise RpcError(
+                    RPC_ERROR_INVALID_REQUEST,
+                    "params.session_id is required for a project agent address",
+                )
+            session_id = await _CHAT_RPC_WORKERS.run(_current_session_id, state, agent_id)
+        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+        chat_runs = _state_chat_runs(state)
         while True:
-            active_run_object = _state_chat_runs(state).active_run(
-                agent_id=agent_id,
-                session_id=active_session_id,
-                project_id=project_id,
+            active_run_object = chat_runs.active_run(
+                agent_id=agent_id, session_id=session_id, project_id=project_id
             )
-            history = await _CHAT_RPC_WORKERS.run(
-                session.read_chat_history_snapshot,
+            # Capture running reviews before the durable read. If one finishes
+            # during that read, its persisted terminal status wins.
+            active_reviews = (
+                _active_reflection_runs(state, address)
+                if before is None and after is None
+                else None
+            )
+            read = await _CHAT_RPC_WORKERS.run(
+                _read_chat_history,
+                state,
+                address,
                 limit=limit,
                 before=before,
                 after=after,
-                excluded_roles=("note", "history_edit"),
-                complete_run_segment=True,
-                background_roles=("note", "tool"),
-                background_tool_names=("bash", "process"),
+                active_reviews=active_reviews,
             )
-            latest_run = _state_chat_runs(state).active_run(
-                agent_id=agent_id,
-                session_id=active_session_id,
-                project_id=project_id,
+            latest_run = chat_runs.active_run(
+                agent_id=agent_id, session_id=session_id, project_id=project_id
             )
             if latest_run is active_run_object:
                 break
@@ -182,50 +205,78 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
             if active_run_object is not None
             else None
         )
-        projection = await _CHAT_RPC_WORKERS.run(
-            _project_chat_history,
-            history.page,
-            session_usage=history.session_usage,
-            context_messages=list(history.context_messages),
-            background_messages=list(history.background_messages),
-            file_delivery=getattr(state, "file_delivery", None),
-        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    history = read.history
+    projection = read.projection
     response: JsonObject = {
         "agent_id": agent_id,
-        "session_id": active_session_id,
-        "messages": projection.messages,
+        "session_id": session_id,
+        "messages": [] if projection is None else projection.messages,
         "history_generation": history.generation_id,
         "runs": list(history.runs),
         "next_after": history.after_cursor,
         "incremental": history.incremental,
         "history_reset": after is not None and not history.incremental,
         "has_newer": history.has_newer,
-        "has_more": projection.has_more,
-        "background_bash_statuses": projection.background_bash_statuses,
-        # Whole-session provider-reported token fields — the page above may be a
-        # slice, but these always cover the full transcript.
-        "session_usage": projection.session_usage,
+        "has_more": history.page.has_more,
     }
-    if projection.before_cursor is not None:
-        response["next_before"] = projection.before_cursor
-    if reflection_runs is not None:
-        response["reflection_runs"] = reflection_runs
-    if compaction_policy is not None:
-        response["compaction_policy"] = compaction_policy
-    context_usage = (
-        active_run_object.terminal_payload_extras.get("context_usage")
-        if active_run_object is not None
-        else None
-    )
-    if not isinstance(context_usage, dict):
-        context_usage = projection.context_usage
-    if context_usage is not None:
-        response["context_usage"] = context_usage
+    if history.page.before_cursor is not None:
+        response["next_before"] = history.page.before_cursor
+    if projection is not None:
+        # Whole-session provider-reported token fields: the page above may be
+        # a slice, but these always cover the full transcript.
+        response["session_usage"] = history.session_usage
+        context_usage = (
+            active_run_object.terminal_payload_extras.get("context_usage")
+            if active_run_object is not None
+            else None
+        )
+        # Present (possibly null) whenever it was read; an absent field keeps
+        # the caller's value.
+        response["context_usage"] = (
+            context_usage if isinstance(context_usage, dict) else projection.context_usage
+        )
+        if before is None:
+            response["background_bash_statuses"] = projection.background_bash_statuses
+    if read.reflection_runs is not None:
+        response["reflection_runs"] = read.reflection_runs
+    if read.compaction_policy is not None:
+        response["compaction_policy"] = read.compaction_policy
     if active_run is not None:
         response["active_run"] = active_run
     return response
+
+
+def _read_chat_history(
+    state: Any,
+    address: SessionAddress,
+    *,
+    limit: int | None,
+    before: str | None,
+    after: str | None,
+    active_reviews: list[Run] | None,
+) -> _ChatHistoryRead:
+    """Read and project one History page in a single worker hop."""
+    session = state.runtime.chat_sessions.get(address)
+    history = session.read_chat_history_snapshot(
+        limit=limit,
+        before=before,
+        after=after,
+        excluded_roles=("note", "history_edit"),
+        complete_run_segment=True,
+        background_tool_names=BACKGROUND_STATUS_TOOL_NAMES if before is None else (),
+        background_note_marker=BACKGROUND_STATUS_NOTE_MARKER if before is None else None,
+        skip_unchanged=True,
+    )
+    if history.unchanged:
+        return _ChatHistoryRead(history, None, None, None)
+    return _ChatHistoryRead(
+        history,
+        _project_chat_history(history, file_delivery=getattr(state, "file_delivery", None)),
+        _session_compaction_policy(state, address) if before is None else None,
+        None if active_reviews is None else _read_reflection_runs(session, active_reviews),
+    )
 
 
 def _session_compaction_policy(state: Any, address: SessionAddress) -> JsonObject | None:
@@ -236,7 +287,7 @@ def _session_compaction_policy(state: Any, address: SessionAddress) -> JsonObjec
     (a removed Team member, a temporary Session) stays readable; its Policy is
     reported as unknown by omitting the field.
     """
-    metadata = state.runtime.chat_sessions.get_metadata(address)
+    session_policy = state.runtime.chat_sessions.metadata_value(address, COMPACTION_POLICY_META_KEY)
     try:
         agent = state.runtime.agent_resolver.resolve_agent(address.project_id, address.agent_id)
     except AgentResolutionError as exc:
@@ -248,18 +299,18 @@ def _session_compaction_policy(state: Any, address: SessionAddress) -> JsonObjec
         )
         return None
     return effective_compaction_policy(
-        metadata.get(COMPACTION_POLICY_META_KEY),
+        session_policy,
         getattr(agent, "compaction_policy", None),
         state.runtime.storage.load_compaction_settings,
     )
 
 
-async def _reflection_runs(state: Any, session: Any) -> list[JsonObject]:
-    address = session.address
-    # Capture running reviews before the durable read. If one finishes during
-    # that read, its persisted terminal status wins over the active snapshot.
-    # Review Runs execute in same-scope forks and carry the Session they examine.
-    active = [
+def _active_reflection_runs(state: Any, address: SessionAddress) -> list[Run]:
+    """Active Review Runs of this Session.
+
+    Review Runs execute in same-scope forks and carry the Session they examine.
+    """
+    return [
         run
         for run in _state_chat_runs(state).active_runs()
         if run.agent_id == address.agent_id
@@ -267,45 +318,45 @@ async def _reflection_runs(state: Any, session: Any) -> list[JsonObject]:
         and run.source_session_id == address.session_id
     ]
 
-    def read() -> list[JsonObject]:
-        rows = {
-            run.id: {
-                "run_id": run.id,
-                "session_id": run.session_id,
-                "run_kind": run.run_kind.value,
-                "status": "running",
-                "started_at": run.created_at,
-            }
-            for run in active
-        }
-        rows.update({row["run_id"]: row for row in session.reflection_runs()})
-        return list(rows.values())
 
-    return await _CHAT_RPC_WORKERS.run(read)
+def _read_reflection_runs(session: ChatSession, active_reviews: list[Run]) -> list[JsonObject]:
+    rows = {
+        run.id: {
+            "run_id": run.id,
+            "session_id": run.session_id,
+            "run_kind": run.run_kind.value,
+            "status": "running",
+            "started_at": run.created_at,
+        }
+        for run in active_reviews
+    }
+    rows.update({row["run_id"]: row for row in session.reflection_runs()})
+    return list(rows.values())
 
 
 async def _chat_reflections(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"agent_id", "session_id"}, "chat.reflections")
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
+    address = SessionAddress(project_id, agent_id, session_id)
+    # Capture running reviews before the durable read. If one finishes during
+    # that read, its persisted terminal status wins over the active snapshot.
+    active_reviews = _active_reflection_runs(state, address)
+
+    def read() -> list[JsonObject]:
+        session = state.runtime.chat_sessions.get(address)
+        return _read_reflection_runs(session, active_reviews)
+
     try:
-        session = await _CHAT_RPC_WORKERS.run(
-            state.runtime.chat_sessions.get,
-            SessionAddress(project_id, agent_id, session_id),
-        )
-        return {"reflection_runs": await _reflection_runs(state, session)}
+        return {"reflection_runs": await _CHAT_RPC_WORKERS.run(read)}
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
 
 def _project_chat_history(
-    page: SessionMessagePage,
-    *,
-    session_usage: JsonObject,
-    context_messages: list[Any],
-    background_messages: list[Any],
-    file_delivery: Any,
+    history: SessionChatHistorySnapshot, *, file_delivery: Any
 ) -> _ChatHistoryProjection:
+    page = history.page
     messages = [
         {
             **_visible_message(message, file_delivery=file_delivery),
@@ -317,33 +368,14 @@ def _project_chat_history(
     ]
     return _ChatHistoryProjection(
         messages=messages,
-        has_more=page.has_more,
-        before_cursor=page.before_cursor,
-        background_bash_statuses=background_bash_statuses(background_messages),
-        session_usage=session_usage,
-        context_usage=latest_session_context_usage(context_messages),
+        background_bash_statuses=background_bash_statuses(history.background_records),
+        context_usage=latest_session_context_usage(list(history.context_messages)),
     )
 
 
-def _resolve_history_session_id(
-    state: Any, agent_id: str, session_id: str | None, project_id: str | None
-) -> str:
-    """Pick the session to read history from for an identity or project address.
-
-    Identity (``project_id is None``) keeps today's behavior exactly: an explicit
-    ``session_id`` wins, otherwise the identity agent's ``current_session_id``. A
-    project session has no anchor-level current pointer (the config agent carries
-    none), so an explicit ``session_id`` is required and a missing one is a clean
-    client error.
-    """
-    if session_id is not None:
-        return session_id
-    if project_id is None:
-        return cast(str, state.runtime.agents.get(agent_id).current_session_id)
-    raise RpcError(
-        RPC_ERROR_INVALID_REQUEST,
-        "params.session_id is required for a project agent address",
-    )
+def _current_session_id(state: Any, agent_id: str) -> str:
+    """An Identity Agent's History defaults to its current Session."""
+    return cast(str, state.runtime.agents.get(agent_id).current_session_id)
 
 
 async def _subagent_inspect(state: Any, params: JsonObject) -> JsonObject:
