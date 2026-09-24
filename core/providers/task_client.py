@@ -30,6 +30,7 @@ from core.providers.errors import (
 )
 from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter, TokenGetter
 from core.utils.retry import retry_async
+from core.utils.tls import shared_ssl_context
 
 JsonObject = dict[str, Any]
 ParsedResultT = TypeVar("ParsedResultT")
@@ -228,7 +229,11 @@ class ProviderTaskClient:
             context = (
                 nullcontext(http_client)
                 if http_client is not None
-                else httpx.AsyncClient(base_url=self._base_url, timeout=timeout)
+                else httpx.AsyncClient(
+                    base_url=self._base_url,
+                    timeout=timeout,
+                    verify=shared_ssl_context(),
+                )
             )
             async with context as client:
                 request_headers = dict(await (headers or self._headers)())
@@ -290,6 +295,7 @@ class ProviderTaskClient:
             async with httpx.AsyncClient(
                 base_url=self._base_url,
                 timeout=timeout,
+                verify=shared_ssl_context(),
             ) as client:
                 request_headers = await self._headers()
                 try:

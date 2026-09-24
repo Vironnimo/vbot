@@ -27,6 +27,7 @@ from core.providers.errors import (
 )
 from core.utils.http_status import is_retryable_status, parse_retry_after
 from core.utils.retry import retry_async
+from core.utils.tls import shared_ssl_context
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
@@ -96,9 +97,16 @@ def build_async_client(
     """
     effective_timeout = timeout if timeout is not None else provider_chat_timeout()
     if debug_recorder is None:
-        return httpx.AsyncClient(base_url=base_url, timeout=effective_timeout)
+        return httpx.AsyncClient(
+            base_url=base_url,
+            timeout=effective_timeout,
+            verify=shared_ssl_context(),
+        )
 
-    transport = _DebugCaptureTransport(httpx.AsyncHTTPTransport(), debug_recorder)
+    transport = _DebugCaptureTransport(
+        httpx.AsyncHTTPTransport(verify=shared_ssl_context()),
+        debug_recorder,
+    )
     return httpx.AsyncClient(
         base_url=base_url,
         timeout=effective_timeout,

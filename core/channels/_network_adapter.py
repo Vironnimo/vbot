@@ -35,6 +35,7 @@ from core.channels.engine import ChannelConversationEngine
 from core.chat.content_blocks import ContentBlock, TextBlock
 from core.utils.atomic import atomic_write_text
 from core.utils.retry import retry_async
+from core.utils.tls import shared_ssl_context
 from core.utils.workers import BoundedWorkerPool
 
 # Readable per-message size for Slack, Mattermost and WhatsApp (below each wire limit).
@@ -88,7 +89,10 @@ class NetworkChannelAdapter(ChannelAdapter):
     def _http(self) -> httpx.AsyncClient:
         if self._http_client is None:
             self._http_client = httpx.AsyncClient(
-                timeout=30, trust_env=False, follow_redirects=False
+                timeout=30,
+                trust_env=False,
+                follow_redirects=False,
+                verify=shared_ssl_context(),
             )
         return self._http_client
 
