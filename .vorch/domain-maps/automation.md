@@ -34,11 +34,19 @@ New Cron and Bootstrap job ids use `cron_` and `boot_` plus 12 lowercase base32 
 - Background completions key exactly `(project_id, agent_id, session_id)` and capture their active Run: ready results inject at Model-request boundaries without extra requests or split Tool cycles; unconsumed notices deliver in one internal follow-up Run, recovering and persisting the latest `ReplySurface`, or persist as a System Reminder when that cannot start (append failures retry capped at 30s). A configured relay consumes the follow-up Run events for accessor delivery while the coordinator still owns durable note acknowledgement. Every completion message opens by stating it is not a new request and the Agent must re-evaluate the original goal; user-cancelled origins append notes instead of starting Runs - no cancellation-triggered cascades.
 
 Extension-owned completion notices additionally retain their exact execution owner.
-They join only a matching owned Run's request boundary or use the injected owned
-continuation starter. Admission failure never falls back to an arbitrary Session
-write for these notices. Group closure retires only matching notices and rejects
-late submissions; unrelated notices retain normal delivery behavior
-(`automation.py`, `tests/core/automation/test_automation_completion.py`).
+Submission checks that owner through the injected owned-completion validator
+(Runtime wires the temporary-group Run admission check) and rejects a closed epoch,
+replaced generation, or retired registration before any state is kept; without a
+validator, owned notices are rejected. The Session-write fallback for a
+user-cancelled origin checks the owner again, because that write bypasses Run
+admission. Admitted notices join only a matching owned Run's request boundary or use
+the injected owned continuation starter; admission failure never falls back to an
+arbitrary Session write. Group closure withdraws only matching pending notices and
+keeps no per-group state: late submissions fail validation, which matters because a
+Terminal's stale activity owner can submit long after the group closed. Unrelated
+notices retain normal delivery behavior (`automation.py`,
+`tests/core/automation/test_automation_completion.py`,
+`tests/core/runtime/test_runtime_extension_host.py`).
 
 ## Reflection (background self-improvement reviews)
 
