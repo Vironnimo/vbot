@@ -27,6 +27,7 @@ from core.sessions import (
 )
 from core.sessions._types import (
     JsonObject,
+    OwnedRunRecord,
     SessionChatHistorySnapshot,
     SessionHistoryRevision,
     SessionRecallVisibility,
@@ -335,14 +336,7 @@ class SessionStore:
         *,
         create_missing: bool,
     ) -> tuple[JsonObject, JsonObject]:
-        """Apply a metadata mutation, entering the writer only for a real change.
-
-        The mutation first runs against a read snapshot. A live Session whose
-        persisted metadata it leaves unchanged returns without a write
-        transaction; otherwise the writer creates the Session when allowed and
-        reapplies the mutation to the latest row. The mutation may therefore
-        run twice and must be deterministic and free of side effects.
-        """
+        """Try the mutation on a read snapshot; enter the writer only for a real change."""
         with self._runtime.read_ctx() as connection:
             state = _store_values._find_live(connection, address)
         if state is not None:
@@ -634,7 +628,7 @@ class SessionStore:
         participant_id: str | None = None,
         after: int = 0,
         limit: int = 100,
-    ) -> list[sqlite3.Row]:
+    ) -> list[OwnedRunRecord]:
         with self._runtime.read_ctx() as connection:
             return _store_owned.owned_runs(
                 connection,
@@ -647,23 +641,13 @@ class SessionStore:
 
     def owned_runs_by_id(
         self, *, owner_name: str, group_id: str, run_ids: Sequence[str]
-    ) -> list[sqlite3.Row]:
-        unique = list(dict.fromkeys(run_ids))
-        limit = _store_owned.OWNED_RUN_LOOKUP_LIMIT
-        rows: list[sqlite3.Row] = []
+    ) -> dict[str, OwnedRunRecord]:
         with self._runtime.read_ctx() as connection:
-            for start in range(0, len(unique), limit):
-                rows.extend(
-                    _store_owned.owned_runs_by_id(
-                        connection,
-                        owner_name=owner_name,
-                        group_id=group_id,
-                        run_ids=unique[start : start + limit],
-                    )
-                )
-        return rows
+            return _store_owned.owned_runs_by_id(
+                connection, owner_name=owner_name, group_id=group_id, run_ids=run_ids
+            )
 
-    def owned_run_by_input(self, address: SessionAddress, input_id: str) -> sqlite3.Row | None:
+    def owned_run_by_input(self, address: SessionAddress, input_id: str) -> OwnedRunRecord | None:
         with self._runtime.read_ctx() as connection:
             return _store_owned.owned_run_by_input(connection, address, input_id)
 
