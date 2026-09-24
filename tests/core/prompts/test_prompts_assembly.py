@@ -171,6 +171,28 @@ def test_memory_block_renders_with_empty_memory_files(tmp_path: Path) -> None:
     assert manager.build_system_prompt(agent) == missing
 
 
+def test_memory_entries_and_skill_descriptions_are_never_expanded(
+    workspace: Path, tmp_path: Path
+) -> None:
+    # Memory entries and Skill descriptions are Producer output: markers inside them
+    # stay literal, an unsafe include never fails the build, and no file is inlined.
+    (workspace / "MEMORY.md").write_text(
+        "- see {include:../etc/passwd}\n- note {include:USER.md} on {model} at {data_root}\n",
+        encoding="utf-8",
+    )
+    skills = StubSkills([StubSkill("notes", "Reads {include:SOUL.md} and {generated:tool_list}")])
+    manager = _manager(tmp_path, skills=skills)
+    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert "- see {include:../etc/passwd}" in prompt
+    assert "- note {include:USER.md} on {model} at {data_root}" in prompt
+    assert "Reads {include:SOUL.md} and {generated:tool_list}" in prompt
+    assert "User text" not in prompt
+    assert '<file name="USER.md">' not in prompt
+
+
 def test_memory_block_absent_when_memory_off(workspace: Path, tmp_path: Path) -> None:
     manager = _manager(tmp_path)
     agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
