@@ -405,10 +405,7 @@ class OAuthTokenGetter:
                 await client.aclose()
 
         _classify_token_exchange_status(response.status_code, response.text)
-        data = response.json()
-        if not isinstance(data, dict):
-            raise ProviderAuthError("OAuth token refresh failed — please reconnect")
-        return data
+        return _token_response_object(response)
 
     async def _post_refresh_token(self, refresh_token: str) -> dict[str, object]:
         client = self._client
@@ -449,10 +446,7 @@ class OAuthTokenGetter:
             _classify_nous_refresh_status(response.status_code, response.text)
         else:
             _classify_token_exchange_status(response.status_code, response.text)
-        data = response.json()
-        if not isinstance(data, dict):
-            raise ProviderAuthError("OAuth token refresh failed — please reconnect")
-        return data
+        return _token_response_object(response)
 
 
 def _is_expiring(token: OAuthToken) -> bool:
@@ -507,6 +501,26 @@ def _parse_oauth_expiry(data: dict[str, object], now: datetime) -> datetime:
         except (OverflowError, ValueError):
             pass
     return now + timedelta(minutes=TOKEN_EXCHANGE_FALLBACK_MINUTES)
+
+
+def _token_response_object(response: httpx.Response) -> dict[str, object]:
+    """Decode a successful token-endpoint reply without leaking parser errors.
+
+    A non-JSON 2xx body (for example an intercepting proxy page) is malformed
+    Provider output: non-retryable and not an authentication failure, so a
+    rotating Account token is not quarantined because of it.
+    """
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise ProviderError(
+            f"OAuth token endpoint sent a malformed JSON response (HTTP {response.status_code})",
+            retryable=False,
+        ) from exc
+    if not isinstance(data, dict):
+        raise ProviderAuthError("OAuth token refresh failed — please reconnect")
+    return data
 
 
 def _required_token_string(value: object) -> str:
