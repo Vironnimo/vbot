@@ -8,15 +8,18 @@ Paths can be files or directories. If no paths are given, the full project
 is checked. Direct files are routed only to tools that explicitly own their
 format; directories remain mixed scopes. Python files (e.g.
 ``core/utils/config.py``) are translated to their corresponding test paths
-(``tests/core/utils/test_config.py``) for pytest.
+(``tests/core/utils/test_config.py``) for pytest. Direct ``.sh``/``.ps1``
+scripts under ``scripts/`` get a native syntax check instead of Ruff/mypy.
 """
 
 import argparse
 import re
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 from _quality_common import (
     PROJECT_ROOT,
@@ -32,6 +35,21 @@ configure_console_encoding()
 
 PYTHON_FILE_SUFFIXES = {".py", ".pyi"}
 PYTHON_CONFIG_FILES = {"pyproject.toml"}
+# Native scripts owned by a syntax-only route: never handed to Ruff or mypy.
+SHELL_SCRIPT_SUFFIX = ".sh"
+POWERSHELL_SCRIPT_SUFFIX = ".ps1"
+SCRIPT_ROUTE_ROOT = "scripts"
+LIFECYCLE_SCRIPT_TEST = "tests/scripts/test_install_scripts.py"
+LIFECYCLE_SCRIPT_TESTS = {
+    f"{SCRIPT_ROUTE_ROOT}/{stem}{suffix}": LIFECYCLE_SCRIPT_TEST
+    for stem in ("install", "setup", "uninstall")
+    for suffix in (SHELL_SCRIPT_SUFFIX, POWERSHELL_SCRIPT_SUFFIX)
+}
+# `bash -n a b` checks only `a` (later arguments become positional
+# parameters), so every script gets its own syntax-only invocation.
+BASH_SYNTAX_LOOP = (
+    'status=0; for script in "$@"; do "$BASH" -n "$script" || status=1; done; exit "$status"'
+)
 FULL_MYPY_PATHS = ["core/", "server/", "cli/", "desktop/", "tests/"]
 SNAPSHOT_IGNORED_DIRS = {
     ".git",
@@ -160,6 +178,14 @@ def translate_to_test_paths(paths: list[str]) -> tuple[list[str], list[str]]:
             notes.append(f"{p}: not under a mirrored test package, no tests selected")
             continue
 
+        if _is_native_script(p):
+            lifecycle_test = LIFECYCLE_SCRIPT_TESTS.get(p)
+            if lifecycle_test is None:
+                notes.append(f"{p}: no mirrored tests for this script")
+            else:
+                add(lifecycle_test)
+            continue
+
         suffix = Path(p).suffix
         if suffix in PYTHON_FILE_SUFFIXES:
             directory, _, filename = p.rpartition("/")
@@ -195,6 +221,15 @@ def _is_python_config(path: str) -> bool:
     }
 
 
+def _is_native_script(path: str) -> bool:
+    """Return whether *path* is a direct shell or PowerShell script under ``scripts/``."""
+    return (
+        path.startswith(f"{SCRIPT_ROUTE_ROOT}/")
+        and Path(path).suffix in {SHELL_SCRIPT_SUFFIX, POWERSHELL_SCRIPT_SUFFIX}
+        and (PROJECT_ROOT / path).is_file()
+    )
+
+
 def _unsupported_direct_files(paths: list[str]) -> list[str]:
     """Return explicit files for which no backend quality capability is registered."""
     unsupported: list[str] = []
@@ -204,9 +239,84 @@ def _unsupported_direct_files(paths: list[str]) -> list[str]:
             candidate.is_file()
             and candidate.suffix not in PYTHON_FILE_SUFFIXES
             and not _is_python_config(path)
+            and not _is_native_script(path)
         ):
             unsupported.append(path)
     return unsupported
+
+
+def _powershell_parse_command(executable: str, paths: list[str]) -> list[str]:
+    """Return a command that reports every PowerShell parse error without running code.
+
+    Paths stay project-relative for the report; the step runs with the project
+    root as working directory, which ``GetFullPath`` resolves them against.
+    """
+    quoted_paths = ",".join("'" + path.replace("'", "''") + "'" for path in paths)
+    script = (
+        "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false; "
+        f"$failed = $false; foreach ($path in @({quoted_paths})) {{ "
+        "$tokens = $null; $errors = $null; "
+        "[System.Management.Automation.Language.Parser]::ParseFile("
+        "[System.IO.Path]::GetFullPath($path), [ref]$tokens, "
+        "[ref]$errors) | Out-Null; foreach ($parseError in $errors) { $failed = $true; "
+        "Write-Output ('{0}:{1}:{2}: {3}' -f $path, $parseError.Extent.StartLineNumber, "
+        "$parseError.Extent.StartColumnNumber, $parseError.Message) } }; "
+        "if ($failed) { exit 1 }"
+    )
+    return [executable, "-NoProfile", "-NonInteractive", "-Command", script]
+
+
+class Step(NamedTuple):
+    """One gate step; ``command`` is None when the step reports ``skip_status``."""
+
+    label: str
+    command: list[str] | None
+    kind: str
+    snapshot_paths: list[str] | None = None
+    skip_status: str = ""
+    notes: tuple[str, ...] = ()
+
+
+def _bash_syntax_command(executable: str, paths: list[str]) -> list[str]:
+    """Return a command that runs ``bash -n`` once per shell script."""
+    return [executable, "-c", BASH_SYNTAX_LOOP, "bash", *paths]
+
+
+def _native_script_steps(paths: list[str]) -> list[Step]:
+    """Return syntax-only gate steps for direct shell and PowerShell scripts.
+
+    A missing interpreter yields an explicit ``SKIPPED`` step: bash and
+    PowerShell are platform tools that not every supported host provides.
+    """
+    routes = (
+        ("sh syntax", SHELL_SCRIPT_SUFFIX, "bash", ("bash",), _bash_syntax_command),
+        (
+            "ps1 syntax",
+            POWERSHELL_SCRIPT_SUFFIX,
+            "PowerShell",
+            ("pwsh", "powershell"),
+            _powershell_parse_command,
+        ),
+    )
+    steps: list[Step] = []
+    for label, suffix, tool_name, executables, build_command in routes:
+        scripts = [path for path in paths if Path(path).suffix == suffix]
+        if not scripts:
+            continue
+        executable = next(filter(None, (shutil.which(name) for name in executables)), None)
+        if executable is None:
+            steps.append(
+                Step(
+                    label,
+                    None,
+                    "gate",
+                    skip_status=f"SKIPPED ({tool_name} not found)",
+                    notes=tuple(f"{path}: syntax not checked" for path in scripts),
+                )
+            )
+        else:
+            steps.append(Step(label, build_command(executable, scripts), "gate"))
+    return steps
 
 
 def parse_pytest_counts(output: str) -> tuple[int, int, int]:
@@ -281,19 +391,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   --check       Validate without changing source files. Formatting differences fail.
 
 Pipeline:
-  ruff format -> ruff check -> mypy -> pytest
+  ruff format -> ruff check -> mypy -> [sh/ps1 syntax] -> pytest
   The default mode adds Ruff's auto-fix pass. --check uses `ruff format --check`.
 
 Path behavior:
   With no PATH, run the complete backend gate. PATH values are project-root-relative
   files or directories and are deduplicated. Python source paths select their mirrored
-  pytest tests; pyproject.toml selects the complete Python pipeline. Missing paths and
-  direct files without a registered quality capability abort before any tool runs.
+  pytest tests; pyproject.toml selects the complete Python pipeline. Direct .sh/.ps1
+  files under scripts/ skip Ruff and mypy, get a native syntax check (bash -n, the
+  PowerShell parser), and select their lifecycle tests. Missing paths and direct files
+  without a registered quality capability abort before any tool runs.
 
 Notes:
   The default mode keeps and reports every source-file change made by Ruff. --check
   does not modify source files, although underlying tools may still write caches.
-  --profile prints pytest's 25 slowest setup/call/teardown durations.
+  --profile prints pytest's 25 slowest setup/call/teardown durations. Steps without
+  inputs report NO FILES; a syntax check whose bash/PowerShell is not on PATH reports
+  SKIPPED. Neither reads as PASS, and neither fails the gate.
 
 Exit codes:
   0  All gates passed.
@@ -352,55 +466,41 @@ def main() -> int:
         return 2
 
     # ---------- Build command lists ----------
+    script_paths = [path for path in paths if _is_native_script(path)]
+    python_paths = [path for path in paths if path not in script_paths]
     if paths:
         if any(_is_python_config(path) for path in paths):
-            ruff_fmt_paths = ["."]
-            ruff_fix_paths = ["."]
-            ruff_check_paths = ["."]
+            python_targets = ["."]
             mypy_paths = FULL_MYPY_PATHS
             test_paths = ["tests/"]
             test_notes = ["pyproject.toml configures the full Python pipeline"]
         else:
-            ruff_fmt_paths = paths
-            ruff_fix_paths = paths
-            ruff_check_paths = paths
-            mypy_paths = paths
+            python_targets = python_paths
+            mypy_paths = python_paths
             test_paths, test_notes = translate_to_test_paths(paths)
     else:
-        ruff_fmt_paths = ["."]
-        ruff_fix_paths = ["."]
-        ruff_check_paths = ["."]
+        python_targets = ["."]
         mypy_paths = FULL_MYPY_PATHS
         test_paths = ["tests/"]
         test_notes = []
 
-    # Each step: (label, command, kind)
+    def python_step(label: str, tool_args: list[str], targets: list[str], kind: str) -> Step:
+        # Ruff without a target falls back to `.` (the whole repository), so a
+        # scope of only native scripts reports the Python steps as skipped.
+        if not targets:
+            return Step(label, None, kind, skip_status="NO FILES (no Python paths)")
+        snapshot_paths = targets if kind == "fix" else None
+        return Step(label, [sys.executable, "-m", *tool_args, *targets], kind, snapshot_paths)
+
     # kind: "fix" = auto-fix (shows FIXED), "gate" = validation (PASS/FAIL),
     #       "pytest" = test runner with count display
-    steps: list[tuple[str, list[str], str, list[str] | None]]
+    steps: list[Step]
     if args.check:
-        steps = [
-            (
-                "ruff format",
-                [sys.executable, "-m", "ruff", "format", "--check"] + ruff_fmt_paths,
-                "gate",
-                None,
-            )
-        ]
+        steps = [python_step("ruff format", ["ruff", "format", "--check"], python_targets, "gate")]
     else:
         steps = [
-            (
-                "ruff format",
-                [sys.executable, "-m", "ruff", "format"] + ruff_fmt_paths,
-                "fix",
-                ruff_fmt_paths,
-            ),
-            (
-                "ruff fix",
-                [sys.executable, "-m", "ruff", "check", "--fix"] + ruff_fix_paths,
-                "fix",
-                ruff_fix_paths,
-            ),
+            python_step("ruff format", ["ruff", "format"], python_targets, "fix"),
+            python_step("ruff fix", ["ruff", "check", "--fix"], python_targets, "fix"),
         ]
     pytest_command = [
         sys.executable,
@@ -416,19 +516,10 @@ def main() -> int:
 
     steps.extend(
         [
-            (
-                "ruff check",
-                [sys.executable, "-m", "ruff", "check"] + ruff_check_paths,
-                "gate",
-                None,
-            ),
-            ("mypy", [sys.executable, "-m", "mypy", "--pretty"] + mypy_paths, "gate", None),
-            (
-                "pytest",
-                pytest_command,
-                "pytest",
-                None,
-            ),
+            python_step("ruff check", ["ruff", "check"], python_targets, "gate"),
+            python_step("mypy", ["mypy", "--pretty"], mypy_paths, "gate"),
+            *_native_script_steps(script_paths),
+            Step("pytest", pytest_command, "pytest"),
         ]
     )
 
@@ -439,7 +530,13 @@ def main() -> int:
     validation_passed = True
     failures: list[tuple[str, str]] = []  # (label, full_output)
 
-    for label, cmd, kind, snapshot_paths in steps:
+    for label, cmd, kind, snapshot_paths, skip_status, step_notes in steps:
+        if cmd is None:
+            print(f"{label:<14}.... {skip_status}")
+            for note in step_notes:
+                print(f"{'':<18}note: {note}")
+            continue
+
         # Without any mirrored test path, running pytest with no arguments
         # would execute the full suite — skip explicitly instead.
         if kind == "pytest" and not test_paths:

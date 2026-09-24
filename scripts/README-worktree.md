@@ -295,8 +295,15 @@ python .worktrees/my-task/scripts/test-env.py start
 ```
 
 The file path points into the worktree, but the process working directory is
-still the main checkout. For the worktree workflow, prefer changing into the
-worktree first and then using relative commands.
+still the main checkout. Script entry points under `scripts/` that import vBot
+packages put their own checkout first on the import path, so `test-env.py` and
+the server it starts
+(launched from that checkout's root) run the worktree's code even though the
+editable install points at the main checkout. The default data dir and port,
+however, still come from the working directory's `.vbot-worktree` marker, so
+this command targets the main checkout's development instance. For the
+worktree workflow, prefer changing into the worktree first and then using
+relative commands.
 
 Practical rule:
 
@@ -368,7 +375,7 @@ This is the machine-readable marker used by config and cleanup logic.
 
 ### `~/.vbot-<name>/settings.json`
 
-This contains the dedicated `server_port`, the keyless `providers.custom.fake` endpoint, manual fake Models for chat/fallback/image/speech, and the corresponding default/task-model bindings. Existing user values in a reused data directory are preserved; missing fixture values are filled.
+This contains the dedicated `server_port`, the keyless `providers.custom.fake` endpoint, manual fake Models for chat/fallback/image/speech, and the corresponding default/task-model bindings. Existing user values in a reused data directory are preserved; missing fixture values are filled. The fixture is `tests/e2e/fake-provider-settings.json` from the checkout that runs `worktree.py` (like the data-directory layout and seed resources), not from the main repository, so a branch that changes it seeds its own version.
 
 ### `~/.vbot-<name>/.env` and canonical directories
 
@@ -387,6 +394,17 @@ Important behavior:
 - if the worktree is dirty, delete fails unless you explicitly use `--force`;
   the error output lists each blocking file as an `uncommitted:` line so you
   can decide whether to commit the work or discard it with `--force`
+- before removing anything it stops the worktree's managed server and fake
+  Provider with `scripts/test-env.py stop` for the recorded data dir and port;
+  when the worktree no longer has that script, the copy in the checkout running
+  `worktree.py` is used, which still refuses to kill a fake Provider it cannot
+  verify as its own
+- a directory without `.git` is a leftover whose checkout is already gone (see
+  "Merge succeeded but cleanup failed"); it holds no uncommitted work, so both
+  modes remove it and prune Git's registration. Its branch is read from
+  `git worktree list`, never from the enclosing repository; a managed branch is
+  still deleted with `git branch -d` without `--force`, so unmerged commits keep
+  their branch
 
 Ignored files never block a non-force delete. Build artifacts such as
 `node_modules/`, `webui/dist/`, `coverage/`, plan files under `docs/plans/`,
@@ -480,6 +498,8 @@ A keeper process exits when its release signal appears, when its window expires,
 ### Merge succeeded but cleanup failed
 
 The output prints `status: merged` with the commit and then an explicit cleanup error. The landed commit is safe; finish the removal manually with `python scripts/worktree.py delete <name>` (add `--force` only to discard worktree-local leftovers).
+
+The usual cause is a shell whose working directory is still inside the worktree: the held directory cannot be removed, and the merge restores the `.vbot-worktree` marker for a retry, so only the marker remains (typically while `git worktree list` still shows the entry as `prunable`). Move that shell out in a separate command (a `cd` inside the merge command does not release it), then run `delete <name>` without `--force`. It removes the leftover directory, the data dir, Git's registration, and the merged managed branch. If Git no longer registers the leftover, its branch cannot be verified and is kept; delete it with `git branch -d <name>`.
 
 ## Recommended team workflow
 

@@ -20,7 +20,7 @@ from pathlib import Path
 
 # Direct execution loads helper modules from this checkout.
 _checkout_root = Path(__file__).resolve().parents[1]
-if str(_checkout_root) not in sys.path:
+if sys.path[:1] != [str(_checkout_root)]:
     sys.path.insert(0, str(_checkout_root))
 
 from scripts._worktree_args import parse_args  # noqa: E402
@@ -46,18 +46,30 @@ from scripts._worktree_records import (  # noqa: E402
     SERVER_PORT_KEY,
     UNKNOWN_VALUE,
     WORKTREE_FILE_NAME,
+    _find_worktree_registration,
     _list_uncommitted_paths,
     _marker_data_dir,
     _marker_managed_branch,
+    _read_registered_branch_name,
     _read_settings_port,
     _read_worktree_branch_name,
     _read_worktree_marker,
+    _read_worktree_registrations,
 )
+
+
+def _script_checkout_root() -> Path:
+    """Return the checkout that holds the running script.
+
+    Resolved at call time: a worktree checkout runs its own code and fixtures,
+    which may be newer than the linked main repository's (``PROJECT_ROOT``).
+    """
+    return Path(__file__).resolve().parent.parent
 
 
 def _resolve_project_root() -> Path:
     """Resolve the canonical repository root across linked git worktrees."""
-    script_root = Path(__file__).resolve().parent.parent
+    script_root = _script_checkout_root()
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -82,7 +94,8 @@ def _resolve_project_root() -> Path:
 PROJECT_ROOT = _resolve_project_root()
 
 WORKTREES_DIR = PROJECT_ROOT / ".worktrees"
-FAKE_PROVIDER_SETTINGS_PATH = PROJECT_ROOT / "tests" / "e2e" / "fake-provider-settings.json"
+# Relative to the running script's checkout (see ``_script_checkout_root``).
+FAKE_PROVIDER_SETTINGS_RELATIVE_PATH = Path("tests") / "e2e" / "fake-provider-settings.json"
 VALID_WORKTREE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 TRASH_DIR_PREFIX = ".trash-"
 PORT_ALLOCATION_LOCK_NAME = "vbot-worktree-port.lock"
@@ -133,7 +146,7 @@ def initialize_data_dir(data_dir: Path) -> None:
     # own code defines the layout its server expects. The seed resources
     # (.env.example and friends) come from the same checkout, otherwise a branch
     # that changes a resource would seed the main copy and diverge from it.
-    checkout_root = Path(__file__).resolve().parent.parent
+    checkout_root = _script_checkout_root()
     layout_module = runpy.run_path(
         str(checkout_root / "core" / "storage" / "layout.py"),
         run_name="vbot_data_directory_layout",
@@ -247,28 +260,10 @@ def sweep_trash_directories(worktrees_dir: Path) -> None:
 
 def _worktree_registration_state(worktree_path: Path) -> bool | None:
     """Return whether Git still registers a worktree, or ``None`` if unknown."""
-    try:
-        result = subprocess.run(
-            ["git", "worktree", "list", "--porcelain", "-z"],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            check=False,
-        )
-    except OSError:
+    registrations = _read_worktree_registrations(PROJECT_ROOT)
+    if registrations is None:
         return None
-
-    if result.returncode != 0:
-        return None
-
-    target = os.path.normcase(str(worktree_path.resolve()))
-    for field in result.stdout.split("\0"):
-        if not field.startswith("worktree "):
-            continue
-        registered = Path(field.removeprefix("worktree ")).resolve()
-        if os.path.normcase(str(registered)) == target:
-            return True
-    return False
+    return _find_worktree_registration(registrations, worktree_path) is not None
 
 
 @contextmanager
@@ -341,7 +336,10 @@ def seed_worktree_settings(settings_path: Path, *, server_port: int) -> None:
         if isinstance(loaded, dict):
             settings = loaded
 
-    fixture = json.loads(FAKE_PROVIDER_SETTINGS_PATH.read_text(encoding="utf-8"))
+    # The fixture comes from the running checkout, like the data-dir layout in
+    # ``initialize_data_dir``: a branch that changes it seeds its own version.
+    fixture_path = _script_checkout_root() / FAKE_PROVIDER_SETTINGS_RELATIVE_PATH
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     if not isinstance(fixture, dict):
         raise ValueError("fake Provider settings fixture must be a JSON object")
     providers = fixture["providers"]
@@ -441,13 +439,24 @@ def cleanup_failed_create(
 
 
 def _stop_worktree_services(worktree_path: Path, data_dir: Path) -> str | None:
-    """Stop the exact managed server and fake Provider before deletion."""
+    """Stop the exact managed server and fake Provider before deletion.
+
+    The worktree's own ``test-env.py`` runs when present. A leftover whose
+    checkout is gone (for example after a merge whose directory removal
+    failed) falls back to this checkout's copy: ``stop`` targets the recorded
+    data dir and port, and still refuses to kill a fake Provider it cannot
+    verify as its own.
+    """
     settings_path = data_dir / "settings.json"
     if not settings_path.exists():
         return None
+    script_cwd = worktree_path
     test_env_script = worktree_path / "scripts" / "test-env.py"
     if not test_env_script.is_file():
-        return f"test environment stop script is missing: {test_env_script}"
+        script_cwd = _script_checkout_root()
+        test_env_script = script_cwd / "scripts" / "test-env.py"
+        if not test_env_script.is_file():
+            return f"test environment stop script is missing: {test_env_script}"
     port = _read_settings_port(data_dir)
     command = [
         sys.executable,
@@ -460,7 +469,7 @@ def _stop_worktree_services(worktree_path: Path, data_dir: Path) -> str | None:
     ]
     if port is not None:
         command.extend(["--port", str(port)])
-    return_code, stderr = _run_command(command, cwd=worktree_path)
+    return_code, stderr = _run_command(command, cwd=script_cwd)
     if return_code == 0:
         return None
     return stderr or "managed worktree services could not be stopped"
@@ -601,7 +610,15 @@ def cmd_delete(args: argparse.Namespace) -> int:
         print_error(f"worktree '{name}' does not exist")
         return 1
 
-    worktree_branch = _read_worktree_branch_name(worktree_path)
+    # A directory without `.git` is a leftover whose checkout is gone, typically
+    # a merge whose directory removal failed and restored the marker. `git -C`
+    # would resolve such a directory through the enclosing repository, so its
+    # branch comes only from Git's worktree registration.
+    checkout_present = (worktree_path / ".git").exists()
+    if checkout_present:
+        worktree_branch = _read_worktree_branch_name(worktree_path)
+    else:
+        worktree_branch = _read_registered_branch_name(PROJECT_ROOT, worktree_path)
 
     marker = worktree_path / WORKTREE_FILE_NAME
     marker_data = _read_worktree_marker(marker)
@@ -613,11 +630,12 @@ def cmd_delete(args: argparse.Namespace) -> int:
         return 1
 
     marker_text: str | None = None
-    if marker.exists() and not args.force:
+    if marker.exists():
         try:
             marker_text = marker.read_text(encoding="utf-8")
         except OSError:
             marker_text = None
+    if marker.exists() and checkout_present and not args.force:
         # Remove only the script-managed marker so legacy branches without the
         # ignore rule do not fail the non-force dirty-worktree guard.
         _run_command(["git", "-C", str(worktree_path), "clean", "-f", "--", WORKTREE_FILE_NAME])
@@ -628,34 +646,40 @@ def cmd_delete(args: argparse.Namespace) -> int:
         if isinstance(managed_branch, bool) and managed_branch:
             delete_branch = worktree_branch == name
 
-    if args.force:
-        git_command = ["git", "worktree", "remove", "--force", str(worktree_path)]
-    else:
-        git_command = ["git", "worktree", "remove", str(worktree_path)]
-
-    return_code, stderr = _run_command(git_command)
     terminated_paths: list[str] = []
     leftover_path: Path | None = None
-    if return_code != 0:
-        reason = stderr or "git worktree remove failed"
-        uncommitted_paths = _list_uncommitted_paths(worktree_path) if not args.force else []
-        registration_state = (
-            _worktree_registration_state(worktree_path) if not args.force else False
-        )
-        if not args.force and registration_state is not False:
-            if marker_text is not None and not marker.exists():
-                with suppress(OSError):
-                    marker.write_text(marker_text, encoding="utf-8")
-            if uncommitted_paths:
-                print_error("worktree has uncommitted changes, use --force to override")
-            else:
-                print_error(reason)
-            for line in uncommitted_paths:
-                print(f"uncommitted: {line}")
-            return 1
+    # Without a checkout there is no work to lose in either mode, and
+    # `git worktree remove` refuses a registered directory lacking `.git`.
+    finish_removal = not checkout_present
+    if checkout_present:
+        if args.force:
+            git_command = ["git", "worktree", "remove", "--force", str(worktree_path)]
+        else:
+            git_command = ["git", "worktree", "remove", str(worktree_path)]
 
-        # git may have deregistered the worktree but failed to delete files
-        # locked by running processes (Windows) — finish the removal ourselves.
+        return_code, stderr = _run_command(git_command)
+        if return_code != 0:
+            reason = stderr or "git worktree remove failed"
+            uncommitted_paths = _list_uncommitted_paths(worktree_path) if not args.force else []
+            registration_state = (
+                _worktree_registration_state(worktree_path) if not args.force else False
+            )
+            if not args.force and registration_state is not False:
+                if marker_text is not None and not marker.exists():
+                    with suppress(OSError):
+                        marker.write_text(marker_text, encoding="utf-8")
+                if uncommitted_paths:
+                    print_error("worktree has uncommitted changes, use --force to override")
+                else:
+                    print_error(reason)
+                for line in uncommitted_paths:
+                    print(f"uncommitted: {line}")
+                return 1
+            # git may have deregistered the worktree but failed to delete files
+            # locked by running processes (Windows) — finish the removal ourselves.
+            finish_removal = True
+
+    if finish_removal:
         terminated_paths = _terminate_worktree_processes(worktree_path)
         if worktree_path.exists():
             removal_error = _remove_directory_tree(worktree_path)

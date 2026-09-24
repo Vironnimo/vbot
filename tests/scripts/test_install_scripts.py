@@ -207,17 +207,16 @@ def test_server_setup_initializes_layout_before_writing_fresh_settings(
     assert script.index(layout_reference) < script.index(fresh_settings_branch)
 
 
-def test_shell_lifecycle_scripts_parse() -> None:
+@pytest.mark.parametrize("script", SHELL_SCRIPTS, ids=lambda path: path.name)
+def test_shell_lifecycle_scripts_parse(script: Path) -> None:
     bash = shutil.which("bash")
     if bash is None:
         pytest.skip("bash is unavailable")
 
+    # One script per invocation: `bash -n a b` parses only `a` and treats the
+    # remaining arguments as positional parameters.
     result = subprocess.run(
-        [
-            bash,
-            "-n",
-            *(path.relative_to(PROJECT_ROOT).as_posix() for path in SHELL_SCRIPTS),
-        ],
+        [bash, "-n", script.relative_to(PROJECT_ROOT).as_posix()],
         cwd=PROJECT_ROOT,
         capture_output=True,
         text=True,

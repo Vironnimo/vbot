@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
+if sys.path[:1] != [str(PROJECT_ROOT)]:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from cli.model_management import model_refresh  # noqa: E402

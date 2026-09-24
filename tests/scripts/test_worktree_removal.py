@@ -4,10 +4,29 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
+from pathlib import Path
 
 import pytest
 
-from tests.scripts.worktree_helpers import _load_worktree_module
+from tests.scripts.worktree_helpers import (
+    _commit_file,
+    _create_task_worktree,
+    _git,
+    _git_output,
+    _load_worktree_module,
+    _patch_repo_globals,
+    real_repo,
+)
+
+__all__ = ["real_repo"]
+
+
+def _make_checkout(worktree_path: Path) -> Path:
+    """Create a fake linked checkout; its `.git` file marks the checkout as present."""
+    worktree_path.mkdir(parents=True)
+    (worktree_path / ".git").write_text("gitdir: missing-admin-dir\n", encoding="utf-8")
+    return worktree_path
 
 
 def test_parse_args_accepts_create_delete_and_list():
@@ -43,7 +62,7 @@ def test_cmd_delete_uses_expected_data_dir_when_marker_is_tampered(tmp_path, mon
 
     name = "safe-delete"
     worktree_path = module.WORKTREES_DIR / name
-    worktree_path.mkdir(parents=True)
+    _make_checkout(worktree_path)
     expected_data_dir = tmp_path / "home" / f".vbot-{name}"
     expected_data_dir.mkdir(parents=True)
     malicious_target = tmp_path / "malicious-target"
@@ -79,7 +98,8 @@ def test_cmd_delete_stops_managed_services_before_removing_worktree(tmp_path, mo
     name = "running-worktree"
     worktree_path = tmp_path / ".worktrees" / name
     data_dir = tmp_path / "home" / f".vbot-{name}"
-    (worktree_path / "scripts").mkdir(parents=True)
+    _make_checkout(worktree_path)
+    (worktree_path / "scripts").mkdir()
     (worktree_path / "scripts" / "test-env.py").write_text("", encoding="utf-8")
     (worktree_path / module.WORKTREE_FILE_NAME).write_text(
         json.dumps({"data_dir": f"~/.vbot-{name}", "managed_branch": False}),
@@ -123,7 +143,8 @@ def test_cmd_delete_reports_stop_failure_without_removing_anything(tmp_path, mon
     name = "unstoppable-worktree"
     worktree_path = tmp_path / ".worktrees" / name
     data_dir = tmp_path / "home" / f".vbot-{name}"
-    (worktree_path / "scripts").mkdir(parents=True)
+    _make_checkout(worktree_path)
+    (worktree_path / "scripts").mkdir()
     (worktree_path / "scripts" / "test-env.py").write_text("", encoding="utf-8")
     data_dir.mkdir(parents=True)
     (data_dir / "settings.json").write_text("{}", encoding="utf-8")
@@ -151,7 +172,7 @@ def test_cmd_delete_reports_data_directory_removal_failure(tmp_path, monkeypatch
     name = "locked-data"
     worktree_path = tmp_path / ".worktrees" / name
     data_dir = tmp_path / "home" / f".vbot-{name}"
-    worktree_path.mkdir(parents=True)
+    _make_checkout(worktree_path)
     data_dir.mkdir(parents=True)
 
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
@@ -170,7 +191,7 @@ def test_cmd_delete_missing_marker_same_name_branch_skips_branch_delete(tmp_path
 
     name = "missing-marker"
     worktree_path = module.WORKTREES_DIR / name
-    worktree_path.mkdir(parents=True)
+    _make_checkout(worktree_path)
 
     commands = []
 
@@ -194,7 +215,7 @@ def test_cmd_delete_tolerates_non_object_marker_and_skips_branch_delete(tmp_path
 
     name = "existing-branch"
     worktree_path = module.WORKTREES_DIR / name
-    worktree_path.mkdir(parents=True)
+    _make_checkout(worktree_path)
 
     (worktree_path / module.WORKTREE_FILE_NAME).write_text(
         json.dumps(["not", "an", "object"]),
@@ -226,7 +247,7 @@ def test_cmd_delete_malformed_marker_same_name_branch_skips_branch_delete(tmp_pa
 
     name = "bad-marker"
     worktree_path = module.WORKTREES_DIR / name
-    worktree_path.mkdir(parents=True)
+    _make_checkout(worktree_path)
 
     (worktree_path / module.WORKTREE_FILE_NAME).write_text("{not-json", encoding="utf-8")
 
@@ -255,7 +276,7 @@ def test_cmd_delete_force_skips_marker_cleanup(tmp_path, monkeypatch):
 
     name = "force-remove"
     worktree_path = module.WORKTREES_DIR / name
-    worktree_path.mkdir(parents=True)
+    _make_checkout(worktree_path)
 
     (worktree_path / module.WORKTREE_FILE_NAME).write_text(
         json.dumps({"data_dir": f"~/.vbot-{name}", "managed_branch": False}),
@@ -286,7 +307,7 @@ def test_cmd_delete_skips_branch_delete_when_marker_declares_unmanaged_branch(
 
     name = "from-existing"
     worktree_path = module.WORKTREES_DIR / name
-    worktree_path.mkdir(parents=True)
+    _make_checkout(worktree_path)
 
     (worktree_path / module.WORKTREE_FILE_NAME).write_text(
         json.dumps({"data_dir": f"~/.vbot-{name}", "managed_branch": False}),
@@ -318,7 +339,7 @@ def test_cmd_delete_deletes_branch_when_marker_declares_managed_branch(tmp_path,
 
     name = "managed"
     worktree_path = module.WORKTREES_DIR / name
-    worktree_path.mkdir(parents=True)
+    _make_checkout(worktree_path)
 
     (worktree_path / module.WORKTREE_FILE_NAME).write_text(
         json.dumps({"data_dir": f"~/.vbot-{name}", "managed_branch": True}),
@@ -382,7 +403,7 @@ def test_cmd_delete_finishes_removal_when_git_fails_on_locked_files(tmp_path, mo
 
     name = "locked-worktree"
     worktree_path = module.WORKTREES_DIR / name
-    worktree_path.mkdir(parents=True)
+    _make_checkout(worktree_path)
     (worktree_path / "leftover.txt").write_text("x", encoding="utf-8")
 
     commands = []
@@ -420,7 +441,7 @@ def test_cmd_delete_moves_stuck_worktree_to_trash(tmp_path, monkeypatch, capsys)
 
     name = "stuck-worktree"
     worktree_path = module.WORKTREES_DIR / name
-    worktree_path.mkdir(parents=True)
+    _make_checkout(worktree_path)
     (worktree_path / "held-by-editor.node").write_text("x", encoding="utf-8")
 
     def fake_run_command(command, *, cwd=None):
@@ -457,7 +478,7 @@ def test_cmd_delete_lists_uncommitted_files_when_non_force_remove_fails(
 
     name = "dirty-worktree"
     worktree_path = module.WORKTREES_DIR / name
-    worktree_path.mkdir(parents=True)
+    _make_checkout(worktree_path)
 
     def fake_run_command(command, *, cwd=None):
         if command[:3] == ["git", "worktree", "remove"]:
@@ -488,7 +509,7 @@ def test_cmd_delete_restores_marker_after_failed_remove_for_retry(tmp_path, monk
 
     name = "managed-retry"
     worktree_path = module.WORKTREES_DIR / name
-    worktree_path.mkdir(parents=True)
+    _make_checkout(worktree_path)
 
     marker_path = worktree_path / module.WORKTREE_FILE_NAME
     marker_path.write_text(
@@ -545,7 +566,7 @@ def test_cmd_delete_non_force_fails_closed_for_localized_remove_error(
 
     name = "localized-error"
     worktree_path = module.WORKTREES_DIR / name
-    worktree_path.mkdir(parents=True)
+    _make_checkout(worktree_path)
     protected = worktree_path / "important.txt"
     protected.write_text("keep", encoding="utf-8")
 
@@ -572,7 +593,7 @@ def test_cmd_delete_non_force_finishes_only_after_verified_deregistration(tmp_pa
 
     name = "deregistered"
     worktree_path = module.WORKTREES_DIR / name
-    worktree_path.mkdir(parents=True)
+    _make_checkout(worktree_path)
     (worktree_path / "leftover.txt").write_text("x", encoding="utf-8")
 
     def fake_run_command(command, *, cwd=None):
@@ -588,3 +609,118 @@ def test_cmd_delete_non_force_finishes_only_after_verified_deregistration(tmp_pa
 
     assert result == 0
     assert not worktree_path.exists()
+
+
+def _strip_to_marker_only(module, worktree_path: Path) -> None:
+    """Leave only the marker, as a merge whose directory removal failed does."""
+    for entry in worktree_path.iterdir():
+        if entry.name == module.WORKTREE_FILE_NAME:
+            continue
+        if entry.is_dir():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+
+
+def _seed_leftover_data_dir(repo: Path, name: str, port: int) -> Path:
+    data_dir = repo.parent / "home" / f".vbot-{name}"
+    data_dir.mkdir(parents=True)
+    (data_dir / "settings.json").write_text(json.dumps({"server_port": port}), encoding="utf-8")
+    return data_dir
+
+
+def _intercept_service_stop(module, monkeypatch) -> list[tuple[list[str], Path | None]]:
+    """Record `test-env.py stop` calls; every other command runs for real."""
+    stop_calls: list[tuple[list[str], Path | None]] = []
+    real_run_command = module._run_command
+
+    def run_command(command, *, cwd=None):
+        if command[1:2] and command[1].endswith("test-env.py"):
+            stop_calls.append((command, cwd))
+            return 0, ""
+        return real_run_command(command, cwd=cwd)
+
+    monkeypatch.setattr(module, "_run_command", run_command)
+    monkeypatch.setattr(module, "_terminate_worktree_processes", lambda _path: [])
+    return stop_calls
+
+
+def _branch_exists(repo: Path, name: str) -> bool:
+    return bool(_git_output(repo, "branch", "--list", name))
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_cmd_delete_finishes_marker_only_leftover(real_repo, monkeypatch, capsys, force):
+    module = _load_worktree_module()
+    _patch_repo_globals(monkeypatch, module, real_repo)
+    name = "leftover"
+    worktree_path = _create_task_worktree(module, real_repo, name)
+    _commit_file(worktree_path, "task.txt", "done\n", "task work")
+    _git(real_repo, "merge", "--no-ff", name, "-m", f"merge: {name}")
+    _strip_to_marker_only(module, worktree_path)
+    data_dir = _seed_leftover_data_dir(real_repo, name, 8433)
+    stop_calls = _intercept_service_stop(module, monkeypatch)
+    # The enclosing repository is on main; the leftover must not resolve to it.
+    assert module._read_worktree_branch_name(worktree_path) is None
+
+    assert module.cmd_delete(argparse.Namespace(name=name, force=force)) == 0
+
+    assert "status: deleted" in capsys.readouterr().out
+    assert not worktree_path.exists()
+    assert not data_dir.exists()
+    assert _git_output(real_repo, "worktree", "list", "--porcelain").count("worktree ") == 1
+    assert not _branch_exists(real_repo, name)
+    checkout_root = module._script_checkout_root()
+    assert stop_calls == [
+        (
+            [
+                module.sys.executable,
+                str(checkout_root / "scripts" / "test-env.py"),
+                "stop",
+                "--host",
+                "127.0.0.1",
+                "--data-dir",
+                str(data_dir),
+                "--port",
+                "8433",
+            ],
+            checkout_root,
+        )
+    ]
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_cmd_delete_leftover_deletes_unmerged_branch_only_with_force(
+    real_repo, monkeypatch, capsys, force
+):
+    module = _load_worktree_module()
+    _patch_repo_globals(monkeypatch, module, real_repo)
+    name = "unmerged-leftover"
+    worktree_path = _create_task_worktree(module, real_repo, name)
+    _commit_file(worktree_path, "task.txt", "unmerged\n", "unmerged work")
+    _strip_to_marker_only(module, worktree_path)
+    _intercept_service_stop(module, monkeypatch)
+
+    result = module.cmd_delete(argparse.Namespace(name=name, force=force))
+
+    assert not worktree_path.exists()
+    assert _git_output(real_repo, "worktree", "list", "--porcelain").count("worktree ") == 1
+    if force:
+        assert result == 0
+        assert not _branch_exists(real_repo, name)
+    else:
+        # `git branch -d` keeps the unmerged commits reachable.
+        assert result == 1
+        assert "not fully merged" in capsys.readouterr().out
+        assert _branch_exists(real_repo, name)
+
+
+def test_read_registered_branch_name_reads_git_registration(real_repo):
+    module = _load_worktree_module()
+    worktree_path = _create_task_worktree(module, real_repo, "registered")
+    unregistered = real_repo / ".worktrees" / "unregistered"
+    unregistered.mkdir()
+
+    assert module._read_registered_branch_name(real_repo, worktree_path) == "registered"
+    assert module._read_registered_branch_name(real_repo, unregistered) is None
+    assert module._read_worktree_branch_name(unregistered) is None

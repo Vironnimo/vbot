@@ -29,6 +29,7 @@ from _quality_common import (
     configure_console_encoding,
     deduplicate_paths,
     describe_fix_result,
+    iter_snapshot_files,
     snapshot_target_files,
 )
 
@@ -63,6 +64,11 @@ SNAPSHOT_IGNORED_DIRS = {
     "dist",
     "node_modules",
 }
+# Every suffix ESLint lints here: its default .js/.mjs/.cjs patterns plus the
+# .svelte files webui/eslint.config.js adds. ESLint aborts on a directory whose
+# files it all ignores and only warns (exit 0) on an ignored file, so scoped
+# inputs without these suffixes are not handed to it.
+ESLINT_FILE_SUFFIXES = {".js", ".mjs", ".cjs", ".svelte"}
 
 # ---------- path helpers ----------
 
@@ -92,6 +98,9 @@ def _is_explicit_test_file(path: str) -> bool:
 
 # Test files live in ``__tests__`` dirs and carry one of these extensions.
 TEST_FILE_SUFFIXES = {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"}
+# Repo-wide guard scans (UI primitives, RPC ownership, i18n placeholders):
+# they cover every source, so no source-to-mirror mapping ever selects them.
+GUARD_TEST_GLOB = "*.guard.test.*"
 
 
 def _looks_like_test_file(name: str) -> bool:
@@ -227,6 +236,43 @@ def _is_webui_testable_source(path: Path) -> bool:
     return any(path == root or root in path.parents for root in (SRC_ROOT, WEBUI_ROOT / "scripts"))
 
 
+def _selects_guard_tests(path: Path) -> bool:
+    """Return whether a non-test input falls inside a scope the guard tests scan.
+
+    The guards read every WebUI source under ``src/`` (``uiPrimitives`` also
+    reads bundled Extension ``ui/`` sources), so a change anywhere there can
+    break one without touching its mirrored test.
+    """
+    src_root = WEBUI_ROOT / "src"
+    if path == src_root or src_root in path.parents:
+        return True
+    ui_root = _extension_ui_root(path)
+    return ui_root is not None and EXTENSION_UI_ROOT in ui_root.parents
+
+
+def _guard_test_targets() -> list[str]:
+    """Return every repo-wide guard test (``src/**/__tests__/*.guard.test.*``)."""
+    src_root = WEBUI_ROOT / "src"
+    if not src_root.is_dir():
+        return []
+    return sorted(
+        _relative_to_webui(entry)
+        for entry in src_root.rglob(GUARD_TEST_GLOB)
+        if entry.is_file()
+        and entry.parent.name == "__tests__"
+        and entry.suffix in TEST_FILE_SUFFIXES
+        and "node_modules" not in entry.parts
+    )
+
+
+def _is_covered_by_target(path: str, targets: list[str]) -> bool:
+    """Return whether *path* equals a target or lies under a directory target."""
+    return any(
+        path == target or (not _has_extension(target) and path.startswith(target + "/"))
+        for target in targets
+    )
+
+
 def translate_to_vitest_targets(paths: list[str]) -> tuple[list[str], list[str]]:
     """Translate input paths to the Vitest targets that actually cover them.
 
@@ -237,10 +283,13 @@ def translate_to_vitest_targets(paths: list[str]) -> tuple[list[str], list[str]]
     directory keeps its tests one level up, the nearest ancestor directory that
     holds any tests runs instead so a broader suite still exercises it. Inputs
     with no tests anywhere become a note, not a Vitest argument, so the runner
-    reports "no tests" honestly instead of a silent green pass.
+    reports "no tests" honestly instead of a silent green pass. Any non-test
+    input under ``src/`` or a bundled Extension ``ui/`` also runs every
+    repo-wide guard test not already covered by a directory target, with a note.
     """
     targets: list[str] = []
     notes: list[str] = []
+    run_guard_tests = False
 
     def add(target: str) -> None:
         if target not in targets:
@@ -252,6 +301,7 @@ def translate_to_vitest_targets(paths: list[str]) -> tuple[list[str], list[str]]
             continue
 
         absolute = (WEBUI_ROOT / p).resolve()
+        run_guard_tests = run_guard_tests or _selects_guard_tests(absolute)
         if _is_extension_page_source(absolute):
             for test_file in _find_extension_page_tests(absolute):
                 add((Path("..") / test_file.relative_to(PROJECT_ROOT)).as_posix())
@@ -290,7 +340,40 @@ def translate_to_vitest_targets(paths: list[str]) -> tuple[list[str], list[str]]
             add(relative)
             notes.append(f"{p}: no {stem} test, running {relative}/ instead")
 
-    return deduplicate_paths(targets, _has_extension), notes
+    targets = deduplicate_paths(targets, _has_extension)
+    if run_guard_tests:
+        guards = [
+            guard for guard in _guard_test_targets() if not _is_covered_by_target(guard, targets)
+        ]
+        if guards:
+            targets.extend(guards)
+            notes.append(f"repo-wide guard tests added: {', '.join(guards)}")
+    return targets, notes
+
+
+def translate_to_eslint_targets(paths: list[str]) -> tuple[list[str], list[str]]:
+    """Split scoped WebUI-relative inputs into ESLint targets and notes.
+
+    Returns ``(lint_paths, notes)``: a file is kept when ESLint lints its suffix,
+    a directory when it contains at least one such file outside build and
+    dependency folders. Everything else is dropped with a note instead of making
+    ESLint abort or report a pass for a file it ignored.
+    """
+    lint_paths: list[str] = []
+    notes: list[str] = []
+    for path in paths:
+        absolute = (WEBUI_ROOT / path).resolve()
+        if absolute.is_dir():
+            lintable = bool(
+                iter_snapshot_files(absolute, ESLINT_FILE_SUFFIXES, SNAPSHOT_IGNORED_DIRS)
+            )
+        else:
+            lintable = absolute.suffix in ESLINT_FILE_SUFFIXES
+        if lintable:
+            lint_paths.append(path)
+        else:
+            notes.append(f"{path}: no ESLint-lintable files (.js/.mjs/.cjs/.svelte), not linted")
+    return lint_paths, notes
 
 
 def _tool_path_and_absolute(path: str) -> tuple[str, Path]:
@@ -373,10 +456,13 @@ Pipeline:
 Path behavior:
   With no PATH, run the complete frontend gate and build. PATH values may be
   project-root-relative (`webui/src/...`) or WebUI-relative (`src/...`) files or
-  directories. Source paths select their nearest mirrored Vitest coverage. A scoped
-  run omits the build unless --build is given. --build adds a full WebUI build
-  without widening the selected lint or test paths. Missing paths abort before
-  any quality tool runs.
+  directories. Source paths select their nearest mirrored Vitest coverage; any
+  non-test path under src/ or a bundled Extension ui/ also selects the repo-wide
+  *.guard.test.* suites. ESLint receives only paths holding .js/.mjs/.cjs/.svelte
+  files; other inputs get a note, and a scope without any reports the ESLint
+  steps as NO FILES (not a pass). A scoped run omits the build unless --build
+  is given. --build adds a full WebUI build without widening the selected lint
+  or test paths. Missing paths abort before any quality tool runs.
 
 Notes:
   npx and npm must be on PATH. The default mode keeps and reports every source-file
@@ -452,12 +538,15 @@ def main() -> int:
     if stripped:
         scope_paths = stripped
         prettier_paths = scope_paths
+        lint_paths, eslint_notes = translate_to_eslint_targets(scope_paths)
         vitest_paths, vitest_notes = translate_to_vitest_targets(scope_paths)
     else:
         scope_paths = ["src/", "scripts/", *_extension_page_ui_paths()]
         prettier_paths = scope_paths
+        lint_paths, eslint_notes = scope_paths, []
         vitest_paths = ["src/", "scripts/"]
         vitest_notes = []
+    step_notes = {"eslint": eslint_notes, "vitest": vitest_notes}
 
     external_scope = any(
         path.startswith("../resources/") or path.startswith("../tests/") for path in scope_paths
@@ -472,16 +561,22 @@ def main() -> int:
     )
     eslint_config = ["--config", "webui/eslint.config.js"] if external_scope else []
     eslint_paths = (
-        [(WEBUI_ROOT / path).resolve().relative_to(PROJECT_ROOT).as_posix() for path in scope_paths]
+        [(WEBUI_ROOT / path).resolve().relative_to(PROJECT_ROOT).as_posix() for path in lint_paths]
         if external_scope
-        else scope_paths
+        else lint_paths
     )
+    # Without a lintable input, ESLint would abort (directory) or lint nothing;
+    # a None command reports the step as NO FILES instead of running it.
+    eslint_fix_command = (
+        [npx_exe, "eslint", *eslint_config, "--fix", *eslint_paths] if eslint_paths else None
+    )
+    eslint_command = [npx_exe, "eslint", *eslint_config, *eslint_paths] if eslint_paths else None
 
-    # Each step: (label, command, kind)
+    # Each step: (label, command, kind, snapshot paths); a None command is skipped.
     # kind: "fix" = auto-fix (shows FIXED), "gate" = validation (PASS/FAIL),
     #       "test" = test runner with count display,
     #       "build" = full build; surfaces stderr warnings on success without failing
-    steps: list[tuple[str, list[str], str, list[str] | None]]
+    steps: list[tuple[str, list[str] | None, str, list[str] | None]]
     if args.check:
         steps = [
             (
@@ -499,16 +594,11 @@ def main() -> int:
                 "fix",
                 prettier_paths,
             ),
-            (
-                "eslint fix",
-                [npx_exe, "eslint", *eslint_config, "--fix"] + eslint_paths,
-                "fix",
-                scope_paths,
-            ),
+            ("eslint fix", eslint_fix_command, "fix", lint_paths),
         ]
     steps.extend(
         [
-            ("eslint", [npx_exe, "eslint", *eslint_config] + eslint_paths, "gate", None),
+            ("eslint", eslint_command, "gate", None),
             (
                 "vitest",
                 # --passWithNoTests: a path filter without nearby tests must not
@@ -535,6 +625,12 @@ def main() -> int:
     build_warnings: list[tuple[str, str]] = []  # (label, stderr) — non-fatal
 
     for label, cmd, kind, snapshot_paths in steps:
+        if cmd is None:
+            print(f"{label:<14}.... NO FILES (nothing lintable)")
+            for note in step_notes.get(label, []):
+                print(f"{'':<18}note: {note}")
+            continue
+
         # A scoped run whose inputs map to no test files must not fall through to
         # ``vitest`` with no path argument — that would silently run the whole
         # suite. Report the honest "no tests" outcome and move on.
@@ -627,9 +723,8 @@ def main() -> int:
         if changed_files:
             for changed_path in changed_files:
                 print(f"{'':<18}{changed_path}")
-        if kind == "test":
-            for note in vitest_notes:
-                print(f"{'':<18}note: {note}")
+        for note in step_notes.get(label, []):
+            print(f"{'':<18}note: {note}")
 
     print()
 

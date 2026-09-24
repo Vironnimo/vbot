@@ -27,7 +27,7 @@ from typing import Any
 
 # Resolve internal probe modules from the invoked checkout.
 _project_root = Path(__file__).resolve().parents[1]
-if str(_project_root) not in sys.path:
+if sys.path[:1] != [str(_project_root)]:
     sys.path.insert(0, str(_project_root))
 
 

@@ -20,6 +20,7 @@ import asyncio
 import copy
 import json
 import secrets
+import sys
 import tempfile
 import time
 from collections.abc import AsyncIterator
@@ -28,18 +29,24 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from core.agents import Agent
-from core.automation import TriggerService
-from core.chat import ChatLoop, ChatLoopDependencies, ChatSessionManager
-from core.prompts import PinnedSkillCatalog
-from core.providers.accounts import ConnectionRef
-from core.runs import ChatRunManager, Run
-from core.runtime.runtime import Runtime
-from core.sessions import SessionAddress
-from core.tools import ToolAccess, ToolContext, ToolRegistry, tool_success
-from core.tools.change_tracker import ChangeTracker
-from core.tools.file_state import FileReadState
-from core.utils.config import Config
+# Import this checkout's packages first; from a linked worktree `core` would
+# otherwise resolve through the editable install to the main checkout's code.
+_CHECKOUT_ROOT = str(Path(__file__).resolve().parents[1])
+if sys.path[:1] != [_CHECKOUT_ROOT]:
+    sys.path.insert(0, _CHECKOUT_ROOT)
+
+from core.agents import Agent  # noqa: E402
+from core.automation import TriggerService  # noqa: E402
+from core.chat import ChatLoop, ChatLoopDependencies, ChatSessionManager  # noqa: E402
+from core.prompts import PinnedSkillCatalog  # noqa: E402
+from core.providers.accounts import ConnectionRef  # noqa: E402
+from core.runs import ChatRunManager, Run  # noqa: E402
+from core.runtime.runtime import Runtime  # noqa: E402
+from core.sessions import SessionAddress  # noqa: E402
+from core.tools import ToolAccess, ToolContext, ToolRegistry, tool_success  # noqa: E402
+from core.tools.change_tracker import ChangeTracker  # noqa: E402
+from core.tools.file_state import FileReadState  # noqa: E402
+from core.utils.config import Config  # noqa: E402
 
 JsonObject = dict[str, Any]
 

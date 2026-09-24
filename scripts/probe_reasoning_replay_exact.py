@@ -78,7 +78,7 @@ from typing import Any
 # Direct script execution must use this checkout, not an editable installation
 # pointing at another worktree.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
+if sys.path[:1] != [str(PROJECT_ROOT)]:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.chat.messages import ChatMessage  # noqa: E402
