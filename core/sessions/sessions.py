@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import builtins
-import json
 import logging
 import threading
 from collections.abc import Callable, Sequence
@@ -19,15 +18,12 @@ from core.sessions._io import (
 )
 from core.sessions._metadata import (
     _append_run_kind,
-    _completion_activity_from_state,
     _completion_activity_payload,
-    _decode_state_object,
     _default_prompt_cache_affinity_id,
     _format_timestamp,
     _is_prompt_cache_affinity_id,
     _new_prompt_cache_affinity_id,
     _normalize_session_title,
-    _session_list_summary_from_state,
     _valid_latest_completion,
     _validate_agent_id,
     _validate_session_id,
@@ -415,19 +411,7 @@ class ChatSessionManager:
         metadata_keys: Sequence[str] = (),
     ) -> builtins.list[JsonObject]:
         """Return normalized Session-list fields without open-ended metadata."""
-        summaries: builtins.list[JsonObject] = []
-        for state in self._store.list_summary_rows_for_scope(
-            project_id,
-            agent_id,
-            metadata_keys=metadata_keys,
-        ):
-            summary = _session_list_summary_from_state(state)
-            for key in metadata_keys:
-                payload = state[f"metadata_{key}_json"]
-                if payload is not None:
-                    summary[key] = json.loads(str(payload))
-            summaries.append(summary)
-        return summaries
+        return self._store.list_summaries(project_id, agent_id, metadata_keys=metadata_keys)
 
     def list_summaries_page(
         self,
@@ -438,63 +422,22 @@ class ChatSessionManager:
         filters: SessionListFilters | None = None,
         required_address: SessionAddress | None = None,
     ) -> SessionListPage:
-        """Return a bounded Session-list read model without open-ended metadata."""
-        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
-            raise ChatSessionError("Session list limit must be a positive integer")
-        selected_filters = filters or SessionListFilters()
-        cursor_value = (
-            None
-            if cursor is None
-            else (
-                cursor.active_sort,
-                cursor.project_id or "",
-                cursor.agent_id,
-                cursor.session_id,
-            )
-        )
-        rows, required_row, total_count, has_more = self._store.list_summary_rows(
+        """Return a bounded Session-list read model without open-ended metadata.
+
+        A live ``required_address`` within ``scopes`` joins the page even when
+        the filters hide it.
+        """
+        return self._store.list_summaries_page(
             scopes,
             limit=limit,
-            cursor=cursor_value,
-            include_subagents=selected_filters.include_subagents,
-            include_memory_reflections=selected_filters.include_memory_reflections,
-            include_skill_reflections=selected_filters.include_skill_reflections,
-            include_cron=selected_filters.include_cron,
-            include_channels=selected_filters.include_channels,
+            cursor=cursor,
+            filters=filters or SessionListFilters(),
             required_address=required_address,
-        )
-        summaries = [_session_list_summary_from_state(row) for row in rows]
-        seen = {
-            (summary.get("project_id"), summary["agent_id"], summary["id"]) for summary in summaries
-        }
-        if required_row is not None:
-            required_summary = _session_list_summary_from_state(required_row)
-            required_key = (
-                required_summary.get("project_id"),
-                required_summary["agent_id"],
-                required_summary["id"],
-            )
-            if required_key not in seen:
-                summaries.append(required_summary)
-        next_cursor = None
-        if has_more and rows:
-            last = rows[-1]
-            next_cursor = SessionListCursor(
-                active_sort=float(last["active_sort"]),
-                project_id=str(last["project_id"]) or None,
-                agent_id=str(last["agent_id"]),
-                session_id=str(last["session_id"]),
-            )
-        return SessionListPage(
-            sessions=tuple(summaries),
-            next_cursor=next_cursor,
-            total_count=total_count,
         )
 
     def summary(self, address: SessionAddress) -> JsonObject | None:
         """Read one live Session's list row by exact address; ``None`` if absent."""
-        row = self._store.summary_row(address)
-        return None if row is None else _session_list_summary_from_state(row)
+        return self._store.summary(address)
 
     def session_ids_with_messages(
         self,
@@ -516,14 +459,7 @@ class ChatSessionManager:
         self, scopes: Sequence[tuple[str | None, str]]
     ) -> dict[tuple[str | None, str], builtins.list[JsonObject]]:
         """Map every ``(project_id, agent_id)`` scope to its live Sessions with a completion."""
-        result: dict[tuple[str | None, str], builtins.list[JsonObject]] = {
-            (project_id or None, agent_id): [] for project_id, agent_id in scopes
-        }
-        for state in self._store.list_completion_activity_rows(builtins.list(result)):
-            result[(state["project_id"] or None, state["agent_id"])].append(
-                {"id": state["session_id"], **_completion_activity_from_state(state)}
-            )
-        return result
+        return self._store.list_completion_activity(scopes)
 
     def list_history_revisions(
         self, agent_id: str, project_id: str | None = None
@@ -561,34 +497,13 @@ class ChatSessionManager:
         return binding
 
     def temporary_binding(self, address: SessionAddress) -> TemporarySessionBinding | None:
-        row = self._store.temporary_binding(address)
-        if row is None:
-            return None
-        return TemporarySessionBinding(
-            address,
-            str(row["generation_id"]),
-            str(row["owner_name"]),
-            str(row["group_id"]),
-            str(row["participant_id"]),
-            _decode_state_object(str(row["config_json"]), "temporary Session config"),
-        )
+        return self._store.temporary_binding(address)
 
     def temporary_binding_by_participant(
         self, *, owner_name: str, group_id: str, participant_id: str
     ) -> TemporarySessionBinding | None:
-        result = self._store.temporary_binding_by_participant(
+        return self._store.temporary_binding_by_participant(
             owner_name=owner_name, group_id=group_id, participant_id=participant_id
-        )
-        if result is None:
-            return None
-        address, row = result
-        return TemporarySessionBinding(
-            address,
-            str(row["generation_id"]),
-            str(row["owner_name"]),
-            str(row["group_id"]),
-            str(row["participant_id"]),
-            _decode_state_object(str(row["config_json"]), "temporary Session config"),
         )
 
     async def delete_temporary_group(self, *, owner_name: str, group_id: str) -> int:
@@ -605,25 +520,11 @@ class ChatSessionManager:
         after: str = "",
         limit: int = 100,
     ) -> builtins.list[TemporarySessionBinding]:
-        rows = await _run_session_io(
+        return await _run_session_io(
             lambda: self._store.temporary_bindings(
-                owner_name=owner_name,
-                group_id=group_id,
-                after=after,
-                limit=limit,
+                owner_name=owner_name, group_id=group_id, after=after, limit=limit
             )
         )
-        return [
-            TemporarySessionBinding(
-                address,
-                str(row["generation_id"]),
-                str(row["owner_name"]),
-                str(row["group_id"]),
-                str(row["participant_id"]),
-                _decode_state_object(str(row["config_json"]), "temporary Session config"),
-            )
-            for address, row in rows
-        ]
 
     def set_temporary_group_title(self, *, owner_name: str, group_id: str, title: str) -> None:
         """Replace the display title of one owner's temporary execution group."""
@@ -660,37 +561,9 @@ class ChatSessionManager:
         configured Model from the protected binding, never its complete
         configuration. ``group_id`` narrows one owner's group.
         """
-        result: builtins.list[OwnedSessionSummary] = []
-        for state in self._store.owned_session_summary_rows(
+        return self._store.owned_session_summaries(
             owner_name=owner_name, group_id=group_id, metadata_keys=metadata_keys
-        ):
-            summary = _session_list_summary_from_state(state)
-            for key in metadata_keys:
-                payload = state[f"metadata_{key}_json"]
-                if payload is not None:
-                    summary[key] = json.loads(str(payload))
-            participant_name = state["participant_name"]
-            model = state["participant_model"]
-            group_title = state["group_title"]
-            result.append(
-                OwnedSessionSummary(
-                    address=SessionAddress(
-                        project_id=str(state["project_id"]) or None,
-                        agent_id=str(state["agent_id"]),
-                        session_id=str(state["session_id"]),
-                    ),
-                    owner_name=str(state["owner_name"]),
-                    group_id=str(state["group_id"]),
-                    group_title=group_title if isinstance(group_title, str) else None,
-                    participant_id=str(state["participant_id"]),
-                    participant_name=(
-                        participant_name if isinstance(participant_name, str) else None
-                    ),
-                    model=model if isinstance(model, str) else None,
-                    summary=summary,
-                )
-            )
-        return result
+        )
 
     async def list_owned_session_summaries_async(
         self,
@@ -769,21 +642,13 @@ class ChatSessionManager:
         owner_name: str,
         receipt_id: str,
     ) -> DeliveryReceipt | None:
-        row = await _run_session_io(
+        return await _run_session_io(
             lambda: self._store.delivery_receipt(
                 address,
                 generation_id=generation_id,
                 owner_name=owner_name,
                 receipt_id=receipt_id,
             )
-        )
-        if row is None:
-            return None
-        return DeliveryReceipt(
-            str(row["receipt_id"]),
-            str(row["content_hash"]),
-            str(row["effect_kind"]),
-            {"kind": str(row["carrier_kind"]), "sequence": int(row["carrier_sequence"])},
         )
 
     async def record_run_owner_async(
@@ -844,16 +709,7 @@ class ChatSessionManager:
     def run_start_boundaries(
         self, addresses: Sequence[SessionAddress]
     ) -> builtins.list[RunStartBoundary]:
-        rows = self._store.run_start_boundaries(addresses)
-        return [
-            RunStartBoundary(
-                SessionAddress(row["project_id"] or None, row["agent_id"], row["session_id"]),
-                str(row["generation_id"]),
-                str(row["run_id"]),
-                int(row["start_sequence"]),
-            )
-            for row in rows
-        ]
+        return self._store.run_start_boundaries(addresses)
 
     def history_revision(self, address: SessionAddress) -> int:
         return int(self._store.state(address)["history_revision"])

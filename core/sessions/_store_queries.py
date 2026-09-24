@@ -11,12 +11,21 @@ from typing import TYPE_CHECKING, Any, cast
 
 from core.chat.errors import ChatSessionError
 from core.sessions import _store_codec, _store_values
-from core.sessions._types import JsonObject, SessionHistoryRevision
+from core.sessions._metadata import (
+    _completion_activity_from_state,
+    _session_list_summary_from_state,
+)
+from core.sessions._types import (
+    JsonObject,
+    SessionHistoryRevision,
+    SessionListCursor,
+    SessionListPage,
+)
 from core.sessions.errors import SessionNotFoundError
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
-    from core.sessions._types import SessionAddress, SessionRecallVisibility
+    from core.sessions._types import SessionAddress, SessionListFilters, SessionRecallVisibility
 
 
 def exists(connection: sqlite3.Connection, address: SessionAddress) -> bool:
@@ -196,73 +205,102 @@ def metadata_value(connection: sqlite3.Connection, address: SessionAddress, key:
     return json.loads(row[1])
 
 
-def list_summary_rows_for_scope(
-    connection: sqlite3.Connection,
-    project_id: str | None,
-    agent_id: str,
-    *,
-    metadata_keys: Sequence[str] = (),
-) -> list[sqlite3.Row]:
+def _summary_metadata_columns(metadata_keys: Sequence[str]) -> tuple[tuple[str, ...], str]:
+    """Validate requested summary metadata and select each key as ``metadata_<key>_json``."""
     selected_keys = tuple(dict.fromkeys(metadata_keys))
     unknown = set(selected_keys) - _store_values._SUMMARY_METADATA_COLUMNS.keys()
     if unknown:
         raise ChatSessionError(
             f"unsupported Session summary metadata: {', '.join(sorted(unknown))}"
         )
-    metadata_columns = "".join(
+    return selected_keys, "".join(
         f", json_extract(metadata_json, '{_store_values._SUMMARY_METADATA_COLUMNS[key]}') "
         f"AS metadata_{key}_json"
         for key in selected_keys
     )
+
+
+def _summary(state: sqlite3.Row, metadata_keys: Sequence[str] = ()) -> JsonObject:
+    """Decode one Session-list row, adding each selected metadata value that is set."""
+    summary = _session_list_summary_from_state(state)
+    for key in metadata_keys:
+        payload = state[f"metadata_{key}_json"]
+        if payload is not None:
+            summary[key] = json.loads(str(payload))
+    return summary
+
+
+def list_summaries(
+    connection: sqlite3.Connection,
+    project_id: str | None,
+    agent_id: str,
+    *,
+    metadata_keys: Sequence[str] = (),
+) -> Callable[[], list[JsonObject]]:
+    """Select one scope's live Session-list rows, most recently active first.
+
+    The returned decoder builds the summaries after the read transaction.
+    """
+    selected_keys, metadata_columns = _summary_metadata_columns(metadata_keys)
     rows = connection.execute(
         f"SELECT {_store_values._SESSION_LIST_COLUMNS}{metadata_columns} FROM sessions "
         "WHERE status = 'live' AND project_id = ? AND agent_id = ? "
         "ORDER BY active_sort DESC, session_id",
         (project_id or "", agent_id),
     ).fetchall()
-    return cast(list[sqlite3.Row], rows)
+    return lambda: [_summary(row, selected_keys) for row in rows]
 
 
-def list_summary_rows(
+def list_summaries_page(
     connection: sqlite3.Connection,
     scopes: Sequence[tuple[str | None, str]],
     *,
     limit: int,
-    cursor: tuple[float, str, str, str] | None,
-    include_subagents: bool,
-    include_memory_reflections: bool,
-    include_skill_reflections: bool,
-    include_cron: bool,
-    include_channels: bool,
+    cursor: SessionListCursor | None,
+    filters: SessionListFilters,
     required_address: SessionAddress | None,
-) -> tuple[list[sqlite3.Row], sqlite3.Row | None, int, bool]:
-    """Read one bounded, globally ordered Session-list page from normalized columns."""
+) -> Callable[[], SessionListPage]:
+    """Read one bounded, globally ordered Session-list page from normalized columns.
+
+    A live ``required_address`` within ``scopes`` is appended when the page lacks
+    it; if the filters hide it, it also counts toward the total. The returned
+    decoder builds the page after the read transaction.
+    """
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+        raise ChatSessionError("Session list limit must be a positive integer")
     normalized_scopes = tuple(
         dict.fromkeys((project_id or "", agent_id) for project_id, agent_id in scopes)
     )
     if not normalized_scopes:
-        return [], None, 0, False
+        return lambda: SessionListPage(sessions=(), next_cursor=None, total_count=0)
     scope_sql = (
         "(" + " OR ".join("(project_id = ? AND agent_id = ?)" for _scope in normalized_scopes) + ")"
     )
     scope_params = [value for scope in normalized_scopes for value in scope]
     visibility_sql, visibility_params = _store_values._session_list_visibility_sql(
-        include_subagents=include_subagents,
-        include_memory_reflections=include_memory_reflections,
-        include_skill_reflections=include_skill_reflections,
-        include_cron=include_cron,
-        include_channels=include_channels,
+        include_subagents=filters.include_subagents,
+        include_memory_reflections=filters.include_memory_reflections,
+        include_skill_reflections=filters.include_skill_reflections,
+        include_cron=filters.include_cron,
+        include_channels=filters.include_channels,
     )
     base_where = f"status = 'live' AND {scope_sql}"
     page_where = ""
     page_params: list[Any] = []
     if cursor is not None:
-        active_sort, project_id, agent_id, session_id = cursor
         page_where = (
             "WHERE active_sort < ? OR (active_sort = ? AND "
             "(project_id, agent_id, session_id) > (?, ?, ?))"
         )
-        page_params.extend((active_sort, active_sort, project_id, agent_id, session_id))
+        page_params.extend(
+            (
+                cursor.active_sort,
+                cursor.active_sort,
+                cursor.project_id or "",
+                cursor.agent_id,
+                cursor.session_id,
+            )
+        )
     total = int(
         connection.execute(
             f"SELECT COUNT(*) FROM sessions WHERE {base_where} AND {visibility_sql}",
@@ -291,51 +329,81 @@ def list_summary_rows(
             ).fetchone()
     if required_row is not None and not bool(required_row["list_visible"]):
         total += 1
-    return cast(list[sqlite3.Row], rows), required_row, total, has_more
+    return lambda: _summaries_page(rows, required_row, total, has_more=has_more)
 
 
-def summary_row(connection: sqlite3.Connection, address: SessionAddress) -> sqlite3.Row | None:
-    """Select one live Session's list columns by its exact address."""
+def _summaries_page(
+    rows: Sequence[sqlite3.Row],
+    required_row: sqlite3.Row | None,
+    total_count: int,
+    *,
+    has_more: bool,
+) -> SessionListPage:
+    summaries = [_summary(row) for row in rows]
+    if required_row is not None and _store_values._address(required_row) not in {
+        _store_values._address(row) for row in rows
+    }:
+        summaries.append(_summary(required_row))
+    last = rows[-1] if has_more and rows else None
+    return SessionListPage(
+        sessions=tuple(summaries),
+        next_cursor=None
+        if last is None
+        else SessionListCursor(
+            active_sort=float(last["active_sort"]),
+            project_id=str(last["project_id"]) or None,
+            agent_id=str(last["agent_id"]),
+            session_id=str(last["session_id"]),
+        ),
+        total_count=total_count,
+    )
+
+
+def summary(
+    connection: sqlite3.Connection, address: SessionAddress
+) -> Callable[[], JsonObject | None]:
+    """Select one live Session's list columns by its exact address; absent is ``None``."""
     row = connection.execute(
         f"SELECT {_store_values._SESSION_LIST_COLUMNS} FROM sessions "
         "WHERE status = 'live' AND project_id = ? AND agent_id = ? AND session_id = ?",
         _store_values._scope(address),
     ).fetchone()
-    return cast("sqlite3.Row | None", row)
+    return lambda: None if row is None else _summary(row)
 
 
 # Two bound values per scope; the chunk stays far below SQLite's variable limit.
 _COMPLETION_ACTIVITY_SCOPE_BATCH_SIZE = 400
 
 
-def list_completion_activity_rows(
+def list_completion_activity(
     connection: sqlite3.Connection, scopes: Sequence[tuple[str | None, str]]
-) -> list[sqlite3.Row]:
-    """Select live Sessions with a latest completion for many Agent scopes.
+) -> dict[tuple[str | None, str], list[JsonObject]]:
+    """Map every ``(project_id, agent_id)`` scope to its live Sessions with a completion.
 
-    Sessions without a completion are not selected. The scopes join the live
+    Sessions without a latest completion are omitted. The scopes join the live
     address index, so each scope is one index search in the caller's snapshot.
     """
-    normalized = tuple(
-        dict.fromkeys((project_id or "", agent_id) for project_id, agent_id in scopes)
-    )
-    rows: list[sqlite3.Row] = []
+    result: dict[tuple[str | None, str], list[JsonObject]] = {
+        (project_id or None, agent_id): [] for project_id, agent_id in scopes
+    }
+    normalized = tuple((project_id or "", agent_id) for project_id, agent_id in result)
     for start in range(0, len(normalized), _COMPLETION_ACTIVITY_SCOPE_BATCH_SIZE):
         chunk = normalized[start : start + _COMPLETION_ACTIVITY_SCOPE_BATCH_SIZE]
         values = ", ".join("(?, ?)" for _scope in chunk)
-        rows.extend(
-            connection.execute(
-                f"WITH scopes(project_id, agent_id) AS (VALUES {values}) "
-                "SELECT s.project_id, s.agent_id, s.session_id, s.latest_completion_run_id, "
-                "s.latest_completion_status, s.latest_completion_at, s.read_completion_run_id "
-                "FROM scopes JOIN sessions AS s "
-                "ON s.project_id = scopes.project_id AND s.agent_id = scopes.agent_id "
-                "WHERE s.status = 'live' AND s.latest_completion_run_id IS NOT NULL "
-                "ORDER BY s.project_id, s.agent_id, s.session_id",
-                [value for scope in chunk for value in scope],
-            ).fetchall()
-        )
-    return rows
+        for state in connection.execute(
+            f"WITH scopes(project_id, agent_id) AS (VALUES {values}) "
+            "SELECT s.project_id, s.agent_id, s.session_id, s.latest_completion_run_id, "
+            "s.latest_completion_status, s.latest_completion_at, s.read_completion_run_id "
+            "FROM scopes JOIN sessions AS s "
+            "ON s.project_id = scopes.project_id AND s.agent_id = scopes.agent_id "
+            "WHERE s.status = 'live' AND s.latest_completion_run_id IS NOT NULL "
+            "ORDER BY s.project_id, s.agent_id, s.session_id",
+            [value for scope in chunk for value in scope],
+        ).fetchall():
+            result[(state["project_id"] or None, state["agent_id"])].append(
+                {"id": state["session_id"], **_completion_activity_from_state(state)}
+            )
+    return result
 
 
 def session_ids_with_messages(
