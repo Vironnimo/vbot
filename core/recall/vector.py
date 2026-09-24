@@ -4,7 +4,8 @@ Search builds source-derived Passages, applies scope/Session/time filters inside
 KNN, and returns pure semantic top-K Passages without Session deduplication,
 a universal distance cutoff, or literal fallback. One disposable store pins the
 embedding-space fingerprint, index policy, and dimension; incompatible changes
-trigger a complete rebuild.
+trigger a complete rebuild. Within one space, a changed Session embeds only the
+Passage texts that have no stored vector yet.
 """
 
 from __future__ import annotations
@@ -12,8 +13,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import sqlite3
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import TypeVar, cast
 
 from core.model_tasks import (
     EmbeddingError,
@@ -30,11 +32,9 @@ from core.recall.passages import (
     PASSAGE_OVERLAP_CHARS,
     PASSAGE_POLICY_VERSION,
     PASSAGE_TARGET_CHARS,
-    Passage,
     build_session_passages,
 )
 from core.recall.recall import (
-    JsonObject,
     RecallBackendContext,
     RecallSearchCapabilities,
     RecallSearchError,
@@ -43,13 +43,17 @@ from core.recall.recall import (
     RecallSearchRequest,
 )
 from core.recall.vector_store import (
-    ChunkVectorRecord,
+    RefreshPlan,
+    SessionPassages,
+    SessionVersion,
+    StoredPassage,
     VectorHeader,
     VectorStore,
     VectorStoreError,
-    format_started_at,
 )
 from core.sessions import SessionAddress, SessionNotFoundError
+
+_T = TypeVar("_T")
 
 # Maximum number of texts embedded in one provider call. The provider
 # contract has no hard limit, but splitting keeps the per-request
@@ -65,20 +69,22 @@ _SEMANTIC_SEARCH_GUIDANCE = (
 )
 _SEMANTIC_TOOL_SUMMARY = "Find past conversations about a topic, ranked by similarity in meaning."
 # Sentinel stored for the identity/global scope (``project_id is None``) in the
-# chunk-key tuple. An empty string keeps the store's UNIQUE constraint reliable —
-# SQLite treats NULLs as distinct, which would break per-scope uniqueness.
+# Passage key. An empty string keeps per-scope keys reliable — SQLite treats
+# NULLs as distinct, which would break per-scope uniqueness.
 _GLOBAL_PROJECT_SCOPE = ""
 _INDEX_POLICY = (
     f"passage-v{PASSAGE_POLICY_VERSION}:target={PASSAGE_TARGET_CHARS}:"
     f"overlap={PASSAGE_OVERLAP_CHARS}"
 )
+# Failures of the disposable index itself; the file is discarded and rebuilt once.
+_STORE_FAILURES = (VectorStoreError, OSError, sqlite3.Error)
 
 
 def _project_scope(project_id: str | None) -> str:
     """Map a recall project scope to the vector store's stored scope value.
 
     ``None`` (identity/global recall) maps to the ``_GLOBAL_PROJECT_SCOPE``
-    sentinel so the on-disk chunk rows for the global scope never share a key
+    sentinel so the on-disk rows for the global scope never share a key
     with a project's same-UUID session.
     """
 
@@ -111,6 +117,34 @@ class _EmbeddingOperationUsage:
         self.model_id = result.actual_model_id
 
 
+@dataclass(frozen=True)
+class _ScopeVersions:
+    """Live Session versions of one Recall scope, read in one Session-store query."""
+
+    live_session_ids: frozenset[str]
+    candidates: dict[str, SessionVersion]
+    source_fingerprint: str
+
+
+@dataclass(frozen=True)
+class PreparedSemanticSearch:
+    """One semantic search whose index is fresh and whose query is embedded.
+
+    ``page`` ranks at any depth without repeating freshness or query embedding.
+    ``header`` is ``None`` when the request selects no candidate Session.
+    """
+
+    backend: VectorRecallBackend
+    request: RecallSearchRequest
+    snapshot_id: str
+    candidate_sessions: int
+    header: VectorHeader | None = None
+    query_vector: tuple[float, ...] = ()
+
+    async def page(self, offset: int, limit: int) -> RecallSearchPage:
+        return await self.backend._search_prepared(self, offset=offset, limit=limit)
+
+
 class VectorRecallBackend(CanonicalSessionRecallBackend):
     """Recall backend backed by sqlite-vec Passage vectors."""
 
@@ -134,165 +168,33 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
         )
 
     async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
+        prepared = await self.prepare_search(request)
+        return await prepared.page(request.offset, request.limit)
+
+    async def prepare_search(self, request: RecallSearchRequest) -> PreparedSemanticSearch:
+        """Reconcile the request's candidates and embed its query once.
+
+        Emits one embedding Usage summary for the whole operation.
+        """
+
         usage = _EmbeddingOperationUsage()
         try:
-            return await self._search_page_with_usage(request, usage)
+            async with self._index_lock:
+                return await self._semantic_operation(
+                    lambda: self._prepare(request, usage),
+                    recover=True,
+                )
         finally:
             self._log_embedding_usage("typed_search", usage)
-
-    async def _search_page_with_usage(
-        self,
-        request: RecallSearchRequest,
-        usage: _EmbeddingOperationUsage,
-    ) -> RecallSearchPage:
-        summaries = await asyncio.to_thread(self._search_candidate_summaries, request)
-        try:
-            async with self._index_lock:
-                for attempt in range(2):
-                    try:
-                        binding_header = await asyncio.to_thread(
-                            self._resolve_header,
-                            self.store,
-                            _INDEX_POLICY,
-                        )
-                        if binding_header is None:
-                            raise RecallSearchError(
-                                "semantic_unavailable",
-                                "Semantic search is unavailable because no embedding model "
-                                "is configured.",
-                            )
-                        snapshot_id = self._vector_snapshot(request, summaries, binding_header)
-                        if request.snapshot_id is not None and request.snapshot_id != snapshot_id:
-                            raise RecallSearchError(
-                                "stale_cursor",
-                                "Session search source changed; repeat the search.",
-                            )
-                        if not summaries:
-                            return RecallSearchPage(
-                                hits=(),
-                                result_type="passage",
-                                ranking="cosine_distance",
-                                snapshot_id=snapshot_id,
-                                has_more=False,
-                                total_candidate_sessions=0,
-                            )
-
-                        await self._ensure_fresh_index(
-                            request,
-                            binding_header,
-                            store=self.store,
-                            index_policy=_INDEX_POLICY,
-                            usage=usage,
-                        )
-                        query_vector, query_header = await self._embed_query(
-                            binding_header,
-                            request.query,
-                            index_policy=_INDEX_POLICY,
-                            usage=usage,
-                        )
-                        await self._ensure_query_header(
-                            request,
-                            query_header,
-                            store=self.store,
-                            index_policy=_INDEX_POLICY,
-                            usage=usage,
-                        )
-                        resolved_snapshot_id = self._vector_snapshot(
-                            request,
-                            summaries,
-                            query_header,
-                        )
-                        if (
-                            request.snapshot_id is not None
-                            and request.snapshot_id != resolved_snapshot_id
-                        ):
-                            raise RecallSearchError(
-                                "stale_cursor",
-                                "Session search source changed; repeat the search.",
-                            )
-                        snapshot_id = resolved_snapshot_id
-                        candidates = await asyncio.to_thread(
-                            self.store.knn_search,
-                            header=query_header,
-                            query_vector=query_vector,
-                            limit=request.offset + request.limit + 1,
-                            agent_id=request.agent_id,
-                            project_id=_project_scope(request.project_id),
-                            session_id=request.session_id,
-                            excluded_session_ids=request.excluded_session_ids,
-                            since=request.since,
-                            until=request.until,
-                        )
-                        records = await asyncio.to_thread(
-                            self.store.get_chunks_by_rowids,
-                            [rowid for rowid, _ in candidates],
-                        )
-                        break
-                    except (VectorStoreError, OSError, sqlite3.Error) as error:
-                        if attempt > 0:
-                            raise
-                        self._warning("Vector recall index failed; rebuilding once: %s", error)
-                        await asyncio.to_thread(self.store.reset_index)
-        except (VectorStoreError, EmbeddingError, OSError, sqlite3.Error) as error:
-            self._warning("Vector recall failed: %s", error)
-            raise RecallSearchError(
-                "semantic_unavailable",
-                "Semantic search failed; retry or check the embedding provider.",
-            ) from error
-
-        ranked: list[RecallSearchHit] = []
-        for rowid, distance in candidates:
-            record = records.get(rowid)
-            if record is None:
-                continue
-            ranked.append(
-                RecallSearchHit(
-                    result_type="passage",
-                    session_id=record.session_id,
-                    message_id=record.start_message_id,
-                    role=record.start_role,
-                    timestamp=record.start_timestamp,
-                    text=record.text,
-                    score=distance,
-                    passage_id=record.passage_id,
-                    start_message_id=record.start_message_id,
-                    end_message_id=record.end_message_id,
-                    end_timestamp=record.end_timestamp,
-                    sources=("semantic",),
-                )
-            )
-        page_hits = ranked[request.offset : request.offset + request.limit]
-        return RecallSearchPage(
-            hits=tuple(page_hits),
-            result_type="passage",
-            ranking="cosine_distance",
-            snapshot_id=snapshot_id,
-            has_more=len(ranked) > request.offset + len(page_hits),
-            total_candidate_sessions=len(summaries),
-        )
-
-    def _vector_snapshot(
-        self,
-        request: RecallSearchRequest,
-        summaries: list[JsonObject],
-        header: VectorHeader,
-    ) -> str:
-        source = self._search_snapshot(request, summaries)
-        payload = (
-            f"{source}\0{header.provider_id}\0{header.model_id}\0"
-            f"{header.response_model_id}\0{header.space_fingerprint}\0{header.index_policy}"
-        ).encode()
-        return hashlib.sha256(payload).hexdigest()
 
     async def remove_session(
         self, agent_id: str, session_id: str, project_id: str | None = None
     ) -> None:
-        """Evict one session's chunk vectors from the store (delete-time cleanup).
+        """Evict one session's Passage vectors from the store (delete-time cleanup).
 
-        Active counterpart to the on-search staleness drop in
-        ``_ensure_fresh_index``: session deletion calls it so a removed session
-        leaves semantic search immediately. ``project_id`` maps through
-        ``_project_scope`` to match how chunks are keyed in the store.
+        Active counterpart to the pruning in ``_plan_refresh``: session deletion
+        calls it so a removed session leaves semantic search immediately.
+        ``project_id`` maps through ``_project_scope`` to match the stored keys.
         """
         async with self._index_lock:
             await asyncio.to_thread(
@@ -305,6 +207,174 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
     # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------
+
+    async def _prepare(
+        self,
+        request: RecallSearchRequest,
+        usage: _EmbeddingOperationUsage,
+    ) -> PreparedSemanticSearch:
+        binding_header = await asyncio.to_thread(self._resolve_header, self.store, _INDEX_POLICY)
+        if binding_header is None:
+            raise RecallSearchError(
+                "semantic_unavailable",
+                "Semantic search is unavailable because no embedding model is configured.",
+            )
+        scope = await asyncio.to_thread(self._read_scope, request)
+        if binding_header.dimension > 0:
+            # A pinned header already names the complete embedding space, so a
+            # stale continuation fails before any embedding is paid for.
+            self._check_snapshot(request, self._vector_snapshot(scope, binding_header))
+        if not scope.candidates:
+            snapshot_id = self._vector_snapshot(scope, binding_header)
+            self._check_snapshot(request, snapshot_id)
+            return PreparedSemanticSearch(self, request, snapshot_id, 0)
+
+        # The query embedding observes the live dimension and actual model
+        # first; every document vector of this search must match it.
+        query_vector, header = await self._embed_query(
+            binding_header,
+            request.query,
+            index_policy=_INDEX_POLICY,
+            usage=usage,
+        )
+        snapshot_id = self._vector_snapshot(scope, header)
+        self._check_snapshot(request, snapshot_id)
+        await self._refresh_index(request, scope, header, usage=usage)
+        return PreparedSemanticSearch(
+            self,
+            request,
+            snapshot_id,
+            len(scope.candidates),
+            header,
+            tuple(query_vector),
+        )
+
+    async def _search_prepared(
+        self,
+        prepared: PreparedSemanticSearch,
+        *,
+        offset: int,
+        limit: int,
+    ) -> RecallSearchPage:
+        header = prepared.header
+        if header is None:
+            return RecallSearchPage(
+                hits=(),
+                result_type="passage",
+                ranking="cosine_distance",
+                snapshot_id=prepared.snapshot_id,
+                has_more=False,
+                total_candidate_sessions=0,
+            )
+        request = prepared.request
+
+        async def nearest() -> list[tuple[StoredPassage, float]]:
+            return await asyncio.to_thread(
+                self.store.knn_search,
+                header=header,
+                query_vector=prepared.query_vector,
+                limit=offset + limit + 1,
+                agent_id=request.agent_id,
+                project_id=_project_scope(request.project_id),
+                session_id=request.session_id,
+                excluded_session_ids=request.excluded_session_ids,
+                since=request.since,
+                until=request.until,
+            )
+
+        async with self._index_lock:
+            matches = await self._semantic_operation(nearest, recover=False)
+        ranked = [
+            RecallSearchHit(
+                result_type="passage",
+                session_id=passage.session_id,
+                message_id=passage.start_message_id,
+                role=passage.start_role,
+                timestamp=passage.start_timestamp,
+                text=passage.text,
+                score=distance,
+                passage_id=passage.passage_id,
+                start_message_id=passage.start_message_id,
+                end_message_id=passage.end_message_id,
+                end_timestamp=passage.end_timestamp,
+                sources=("semantic",),
+            )
+            for passage, distance in matches
+        ]
+        page_hits = ranked[offset : offset + limit]
+        return RecallSearchPage(
+            hits=tuple(page_hits),
+            result_type="passage",
+            ranking="cosine_distance",
+            snapshot_id=prepared.snapshot_id,
+            has_more=len(ranked) > offset + len(page_hits),
+            total_candidate_sessions=prepared.candidate_sessions,
+        )
+
+    async def _semantic_operation(
+        self,
+        operation: Callable[[], Awaitable[_T]],
+        *,
+        recover: bool,
+    ) -> _T:
+        """Run one index operation; map index/provider failures to ``semantic_unavailable``.
+
+        With ``recover`` a failed disposable store is discarded and the
+        operation retried once.
+        """
+
+        try:
+            if recover:
+                try:
+                    return await operation()
+                except _STORE_FAILURES as error:
+                    self._warning("Vector recall index failed; rebuilding once: %s", error)
+                    await asyncio.to_thread(self.store.reset_index)
+            return await operation()
+        except (*_STORE_FAILURES, EmbeddingError) as error:
+            self._warning("Vector recall failed: %s", error)
+            raise RecallSearchError(
+                "semantic_unavailable",
+                "Semantic search failed; retry or check the embedding provider.",
+            ) from error
+
+    def _read_scope(self, request: RecallSearchRequest) -> _ScopeVersions:
+        """Read every live Session version of the scope in one Session-store query."""
+
+        live = {
+            address.session_id: (generation_id, history_revision)
+            for address, generation_id, history_revision in self.sessions.list_history_revisions(
+                request.agent_id, request.project_id
+            )
+        }
+        excluded = set(request.excluded_session_ids)
+        candidates = {
+            session_id: version
+            for session_id, version in live.items()
+            if session_id not in excluded
+            and (request.session_id is None or session_id == request.session_id)
+        }
+        return _ScopeVersions(
+            live_session_ids=frozenset(live),
+            candidates=candidates,
+            source_fingerprint=self._selection_snapshot(request, candidates),
+        )
+
+    @staticmethod
+    def _vector_snapshot(scope: _ScopeVersions, header: VectorHeader) -> str:
+        payload = (
+            f"{scope.source_fingerprint}\0{header.provider_id}\0{header.model_id}\0"
+            f"{header.response_model_id}\0{header.space_fingerprint}\0{header.index_policy}"
+        ).encode()
+        return hashlib.sha256(payload).hexdigest()
+
+    @staticmethod
+    def _check_snapshot(request: RecallSearchRequest, snapshot_id: str) -> None:
+        if request.snapshot_id is not None and request.snapshot_id != snapshot_id:
+            raise RecallSearchError(
+                "stale_cursor",
+                "Session search source changed; repeat the search.",
+            )
 
     # ------------------------------------------------------------------
     # Embedding helpers
@@ -384,7 +454,7 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
         index_policy: str,
         usage: _EmbeddingOperationUsage,
     ) -> tuple[list[float], VectorHeader]:
-        """Embed a single query string and pin the dimension from the first response."""
+        """Embed a single query string and resolve the live dimension and actual model."""
 
         result = await self._run_embed([query], purpose="query")
         usage.add(result, purpose="query", input_count=1)
@@ -433,75 +503,24 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
             )
         return resolved
 
-    async def _embed_chunks(
+    async def _embed_documents(
         self,
         texts: list[str],
-        expected: VectorHeader,
+        header: VectorHeader,
         *,
-        index_policy: str,
         usage: _EmbeddingOperationUsage,
-    ) -> tuple[list[list[float]], VectorHeader]:
-        """Embed a batch of chunk texts and return vectors with the resolved header."""
+    ) -> list[list[float]]:
+        """Embed Passage texts; they must land in exactly the query's space."""
 
         result = await self._run_embed(texts, purpose="document")
         usage.add(result, purpose="document", input_count=len(texts))
-        header = self._header_from_result(
-            result,
-            expected,
-            index_policy=index_policy,
-            allow_response_model_change=True,
-        )
-        return [list(vector) for vector in result.vectors], header
-
-    async def _ensure_query_header(
-        self,
-        request: RecallSearchRequest,
-        query_header: VectorHeader,
-        *,
-        store: VectorStore,
-        index_policy: str,
-        usage: _EmbeddingOperationUsage,
-    ) -> None:
-        """Ensure the live query vector is comparable with every stored vector."""
-
-        stored = await asyncio.to_thread(store.read_header)
-        if stored is None:
-            await asyncio.to_thread(store.ensure_index, query_header)
-            return
-        if self._headers_match(stored, query_header, include_dimension=True):
-            return
-        if not self._headers_match(
-            stored,
-            query_header,
-            include_response_model=False,
-        ):
-            raise EmbeddingError("embedding space changed while the Recall request was running")
-
-        if stored.response_model_id != query_header.response_model_id:
-            self._warning(
-                "Embedding response model changed (%s → %s); rebuilding vector index",
-                stored.response_model_id,
-                query_header.response_model_id,
+        resolved = self._header_from_result(result, header, index_policy=header.index_policy)
+        if resolved.dimension != header.dimension:
+            raise EmbeddingError(
+                f"embedding dimension changed while the Recall request was running: "
+                f"{header.dimension} → {resolved.dimension}"
             )
-        else:
-            self._warning(
-                "Embedding dimension changed (%d → %d); rebuilding vector index",
-                stored.dimension,
-                query_header.dimension,
-            )
-        await asyncio.to_thread(store.reset_index)
-        await self._ensure_fresh_index(
-            request,
-            query_header,
-            store=store,
-            index_policy=index_policy,
-            usage=usage,
-        )
-        rebuilt = await asyncio.to_thread(store.read_header)
-        if rebuilt is None:
-            await asyncio.to_thread(store.ensure_index, query_header)
-        elif not self._headers_match(rebuilt, query_header, include_dimension=True):
-            raise VectorStoreError("rebuilt vector store header does not match the live query")
+        return [list(vector) for vector in result.vectors]
 
     async def _run_embed(
         self,
@@ -513,9 +532,9 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
 
         A context overflow on a multi-input call recursively divides that call
         until each accepted provider request fits. A single rejected text is
-        never modified here: chunk/Passage construction owns any truncation so
-        the text stored beside a vector remains byte-for-byte honest. Results
-        are concatenated in input order and every configured/actual model,
+        never modified here: Passage construction owns any truncation so the
+        text stored beside a vector remains byte-for-byte honest. Results are
+        concatenated in input order and every configured/actual model,
         provider, dimension, and fingerprint must stay consistent.
         """
 
@@ -605,187 +624,94 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
         )
 
     # ------------------------------------------------------------------
-    # Freshness + backfill
+    # Freshness
     # ------------------------------------------------------------------
 
-    async def _ensure_fresh_index(
+    async def _refresh_index(
         self,
         request: RecallSearchRequest,
+        scope: _ScopeVersions,
         header: VectorHeader,
         *,
-        store: VectorStore,
-        index_policy: str,
         usage: _EmbeddingOperationUsage,
-        allow_header_rebuild: bool = True,
     ) -> None:
-        """Make sure every canonical session in this scope has fresh chunk vectors."""
+        """Bring the request's candidate Sessions up to date in *header*'s space.
 
-        agent_id = request.agent_id
-        scope = _project_scope(request.project_id)
-        summaries = await asyncio.to_thread(
-            self.sessions.list_summaries,
-            request.agent_id,
-            request.project_id,
-        )
-        active = {str(summary["id"]): summary for summary in summaries}
-        indexed = await asyncio.to_thread(store.list_indexed_sessions, agent_id, scope)
+        Deleted Sessions are pruned against the complete scope. Sessions the
+        request excludes cannot appear in its KNN results and are reconciled
+        by a later search that includes them.
+        """
 
-        # Drop canonical Sessions that have been removed since last index.
-        stale_to_remove = sorted(set(indexed) - set(active))
-        if stale_to_remove:
-            await asyncio.to_thread(
-                store.drop_indexed_sessions,
-                agent_id,
-                scope,
-                stale_to_remove,
-            )
-
-        # Collect every Session whose canonical message history revision changed.
-        all_chunks = await asyncio.to_thread(
-            self._collect_stale_chunks,
-            request,
-            active,
-            indexed,
-            store,
-        )
-        if not all_chunks:
-            if header.dimension > 0:
-                await asyncio.to_thread(store.ensure_index, header)
-            return
-
-        texts = [chunk.text for _, _, _, chunk in all_chunks]
-        vectors, resolved_header = await self._embed_chunks(
-            texts,
-            header,
-            index_policy=index_policy,
-            usage=usage,
-        )
-        if resolved_header.dimension <= 0:
-            raise VectorStoreError("embedding provider returned no vectors")
-        if header.dimension > 0 and not self._headers_match(
-            header,
-            resolved_header,
-            include_dimension=True,
-        ):
-            if not allow_header_rebuild:
-                raise EmbeddingError("embedding header changed repeatedly during index rebuild")
-            if header.response_model_id != resolved_header.response_model_id:
+        stored = await asyncio.to_thread(self.store.read_header)
+        if stored is not None and not self._headers_match(stored, header, include_dimension=True):
+            if stored.response_model_id != header.response_model_id:
                 self._warning(
-                    "Embedding response model changed during backfill (%s → %s); "
-                    "rebuilding full index",
+                    "Embedding response model changed (%s → %s); rebuilding vector index",
+                    stored.response_model_id,
                     header.response_model_id,
-                    resolved_header.response_model_id,
                 )
             else:
                 self._warning(
-                    "Embedding dimension drift (%d → %d); rebuilding full index",
+                    "Embedding dimension changed (%d → %d); rebuilding vector index",
+                    stored.dimension,
                     header.dimension,
-                    resolved_header.dimension,
                 )
-            await asyncio.to_thread(store.reset_index)
-            await self._ensure_fresh_index(
-                request,
-                resolved_header,
-                store=store,
-                index_policy=index_policy,
-                usage=usage,
-                allow_header_rebuild=False,
-            )
-            return
+            await asyncio.to_thread(self.store.reset_index)
+        plan = await asyncio.to_thread(self._plan_refresh, request, scope, header)
+        vectors: list[list[float]] = []
+        if plan.texts_to_embed:
+            vectors = await self._embed_documents(list(plan.texts_to_embed), header, usage=usage)
+        await asyncio.to_thread(self.store.apply_refresh, plan, vectors)
 
-        # Per-session running counter: chunk_index must be unique within
-        # ``(project_id, agent_id, session_id)`` and start at 0 — the store's
-        # ``UNIQUE(project_id, agent_id, session_id, chunk_index)`` constraint
-        # will reject duplicates, so a stable, ordered counter is required.
-        records: list[tuple[ChunkVectorRecord, list[float]]] = []
-        per_session_index: dict[str, int] = {}
-        for (summary, generation_id, history_revision, chunk), vector in zip(
-            all_chunks, vectors, strict=True
-        ):
-            session_id = str(summary["id"])
-            index = per_session_index.get(session_id, 0)
-            per_session_index[session_id] = index + 1
-            records.append(
-                (
-                    ChunkVectorRecord(
-                        session_id=session_id,
-                        agent_id=agent_id,
-                        project_id=scope,
-                        started_at=format_started_at(summary.get("created_at")),
-                        generation_id=generation_id,
-                        history_revision=history_revision,
-                        anchor_message_id=chunk.start_message_id,
-                        snippet=chunk.text,
-                        chunk_index=index,
-                        start_message_id=chunk.start_message_id,
-                        end_message_id=chunk.end_message_id,
-                        passage_id=chunk.passage_id,
-                        text=chunk.text,
-                        start_timestamp=chunk.start_timestamp,
-                        end_timestamp=chunk.end_timestamp,
-                        start_role=chunk.start_role,
-                        end_role=chunk.end_role,
-                    ),
-                    vector,
-                )
-            )
-
-        await asyncio.to_thread(
-            store.upsert_many_chunks,
-            header=resolved_header,
-            records=records,
-        )
-
-    def _collect_stale_chunks(
+    def _plan_refresh(
         self,
         request: RecallSearchRequest,
-        active: dict[str, JsonObject],
-        indexed: dict[str, tuple[str, int]],
-        store: VectorStore,
-    ) -> list[tuple[JsonObject, str, int, Passage]]:
-        """Load changed Sessions and pack their chunks off the event loop."""
+        scope: _ScopeVersions,
+        header: VectorHeader,
+    ) -> RefreshPlan:
+        """Reread changed candidate Sessions and diff their Passages off the event loop."""
 
         agent_id = request.agent_id
-        scope = _project_scope(request.project_id)
-        stale_sessions: list[tuple[JsonObject, str, int, list[Any]]] = []
-        # One batched canonical-freshness query instead of one per Session.
-        addresses = [
-            SessionAddress(project_id=request.project_id, agent_id=agent_id, session_id=session_id)
-            for session_id in active
-        ]
-        versions = self.sessions.list_history_versions(addresses)
-        for session_id, summary in active.items():
+        project_scope = _project_scope(request.project_id)
+        indexed = self.store.list_indexed_sessions(agent_id, project_scope)
+        pruned = {session_id for session_id in indexed if session_id not in scope.live_session_ids}
+        targets: list[SessionPassages] = []
+        for session_id, version in sorted(scope.candidates.items()):
+            previous = indexed.get(session_id)
+            if previous == version:
+                continue
             address = SessionAddress(
                 project_id=request.project_id, agent_id=agent_id, session_id=session_id
             )
-            version = versions.get(address)
-            if version is None:
-                # The Session vanished between listing and indexing; treat as
-                # unchanged so the stale-row cleanup handles it.
-                continue
-            generation_id, history_revision = version
-            cached = indexed.get(session_id)
-            if cached is not None and cached == (generation_id, history_revision):
-                continue
             try:
-                messages = self.sessions.get(address).load_active()
+                # One read transaction returns the active history together with
+                # the exact version it belongs to.
+                batch = self.sessions.get(address).load_since(None)
             except SessionNotFoundError:
+                # Vanished since listing: its rows describe no live Session.
+                if previous is not None:
+                    pruned.add(session_id)
                 continue
-            stale_sessions.append((summary, generation_id, history_revision, messages))
-
-        # A session that yields zero indexable chunks is not covered by
-        # ``upsert_many_chunks``. Clear its old rows explicitly.
-        all_chunks: list[tuple[JsonObject, str, int, Passage]] = []
-        for summary, generation_id, history_revision, messages in stale_sessions:
-            chunks = build_session_passages(messages)
-            if not chunks:
-                store.delete_session(agent_id, scope, str(summary["id"]))
+            if batch is None:  # Only a stale cursor yields no batch; a full read has none.
                 continue
-            all_chunks.extend((summary, generation_id, history_revision, chunk) for chunk in chunks)
-        return all_chunks
+            targets.append(
+                SessionPassages(
+                    session_id=session_id,
+                    version=(batch.cursor.generation_id, batch.cursor.history_revision),
+                    previous_version=previous,
+                    passages=tuple(build_session_passages(batch.active_messages)),
+                )
+            )
+        return self.store.plan_refresh(
+            agent_id,
+            project_scope,
+            header=header,
+            sessions=targets,
+            pruned_session_ids=pruned,
+        )
 
     # ------------------------------------------------------------------
-    # Hydration
+    # Logging
     # ------------------------------------------------------------------
 
     def _log_embedding_usage(
@@ -844,4 +770,4 @@ def _is_context_overflow(error: Exception) -> bool:
     )
 
 
-__all__ = ["VectorRecallBackend"]
+__all__ = ["PreparedSemanticSearch", "VectorRecallBackend"]

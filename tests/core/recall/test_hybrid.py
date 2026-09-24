@@ -10,6 +10,7 @@ that fall through the FTS trigram path.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,11 +19,12 @@ import pytest
 
 from core.chat import ChatMessage
 from core.model_tasks import EmbeddingResult, EmbeddingSpaceIdentity
-from core.recall import RecallBackendContext, RecallSearchRequest
+from core.recall import RecallBackendContext, RecallSearchPage, RecallSearchRequest, hybrid
 from core.recall.hybrid import (
     HybridRecallBackend,
 )
 from core.sessions import ChatSessionManager
+from tests.core.recall.vector_helpers import forbid_event_loop_calls
 
 pytestmark = pytest.mark.asyncio
 
@@ -176,32 +178,112 @@ async def test_typed_hybrid_keeps_multiple_passages_from_one_session(
     assert len({hit.passage_id for hit in repeated}) == len(repeated)
 
 
+class _WaitingArm:
+    """Prepared arm whose ranking waits until the other arm ranks too."""
+
+    def __init__(self, ranking: str, started: asyncio.Event, other: asyncio.Event) -> None:
+        self._ranking = ranking
+        self._started = started
+        self._other = other
+
+    async def page(self, offset: int, limit: int) -> RecallSearchPage:
+        self._started.set()
+        await self._other.wait()
+        return RecallSearchPage((), "passage", self._ranking, f"{self._ranking}-snapshot", False, 0)
+
+
 async def test_hybrid_arms_run_concurrently(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import asyncio
-
-    from core.recall import RecallSearchPage
-
     recall = backend(tmp_path, ChatSessionManager(tmp_path))
-    literal_started = asyncio.Event()
-    semantic_started = asyncio.Event()
+    literal_prepared = asyncio.Event()
+    semantic_prepared = asyncio.Event()
+    literal_ranked = asyncio.Event()
+    semantic_ranked = asyncio.Event()
 
-    async def literal(request: RecallSearchRequest) -> RecallSearchPage:
-        literal_started.set()
-        await semantic_started.wait()
-        return RecallSearchPage((), "passage", "literal", "literal-snapshot", False, 0)
+    async def literal(request: RecallSearchRequest) -> _WaitingArm:
+        literal_prepared.set()
+        await semantic_prepared.wait()
+        return _WaitingArm("literal", literal_ranked, semantic_ranked)
 
-    async def semantic(request: RecallSearchRequest) -> RecallSearchPage:
-        semantic_started.set()
-        await literal_started.wait()
-        return RecallSearchPage((), "passage", "semantic", "semantic-snapshot", False, 0)
+    async def semantic(request: RecallSearchRequest) -> _WaitingArm:
+        semantic_prepared.set()
+        await literal_prepared.wait()
+        return _WaitingArm("semantic", semantic_ranked, literal_ranked)
 
-    monkeypatch.setattr(recall._fts, "search_passages", literal)
-    monkeypatch.setattr(recall._vector, "search_page", semantic)
+    monkeypatch.setattr(recall._fts, "prepare_passage_search", literal)
+    monkeypatch.setattr(recall._vector, "prepare_search", semantic)
     page = await asyncio.wait_for(recall.search_page(search_request("query")), timeout=2)
     assert page.degraded is False
     assert page.hits == ()
+
+
+async def test_hybrid_depth_growth_prepares_each_arm_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deeper fusion pass reruns only the rankings, never freshness or query embedding."""
+
+    sessions = ChatSessionManager(tmp_path)
+    for index in range(3):
+        sessions.create("coder", session_id=f"drive-{index}").append(
+            ChatMessage.user(f"I was driving today {index}", timestamp=timestamp(index + 1))
+        )
+    embeddings = _StubEmbeddings()
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    stability_checks = 0
+
+    def unstable_once(*args: Any) -> bool:
+        nonlocal stability_checks
+        stability_checks += 1
+        return stability_checks > 1
+
+    revisions = 0
+    list_history_revisions = sessions.list_history_revisions
+
+    def counting_revisions(agent_id: str, project_id: str | None = None) -> Any:
+        nonlocal revisions
+        revisions += 1
+        return list_history_revisions(agent_id, project_id)
+
+    syncs = 0
+    sync_passage_index = recall._fts._sync_passage_index
+
+    def counting_sync(*args: Any) -> None:
+        nonlocal syncs
+        syncs += 1
+        sync_passage_index(*args)
+
+    monkeypatch.setattr(hybrid, "_rrf_page_is_stable", unstable_once)
+    monkeypatch.setattr(sessions, "list_history_revisions", counting_revisions)
+    monkeypatch.setattr(recall._fts, "_sync_passage_index", counting_sync)
+
+    page = await recall.search_page(search_request("driving"))
+
+    assert stability_checks == 2
+    assert page.degraded is False
+    assert {hit.session_id for hit in page.hits} == {"drive-0", "drive-1", "drive-2"}
+    assert embeddings.embed_calls.count(["driving"]) == 1
+    assert revisions == 1
+    assert syncs == 1
+
+
+async def test_hybrid_search_keeps_session_and_store_reads_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="both").append(
+        ChatMessage.user("I was driving today", timestamp=timestamp(1))
+    )
+    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+    calls = forbid_event_loop_calls(monkeypatch, sessions._store, recall._vector.store)
+
+    page = await recall.search_page(search_request("driving"))
+
+    # An arm failure would only degrade the page, so both arms must have succeeded.
+    assert page.degraded is False
+    assert page.hits[0].sources == ("literal", "semantic")
+    assert "list_history_revisions" in calls
+    assert "knn_search" in calls
 
 
 async def test_hybrid_short_query_retains_literal_and_semantic_sources(tmp_path: Path) -> None:
