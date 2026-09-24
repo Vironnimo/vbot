@@ -26,6 +26,7 @@ from core.statistics._cache import (
 from core.statistics._compactions import CompactionAccumulator
 from core.statistics._costs import CostAccumulator
 from core.statistics._extensions import (
+    EXTENSION_ACTOR_PREFIX,
     ExtensionSlice,
     ExtensionSliceKey,
     ExtensionUsageAccumulator,
@@ -636,7 +637,10 @@ class _Aggregator:
             for accumulator in (self._agents[agent_id] for agent_id in self._agent_order)
         ]
         return OverviewSection(
-            total_agents=len(self._agent_order),
+            # Extension actor rows attribute activity; an Extension is not an Agent.
+            total_agents=sum(
+                not agent_id.startswith(EXTENSION_ACTOR_PREFIX) for agent_id in self._agent_order
+            ),
             total_sessions=self._total_sessions,
             total_runs=self._total_runs,
             open_run_groups=self._open_run_groups,
