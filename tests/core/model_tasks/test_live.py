@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -12,12 +13,18 @@ import core.model_tasks.live as live_module
 from core.model_tasks._live_brain import DelegationInput
 from core.model_tasks._live_call import LiveCallSession
 from core.model_tasks._live_openai import ControlJoinError
+from core.model_tasks._live_tools import DIRECT_VOICE_INSTRUCTIONS, VOICE_INSTRUCTIONS
 from core.model_tasks._live_wire import (
+    WireAudio,
     WireCaption,
     WireClosed,
     WireDelegation,
+    WirePlaybackClear,
+    WireSendError,
     WireStarted,
+    WireToolCall,
     WireUsage,
+    relay_media,
 )
 from core.model_tasks.live import LiveRunNotice, LiveStartRejected, LiveVoiceService
 from core.model_tasks.model_tasks import TaskModelError
@@ -30,17 +37,20 @@ from core.providers.errors import (
 from core.utils.errors import ConfigError
 
 OFFER = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+XAI_TARGET = "xai/grok-voice-think-fast-2.0::subscription"
 
 
 class FakeWire:
     call_id = "rtc_1"
-    answer_sdp = "v=0\r\nanswer"
 
-    def __init__(self, *, confirm_close: bool = True) -> None:
+    def __init__(self, *, confirm_close: bool = True, relay: bool = False) -> None:
         self.queue: asyncio.Queue[Any] = asyncio.Queue()
         self.sent: list[tuple[Any, ...]] = []
+        self.audio: list[bytes] = []
+        self.audio_error: Exception | None = None
         self.confirm_close = confirm_close
         self.closed = False
+        self.media = relay_media() if relay else {"type": "webrtc", "sdp": "v=0\r\nanswer"}
 
     def push(self, *events: Any) -> None:
         for event in events:
@@ -61,6 +71,11 @@ class FakeWire:
 
     async def announce(self, text: str) -> None:
         self.sent.append(("announce", text))
+
+    async def send_audio(self, pcm: bytes) -> None:
+        if self.audio_error is not None:
+            raise self.audio_error
+        self.audio.append(pcm)
 
     async def request_close(self) -> None:
         self.sent.append(("close",))
@@ -89,18 +104,32 @@ class FakeBrain:
 class FakeHost:
     def __init__(self) -> None:
         self.updates: list[dict[str, Any]] = []
+        self.audio: list[bytes] = []
+        self.executed: list[tuple[str, dict[str, Any]]] = []
+        self.tool_result: Any = {"ok": True}
+        self.tool_release = asyncio.Event()
+        self.tool_release.set()
 
     async def execute_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        return {"ok": True}
+        self.executed.append((name, arguments))
+        await self.tool_release.wait()
+        if isinstance(self.tool_result, Exception):
+            raise self.tool_result
+        return dict(self.tool_result)
 
     def publish(self, update: dict[str, Any]) -> None:
         self.updates.append(update)
+
+    def publish_audio(self, pcm: bytes) -> None:
+        self.audio.append(pcm)
 
     def of_type(self, kind: str) -> list[dict[str, Any]]:
         return [update for update in self.updates if update["type"] == kind]
 
 
-def _call(wire: FakeWire, brain: FakeBrain, host: FakeHost, **options: Any) -> LiveCallSession:
+def _call(
+    wire: FakeWire, brain: FakeBrain | None, host: FakeHost, **options: Any
+) -> LiveCallSession:
     call = LiveCallSession(wire=wire, brain=brain, host=host, target="openai/gpt-live-1", **options)  # type: ignore[arg-type]
     call.start()
     return call
@@ -372,17 +401,21 @@ def _service(model_tasks: FakeModelTasks | None = None) -> LiveVoiceService:
     return LiveVoiceService(model_tasks or FakeModelTasks(), SimpleNamespace(models=object()))  # type: ignore[arg-type]
 
 
-def test_status_reports_binding_without_starting_anything():
+def test_status_reports_binding_and_media_without_starting_anything():
     assert _service(FakeModelTasks(configured=False)).status() == {
         "configured": False,
         "usable": False,
         "target": None,
+        "media": None,
     }
     assert _service().status() == {
         "configured": True,
         "usable": True,
         "target": "openai/gpt-live-1-codex::subscription",
+        "media": "webrtc",
     }
+    assert _service(FakeModelTasks(target=XAI_TARGET)).status()["media"] == "relay"
+    assert _service(FakeModelTasks(target="mistral/voxtral::api-key")).status()["media"] is None
 
 
 @pytest.mark.asyncio
@@ -394,7 +427,7 @@ def test_status_reports_binding_without_starting_anything():
 async def test_invalid_offers_are_rejected_before_resolution(offer: str):
     with pytest.raises(LiveStartRejected) as caught:
         await _service(FakeModelTasks(configured=False)).start_call(
-            offer_sdp=offer, host=FakeHost()
+            media="webrtc", offer_sdp=offer, host=FakeHost()
         )
     assert caught.value.code == "invalid_offer"
 
@@ -404,7 +437,8 @@ async def test_invalid_offers_are_rejected_before_resolution(offer: str):
     "model_tasks",
     [
         FakeModelTasks(configured=False),
-        FakeModelTasks(target="xai/grok-voice::api-key"),
+        FakeModelTasks(target="mistral/voxtral::api-key"),
+        FakeModelTasks(options={"voice": "cove", "backend_model": ""}),
         FakeModelTasks(options={"voice": "cove", "backend_model": "gpt-image-2"}),
         FakeModelTasks(
             options={
@@ -424,6 +458,7 @@ async def test_invalid_offers_are_rejected_before_resolution(offer: str):
     ids=[
         "unbound",
         "unsupported-provider",
+        "no-backend-without-direct-tools",
         "backend-not-candidate",
         "unknown-effort",
         "non-string-effort",
@@ -431,7 +466,7 @@ async def test_invalid_offers_are_rejected_before_resolution(offer: str):
 )
 async def test_unusable_configuration_is_not_configured(model_tasks, candidates):
     with pytest.raises(LiveStartRejected) as caught:
-        await _service(model_tasks).start_call(offer_sdp=OFFER, host=FakeHost())
+        await _service(model_tasks).start_call(media="webrtc", offer_sdp=OFFER, host=FakeHost())
     assert caught.value.code == "not_configured"
 
 
@@ -453,7 +488,7 @@ async def test_creation_failures_map_to_stable_codes(error, code, candidates, mo
 
     monkeypatch.setattr(live_module, "open_openai_live_wire", failing_wire)
     with pytest.raises(LiveStartRejected) as caught:
-        await _service().start_call(offer_sdp=OFFER, host=FakeHost())
+        await _service().start_call(media="webrtc", offer_sdp=OFFER, host=FakeHost())
     assert caught.value.code == code
 
 
@@ -471,12 +506,13 @@ async def test_start_call_opens_the_bound_target_and_returns_a_running_call(
     monkeypatch.setattr(live_module, "open_openai_live_wire", open_wire)
     host = FakeHost()
 
-    call = await _service().start_call(offer_sdp=OFFER, host=host)
+    call = await _service().start_call(media="webrtc", offer_sdp=OFFER, host=host)
 
     assert candidates == [("openai", "subscription")]
     assert opened[0]["target"] == "openai/gpt-live-1-codex::subscription"
     assert opened[0]["voice"] == "cove"
     assert opened[0]["offer_sdp"] == OFFER
+    assert opened[0]["instructions"] == VOICE_INSTRUCTIONS
     assert call.id == "rtc_1"
     assert host.updates == [{"type": "state", "phase": "connecting"}]
     await call.close()
@@ -514,9 +550,255 @@ async def test_the_backend_uses_the_configured_reasoning_effort(
         options={"voice": "cove", "backend_model": "gpt-5.6-luna", **stored}
     )
 
-    call = await _service(model_tasks).start_call(offer_sdp=OFFER, host=FakeHost())
+    call = await _service(model_tasks).start_call(media="webrtc", offer_sdp=OFFER, host=FakeHost())
 
     assert [(target.model_id, target.thinking_effort) for target in brains] == [
         ("gpt-5.6-luna", sent)
+    ]
+    await call.close()
+
+
+@pytest.mark.asyncio
+async def test_relay_audio_flows_only_while_live():
+    wire, brain, host = FakeWire(relay=True), FakeBrain(), FakeHost()
+    call = _call(wire, brain, host)
+
+    call.push_audio(b"\x01\x00")
+    wire.push(WireStarted(None))
+    await _until(lambda: any(u.get("phase") == "live" for u in host.updates))
+    call.push_audio(b"\x02\x00")
+    call.push_audio(b"")
+    call.push_audio(b"\x03\x00")
+    await _until(lambda: len(wire.audio) == 2)
+    wire.push(WireAudio("item_1", b"\x10\x00"), WirePlaybackClear())
+    await _until(lambda: bool(host.of_type("playback_clear")))
+
+    assert call.media == relay_media()
+    assert wire.audio == [b"\x02\x00", b"\x03\x00"]
+    assert host.audio == [b"\x10\x00"]
+    assert host.of_type("playback_clear") == [{"type": "playback_clear"}]
+    await call.close()
+    call.push_audio(b"\x04\x00")
+    await asyncio.sleep(0.01)
+    assert wire.audio == [b"\x02\x00", b"\x03\x00"]
+
+
+@pytest.mark.asyncio
+async def test_webrtc_calls_ignore_pushed_audio():
+    wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
+    call = _call(wire, brain, host)
+    wire.push(WireStarted(None))
+    await _until(lambda: any(u.get("phase") == "live" for u in host.updates))
+
+    call.push_audio(b"\x01\x00")
+    await asyncio.sleep(0.01)
+
+    assert wire.audio == []
+    await call.close()
+
+
+@pytest.mark.asyncio
+async def test_relay_audio_backlog_drops_the_oldest_audio():
+    wire, brain, host = FakeWire(relay=True), FakeBrain(), FakeHost()
+    call = _call(wire, brain, host)
+    wire.push(WireStarted(None))
+    await _until(lambda: any(u.get("phase") == "live" for u in host.updates))
+
+    one_second = bytes(48 * 1000)
+    for index in range(4):
+        call.push_audio(bytes([index]) + one_second[1:])
+    await _until(lambda: len(wire.audio) == 2)
+
+    assert [frame[0] for frame in wire.audio] == [2, 3]
+    await call.close()
+
+
+@pytest.mark.asyncio
+async def test_relay_audio_stops_when_the_socket_is_gone():
+    wire, brain, host = FakeWire(relay=True), FakeBrain(), FakeHost()
+    wire.audio_error = WireSendError("closed")
+    call = _call(wire, brain, host)
+    wire.push(WireStarted(None))
+    await _until(lambda: any(u.get("phase") == "live" for u in host.updates))
+
+    call.push_audio(b"\x01\x00")
+    await asyncio.sleep(0.01)
+    wire.audio_error = None
+    call.push_audio(b"\x02\x00")
+    await asyncio.sleep(0.01)
+
+    assert wire.audio == []
+    await call.close()
+
+
+@pytest.mark.asyncio
+async def test_direct_tool_calls_run_on_the_host_and_return_json_results():
+    wire, host = FakeWire(relay=True), FakeHost()
+    host.tool_release.clear()
+    host.tool_result = {"ok": True, "sessions": ["s-1"]}
+    call = _call(wire, None, host)
+
+    wire.push(
+        WireStarted(None),
+        WireToolCall("call_1", "vbot_app", {"action": "sessions", "agent_id": "coder"}),
+    )
+    await _until(lambda: len(host.executed) == 1)
+    assert host.of_type("activity") == [{"type": "activity", "busy": True, "label": "working"}]
+    host.tool_release.set()
+    await _until(lambda: any(s[0] == "result" for s in wire.sent))
+    await call.close()
+
+    assert host.executed == [("vbot_app", {"action": "sessions", "agent_id": "coder"})]
+    result = next(s for s in wire.sent if s[0] == "result")
+    assert result[1] == "call_1"
+    assert json.loads(result[2]) == {"ok": True, "sessions": ["s-1"]}
+    assert host.of_type("activity")[-1] == {"type": "activity", "busy": False, "label": None}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event", "code"),
+    [
+        (WireToolCall("c", "shell", {"command": "ls"}), "unknown_tool"),
+        (WireToolCall("c", "vbot_app", ["sessions"]), "invalid_arguments"),
+        (WireToolCall("c", "vbot_app", None), "invalid_arguments"),
+    ],
+    ids=["unknown-tool", "array-arguments", "undecodable-arguments"],
+)
+async def test_direct_tool_calls_that_must_not_run_are_refused(event: WireToolCall, code: str):
+    wire, host = FakeWire(relay=True), FakeHost()
+    call = _call(wire, None, host)
+
+    wire.push(WireStarted(None), event)
+    await _until(lambda: any(s[0] == "result" for s in wire.sent))
+    await call.close()
+
+    assert host.executed == []
+    result = json.loads(next(s for s in wire.sent if s[0] == "result")[2])
+    assert result["ok"] is False
+    assert result["error"]["code"] == code
+
+
+@pytest.mark.asyncio
+async def test_failing_or_slow_direct_tool_calls_answer_with_an_error_and_never_retry():
+    wire, host = FakeWire(relay=True), FakeHost()
+    host.tool_result = RuntimeError("boom")
+    call = _call(wire, None, host, delegation_timeout=0.05)
+
+    wire.push(WireStarted(None), WireToolCall("fail", "vbot_terminal", {"action": "start"}))
+    await _until(lambda: any(s[1] == "fail" for s in wire.sent if s[0] == "result"))
+    host.tool_result = {"ok": True}
+    host.tool_release.clear()
+    wire.push(WireToolCall("slow", "vbot_terminal", {"action": "list"}))
+    await _until(lambda: any(s[1] == "slow" for s in wire.sent if s[0] == "result"))
+    await call.close()
+
+    results = {s[1]: json.loads(s[2]) for s in wire.sent if s[0] == "result"}
+    assert results["fail"]["error"]["code"] == "tool_failed"
+    assert results["slow"]["error"]["code"] == "timeout"
+    assert [name for name, _arguments in host.executed] == ["vbot_terminal", "vbot_terminal"]
+
+
+@pytest.mark.asyncio
+async def test_a_delegation_without_a_backend_model_is_answered_without_running():
+    wire, host = FakeWire(relay=True), FakeHost()
+    call = _call(wire, None, host)
+
+    wire.push(WireStarted(None), WireDelegation("d", "Open the terminals"))
+    await _until(lambda: any(s[0] == "result" for s in wire.sent))
+    await call.close()
+
+    assert next(s for s in wire.sent if s[0] == "result")[2].startswith("No backend model")
+    assert host.executed == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_tasks", "media"),
+    [
+        (FakeModelTasks(), "relay"),
+        (
+            FakeModelTasks(target=XAI_TARGET, options={"voice": "eve", "backend_model": ""}),
+            "webrtc",
+        ),
+    ],
+    ids=["openai-needs-webrtc", "xai-needs-relay"],
+)
+async def test_a_start_with_the_other_media_kind_is_a_media_mismatch(
+    model_tasks: FakeModelTasks, media: str, candidates: list[tuple[Any, ...]]
+) -> None:
+    with pytest.raises(LiveStartRejected) as caught:
+        await _service(model_tasks).start_call(media=media, offer_sdp=OFFER, host=FakeHost())
+    assert caught.value.code == "media_mismatch"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored",
+    [
+        {"backend_model": ""},
+        {},
+        {"backend_model": "", "backend_thinking_effort": "turbo"},
+    ],
+    ids=["no-backend", "backend-unset", "stale-effort-is-ignored"],
+)
+async def test_xai_without_a_backend_model_runs_in_direct_tools_mode(
+    stored: dict[str, Any], candidates: list[tuple[Any, ...]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened: list[dict[str, Any]] = []
+    brains: list[Any] = []
+
+    async def open_wire(runtime: Any, target_ref: Any, **kwargs: Any) -> FakeWire:
+        opened.append({"target": target_ref.target, **kwargs})
+        return FakeWire(relay=True)
+
+    monkeypatch.setattr(live_module, "open_xai_live_wire", open_wire)
+    monkeypatch.setattr(live_module, "LiveBrain", lambda *args, **kwargs: brains.append(args))
+    model_tasks = FakeModelTasks(target=XAI_TARGET, options={"voice": "eve", **stored})
+
+    call = await _service(model_tasks).start_call(media="relay", host=FakeHost())
+
+    assert opened == [
+        {
+            "target": XAI_TARGET,
+            "instructions": DIRECT_VOICE_INSTRUCTIONS,
+            "voice": "eve",
+            "direct_tools": True,
+        }
+    ]
+    assert brains == []
+    assert candidates == []
+    assert call.media == relay_media()
+    await call.close()
+
+
+@pytest.mark.asyncio
+async def test_xai_with_a_backend_model_delegates_to_it(
+    candidates: list[tuple[Any, ...]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened: list[dict[str, Any]] = []
+    brains: list[Any] = []
+
+    async def open_wire(runtime: Any, target_ref: Any, **kwargs: Any) -> FakeWire:
+        opened.append(kwargs)
+        return FakeWire(relay=True)
+
+    def record_brain(runtime: Any, target: Any, execute_tool: Any, **kwargs: Any) -> FakeBrain:
+        brains.append(target)
+        return FakeBrain()
+
+    monkeypatch.setattr(live_module, "open_xai_live_wire", open_wire)
+    monkeypatch.setattr(live_module, "LiveBrain", record_brain)
+    model_tasks = FakeModelTasks(
+        target=XAI_TARGET, options={"voice": "eve", "backend_model": "gpt-5.6-terra"}
+    )
+
+    call = await _service(model_tasks).start_call(media="relay", host=FakeHost())
+
+    assert opened[0]["direct_tools"] is False
+    assert opened[0]["instructions"] == VOICE_INSTRUCTIONS
+    assert candidates == [("xai", "subscription")]
+    assert [(target.provider_id, target.model_id) for target in brains] == [
+        ("xai", "gpt-5.6-terra")
     ]
     await call.close()

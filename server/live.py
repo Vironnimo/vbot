@@ -7,15 +7,23 @@ registry buffers call updates until the owner attaches, ends a call whose owner
 never attaches or does not return, runs the call's app Tools, and feeds vBot
 Runs that finish during the call to it.
 
-Owner socket frames (server to accessor, JSON text; inbound frames are ignored):
+Owner socket frames, server to accessor:
 
-* call updates as the call publishes them (``state``, ``caption``,
-  ``activity``, ``error``, ``closed``); a call replaced by a newer start gets
-  ``{"type": "closed", "reason": "replaced", "usage": null}``, and a call that
-  ends without its own ``closed`` update gets one with ``reason: null``;
-* ``{"type": "ui_request", "request_id", "action", "args"}`` - see
+* JSON text: call updates as the call publishes them (``state``, ``caption``,
+  ``activity``, ``playback_clear``, ``error``, ``closed``); a call replaced by
+  a newer start gets ``{"type": "closed", "reason": "replaced", "usage": null}``,
+  and a call that ends without its own ``closed`` update gets one with
+  ``reason: null``;
+* JSON text: ``{"type": "ui_request", "request_id", "action", "args"}`` - see
   ``server/_live_tools.py`` for ``context``, ``open`` and ``terminal_view``;
-* ``{"type": "heartbeat", "timestamp"}`` while otherwise idle.
+* JSON text: ``{"type": "heartbeat", "timestamp"}`` while otherwise idle;
+* binary, relay calls only: assistant audio as raw PCM in the call's
+  ``media.audio`` format. Audio is never buffered: it is dropped while no
+  owner is attached.
+
+Accessor to server: binary frames of a relay call are microphone PCM in the
+same format (even length, at most 64 KiB each); malformed binary frames and
+all text frames are ignored.
 
 Close codes: 1000 after the ``closed`` update, 1008 for an unknown or already
 forgotten call, 1013 when the owner fell behind, 4000 when a newer owner socket
@@ -55,6 +63,8 @@ LIVE_SOCKET_CLOSE_UNKNOWN_CALL = 1008
 LIVE_SOCKET_CLOSE_LAGGED = 1013
 LIVE_SOCKET_CLOSE_REPLACED = 4000
 
+LIVE_AUDIO_FRAME_MAX_BYTES = 64 * 1024
+
 CLOSED_REASON_REPLACED = "replaced"
 _NOTIFICATION_FAILED = "notification_failed"
 
@@ -79,7 +89,9 @@ class LiveCallLimits:
 class LiveVoiceStarter(Protocol):
     """The Live voice service surface the registry uses."""
 
-    async def start_call(self, *, offer_sdp: str, host: LiveCallHost) -> LiveCall: ...
+    async def start_call(
+        self, *, media: str, offer_sdp: str | None, host: LiveCallHost
+    ) -> LiveCall: ...
 
 
 class LiveRegistryClosedError(Exception):
@@ -90,13 +102,19 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+OwnerFrame = JsonObject | bytes
+
+
 class LiveOwnerStream:
-    """Frames for one attached owner socket, in delivery order."""
+    """Frames for one attached owner socket, in delivery order.
+
+    JSON objects go out as text frames and ``bytes`` as binary audio frames.
+    """
 
     def __init__(self, entry: _LiveCallEntry, limit: int) -> None:
         self._entry = entry
         self._limit = limit
-        self._frames: deque[JsonObject] = deque()
+        self._frames: deque[OwnerFrame] = deque()
         self._wakeup = asyncio.Event()
         self._close_code: int | None = None
         self._finished = False
@@ -111,7 +129,7 @@ class LiveOwnerStream:
         """Whether :meth:`frames` yielded every frame and ended; close the socket then."""
         return self._finished
 
-    def send(self, frame: JsonObject) -> bool:
+    def send(self, frame: OwnerFrame) -> bool:
         """Queue one frame; ``False`` when the stream ended or fell behind."""
         if self._close_code is not None or len(self._frames) >= self._limit:
             return False
@@ -125,7 +143,7 @@ class LiveOwnerStream:
             self._close_code = code
             self._wakeup.set()
 
-    async def frames(self) -> AsyncGenerator[JsonObject, None]:
+    async def frames(self) -> AsyncGenerator[OwnerFrame, None]:
         """Yield queued frames until the stream ends."""
         while True:
             while self._frames:
@@ -135,6 +153,10 @@ class LiveOwnerStream:
                 return
             self._wakeup.clear()
             await self._wakeup.wait()
+
+    def receive_audio(self, pcm: bytes) -> None:
+        """Hand one inbound binary frame to the call as microphone audio."""
+        self._entry.receive_audio(self, pcm)
 
     def detach(self) -> None:
         """Release ownership after the socket closed."""
@@ -169,6 +191,7 @@ class _LiveCallEntry:
         self._finalized = False
         self._buffer: deque[JsonObject] = deque(maxlen=limits.update_buffer_limit)
         self._owner: LiveOwnerStream | None = None
+        self._malformed_audio_logged = False
         self._ui_requests: dict[str, asyncio.Future[JsonObject]] = {}
         self._tool_lock = asyncio.Lock()
         self._executor = LiveToolExecutor(rpc=rpc, ui=self.ui_request, is_active=self._is_active)
@@ -206,6 +229,14 @@ class _LiveCallEntry:
         self._deliver(update)
         if self._closed_published and self._owner is not None:
             self._owner.end(LIVE_SOCKET_CLOSE_ENDED)
+
+    def publish_audio(self, pcm: bytes) -> None:
+        """Send assistant audio to the attached owner; dropped while none is attached."""
+        owner = self._owner
+        if owner is None or self._closed_published or not pcm:
+            return
+        if not owner.send(pcm):
+            self._owner_lagged(owner)
 
     # -- lifecycle --------------------------------------------------------
 
@@ -334,16 +365,35 @@ class _LiveCallEntry:
         self._owner = None
         self._arm_timer(self._limits.reattach_grace_seconds, "did not return")
 
+    def receive_audio(self, owner: LiveOwnerStream, pcm: bytes) -> None:
+        """Forward microphone audio from the current owner socket to the call."""
+        call = self.call
+        if owner is not self._owner or call is None or self.ended:
+            return
+        if not pcm or len(pcm) % 2 or len(pcm) > LIVE_AUDIO_FRAME_MAX_BYTES:
+            if not self._malformed_audio_logged:
+                self._malformed_audio_logged = True
+                _LOGGER.warning(
+                    "Live owner sent a malformed audio frame; dropping it (call_id=%s bytes=%d)",
+                    self.call_id,
+                    len(pcm),
+                )
+            return
+        call.push_audio(pcm)
+
     def _deliver(self, frame: JsonObject) -> None:
         owner = self._owner
         if owner is not None:
             if owner.send(frame):
                 return
-            _LOGGER.warning("Live owner socket fell behind (call_id=%s)", self.call_id)
-            self._owner = None
-            owner.end(LIVE_SOCKET_CLOSE_LAGGED)
-            self._arm_timer(self._limits.reattach_grace_seconds, "did not return")
+            self._owner_lagged(owner)
         self._buffer.append(frame)
+
+    def _owner_lagged(self, owner: LiveOwnerStream) -> None:
+        _LOGGER.warning("Live owner socket fell behind (call_id=%s)", self.call_id)
+        self._owner = None
+        owner.end(LIVE_SOCKET_CLOSE_LAGGED)
+        self._arm_timer(self._limits.reattach_grace_seconds, "did not return")
 
     def _arm_timer(self, seconds: float, reason: str) -> None:
         self._cancel_timer()
@@ -435,8 +485,10 @@ class LiveCallRegistry:
         """The id of the active call, if any."""
         return self._active.call_id if self._active is not None else None
 
-    async def start(self, service: LiveVoiceStarter, *, offer_sdp: str) -> LiveCall:
-        """Start a call for *offer_sdp*, ending the active call first.
+    async def start(
+        self, service: LiveVoiceStarter, *, media: str, offer_sdp: str | None = None
+    ) -> LiveCall:
+        """Start a call with *media* (WebRTC needs *offer_sdp*), ending the active call first.
 
         :class:`core.model_tasks.live.LiveStartRejected` propagates unchanged.
         """
@@ -454,7 +506,7 @@ class LiveCallRegistry:
                 started_at=self._clock(),
                 after_sequence=self._events.last_sequence,
             )
-            call = await service.start_call(offer_sdp=offer_sdp, host=entry)
+            call = await service.start_call(media=media, offer_sdp=offer_sdp, host=entry)
             if self._closed:
                 # Shutdown began while the provider created the call.
                 entry.call = call

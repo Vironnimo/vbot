@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.model_tasks.live import LiveStartRejected
+from core.model_tasks.live import LIVE_MEDIA_KINDS, LiveStartRejected
 from server.live import LiveCallRegistry, LiveRegistryClosedError
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -28,11 +28,27 @@ def _status(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _start(state: Any, params: JsonObject) -> JsonObject:
-    """Start a call for the accessor's SDP offer, replacing any active call."""
-    _reject_unsupported(params, {"sdp"}, "live.start")
-    offer_sdp = _required_string(params, "sdp")
+    """Start a call with the accessor's media kind, replacing any active call.
+
+    ``{"media": "webrtc", "sdp"}`` carries the accessor's SDP offer;
+    ``{"media": "relay"}`` relays audio over the owner socket.
+    """
+    _reject_unsupported(params, {"media", "sdp"}, "live.start")
+    media = _required_string(params, "media")
+    if media not in LIVE_MEDIA_KINDS:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.media must be one of: {', '.join(sorted(LIVE_MEDIA_KINDS))}",
+        )
+    offer_sdp: str | None = None
+    if media == "webrtc":
+        offer_sdp = _required_string(params, "sdp")
+    elif "sdp" in params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.sdp is not used with media {media}")
     try:
-        call = await _registry(state).start(state.runtime.live_voice, offer_sdp=offer_sdp)
+        call = await _registry(state).start(
+            state.runtime.live_voice, media=media, offer_sdp=offer_sdp
+        )
     except LiveStartRejected as exc:
         return {"error": exc.code}
     except LiveRegistryClosedError as exc:
