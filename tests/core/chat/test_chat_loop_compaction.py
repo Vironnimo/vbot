@@ -285,3 +285,105 @@ async def test_failed_auto_compaction_retries_at_the_next_boundary(tmp_path: Pat
         assert not any(message.role == "compaction_checkpoint" for message in session.load())
     finally:
         await runtime.chat_runs.aclose()
+
+
+class _RecordingCompactionService(StubCompactionService):
+    """Record the Session history each automatic Compaction received."""
+
+    def __init__(self) -> None:
+        super().__init__(should_auto=True)
+        self.compacted_contents: list[list[Any]] = []
+
+    async def compact(self, messages: list[ChatMessage], **_kwargs: Any) -> ChatMessage:
+        self.compacted_contents.append([message.content for message in messages])
+        return ChatMessage.compaction_checkpoint(
+            summary=f"SUMMARY {len(self.compacted_contents)}",
+            projection=[],
+            compacted_token_count=10,
+        )
+
+
+def _auto_compacting_runtime(tmp_path: Path, adapter: StubAdapter, **kwargs: Any) -> Any:
+    return StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"]),
+        adapter=adapter,
+        storage=StubStorage(
+            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 1_000_000}),
+        **kwargs,
+    )
+
+
+@pytest.mark.asyncio
+async def test_edit_run_compacts_only_its_edited_lineage(tmp_path: Path) -> None:
+    runtime = _auto_compacting_runtime(tmp_path, StubAdapter([{"content": "new answer"}]))
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    original = ChatMessage.user("old request")
+    session.append_many(
+        [
+            original,
+            ChatMessage.assistant(model="openai/gpt-5.2", content="old answer"),
+            ChatMessage.user("later request"),
+        ]
+    )
+    service = _RecordingCompactionService()
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+
+    run = await loop.edit_run(
+        "coder", "edited request", session_id="session-one", message_id=original.id
+    )
+    await run.wait()
+
+    # The pre-request boundary sees the edited lineage, never the replaced tail.
+    assert service.compacted_contents[0] == ["edited request"]
+    assert persisted_roles(session.load_active())[:3] == [
+        "user",
+        "compaction_checkpoint",
+        "assistant",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_automatic_compaction_boundaries_never_reload_complete_history(
+    tmp_path: Path,
+) -> None:
+    tools = ToolRegistry()
+    tools.register(
+        "probe",
+        "Return a fixed value.",
+        {"type": "object"},
+        lambda _context, _arguments: tool_success({"value": 1}),
+    )
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "call-one", "name": "probe", "arguments": {}}],
+            },
+            {"content": "done", "tool_calls": None},
+        ]
+    )
+    runtime = _auto_compacting_runtime(tmp_path, adapter, tools=tools)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Earlier context"))
+    service = _RecordingCompactionService()
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    store = runtime.chat_sessions._store
+    reads = store.messages_since
+    complete_reads: list[None] = []
+
+    def recording_messages_since(address: Any, cursor: Any) -> Any:
+        if cursor is None:
+            complete_reads.append(None)
+        return reads(address, cursor)
+
+    store.messages_since = recording_messages_since
+    await (await loop.start_run("coder", "Go", session_id="session-one")).wait()
+
+    # Every boundary compacted, yet only the Run-start snapshot read full history.
+    assert len(service.compacted_contents) == 3
+    assert complete_reads == [None]
+    active = session.load_active()
+    assert persisted_roles(active).count("compaction_checkpoint") == 3

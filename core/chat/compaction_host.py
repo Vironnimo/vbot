@@ -52,6 +52,7 @@ if TYPE_CHECKING:
 
     from core.compaction.compaction import CompactionService, CompactionSettings
     from core.runs import Run
+    from core.sessions import SessionReadCursor
 
 
 @dataclass(frozen=True)
@@ -433,53 +434,63 @@ class ChatCompactionHost:
             ),
         )
 
-    async def commit_prompt_refresh(
+    async def commit_checkpoint(
         self,
+        session: ChatSession,
+        checkpoint: ChatMessage,
         *,
-        agent_id: str,
-        session_id: str,
-        project_id: str | None,
-        refresh: object,
-    ) -> None:
-        typed_refresh = cast(_CompactionPromptRefresh, refresh)
-        await self.run_transform(
-            self._commit_prompt_refresh_sync,
-            agent_id=agent_id,
-            session_id=session_id,
-            project_id=project_id,
-            refresh=typed_refresh,
-        )
-
-    def _commit_prompt_refresh_sync(
-        self,
-        *,
-        agent_id: str,
-        session_id: str,
-        project_id: str | None,
-        refresh: _CompactionPromptRefresh,
-    ) -> None:
-        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
-
-        def update(metadata: JsonObject) -> None:
-            replace_prompt_epoch_pins(
-                metadata,
-                skill_catalog=refresh.skill_catalog,
-                skill_project_id=refresh.skill_project_id,
-                working_project_context=refresh.working_project_context,
-                working_project_id=(
-                    refresh.project_prompt_context.project_id
-                    if refresh.project_prompt_context is not None
-                    else None
-                ),
-                soul_context=refresh.soul_context,
-                memory_files_context=refresh.memory_files_context,
-                memory_prompt_mode=refresh.memory_prompt_mode,
+        since: SessionReadCursor,
+        prompt_refresh: object | None,
+    ) -> bool:
+        """Commit a manual *checkpoint* and its prompt epoch while *since* is current."""
+        refresh = cast(_CompactionPromptRefresh | None, prompt_refresh)
+        async with self.sessions.write_lock(session.address):
+            committed = await session.commit_compaction_checkpoint_async(
+                checkpoint,
+                since=since,
+                metadata_mutation=_prompt_epoch_mutation(refresh),
             )
-            if refresh.available_skill_names is not None:
-                metadata[SEEN_SKILLS_META_KEY] = list(refresh.available_skill_names)
+        if committed is None:
+            return False
+        await self._stamp_prompt_files_read(session.id, refresh)
+        return True
 
-        self.sessions.mutate_metadata(address, update)
-        stamp_prompt_files_read(
+    async def commit_automatic_checkpoint(
+        self,
+        context: Any,
+        checkpoint: ChatMessage,
+        *,
+        prompt_refresh: object | None,
+    ) -> bool:
+        """Commit an automatic *checkpoint* against the Run snapshot and adopt its epoch.
+
+        The Run snapshot advances past the checkpoint from the same transaction,
+        and the Run continues with the rotated prompt-cache affinity id and the
+        refreshed prompt inputs.
+        """
+        refresh = cast(_CompactionPromptRefresh | None, prompt_refresh)
+        session = context.session
+        async with self.sessions.write_lock(session.address):
+            affinity_id = await context.session_snapshot.commit_checkpoint(
+                session,
+                checkpoint,
+                metadata_mutation=_prompt_epoch_mutation(refresh),
+            )
+        if affinity_id is None:
+            return False
+        context.prompt_cache_affinity_id = affinity_id
+        if refresh is not None:
+            await self._stamp_prompt_files_read(session.id, refresh)
+            self.apply_prompt_refresh(context, refresh)
+        return True
+
+    async def _stamp_prompt_files_read(
+        self, session_id: str, refresh: _CompactionPromptRefresh | None
+    ) -> None:
+        if refresh is None or not refresh.prompt_read_paths:
+            return
+        await self.run_transform(
+            stamp_prompt_files_read,
             self._dependencies.file_read_state,
             session_id,
             list(refresh.prompt_read_paths),
@@ -581,19 +592,6 @@ class ChatCompactionHost:
             continuation_reminder=context.continuation_reminder,
         )
 
-    async def rotate_prompt_cache_affinity(self, run: Run) -> str:
-        return cast(
-            str,
-            await self.run_transform(
-                self.sessions.rotate_prompt_cache_affinity_id,
-                SessionAddress(
-                    project_id=run.project_id,
-                    agent_id=run.agent_id,
-                    session_id=run.session_id,
-                ),
-            ),
-        )
-
     @staticmethod
     def apply_prompt_refresh(context: Any, refresh: object) -> None:
         typed_refresh = cast(_CompactionPromptRefresh, refresh)
@@ -604,3 +602,31 @@ class ChatCompactionHost:
         context.memory_files_context = typed_refresh.memory_files_context
         context.skill_registry = typed_refresh.skill_registry
         context.skill_catalog = typed_refresh.skill_catalog
+
+
+def _prompt_epoch_mutation(
+    refresh: _CompactionPromptRefresh | None,
+) -> Callable[[JsonObject], None] | None:
+    """The metadata a committed checkpoint's new prompt epoch starts from."""
+    if refresh is None:
+        return None
+
+    def update(metadata: JsonObject) -> None:
+        replace_prompt_epoch_pins(
+            metadata,
+            skill_catalog=refresh.skill_catalog,
+            skill_project_id=refresh.skill_project_id,
+            working_project_context=refresh.working_project_context,
+            working_project_id=(
+                refresh.project_prompt_context.project_id
+                if refresh.project_prompt_context is not None
+                else None
+            ),
+            soul_context=refresh.soul_context,
+            memory_files_context=refresh.memory_files_context,
+            memory_prompt_mode=refresh.memory_prompt_mode,
+        )
+        if refresh.available_skill_names is not None:
+            metadata[SEEN_SKILLS_META_KEY] = list(refresh.available_skill_names)
+
+    return update

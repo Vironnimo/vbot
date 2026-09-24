@@ -136,14 +136,22 @@ class CompactionRunHost(Protocol):
         activation_skill_project_id: str | None,
     ) -> object: ...
 
-    async def commit_prompt_refresh(
+    async def commit_checkpoint(
         self,
+        session: ChatSession,
+        checkpoint: ChatMessage,
         *,
-        agent_id: str,
-        session_id: str,
-        project_id: str | None,
-        refresh: object,
-    ) -> None: ...
+        since: SessionReadCursor,
+        prompt_refresh: object | None,
+    ) -> bool: ...
+
+    async def commit_automatic_checkpoint(
+        self,
+        context: Any,
+        checkpoint: ChatMessage,
+        *,
+        prompt_refresh: object | None,
+    ) -> bool: ...
 
     async def project_post_compaction_request(
         self,
@@ -187,10 +195,6 @@ class CompactionRunHost(Protocol):
         target: Any,
         live_request_messages: list[JsonObject],
     ) -> RequestState: ...
-
-    async def rotate_prompt_cache_affinity(self, run: Run) -> str: ...
-
-    def apply_prompt_refresh(self, context: Any, refresh: object) -> None: ...
 
     def resolve_summary_adapter(
         self,
@@ -339,29 +343,15 @@ class CompactionRunCoordinator:
                 active_adapter=request.active_adapter,
                 active_model_id=request.active_model_id,
             )
-            if not await self._append_compaction_checkpoint_if_current(
-                run, session, checkpoint, snapshot_cursor
+            if not await self._host.commit_checkpoint(
+                session,
+                checkpoint,
+                since=snapshot_cursor,
+                prompt_refresh=prompt_refresh,
             ):
                 raise CompactionError("Session context changed during Compaction. Please retry.")
             messages.append(checkpoint)
             raw_messages.append(checkpoint)
-            await self._host.rotate_prompt_cache_affinity(run)
-            if prompt_refresh is not None:
-                try:
-                    await self._host.commit_prompt_refresh(
-                        agent_id=run.agent_id,
-                        session_id=run.session_id,
-                        project_id=run.project_id,
-                        refresh=prompt_refresh,
-                    )
-                except Exception:
-                    _LOGGER.warning(
-                        "Prompt context persistence failed after manual Compaction "
-                        "(agent=%s session=%s)",
-                        run.agent_id,
-                        run.session_id,
-                        exc_info=True,
-                    )
             self._emit_compaction_completed(run, messages, checkpoint)
             run.terminal_payload_extras["session_usage"] = aggregate_session_usage(raw_messages)
             return checkpoint
@@ -394,24 +384,6 @@ class CompactionRunCoordinator:
         if snapshot is None:
             raise AssertionError("A full Session snapshot must always produce a cursor")
         return list(snapshot.messages), snapshot.cursor
-
-    async def _append_compaction_checkpoint_if_current(
-        self,
-        run: Run,
-        session: ChatSession,
-        checkpoint: ChatMessage,
-        snapshot_cursor: SessionReadCursor,
-    ) -> bool:
-        """Append *checkpoint* only while its Session snapshot is still current."""
-        session_address = SessionAddress(
-            project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
-        )
-        async with self._host.sessions.write_lock(session_address):
-            appended = await session.load_since_async(snapshot_cursor)
-            if appended is None or appended.messages:
-                return False
-            await session.append_async(checkpoint)
-            return True
 
     async def maybe_auto_compact_state(
         self,
@@ -477,8 +449,12 @@ class CompactionRunCoordinator:
         )
         if not should_compact and not forced:
             return current_state
-        session_messages, snapshot_cursor = await self._load_compaction_snapshot(run, session)
-        session_messages = active_session_messages(session_messages)
+        # Only this Run appends through its snapshot, but out-of-band writers
+        # (Notes, deliveries) may have advanced the Session; the delta brings the
+        # snapshot current, and its cursor is what the checkpoint commit verifies.
+        async with self._host.sessions.write_lock(session.address):
+            await context.session_snapshot.refresh(session)
+        session_messages = list(context.session_snapshot.active_messages)
         if settings.strategy == "summary_tail" and has_unconsumed_skill_activation(
             session_messages
         ):
@@ -635,11 +611,10 @@ class CompactionRunCoordinator:
                 )
                 return current_state
 
-            checkpoint_committed = await self._append_compaction_checkpoint_if_current(
-                run,
-                session,
+            checkpoint_committed = await self._host.commit_automatic_checkpoint(
+                context,
                 checkpoint,
-                snapshot_cursor,
+                prompt_refresh=prompt_refresh,
             )
             if not checkpoint_committed:
                 run.emit(COMPACTION_ABORTED_EVENT, {"reason": "stale_context"})
@@ -663,27 +638,7 @@ class CompactionRunCoordinator:
                             exc_info=True,
                         )
                 return current_state
-            await context.session_snapshot.refresh(session)
             accounting.reset()
-            context.prompt_cache_affinity_id = await self._host.rotate_prompt_cache_affinity(run)
-            if prompt_refresh is not None:
-                try:
-                    await self._host.commit_prompt_refresh(
-                        agent_id=run.agent_id,
-                        session_id=run.session_id,
-                        project_id=run.project_id,
-                        refresh=prompt_refresh,
-                    )
-                except Exception:
-                    _LOGGER.warning(
-                        "Prompt context persistence failed after automatic Compaction "
-                        "(run=%s agent=%s session=%s)",
-                        run.id,
-                        run.agent_id,
-                        run.session_id,
-                        exc_info=True,
-                    )
-                self._host.apply_prompt_refresh(context, prompt_refresh)
             self._emit_compaction_completed(run, context.session_snapshot.messages, checkpoint)
             checkpoint_usage = checkpoint.usage or {}
             _LOGGER.info(
