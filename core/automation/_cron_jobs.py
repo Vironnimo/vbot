@@ -142,7 +142,15 @@ class CronJobInPastError(CronJobValidationError):
     """Raised when a one-time job would be created or armed for a past instant."""
 
 
-class CronTargetAgentNotFoundError(CronJobValidationError, ResolutionAgentNotFoundError):
+class CronTargetError(CronJobValidationError):
+    """The Cron job's target Agent cannot be resolved into a runnable Agent.
+
+    Accessors branch on this type to give target guidance instead of schedule
+    guidance.
+    """
+
+
+class CronTargetAgentNotFoundError(CronTargetError, ResolutionAgentNotFoundError):
     """The Cron target's Agent does not exist.
 
     Both a Cron validation error, for Cron's own catchers, and a resolver
@@ -150,7 +158,7 @@ class CronTargetAgentNotFoundError(CronJobValidationError, ResolutionAgentNotFou
     """
 
 
-class CronTargetProjectNotFoundError(CronJobValidationError, ResolutionProjectNotFoundError):
+class CronTargetProjectNotFoundError(CronTargetError, ResolutionProjectNotFoundError):
     """The Cron target's Project does not exist.
 
     Both a Cron validation error, for Cron's own catchers, and a resolver
@@ -158,11 +166,15 @@ class CronTargetProjectNotFoundError(CronJobValidationError, ResolutionProjectNo
     """
 
 
+class CronTargetUnavailableError(CronTargetError):
+    """The Cron target exists but cannot run (for example, no usable Model)."""
+
+
 class CronStorageError(CronServiceError):
     """Raised when cron storage cannot be read or written."""
 
 
-def _target_validation_error(job: CronJob, error: Exception) -> CronJobValidationError:
+def _target_validation_error(job: CronJob, error: Exception) -> CronTargetError:
     """Describe why a Cron job's target Agent cannot be resolved.
 
     Only a missing Agent or Project says the target does not exist; a target
@@ -174,7 +186,7 @@ def _target_validation_error(job: CronJob, error: Exception) -> CronJobValidatio
         return CronTargetAgentNotFoundError(f"Cron target does not exist: {target}")
     if isinstance(error, ResolutionProjectNotFoundError):
         return CronTargetProjectNotFoundError(f"Cron target does not exist: {target}")
-    return CronJobValidationError(f"Cron target {target} cannot run: {error}")
+    return CronTargetUnavailableError(f"Cron target {target} cannot run: {error}")
 
 
 def validate_cron_jobs_file(jobs_path: str | Path) -> JsonValidationReport:
