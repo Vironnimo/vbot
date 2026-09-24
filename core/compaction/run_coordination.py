@@ -22,6 +22,7 @@ from core.compaction.compaction import (
     CompactionError,
     CompactionInsufficientReclaimError,
     CompactionSettings,
+    effective_compaction_policy,
 )
 from core.providers.adapter import estimate_wire_request_input_tokens
 from core.runs import (
@@ -30,7 +31,6 @@ from core.runs import (
     COMPACTION_STARTED_EVENT,
 )
 from core.sessions import SessionAddress, active_session_messages
-from core.settings.normalizers import normalize_compaction_policy
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -725,15 +725,10 @@ class CompactionRunCoordinator:
         metadata = self._host.sessions.get_metadata(
             SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
         )
-        session_policy = metadata.get(COMPACTION_POLICY_META_KEY)
-        agent_policy = getattr(agent, "compaction_policy", None)
-        raw_settings = normalize_compaction_policy(
-            session_policy
-            if isinstance(session_policy, dict)
-            else agent_policy
-            if isinstance(agent_policy, dict)
-            else self._host.storage.load_compaction_settings(),
-            use_defaults=True,
+        raw_settings = effective_compaction_policy(
+            metadata.get(COMPACTION_POLICY_META_KEY),
+            getattr(agent, "compaction_policy", None),
+            self._host.storage.load_compaction_settings,
         )
         trigger = raw_settings["trigger"]
         strategy = raw_settings["strategy"]

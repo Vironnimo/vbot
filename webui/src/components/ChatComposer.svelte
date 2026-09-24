@@ -19,7 +19,10 @@
     matchMentionCandidates,
   } from '$lib/fileMentions.js';
   import { isImeComposing } from '$lib/keyboard.js';
-  import { contextUsageCardModel } from '$lib/tokenUsageTooltip.js';
+  import {
+    contextLimitWarning,
+    contextUsageCardModel,
+  } from '$lib/tokenUsageTooltip.js';
   import { createComposerMedia } from './composer/media.svelte.js';
   import { createComposerPicker } from './composer/picker.svelte.js';
   import './composer/composer.css';
@@ -34,6 +37,8 @@
     compactionSubmitting = false,
     onForceCompaction = null,
     contextWindow = null,
+    // The displayed Session's effective Compaction Policy (null while unknown).
+    compactionPolicy = null,
     usage = null,
     sessionUsage = null,
     draftKey = '',
@@ -129,18 +134,13 @@
   let contextCard = $derived(
     contextUsageCardModel(contextUsage, usage, sessionUsage, contextWindow),
   );
-  // Fill level of the ring and meter. Automatic Compaction defaults to 80% of
-  // the context window, so the ring turns amber shortly before it and red when
-  // the window is nearly exhausted.
-  const CONTEXT_LEVEL_HIGH = 0.7;
-  const CONTEXT_LEVEL_CRITICAL = 0.9;
-  let contextLevel = $derived(
-    contextFillRatio === null || contextFillRatio < CONTEXT_LEVEL_HIGH
-      ? 'normal'
-      : contextFillRatio < CONTEXT_LEVEL_CRITICAL
-        ? 'high'
-        : 'critical',
+  // Fill level of the ring and meter, relative to the Session's automatic
+  // Compaction trigger. Current Context Usage tokens are the same projection
+  // the server's trigger evaluates; see `contextLimitWarning`.
+  let contextWarning = $derived(
+    contextLimitWarning(contextFillRatio, contextWindow, compactionPolicy),
   );
+  let contextLevel = $derived(contextWarning.level);
   let contextPercentLabel = $derived.by(() => {
     if (contextFillRatio === null) {
       return '';
@@ -888,15 +888,8 @@
               style:width={`${Math.round(contextFillRatio * 1000) / 10}%`}
             ></span>
           </span>
-          {#if contextLevel !== 'normal'}
-            <p class="context-card__level">
-              {contextLevel === 'critical'
-                ? t('chat.contextCard.atLimit', 'Context almost full')
-                : t(
-                    'chat.contextCard.nearLimit',
-                    'Approaching automatic Compaction',
-                  )}
-            </p>
+          {#if contextWarning.message}
+            <p class="context-card__level">{contextWarning.message}</p>
           {/if}
           {#each contextCard.sections as section (section.id)}
             <section class="context-card__section">

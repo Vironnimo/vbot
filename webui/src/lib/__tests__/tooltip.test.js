@@ -44,6 +44,12 @@ function pressKey(target, key, options = {}) {
   return event;
 }
 
+async function flushMicrotasks() {
+  for (let index = 0; index < 3; index += 1) {
+    await Promise.resolve();
+  }
+}
+
 function button(label, parent = document.body) {
   const element = document.createElement('button');
   element.type = 'button';
@@ -668,6 +674,57 @@ describe('floatingHoverCard action', () => {
     expect(card.dataset.floatingOpen).toBe('true');
   });
 
+  it('stays anchored above while its content grows and stops observing once hidden', () => {
+    const observers = [];
+    class FakeResizeObserver {
+      constructor(callback) {
+        this.callback = callback;
+        this.observed = [];
+        this.disconnected = false;
+        observers.push(this);
+      }
+      observe(target) {
+        this.observed.push(target);
+      }
+      disconnect() {
+        this.disconnected = true;
+      }
+    }
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    try {
+      let height = 100;
+      Object.defineProperty(card, 'offsetHeight', { get: () => height });
+      anchor.getBoundingClientRect = () => ({
+        top: 500,
+        bottom: 520,
+        left: 500,
+        right: 540,
+        width: 40,
+        height: 20,
+      });
+      window.innerHeight = 800;
+      window.innerWidth = 1200;
+      action = floatingHoverCard(card);
+
+      open();
+      expect(card.style.top).toBe('394px');
+      expect(observers).toHaveLength(1);
+      expect(observers[0].observed).toEqual([card]);
+
+      // A row appears while the card is open: it must grow upward, not over
+      // the anchor.
+      height = 160;
+      observers[0].callback([]);
+      expect(card.style.top).toBe('334px');
+
+      pressKey(window, 'Escape');
+      expect(card.dataset.floatingOpen).toBe('false');
+      expect(observers[0].disconnected).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('keeps decorative previews out of the accessibility tree', () => {
     action = floatingHoverCard(card, { accessible: false });
 
@@ -767,6 +824,46 @@ describe('floatingHoverCard action', () => {
       expect(card.dataset.floatingOpen).toBe('true');
 
       card.dispatchEvent(new Event('pointerleave'));
+      vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
+      expect(card.dataset.floatingOpen).toBe('false');
+    });
+
+    it('returns keyboard focus to the anchor when a focused card control disables itself', async () => {
+      control.focus();
+      pressKey(control, 'Tab');
+      expect(document.activeElement).toBe(copy);
+
+      // Browsers drop focus to <body> once the focused control is disabled.
+      copy.disabled = true;
+      copy.blur();
+      await flushMicrotasks();
+
+      expect(document.activeElement).toBe(control);
+      vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS * 2);
+      expect(card.dataset.floatingOpen).toBe('true');
+      pressKey(window, 'Escape');
+      expect(card.dataset.floatingOpen).toBe('false');
+    });
+
+    it('recovers focus when the focused card control is removed without a focus event', async () => {
+      control.focus();
+      pressKey(control, 'Tab');
+
+      copy.remove();
+      await flushMicrotasks();
+
+      expect(document.activeElement).toBe(control);
+      expect(card.dataset.floatingOpen).toBe('true');
+    });
+
+    it('leaves focus alone when an enabled card control loses it', async () => {
+      control.focus();
+      pressKey(control, 'Tab');
+
+      copy.blur();
+      await flushMicrotasks();
+
+      expect(document.activeElement).toBe(document.body);
       vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
       expect(card.dataset.floatingOpen).toBe('false');
     });

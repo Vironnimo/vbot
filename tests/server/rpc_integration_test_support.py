@@ -16,6 +16,7 @@ from core.projects.resolver import AgentResolutionError
 from core.providers.accounts import ConnectionRef, ProviderAccount
 from core.runs import ChatRunManager
 from core.sessions.format import write_bootstrap_marker
+from core.settings.normalizers import normalize_compaction_settings
 from core.skills.skills import SkillRegistry
 from core.tools import FileReadState, ToolRegistry
 from core.tools.availability import ToolAccess
@@ -223,12 +224,7 @@ class IntegrationStorage:
         }
 
     def load_compaction_settings(self) -> JsonObject:
-        return {
-            "auto": True,
-            "threshold": 0.8,
-            "tail_tokens": 15000,
-            "summary_model": None,
-        }
+        return normalize_compaction_settings(None)
 
     def load_recall_settings(self) -> JsonObject:
         return {"backend": "sqlite_fts"}

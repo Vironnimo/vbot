@@ -426,7 +426,7 @@ export default Object.freeze({
   'settings.specializedModels.optionsAria': 'Options for {task}',
   'settings.specializedModels.jsonPlaceholder':
     'e.g. [{"text":"hello","bbox":[[0,0],[1,0],[1,1],[0,1]]}]',
-  'settings.specializedModels.jsonInvalid': 'Invalid JSON',
+  'settings.specializedModels.jsonInvalid': 'Invalid JSON: {error}',
   'settings.providers.title': 'Providers',
   'settings.providers.subtitle': 'Connected providers and their credentials.',
   'settings.providers.noneConnected':

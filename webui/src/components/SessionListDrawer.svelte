@@ -65,6 +65,9 @@
     // agentAddress } so ChatView can navigate if it was viewing the removed
     // session (#2).
     onSessionDeleted = () => {},
+    // Called with (agentAddress, sessionId, effectivePolicy) after a Session
+    // Compaction Policy is saved, so Chat applies it without another read.
+    onCompactionPolicyChange = () => {},
   } = $props();
   const menus = createSessionMenus();
   const actions = createSessionActions({
@@ -79,6 +82,9 @@
     },
     get onSessionDeleted() {
       return onSessionDeleted;
+    },
+    get onCompactionPolicyChange() {
+      return onCompactionPolicyChange;
     },
   });
 

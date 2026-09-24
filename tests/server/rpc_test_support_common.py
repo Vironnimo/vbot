@@ -74,6 +74,7 @@ class StubAgent:
     allowed_skills: list[str] | None = None
     tools: JsonObject | None = None
     custom_system_prompt_enabled: bool = False
+    compaction_policy: JsonObject | None = None
     current_session_id: str = ""
     created_at: str = "2026-05-04T00:00:00Z"
     updated_at: str = "2026-05-04T00:00:00Z"
