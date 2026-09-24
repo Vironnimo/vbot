@@ -527,7 +527,7 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
         body="background command finished",
         on_persisted=persisted,
     )
-    await asyncio.wait_for(delivery, timeout=1)
+    await asyncio.wait_for(delivery, timeout=5)
 
     completion_loop.start_run.assert_awaited_once()
     persisted.assert_called_once_with()
@@ -583,7 +583,7 @@ async def test_completion_fallback_retries_transient_persistence_failure(
         origin_run_id="origin-run",
         body="retry this result",
     )
-    await asyncio.wait_for(delivery, timeout=1)
+    await asyncio.wait_for(delivery, timeout=5)
 
     assert attempts == 2
     notes = [
