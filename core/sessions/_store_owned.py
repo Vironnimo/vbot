@@ -501,16 +501,24 @@ def run_start_boundaries(
         raise ValueError("too many Run boundary addresses")
     if not unique:
         return []
-    clauses = " OR ".join("(s.project_id=? AND s.agent_id=? AND s.session_id=?)" for _ in unique)
+    addresses_sql = ", ".join("(?, ?, ?)" for _ in unique)
     values: list[Any] = []
     for address in unique:
         values.extend((address.project_id or "", address.agent_id, address.session_id))
+    # Each address index is partial on one status, so every generation is found
+    # through one probe per status.
+    generations = " UNION ALL ".join(
+        "SELECT session_key FROM sessions WHERE status = '"
+        + status
+        + f"' AND (project_id, agent_id, session_id) IN (VALUES {addresses_sql})"
+        for status in ("live", "archived")
+    )
     rows = connection.execute(
         "SELECT s.project_id,s.agent_id,s.session_id,s.generation_id,r.run_id,r.start_sequence "
         "FROM runs r JOIN sessions s ON s.session_key=r.session_key "
-        "WHERE " + clauses + " "
+        f"WHERE s.session_key IN ({generations}) "
         "ORDER BY s.project_id,s.agent_id,s.session_id,r.start_sequence,r.run_key",
-        values,
+        (*values, *values),
     ).fetchall()
     return cast(list[sqlite3.Row], rows)
 
