@@ -766,3 +766,44 @@ def test_retired_browser_is_preserved_outside_discovery_roots() -> None:
             "tests/resources/extensions/test_browser_use.py",
             "tests/resources/extensions/test_browser_runtime.py",
         } <= set(archive.namelist())
+
+
+_MIXED_CASE_ENV_SKILL = """---
+name: github-helper
+description: Use GitHub.
+metadata:
+    vbot:
+        requirements:
+            env: GitHub_Token
+---
+"""
+
+
+def test_env_requirement_ignores_name_case_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Windows reports process environment names upper-cased; the declared
+    # mixed-case name must still match, and the later process value wins.
+    monkeypatch.setattr("core.skills.skills._ENVIRONMENT_NAMES_IGNORE_CASE", True)
+    skills_dir = tmp_path / "skills"
+    write_skill(skills_dir, "github-helper", _MIXED_CASE_ENV_SKILL)
+
+    registry = SkillRegistry.load(skills_dir, environment={"GITHUB_TOKEN": "set"})
+    assert registry.availability_for("github-helper", ["*"]).state == "available"
+
+    registry.reload_environment({"GitHub_Token": "fallback", "GITHUB_TOKEN": ""})
+    assert registry.availability_for("github-helper", ["*"]).state == "unavailable"
+
+
+def test_env_requirement_stays_case_sensitive_on_posix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("core.skills.skills._ENVIRONMENT_NAMES_IGNORE_CASE", False)
+    skills_dir = tmp_path / "skills"
+    write_skill(skills_dir, "github-helper", _MIXED_CASE_ENV_SKILL)
+
+    registry = SkillRegistry.load(skills_dir, environment={"GITHUB_TOKEN": "set"})
+    assert registry.availability_for("github-helper", ["*"]).state == "unavailable"
+
+    registry.reload_environment({"GitHub_Token": "set"})
+    assert registry.availability_for("github-helper", ["*"]).state == "available"

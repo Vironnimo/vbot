@@ -61,6 +61,25 @@ SKILL_ORIGIN_BUNDLED = "bundled"
 SKILL_ORIGIN_PROJECT_PREFIX = "project:"
 
 _LOGGER = get_logger("skills")
+# Windows environment variable names are case-insensitive (``os.environ`` reports
+# them upper-cased), so ``env: GitHub_Token`` must match ``GITHUB_TOKEN`` there.
+# POSIX names stay case-sensitive.
+_ENVIRONMENT_NAMES_IGNORE_CASE = os.name == "nt"
+
+
+def _environment_key(name: str) -> str:
+    """Return the lookup key for an environment variable name on this platform."""
+    return name.upper() if _ENVIRONMENT_NAMES_IGNORE_CASE else name
+
+
+def _requirement_environment(environment: Mapping[str, str]) -> dict[str, str]:
+    """Snapshot *environment* keyed for :func:`_environment_key` lookups.
+
+    On a case-insensitive platform, names differing only in case collapse to one
+    entry; the later mapping entry wins, so a process value merged after the
+    ``.env`` fallback keeps precedence.
+    """
+    return {_environment_key(name): value for name, value in environment.items()}
 
 
 def format_skill_activation_context(
@@ -151,7 +170,9 @@ class SkillRegistry:
     ) -> None:
         self._skills = skills
         self._diagnostics = list(diagnostics or [])
-        self._environment = dict(os.environ if environment is None else environment)
+        self._environment = _requirement_environment(
+            os.environ if environment is None else environment
+        )
         # Names that bypass an agent's ``allowed_skills`` filter for *this* registry
         # only. The runtime sets this to an agent's own private skills, so an
         # agent-scoped registry always exposes the agent's own skills while a
@@ -213,7 +234,7 @@ class SkillRegistry:
 
     def reload_environment(self, environment: dict[str, str]) -> None:
         """Refresh requirement inputs while preserving loaded packages and policy."""
-        self._environment = dict(environment)
+        self._environment = _requirement_environment(environment)
 
     def get(self, name: str) -> SkillMetadata:
         """Return one skill by name.
@@ -352,13 +373,13 @@ class SkillRegistry:
         stack: tuple[str, ...],
     ) -> RequirementEvaluation:
         if requirement.kind == "binary":
-            search_path = self._environment.get("PATH")
+            search_path = self._environment.get(_environment_key("PATH"))
             if shutil.which(requirement.name, path=search_path) is not None:
                 return RequirementEvaluation(True)
             return RequirementEvaluation(False, (f"missing binary '{requirement.name}'",))
 
         if requirement.kind == "env":
-            if self._environment.get(requirement.name):
+            if self._environment.get(_environment_key(requirement.name)):
                 return RequirementEvaluation(True)
             return RequirementEvaluation(
                 False,

@@ -36,14 +36,11 @@ from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.projects import resolve_prompt_project, resolve_skill_scope, runtime_agent_body
 from core.prompts import ProjectPromptContext
 from core.prompts.pinned_context import (
-    PINNED_MEMORY_FILES_META_KEY,
-    PINNED_SKILL_CATALOG_META_KEY,
-    PINNED_SOUL_CONTEXT_META_KEY,
-    PINNED_WORKING_PROJECT_CONTEXT_META_KEY,
     pinned_memory_files,
     pinned_skill_catalog,
     pinned_soul_context,
     pinned_working_project_context,
+    replace_prompt_epoch_pins,
     stamp_prompt_files_read,
 )
 from core.providers.accounts import ConnectionRef
@@ -234,6 +231,7 @@ class ChatCompactionHost:
                 agent,
                 skill_registry,
                 run.project_id,
+                skill_project_id=skill_project_id,
             )
             inputs = RequestBuildInputs(
                 replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
@@ -425,6 +423,7 @@ class ChatCompactionHost:
             memory_files_context=memory_files_context,
             skill_registry=activation_skill_registry,
             skill_catalog=skill_catalog,
+            skill_project_id=prompt_skill_project_id,
             prompt_read_paths=tuple(read_paths),
             available_skill_names=(
                 tuple(available_skill_names) if available_skill_names is not None else None
@@ -462,22 +461,22 @@ class ChatCompactionHost:
         address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
 
         def update(metadata: JsonObject) -> None:
-            metadata[PINNED_SKILL_CATALOG_META_KEY] = {
-                "catalog_text": refresh.skill_catalog.catalog_text
-            }
+            replace_prompt_epoch_pins(
+                metadata,
+                skill_catalog=refresh.skill_catalog,
+                skill_project_id=refresh.skill_project_id,
+                working_project_context=refresh.working_project_context,
+                working_project_id=(
+                    refresh.project_prompt_context.project_id
+                    if refresh.project_prompt_context is not None
+                    else None
+                ),
+                soul_context=refresh.soul_context,
+                memory_files_context=refresh.memory_files_context,
+                memory_prompt_mode=refresh.memory_prompt_mode,
+            )
             if refresh.available_skill_names is not None:
                 metadata[SEEN_SKILLS_META_KEY] = list(refresh.available_skill_names)
-            for pin_key, pin_text in (
-                (PINNED_WORKING_PROJECT_CONTEXT_META_KEY, refresh.working_project_context),
-                (PINNED_SOUL_CONTEXT_META_KEY, refresh.soul_context),
-                (PINNED_MEMORY_FILES_META_KEY, refresh.memory_files_context),
-            ):
-                if pin_text is None:
-                    metadata.pop(pin_key, None)
-                else:
-                    metadata[pin_key] = {"text": pin_text}
-                    if pin_key == PINNED_MEMORY_FILES_META_KEY:
-                        metadata[pin_key]["mode"] = refresh.memory_prompt_mode
 
         self.sessions.mutate_metadata(address, update)
         stamp_prompt_files_read(

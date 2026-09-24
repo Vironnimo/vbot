@@ -315,7 +315,15 @@ async def test_manual_compaction_refreshes_skill_catalog_snapshot(tmp_path: Path
             StubCompactionService(should_auto=True, checkpoint=checkpoint),
         ),
     )
-    pinned_skill_catalog(loop._dependencies, "coder", "session-one", agent, runtime.skills, None)
+    pinned_skill_catalog(
+        loop._dependencies,
+        "coder",
+        "session-one",
+        agent,
+        runtime.skills,
+        None,
+        skill_project_id=None,
+    )
     runtime.skills = StubSkills(
         [StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))]
     )
@@ -325,7 +333,7 @@ async def test_manual_compaction_refreshes_skill_catalog_snapshot(tmp_path: Path
     metadata = runtime.chat_sessions.get_metadata(session_address("coder", "session-one"))
     assert reply == "Context compacted."
     assert runtime.refresh_skills_for_calls == [(None, "coder")]
-    assert metadata[PINNED_SKILL_CATALOG_META_KEY] == {"catalog_text": "catalog:2"}
+    assert metadata[PINNED_SKILL_CATALOG_META_KEY]["catalog_text"] == "catalog:2"
     assert metadata[SEEN_SKILLS_META_KEY] == ["one", "two"]
 
 

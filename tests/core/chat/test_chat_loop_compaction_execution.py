@@ -544,3 +544,70 @@ async def test_continuation_compacts_before_first_request_and_after_complete_too
         "PREFLIGHT CHECKPOINT",
         "TOOL CHECKPOINT",
     ]
+
+
+@pytest.mark.asyncio
+async def test_continuation_skips_model_call_without_reclaimable_new_context(
+    tmp_path: Path,
+) -> None:
+    # Fixed overhead keeps the request above the trigger after a Continuation
+    # checkpoint. A small Tool batch cannot reclaim the minimum, so the next
+    # boundary must not pay for a Continuation call the reclaim floor discards.
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["word_count"])
+    adapter = _RealCompactionAdapter(
+        [
+            {
+                "content": None,
+                "usage": {"input_tokens": 50_000, "output_tokens": 10},
+                "tool_calls": [
+                    {"id": "call-one", "name": "word_count", "arguments": {"text": "a b"}}
+                ],
+            },
+            {
+                "content": "CONTINUATION_DONE",
+                "usage": {"input_tokens": 50_000, "output_tokens": 2},
+                "tool_calls": None,
+            },
+        ],
+        summaries=["PREFLIGHT CHECKPOINT", "UNEXPECTED CHECKPOINT"],
+    )
+    tools = ToolRegistry()
+    tools.register(
+        "word_count",
+        "Count words.",
+        {
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+        lambda _context, arguments: tool_success({"words": len(str(arguments["text"]).split())}),
+    )
+    storage = _RealCompactionStorage(
+        {
+            "enabled": True,
+            "trigger": {"type": "input_tokens", "tokens": 1},
+            "strategy": {"type": "continuation"},
+        },
+        data_dir=tmp_path,
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=tools,
+        storage=storage,
+        models=StubModels({("openai", "gpt-5.2"): 1_000_000}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("OLD CONTEXT " + ("old work " * 5_000)))
+
+    assistant = await build_chat_loop(
+        runtime,
+        compaction_service=CompactionService(),
+    ).send("coder", "Count the words", session_id=session.id)
+
+    assert assistant.content == "CONTINUATION_DONE"
+    assert adapter.events == ["compaction", "agent", "agent"]
+    checkpoints = [message for message in session.load() if message.role == "compaction_checkpoint"]
+    assert [message.content for message in checkpoints] == ["PREFLIGHT CHECKPOINT"]
