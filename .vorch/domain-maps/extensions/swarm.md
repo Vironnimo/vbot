@@ -262,7 +262,12 @@ contracts. Swarm must consume their canonical history and usage instead of
 maintaining a second transcript or authoritative usage counter.
 
 The retained Swarm list projects a bounded first-line goal title from the stored
-prompt. The sidebar groups preparing/running/stopping records as Active runs;
+prompt; `swarms.list` replaces it with the canonical group title when one exists.
+After a successful Start (not a replay), a background task calls
+`temporary_agents.title_group` with the goal, then publishes a `swarms` change so
+the page refreshes; failures are logged and the Run continues, and `close()` cancels
+pending title tasks. Runs started before titles existed keep the goal-line title.
+The sidebar groups preparing/running/stopping records as Active runs;
 all other states, including idle and needs_attention, appear under Inactive runs.
 This presentation does not close an idle execution group or disable its Board wakes.
 Swarm selection opens the editor; the pinned New run row returns to the goal form

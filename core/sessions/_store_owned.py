@@ -127,6 +127,10 @@ def delete_temporary_group(
             (owner_name, group_id),
         ).fetchall():
             _store_fts._delete_fts_session(connection, int(row[0]))
+        connection.execute(
+            "DELETE FROM temporary_group_titles WHERE owner_name=? AND group_id=?",
+            (owner_name, group_id),
+        )
         return connection.execute(
             "DELETE FROM sessions WHERE session_key IN ("
             "SELECT session_key FROM temporary_session_bindings "
@@ -155,6 +159,86 @@ def temporary_bindings(
         (owner_name, group_id, after, limit),
     ).fetchall()
     return [(_store_values._address(row), row) for row in rows]
+
+
+TEMPORARY_GROUP_TITLE_MAX_CHARACTERS = 120
+
+
+def set_temporary_group_title(
+    connection: sqlite3.Connection, *, owner_name: str, group_id: str, title: str
+) -> None:
+    """Replace one owner group's display title; it describes, never authorizes."""
+    if not all(isinstance(value, str) and value for value in (owner_name, group_id)):
+        raise ChatSessionError("temporary group identity is invalid")
+    if (
+        not isinstance(title, str)
+        or not title.strip()
+        or title != title.strip()
+        or "\n" in title
+        or "\r" in title
+        or len(title) > TEMPORARY_GROUP_TITLE_MAX_CHARACTERS
+    ):
+        raise ChatSessionError("temporary group title is invalid")
+    connection.execute(
+        "INSERT INTO temporary_group_titles (owner_name, group_id, title) VALUES (?, ?, ?) "
+        "ON CONFLICT (owner_name, group_id) DO UPDATE SET title = excluded.title",
+        (owner_name, group_id, title),
+    )
+
+
+def temporary_group_titles(
+    connection: sqlite3.Connection, *, owner_name: str, group_ids: Sequence[str]
+) -> dict[str, str]:
+    unique = tuple(dict.fromkeys(group_ids))
+    if len(unique) > 1000 or not all(isinstance(value, str) and value for value in unique):
+        raise ValueError("invalid temporary group title lookup")
+    if not unique:
+        return {}
+    placeholders = ",".join("?" for _ in unique)
+    rows = connection.execute(
+        "SELECT group_id, title FROM temporary_group_titles "
+        f"WHERE owner_name = ? AND group_id IN ({placeholders})",
+        (owner_name, *unique),
+    ).fetchall()
+    return {str(row["group_id"]): str(row["title"]) for row in rows}
+
+
+def owned_session_summary_rows(
+    connection: sqlite3.Connection,
+    *,
+    owner_name: str | None = None,
+    group_id: str | None = None,
+    metadata_keys: Sequence[str] = (),
+) -> list[sqlite3.Row]:
+    """Read live owner-managed Sessions in creation order with their labels."""
+    if group_id is not None and owner_name is None:
+        raise ValueError("a temporary group filter requires its owner")
+    selected_keys = tuple(dict.fromkeys(metadata_keys))
+    unknown = set(selected_keys) - _store_values._SUMMARY_METADATA_COLUMNS.keys()
+    if unknown:
+        raise ChatSessionError(
+            f"unsupported Session summary metadata: {', '.join(sorted(unknown))}"
+        )
+    metadata_columns = "".join(
+        f", json_extract(metadata_json, '{_store_values._SUMMARY_METADATA_COLUMNS[key]}') "
+        f"AS metadata_{key}_json"
+        for key in selected_keys
+    )
+    rows = connection.execute(
+        f"SELECT {_store_values._SESSION_LIST_COLUMNS}{metadata_columns}, "
+        "b.owner_name, b.group_id, b.participant_id, "
+        "json_extract(b.config_json, '$.name') AS participant_name, "
+        "json_extract(b.config_json, '$.model') AS participant_model, "
+        "(SELECT g.title FROM temporary_group_titles AS g "
+        "WHERE g.owner_name = b.owner_name AND g.group_id = b.group_id) AS group_title "
+        "FROM temporary_session_bindings AS b "
+        "JOIN sessions ON sessions.session_key = b.session_key "
+        "WHERE sessions.status = 'live' "
+        "AND (? IS NULL OR b.owner_name = ?) AND (? IS NULL OR b.group_id = ?) "
+        "ORDER BY b.owner_name, b.group_id, sessions.session_key",
+        (owner_name, owner_name, group_id, group_id),
+    ).fetchall()
+    return cast(list[sqlite3.Row], rows)
 
 
 def append_messages_with_receipts(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -21,11 +22,13 @@ from core.chat.model_resolution import (
     resolve_request_temperature,
 )
 from core.debug import DebugContext
+from core.models.pricing import TokenPricing
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
 from core.sessions._types import (
     SESSION_AUTO_TITLE_INITIALIZED_KEY,
     SESSION_TITLE_KEY,
+    OwnedSessionSummary,
     SessionAddress,
 )
 from core.utils.logging import get_logger
@@ -252,60 +255,14 @@ class SessionTitleService:
         title_input: str,
         run_id: str,
     ) -> None:
-        adapter: Any | None = None
         try:
-            provider_id, model_id, connection_id = _resolve_model_target(self._runtime, model)
-            adapter = self._runtime.get_adapter(ConnectionRef(provider_id, connection_id))
-            request_context = (
-                dict(
-                    adapter.request_context_kwargs(
-                        agent_id=agent_id,
-                        session_id=session_id,
-                        project_id=project_id,
-                    )
-                )
-                if hasattr(adapter, "request_context_kwargs")
-                else {}
-            )
-            if hasattr(adapter, "set_debug_context"):
-                adapter.set_debug_context(
-                    DebugContext(
-                        run_id=f"title-{run_id}",
-                        agent_id=agent_id,
-                        session_id=session_id,
-                        provider_id=provider_id,
-                        connection_id=connection_id,
-                        model_id=model_id,
-                        streaming=False,
-                        iteration_number=0,
-                    )
-                )
-            try:
-                response = await self._send_title_request(
-                    adapter,
-                    model_id,
-                    provider_id,
-                    title_input,
-                    thinking_effort="none",
-                    request_context=request_context,
-                )
-            except ProviderError:
-                # Some reasoning-mandatory endpoints reject an explicit disable
-                # outright. Retry once at the provider-default effort before
-                # giving up on the generated title.
-                response = await self._send_title_request(
-                    adapter,
-                    model_id,
-                    provider_id,
-                    title_input,
-                    thinking_effort="",
-                    request_context=request_context,
-                )
-            title = await _SESSION_TITLE_WORKERS.run(
-                _normalize_generated_title,
-                adapter,
-                response,
-                model_id,
+            title = await self._request_title(
+                model=model,
+                title_input=title_input,
+                agent_id=agent_id,
+                session_id=session_id,
+                project_id=project_id,
+                debug_run_id=f"title-{run_id}",
             )
             await _SESSION_TITLE_WORKERS.run(
                 self._runtime.chat_sessions.set_auto_title,
@@ -336,6 +293,143 @@ class SessionTitleService:
                 session_id,
                 model,
                 exc_info=True,
+            )
+
+    async def generate_group_title(
+        self,
+        *,
+        owner_name: str,
+        group_id: str,
+        source_text: str,
+        participants: Sequence[OwnedSessionSummary],
+    ) -> str | None:
+        """Title an Extension-owned execution group from its originating request.
+
+        Mirrors Session titles: a local title is stored immediately, then the
+        shared title prompt may replace it. The configured Title Model wins;
+        otherwise the approximately cheapest participant Model by catalog price
+        is used, falling back to the first participant. One attempt only; any
+        failure keeps the local title. Returns the stored title, if any.
+        """
+        if self._closed:
+            return None
+        sessions = self._runtime.chat_sessions
+        local_title = _local_title(source_text, [])
+        if not local_title:
+            return None
+        await sessions.set_temporary_group_title_async(
+            owner_name=owner_name, group_id=group_id, title=local_title
+        )
+        settings = self._runtime.storage.load_session_title_settings()
+        title_input = _title_input(source_text, [])
+        candidate = _group_title_candidate(participants, self._runtime.models.pricing_for)
+        if not settings["enabled"] or not title_input or candidate is None:
+            return local_title
+        model = settings["model"] or str(candidate.model)
+        address = candidate.address
+        try:
+            title = await self._request_title(
+                model=model,
+                title_input=title_input,
+                agent_id=address.agent_id,
+                session_id=address.session_id,
+                project_id=address.project_id,
+                debug_run_id=f"title-{group_id}",
+            )
+        except _InvalidGeneratedTitleError as exc:
+            _LOGGER.warning(
+                "Automatic group title rejected; keeping local title "
+                "(owner=%s group=%s model=%s reason=%s)",
+                owner_name,
+                group_id,
+                model,
+                exc,
+            )
+            return local_title
+        except Exception:
+            _LOGGER.warning(
+                "Automatic group title generation failed (owner=%s group=%s model=%s)",
+                owner_name,
+                group_id,
+                model,
+                exc_info=True,
+            )
+            return local_title
+        await sessions.set_temporary_group_title_async(
+            owner_name=owner_name, group_id=group_id, title=title
+        )
+        _LOGGER.info(
+            "Automatic group title generated (owner=%s group=%s model=%s)",
+            owner_name,
+            group_id,
+            model,
+        )
+        return title
+
+    async def _request_title(
+        self,
+        *,
+        model: str,
+        title_input: str,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None,
+        debug_run_id: str,
+    ) -> str:
+        adapter: Any | None = None
+        try:
+            provider_id, model_id, connection_id = _resolve_model_target(self._runtime, model)
+            adapter = self._runtime.get_adapter(ConnectionRef(provider_id, connection_id))
+            request_context = (
+                dict(
+                    adapter.request_context_kwargs(
+                        agent_id=agent_id,
+                        session_id=session_id,
+                        project_id=project_id,
+                    )
+                )
+                if hasattr(adapter, "request_context_kwargs")
+                else {}
+            )
+            if hasattr(adapter, "set_debug_context"):
+                adapter.set_debug_context(
+                    DebugContext(
+                        run_id=debug_run_id,
+                        agent_id=agent_id,
+                        session_id=session_id,
+                        provider_id=provider_id,
+                        connection_id=connection_id,
+                        model_id=model_id,
+                        streaming=False,
+                        iteration_number=0,
+                    )
+                )
+            try:
+                response = await self._send_title_request(
+                    adapter,
+                    model_id,
+                    provider_id,
+                    title_input,
+                    thinking_effort="none",
+                    request_context=request_context,
+                )
+            except ProviderError:
+                # Some reasoning-mandatory endpoints reject an explicit disable
+                # outright. Retry once at the provider-default effort before
+                # giving up on the generated title.
+                response = await self._send_title_request(
+                    adapter,
+                    model_id,
+                    provider_id,
+                    title_input,
+                    thinking_effort="",
+                    request_context=request_context,
+                )
+            return await _SESSION_TITLE_WORKERS.run(
+                _normalize_generated_title,
+                adapter,
+                response,
+                model_id,
             )
         finally:
             if adapter is not None:
@@ -379,6 +473,32 @@ def _normalize_generated_title(
 ) -> str:
     normalized = adapter.normalize_response(response, model_id=model_id)
     return _generated_title(normalized)
+
+
+def _approximate_call_price(pricing: TokenPricing | None) -> float | None:
+    """Rank Models by base input plus output rate; tiers and caching are ignored."""
+    if pricing is None or not pricing.supported:
+        return None
+    rates = pricing.rates
+    if rates.input is None or rates.output is None:
+        return None
+    return rates.input + rates.output
+
+
+def _group_title_candidate(
+    participants: Sequence[OwnedSessionSummary],
+    pricing_for: Callable[[str], TokenPricing | None],
+) -> OwnedSessionSummary | None:
+    """Pick the approximately cheapest priced participant, else the first one."""
+    usable = [participant for participant in participants if participant.model]
+    priced = [
+        (price, index)
+        for index, participant in enumerate(usable)
+        if (price := _approximate_call_price(pricing_for(str(participant.model)))) is not None
+    ]
+    if priced:
+        return usable[min(priced)[1]]
+    return usable[0] if usable else None
 
 
 def _resolve_model_target(runtime: RuntimeServices, model: str) -> tuple[str, str, str]:

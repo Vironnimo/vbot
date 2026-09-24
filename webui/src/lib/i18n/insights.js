@@ -250,6 +250,9 @@ export default Object.freeze({
   'statistics.col.errors': 'Errors',
   'statistics.col.agent': 'Agent',
   'statistics.agent.projectBadgeTitle': 'Project: {project}',
+  'statistics.agent.extensionBadge': 'Extension',
+  'statistics.agent.extensionBadgeTitle':
+    'Sessions this Extension runs on its own, such as Swarm participants',
   'statistics.col.sessions': 'Sessions',
   'statistics.col.session': 'Session',
   'statistics.col.lastActivity': 'Last activity',
@@ -382,6 +385,27 @@ export default Object.freeze({
   'statistics.skills.origin.agent': 'agent: {detail}',
   'statistics.skills.origin.project': 'project: {detail}',
   'statistics.subview.limits': 'Limits',
+  'statistics.subview.extensions': 'Extensions',
+  'statistics.extensions.note':
+    'Extensions such as Swarm run participant Sessions of their own. Every other tab already includes this activity under the Extension’s name; this tab breaks it down by group and participant.',
+  'statistics.extensions.empty': 'No Extension activity in this time range.',
+  'statistics.extensions.groups': 'Groups',
+  'statistics.extensions.groupsHint':
+    'A group is one unit of work the Extension started, such as one Swarm, with its participant Sessions.',
+  'statistics.extensions.sessions': 'Participant Sessions',
+  'statistics.extensions.runs': 'Runs',
+  'statistics.extensions.unfinishedRuns': '{count} not completed',
+  'statistics.extensions.tokens': 'Tokens',
+  'statistics.extensions.estimatedTokens': '+{count} estimated',
+  'statistics.extensions.toolCalls': 'Tool calls',
+  'statistics.extensions.truncated':
+    'Showing the {shown} most recently active of {total} groups.',
+  'statistics.extensions.groupSummary':
+    '{participants} participants · {runs} Runs',
+  'statistics.extensions.groupFallback': 'Started {date} · {id}',
+  'statistics.extensions.groupFallbackId': 'Group {id}',
+  'statistics.extensions.participants': 'Participants',
+  'statistics.extensions.participant': 'Participant',
   'statistics.limits.note':
     'Live subscription usage, updated every 10 seconds while this tab is visible. Only the hourly automatic snapshot is stored.',
   'statistics.limits.loading': 'Loading usage limits…',

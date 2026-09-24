@@ -25,6 +25,7 @@ import {
   formatUsageDelta,
   groupModelsByProvider,
   parseOrigin,
+  shortGroupId,
   rollupDaily,
   rollupSkillActivationsByAgent,
   runActivityTotals,
@@ -148,7 +149,7 @@ describe('statistics dashboard projections', () => {
 });
 
 describe('statisticsView formatting', () => {
-  it('exposes the seven sub-views and three granularities', () => {
+  it('exposes the eight sub-views and three granularities', () => {
     expect(STATISTICS_SUB_VIEWS).toEqual([
       'overview',
       'usage',
@@ -157,6 +158,7 @@ describe('statisticsView formatting', () => {
       'runs',
       'tools',
       'skills',
+      'extensions',
     ]);
     expect(DAILY_GRANULARITIES).toEqual(['day', 'week', 'month']);
     expect(USAGE_HISTORY_RANGES).toEqual(['24h', '7d', '30d', 'all']);
@@ -642,24 +644,41 @@ describe('cacheHitRate', () => {
 });
 
 describe('agentDisplay (project-aware agent rendering)', () => {
+  const identity = (name) => ({ name, projectId: null, extension: false });
+
   it('returns the bare name and null project for an identity agent', () => {
-    expect(agentDisplay('researcher')).toEqual({
-      name: 'researcher',
-      projectId: null,
-    });
+    expect(agentDisplay('researcher')).toEqual(identity('researcher'));
   });
 
   it('splits a project-agent address into name + project for the badge', () => {
     expect(agentDisplay('builder@vbot')).toEqual({
       name: 'builder',
       projectId: 'vbot',
+      extension: false,
     });
   });
 
+  it('names the Extension behind an Extension-owned activity key', () => {
+    expect(agentDisplay('extension:swarm')).toEqual({
+      name: 'swarm',
+      projectId: null,
+      extension: true,
+    });
+    expect(agentDisplay('extension:')).toEqual(identity('extension:'));
+  });
+
   it('falls back to identity rendering for an unexpected/empty value', () => {
-    expect(agentDisplay('')).toEqual({ name: '', projectId: null });
-    expect(agentDisplay(null)).toEqual({ name: '', projectId: null });
-    expect(agentDisplay('a@b@c')).toEqual({ name: 'a@b@c', projectId: null });
+    expect(agentDisplay('')).toEqual(identity(''));
+    expect(agentDisplay(null)).toEqual(identity(''));
+    expect(agentDisplay('a@b@c')).toEqual(identity('a@b@c'));
+  });
+});
+
+describe('shortGroupId', () => {
+  it('keeps a short stable suffix and tolerates missing ids', () => {
+    expect(shortGroupId('swr_0123456789abcdef')).toBe('abcdef');
+    expect(shortGroupId('abc')).toBe('abc');
+    expect(shortGroupId(null)).toBe('');
   });
 });
 

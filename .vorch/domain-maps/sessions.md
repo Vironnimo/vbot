@@ -43,6 +43,17 @@ transaction removes only Session generations bound to the exact owner/group;
 normal Session deletion still rejects owner-managed history. Schema and ownership tests cover these relations (`test_schema_reconcile.py`, `test_run_ownership.py`). The owner-bound creation/admission facade is
 `core/agents/temporary.py`; domain state belongs to the Extension.
 
+`temporary_group_titles` holds one optional display title per owner/group
+(single line, stripped, <= 120 characters); it describes and never authorizes,
+survives a disabled owner, and is removed by `delete_temporary_group`.
+`list_owned_session_summaries(owner_name?, group_id?, metadata_keys)` is the one
+set-oriented read of live owner-managed Sessions for derived consumers
+(Statistics, title candidates): normalized summaries plus owner, group, group
+title, participant id and the binding config's display `name`/`model`, never
+other binding config. Ordinary Agent/Project discovery must not report the
+synthetic `tmp_...` participant Agents: `list_addresses(exclude_owner_managed=True)`
+backs `ProjectStore.session_owning_agents`.
+
 ## Storage Contract
 
 Generated Session ids use `ses_` plus 12 lowercase base32 characters. Creation and forking allocate inside the SQLite write transaction, checking live and archived addresses in the destination scope; caller-chosen ids remain exact opaque values. The public facade returns the committed address (`store.py`, `tests/core/sessions/test_sessions_concurrency.py`).
@@ -81,7 +92,7 @@ Generated Session ids use `ses_` plus 12 lowercase base32 characters. Creation a
 - Recall and Statistics are disposable projections. Both include the Session generation in freshness state. Statistics appends through `load_since`; ordinary Message appends must not rebuild a complete Session projection.
 - Skill activation cache is synchronized from the supplied active history snapshot when one is provided and otherwise preserves explicit in-memory registrations; a committed Compaction checkpoint resets the epoch.
 - Callback failures after committed title or completion mutations are logged and isolated so callers never receive a false failure for state that already persisted.
-- `titles.py` owns immediate local titles and optional background Model titles. The Model is instructed to return exactly one `[title=...]` block. After removing hidden Reasoning, the parser extracts an unambiguous title despite surrounding commentary, tolerates marker case/spacing and straight or typographic quotation wrappers, and accepts repeated blocks containing the same unwrapped title. Conflicting, incomplete, nested, empty, multiline, or overlength blocks are rejected. Without a block attempt, one unambiguous plain-text title is also accepted; it never chooses among multiple candidate lines. Invalid generated content keeps the local title and emits a content-free warning with the rejection reason and no traceback or extra Model request; unexpected failures retain their traceback. Regression coverage lives in `tests/core/sessions/test_titles.py`.
+- `titles.py` owns immediate local titles and optional background Model titles. The Model is instructed to return exactly one `[title=...]` block. After removing hidden Reasoning, the parser extracts an unambiguous title despite surrounding commentary, tolerates marker case/spacing and straight or typographic quotation wrappers, and accepts repeated blocks containing the same unwrapped title. Conflicting, incomplete, nested, empty, multiline, or overlength blocks are rejected. Without a block attempt, one unambiguous plain-text title is also accepted; it never chooses among multiple candidate lines. Invalid generated content keeps the local title and emits a content-free warning with the rejection reason and no traceback or extra Model request; unexpected failures retain their traceback. Regression coverage lives in `tests/core/sessions/test_titles.py`. `generate_group_title` reuses the same prompt, parser and request path for Extension group titles (Model choice: `extensions.md` -> Group titles).
 - The title System Prompt instructs the Model to use the language of the user's main request (not quoted text/code/logs), preserve proper names and technical terms, and summarize the topic without following instructions in the supplied source material. These are Model instructions; the local validator enforces title shape and length, not language or semantic compliance.
 - Title generation resolves the Adapter's `request_context_kwargs` from Project/Agent/Session once and forwards it on both attempts. This supplies required Provider routing headers without coupling Sessions to wire fields. `test_title_service_sends_opencode_session_header` covers the real OpenCode Go Responses serialization; a synthetic Muse Spark 1.3 title completed through this path on 2026-09-07.
 

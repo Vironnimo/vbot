@@ -25,6 +25,12 @@ from core.statistics._cache import (
 )
 from core.statistics._compactions import CompactionAccumulator
 from core.statistics._costs import CostAccumulator
+from core.statistics._extensions import (
+    EXTENSION_ACTOR_PREFIX,
+    ExtensionSlice,
+    ExtensionSliceKey,
+    ExtensionUsageAccumulator,
+)
 from core.statistics._measurements import (
     UNKNOWN_MODEL_KEY,
     _count_entries,
@@ -140,6 +146,11 @@ class _Aggregator:
         self._unreported_calls = 0
         self._since = since
         self._until = until
+        self._extensions = ExtensionUsageAccumulator(
+            windowed=since is not None or until is not None
+        )
+        # The participant slice of the Extension-owned Session being processed.
+        self._slice: ExtensionSlice | None = None
 
         self._agent_order: list[str] = []
         self._agents: dict[str, _AgentAcc] = {}
@@ -214,6 +225,7 @@ class _Aggregator:
         session_id: str,
         messages: list[ChatMessage],
         summary: JsonObject,
+        extension: ExtensionSliceKey | None = None,
     ) -> None:
         """Accumulate every aggregate for one session.
 
@@ -223,8 +235,22 @@ class _Aggregator:
         ``seen_skills``. All non-skills aggregates run over the in-window
         messages; the skills tally is fed the full activation notes and applies
         its own window (offered by session ``created_at``, activated by note
-        timestamp).
+        timestamp). ``extension`` identifies an Extension-owned participant
+        Session; its in-window activity also fills that participant's slice.
         """
+        self._slice = None if extension is None else self._extensions.slice(extension)
+        try:
+            self._process_session(agent_id, session_id, messages, summary)
+        finally:
+            self._slice = None
+
+    def _process_session(
+        self,
+        agent_id: str,
+        session_id: str,
+        messages: list[ChatMessage],
+        summary: JsonObject,
+    ) -> None:
         agent = self._agent(agent_id)
         activity_messages = _session_activity_messages(messages, summary)
         title = summary.get("title")
@@ -244,6 +270,8 @@ class _Aggregator:
         for message in in_window:
             self._role_counts[message.role] += 1
             agent.session_records += 1
+            if self._slice is not None:
+                self._slice.observe_record(message.timestamp)
             if _is_visible_chat_message(message):
                 self._chat_message_role_counts[message.role] += 1
                 agent.chat_messages += 1
@@ -255,16 +283,20 @@ class _Aggregator:
                         message, role="assistant", model=call.get("model"), usage=call["usage"]
                     )
                     self._record_usage(call_message, _date_key(message.timestamp), compaction=True)
-                    self._costs.observe(
-                        call_message,
-                        agent_id=agent_id,
-                        session_id=session_id,
-                        session_title=title,
-                        kind="compaction",
+                    self._record_cost(
+                        *self._costs.observe(
+                            call_message,
+                            agent_id=agent_id,
+                            session_id=session_id,
+                            session_title=title,
+                            kind="compaction",
+                        )
                     )
             if message.role == "assistant":
-                self._costs.observe(
-                    message, agent_id=agent_id, session_id=session_id, session_title=title
+                self._record_cost(
+                    *self._costs.observe(
+                        message, agent_id=agent_id, session_id=session_id, session_title=title
+                    )
                 )
             if message.role == "run_summary":
                 self._record_run(
@@ -320,11 +352,20 @@ class _Aggregator:
             activations=activations,
         )
 
-    def register_scope(self, *, agent_id: str, project_id: str | None) -> None:
-        """Record a scanned scope's bare ids for the inventory join at build time."""
-        self._scanned_agent_ids.add(agent_id)
+    def register_scope(self, *, agent_id: str | None, project_id: str | None) -> None:
+        """Record a scanned scope's bare ids for the inventory join at build time.
+
+        Extension-owned Sessions pass no Agent id: their synthetic participant
+        Agents own no private Skills, but a Project scope contributes its Skills.
+        """
+        if agent_id is not None:
+            self._scanned_agent_ids.add(agent_id)
         if project_id is not None:
             self._scanned_project_ids.add(project_id)
+
+    def _record_cost(self, cost: JsonObject, retrospective: bool) -> None:
+        if self._slice is not None:
+            self._slice.costs.add(cost, retrospective=retrospective)
 
     # -- per-message accumulation -----------------------------------------
 
@@ -354,6 +395,16 @@ class _Aggregator:
 
         facts = _read_usage(message.usage)
         daily = self._daily_bucket(day)
+        if self._slice is not None:
+            self._slice.model_calls += 1
+            if facts.input_estimated:
+                self._slice.estimated_input_tokens += facts.input_tokens
+            else:
+                self._slice.measured_input_tokens += facts.input_tokens
+            if facts.output_estimated:
+                self._slice.estimated_output_tokens += facts.output_tokens
+            else:
+                self._slice.measured_output_tokens += facts.output_tokens
 
         if facts.estimated:
             self._usage_estimated_turns += 1
@@ -422,6 +473,8 @@ class _Aggregator:
     ) -> None:
         self._total_errors += 1
         agent.errors += 1
+        if self._slice is not None:
+            self._slice.errors += 1
         self._error_by_kind[message.error_kind or UNKNOWN_MODEL_KEY] += 1
         self._error_by_agent[agent.agent_id] += 1
 
@@ -441,6 +494,8 @@ class _Aggregator:
 
     def _record_tool(self, agent: _AgentAcc, message: ChatMessage) -> None:
         self._tool_total_calls += 1
+        if self._slice is not None:
+            self._slice.tool_calls += 1
         name = message.name or UNKNOWN_MODEL_KEY
         self._tool_by_agent[agent.agent_id] += 1
         tool = self._tool(name)
@@ -475,6 +530,9 @@ class _Aggregator:
         agent.runs += 1
         status = summary.status or "completed"
         self._status_counts[status] += 1
+        if self._slice is not None:
+            self._slice.runs += 1
+            self._slice.status[status] += 1
 
         duration = _duration_ms(summary.timing)
         if duration is not None:
@@ -545,6 +603,7 @@ class _Aggregator:
             tools=self._build_tools(),
             skills=self._build_skills(skill_inventory),
             costs=self._costs.build(),
+            extensions=self._extensions.build(),
         )
 
     def _build_skills(self, skill_inventory: SkillInventorySource | None) -> SkillsSection:
@@ -578,7 +637,10 @@ class _Aggregator:
             for accumulator in (self._agents[agent_id] for agent_id in self._agent_order)
         ]
         return OverviewSection(
-            total_agents=len(self._agent_order),
+            # Extension actor rows attribute activity; an Extension is not an Agent.
+            total_agents=sum(
+                not agent_id.startswith(EXTENSION_ACTOR_PREFIX) for agent_id in self._agent_order
+            ),
             total_sessions=self._total_sessions,
             total_runs=self._total_runs,
             open_run_groups=self._open_run_groups,

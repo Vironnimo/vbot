@@ -87,6 +87,24 @@ class TemporarySessionBinding:
 
 
 @dataclass(frozen=True)
+class OwnedSessionSummary:
+    """One live owner-managed Session projected for derived consumers.
+
+    ``summary`` has the same normalized shape as ``list_summaries``. The group
+    title and participant labels are display values; they never grant access.
+    """
+
+    address: SessionAddress
+    owner_name: str
+    group_id: str
+    group_title: str | None
+    participant_id: str
+    participant_name: str | None
+    model: str | None
+    summary: JsonObject
+
+
+@dataclass(frozen=True)
 class DeliveryReceipt:
     receipt_id: str
     content_hash: str

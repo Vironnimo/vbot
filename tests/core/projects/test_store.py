@@ -19,7 +19,7 @@ from core.projects.projects import (
     ProjectNotFoundError,
 )
 from core.projects.store import ProjectStore, _validate_agent_id, _validate_project_id
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.format import write_bootstrap_marker
 
 
@@ -852,6 +852,15 @@ def test_session_owning_agents_lists_only_agents_with_sessions(data_dir: Path, r
     store.create("vbot", "vBot", repo)
     _write_anchor_session(sessions, "vbot", "builder")
     _write_anchor_session(sessions, "vbot", "orchestrator")
+    # An Extension participant's synthetic Agent is neither a Team member nor an
+    # orphan; its owner reports the Session separately.
+    sessions.create_bound_temporary_session(
+        SessionAddress("vbot", "tmp_participant", "ses_participant"),
+        owner_name="swarm",
+        group_id="swr_group",
+        participant_id="prt_peer",
+        config={},
+    )
     owners = store.session_owning_agents("vbot")
 
     assert owners == ["builder", "orchestrator"]

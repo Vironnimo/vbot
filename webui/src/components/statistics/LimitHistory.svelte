@@ -7,6 +7,7 @@
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
+  import { agentName } from './ReportPrimitives.svelte';
   import {
     clearProviderUsageHistory,
     getProviderUsageHistory,
@@ -605,7 +606,7 @@
                     <li>
                       <div class="limit-run__head">
                         <div>
-                          <strong>{run.agent_id}</strong>
+                          <strong>{@render agentName(run.agent_id)}</strong>
                           <span>{run.session_title ?? run.session_id}</span>
                         </div>
                         <Badge variant={runStatusVariant(run.status)}>
