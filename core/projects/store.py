@@ -440,10 +440,7 @@ class ProjectStore:
         """
         if self._stored_project_dir(project_id) is None:
             return []
-        addresses = self._session_manager().list_addresses(
-            project_id=project_id, exclude_owner_managed=True
-        )
-        return sorted({address.agent_id for address in addresses})
+        return self._session_manager().list_agent_ids(project_id, exclude_owner_managed=True)
 
     def _session_manager(self) -> ChatSessionManager:
         with self._write_lock:

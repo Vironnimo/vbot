@@ -104,7 +104,8 @@ def _rename_agent_and_retarget_references(
     """Rename an Identity Agent and transactionally retarget live references."""
     runtime = state.runtime
     session_ids = tuple(
-        session.id for session in runtime.chat_sessions.list(agent_id, project_id=None)
+        address.session_id
+        for address in runtime.chat_sessions.list_addresses(None, agent_id=agent_id)
     )
     rename_result = None
     policy_result = None

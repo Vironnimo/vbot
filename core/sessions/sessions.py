@@ -408,29 +408,36 @@ class ChatSessionManager:
         return await _run_session_io(self.list, agent_id, project_id)
 
     def list_addresses(
-        self, project_id: str | None = None, *, exclude_owner_managed: bool = False
+        self,
+        project_id: str | None = None,
+        *,
+        agent_id: str | None = None,
+        exclude_owner_managed: bool = False,
     ) -> builtins.list[SessionAddress]:
-        """List live addresses in one scope, optionally without Extension-owned Sessions."""
+        """List live addresses in one scope (optionally one Agent's), sorted by id.
+
+        ``exclude_owner_managed`` leaves out Extension-owned Sessions.
+        """
         return self._store.list_addresses(
             project_id=project_id,
-            agent_id=None,
+            agent_id=agent_id,
             exclude_owner_managed=exclude_owner_managed,
         )
 
-    def list_with_metadata(
-        self, agent_id: str, project_id: str | None = None
-    ) -> builtins.list[JsonObject]:
-        result: builtins.list[JsonObject] = []
-        for state in self._store.list_state_rows(project_id, agent_id):
-            summary = self._store.metadata_from_state(state)
-            summary.update(_completion_activity_from_state(state))
-            summary.update(
-                id=state["session_id"],
-                created_at=state["created_at"],
-                last_active_at=state["last_message_at"] or state["created_at"],
-            )
-            result.append(summary)
-        return result
+    def list_agent_ids(
+        self, project_id: str | None = None, *, exclude_owner_managed: bool = False
+    ) -> builtins.list[str]:
+        """Return each Agent id owning a live Session in one scope, in one indexed read."""
+        return self._store.list_agent_ids(project_id, exclude_owner_managed=exclude_owner_managed)
+
+    def newest_session_id(self, agent_id: str, project_id: str | None = None) -> str | None:
+        """Return the most recently active listable Session of one Agent scope, if any.
+
+        Every run kind counts (Sub-Agent, Reflection, Cron and Channel Sessions
+        included); Extension-owned Sessions never do.
+        """
+        page = self.list_summaries_page([(project_id, agent_id)], limit=1)
+        return str(page.sessions[0]["id"]) if page.sessions else None
 
     def list_summaries(
         self,
@@ -453,11 +460,6 @@ class ChatSessionManager:
                     summary[key] = json.loads(str(payload))
             summaries.append(summary)
         return summaries
-
-    async def list_with_metadata_async(
-        self, agent_id: str, project_id: str | None = None
-    ) -> builtins.list[JsonObject]:
-        return await _run_session_io(self.list_with_metadata, agent_id, project_id)
 
     def list_summaries_page(
         self,

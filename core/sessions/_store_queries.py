@@ -126,14 +126,13 @@ def descriptor_sources(
     }
 
 
-def list_addresses(
-    connection: sqlite3.Connection,
+def _live_scope_filter(
     *,
-    project_id: str | None = None,
-    agent_id: str | None = None,
-    include_all_scopes: bool = False,
-    exclude_owner_managed: bool = False,
-) -> list[SessionAddress]:
+    project_id: str | None,
+    agent_id: str | None,
+    include_all_scopes: bool,
+    exclude_owner_managed: bool,
+) -> tuple[str, list[str]]:
     clauses = ["status = 'live'"]
     params: list[str] = []
     if not include_all_scopes:
@@ -147,23 +146,45 @@ def list_addresses(
             "NOT EXISTS (SELECT 1 FROM temporary_session_bindings AS owner_binding "
             "WHERE owner_binding.session_key = sessions.session_key)"
         )
+    return " AND ".join(clauses), params
+
+
+def list_addresses(
+    connection: sqlite3.Connection,
+    *,
+    project_id: str | None = None,
+    agent_id: str | None = None,
+    include_all_scopes: bool = False,
+    exclude_owner_managed: bool = False,
+) -> list[SessionAddress]:
+    where, params = _live_scope_filter(
+        project_id=project_id,
+        agent_id=agent_id,
+        include_all_scopes=include_all_scopes,
+        exclude_owner_managed=exclude_owner_managed,
+    )
     rows = connection.execute(
-        "SELECT project_id, agent_id, session_id FROM sessions WHERE "
-        + " AND ".join(clauses)
-        + " ORDER BY session_id",
+        f"SELECT project_id, agent_id, session_id FROM sessions WHERE {where} ORDER BY session_id",
         params,
     ).fetchall()
     return [_store_values._address(row) for row in rows]
 
 
-def list_state_rows(
-    connection: sqlite3.Connection, project_id: str | None, agent_id: str
-) -> list[sqlite3.Row]:
+def list_agent_ids(
+    connection: sqlite3.Connection, project_id: str | None, *, exclude_owner_managed: bool
+) -> list[str]:
+    """Return each Agent id owning a live Session in one scope, sorted."""
+    where, params = _live_scope_filter(
+        project_id=project_id,
+        agent_id=None,
+        include_all_scopes=False,
+        exclude_owner_managed=exclude_owner_managed,
+    )
     rows = connection.execute(
-        "SELECT * FROM sessions WHERE status = 'live' AND project_id = ? AND agent_id = ? ORDER BY session_id",
-        (project_id or "", agent_id),
+        f"SELECT DISTINCT agent_id FROM sessions WHERE {where} ORDER BY agent_id",
+        params,
     ).fetchall()
-    return cast(list[sqlite3.Row], rows)
+    return [str(row["agent_id"]) for row in rows]
 
 
 def metadata_value(connection: sqlite3.Connection, address: SessionAddress, key: str) -> Any:
