@@ -63,10 +63,6 @@ class ExtensionSlice:
     costs: CostTotals = field(default_factory=CostTotals)
     last_activity: str | None = None
 
-    def observe_record(self, timestamp: str) -> None:
-        self.records += 1
-        self.last_activity = _max_timestamp(self.last_activity, timestamp)
-
     def merge(self, other: ExtensionSlice) -> None:
         self.records += other.records
         self.runs += other.runs

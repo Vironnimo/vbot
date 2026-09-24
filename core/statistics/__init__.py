@@ -7,6 +7,7 @@ from core.statistics._sources import (
     ProjectDirectory,
     SessionSource,
 )
+from core.statistics.index import StatisticsIndex, StatisticsUnavailableError
 from core.statistics.report import (
     AgentActivity,
     AgentRunCount,
@@ -84,8 +85,10 @@ __all__ = [
     "SkillInventorySource",
     "SkillUsageStat",
     "SkillsSection",
+    "StatisticsIndex",
     "StatisticsReport",
     "StatisticsService",
+    "StatisticsUnavailableError",
     "SuspectedCacheBreaks",
     "ToolSessionCount",
     "ToolStat",

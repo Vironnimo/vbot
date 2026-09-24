@@ -184,21 +184,30 @@ def _session_metadata_storage(metadata: JsonObject) -> tuple[str, tuple[Any, ...
     )
 
 
+# Metadata keys stored in dedicated columns, in metadata-facade order.
+_PROJECTED_METADATA_COLUMNS: dict[str, str] = {
+    **dict(_SESSION_METADATA_SCALAR_COLUMNS),
+    "is_subagent_session": "is_subagent_session",
+    **{key: column for key, column, _expected_type in _SESSION_METADATA_JSON_COLUMNS},
+}
+
+
+def _projected_metadata_value(key: str, payload: Any) -> Any:
+    """Decode one non-null projected column exactly as the metadata facade does."""
+    if key == "is_subagent_session":
+        return bool(payload)
+    for json_key, _column, expected_type in _SESSION_METADATA_JSON_COLUMNS:
+        if json_key == key:
+            return _json_value_from_payload(payload, f"Session {key}", expected_type)
+    return str(payload)
+
+
 def _session_projected_metadata_from_state(state: Any) -> JsonObject:
     metadata: JsonObject = {}
-    for key, column in _SESSION_METADATA_SCALAR_COLUMNS:
-        value = state[column]
-        if value is not None:
-            metadata[key] = str(value)
-    subagent_flag = state["is_subagent_session"]
-    if subagent_flag is not None:
-        metadata["is_subagent_session"] = bool(subagent_flag)
-    for key, column, expected_type in _SESSION_METADATA_JSON_COLUMNS:
+    for key, column in _PROJECTED_METADATA_COLUMNS.items():
         payload = state[column]
-        if payload is None:
-            continue
-        value = _json_value_from_payload(payload, f"Session {key}", expected_type)
-        metadata[key] = value
+        if payload is not None:
+            metadata[key] = _projected_metadata_value(key, payload)
     return metadata
 
 

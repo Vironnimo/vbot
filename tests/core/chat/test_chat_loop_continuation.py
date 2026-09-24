@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -11,6 +11,7 @@ from core.chat import (
     ChatMessage,
     ChatSessionError,
 )
+from core.chat._request_builder import SEEN_SKILLS_META_KEY
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
 from core.chat.continuation import (
     ContinuationTracker,
@@ -41,6 +42,8 @@ from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
     StubRuntime,
+    StubSkill,
+    StubSkills,
     TenToolsThenBlockingReasoningAdapter,
     build_chat_loop,
     persisted_roles,
@@ -107,6 +110,53 @@ async def test_content_block_request_is_serialized_in_continuation_journal(
             },
         ]
     ]
+
+
+@pytest.mark.asyncio
+async def test_input_append_is_the_only_write_between_admission_and_the_first_request(
+    tmp_path: Path, monkeypatch
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_skills=["*"])
+    observed: list[tuple[int, Any, list[ChatMessage]]] = []
+    address = session_address("coder", "session-one")
+    writes = 0
+
+    class ObservingAdapter(StubAdapter):
+        async def send(self, messages: Any, *, model_id: str, **kwargs: Any) -> Any:
+            session = runtime.chat_sessions.get(address)
+            observed.append((writes, session.load_continuation(), session.load()))
+            return await super().send(messages, model_id=model_id, **kwargs)
+
+    adapter = ObservingAdapter(
+        [{"content": "warm", "tool_calls": None}, {"content": "done", "tool_calls": None}]
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.skills = StubSkills([])
+    loop = build_chat_loop(runtime, streaming=False)
+    await loop.send("coder", "warm up", session_id="session-one")
+    runtime.skills = StubSkills([StubSkill("deploy", "Ship the app.", tmp_path / "deploy")])
+    store = runtime.chat_sessions._store
+    execute_write = store._execute_write
+
+    def counting_write(*args: Any, **kwargs: Any) -> Any:
+        nonlocal writes
+        writes += 1
+        return execute_write(*args, **kwargs)
+
+    monkeypatch.setattr(store, "_execute_write", counting_write)
+    run = await loop.start_run("coder", "measure me", session_id="session-one")
+    await run.wait()
+
+    # Run admission is one transaction; the input append carries the Skill
+    # announcement, its seen-Skill record and the journal start in the next.
+    request_writes, journal, history = observed[-1]
+    assert request_writes == 2
+    assert journal is not None
+    assert journal.latest_run_id == run.id
+    assert journal.requests[-1] == "measure me"
+    assert [message.role for message in history[-2:]] == ["note", "user"]
+    assert "deploy: Ship the app." in cast(str, history[-2].content)
+    assert runtime.chat_sessions.metadata_value(address, SEEN_SKILLS_META_KEY) == ["deploy"]
 
 
 @pytest.mark.asyncio

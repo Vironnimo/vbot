@@ -528,3 +528,17 @@ async def test_extension_group_title_reaches_the_shared_title_generator(tmp_path
         assert stored == {"swr_new": "Review the parser"}
     finally:
         await runtime.aclose()
+
+
+def test_extension_group_usage_reads_the_runtime_statistics_index(tmp_path: Path) -> None:
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+    try:
+        operations = runtime._host_operations()
+        usage = asyncio.run(operations._extension_group_usage("swarm", "group", {}))
+        assert operations._statistics_service is not None
+        assert operations._statistics_service._index is runtime.statistics_index
+    finally:
+        runtime.stop()
+
+    assert usage["participants"] == []
