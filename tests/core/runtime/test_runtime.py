@@ -3,7 +3,9 @@
 import asyncio
 import json
 import logging
+import os
 import sys
+import time
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +26,11 @@ from core.skills.skills import SkillRegistry
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 from core.storage.storage import StorageManager
 from core.storage.temp_files import TemporaryFileManager
+from core.tools._bash_update_handoff import (
+    HANDOFF_DIRECTORY,
+    UPDATE_HANDOFF_FILE_RETENTION,
+    UpdateHandoffs,
+)
 from core.tools.process_manager import ProcessManager
 from core.tools.terminal_manager import TerminalManager, TerminalManagerError
 from core.tools.tools import ToolRegistry
@@ -368,6 +375,7 @@ def test_phase_two_services_available_after_start(config: Config):
     assert isinstance(runtime.provider_credentials, ProviderCredentialResolver)
     assert isinstance(runtime.tools, ToolRegistry)
     assert isinstance(runtime.process_manager, ProcessManager)
+    assert isinstance(runtime.update_handoffs, UpdateHandoffs)
     assert isinstance(runtime.terminal_manager, TerminalManager)
     assert isinstance(runtime.skills, SkillRegistry)
     assert isinstance(runtime.chat_sessions, ChatSessionManager)
@@ -517,7 +525,28 @@ def test_runtime_stop_clears_phase_two_services(config: Config):
     with pytest.raises(RuntimeError):
         _ = runtime.process_manager
     with pytest.raises(RuntimeError):
+        _ = runtime.update_handoffs
+    with pytest.raises(RuntimeError):
         _ = runtime.terminal_manager
+
+
+def test_runtime_start_removes_only_expired_update_handoff_tickets(config: Config) -> None:
+    logging.getLogger("vbot").handlers = []
+    tickets = config.data_dir / HANDOFF_DIRECTORY
+    tickets.mkdir(parents=True)
+    expired = tickets / "expired.json"
+    recent = tickets / "recent.json"
+    for path in (expired, recent):
+        path.write_text("{}", encoding="utf-8")
+    old = time.time() - UPDATE_HANDOFF_FILE_RETENTION.total_seconds() - 60
+    os.utime(expired, (old, old))
+    runtime = Runtime(config)
+
+    runtime.start()
+    runtime.stop()
+
+    assert not expired.exists()
+    assert recent.exists()
 
 
 @pytest.mark.asyncio

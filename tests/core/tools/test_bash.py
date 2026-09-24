@@ -14,6 +14,11 @@ import pytest
 import core.tools._bash_environment as bash_environment
 import core.tools._bash_results as bash_results
 import core.tools.bash as bash_module
+from core.tools._bash_update_handoff import (
+    UpdateHandoffs,
+    UpdateHandoffUnavailableError,
+    read_handoff_ticket,
+)
 from core.tools.bash import (
     bash_handler,
 )
@@ -382,3 +387,108 @@ async def test_ungranted_env_key_is_rejected_before_spawn(
     assert result["error"]["code"] == "invalid_arguments"
     assert "OPENAI_API_KEY" in result["error"]["message"]
     assert manager.list_processes(AGENT_ID) == []
+
+
+_PRINT_HANDOFF = "import os; print(os.environ.get('VBOT_UPDATE_HANDOFF', 'missing'), flush=True)"
+
+
+@pytest.mark.asyncio
+async def test_bash_exports_update_handoff_token_without_writing_a_ticket(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("VBOT_UPDATE_HANDOFF", raising=False)
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    data_dir = tmp_path / "data"
+    handoffs = UpdateHandoffs(data_dir)
+    persisted: list[Any] = []
+    context = replace(make_context(tmp_path), result_persisted_hook=persisted.append)
+
+    result = await bash_handler(
+        context, {"command": _PRINT_HANDOFF}, manager, update_handoffs=handoffs
+    )
+
+    token = result["data"]["output"].strip()
+    assert token not in {"", "missing"}
+    assert len(persisted) == 1
+    assert not (data_dir / "runtime").exists()
+    # The foreground process has exited: nothing can claim its token any more.
+    with pytest.raises(UpdateHandoffUnavailableError):
+        handoffs.mint(token)
+
+    unpersisted = await bash_handler(
+        make_context(tmp_path), {"command": _PRINT_HANDOFF}, manager, update_handoffs=handoffs
+    )
+    assert unpersisted["data"]["output"].strip() == "missing"
+
+
+@pytest.mark.asyncio
+async def test_background_update_handoff_is_claimable_until_its_process_exits(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    handoffs = UpdateHandoffs(tmp_path / "data")
+    persisted: list[Any] = []
+    context = replace(make_context(tmp_path), result_persisted_hook=persisted.append)
+
+    result = await bash_handler(
+        context,
+        {
+            "command": (
+                f"{_PRINT_HANDOFF}\nfrom pathlib import Path\nimport time\n"
+                "while not Path('release').exists():\n    time.sleep(0.01)"
+            ),
+            "mode": "background",
+        },
+        manager,
+        update_handoffs=handoffs,
+    )
+    process_id = result["data"]["process_id"]
+    token = ""
+    for _ in range(500):
+        token = str((await manager.snapshot(process_id, AGENT_ID))["output"]).strip()
+        if token:
+            break
+        await asyncio.sleep(0.01)
+
+    ticket = handoffs.mint(token)
+    assert handoffs.mint(token).path == ticket.path
+    assert read_handoff_ticket(tmp_path / "data", ticket.ticket_id)["acknowledged"] is False
+    persisted[0]()
+    assert read_handoff_ticket(tmp_path / "data", ticket.ticket_id)["acknowledged"] is True
+
+    (tmp_path / "release").write_text("done", encoding="utf-8")
+    wait_task = manager.get_process(process_id, AGENT_ID).wait_task
+    assert wait_task is not None
+    await asyncio.wait_for(asyncio.shield(wait_task), 5)
+    await asyncio.sleep(0)
+    with pytest.raises(UpdateHandoffUnavailableError):
+        handoffs.mint(token)
+
+
+@pytest.mark.asyncio
+async def test_failed_spawn_releases_its_update_handoff(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handoffs = UpdateHandoffs(tmp_path / "data")
+    offered: list[str] = []
+
+    async def failing_spawn(*_args: Any, env: dict[str, str], **_kwargs: Any) -> str:
+        offered.append(env["VBOT_UPDATE_HANDOFF"])
+        raise OSError("spawn unavailable")
+
+    monkeypatch.setattr(manager, "spawn", failing_spawn)
+    context = replace(make_context(tmp_path), result_persisted_hook=lambda _callback: None)
+
+    result = await bash_handler(
+        context, {"command": "print('never')"}, manager, update_handoffs=handoffs
+    )
+
+    assert result["error"]["code"] == "process_spawn_failed"
+    with pytest.raises(UpdateHandoffUnavailableError):
+        handoffs.mint(offered[0])
