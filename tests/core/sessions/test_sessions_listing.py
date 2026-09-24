@@ -9,7 +9,6 @@ import pytest
 
 import core.sessions._store_codec as session_store_module
 from core.chat import ChatMessage
-from core.chat.continuation import fold_continuation_records
 from core.chat.errors import ChatSessionError
 from core.runs import RunKind
 from core.sessions import (
@@ -70,7 +69,7 @@ def test_append_returns_every_record_since_the_cursor_and_commits_its_journal(ma
     assert [message.role for message in delta.active_messages] == ["note", "assistant"]
     latest = session.load_since()
     assert latest is not None and delta.cursor == latest.cursor
-    assert fold_continuation_records(session.load_continuation_records()) is not None
+    assert session.load_continuation() is not None
 
 
 def test_a_rejected_journal_record_rolls_back_its_history_append(manager) -> None:
@@ -84,7 +83,7 @@ def test_a_rejected_journal_record_rolls_back_its_history_append(manager) -> Non
         )
 
     assert [message.role for message in session.load()] == ["user"]
-    assert session.load_continuation_records() == []
+    assert session.load_continuation() is None
 
 
 @pytest.mark.asyncio
@@ -162,11 +161,40 @@ def test_metadata_activity_and_continuation_change_state_not_history(manager) ->
     assert manager.history_revision(address) == revision
     assert manager.get_metadata(address)["project"] == "vbot"
     assert manager.get_metadata(address)[SESSION_RUN_KINDS_META_KEY] == [RunKind.USER.value]
-    continuation = fold_continuation_records(session.load_continuation_records())
+    continuation = session.load_continuation()
     assert continuation is not None
     assert continuation.checkpoint_id == "checkpoint-one"
     assert manager.mark_terminal_run_read(address, "wrong")["marked_read"] is False
     assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is True
+
+
+def test_unchanged_metadata_and_activity_mutations_write_nothing(manager) -> None:
+    address = _address("coder", "unchanged-mutations")
+    manager.create(address.agent_id, session_id=address.session_id)
+    manager.set_metadata(address, {"title": "Kept", "seen_skills": ["alpha"]})
+    manager.record_run_kind(address, RunKind.USER)
+    manager.record_terminal_run(address, "run-1", "completed", "2026-08-29T12:00:00Z")
+    assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is True
+    writer = manager._store._writer
+    revision = manager._store.state(address)["state_revision"]
+    changes = writer.total_changes
+
+    manager.record_run_kind(address, RunKind.USER)
+    previous, updated = manager.mutate_metadata_with_previous(
+        address, lambda metadata: metadata.update(title="Kept", seen_skills=["alpha"])
+    )
+    assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is False
+
+    assert previous == updated
+    assert writer.total_changes == changes
+    assert manager._store.state(address)["state_revision"] == revision
+
+    manager.record_run_kind(address, RunKind.CRON)
+    assert manager._store.state(address)["state_revision"] == revision + 1
+    assert manager.get_metadata(address)[SESSION_RUN_KINDS_META_KEY] == [
+        RunKind.USER.value,
+        RunKind.CRON.value,
+    ]
 
 
 def test_listable_metadata_is_normalized_out_of_open_ended_metadata(manager) -> None:

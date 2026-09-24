@@ -393,7 +393,7 @@ async def test_interrupted_edit_run_keeps_its_own_checkpoint(tmp_path: Path, mon
     assert len(reminders) == 1
     assert "EDITED-REQUEST" in reminders[0]
     assert "STALE-REQUEST" not in reminders[0]
-    assert session.load_continuation_records() == []
+    assert session.load_continuation() is None
 
 
 @pytest.mark.asyncio

@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from core.runs import RunExecutionOwner
     from core.sessions._types import (
         SessionAddress,
+        SessionContinuationState,
         SessionIdentityReferenceUpdate,
         SessionReadBatch,
         SessionReadCursor,
@@ -267,6 +268,11 @@ class SessionStore:
 
     def metadata(self, address: SessionAddress) -> JsonObject:
         return _store_values._session_metadata_from_state(self.state(address))
+
+    def prompt_cache_affinity_value(self, address: SessionAddress) -> Any:
+        """Return the stored affinity value, or ``None`` when the Session has none."""
+        with self._runtime.read_ctx() as connection:
+            return _store_queries.prompt_cache_affinity_value(connection, address)
 
     def descriptor_source(
         self, address: SessionAddress
@@ -762,7 +768,7 @@ class SessionStore:
         with self._runtime.read_ctx() as connection:
             return _store_history.messages_since(connection, address, cursor)
 
-    def continuation(self, address: SessionAddress) -> list[JsonObject]:
+    def continuation(self, address: SessionAddress) -> SessionContinuationState | None:
         with self._runtime.read_ctx() as connection:
             return _store_continuation.continuation(connection, address)
 
@@ -779,6 +785,10 @@ class SessionStore:
     def bookend_timestamps(self, address: SessionAddress) -> tuple[str, str] | None:
         with self._runtime.read_ctx() as connection:
             return _store_history.bookend_timestamps(connection, address)
+
+    def current_skill_activation_messages(self, address: SessionAddress) -> list[ChatMessage]:
+        with self._runtime.read_ctx() as connection:
+            return _store_history.current_skill_activation_messages(connection, address)
 
     def list_addresses(
         self,

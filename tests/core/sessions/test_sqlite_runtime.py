@@ -16,6 +16,8 @@ from core.sessions import sqlite_runtime
 from core.sessions.errors import SessionStoreUnavailableError
 from core.sessions.sqlite_runtime import (
     READ_CONNECTION_LIMIT,
+    READER_CACHE_KIB,
+    WRITER_CACHE_KIB,
     SQLiteRuntime,
     copy_database,
     readonly_sqlite_uri,
@@ -151,6 +153,22 @@ def test_reader_permits_are_bounded_and_released_on_failure(tmp_path: Path) -> N
             raise KeyboardInterrupt
         assert runtime.reader_stats()[0] == 0
     finally:
+        runtime.close()
+    assert runtime.live_connection_count() == 0
+
+
+def test_writer_and_readers_keep_bounded_page_caches(tmp_path: Path) -> None:
+    runtime = _runtime(tmp_path)
+    reader = runtime._checkout_reader()
+    try:
+        assert reader is not None
+        assert runtime.writer.execute("PRAGMA cache_size").fetchone()[0] == -WRITER_CACHE_KIB
+        assert reader.execute("PRAGMA cache_size").fetchone()[0] == -READER_CACHE_KIB
+        # The documented ceiling: every pooled reader plus the writer, full.
+        assert WRITER_CACHE_KIB + READ_CONNECTION_LIMIT * READER_CACHE_KIB == 192 * 1024
+    finally:
+        if reader is not None:
+            runtime._close_reader(reader)
         runtime.close()
     assert runtime.live_connection_count() == 0
 

@@ -193,6 +193,46 @@ class SessionRunResult:
 
 
 @dataclass(frozen=True)
+class SessionContinuationStep:
+    """Readable output recorded for one Model step, in first-recorded order."""
+
+    run_id: str
+    step: int
+    reasoning: str
+    content: str
+    assistant_message_id: str | None
+    interrupted: bool
+
+
+@dataclass(frozen=True)
+class SessionContinuationOperation:
+    """One recorded Tool Call; ``ok`` is set only once its result completed."""
+
+    tool_call_id: str
+    name: str
+    run_id: str
+    completed: bool
+    ok: bool | None
+
+
+@dataclass(frozen=True)
+class SessionContinuationState:
+    """The current Continuation state as the store folded its records.
+
+    ``cause`` is set exactly when the chain is inactive (interrupted).
+    """
+
+    checkpoint_id: str
+    origin_run_id: str
+    latest_run_id: str
+    cause: str | None
+    active: bool
+    requests: tuple[Any, ...]
+    steps: tuple[SessionContinuationStep, ...]
+    operations: tuple[SessionContinuationOperation, ...]
+
+
+@dataclass(frozen=True)
 class SessionHistoryCheckpoint:
     ordinal: int
     sequence: int
