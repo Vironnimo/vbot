@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Callable, Sequence
 from copy import deepcopy
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from core.chat.errors import ChatSessionError
 from core.sessions import _store_codec, _store_fts, _store_values
@@ -84,26 +84,34 @@ def replace_metadata(
     _fn(connection)
 
 
+def metadata_change(
+    state: sqlite3.Row, mutation: Callable[[JsonObject], None]
+) -> tuple[JsonObject, JsonObject, tuple[str, tuple[Any, ...]] | None]:
+    """Apply a mutation to one Session row's metadata without writing it.
+
+    Returns the previous and updated metadata plus the storage to persist, or
+    ``None`` when the persisted form is unchanged and no write is needed.
+    """
+    previous = _store_values._session_metadata_from_state(state)
+    updated = deepcopy(previous)
+    mutation(updated)
+    _store_values._json_object(updated, "session metadata")
+    storage = _store_values._session_metadata_storage(updated)
+    if storage == _store_values._session_metadata_storage(previous):
+        return previous, updated, None
+    return previous, updated, storage
+
+
 def mutate_metadata(
     connection: sqlite3.Connection,
     address: SessionAddress,
     mutation: Callable[[JsonObject], None],
 ) -> tuple[JsonObject, JsonObject]:
     """Apply one metadata read-modify-write under the writer transaction."""
-    result: tuple[JsonObject, JsonObject] | None = None
-
-    def _fn(connection: sqlite3.Connection) -> None:
-        nonlocal result
-        state = _store_values._require_live(connection, address)
-        previous = _store_values._session_metadata_from_state(state)
-        updated = deepcopy(previous)
-        mutation(updated)
-        _store_values._json_object(updated, "session metadata")
-        storage = _store_values._session_metadata_storage(updated)
-        result = (previous, updated)
-        # Compare persisted forms: an unchanged row needs no write or revision.
-        if storage == _store_values._session_metadata_storage(previous):
-            return
+    state = _store_values._require_live(connection, address)
+    previous, updated, storage = metadata_change(state, mutation)
+    # Compare persisted forms: an unchanged row needs no write or revision.
+    if storage is not None:
         payload, projection = storage
         connection.execute(
             "UPDATE sessions SET metadata_json = ?, "
@@ -113,10 +121,20 @@ def mutate_metadata(
             + ", state_revision = state_revision + 1 WHERE session_key = ?",
             (payload, *projection, state["session_key"]),
         )
+    return previous, updated
 
-    _fn(connection)
-    assert result is not None
-    return result
+
+def ensure_metadata(
+    connection: sqlite3.Connection,
+    address: SessionAddress,
+    mutation: Callable[[JsonObject], None],
+    *,
+    create_missing: bool,
+) -> tuple[JsonObject, JsonObject]:
+    """Optionally create the live Session, then apply one metadata mutation."""
+    if create_missing:
+        ensure_live(connection, address)
+    return mutate_metadata(connection, address, mutation)
 
 
 def replace_activity(

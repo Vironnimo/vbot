@@ -18,6 +18,7 @@ from core.sessions._io import (
     _SessionWriteLock,
 )
 from core.sessions._metadata import (
+    _append_run_kind,
     _completion_activity_from_state,
     _completion_activity_payload,
     _decode_state_object,
@@ -166,6 +167,10 @@ class ChatSessionManager:
     async def exists_async(self, address: SessionAddress) -> bool:
         return await _run_session_io(self.exists, address)
 
+    def existing_addresses(self, addresses: Sequence[SessionAddress]) -> set[SessionAddress]:
+        """Return which *addresses* name live Sessions, in one set-oriented read."""
+        return self._store.existing_addresses(addresses)
+
     def get(self, address: SessionAddress) -> ChatSession:
         _validate_session_id(address.session_id)
         self._store.state(address)
@@ -175,10 +180,8 @@ class ChatSessionManager:
         return await _run_session_io(self.get, address)
 
     def get_or_create(self, address: SessionAddress) -> ChatSession:
-        _validate_agent_id(address.agent_id)
-        _validate_session_id(address.session_id)
-        if address.project_id is not None and not is_valid_project_id(address.project_id):
-            raise ChatSessionError("invalid project id")
+        """Return the live Session, creating it when missing (existing ones cost a read)."""
+        _validate_creatable_address(address)
         self._store.ensure_live(address)
         return ChatSession(self._store, address)
 
@@ -187,6 +190,21 @@ class ChatSessionManager:
 
     def get_metadata(self, address: SessionAddress) -> JsonObject:
         return self._store.metadata(address)
+
+    def ensure_metadata(
+        self,
+        address: SessionAddress,
+        mutation: Callable[[JsonObject], None],
+        *,
+        create_missing: bool = False,
+    ) -> tuple[JsonObject, JsonObject]:
+        """Re-assert metadata, writing only a real change (or a ``create_missing`` Session).
+
+        The mutation may run twice, so it must be deterministic and side-effect free.
+        """
+        if create_missing:
+            _validate_creatable_address(address)
+        return self._store.ensure_metadata(address, mutation, create_missing=create_missing)
 
     async def get_metadata_async(self, address: SessionAddress) -> JsonObject:
         return await _run_session_io(self.get_metadata, address)
@@ -225,6 +243,9 @@ class ChatSessionManager:
     def metadata_value(self, address: SessionAddress, key: str) -> Any:
         """Read one metadata value (``None`` when absent) without decoding the rest."""
         return self._store.metadata_value(address, key)
+
+    async def metadata_value_async(self, address: SessionAddress, key: str) -> Any:
+        return await _run_session_io(self.metadata_value, address, key)
 
     def prompt_cache_affinity_id(self, address: SessionAddress) -> str:
         value = self._store.metadata_value(address, PROMPT_CACHE_AFFINITY_META_KEY)
@@ -324,14 +345,9 @@ class ChatSessionManager:
 
     def set_title(self, address: SessionAddress, title: str) -> str | None:
         normalized = _normalize_session_title(title)
-
-        def update(metadata: JsonObject) -> None:
-            if normalized is None:
-                metadata.pop(SESSION_TITLE_KEY, None)
-            else:
-                metadata[SESSION_TITLE_KEY] = normalized
-
-        previous_metadata, _updated = self._store.mutate_metadata(address, update)
+        previous_metadata, _updated = self._store.mutate_metadata(
+            address, lambda metadata: _set_title(metadata, normalized)
+        )
         previous = previous_metadata.get(SESSION_TITLE_KEY)
         if previous != normalized:
             self._notify_callbacks(self._title_changed_callbacks, address)
@@ -384,29 +400,29 @@ class ChatSessionManager:
         return await _run_session_io(self.list, agent_id, project_id)
 
     def list_addresses(
-        self, project_id: str | None = None, *, exclude_owner_managed: bool = False
+        self,
+        project_id: str | None = None,
+        *,
+        agent_id: str | None = None,
+        exclude_owner_managed: bool = False,
     ) -> builtins.list[SessionAddress]:
-        """List live addresses in one scope, optionally without Extension-owned Sessions."""
+        """List live addresses in one scope or one Agent, optionally without Extension ones."""
         return self._store.list_addresses(
             project_id=project_id,
-            agent_id=None,
+            agent_id=agent_id,
             exclude_owner_managed=exclude_owner_managed,
         )
 
-    def list_with_metadata(
-        self, agent_id: str, project_id: str | None = None
-    ) -> builtins.list[JsonObject]:
-        result: builtins.list[JsonObject] = []
-        for state in self._store.list_state_rows(project_id, agent_id):
-            summary = self._store.metadata_from_state(state)
-            summary.update(_completion_activity_from_state(state))
-            summary.update(
-                id=state["session_id"],
-                created_at=state["created_at"],
-                last_active_at=state["last_message_at"] or state["created_at"],
-            )
-            result.append(summary)
-        return result
+    def list_agent_ids(
+        self, project_id: str | None = None, *, exclude_owner_managed: bool = False
+    ) -> builtins.list[str]:
+        """Return each Agent id owning a live Session in one scope, in one indexed read."""
+        return self._store.list_agent_ids(project_id, exclude_owner_managed=exclude_owner_managed)
+
+    def newest_session_id(self, agent_id: str, project_id: str | None = None) -> str | None:
+        """Return the most recently active listed Session (any run kind, no Extension one)."""
+        page = self.list_summaries_page([(project_id, agent_id)], limit=1)
+        return str(page.sessions[0]["id"]) if page.sessions else None
 
     def list_summaries(
         self,
@@ -429,11 +445,6 @@ class ChatSessionManager:
                     summary[key] = json.loads(str(payload))
             summaries.append(summary)
         return summaries
-
-    async def list_with_metadata_async(
-        self, agent_id: str, project_id: str | None = None
-    ) -> builtins.list[JsonObject]:
-        return await _run_session_io(self.list_with_metadata, agent_id, project_id)
 
     def list_summaries_page(
         self,
@@ -828,35 +839,13 @@ class ChatSessionManager:
         after: int = 0,
         limit: int = 100,
     ) -> builtins.list[OwnedRunRecord]:
-        rows = self._store.owned_runs(
+        return self._store.owned_runs(
             owner_name=owner_name,
             group_id=group_id,
             participant_id=participant_id,
             after=after,
             limit=limit,
         )
-        return [
-            OwnedRunRecord(
-                record_key=int(row["record_key"]),
-                address=SessionAddress(
-                    row["project_id"] or None, row["agent_id"], row["session_id"]
-                ),
-                generation_id=str(row["generation_id"]),
-                run_id=str(row["run_id"]),
-                owner=RunExecutionOwner(
-                    str(row["owner_name"]),
-                    str(row["group_id"]),
-                    str(row["participant_id"]),
-                    str(row["participant_generation_id"]),
-                    str(row["epoch"]),
-                ),
-                start_sequence=int(row["start_sequence"]),
-                terminal_status=row["terminal_status"],
-                terminal_sequence=row["terminal_sequence"],
-                input_id=row["input_id"],
-            )
-            for row in rows
-        ]
 
     async def owned_runs_async(
         self,
@@ -876,6 +865,26 @@ class ChatSessionManager:
                 limit=limit,
             )
         )
+
+    async def owned_runs_by_id_async(
+        self, *, owner_name: str, group_id: str, run_ids: Sequence[str]
+    ) -> dict[str, OwnedRunRecord]:
+        """Read exact Run ids' execution records in one owner group (absent ids omitted)."""
+        return await _run_session_io(
+            lambda: self._store.owned_runs_by_id(
+                owner_name=owner_name, group_id=group_id, run_ids=run_ids
+            )
+        )
+
+    async def owned_run_by_input_async(
+        self, address: SessionAddress, input_id: str
+    ) -> OwnedRunRecord | None:
+        """Read the execution record admitted for one input of a live Session."""
+        return await _run_session_io(self._store.owned_run_by_input, address, input_id)
+
+    async def tool_result_persisted_async(self, address: SessionAddress, tool_call_id: str) -> bool:
+        """Report in one indexed probe whether a live Session holds a Tool call's result."""
+        return await _run_session_io(self._store.tool_result_persisted, address, tool_call_id)
 
     def run_start_boundaries(
         self, addresses: Sequence[SessionAddress]
@@ -933,17 +942,25 @@ class ChatSessionManager:
         target_agent_id: str | None = None,
         target_project_id: str | None = None,
         strip_meta_keys: frozenset[str] = frozenset(),
+        title: str | None = None,
+        run_kind: RunKind | None = None,
     ) -> ChatSession:
+        """Copy a Session in one write; ``title``/``run_kind`` label the copy in it."""
         _validate_session_id(source.session_id)
         async with self.write_lock(source):
-            return await _run_session_io(
+            fork = await _run_session_io(
                 self._fork,
                 source,
                 target_agent_id or source.agent_id,
                 target_project_id,
                 strip_meta_keys,
                 target_agent_id is not None,
+                title,
+                run_kind,
             )
+        if title is not None:
+            self._notify_callbacks(self._title_changed_callbacks, fork.address)
+        return fork
 
     def _fork(
         self,
@@ -952,8 +969,13 @@ class ChatSessionManager:
         target_project_id: str | None,
         strip_meta_keys: frozenset[str],
         target_explicit: bool,
+        title: str | None = None,
+        run_kind: RunKind | None = None,
     ) -> ChatSession:
         _validate_agent_id(target_agent_id)
+        normalized_title = None if title is None else _normalize_session_title(title)
+        if run_kind is not None and not isinstance(run_kind, RunKind):
+            raise ChatSessionError("run kind must be a RunKind")
         same_scope = target_agent_id == source.agent_id and target_project_id == source.project_id
         target = SessionAddress(target_project_id, target_agent_id, "")
         cross_scope_affinity_id = None if same_scope else _new_prompt_cache_affinity_id()
@@ -980,6 +1002,10 @@ class ChatSessionManager:
                 "forked_at": forked_at,
                 "message_count": message_count,
             }
+            if title is not None:
+                _set_title(metadata, normalized_title)
+            if run_kind is not None:
+                _append_run_kind(metadata, run_kind.value)
 
         target = self._store.fork(
             source,
@@ -1068,3 +1094,17 @@ class ChatSessionManager:
                 callback(*args)
             except Exception:
                 logging.getLogger(__name__).exception("Session callback failed")
+
+
+def _validate_creatable_address(address: SessionAddress) -> None:
+    _validate_agent_id(address.agent_id)
+    _validate_session_id(address.session_id)
+    if address.project_id is not None and not is_valid_project_id(address.project_id):
+        raise ChatSessionError("invalid project id")
+
+
+def _set_title(metadata: JsonObject, normalized: str | None) -> None:
+    if normalized is None:
+        metadata.pop(SESSION_TITLE_KEY, None)
+    else:
+        metadata[SESSION_TITLE_KEY] = normalized

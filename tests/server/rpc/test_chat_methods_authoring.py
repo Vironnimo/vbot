@@ -269,14 +269,19 @@ def _make_reflect_state(
         captured.append({"agent_id": agent_id, "message": content, **kwargs})
         return _FakeRun()
 
-    async def fork(source: SessionAddress, **kwargs: Any) -> Any:
+    title_log = titles if titles is not None else []
+    metadata_log = metadata_writes if metadata_writes is not None else []
+
+    async def fork(source: SessionAddress, *, title: str | None = None, **kwargs: Any) -> Any:
         forked.append(
             {"source_agent_id": source.agent_id, "session_id": source.session_id, **kwargs}
         )
+        if title is not None:
+            title_log.append(("fork-1", title))
         return SimpleNamespace(id="fork-1")
 
-    title_log = titles if titles is not None else []
-    metadata_log = metadata_writes if metadata_writes is not None else []
+    async def metadata_value_async(address: SessionAddress, key: str) -> Any:
+        return None
 
     def mutate_metadata(address: SessionAddress, mutation: Any) -> dict[str, Any]:
         metadata: dict[str, Any] = {}
@@ -287,10 +292,9 @@ def _make_reflect_state(
     chat_sessions = SimpleNamespace(
         fork=fork,
         get_metadata=lambda address: {},
+        metadata_value_async=metadata_value_async,
         set_metadata=lambda address, data: metadata_log.append((address.session_id, data)),
         mutate_metadata=mutate_metadata,
-        set_title=lambda address, title: title_log.append((address.session_id, title)),
-        record_run_kind=lambda address, run_kind: None,
     )
 
     def resolve_agent(project_id: str | None, agent_id: str) -> SimpleNamespace:

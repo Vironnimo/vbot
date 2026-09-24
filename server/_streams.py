@@ -17,10 +17,7 @@ from server.events import (
     ServerEventBus,
 )
 from server.file_delivery import FileDelivery
-from server.rpc.event_bridge import (
-    publish_resource_changed,
-    reflection_source_session_id,
-)
+from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.payloads import remove_opaque_provider_metadata
 
 JsonObject = dict[str, Any]
@@ -215,9 +212,7 @@ def _active_runs_snapshot(state: Any) -> list[JsonObject]:
         }
         if not getattr(run, "contributes_to_agent_activity", True):
             item[RUN_AGENT_ACTIVITY_FIELD] = False
-        source_session_id = reflection_source_session_id(
-            getattr(getattr(state, "runtime", None), "chat_sessions", None), run
-        )
+        source_session_id = getattr(run, "source_session_id", None)
         if source_session_id:
             item["source_session_id"] = source_session_id
         snapshot.append(item)

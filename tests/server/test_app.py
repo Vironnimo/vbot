@@ -101,12 +101,15 @@ def test_extension_run_events_streams_only_the_current_owned_page_run(tmp_path: 
 
     class Groups:
         calls = 0
+        retire_during_lookup = False
 
         async def owned_run(self, group_id: str, run_id: str) -> Any:
             if (group_id, run_id) != ("group-a", "run-a"):
                 raise ValueError("foreign run")
             self.calls += 1
-            if self.calls == 2:
+            if self.retire_during_lookup:
+                runtime.extensions.current = False
+            elif self.calls == 1:
                 run.mark_completed(None)
             return SimpleNamespace(run=run)
 
@@ -147,13 +150,18 @@ def test_extension_run_events_streams_only_the_current_owned_page_run(tmp_path: 
         runtime.extensions.current = True
         runtime.extensions.host_bound = False
         reloading_response = client.get(url)
+        runtime.extensions.host_bound = True
+        groups.retire_during_lookup = True
+        retired_response = client.get(url)
 
     assert response.status_code == 200
+    assert groups.calls == 2
     assert response.headers["content-type"].startswith("text/event-stream")
     assert "event: model.response" in response.text
     assert '"text":"visible"' in response.text
     assert stale_response.status_code == 404
     assert reloading_response.status_code == 404
+    assert retired_response.status_code == 404
 
 
 def test_control_shutdown_requires_secret_and_requests_uvicorn_exit(tmp_path: Path) -> None:

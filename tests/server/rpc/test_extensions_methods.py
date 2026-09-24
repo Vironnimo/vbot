@@ -987,23 +987,34 @@ async def test_extension_page_cancel_tool_is_owner_scoped_and_call_local(scenari
 
 
 @pytest.mark.asyncio
-async def test_extension_page_run_reports_verified_replay_watermark() -> None:
+@pytest.mark.parametrize("scenario", ["live", "retired"])
+async def test_extension_page_run_reports_verified_replay_watermark(scenario: str) -> None:
+    run = SimpleNamespace(events=[SimpleNamespace(sequence=7)])
+
     class Groups:
         reads = 0
 
         async def owned_run(self, group_id: str, run_id: str) -> Any:
             assert (group_id, run_id) == ("group-a", "run-a")
             self.reads += 1
-            return SimpleNamespace(
-                run=SimpleNamespace(events=[SimpleNamespace(sequence=self.reads * 7)])
-            )
+            if scenario == "retired":
+                registry.current = False
+            return SimpleNamespace(run=run)
+
+    class Registry(_PageRegistry):
+        def page_declarations(self) -> list[tuple[Any, Any, Path]]:
+            # Events the Run emits while ownership is re-verified belong to replay.
+            if groups.reads:
+                run.events.append(SimpleNamespace(sequence=14))
+            return super().page_declarations()
 
     class Delivery:
         def open_extension_run(self, **kwargs: Any) -> Any:
             assert kwargs["after_sequence"] == 3
             return {"url": "/api/extension-runs/test"}
 
-    registry = _PageRegistry(SimpleNamespace(temporary_agents=Groups()))
+    groups = Groups()
+    registry = Registry(SimpleNamespace(temporary_agents=groups))
     state = _state_with_records([])
     state.runtime.extensions = registry
     state.file_delivery = Delivery()
@@ -1020,6 +1031,11 @@ async def test_extension_page_run_reports_verified_replay_watermark() -> None:
             },
         },
     )
+    assert groups.reads == 1
+    if scenario == "retired":
+        assert result["ok"] is False
+        assert result["error"]["message"] == "Extension page is unavailable; refresh the page"
+        return
     assert result == {
         "ok": True,
         "result": {"stream": {"url": "/api/extension-runs/test"}, "replay_through_sequence": 14},

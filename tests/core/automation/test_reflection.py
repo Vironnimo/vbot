@@ -71,6 +71,9 @@ class _FakeSessions:
     def get_metadata(self, address: SessionAddress) -> dict[str, Any]:
         return dict(self.metadata.get(address.session_id, {}))
 
+    async def metadata_value_async(self, address: SessionAddress, key: str) -> Any:
+        return self.get_metadata(address).get(key)
+
     def set_metadata(self, address: SessionAddress, data: dict[str, Any]) -> None:
         self.metadata[address.session_id] = dict(data)
 
@@ -81,15 +84,15 @@ class _FakeSessions:
         self.set_metadata(address, metadata)
         return metadata
 
-    def set_title(self, address: SessionAddress, title: str) -> str:
-        self.titles.append((address.session_id, title))
-        return title
-
-    def record_run_kind(self, address: SessionAddress, run_kind: RunKind) -> None:
-        metadata = self.metadata.setdefault(address.session_id, {})
-        metadata.setdefault("run_kinds", []).append(run_kind.value)
-
-    async def fork(self, source: SessionAddress, **kwargs: Any) -> Any:
+    async def fork(
+        self,
+        source: SessionAddress,
+        *,
+        title: str | None = None,
+        run_kind: RunKind | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        # Title and run kind commit with the fork; there is no follow-up write.
         self.fork_counter += 1
         fork_id = f"fork-{self.fork_counter}"
         self.forks.append(
@@ -99,6 +102,10 @@ class _FakeSessions:
                 **kwargs,
             }
         )
+        if title is not None:
+            self.titles.append((fork_id, title))
+        if run_kind is not None:
+            self.metadata.setdefault(fork_id, {})["run_kinds"] = [run_kind.value]
         return SimpleNamespace(id=fork_id)
 
 
@@ -772,6 +779,8 @@ async def test_run_review_reports_fork_before_run_and_returns_summary() -> None:
     assert "tool_grants" not in loop.started[0]
     assert loop.started[0]["run_kind"] is RunKind.REFLECTION
     assert loop.started[0]["contributes_to_agent_activity"] is False
+    # The review Run carries the Session it examines for accessor attribution.
+    assert loop.started[0]["source_session_id"] == "s1"
     assert sessions.metadata["fork-1"]["run_kinds"] == ["reflection"]
 
 

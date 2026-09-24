@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from core.chat.errors import ChatSessionError
+from core.runs import RunKind
 from core.sessions._types import (
     _CHAT_HISTORY_CURSOR_PREFIX,
     FORK_SOURCE_META_KEY,
@@ -24,6 +25,21 @@ from core.sessions._types import (
 )
 from core.sessions.errors import SessionPageCursorError
 from core.settings import is_valid_agent_id
+
+_RUN_KIND_VALUES = frozenset(kind.value for kind in RunKind)
+
+
+def _append_run_kind(metadata: JsonObject, run_kind: str) -> None:
+    """Add *run_kind* to the Session's listed Run kinds; a known kind is a no-op."""
+    if run_kind not in _RUN_KIND_VALUES:
+        raise ChatSessionError(f"unknown run kind: {run_kind}")
+    values = metadata.get(SESSION_RUN_KINDS_META_KEY, [])
+    if not isinstance(values, list) or not all(
+        isinstance(value, str) and value in _RUN_KIND_VALUES for value in values
+    ):
+        raise ChatSessionError("session run_kinds metadata is invalid")
+    if run_kind not in values:
+        metadata[SESSION_RUN_KINDS_META_KEY] = [*values, run_kind]
 
 
 def _validate_agent_id(agent_id: str) -> None:

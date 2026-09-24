@@ -27,6 +27,7 @@ from core.sessions import (
 )
 from core.sessions._types import (
     JsonObject,
+    OwnedRunRecord,
     SessionChatHistorySnapshot,
     SessionHistoryRevision,
     SessionRecallVisibility,
@@ -274,13 +275,19 @@ class SessionStore:
         )
 
     def ensure_live(self, address: SessionAddress) -> None:
-        return self._execute_write(
-            lambda connection: _store_mutations.ensure_live(connection, address)
-        )
+        """Create a missing live Session; an existing one costs only a read."""
+        with self._runtime.read_ctx() as connection:
+            if _store_values._find_live(connection, address) is not None:
+                return
+        self._execute_write(lambda connection: _store_mutations.ensure_live(connection, address))
 
     def exists(self, address: SessionAddress, *, include_archived: bool = False) -> bool:
         with self._runtime.read_ctx() as connection:
             return _store_queries.exists(connection, address, include_archived=include_archived)
+
+    def existing_addresses(self, addresses: Sequence[SessionAddress]) -> set[SessionAddress]:
+        with self._runtime.read_ctx() as connection:
+            return _store_queries.existing_addresses(connection, addresses)
 
     def state(self, address: SessionAddress, *, include_archived: bool = False) -> sqlite3.Row:
         with self._runtime.read_ctx() as connection:
@@ -320,6 +327,28 @@ class SessionStore:
     ) -> tuple[JsonObject, JsonObject]:
         return self._execute_write(
             lambda connection: _store_mutations.mutate_metadata(connection, address, mutation)
+        )
+
+    def ensure_metadata(
+        self,
+        address: SessionAddress,
+        mutation: Callable[[JsonObject], None],
+        *,
+        create_missing: bool,
+    ) -> tuple[JsonObject, JsonObject]:
+        """Try the mutation on a read snapshot; enter the writer only for a real change."""
+        with self._runtime.read_ctx() as connection:
+            state = _store_values._find_live(connection, address)
+        if state is not None:
+            previous, updated, storage = _store_mutations.metadata_change(state, mutation)
+            if storage is None:
+                return previous, updated
+        elif not create_missing:
+            raise SessionNotFoundError(f"session does not exist: {address.session_id}")
+        return self._execute_write(
+            lambda connection: _store_mutations.ensure_metadata(
+                connection, address, mutation, create_missing=create_missing
+            )
         )
 
     def activity(self, address: SessionAddress) -> JsonObject:
@@ -599,7 +628,7 @@ class SessionStore:
         participant_id: str | None = None,
         after: int = 0,
         limit: int = 100,
-    ) -> list[sqlite3.Row]:
+    ) -> list[OwnedRunRecord]:
         with self._runtime.read_ctx() as connection:
             return _store_owned.owned_runs(
                 connection,
@@ -609,6 +638,18 @@ class SessionStore:
                 after=after,
                 limit=limit,
             )
+
+    def owned_runs_by_id(
+        self, *, owner_name: str, group_id: str, run_ids: Sequence[str]
+    ) -> dict[str, OwnedRunRecord]:
+        with self._runtime.read_ctx() as connection:
+            return _store_owned.owned_runs_by_id(
+                connection, owner_name=owner_name, group_id=group_id, run_ids=run_ids
+            )
+
+    def owned_run_by_input(self, address: SessionAddress, input_id: str) -> OwnedRunRecord | None:
+        with self._runtime.read_ctx() as connection:
+            return _store_owned.owned_run_by_input(connection, address, input_id)
 
     def run_start_boundaries(self, addresses: Sequence[SessionAddress]) -> list[sqlite3.Row]:
         with self._runtime.read_ctx() as connection:
@@ -625,6 +666,10 @@ class SessionStore:
     def active_user_message_count(self, address: SessionAddress, *, limit: int) -> int:
         with self._runtime.read_ctx() as connection:
             return _store_history.active_user_message_count(connection, address, limit=limit)
+
+    def tool_result_persisted(self, address: SessionAddress, tool_call_id: str) -> bool:
+        with self._runtime.read_ctx() as connection:
+            return _store_history.tool_result_persisted(connection, address, tool_call_id)
 
     def latest_note(self, address: SessionAddress, *, content_prefix: str) -> ChatMessage | None:
         return self._read_decoded(
@@ -846,9 +891,13 @@ class SessionStore:
                 exclude_owner_managed=exclude_owner_managed,
             )
 
-    def list_state_rows(self, project_id: str | None, agent_id: str) -> list[sqlite3.Row]:
+    def list_agent_ids(
+        self, project_id: str | None, *, exclude_owner_managed: bool = False
+    ) -> list[str]:
         with self._runtime.read_ctx() as connection:
-            return _store_queries.list_state_rows(connection, project_id, agent_id)
+            return _store_queries.list_agent_ids(
+                connection, project_id, exclude_owner_managed=exclude_owner_managed
+            )
 
     def list_summary_rows_for_scope(
         self,
@@ -861,10 +910,6 @@ class SessionStore:
             return _store_queries.list_summary_rows_for_scope(
                 connection, project_id, agent_id, metadata_keys=metadata_keys
             )
-
-    @staticmethod
-    def metadata_from_state(state: Any) -> JsonObject:
-        return _store_values._session_metadata_from_state(state)
 
     def list_summary_rows(
         self,

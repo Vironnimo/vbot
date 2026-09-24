@@ -41,7 +41,7 @@ class _FakeSessions:
         self.archived: list[tuple[str, str, str | None]] = []
         self.got: list[tuple[str, str, str | None]] = []
         self.forked: list[dict[str, Any]] = []
-        # Rows returned by list_with_metadata; default keeps the existing
+        # Rows the Session listing fakes return; default keeps the existing
         # listing tests byte-identical. Delete tests override it.
         self.metadata_rows: list[dict[str, Any]] = [{"id": "s1"}]
         self.activity_rows: list[dict[str, Any]] = [
@@ -92,9 +92,12 @@ class _FakeSessions:
             await self.archive_release.wait()
         return SimpleNamespace(id=address.session_id)
 
-    def list_with_metadata(self, agent_id: str, project_id: str | None = None) -> list[Any]:
+    def newest_session_id(self, agent_id: str, project_id: str | None = None) -> str | None:
         self.listed.append((agent_id, project_id))
-        return self.metadata_rows
+        rows = sorted(
+            self.metadata_rows, key=lambda row: row.get("last_active_at", ""), reverse=True
+        )
+        return str(rows[0]["id"]) if rows else None
 
     def list_summaries_page(
         self,

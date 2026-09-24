@@ -257,10 +257,9 @@ def _resolve_post_delete_landing(
     if project_id is None:
         agent = state.runtime.agents.reset_current_after_session_removed(agent_id, session_id)
         return str(agent.current_session_id)
-    remaining = chat_sessions.list_with_metadata(agent_id, project_id)
-    if remaining:
-        newest = max(remaining, key=lambda session: session["last_active_at"])
-        return str(newest["id"])
+    newest_session_id = chat_sessions.newest_session_id(agent_id, project_id)
+    if newest_session_id is not None:
+        return str(newest_session_id)
     return str(chat_sessions.create(agent_id, project_id=project_id).id)
 
 
@@ -645,13 +644,8 @@ async def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject
             raise ChannelConfigError(
                 f"Channel {channel_id} belongs to agent {channel_config.agent_id}, not {agent_id}"
             )
-        await _session_io(
-            state.runtime.chat_sessions,
-            "get_async",
-            "get",
-            _session_address(agent_id, session_id),
-        )
 
+        # The metadata mutation itself rejects a missing Session.
         def link_channel(metadata: JsonObject) -> None:
             metadata.update(
                 {
@@ -729,12 +723,6 @@ async def _set_session_compaction_policy(state: Any, params: JsonObject) -> Json
         from core.settings.normalizers import normalize_compaction_policy
 
         normalized = normalize_compaction_policy(policy) if policy is not None else None
-        await _session_io(
-            state.runtime.chat_sessions,
-            "get_async",
-            "get",
-            _session_address(agent_id, session_id, project_id),
-        )
         agent = await _SESSION_RPC_WORKERS.run(
             state.runtime.agent_resolver.resolve_agent,
             project_id,
@@ -747,6 +735,7 @@ async def _set_session_compaction_policy(state: Any, params: JsonObject) -> Json
             state.runtime.storage.load_compaction_settings,
         )
 
+        # The metadata mutation itself rejects a missing Session.
         def set_policy(metadata: JsonObject) -> None:
             if normalized is None:
                 metadata.pop(COMPACTION_POLICY_META_KEY, None)

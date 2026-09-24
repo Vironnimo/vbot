@@ -491,11 +491,12 @@ class _PayloadCredentials:
         return self.has_credentials(provider_id, connection_id)
 
 
-def test_agent_get_reports_config_and_effective_for_own_value(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_agent_get_reports_config_and_effective_for_own_value(tmp_path: Path) -> None:
     state = _agent_payload_state(tmp_path, defaults={})
     state.runtime.agents.create("orchestrator", "Orchestrator", model="openai/gpt-5.2")
 
-    result = _get_agent(state, {"id": "orchestrator"})
+    result = await _get_agent(state, {"id": "orchestrator"})
 
     # config = raw own values (pre-default-bake); shape check.
     assert set(result["config"]) == {
@@ -513,13 +514,14 @@ def test_agent_get_reports_config_and_effective_for_own_value(tmp_path: Path) ->
     assert result["effective"]["temperature"] == {"value": None, "source": None}
 
 
-def test_agent_get_effective_reports_global_default_when_own_empty(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_agent_get_effective_reports_global_default_when_own_empty(tmp_path: Path) -> None:
     # With a global default set, the top-level model is baked while config keeps the
     # raw "", and effective attributes the value to the global_default tier.
     state = _agent_payload_state(tmp_path, defaults={"model": "openai/gpt-5.2"})
     state.runtime.agents.create("orchestrator", "Orchestrator")
 
-    result = _get_agent(state, {"id": "orchestrator"})
+    result = await _get_agent(state, {"id": "orchestrator"})
 
     assert result["model"] == "openai/gpt-5.2"  # baked top-level key
     assert result["config"]["model"] == ""  # raw own value

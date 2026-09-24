@@ -44,7 +44,7 @@ async def test_new_subagent_session_uses_description_as_automatic_title(tmp_path
     metadata = runtime.chat_sessions.get_metadata(_address("worker", child_session_id))
     assert metadata["auto_title"] == "A" * 48
     assert metadata["auto_title_initialized"] is True
-    assert runtime.chat_sessions.list_with_metadata("worker")[0]["auto_title"] == "A" * 48
+    assert runtime.chat_sessions.list_summaries("worker")[0]["auto_title"] == "A" * 48
     manager.started[0]["run"].mark_completed(
         ChatMessage.assistant(model="openai/gpt-5.2", content="done")
     )

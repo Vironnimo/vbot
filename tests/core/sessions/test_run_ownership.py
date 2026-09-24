@@ -138,6 +138,71 @@ async def test_owner_pages_are_bounded_and_partition_participants(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_owned_run_point_lookups_resolve_exact_ids_and_inputs(tmp_path):
+    sessions, binding, owner = make_sessions(tmp_path)
+    try:
+        other_group = sessions.create_bound_temporary_session(
+            SessionAddress(None, "temporary", "other-participant"),
+            owner_name="fixture",
+            group_id="other",
+            participant_id="peer",
+            config={},
+        )
+        await sessions.record_run_owner_async(
+            other_group.address,
+            run_id="foreign",
+            owner=RunExecutionOwner("fixture", "other", "peer", other_group.generation_id, "epoch"),
+            input_id="initial:foreign",
+        )
+        for number in range(130):
+            await sessions.record_run_owner_async(
+                binding.address,
+                run_id=f"run{number}",
+                owner=owner,
+                input_id=f"input{number}",
+            )
+        sessions.get(binding.address).append(summary("run6"))
+
+        wanted = [f"run{number}" for number in range(0, 130, 3)] + ["foreign", "missing"]
+        records = await sessions.owned_runs_by_id_async(
+            owner_name="fixture", group_id="group", run_ids=[*wanted, "run0"]
+        )
+        # Ids beyond one bounded statement are read in chunks of the same snapshot.
+        assert sorted(records) == sorted(wanted[:-2])
+        assert records["run0"].address == binding.address
+        assert records["run0"].owner == owner
+        assert records["run0"].input_id == "input0"
+        assert records["run0"].terminal_status is None
+        assert records["run129"].record_key > records["run0"].record_key
+        paged = {
+            record.run_id: record
+            for record in sessions.owned_runs(owner_name="fixture", group_id="group", limit=1000)
+        }
+        assert records["run6"] == paged["run6"]
+        assert records["run6"].terminal_status == "completed"
+        by_id = sessions.owned_runs_by_id_async
+        assert not await by_id(owner_name="other", group_id="group", run_ids=["run0"])
+        assert await by_id(owner_name="fixture", group_id="group", run_ids=[]) == {}
+
+        by_input = await sessions.owned_run_by_input_async(binding.address, "input6")
+        assert by_input == paged["run6"]
+        by_input_of = sessions.owned_run_by_input_async
+        assert await by_input_of(binding.address, "missing") is None
+        assert await by_input_of(binding.address, "initial:foreign") is None
+        assert await by_input_of(SessionAddress(None, "temporary", "gone"), "x") is None
+        with pytest.raises(ValueError):
+            await by_input_of(binding.address, "")
+        with pytest.raises(ValueError):
+            await by_id(owner_name="fixture", group_id="group", run_ids=[""])
+
+        assert await sessions.delete_temporary_group(owner_name="fixture", group_id="group") == 1
+        assert await by_input_of(binding.address, "input6") is None
+        assert not await by_id(owner_name="fixture", group_id="group", run_ids=["run6"])
+    finally:
+        sessions.close()
+
+
+@pytest.mark.asyncio
 async def test_run_start_boundaries_include_owned_and_ordinary_successors(tmp_path):
     sessions, binding, owner = make_sessions(tmp_path)
     try:

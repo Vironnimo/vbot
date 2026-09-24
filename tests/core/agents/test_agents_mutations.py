@@ -79,7 +79,7 @@ def test_concurrent_updates_and_current_session_repairs_do_not_lose_state(
         following.result(timeout=5)
 
     if repair:
-        sessions = store._session_manager().list_with_metadata("coder")
+        sessions = store._session_manager().list_summaries("coder")
         assert [session["id"] for session in sessions] == [store.get("coder").current_session_id]
     else:
         persisted = store.get("coder")
@@ -99,7 +99,45 @@ def test_failed_current_session_reset_removes_new_session(
     with pytest.raises(OSError, match="config unavailable"):
         store.reset_current_after_session_removed("coder", agent.current_session_id)
 
-    assert store._session_manager().list_with_metadata("coder") == []
+    assert store._session_manager().list_summaries("coder") == []
+
+
+def test_roster_verifies_every_current_session_in_one_read(
+    store: AgentStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for agent_id in ("alpha", "beta", "gamma"):
+        store.create(agent_id)
+    manager = store._session_manager()
+    dangling = store.get("beta").current_session_id
+    manager.delete(SessionAddress(None, "beta", dangling))
+    original = manager.existing_addresses
+    probes: list[int] = []
+    point_probes: list[SessionAddress] = []
+
+    def counted(addresses):
+        probes.append(len(addresses))
+        return original(addresses)
+
+    monkeypatch.setattr(manager, "existing_addresses", counted)
+    monkeypatch.setattr(manager, "exists", point_probes.append)
+
+    agents = {agent.id: agent for agent in store.list()}
+
+    assert probes == [3]
+    assert point_probes == []
+    # The dangling pointer self-heals to a fresh live Session.
+    healed = SessionAddress(None, "beta", agents["beta"].current_session_id)
+    assert healed.session_id != dangling
+    assert original([healed]) == {healed}
+
+    # Provenance reads return the stored pointer without verifying it.
+    alpha = SessionAddress(None, "alpha", agents["alpha"].current_session_id)
+    manager.delete(alpha)
+    probes.clear()
+    assert store.get_raw("alpha").current_session_id == alpha.session_id
+    assert probes == []
+    assert store.get("alpha").current_session_id != alpha.session_id
+    assert probes == [1]
 
 
 def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> None:

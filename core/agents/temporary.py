@@ -448,27 +448,19 @@ class TemporaryExecutionGroups:
                     )
                 previous = state.inputs.get(input_id)
                 if previous is None:
-                    after = 0
-                    while True:
-                        records = await self._sessions.owned_runs_async(
-                            owner_name=handle.owner_name,
-                            group_id=handle.group_id,
-                            participant_id=participant_id,
-                            after=after,
+                    previous_record = await self._sessions.owned_run_by_input_async(
+                        binding.address, input_id
+                    )
+                    if previous_record is not None and (
+                        previous_record.owner.extension,
+                        previous_record.owner.group_id,
+                        previous_record.owner.participant_id,
+                    ) == (handle.owner_name, handle.group_id, participant_id):
+                        previous = TemporaryRunAdmission(
+                            previous_record.run_id,
+                            previous_record.terminal_status or "interrupted",
+                            True,
                         )
-                        previous_record = next(
-                            (record for record in records if record.input_id == input_id), None
-                        )
-                        if previous_record is not None:
-                            previous = TemporaryRunAdmission(
-                                previous_record.run_id,
-                                previous_record.terminal_status or "interrupted",
-                                True,
-                            )
-                            break
-                        if len(records) < 100:
-                            break
-                        after = records[-1].record_key
                 if previous is not None:
                     try:
                         status = self._manager.get(previous.run_id).status.value
@@ -641,28 +633,35 @@ class TemporaryExecutionGroups:
         )
 
     async def owned_run(self, group_id: str, run_id: str) -> OwnedRunInspection:
-        self._require_current()
-        after = 0
-        while True:
-            page = await self._sessions.owned_runs_async(
-                owner_name=self._identity.name, group_id=group_id, after=after
+        inspection = (await self.owned_runs(group_id, (run_id,))).get(run_id)
+        if inspection is None:
+            raise RunNotFoundError(
+                "This Session is no longer available. Check its state through its Extension."
             )
-            record = next((record for record in page if record.run_id == run_id), None)
-            if record is not None:
-                break
-            if len(page) < 100:
-                raise RunNotFoundError(
-                    "This Session is no longer available. Check its state through its Extension."
-                )
-            after = page[-1].record_key
+        return inspection
+
+    async def owned_runs(
+        self, group_id: str, run_ids: Sequence[str]
+    ) -> dict[str, OwnedRunInspection]:
+        """Inspect exact Runs of one group with one indexed read.
+
+        Ids this owner never recorded in the group are absent from the result.
+        """
         self._require_current()
-        try:
-            run = self._manager.get(run_id)
-        except RunNotFoundError:
-            run = None
-        if run is not None and run.execution_owner != record.owner:
-            run = None
-        return OwnedRunInspection(record, run)
+        records = await self._sessions.owned_runs_by_id_async(
+            owner_name=self._identity.name, group_id=group_id, run_ids=run_ids
+        )
+        self._require_current()
+        inspections: dict[str, OwnedRunInspection] = {}
+        for run_id, record in records.items():
+            try:
+                run: Run | None = self._manager.get(run_id)
+            except RunNotFoundError:
+                run = None
+            if run is not None and run.execution_owner != record.owner:
+                run = None
+            inspections[run_id] = OwnedRunInspection(record, run)
+        return inspections
 
     async def inspect(
         self, group_id: str, participant_id: str, query: dict[str, Any]

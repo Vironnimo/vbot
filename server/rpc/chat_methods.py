@@ -45,7 +45,6 @@ from server.rpc.event_bridge import (
     _bridge_queued_item_to_event_bus,
     _bridge_run_to_event_bus,
     publish_resource_changed,
-    reflection_source_session_id,
 )
 from server.rpc.payloads import (
     _queued_response,
@@ -276,7 +275,7 @@ def _read_chat_history(
         history,
         _project_chat_history(history, file_delivery=getattr(state, "file_delivery", None)),
         _session_compaction_policy(state, address) if before is None else None,
-        None if active_reviews is None else _read_reflection_runs(state, session, active_reviews),
+        None if active_reviews is None else _read_reflection_runs(session, active_reviews),
     )
 
 
@@ -307,18 +306,20 @@ def _session_compaction_policy(state: Any, address: SessionAddress) -> JsonObjec
 
 
 def _active_reflection_runs(state: Any, address: SessionAddress) -> list[Run]:
-    """Active Runs of the Session's Agent that may review this Session."""
+    """Active Review Runs of this Session.
+
+    Review Runs execute in same-scope forks and carry the Session they examine.
+    """
     return [
         run
         for run in _state_chat_runs(state).active_runs()
-        if run.agent_id == address.agent_id and run.project_id == address.project_id
+        if run.agent_id == address.agent_id
+        and run.project_id == address.project_id
+        and run.source_session_id == address.session_id
     ]
 
 
-def _read_reflection_runs(
-    state: Any, session: ChatSession, active_reviews: list[Run]
-) -> list[JsonObject]:
-    address = session.address
+def _read_reflection_runs(session: ChatSession, active_reviews: list[Run]) -> list[JsonObject]:
     rows = {
         run.id: {
             "run_id": run.id,
@@ -328,7 +329,6 @@ def _read_reflection_runs(
             "started_at": run.created_at,
         }
         for run in active_reviews
-        if reflection_source_session_id(state.runtime.chat_sessions, run) == address.session_id
     }
     rows.update({row["run_id"]: row for row in session.reflection_runs()})
     return list(rows.values())
@@ -345,7 +345,7 @@ async def _chat_reflections(state: Any, params: JsonObject) -> JsonObject:
 
     def read() -> list[JsonObject]:
         session = state.runtime.chat_sessions.get(address)
-        return _read_reflection_runs(state, session, active_reviews)
+        return _read_reflection_runs(session, active_reviews)
 
     try:
         return {"reflection_runs": await _CHAT_RPC_WORKERS.run(read)}
@@ -378,14 +378,14 @@ def _current_session_id(state: Any, agent_id: str) -> str:
     return cast(str, state.runtime.agents.get(agent_id).current_session_id)
 
 
-def _subagent_inspect(state: Any, params: JsonObject) -> JsonObject:
+async def _subagent_inspect(state: Any, params: JsonObject) -> JsonObject:
     supported_fields = {"id", "agent_id", "session_id"}
     _reject_unsupported(params, supported_fields, "subagent.inspect")
     work_id = _required_string(params, "id")
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
     try:
-        inspection = state.runtime.subagents.inspect(
+        inspection = await state.runtime.subagents.inspect(
             agent_id,
             session_id,
             work_id,

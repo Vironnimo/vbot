@@ -97,13 +97,13 @@ async def test_foreground_result_keeps_handle_and_child_unread_until_parent_pers
     await asyncio.sleep(0)
     assert tracker.owned_entry("parent", "parent-session", None, work_id) is not None
     assert f"subagent:parent-run:{work_id}" in trigger_service.completion_deliveries
-    assert runtime.chat_sessions.list_with_metadata("worker")[0]["has_unread_completion"] is True
+    assert runtime.chat_sessions.list_summaries("worker")[0]["has_unread_completion"] is True
 
     persisted_callbacks[0]()
 
     assert tracker.owned_entry("parent", "parent-session", None, work_id) is None
     assert f"subagent:parent-run:{work_id}" not in trigger_service.completion_deliveries
-    assert runtime.chat_sessions.list_with_metadata("worker")[0]["has_unread_completion"] is False
+    assert runtime.chat_sessions.list_summaries("worker")[0]["has_unread_completion"] is False
 
 
 async def test_executor_base_exception_reaches_subagent_completion_watcher(monkeypatch) -> None:
@@ -357,13 +357,13 @@ async def test_status_result_keeps_handle_and_child_unread_until_parent_persiste
     manager.parent_run.request_cancel(reason="user")
     assert tracker.owned_entry("parent", "parent-session", None, "sub_child") is not None
     assert "subagent:parent-run:sub_child" in trigger_service.completion_deliveries
-    assert runtime.chat_sessions.list_with_metadata("worker")[0]["has_unread_completion"] is True
+    assert runtime.chat_sessions.list_summaries("worker")[0]["has_unread_completion"] is True
 
     persisted_callbacks[0]()
 
     assert tracker.owned_entry("parent", "parent-session", None, "sub_child") is None
     assert "subagent:parent-run:sub_child" not in trigger_service.completion_deliveries
-    assert runtime.chat_sessions.list_with_metadata("worker")[0]["has_unread_completion"] is False
+    assert runtime.chat_sessions.list_summaries("worker")[0]["has_unread_completion"] is False
 
     if all_entries:
         empty = await _handle_subagent_result(context, {}, runtime=runtime, batch_tracker=tracker)
@@ -532,13 +532,23 @@ async def test_inspect_resolves_exact_completed_work_after_child_session_reuse(
         raise AssertionError("Sub-Agent inspection must use the terminal Run projection")
 
     monkeypatch.setattr(ChatSession, "load", fail_full_load)
+    read_threads: list[int] = []
+    load_run_result = ChatSession.load_run_result
 
-    result = SubAgentCoordinator(runtime, RecordingTriggerService()).inspect(
+    def recording_load_run_result(self: ChatSession, **kwargs: Any) -> Any:
+        read_threads.append(threading.get_ident())
+        return load_run_result(self, **kwargs)
+
+    monkeypatch.setattr(ChatSession, "load_run_result", recording_load_run_result)
+
+    result = await SubAgentCoordinator(runtime, RecordingTriggerService()).inspect(
         "worker",
         "reused-child",
         "sub_old",
     )
 
+    # The durable result read runs on a Session worker, never on the Event Loop.
+    assert read_threads and threading.get_ident() not in read_threads
     assert result is not None
     assert result["id"] == "sub_old"
     assert result["run_id"] == "old-run"
@@ -559,7 +569,7 @@ async def test_inspect_prefers_matching_live_work_in_child_session(tmp_path: Pat
     )
     manager.busy_sessions[("worker", "live-child")] = active
 
-    result = SubAgentCoordinator(runtime, RecordingTriggerService()).inspect(
+    result = await SubAgentCoordinator(runtime, RecordingTriggerService()).inspect(
         "worker",
         "live-child",
         "sub_live",

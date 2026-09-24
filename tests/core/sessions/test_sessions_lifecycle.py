@@ -12,8 +12,10 @@ import pytest
 
 from core.chat import ChatMessage, ChatSessionError
 from core.chat.usage import aggregate_session_usage
+from core.runs import RunKind
 from core.sessions import (
     FORK_SOURCE_META_KEY,
+    SESSION_FORK_ALWAYS_STRIP_META_KEYS,
 )
 from tests.core.sessions.sessions_test_support import (
     _address,
@@ -151,6 +153,48 @@ def test_fork_reads_and_transforms_metadata_inside_its_writer_transaction(
     assert metadata["title"] == "latest title"
     assert metadata[FORK_SOURCE_META_KEY]["message_count"] == 1
     assert forked.load() == source.load()
+
+
+def test_fork_titles_and_classifies_the_copy_in_its_one_write(manager, monkeypatch) -> None:
+    source = manager.create("coder", session_id="session-one")
+    source.append(ChatMessage.user("hello"))
+    manager.set_title(source.address, "Source title")
+    manager.record_run_kind(source.address, RunKind.USER)
+    notified: list[object] = []
+    manager.add_title_changed_callback(notified.append)
+    writes: list[object] = []
+    original = manager._store._runtime.execute_write
+
+    def counted(fn, **kwargs):
+        writes.append(fn)
+        return original(fn, **kwargs)
+
+    monkeypatch.setattr(manager._store._runtime, "execute_write", counted)
+
+    forked = asyncio.run(
+        manager.fork(
+            source.address,
+            strip_meta_keys=SESSION_FORK_ALWAYS_STRIP_META_KEYS,
+            title="  Reviewer:   Source title ",
+            run_kind=RunKind.MEMORY_REFLECTION,
+        )
+    )
+
+    assert len(writes) == 1
+    metadata = manager.get_metadata(forked.address)
+    assert metadata["title"] == "Reviewer: Source title"
+    assert metadata["run_kinds"] == ["memory_reflection"]
+    assert notified == [forked.address]
+    assert manager.get_metadata(source.address)["title"] == "Source title"
+    # The classification reaches the list projection in the same commit.
+    summary = next(item for item in manager.list_summaries("coder") if item["id"] == forked.id)
+    assert summary["run_kinds"] == ["memory_reflection"]
+
+    inherited = asyncio.run(manager.fork(source.address))
+    assert manager.get_metadata(inherited.address)["title"] == "Source title"
+    assert notified == [forked.address]
+    with pytest.raises(ChatSessionError, match="run kind"):
+        asyncio.run(manager.fork(source.address, run_kind="reflection"))
 
 
 def test_archive_hides_session_until_explicit_restore(manager) -> None:

@@ -64,12 +64,16 @@ _LOGGER = get_logger("server.rpc.agents")
 __all__ = ["ALLOWED_THINKING_EFFORTS", "MAX_TEMPERATURE", "MIN_TEMPERATURE"]
 
 
-def _list_agents(state: Any) -> JsonObject:
-    try:
-        listing = state.runtime.agents.list_with_order()
-    except Exception as exc:
-        raise _map_expected_error(exc) from exc
-    return _agent_list_response(state, listing)
+async def _list_agents(state: Any) -> JsonObject:
+    def read() -> JsonObject:
+        # Agent reads load agent.json and may repair a current Session pointer.
+        try:
+            listing = state.runtime.agents.list_with_order()
+        except Exception as exc:
+            raise _map_expected_error(exc) from exc
+        return _agent_list_response(state, listing)
+
+    return await _SESSION_RPC_WORKERS.run(read)
 
 
 async def _reorder_agents(state: Any, params: JsonObject) -> JsonObject:
@@ -108,18 +112,22 @@ def _agent_list_response(state: Any, listing: Any) -> JsonObject:
     }
 
 
-def _get_agent(state: Any, params: JsonObject) -> JsonObject:
+async def _get_agent(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id"}, "agent.get")
 
     agent_id = _required_string(params, "id")
-    try:
-        agent = state.runtime.agents.get(agent_id)
-    except Exception as exc:
-        raise _map_expected_error(exc) from exc
-    return _agent_response(state, agent)
+
+    def read() -> JsonObject:
+        try:
+            agent = state.runtime.agents.get(agent_id)
+        except Exception as exc:
+            raise _map_expected_error(exc) from exc
+        return _agent_response(state, agent)
+
+    return await _SESSION_RPC_WORKERS.run(read)
 
 
-def _create_agent(state: Any, params: JsonObject) -> JsonObject:
+def _create_agent_record(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "id")
     try:
         changes = _agent_changes(params, blocked={"id"}, for_create=True)
@@ -131,15 +139,10 @@ def _create_agent(state: Any, params: JsonObject) -> JsonObject:
         agent = state.runtime.agents.get(agent_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    response = _agent_response(state, agent)
-    # Agent CRUD rides the generic reload-on-change channel ("one app system"):
-    # the signal carries no agent data, open windows re-fetch agent.list.
-    publish_resource_changed(state, RESOURCE_KIND_AGENTS)
-    _LOGGER.info("Agent created (agent=%s)", agent_id)
-    return response
+    return _agent_response(state, agent)
 
 
-def _update_agent(state: Any, params: JsonObject) -> JsonObject:
+def _update_agent_record(state: Any, params: JsonObject) -> tuple[JsonObject, list[str]]:
     agent_id = _required_string(params, "id")
     try:
         changes = _agent_changes(params, blocked={"id"}, for_create=False)
@@ -178,14 +181,7 @@ def _update_agent(state: Any, params: JsonObject) -> JsonObject:
         "backed_up_files": list(update_result.backed_up_files),
         "backup_created": update_result.backup_dir is not None,
     }
-    publish_resource_changed(state, RESOURCE_KIND_AGENTS)
-    if changed_fields:
-        _LOGGER.info(
-            "Agent updated (agent=%s fields=%s)",
-            agent_id,
-            ",".join(changed_fields),
-        )
-    return response
+    return response, changed_fields
 
 
 def _guard_agent_lifecycle(handler: MutationHandler) -> MutationHandler:
@@ -198,6 +194,30 @@ def _guard_agent_lifecycle(handler: MutationHandler) -> MutationHandler:
             return await mutate(state, params)
 
     return guarded
+
+
+@_guard_agent_lifecycle
+async def _create_agent(state: Any, params: JsonObject) -> JsonObject:
+    # Agent and Session files are written on a worker; publication stays on the loop.
+    response = await _SESSION_RPC_WORKERS.run(_create_agent_record, state, params)
+    # Agent CRUD rides the generic reload-on-change channel ("one app system"):
+    # the signal carries no agent data, open windows re-fetch agent.list.
+    publish_resource_changed(state, RESOURCE_KIND_AGENTS)
+    _LOGGER.info("Agent created (agent=%s)", response["id"])
+    return response
+
+
+@_guard_agent_lifecycle
+async def _update_agent(state: Any, params: JsonObject) -> JsonObject:
+    response, changed_fields = await _SESSION_RPC_WORKERS.run(_update_agent_record, state, params)
+    publish_resource_changed(state, RESOURCE_KIND_AGENTS)
+    if changed_fields:
+        _LOGGER.info(
+            "Agent updated (agent=%s fields=%s)",
+            response["id"],
+            ",".join(changed_fields),
+        )
+    return response
 
 
 @_guard_agent_lifecycle
@@ -572,8 +592,8 @@ def _validate_thinking_effort(
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the registered agent RPC handlers."""
 
-    def list_agents(state: Any, _params: dict[str, Any]) -> dict[str, Any]:
-        return cast(dict[str, Any], _list_agents(state))
+    async def list_agents(state: Any, _params: dict[str, Any]) -> dict[str, Any]:
+        return cast(dict[str, Any], await _list_agents(state))
 
     return {
         "agent.list": list_agents,
