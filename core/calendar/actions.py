@@ -439,11 +439,14 @@ class CalendarActions:
                         continue
                     if expires <= now:
                         row["status"] = "missed"
-                    else:
-                        desired[key] = (row, action, event, occurrence)
                     if previous != row:
                         self._executions[key] = row
                         changed = True
+                    # Workers mutate the stored row, never a recomputed copy: an
+                    # equal pending row already stored stays the single source of truth.
+                    stored = self._executions[key]
+                    if stored["status"] == "pending":
+                        desired[key] = (stored, action, event, occurrence)
                 lower = edge
             if now - _instant(action["scanned_until"]) >= timedelta(minutes=1):
                 action["scanned_until"] = now.isoformat()
@@ -507,15 +510,20 @@ class CalendarActions:
             nonlocal input_persisted
             input_persisted = True
 
+        def mark(**fields: Any) -> None:
+            # Always record progress in the stored row, even if a compensating
+            # rollback replaced the execution map while this worker was waiting.
+            self._executions.setdefault(key, row).update(fields)
+
         try:
             assert self._trigger is not None
             self._validate(action)
             remaining = (_instant(row["expires_at"]) - datetime.now(UTC)).total_seconds()
             if remaining <= 0:
-                row["status"] = "missed"
+                mark(status="missed")
                 return
             # The claim precedes any await that can admit work.
-            row["status"] = "claimed"
+            mark(status="claimed")
             self._save()
             agent, project = parse_agent_address(action["target"])
             message = json.dumps(
@@ -543,27 +551,31 @@ class CalendarActions:
                     input_persisted_hook=admitted,
                 )
             self._runs[key] = run
-            row.update(status="running", run_id=run.id, session=run.session_id)
+            mark(status="running", run_id=run.id, session=run.session_id)
             try:
                 self._save()
             except CalendarStorageError:
                 _LOGGER.exception("Cannot persist admitted calendar Run (action=%s)", action["id"])
             self._calendar._notify_action_changed()
             await run.wait()
-            row["status"] = "completed"
+            mark(status="completed")
         except TimeoutError:
-            row["status"] = (
-                "failed" if run is not None else "interrupted" if input_persisted else "missed"
+            mark(
+                status="failed"
+                if run is not None
+                else "interrupted"
+                if input_persisted
+                else "missed"
             )
         except asyncio.CancelledError:
-            row["status"] = "interrupted" if run is not None or input_persisted else "pending"
+            mark(status="interrupted" if run is not None or input_persisted else "pending")
             raise
         except Exception:
-            row["status"] = "failed"
             if run is None:
+                mark(status="failed")
                 _LOGGER.exception("Calendar action admission failed (action=%s)", action["id"])
             else:
-                row["status"] = run.status.value
+                mark(status=run.status.value)
         finally:
             self._runs.pop(key, None)
             self._workers.pop(key, None)

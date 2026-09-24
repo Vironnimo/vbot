@@ -115,6 +115,49 @@ async def test_fires_once_and_reloads_without_duplicate(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_actions_waiting_for_a_worker_slot_fire_exactly_once(tmp_path):
+    service, event, trigger, now = setup(tmp_path)
+    for index in range(6):
+        service.actions.add(event.id, when="start - 1h", prompt=f"p{index}", target="main")
+    for step in range(4):
+        await service.actions.tick(now + timedelta(seconds=step))
+        await drain(service)
+    assert trigger.trigger_run.await_count == 6
+    assert [row["status"] for row in service.actions._executions.values()] == ["completed"] * 6
+    stored = json.loads(service.actions._path.read_text(encoding="utf-8"))["executions"]
+    assert {row["status"] for row in stored.values()} == {"completed"}
+
+
+@pytest.mark.asyncio
+async def test_withdrawn_worker_is_redispatched_and_fires_once(tmp_path):
+    service, event, trigger, now = setup(tmp_path)
+    waiting = asyncio.Event()
+    calls = 0
+
+    async def first_call_waits(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            waiting.set()
+            await asyncio.Event().wait()
+        return SimpleNamespace(id="run-1", session_id="new-session", wait=AsyncMock())
+
+    trigger.trigger_run.side_effect = first_call_waits
+    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    await service.actions.tick(now)
+    await waiting.wait()
+    # An event change withdraws work that is still awaiting admission.
+    service.update_event(event.id, title="Renamed")
+    await asyncio.gather(*list(service.actions._workers.values()), return_exceptions=True)
+    assert service.actions.project(window(service, now))[0]["status"] == "pending"
+    for step in range(1, 4):
+        await service.actions.tick(now + timedelta(seconds=step))
+        await drain(service)
+    assert trigger.trigger_run.await_count == 2
+    assert service.actions.project(window(service, now))[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
 async def test_completed_single_action_rearms_only_after_event_moves(tmp_path):
     service, event, trigger, now = setup(tmp_path)
     service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
