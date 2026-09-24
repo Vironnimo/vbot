@@ -28,6 +28,7 @@ from core.config_validation import (
     validate_optional_string,
     warn_unknown_keys,
 )
+from core.projects import ResolutionAgentNotFoundError, ResolutionProjectNotFoundError
 from core.settings import is_valid_agent_id, is_valid_project_id
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -141,8 +142,39 @@ class CronJobInPastError(CronJobValidationError):
     """Raised when a one-time job would be created or armed for a past instant."""
 
 
+class CronTargetAgentNotFoundError(CronJobValidationError, ResolutionAgentNotFoundError):
+    """The Cron target's Agent does not exist.
+
+    Both a Cron validation error, for Cron's own catchers, and a resolver
+    not-found error, so accessors report the missing Agent precisely.
+    """
+
+
+class CronTargetProjectNotFoundError(CronJobValidationError, ResolutionProjectNotFoundError):
+    """The Cron target's Project does not exist.
+
+    Both a Cron validation error, for Cron's own catchers, and a resolver
+    not-found error, so accessors report the missing Project precisely.
+    """
+
+
 class CronStorageError(CronServiceError):
     """Raised when cron storage cannot be read or written."""
+
+
+def _target_validation_error(job: CronJob, error: Exception) -> CronJobValidationError:
+    """Describe why a Cron job's target Agent cannot be resolved.
+
+    Only a missing Agent or Project says the target does not exist; a target
+    that exists but cannot run (for example, no usable Model) keeps the
+    resolver's reason.
+    """
+    target = f"{job.agent_id}@{job.project_id}" if job.project_id else job.agent_id
+    if isinstance(error, ResolutionAgentNotFoundError):
+        return CronTargetAgentNotFoundError(f"Cron target does not exist: {target}")
+    if isinstance(error, ResolutionProjectNotFoundError):
+        return CronTargetProjectNotFoundError(f"Cron target does not exist: {target}")
+    return CronJobValidationError(f"Cron target {target} cannot run: {error}")
 
 
 def validate_cron_jobs_file(jobs_path: str | Path) -> JsonValidationReport:
