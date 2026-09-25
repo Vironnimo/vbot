@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import threading
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -384,6 +385,8 @@ class ModelRegistry:
     ) -> None:
         self._models = models
         self._provider_reasoning_replay = dict(provider_reasoning_replay or {})
+        self._reload_lock = threading.Lock()
+        self._reload_generation = 0
 
     def pricing_for(self, model_reference: str) -> TokenPricing | None:
         """Read exact catalog pricing without Connection/Account identifiers."""
@@ -466,7 +469,9 @@ class ModelRegistry:
         (now-updated) instance, so a later ``load`` returns it too.
         """
 
-        self._adopt(self._assemble_reload(resources_dir, runtime_models_dir, custom_providers))
+        generation = self._begin_reload()
+        assembled = self._assemble_reload(resources_dir, runtime_models_dir, custom_providers)
+        self._adopt(assembled, generation)
 
     async def reload_async(
         self,
@@ -479,16 +484,23 @@ class ModelRegistry:
 
         The catalog files are read and assembled on a worker thread; the swap
         then happens on the calling Event Loop, so a reader there never sees a
-        half-replaced registry.
+        half-replaced registry. A newer synchronous or asynchronous reload
+        supersedes this assembly even if this worker finishes last.
         """
 
+        generation = self._begin_reload()
         assembled = await _RELOAD_WORKERS.run(
             self._assemble_reload,
             resources_dir,
             runtime_models_dir,
             custom_providers,
         )
-        self._adopt(assembled)
+        self._adopt(assembled, generation)
+
+    def _begin_reload(self) -> int:
+        with self._reload_lock:
+            self._reload_generation += 1
+            return self._reload_generation
 
     @classmethod
     def _assemble_reload(
@@ -512,12 +524,15 @@ class ModelRegistry:
             cache_key=(resolved, resolved_runtime) if custom_providers is None else None,
         )
 
-    def _adopt(self, assembled: _AssembledCatalog) -> None:
-        self._models = assembled.models
-        self._provider_reasoning_replay = assembled.provider_reasoning_replay
-        self._active_models_dir = assembled.models_dir
-        if assembled.cache_key is not None:
-            type(self)._cache[assembled.cache_key] = self
+    def _adopt(self, assembled: _AssembledCatalog, generation: int) -> None:
+        with self._reload_lock:
+            if generation != self._reload_generation:
+                return
+            self._models = assembled.models
+            self._provider_reasoning_replay = assembled.provider_reasoning_replay
+            self._active_models_dir = assembled.models_dir
+            if assembled.cache_key is not None:
+                type(self)._cache[assembled.cache_key] = self
 
     @classmethod
     def _assemble_models(
