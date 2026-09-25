@@ -218,6 +218,31 @@ def test_argument_error_names_every_problem_with_a_suggestion_and_the_parameters
     )
 
 
+@pytest.mark.parametrize(
+    ("unknown", "hint"),
+    [
+        ("limti", ' Did you mean "limit"?'),
+        ("counts", ' Did you mean "count"?'),
+        ("max_count", ' Did you mean "count"?'),
+        ("country", ""),
+    ],
+)
+def test_unknown_parameter_hint_suggests_only_a_likely_misspelling(unknown: str, hint: str) -> None:
+    contract = compile_tool_contract(
+        name="web_search",
+        input_schema={
+            "type": "object",
+            "properties": {"query": {"type": "string"}, "count": {}, "limit": {}},
+        },
+        require_closed_input=False,
+    )
+
+    with pytest.raises(ToolContractError) as exc_info:
+        contract.validate_arguments({"query": "news", unknown: "x"})
+
+    assert str(exc_info.value).splitlines()[1] == f'- "{unknown}" is not a parameter.{hint}'
+
+
 def test_nested_argument_problems_name_the_field_by_its_path() -> None:
     contract = compile_tool_contract(
         name="edit",
