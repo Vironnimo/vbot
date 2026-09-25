@@ -46,24 +46,26 @@ def _runtime_with_storage(storage: Any) -> Any:
     return SimpleNamespace(storage=storage)
 
 
-def test_trace_count_returns_zero_silently_on_missing_store(
+@pytest.mark.asyncio
+async def test_trace_count_returns_zero_silently_on_missing_store(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     runtime = _runtime_with_storage(_RaisingStorage(FileNotFoundError("no traces yet")))
 
     caplog.set_level(logging.WARNING, logger="vbot.server.rpc.settings")
-    assert _trace_count(runtime) == 0
+    assert await _trace_count(runtime) == 0
 
     assert [record for record in caplog.records if record.name == "vbot.server.rpc.settings"] == []
 
 
-def test_trace_count_logs_warning_on_unexpected_error(
+@pytest.mark.asyncio
+async def test_trace_count_logs_warning_on_unexpected_error(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     runtime = _runtime_with_storage(_RaisingStorage(RuntimeError("store corrupt")))
 
     caplog.set_level(logging.WARNING, logger="vbot.server.rpc.settings")
-    assert _trace_count(runtime) == 0
+    assert await _trace_count(runtime) == 0
 
     warning_records = [
         record for record in caplog.records if record.name == "vbot.server.rpc.settings"
