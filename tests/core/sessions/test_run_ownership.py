@@ -4,8 +4,9 @@ import pytest
 
 from core.chat import ChatMessage, ChatSessionError
 from core.database import write_bootstrap_marker
-from core.runs import RunExecutionOwner
+from core.runs import Run, RunExecutionOwner
 from core.sessions import ChatSessionManager, SessionAddress
+from tests.core.sessions.history_fixtures import complete_run
 
 
 def make_sessions(tmp_path):
@@ -20,6 +21,20 @@ def make_sessions(tmp_path):
     )
     owner = RunExecutionOwner("fixture", "group", "peer", binding.generation_id, "epoch")
     return sessions, binding, owner
+
+
+async def admit(sessions, address, run_id, owner, input_id=None):
+    """Admit *run_id* with its execution owner, as the Run manager does."""
+    await sessions.start_run(
+        Run(
+            run_id=run_id,
+            agent_id=address.agent_id,
+            session_id=address.session_id,
+            project_id=address.project_id,
+            execution_owner=owner,
+            execution_input_id=input_id,
+        )
+    )
 
 
 def summary(run_id, status="completed"):
@@ -40,10 +55,11 @@ async def test_owned_run_survives_reopen_and_requires_exact_durable_terminal(tmp
     sessions, binding, owner = make_sessions(tmp_path)
     child = sessions.create("existing", "target")
     child.append(ChatMessage.user("older unrelated work"))
-    child.start_run("old").append(summary("old"))
-    await sessions.record_run_owner_async(child.address, run_id="owned", owner=owner)
-    child.append(ChatMessage.user("owned work"))
-    child.start_run("foreign").append(summary("foreign"))
+    complete_run(child.start_run("old"), summary("old"))
+    await admit(sessions, child.address, "owned", owner)
+    owned = child.for_run("owned")
+    owned.append(ChatMessage.user("owned work"))
+    complete_run(child.start_run("foreign"), summary("foreign"))
     rows = sessions.owned_runs(owner_name="fixture", group_id="group")
     assert len(rows) == 1
     assert rows[0].owner == owner
@@ -51,8 +67,10 @@ async def test_owned_run_survives_reopen_and_requires_exact_durable_terminal(tmp
     assert rows[0].start_sequence == 2
     assert rows[0].terminal_status is None
     assert sessions.temporary_binding(child.address) is None
-    await sessions.record_run_owner_async(child.address, run_id="owned", owner=owner)
-    child.append(summary("owned"))
+    # Admitting the running Run again with the same owner changes nothing.
+    await admit(sessions, child.address, "owned", owner)
+    assert sessions.owned_runs(owner_name="fixture", group_id="group") == rows
+    complete_run(owned, summary("owned"))
     sessions.close()
 
     reopened = ChatSessionManager(tmp_path)
@@ -73,28 +91,21 @@ async def test_owned_run_survives_reopen_and_requires_exact_durable_terminal(tmp
 async def test_owner_claim_cannot_rebind_and_forked_history_has_no_execution_owner(tmp_path):
     sessions, binding, owner = make_sessions(tmp_path)
     try:
-        await sessions.record_run_owner_async(binding.address, run_id="run", owner=owner)
+        await admit(sessions, binding.address, "run", owner)
         with pytest.raises(ChatSessionError):
-            await sessions.record_run_owner_async(
-                binding.address,
-                run_id="run",
-                owner=replace(owner, epoch="other"),
-            )
+            await admit(sessions, binding.address, "run", replace(owner, epoch="other"))
         with pytest.raises(ChatSessionError):
-            await sessions.record_run_owner_async(
-                binding.address,
-                run_id="forged",
-                owner=replace(owner, generation_id="old"),
-            )
-        session = sessions.get(binding.address)
+            await admit(sessions, binding.address, "forged", replace(owner, generation_id="old"))
+        session = sessions.get(binding.address).for_run("run")
         session.append(ChatMessage.user("goal"))
-        session.append(summary("run", "cancelled"))
+        complete_run(session, summary("run", "cancelled"))
         with pytest.raises(ChatSessionError, match="managed by an Extension"):
             await sessions.fork(binding.address)
         with pytest.raises(ChatSessionError, match="managed by an Extension"):
             await sessions.fork(binding.address, target_agent_id=binding.address.agent_id)
         fork = await sessions.fork(binding.address, target_agent_id="ordinary")
-        assert len(fork.load()) == 2
+        assert fork.load() == []
+        assert [message.role for message in fork.load_active()] == ["user", "run_summary"]
         assert sessions.temporary_binding(fork.address) is None
         records = sessions.owned_runs(owner_name="fixture", group_id="group")
         assert len(records) == 1
@@ -112,11 +123,7 @@ async def test_owner_pages_are_bounded_and_partition_participants(tmp_path):
     sessions, binding, owner = make_sessions(tmp_path)
     try:
         for number in range(3):
-            await sessions.record_run_owner_async(
-                binding.address,
-                run_id=f"run{number}",
-                owner=owner,
-            )
+            await admit(sessions, binding.address, f"run{number}", owner)
         first = sessions.owned_runs(owner_name="fixture", group_id="group", limit=2)
         second = sessions.owned_runs(
             owner_name="fixture",
@@ -148,20 +155,18 @@ async def test_owned_run_point_lookups_resolve_exact_ids_and_inputs(tmp_path):
             participant_id="peer",
             config={},
         )
-        await sessions.record_run_owner_async(
+        await admit(
+            sessions,
             other_group.address,
-            run_id="foreign",
-            owner=RunExecutionOwner("fixture", "other", "peer", other_group.generation_id, "epoch"),
+            "foreign",
+            RunExecutionOwner("fixture", "other", "peer", other_group.generation_id, "epoch"),
             input_id="initial:foreign",
         )
         for number in range(130):
-            await sessions.record_run_owner_async(
-                binding.address,
-                run_id=f"run{number}",
-                owner=owner,
-                input_id=f"input{number}",
-            )
-        sessions.get(binding.address).append(summary("run6"))
+            await admit(sessions, binding.address, f"run{number}", owner, f"input{number}")
+        with pytest.raises(ChatSessionError):
+            await admit(sessions, binding.address, "duplicate-input", owner, "input0")
+        complete_run(sessions.get(binding.address), summary("run6"))
 
         wanted = [f"run{number}" for number in range(0, 130, 3)] + ["foreign", "missing"]
         records = await sessions.owned_runs_by_id_async(
@@ -198,27 +203,6 @@ async def test_owned_run_point_lookups_resolve_exact_ids_and_inputs(tmp_path):
         assert await sessions.delete_temporary_group(owner_name="fixture", group_id="group") == 1
         assert await by_input_of(binding.address, "input6") is None
         assert not await by_id(owner_name="fixture", group_id="group", run_ids=["run6"])
-    finally:
-        sessions.close()
-
-
-@pytest.mark.asyncio
-async def test_run_start_boundaries_include_owned_and_ordinary_successors(tmp_path):
-    sessions, binding, owner = make_sessions(tmp_path)
-    try:
-        session = sessions.create("reused", "target")
-        await sessions.record_run_owner_async(session.address, run_id="owned", owner=owner)
-        session.append(ChatMessage.assistant(model="model", content="owned"))
-        await sessions.record_run_start_async(session.address, run_id="ordinary")
-        session.append(ChatMessage.assistant(model="model", content="ordinary"))
-        session.append(summary("ordinary"))
-
-        boundaries = sessions.run_start_boundaries([session.address])
-
-        assert [(row.run_id, row.start_sequence) for row in boundaries] == [
-            ("owned", 0),
-            ("ordinary", 1),
-        ]
     finally:
         sessions.close()
 

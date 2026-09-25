@@ -19,8 +19,9 @@ from core.automation.reflection import (
     ReflectionService,
     _review_scope,
 )
+from core.chat import ChatMessage
 from core.runs import RunKind
-from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS, SessionAddress
+from core.sessions import ChatSessionManager, SessionAddress
 
 REFLECT_BRIEFS = {
     "reflect-memory.md": "Review this Session for durable Memory updates.",
@@ -132,7 +133,9 @@ def _make_service(
     enabled: bool = True,
     memory_turn_interval: int = 3,
     skill_model_step_interval: int = 10,
+    chat_sessions: ChatSessionManager | None = None,
 ) -> tuple[ReflectionService, _FakeSessions, _FakeLoop]:
+    """Build the service over the fake Sessions, or over real ``chat_sessions``."""
     sessions = _FakeSessions()
     loop = _FakeLoop()
     runtime = SimpleNamespace(
@@ -145,7 +148,7 @@ def _make_service(
             read_prompt_fragment=lambda name: REFLECT_BRIEFS[name],
         ),
         agent_resolver=SimpleNamespace(resolve_agent_async=_resolve_identity_agent),
-        chat_sessions=sessions,
+        chat_sessions=sessions if chat_sessions is None else chat_sessions,
         streaming_chat_loop=loop,
     )
     return ReflectionService(cast("Any", runtime)), sessions, loop
@@ -616,7 +619,7 @@ async def test_skill_manage_call_resets_counter_even_when_the_run_later_fails() 
 
 
 @pytest.mark.asyncio
-async def test_review_fork_is_stripped_and_titled() -> None:
+async def test_review_fork_is_titled_with_its_review_run_kind() -> None:
     service, sessions, loop = _make_service(memory_turn_interval=1)
     sessions.metadata["s1"] = {"title": "Refactor plan"}
 
@@ -625,10 +628,63 @@ async def test_review_fork_is_stripped_and_titled() -> None:
     )
     await _drain(service)
 
-    assert sessions.forks[0]["strip_meta_keys"] == SESSION_FORK_ALWAYS_STRIP_META_KEYS
+    assert sessions.forks == [
+        {"source_agent_id": "main", "session_id": "s1", "target_project_id": None}
+    ]
     assert sessions.titles == [("fork-1", "Main Agent: Refactor plan")]
     assert loop.started[0]["run_kind"] is RunKind.MEMORY_REFLECTION
     assert sessions.metadata["fork-1"]["run_kinds"] == ["memory_reflection"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("current_format_data_directory")
+async def test_review_fork_leaves_source_bindings_and_run_kinds_behind(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    try:
+        service, _fake, loop = _make_service(chat_sessions=sessions)
+        source = sessions.create("main", session_id="s1")
+        source.append(ChatMessage.user("Plan the parser refactor"))
+        bindings = {
+            "source_channel_id": "telegram-main",
+            "platform": "telegram",
+            "platform_conv_id": "chat-1",
+            "last_reply_target": {"chat_id": "chat-1"},
+            "is_subagent_session": True,
+            "subagent_parent": {
+                "id": "sub_work",
+                "agent_id": "lead",
+                "session_id": "lead-session",
+                "run_id": "lead-run",
+                "tool_call_id": "call-1",
+                "tool_call_index": 0,
+                "project_id": None,
+            },
+            REFLECTION_COUNTERS_META_KEY: {
+                "turns_since_memory_review": 3,
+                "iterations_since_skill_review": 4,
+                COUNTER_GENERATION_KEY: 1,
+            },
+        }
+        sessions.set_metadata(source.address, {"title": "Refactor plan", **bindings})
+        sessions.record_run_kind(source.address, RunKind.CHANNEL)
+
+        result = await service.run_review("main", "s1", review_scope="memory")
+
+        fork = SessionAddress(project_id=None, agent_id="main", session_id=result.session_id)
+        metadata = sessions.get_metadata(fork)
+        # The fork keeps the reviewed history but none of the source's bindings.
+        assert not bindings.keys() & metadata.keys()
+        assert metadata["title"] == "Main Agent: Refactor plan"
+        assert metadata["run_kinds"] == ["memory_reflection"]
+        assert metadata["fork_source"]["session_id"] == "s1"
+        assert sessions.get(fork).load_active() == source.load_active()
+        assert loop.started[0]["session_id"] == result.session_id
+        assert loop.started[0]["run_kind"] is RunKind.MEMORY_REFLECTION
+        source_metadata = sessions.get_metadata(source.address)
+        assert {key: source_metadata.get(key) for key in bindings} == bindings
+        assert source_metadata["run_kinds"] == ["channel"]
+    finally:
+        sessions.close()
 
 
 @pytest.mark.asyncio

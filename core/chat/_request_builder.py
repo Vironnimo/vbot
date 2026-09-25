@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -56,6 +56,7 @@ from core.runs import Run
 from core.sessions import (
     SKILL_AVAILABLE_NOTE_PREFIX,
     ChatSession,
+    SeenSkillsUpdate,
     SessionAddress,
 )
 from core.tools import (
@@ -151,9 +152,6 @@ def _resolve_image_size_limit(adapter: Any, model_id: str) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
-SEEN_SKILLS_META_KEY = "seen_skills"
-
-
 SKILL_AVAILABLE_NEW_SKILLS_HEADER = (
     "New skills are now available to you. Load one by name with the `skill` tool when relevant:"
 )
@@ -161,10 +159,10 @@ SKILL_AVAILABLE_NEW_SKILLS_HEADER = (
 
 @dataclass(frozen=True)
 class _SkillAnnouncement:
-    """A newly-available-Skill note and the seen-Skill baseline change it commits with."""
+    """A newly-available-Skill note and the seen-Skill change it commits with."""
 
     note: str | None = None
-    record_seen: Callable[[JsonObject], None] | None = None
+    record_seen: SeenSkillsUpdate | None = None
 
 
 class RequestBuilder:
@@ -290,7 +288,8 @@ class RequestBuilder:
 
         Nothing is written here: the caller commits ``record_seen`` in the same
         transaction as the note, so a Skill is marked seen exactly when its
-        announcement persists.
+        announcement persists. A Session without a seen set records the whole
+        catalog as its baseline instead.
         """
         # Minimal/degraded skill registries (e.g. some test doubles) may not expose
         # ``filter_allowed``; the announcement is an optional enhancement, so skip it
@@ -304,25 +303,18 @@ class RequestBuilder:
             str(skill.name): str(skill.description)
             for skill in skill_registry.filter_allowed(allowed)
         }
-        seen = self._dependencies.sessions.metadata_value(address, SEEN_SKILLS_META_KEY)
-        new_names = sorted(set(available) - set(seen)) if isinstance(seen, list) else []
-
-        def record_seen(metadata: JsonObject) -> None:
-            current = metadata.get(SEEN_SKILLS_META_KEY)
-            if not isinstance(current, list):
-                metadata[SEEN_SKILLS_META_KEY] = available_names
-            elif new_names:
-                metadata[SEEN_SKILLS_META_KEY] = sorted(set(current) | set(new_names))
-
-        if not isinstance(seen, list):
-            return _SkillAnnouncement(record_seen=record_seen)
+        seen = self._dependencies.sessions.seen_skills(address)
+        baseline = tuple(available_names)
+        if seen is None:
+            return _SkillAnnouncement(record_seen=SeenSkillsUpdate(baseline))
+        new_names = sorted(set(available) - seen)
         if not new_names:
             return _SkillAnnouncement()
         lines = [SKILL_AVAILABLE_NEW_SKILLS_HEADER]
         lines.extend(f"- {name}: {available[name]}" for name in new_names)
         return _SkillAnnouncement(
             note=SKILL_AVAILABLE_NOTE_PREFIX + "\n".join(lines),
-            record_seen=record_seen,
+            record_seen=SeenSkillsUpdate(baseline, tuple(new_names)),
         )
 
     async def _build_request_messages(

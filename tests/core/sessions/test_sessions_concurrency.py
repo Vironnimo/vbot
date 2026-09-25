@@ -130,9 +130,12 @@ def test_history_edits_and_skill_cache_preserve_chat_semantics(manager) -> None:
     session = manager.create("coder", session_id="session-one")
     user = ChatMessage.user("first")
     replacement = ChatMessage.user("replacement")
-    session.append_many([user, ChatMessage.history_edit(user.id), replacement])
+    session.append(user)
+    session.apply_edit(user.id, [replacement])
 
+    assert [message.role for message in session.load()] == ["user", "history_edit", "user"]
     assert active_session_messages(session.load()) == [replacement]
+    assert session.load_active() == [replacement]
     assert editable_session_message_ids(session.load()) == frozenset({replacement.id})
     assert current_skill_activation_contents(session.load()) == {}
 

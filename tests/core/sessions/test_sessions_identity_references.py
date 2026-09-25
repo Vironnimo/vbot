@@ -12,11 +12,14 @@ from tests.core.sessions.sessions_test_support import manager as manager
 def test_rename_compensation_only_restores_its_unchanged_parent_reference(manager, new_parent):
     manager.create("worker", session_id="child")
     address = _address("worker", "child")
+    # The shape the Sub-Agent service records; the store keeps these fields as columns.
     original_parent = {
         "id": "original-work",
         "agent_id": "before",
         "session_id": "parent-session",
         "run_id": "parent-run",
+        "tool_call_id": "parent-call",
+        "tool_call_index": 0,
         "project_id": None,
     }
     manager.set_metadata(address, {"title": "Before", "subagent_parent": original_parent})

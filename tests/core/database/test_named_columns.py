@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import ast
 import re
-from collections import Counter
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).parents[3]
@@ -22,19 +21,6 @@ _IMPLICIT_COLUMNS = (
     re.compile(r"(?<![\w.])[A-Za-z_]\w*\.\*"),
     re.compile(r",\s*\*\s*(?:,|\bFROM\b)", re.IGNORECASE),
 )
-
-# Implicit reads that remain only in the Session store query modules, which
-# the sessions.db Generation 1 rewrite replaces. Counts may only shrink:
-# remove an entry once its module names every column.
-_ALLOWED = {
-    "core/sessions/_store_continuation.py": 3,
-    "core/sessions/_store_fts.py": 1,
-    "core/sessions/_store_mutations.py": 1,
-    "core/sessions/_store_owned.py": 5,
-    "core/sessions/_store_queries.py": 1,
-    "core/sessions/_store_runs.py": 2,
-    "core/sessions/_store_values.py": 4,
-}
 
 
 def _literals(tree: ast.AST) -> list[tuple[int, str]]:
@@ -79,22 +65,9 @@ def _implicit_column_reads() -> list[tuple[str, int, str]]:
 
 
 def test_runtime_sql_never_selects_columns_implicitly() -> None:
-    findings = _implicit_column_reads()
-    counts = Counter(path for path, _line, _match in findings)
-
-    unexpected = [
-        f"{path}:{line}: {match!r}"
-        for path, line, match in findings
-        if counts[path] > _ALLOWED.get(path, 0)
-    ]
-    stale = sorted(
-        f"{path} allows {allowed}, found {counts[path]}"
-        for path, allowed in _ALLOWED.items()
-        if counts[path] < allowed
-    )
+    unexpected = [f"{path}:{line}: {match!r}" for path, line, match in _implicit_column_reads()]
 
     assert unexpected == [], "name the selected columns instead of '*'"
-    assert stale == [], "lower or remove the allowlist entry"
 
 
 def test_the_guard_recognizes_implicit_reads() -> None:

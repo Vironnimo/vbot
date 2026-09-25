@@ -44,7 +44,7 @@ from core.chat.events import (
     _persist_run_error,
     _timing_payload,
 )
-from core.chat.messages import ChatMessage, JsonObject
+from core.chat.messages import ChatMessage
 from core.chat.model_resolution import (
     _resolve_fallback_chain,
     _split_agent_model,
@@ -67,16 +67,14 @@ from core.runs import (
 )
 from core.sessions import (
     ChatSession,
+    SeenSkillsUpdate,
     SessionAddress,
-    active_session_messages,
     editable_session_message_index,
 )
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from core.chat._agentic_progression import AgenticProgression
     from core.chat._request_builder import RequestBuilder
     from core.chat._run_state import (
@@ -159,13 +157,6 @@ class RunExecution:
         session_address = SessionAddress(
             project_id=project_id, agent_id=run.agent_id, session_id=run.session_id
         )
-        if run.execution_owner is not None:
-            await self._dependencies.sessions.record_run_owner_async(
-                session_address,
-                run_id=run.id,
-                owner=run.execution_owner,
-                input_id=run.execution_input_id,
-            )
         session = (await self._dependencies.sessions.get_async(session_address)).for_run(run.id)
         async with self._dependencies.sessions.write_lock(session_address):
             session_snapshot = await _SessionSnapshot.load(session)
@@ -274,7 +265,7 @@ class RunExecution:
         try:
             session.begin_defer_notes()
             # Commits with the first write that persists the Skill note (or in its place).
-            record_seen_skills: Callable[[JsonObject], None] | None = None
+            record_seen_skills: SeenSkillsUpdate | None = None
             try:
                 extension_registry = self._dependencies.get_extension_registry()
                 if extension_registry is not None:
@@ -305,15 +296,9 @@ class RunExecution:
                     # queued for the Session lock. Refresh before assigning image
                     # references so each persisted image stays unique.
                     await context.session_snapshot.refresh(session)
-                    reset_auto_title = False
                     if request.edit_message_id is not None:
                         editable_session_message_index(
-                            active_session_messages(context.session_snapshot.messages),
-                            request.edit_message_id,
-                        )
-                        reset_auto_title = not any(
-                            message.role == "user"
-                            for message in context.session_snapshot.active_messages
+                            context.session_snapshot.active_lineage, request.edit_message_id
                         )
                     if internal:
                         if not isinstance(request.content, str):
@@ -343,65 +328,39 @@ class RunExecution:
                             ),
                             sender=request.sender,
                         )
-                        history_edit = (
-                            ChatMessage.history_edit(request.edit_message_id)
-                            if request.edit_message_id is not None
-                            else None
-                        )
-                        persisted_messages = [
-                            *([history_edit] if history_edit is not None else []),
-                            *session.take_deferred_notes(),
-                            user_message,
-                        ]
+                        persisted_messages = [*session.take_deferred_notes(), user_message]
                     # One transaction persists the input, starts the Continuation
-                    # chain and records the announced Skills. An edit restarts the
-                    # chain below instead, after its history edit commits.
-                    starting_tracker = (
-                        context.continuation_tracker if request.edit_message_id is None else None
-                    )
-                    if persisted_messages:
+                    # chain and records the announced Skills. An edit also
+                    # replaces the edited history, restarts the chain and starts
+                    # a new prompt-cache lineage in that transaction.
+                    tracker = context.continuation_tracker
+                    journal = tracker.start_boundary() if tracker is not None else None
+                    if request.edit_message_id is not None:
+                        edit = await context.session_snapshot.apply_edit(
+                            session,
+                            persisted_messages,
+                            journal=journal,
+                            seen_skills=record_seen_skills,
+                        )
+                        context.prompt_cache_affinity_id = edit.prompt_cache_affinity_id
+                    elif persisted_messages:
                         await context.session_snapshot.append(
                             session,
                             persisted_messages,
-                            journal=(
-                                starting_tracker.start_boundary()
-                                if starting_tracker is not None
-                                else None
-                            ),
-                            metadata_mutation=record_seen_skills,
+                            journal=journal,
+                            seen_skills=record_seen_skills,
                         )
                     else:
                         if record_seen_skills is not None:
                             await _CHAT_TRANSFORM_WORKERS.run(
-                                self._dependencies.sessions.mutate_metadata,
+                                self._dependencies.sessions.record_seen_skills,
                                 session_address,
                                 record_seen_skills,
                             )
-                        if starting_tracker is not None:
-                            await starting_tracker.start()
+                        if tracker is not None:
+                            await tracker.start()
                     record_seen_skills = None
-                    if request.edit_message_id is not None:
-                        context.session_snapshot.commit_edit()
-                        if context.continuation_tracker is not None:
-                            await context.continuation_tracker.restart_journal()
-                        else:
-                            await session.clear_continuation_async()
-                        context.prompt_cache_affinity_id = await _CHAT_TRANSFORM_WORKERS.run(
-                            self._dependencies.sessions.rotate_prompt_cache_affinity_id,
-                            session_address,
-                        )
-                        if reset_auto_title:
-                            try:
-                                await _CHAT_TRANSFORM_WORKERS.run(
-                                    self._dependencies.sessions.reset_auto_title,
-                                    session_address,
-                                )
-                            except Exception:
-                                _LOGGER.warning(
-                                    "Failed to reset generated Session title after history edit",
-                                    exc_info=True,
-                                )
-                    if not persisted_messages or request.edit_message_id is not None:
+                    if not persisted_messages:
                         await context.session_snapshot.refresh(session)
                     if not internal and not request.input_already_persisted:
                         _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
@@ -418,7 +377,7 @@ class RunExecution:
                 # Deferred notes left by a failed input append still persist, and
                 # an unrecorded Skill note carries its seen-Skill change along.
                 await session.append_many_async(
-                    session.take_deferred_notes(), metadata_mutation=record_seen_skills
+                    session.take_deferred_notes(), seen_skills=record_seen_skills
                 )
             if (
                 not internal

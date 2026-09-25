@@ -12,6 +12,7 @@ from core.recall import (
     RecallBackendContext,
     SqliteFtsRecallBackend,
 )
+from core.runs import RunKind
 from core.sessions import ChatSessionManager
 from core.tools.session_search import (
     SESSION_SEARCH_TOOL_NAME,
@@ -176,7 +177,7 @@ async def test_dispatch_accepts_unambiguous_boolean_encodings(
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="delegated")
     session.append(ChatMessage.user("needle"))
-    sessions.set_metadata(session.address, {"run_kinds": ["subagent"]})
+    sessions.record_run_kind(session.address, RunKind.SUBAGENT)
     registry = ToolRegistry()
     register_session_search_tool(registry, CanonicalSessionRecallBackend(sessions))
     arguments = {"query": "needle", "include_subagents": value}

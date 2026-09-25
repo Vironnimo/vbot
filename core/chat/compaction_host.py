@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from core.chat._request_builder import (
-    SEEN_SKILLS_META_KEY,
     RequestBuilder,
     _finalize_compaction_checkpoint,
     _resolve_reasoning_replay_policy,
@@ -40,12 +39,12 @@ from core.prompts.pinned_context import (
     pinned_skill_catalog,
     pinned_soul_context,
     pinned_working_project_context,
-    replace_prompt_epoch_pins,
+    prompt_epoch_pins,
     stamp_prompt_files_read,
 )
 from core.providers.accounts import ConnectionRef
 from core.providers.adapter import estimate_wire_request_input_tokens
-from core.sessions import ChatSession
+from core.sessions import ChatSession, PromptEpoch
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -434,10 +433,8 @@ class ChatCompactionHost:
         """Commit a manual *checkpoint* and its prompt epoch while *since* is current."""
         refresh = cast(_CompactionPromptRefresh | None, prompt_refresh)
         async with self.sessions.write_lock(session.address):
-            committed = await session.commit_compaction_checkpoint_async(
-                checkpoint,
-                since=since,
-                metadata_mutation=_prompt_epoch_mutation(refresh),
+            committed = await session.commit_compaction_async(
+                checkpoint, since=since, epoch=_prompt_epoch(refresh)
             )
         if committed is None:
             return False
@@ -461,9 +458,7 @@ class ChatCompactionHost:
         session = context.session
         async with self.sessions.write_lock(session.address):
             affinity_id = await context.session_snapshot.commit_checkpoint(
-                session,
-                checkpoint,
-                metadata_mutation=_prompt_epoch_mutation(refresh),
+                session, checkpoint, epoch=_prompt_epoch(refresh)
             )
         if affinity_id is None:
             return False
@@ -593,16 +588,12 @@ class ChatCompactionHost:
         context.skill_catalog = typed_refresh.skill_catalog
 
 
-def _prompt_epoch_mutation(
-    refresh: _CompactionPromptRefresh | None,
-) -> Callable[[JsonObject], None] | None:
-    """The metadata a committed checkpoint's new prompt epoch starts from."""
+def _prompt_epoch(refresh: _CompactionPromptRefresh | None) -> PromptEpoch:
+    """The prompt epoch a committed checkpoint starts: fresh pins and seen Skills."""
     if refresh is None:
-        return None
-
-    def update(metadata: JsonObject) -> None:
-        replace_prompt_epoch_pins(
-            metadata,
+        return PromptEpoch(pins={})
+    return PromptEpoch(
+        pins=prompt_epoch_pins(
             skill_catalog=refresh.skill_catalog,
             skill_project_id=refresh.skill_project_id,
             working_project_context=refresh.working_project_context,
@@ -614,8 +605,6 @@ def _prompt_epoch_mutation(
             soul_context=refresh.soul_context,
             memory_files_context=refresh.memory_files_context,
             memory_prompt_mode=refresh.memory_prompt_mode,
-        )
-        if refresh.available_skill_names is not None:
-            metadata[SEEN_SKILLS_META_KEY] = list(refresh.available_skill_names)
-
-    return update
+        ),
+        seen_skills=refresh.available_skill_names,
+    )

@@ -24,11 +24,13 @@ from typing import Any
 
 import httpx
 
+from core.chat._step_outcomes import tool_result_facts
 from core.chat.messages import ChatMessage, ToolCall
 from core.database import write_bootstrap_marker
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.runs import Run
 from core.sessions import ChatSession, ChatSessionManager
 from core.tools import tool_success
 from scripts.perf_bench_suite.runner import BenchContext
@@ -398,8 +400,9 @@ def loaded_history(context: BenchContext, shape: HistoryShape) -> LoadedHistory:
     """Persist ``shape``'s history once per suite run and load it back."""
 
     def build() -> LoadedHistory:
-        session = history_store(context).create(AGENT_ID)
-        persist_history(session, build_history(shape))
+        sessions = history_store(context)
+        session = sessions.create(AGENT_ID)
+        context.run(persist_history(sessions, session, build_history(shape)))
         return LoadedHistory(shape=shape, session=session, messages=session.load_active())
 
     return context.fixture(f"history:{shape.label}", build)
@@ -417,20 +420,34 @@ def session_store(context: BenchContext, name: str) -> ChatSessionManager:
     return manager
 
 
-def persist_history(session: ChatSession, history: SyntheticHistory) -> None:
-    """Write a history through the Session writer API, one Model step per batch.
+async def persist_history(
+    sessions: ChatSessionManager, session: ChatSession, history: SyntheticHistory
+) -> None:
+    """Write a history the way Chat and Run management do, one Model step per batch.
 
-    A step's Tool results name their owning assistant message through the
-    writer's ``assistant_message_id``, as Chat's Tool dispatch does.
+    Each Run is admitted before it writes. A step's Tool results name their
+    owning assistant message through the writer's ``assistant_message_id`` and
+    carry the outcome facts Chat derives from their envelopes. A finished Run
+    is completed with its summary's timing and iteration count, which writes
+    the summary entry.
     """
     for run in history.runs:
-        writer = session.start_run(run.run_id)
+        record = Run(
+            run_id=run.run_id,
+            agent_id=session.address.agent_id,
+            session_id=session.address.session_id,
+            project_id=session.address.project_id,
+        )
+        await sessions.start_run(record)
+        writer = session.for_run(run.run_id)
         for step in run.steps:
             if step[0].role == "assistant" and step[0].tool_calls:
                 writer.assistant_message_id = step[0].id
-            writer.append_many(step)
+            writer.append_many(step, tool_results=tool_result_facts(step))
         if run.summary is not None:
-            writer.append(run.summary)
+            assert run.summary.timing is not None and run.summary.status is not None
+            record.iteration_count = run.summary.iteration_count or 0
+            await sessions.finish_run(record, run.summary.status, {"timing": run.summary.timing})
 
 
 # --- Provider ---------------------------------------------------------------

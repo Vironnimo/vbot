@@ -93,6 +93,8 @@ async def test_chat_history_hides_subagent_batch_completion_note(tmp_path: Path)
 async def test_chat_history_hides_internal_continuation_checkpoint(tmp_path: Path) -> None:
     state, chat_sessions = _history_state(tmp_path)
     session = chat_sessions.create("parent", session_id="session-one")
+    # Continuation records name a Run the Session admitted.
+    session.start_run("run-one")
     session.append_continuation_records(
         [
             {
@@ -144,15 +146,8 @@ async def test_chat_history_projects_only_active_edit_lineage_but_keeps_raw_usag
         content="new answer",
         usage={"input_tokens": 20, "output_tokens": 3},
     )
-    session.append_many(
-        [
-            first_user,
-            first_answer,
-            ChatMessage.history_edit(first_user.id),
-            edited_user,
-            edited_answer,
-        ]
-    )
+    session.append_many([first_user, first_answer])
+    session.apply_edit(first_user.id, [edited_user, edited_answer])
 
     response = await dispatch_rpc(
         state,
@@ -401,10 +396,12 @@ async def test_chat_history_expands_limit_to_complete_oldest_run_segment(tmp_pat
 
     assert response["ok"] is True
     result = response["result"]
+    # Completing a Run writes its summary with a store-assigned id.
+    second_summary_id = messages[5].id
     assert [message["id"] for message in result["messages"]] == [
         "second-user",
         "second-assistant",
-        "second-summary",
+        second_summary_id,
     ]
     assert result["has_more"] is True
 
@@ -420,32 +417,32 @@ async def test_chat_history_expanded_page_cursor_skips_excluded_run_boundary(
         "completed_at": "2026-07-24T10:00:01+00:00",
         "duration_ms": 1000,
     }
-    seed_history(
-        session,
-        [
-            replace(ChatMessage.user("first"), id="first-user"),
-            replace(
-                ChatMessage.run_summary(
-                    run_id="run-one",
-                    status="completed",
-                    timing=timing,
-                    iteration_count=1,
-                ),
-                id="first-summary",
+    messages = [
+        replace(ChatMessage.user("first"), id="first-user"),
+        replace(
+            ChatMessage.run_summary(
+                run_id="run-one",
+                status="completed",
+                timing=timing,
+                iteration_count=1,
             ),
-            replace(ChatMessage.note("internal boundary"), id="boundary-note"),
-            replace(ChatMessage.user("second"), id="second-user"),
-            replace(
-                ChatMessage.run_summary(
-                    run_id="run-two",
-                    status="completed",
-                    timing=timing,
-                    iteration_count=1,
-                ),
-                id="second-summary",
+            id="first-summary",
+        ),
+        replace(ChatMessage.note("internal boundary"), id="boundary-note"),
+        replace(ChatMessage.user("second"), id="second-user"),
+        replace(
+            ChatMessage.run_summary(
+                run_id="run-two",
+                status="completed",
+                timing=timing,
+                iteration_count=1,
             ),
-        ],
-    )
+            id="second-summary",
+        ),
+    ]
+    seed_history(session, messages)
+    # Completing a Run writes its summary with a store-assigned id.
+    first_summary_id, second_summary_id = messages[1].id, messages[4].id
 
     newest = await dispatch_rpc(
         state,
@@ -466,12 +463,12 @@ async def test_chat_history_expanded_page_cursor_skips_excluded_run_boundary(
     assert newest["ok"] is True
     assert [message["id"] for message in newest["result"]["messages"]] == [
         "second-user",
-        "second-summary",
+        second_summary_id,
     ]
     assert older["ok"] is True
     assert [message["id"] for message in older["result"]["messages"]] == [
         "first-user",
-        "first-summary",
+        first_summary_id,
     ]
     assert older["result"]["has_more"] is False
 

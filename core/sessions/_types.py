@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -13,6 +14,64 @@ if TYPE_CHECKING:
 
 
 JsonObject = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ToolResultFacts:
+    """What Chat reports about one Tool Result when it persists it.
+
+    ``status`` is the Tool call's terminal status (``completed``, ``failed`` or
+    ``cancelled``); the other fields repeat the result envelope's outcome so
+    the store never parses Tool output.
+    """
+
+    status: str
+    ok: bool | None = None
+    error_code: str | None = None
+    error_retryable: bool | None = None
+    error_attempts: int | None = None
+
+
+@dataclass(frozen=True)
+class SeenSkillsUpdate:
+    """One change to the Skills a Session has seen.
+
+    A Session without a recorded set starts from ``baseline`` (every Skill
+    offered so far, announced or not); afterwards only ``added`` is merged in.
+    """
+
+    baseline: tuple[str, ...]
+    added: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PromptEpoch:
+    """The prompt state a committed Compaction checkpoint starts.
+
+    ``pins`` sets each named pin slot, ``None`` removing it; slots not named
+    keep their value. ``seen_skills``, when given, replaces the seen Skills.
+    """
+
+    pins: Mapping[str, JsonObject | None]
+    seen_skills: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
+class SessionRunAdmission:
+    """One Run to admit into a Session before it writes output.
+
+    ``owner`` binds an Extension-owned execution to the Session's temporary
+    binding in the same transaction; ``input_id`` names the owner input the Run
+    answers, at most once per Session.
+    """
+
+    run_id: str
+    run_kind: str
+    started_at: str
+    work_id: str | None = None
+    contributes_to_activity: bool = True
+    owner: RunExecutionOwner | None = None
+    input_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -35,7 +94,6 @@ SESSION_TITLE_MAX_LENGTH = 200
 SESSION_TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted"})
 FORK_SOURCE_META_KEY = "fork_source"
 SESSION_RUN_KINDS_META_KEY = "run_kinds"
-PROMPT_CACHE_AFFINITY_META_KEY = "prompt_cache_affinity_id"
 SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
     {
         "source_channel_id",
@@ -48,10 +106,10 @@ SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
         SESSION_RUN_KINDS_META_KEY,
     }
 )
-SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS = frozenset(
-    {"pinned_skill_catalog", "seen_skills", PROMPT_CACHE_AFFINITY_META_KEY}
-)
-SESSION_MOVE_STRIP_META_KEYS = SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS
+# Prompt pin slots bound to the Session's Agent. A fork or move into another
+# scope drops them, together with the seen Skills, and starts a new prompt-cache
+# affinity, so the destination pins its own Skill catalog.
+AGENT_BOUND_PROMPT_PIN_SLOTS = frozenset({"pinned_skill_catalog"})
 SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
 SKILL_TOOL_MESSAGE_NAME = "skill"
 SKILL_TOOL_LOADED_STATUS = "loaded"
@@ -128,29 +186,42 @@ class OwnedRunRecord:
 
 
 @dataclass(frozen=True)
-class RunStartBoundary:
-    """One canonical Run start, owned or ordinary, in a live or archived generation."""
-
-    address: SessionAddress
-    generation_id: str
-    run_id: str
-    start_sequence: int
-
-
-@dataclass(frozen=True)
 class SessionReadCursor:
+    """Where a reader stopped: the next sequence and the entry just before it."""
+
     generation_id: str
     history_revision: int
     next_seq: int
-    message_count: int
     last_message_id: str | None
 
 
 @dataclass(frozen=True)
 class SessionReadBatch:
+    """Records read after a cursor, from one snapshot.
+
+    ``messages`` are the Session's own new entries in seq order, superseded
+    ones included (the audit view). ``active_messages`` is the current view
+    after the cursor: all of it on a full load. Its first ``inherited_count``
+    Messages precede the Session's fork point, so a fork's own conversation is
+    ``active_messages[inherited_count:]``.
+    """
+
     messages: tuple[ChatMessage, ...]
     cursor: SessionReadCursor
     active_messages: tuple[ChatMessage, ...] = ()
+    inherited_count: int = 0
+
+
+@dataclass(frozen=True)
+class SessionEditResult:
+    """What one committed history edit produced.
+
+    ``batch`` is the Session's complete own audit and current view after the
+    edit; ``prompt_cache_affinity_id`` names the cache lineage the edit started.
+    """
+
+    batch: SessionReadBatch
+    prompt_cache_affinity_id: str
 
 
 @dataclass(frozen=True)
@@ -296,9 +367,9 @@ def recall_visibilities(*, include_subagents: bool) -> tuple[SessionRecallVisibi
 
 @dataclass(frozen=True)
 class SessionDescriptorSource:
+    """What a Recall result needs to describe one live Session."""
+
     metadata: JsonObject
-    message_count: int
-    first_user_message: ChatMessage | None
     recall_visibility: SessionRecallVisibility
 
 
@@ -360,7 +431,7 @@ class SessionListFilters:
 
 @dataclass(frozen=True)
 class SessionListCursor:
-    active_sort: float
+    last_activity_at: str
     project_id: str | None
     agent_id: str
     session_id: str

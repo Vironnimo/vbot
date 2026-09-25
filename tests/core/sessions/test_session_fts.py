@@ -11,6 +11,7 @@ import pytest
 
 from core.chat import ChatMessage
 from core.database import data_store_status
+from core.runs import RunKind
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions.schema import (
     FTS_COMPLETED_HIGH_WATER_KEY,
@@ -75,7 +76,7 @@ def test_detached_fts_reopens_complete_when_canonical_projection_already_exists(
     sessions.close()
 
     with sqlite3.connect(tmp_path / "sessions.db") as connection:
-        connection.execute("DROP TABLE messages_fts")
+        connection.execute("DROP TABLE entries_fts")
         connection.commit()
 
     reopened = ChatSessionManager(tmp_path)
@@ -99,7 +100,7 @@ def test_empty_internal_fts_index_never_reports_healthy_or_hides_matches(tmp_pat
     sessions.create(address.agent_id, session_id=address.session_id).append(message)
     try:
         with sqlite3.connect(tmp_path / "sessions.db") as connection:
-            connection.execute("INSERT INTO messages_fts(messages_fts) VALUES('delete-all')")
+            connection.execute("INSERT INTO entries_fts(entries_fts) VALUES('delete-all')")
             connection.commit()
 
         health = sessions.fts_health()
@@ -142,7 +143,7 @@ def test_fts_projection_uses_canonical_message_key_and_recall_text_only(tmp_path
     try:
         with sqlite3.connect(tmp_path / "sessions.db") as connection:
             columns = {
-                row[1] for row in connection.execute("PRAGMA table_info(messages)").fetchall()
+                row[1] for row in connection.execute("PRAGMA table_info(entries)").fetchall()
             }
             tables = {
                 row[0]
@@ -151,29 +152,30 @@ def test_fts_projection_uses_canonical_message_key_and_recall_text_only(tmp_path
                 ).fetchall()
             }
             rows = connection.execute(
-                "SELECT message_id, content, searchable FROM messages ORDER BY message_key"
+                "SELECT e.entry_key, e.entry_id, t.content, e.searchable FROM entries AS e "
+                "JOIN entry_text AS t ON t.entry_key = e.entry_key ORDER BY e.entry_key"
             ).fetchall()
             indexed = connection.execute(
-                "SELECT rowid, content FROM messages_fts ORDER BY rowid"
+                "SELECT rowid, content FROM entries_fts ORDER BY rowid"
             ).fetchall()
-            assert "message_json" not in columns
-            assert "reasoning" not in columns
-            assert "tool_calls_json" not in columns
-            assert "run_id" in columns
+            # Hot entry rows stay narrow: text, reasoning and calls live in side tables.
+            assert {"content", "message_json", "reasoning", "tool_calls_json"}.isdisjoint(columns)
+            assert "run_key" in columns
             assert "message_search" not in tables
             assert {
-                "assistant_messages",
+                "entry_text",
+                "assistant_entries",
                 "tool_calls",
                 "runs",
-                "compaction_checkpoints",
+                "checkpoint_entries",
                 "continuations",
             }.issubset(tables)
-            assert rows == [
+            assert [row[1:] for row in rows] == [
                 (visible.id, "visible searchable content", 1),
                 (system.id, "internal system payload", 0),
                 (note.id, "internal note payload", 0),
             ]
-            assert indexed == [(1, "visible searchable content")]
+            assert indexed == [(rows[0][0], "visible searchable content")]
             metadata = dict(connection.execute("SELECT key, value FROM store_meta").fetchall())
         assert metadata[FTS_STORAGE_VERSION_KEY] == str(FTS_STORAGE_VERSION)
         assert metadata[FTS_GENERATION_KEY]
@@ -294,7 +296,7 @@ def test_fts_candidate_filters_apply_before_the_result_limit(tmp_path: Path) -> 
         sessions.close()
 
 
-def test_history_edit_materializes_active_lineage_and_removes_stale_fts_rows(
+def test_history_edit_supersedes_the_tail_and_removes_stale_fts_rows(
     tmp_path: Path,
 ) -> None:
     sessions = ChatSessionManager(tmp_path)
@@ -304,9 +306,7 @@ def test_history_edit_materializes_active_lineage_and_removes_stale_fts_rows(
         [original, ChatMessage.assistant(model="model", content="obsolete tail needle")]
     )
 
-    session.append_many(
-        [ChatMessage.history_edit(original.id), ChatMessage.user("replacement text")]
-    )
+    session.apply_edit(original.id, [ChatMessage.user("replacement text")])
 
     assert [message.content for message in session.load_active()] == ["replacement text"]
     assert (
@@ -320,26 +320,29 @@ def test_history_edit_materializes_active_lineage_and_removes_stale_fts_rows(
     )
     forked = asyncio.run(sessions.fork(session.address, target_agent_id="reviewer"))
     assert [message.content for message in forked.load_active()] == ["replacement text"]
+    # The fork shares the entry: a search its origin is not eligible for reports the fork.
     assert [
-        hit.message_id
+        (hit.address, hit.message_id)
         for hit in sessions.search_messages(
             "replacement",
             project_id=None,
             agent_id="reviewer",
             session_id=forked.address.session_id,
         ).hits
-    ] == [forked.load_active()[0].id]
+    ] == [(forked.address, session.load_active()[0].id)]
     with sqlite3.connect(tmp_path / "sessions.db") as connection:
         assert connection.execute(
-            "SELECT message.active FROM messages AS message "
-            "JOIN sessions AS session ON session.session_key = message.session_key "
-            "WHERE session.agent_id = 'agent' ORDER BY message.seq"
+            "SELECT e.role, e.superseded_at_seq FROM entries AS e "
+            "JOIN sessions AS s ON s.session_key = e.session_key "
+            "WHERE s.agent_id = 'agent' ORDER BY e.seq"
         ).fetchall() == [
-            (0,),
-            (0,),
-            (1,),
+            ("user", 2),
+            ("assistant", 2),
+            ("history_edit", 2),
+            ("user", None),
         ]
-        assert connection.execute("SELECT COUNT(*) FROM messages_fts_docsize").fetchone()[0] == 2
+        assert connection.execute("SELECT COUNT(*) FROM entries").fetchone()[0] == 4
+        assert connection.execute("SELECT COUNT(*) FROM entries_fts_docsize").fetchone()[0] == 1
     sessions.close()
 
 
@@ -363,7 +366,7 @@ def test_session_delete_and_history_edit_remove_exactly_their_indexed_rows(
         seed_history(sessions.create("agent", session_id=session_id), messages)
         seeded[session_id] = messages
     kept = sessions.get(SessionAddress(project_id=None, agent_id="agent", session_id="kept"))
-    kept.append(ChatMessage.history_edit(seeded["kept"][3].id))
+    kept.apply_edit(seeded["kept"][3].id, [ChatMessage.user("gamma replacement")])
 
     sessions.delete(SessionAddress(project_id=None, agent_id="agent", session_id="removed"))
 
@@ -371,18 +374,19 @@ def test_session_delete_and_history_edit_remove_exactly_their_indexed_rows(
         with sqlite3.connect(tmp_path / "sessions.db") as connection:
             # rank=1 compares every indexed row with its external content.
             connection.execute(
-                "INSERT INTO messages_fts(messages_fts, rank) VALUES('integrity-check', 1)"
+                "INSERT INTO entries_fts(entries_fts, rank) VALUES('integrity-check', 1)"
             )
             connection.execute(
-                "INSERT INTO messages_fts_trigram(messages_fts_trigram, rank) "
+                "INSERT INTO entries_fts_trigram(entries_fts_trigram, rank) "
                 "VALUES('integrity-check', 1)"
             )
-            base_rows = connection.execute("SELECT COUNT(*) FROM messages_fts_docsize").fetchone()
+            base_rows = connection.execute("SELECT COUNT(*) FROM entries_fts_docsize").fetchone()
             trigram_rows = connection.execute(
-                "SELECT COUNT(*) FROM messages_fts_trigram_docsize"
+                "SELECT COUNT(*) FROM entries_fts_trigram_docsize"
             ).fetchone()
-        assert base_rows == (3,)
-        assert trigram_rows == (2,)
+        # The kept prefix (question, answer, Tool result) and the replacement question.
+        assert base_rows == (4,)
+        assert trigram_rows == (3,)
         assert sessions.fts_health().state == "healthy"
         hits = sessions.search_messages(
             "needle", project_id=None, agent_id="agent", roles=("user", "assistant", "tool")
@@ -404,16 +408,16 @@ def test_failed_fts_delete_detaches_the_index_and_still_deletes_the_session(
     sessions.create(address.agent_id, session_id=address.session_id).append(
         ChatMessage.user("indexed words")
     )
-    real_delete = store_module._delete_fts_session
-    failures: list[int] = []
+    real_forget = store_module.fts_forget
+    failures: list[str] = []
 
-    def fail_once(connection: sqlite3.Connection, session_key: int, **kwargs: object) -> None:
+    def fail_once(connection: sqlite3.Connection, keys_sql: str, params: Any) -> None:
         if not failures:
-            failures.append(session_key)
+            failures.append(keys_sql)
             raise sqlite3.OperationalError("fts5: simulated index write failure")
-        real_delete(connection, session_key, **kwargs)  # type: ignore[arg-type]
+        real_forget(connection, keys_sql, params)
 
-    monkeypatch.setattr(store_module, "_delete_fts_session", fail_once)
+    monkeypatch.setattr(store_module, "fts_forget", fail_once)
     try:
         sessions.delete(address)
 
@@ -472,19 +476,19 @@ def test_fts_rebuild_reads_content_only_inside_current_batch(tmp_path: Path, mon
         if stage == "before_batch_commit":
             raise RuntimeError("test batch read complete")
 
-    monkeypatch.setattr(store_module, "_FTS_BATCH_SIZE", 5)
+    monkeypatch.setattr(store_module, "_FTS_BATCH_WINDOW", 5)
     monkeypatch.setattr(store_module, "_FTS_REBUILD_HOOK", stop_after_read)
     with sqlite3.connect(tmp_path / "sessions.db") as connection:
         connection.row_factory = sqlite3.Row
         connection.create_function("observe_content", 2, observe)
         original = connection.execute(
-            "SELECT sql FROM sqlite_schema WHERE name='messages_fts_source'"
+            "SELECT sql FROM sqlite_schema WHERE name='entries_fts_source'"
         ).fetchone()[0]
-        connection.execute(original.replace("messages_fts_source", "unobserved_fts_source", 1))
-        connection.execute("DROP VIEW messages_fts_source")
+        connection.execute(original.replace("entries_fts_source", "unobserved_fts_source", 1))
+        connection.execute("DROP VIEW entries_fts_source")
         connection.execute(
-            "CREATE VIEW messages_fts_source AS SELECT message_key, "
-            "observe_content(message_key, content) AS content, content_search, "
+            "CREATE VIEW entries_fts_source AS SELECT entry_key, "
+            "observe_content(entry_key, content) AS content, search_text, "
             "reasoning, name, error_kind, tool_calls FROM unobserved_fts_source"
         )
         connection.execute(
@@ -495,7 +499,7 @@ def test_fts_rebuild_reads_content_only_inside_current_batch(tmp_path: Path, mon
         first_batch = {
             row[0]
             for row in connection.execute(
-                "SELECT message_key FROM history_records ORDER BY message_key LIMIT 5"
+                "SELECT entry_key FROM entries ORDER BY entry_key LIMIT 5"
             )
         }
         with pytest.raises(RuntimeError, match="test batch read complete"):
@@ -512,14 +516,15 @@ def test_fts_rebuild_resumes_after_an_interrupted_batch(tmp_path: Path, monkeypa
     sessions.close()
 
     with sqlite3.connect(tmp_path / "sessions.db") as connection:
-        connection.execute("DROP TABLE messages_fts")
-        connection.execute("DROP TABLE messages_fts_trigram")
+        connection.execute("DROP TABLE entries_fts")
+        connection.execute("DROP TABLE entries_fts_trigram")
         connection.commit()
 
     def interrupt(stage: str, _high_water: int) -> None:
         if stage == "after_batch_commit":
             raise RuntimeError("simulated FTS interruption")
 
+    monkeypatch.setattr(store_module, "_FTS_BATCH_WINDOW", 50)
     monkeypatch.setattr(store_module, "_FTS_REBUILD_HOOK", interrupt)
     with pytest.raises(RuntimeError, match="simulated FTS interruption"):
         ChatSessionManager(tmp_path)
@@ -535,61 +540,43 @@ def test_fts_rebuild_resumes_after_an_interrupted_batch(tmp_path: Path, monkeypa
         reopened.close()
 
 
-def test_time_filter_uses_instant_index_and_preserves_timestamp_encodings(tmp_path: Path) -> None:
+@pytest.mark.parametrize("use_fts", [True, False])
+def test_time_filters_compare_exact_instants_across_timestamp_encodings(
+    tmp_path: Path, use_fts: bool
+) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("agent", session_id="instant-boundary")
+
+    def at(label: str, timestamp: str) -> ChatMessage:
+        return ChatMessage(
+            id=f"boundary-{label}", timestamp=timestamp, role="user", content=f"boundary {label}"
+        )
+
+    before = at("before", "2026-05-01T12:00:00.249999Z")
     equivalent = [
-        ChatMessage.user("boundary z"),
-        ChatMessage.user("boundary utc"),
-        ChatMessage.user("boundary offset"),
+        at("z", "2026-05-01T12:00:00.250Z"),
+        at("utc", "2026-05-01T12:00:00.250000+00:00"),
+        at("short", "2026-05-01T12:00:00.25+00:00"),
     ]
-    before = ChatMessage.user("boundary before")
-    after = ChatMessage.user("boundary after")
+    after = at("after", "2026-05-01T12:00:00.250001Z")
     session.append_many([before, *equivalent, after])
     try:
         with sqlite3.connect(tmp_path / "sessions.db") as connection:
-            connection.executemany(
-                "UPDATE messages SET timestamp = ? WHERE message_id = ?",
-                [
-                    ("2026-05-01T12:00:00.249Z", before.id),
-                    ("2026-05-01T12:00:00.250Z", equivalent[0].id),
-                    ("2026-05-01T12:00:00.250+00:00", equivalent[1].id),
-                    ("2026-05-01T14:00:00.250+02:00", equivalent[2].id),
-                    ("2026-05-01T12:00:00.251Z", after.id),
-                ],
-            )
-            session_key = connection.execute(
-                "SELECT session_key FROM sessions WHERE session_id = ?",
-                (session.address.session_id,),
-            ).fetchone()[0]
-            plan = " ".join(
-                str(row[3])
-                for row in connection.execute(
-                    "EXPLAIN QUERY PLAN SELECT message_id FROM messages "
-                    "WHERE session_key = ? AND julianday(timestamp) >= julianday(?) "
-                    "AND julianday(timestamp) <= julianday(?)",
-                    (
-                        session_key,
-                        "2026-05-01T12:00:00.250Z",
-                        "2026-05-01T12:00:00.250Z",
-                    ),
-                )
-            )
-            selected = {
-                str(row[0])
-                for row in connection.execute(
-                    "SELECT message_id FROM messages "
-                    "WHERE session_key = ? AND julianday(timestamp) >= julianday(?) "
-                    "AND julianday(timestamp) <= julianday(?)",
-                    (
-                        session_key,
-                        "2026-05-01T12:00:00.250Z",
-                        "2026-05-01T12:00:00.250Z",
-                    ),
-                )
-            }
-        assert "messages_by_session_instant" in plan
-        assert selected == {message.id for message in equivalent}
+            stored = dict(connection.execute("SELECT entry_id, created_at FROM entries"))
+        assert {stored[message.id] for message in equivalent} == {"2026-05-01T12:00:00.250000Z"}
+        for since, until in (
+            ("2026-05-01T12:00:00.250Z", "2026-05-01T12:00:00.250Z"),
+            ("2026-05-01T14:00:00.250+02:00", "2026-05-01T12:00:00.250000+00:00"),
+        ):
+            hits = sessions.search_messages(
+                "boundary",
+                project_id=None,
+                agent_id="agent",
+                since=since,
+                until=until,
+                use_fts=use_fts,
+            ).hits
+            assert {hit.message_id for hit in hits} == {message.id for message in equivalent}
     finally:
         sessions.close()
 
@@ -621,16 +608,17 @@ def test_search_admits_only_recall_visible_sessions(
         )
     sessions = ChatSessionManager(tmp_path)
     visibility = {
-        "ordinary": {"run_kinds": ["user"]},
-        "calendar": {"run_kinds": ["calendar"]},
-        "delegated": {"run_kinds": ["subagent"]},
-        "reflection": {"run_kinds": ["user", "reflection"]},
-        "system": {"run_kinds": ["system"]},
+        "ordinary": (RunKind.USER,),
+        "calendar": (RunKind.CALENDAR,),
+        "delegated": (RunKind.SUBAGENT,),
+        "reflection": (RunKind.USER, RunKind.REFLECTION),
+        "system": (RunKind.SYSTEM,),
     }
-    for session_id, metadata in visibility.items():
+    for session_id, run_kinds in visibility.items():
         session = sessions.create("agent", session_id=session_id)
         session.append(ChatMessage.user(f"visible needle {session_id}"))
-        sessions.set_metadata(session.address, metadata)
+        for run_kind in run_kinds:
+            sessions.record_run_kind(session.address, run_kind)
     try:
 
         def searched(**options: Any) -> set[str]:

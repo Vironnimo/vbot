@@ -1,5 +1,6 @@
 """Execute the shipped SQLite recipes against canonical Session fixtures."""
 
+import asyncio
 import json
 import re
 import sqlite3
@@ -16,7 +17,7 @@ from core.sessions import ChatSessionManager
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
 
-def test_session_sql_recipes_preserve_scope_active_lineage_blocks_and_exact_results(
+def test_session_sql_recipes_preserve_scope_current_history_forks_blocks_and_exact_results(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     sessions = ChatSessionManager(tmp_path)
@@ -29,10 +30,14 @@ def test_session_sql_recipes_preserve_scope_active_lineage_blocks_and_exact_resu
     result = ChatMessage.tool(
         tool_call_id="call", name="bash", content="prefix " * 500 + "exact fragment\n" + "x" * 3000
     )
-    session.append_many([obsolete, ChatMessage.history_edit(obsolete.id), user, assistant, result])
+    session.append(obsolete)
+    session.apply_edit(obsolete.id, [user])
+    session.append_many([assistant, result])
     sessions.create("agent-id", session_id="session-id", project_id="other").append(
         ChatMessage.user("wrong Project")
     )
+    fork = asyncio.run(sessions.fork(session.address))
+    fork.append(ChatMessage.assistant(model="test", content="fork only"))
     document = (
         Path(__file__).resolve().parents[3]
         / "resources/skills/vbot-cli/references/session-search.md"
@@ -46,7 +51,7 @@ def test_session_sql_recipes_preserve_scope_active_lineage_blocks_and_exact_resu
     db = namespace["db"]
     try:
         with pytest.raises(sqlite3.OperationalError):
-            db.execute("DELETE FROM messages")
+            db.execute("DELETE FROM entries")
         exec(blocks[1], namespace)
         transcript = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
         assert [item["message_id"] for item in transcript] == [user.id, assistant.id]
@@ -64,6 +69,19 @@ def test_session_sql_recipes_preserve_scope_active_lineage_blocks_and_exact_resu
         )
         exec(exact, namespace)
         assert json.loads(capsys.readouterr().out)["result_content"] == result.content
+
+        # A fork reads the history it shares with its origin, then its own.
+        exec(setup.replace('"session-id"', repr(fork.id)), namespace)
+        exec(blocks[1], namespace)
+        forked = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        assert [item["message_id"] for item in forked[:2]] == [user.id, assistant.id]
+        assert [item["content"] for item in forked[2:]] == ["fork only"]
+        assert {item["generation_id"] for item in forked} != {transcript[0]["generation_id"]}
+        exec(blocks[2], namespace)
+        assert [
+            json.loads(line)["message_id"] for line in capsys.readouterr().out.splitlines()
+        ] == [result.id]
     finally:
         db.close()
+        namespace["db"].close()
         sessions.close()

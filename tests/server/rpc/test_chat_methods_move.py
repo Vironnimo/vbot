@@ -15,10 +15,7 @@ from core.chat import (
 )
 from core.projects import AgentResolutionError, format_agent_address
 from core.runs import ChatRunManager, RunAdmissionBlockedError
-from core.sessions import (
-    SESSION_MOVE_STRIP_META_KEYS,
-    SessionAddress,
-)
+from core.sessions import SessionAddress
 from core.tools.terminal_manager import TerminalOwner
 from server.events import ServerEventBus
 from tests.server.rpc.chat_methods_test_support import (
@@ -62,13 +59,7 @@ class _FakeMoveSessions:
         self.move_started: asyncio.Event | None = None
         self.move_release: asyncio.Event | None = None
 
-    async def move(
-        self,
-        source: SessionAddress,
-        target: SessionAddress,
-        *,
-        strip_meta_keys: Any = frozenset(),
-    ) -> _FakeMovedSession:
+    async def move(self, source: SessionAddress, target: SessionAddress) -> _FakeMovedSession:
         self.move_calls.append(
             {
                 "source_agent_id": source.agent_id,
@@ -76,7 +67,7 @@ class _FakeMoveSessions:
                 "target_agent_id": target.agent_id,
                 "source_project_id": source.project_id,
                 "target_project_id": target.project_id,
-                "strip_meta_keys": set(strip_meta_keys),
+                "target_session_id": target.session_id,
             }
         )
         if self.move_started is not None:
@@ -226,10 +217,9 @@ async def test_move_directions_relocate_and_re_home_pointers(
     assert move_call["source_project_id"] == source_project
     assert move_call["target_agent_id"] == target_agent
     assert move_call["target_project_id"] == target_project
-    # A move is always cross-agent, so the source Agent's pinned Skill catalog and
-    # seen-Skills set are stripped; the target re-pins its own catalog.
-    assert move_call["strip_meta_keys"] == set(SESSION_MOVE_STRIP_META_KEYS)
-    assert {"pinned_skill_catalog", "seen_skills"} <= move_call["strip_meta_keys"]
+    # The Session keeps its id; the command passes only the two addresses because
+    # Sessions leaves the source Agent's prompt pins and seen Skills behind itself.
+    assert move_call["target_session_id"] == "s1"
 
     # The "current" pointer follows the session on each identity side only.
     assert (state._agents.reset_calls == [("builder", "s1")]) is reset

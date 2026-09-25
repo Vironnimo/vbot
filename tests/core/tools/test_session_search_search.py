@@ -19,6 +19,7 @@ from core.recall import (
     RecallSearchRequest,
     SqliteFtsRecallBackend,
 )
+from core.runs import RunKind
 from core.sessions import ChatSession, ChatSessionManager, SessionAddress
 from core.tools._session_recall_results import (
     SESSION_SEARCH_EXCERPT_MAX_CHARS,
@@ -76,10 +77,9 @@ async def test_unscoped_search_keeps_repeated_hits_and_one_session_descriptor(
     second = ChatMessage.assistant(model="test", content="needle answer", timestamp=timestamp(2))
     session.append(first)
     session.append(second)
-    sessions.set_metadata(
-        SessionAddress(project_id=None, agent_id="coder", session_id="repeated-context"),
-        {"title": "Repeated context", "run_kinds": ["user"]},
-    )
+    address = SessionAddress(project_id=None, agent_id="coder", session_id="repeated-context")
+    sessions.set_title(address, "Repeated context")
+    sessions.record_run_kind(address, RunKind.USER)
 
     data = success(
         await session_search_handler(
@@ -127,20 +127,10 @@ async def test_unscoped_search_rechecks_hit_sessions_before_result_shaping(
     root = sessions.create("coder", session_id="root")
     duplicate = ChatMessage.user("needle duplicated", timestamp=timestamp(1))
     root.append(duplicate)
-    for session_id in ("reflection-one", "reflection-two"):
-        reflection = sessions.create("coder", session_id=session_id)
-        reflection.append(duplicate)
-        sessions.set_metadata(
-            SessionAddress(project_id=None, agent_id="coder", session_id=session_id),
-            {
-                "fork_source": {
-                    "agent_id": "coder",
-                    "session_id": "root",
-                    "project_id": None,
-                },
-                "run_kinds": ["skill_reflection"],
-            },
-        )
+    # Reflection forks inherit the root's entry without copying it.
+    reflection_ids = [
+        (await sessions.fork(root.address, run_kind=RunKind.SKILL_REFLECTION)).id for _ in range(2)
+    ]
     other_messages = []
     for index in range(2):
         session = sessions.create("coder", session_id=f"other-{index}")
@@ -170,8 +160,8 @@ async def test_unscoped_search_rechecks_hit_sessions_before_result_shaping(
 
             return RecallSearchPage(
                 hits=(
-                    hit("reflection-one", duplicate, 1.0),
-                    hit("reflection-two", duplicate, 0.9),
+                    hit(reflection_ids[0], duplicate, 1.0),
+                    hit(reflection_ids[1], duplicate, 0.9),
                     hit("root", duplicate, 0.8),
                     hit("other-0", other_messages[0], 0.7),
                     hit("other-1", other_messages[1], 0.6),

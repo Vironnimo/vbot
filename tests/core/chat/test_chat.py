@@ -31,10 +31,17 @@ async def test_edit_run_appends_lineage_marker_and_preserves_superseded_usage(
 ) -> None:
     from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime
 
+    class AffinityAdapter(StubAdapter):
+        def request_context_kwargs(
+            self, *, prompt_cache_affinity_id: str | None = None, **_kwargs: Any
+        ) -> dict[str, Any]:
+            return {"cache_probe": prompt_cache_affinity_id}
+
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([{"content": "new answer"}])
+    adapter = AffinityAdapter([{"content": "new answer"}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
+    affinity_before_edit = runtime.chat_sessions.prompt_cache_affinity_id(session.address)
     original = ChatMessage.user("old request")
     old_answer = ChatMessage.assistant(
         model="openai/gpt-5.2",
@@ -72,6 +79,10 @@ async def test_edit_run_appends_lineage_marker_and_preserves_superseded_usage(
     ]
     assert request_user_content == ["edited request"]
     assert run.terminal_payload_extras["session_usage"]["input_tokens"] >= 100
+    # The edit starts a new prompt-cache lineage, and the edited Run already uses it.
+    affinity_after_edit = runtime.chat_sessions.prompt_cache_affinity_id(session.address)
+    assert affinity_after_edit != affinity_before_edit
+    assert adapter.requests[0]["kwargs"]["cache_probe"] == affinity_after_edit
 
 
 @pytest.mark.asyncio
@@ -275,7 +286,7 @@ def _project_runtime(
 async def test_skill_catalog_is_pinned_for_the_session(tmp_path: Path) -> None:
     # The catalog snapshot is taken once on a session's first build and reused, so a
     # skill written mid-session never changes the session's pinned catalog.
-    from core.prompts.pinned_context import PINNED_SKILL_CATALOG_META_KEY
+    from core.prompts.pinned_context import PINNED_SKILL_CATALOG_SLOT
     from tests.core.chat.test_chat_loop import (
         StubAdapter,
         StubAgent,
@@ -294,23 +305,19 @@ async def test_skill_catalog_is_pinned_for_the_session(tmp_path: Path) -> None:
     loop = build_chat_loop(runtime)
 
     await loop.send("coder", "hi", session_id="s1")
-    pinned_after_first = dict(
-        runtime.chat_sessions.get_metadata(session_address("coder", "s1"))[
-            PINNED_SKILL_CATALOG_META_KEY
-        ]
-    )
+    address = session_address("coder", "s1")
+    pinned_after_first = runtime.chat_sessions.prompt_pin(address, PINNED_SKILL_CATALOG_SLOT)
 
     # A mid-session skill write: the live registry grows by one skill.
     runtime.skills = StubSkills(
         [StubSkill("one", "One.", Path("a")), StubSkill("two", "Two.", Path("b"))]
     )
     await loop.send("coder", "again", session_id="s1")
-    pinned_after_second = runtime.chat_sessions.get_metadata(session_address("coder", "s1"))[
-        PINNED_SKILL_CATALOG_META_KEY
-    ]
+    pinned_after_second = runtime.chat_sessions.prompt_pin(address, PINNED_SKILL_CATALOG_SLOT)
 
     # Snapshotted once, reused, and byte-identical despite the new skill.
     assert runtime.system_prompts.render_skill_catalog_calls == 1
+    assert pinned_after_first is not None
     assert pinned_after_first == pinned_after_second
     assert pinned_after_first["catalog_text"] == "catalog:1"
 
@@ -319,7 +326,7 @@ async def test_skill_catalog_is_pinned_for_the_session(tmp_path: Path) -> None:
 async def test_new_session_pins_a_fresh_catalog(tmp_path: Path) -> None:
     # A different session pins its own snapshot from the then-current registry, so a
     # skill added before it starts is included.
-    from core.prompts.pinned_context import PINNED_SKILL_CATALOG_META_KEY
+    from core.prompts.pinned_context import PINNED_SKILL_CATALOG_SLOT
     from tests.core.chat.test_chat_loop import (
         StubAdapter,
         StubAgent,
@@ -344,12 +351,13 @@ async def test_new_session_pins_a_fresh_catalog(tmp_path: Path) -> None:
     )
     await loop.send("coder", "hi", session_id="s2")
 
-    s1_catalog = runtime.chat_sessions.get_metadata(session_address("coder", "s1"))[
-        PINNED_SKILL_CATALOG_META_KEY
-    ]
-    s2_catalog = runtime.chat_sessions.get_metadata(session_address("coder", "s2"))[
-        PINNED_SKILL_CATALOG_META_KEY
-    ]
+    s1_catalog = runtime.chat_sessions.prompt_pin(
+        session_address("coder", "s1"), PINNED_SKILL_CATALOG_SLOT
+    )
+    s2_catalog = runtime.chat_sessions.prompt_pin(
+        session_address("coder", "s2"), PINNED_SKILL_CATALOG_SLOT
+    )
+    assert s1_catalog is not None and s2_catalog is not None
     assert s1_catalog["catalog_text"] == "catalog:1"
     assert s2_catalog["catalog_text"] == "catalog:2"
 

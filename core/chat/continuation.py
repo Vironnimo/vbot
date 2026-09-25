@@ -10,7 +10,6 @@ import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 from core.chat.wire_shaping import (
@@ -21,6 +20,7 @@ from core.chat.wire_shaping import (
 from core.providers.errors import NetworkError, ProviderTimeoutError
 from core.sessions import ChatSession, SessionContinuationState, SessionContinuationStep
 from core.utils.errors import ProviderError
+from core.utils.timestamps import utc_now_timestamp
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
@@ -47,10 +47,6 @@ RecordSink = Callable[[list[JsonObject]], None | Awaitable[None]]
 Clock = Callable[[], float]
 Sleeper = Callable[[float], Awaitable[None]]
 _WriteResult = TypeVar("_WriteResult")
-
-
-def _timestamp() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 @dataclass
@@ -444,7 +440,7 @@ class ContinuationTracker:
             "version": CONTINUATION_RECORD_VERSION,
             "type": record_type,
             "run_id": self.run_id,
-            "timestamp": _timestamp(),
+            "timestamp": utc_now_timestamp(),
             **fields,
         }
 
@@ -482,7 +478,7 @@ async def recover_continuation(
                 "version": CONTINUATION_RECORD_VERSION,
                 "type": "run_interrupted",
                 "run_id": state.latest_run_id,
-                "timestamp": _timestamp(),
+                "timestamp": utc_now_timestamp(),
                 "cause": "process_restart",
             }
         ]

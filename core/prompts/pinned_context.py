@@ -1,4 +1,4 @@
-"""Pinned prompt-epoch snapshots stored in Session metadata.
+"""Pinned prompt-epoch snapshots stored as Session prompt pins.
 
 The rendered Skill catalog, Working Project Context, SOUL block, and
 pinned-memory text are prompt-cache state: they stay byte-identical between
@@ -24,19 +24,19 @@ if TYPE_CHECKING:
     from core.tools.file_state import FileReadState
 
 # Prompt-epoch Skill catalog snapshot (the rendered ``<available_skills>`` text),
-# stored in Session metadata so ordinary Runs reuse one stable prefix. A successful
+# pinned on the Session so ordinary Runs reuse one stable prefix. A successful
 # Compaction rescans Skill sources and replaces this snapshot.
-PINNED_SKILL_CATALOG_META_KEY = "pinned_skill_catalog"
+PINNED_SKILL_CATALOG_SLOT = "pinned_skill_catalog"
 # Rooted Identity Agent Working Project Context, rendered from the selected Project's
 # identity and auto-load files and reused verbatim until the next Compaction.
-PINNED_WORKING_PROJECT_CONTEXT_META_KEY = "pinned_working_project_context"
+PINNED_WORKING_PROJECT_CONTEXT_SLOT = "pinned_working_project_context"
 # Session-pinned rendered SOUL block text and pinned-memory text: prompt-epoch
 # snapshots like the Skill catalog above. The first request of an epoch renders
 # them once from the workspace files; every later request reuses the exact text so
 # on-disk changes cannot break the System Prompt prefix mid-epoch. Successful
 # Compaction replaces all three snapshots when the new epoch starts.
-PINNED_SOUL_CONTEXT_META_KEY = "pinned_soul_context"
-PINNED_MEMORY_FILES_META_KEY = "pinned_memory_files"
+PINNED_SOUL_CONTEXT_SLOT = "pinned_soul_context"
+PINNED_MEMORY_FILES_SLOT = "pinned_memory_files"
 # Qualifies the Project-dependent snapshots (Working Project Context and Skill
 # catalog) with the Project they were rendered for. The working Project is
 # re-resolved at every Run admission (a Rooted Identity Agent may be re-rooted
@@ -53,7 +53,7 @@ class PinnedContextDependencies(Protocol):
 
     @property
     def sessions(self) -> ChatSessionManager:
-        """Session metadata store holding the pinned snapshots."""
+        """Session service holding the pinned snapshots as prompt pins."""
         ...
 
     @property
@@ -97,9 +97,9 @@ def pinned_skill_catalog(
 ) -> PinnedSkillCatalog:
     """Return the current prompt epoch's Skill catalog, snapshotting on first build.
 
-    The catalog text is stable between successful Compactions (persisted in
-    Session metadata under the Session's own ``project_id`` anchor), so an
-    ordinary mid-epoch Skill write leaves the System Prompt prefix unchanged.
+    The catalog text is stable between successful Compactions (pinned on the
+    Session at its own ``project_id`` anchor), so an ordinary mid-epoch Skill
+    write leaves the System Prompt prefix unchanged.
     Skill activation and ``/``-``$`` triggers still resolve the live registry.
     The snapshot is qualified with ``skill_project_id``, the Project whose Skill
     pool *skill_registry* resolves: when a re-rooted Identity Agent's Run resolves
@@ -109,7 +109,7 @@ def pinned_skill_catalog(
     """
     text = _pinned_epoch_text(
         dependencies,
-        PINNED_SKILL_CATALOG_META_KEY,
+        PINNED_SKILL_CATALOG_SLOT,
         agent_id,
         session_id,
         project_id,
@@ -124,8 +124,7 @@ def pinned_skill_catalog(
     return PinnedSkillCatalog(catalog_text=text)
 
 
-def replace_prompt_epoch_pins(
-    metadata: dict[str, Any],
+def prompt_epoch_pins(
     *,
     skill_catalog: PinnedSkillCatalog,
     skill_project_id: str | None,
@@ -134,36 +133,36 @@ def replace_prompt_epoch_pins(
     soul_context: str | None,
     memory_files_context: str | None,
     memory_prompt_mode: str | None,
-) -> None:
-    """Replace every prompt-epoch pin in *metadata* when a new epoch starts.
+) -> dict[str, dict[str, Any] | None]:
+    """Return every prompt-epoch pin a new epoch starts with, by pin slot.
 
-    Called inside a Session metadata mutation after a successful Compaction. Pins
-    are stored with the same qualifiers the per-Run readers check, so the next Run
-    reuses them exactly; a ``None`` text removes that pin.
+    A successful Compaction commits these with its checkpoint. Pins carry the
+    same qualifiers the per-Run readers check, so the next Run reuses them
+    exactly; a ``None`` value removes that pin.
     """
-    metadata[PINNED_SKILL_CATALOG_META_KEY] = {
-        "catalog_text": skill_catalog.catalog_text,
-        PINNED_PROJECT_ATTRIBUTE: skill_project_id,
+    pins: dict[str, dict[str, Any] | None] = {
+        PINNED_SKILL_CATALOG_SLOT: {
+            "catalog_text": skill_catalog.catalog_text,
+            PINNED_PROJECT_ATTRIBUTE: skill_project_id,
+        }
     }
-    pins: tuple[tuple[str, str | None, dict[str, str | None]], ...] = (
+    texts: tuple[tuple[str, str | None, dict[str, str | None]], ...] = (
         (
-            PINNED_WORKING_PROJECT_CONTEXT_META_KEY,
+            PINNED_WORKING_PROJECT_CONTEXT_SLOT,
             working_project_context,
             {PINNED_PROJECT_ATTRIBUTE: working_project_id},
         ),
-        (PINNED_SOUL_CONTEXT_META_KEY, soul_context, {}),
-        (PINNED_MEMORY_FILES_META_KEY, memory_files_context, {"mode": memory_prompt_mode}),
+        (PINNED_SOUL_CONTEXT_SLOT, soul_context, {}),
+        (PINNED_MEMORY_FILES_SLOT, memory_files_context, {"mode": memory_prompt_mode}),
     )
-    for meta_key, text, qualifiers in pins:
-        if text is None:
-            metadata.pop(meta_key, None)
-        else:
-            metadata[meta_key] = {"text": text, **qualifiers}
+    for slot, text, qualifiers in texts:
+        pins[slot] = None if text is None else {"text": text, **qualifiers}
+    return pins
 
 
 def _pinned_epoch_text(
     dependencies: PinnedContextDependencies,
-    meta_key: str,
+    slot: str,
     agent_id: str,
     session_id: str,
     project_id: str | None,
@@ -172,15 +171,15 @@ def _pinned_epoch_text(
     attributes: Mapping[str, str | None] | None = None,
     text_key: str = "text",
 ) -> str:
-    """Return the prompt epoch's pinned text under *meta_key*, snapshotting on first build.
+    """Return the prompt epoch's pinned text in *slot*, snapshotting on first build.
 
-    The rendered text is stable between successful Compactions (persisted in
-    Session metadata under the Session's own ``project_id`` anchor), so an
-    ordinary mid-epoch file change leaves the System Prompt prefix unchanged.
-    A successful Compaction replaces the snapshot; a new Session starts with a
-    fresh snapshot too. Attributes qualify the snapshot; a pin lacking an
-    attribute or carrying a different value is replaced, re-rendering only this
-    text (the Memory rendering mode, the Project of Project-dependent pins).
+    The rendered text is stable between successful Compactions (pinned on the
+    Session at its own ``project_id`` anchor), so an ordinary mid-epoch file
+    change leaves the System Prompt prefix unchanged. A successful Compaction
+    replaces the snapshot; a new Session starts with a fresh snapshot too.
+    Attributes qualify the snapshot; a pin lacking an attribute or carrying a
+    different value is replaced, re-rendering only this text (the Memory
+    rendering mode, the Project of Project-dependent pins).
     """
     # Local import: core.sessions transitively imports core.chat at module load,
     # and core.chat imports this package back (runtime cycle).
@@ -199,22 +198,19 @@ def _pinned_epoch_text(
             return None
         return pinned_text
 
-    reused = matching_text(dependencies.sessions.get_metadata(address).get(meta_key))
+    reused = matching_text(dependencies.sessions.prompt_pin(address, slot))
     if reused is not None:
         return reused
     text = render()
-    selected = text
-
-    def update(current: dict[str, Any]) -> None:
-        nonlocal selected
-        concurrent = matching_text(current.get(meta_key))
-        if concurrent is not None:
-            selected = concurrent
-        else:
-            current[meta_key] = {text_key: text, **qualifiers}
-
-    dependencies.sessions.mutate_metadata(address, update)
-    return selected
+    # A concurrent first build may have pinned an acceptable value meanwhile;
+    # every request of the epoch then uses that one.
+    pinned = dependencies.sessions.ensure_prompt_pin(
+        address,
+        slot,
+        {text_key: text, **qualifiers},
+        lambda current: matching_text(current) is not None,
+    )
+    return matching_text(pinned) or text
 
 
 def pinned_working_project_context(
@@ -242,7 +238,7 @@ def pinned_working_project_context(
     read_paths: list[Path] = []
     text = _pinned_epoch_text(
         dependencies,
-        PINNED_WORKING_PROJECT_CONTEXT_META_KEY,
+        PINNED_WORKING_PROJECT_CONTEXT_SLOT,
         agent_id,
         session_id,
         project_id,
@@ -280,7 +276,7 @@ def pinned_soul_context(
 
     text = _pinned_epoch_text(
         dependencies,
-        PINNED_SOUL_CONTEXT_META_KEY,
+        PINNED_SOUL_CONTEXT_SLOT,
         agent_id,
         session_id,
         project_id,
@@ -314,7 +310,7 @@ def pinned_memory_files(
 
     text = _pinned_epoch_text(
         dependencies,
-        PINNED_MEMORY_FILES_META_KEY,
+        PINNED_MEMORY_FILES_SLOT,
         agent_id,
         session_id,
         project_id,

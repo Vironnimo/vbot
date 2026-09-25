@@ -162,7 +162,7 @@ def test_session_list_follows_server_pages(
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
     cursor = {
-        "active_sort": 2460000,
+        "last_activity_at": "2026-09-20T10:00:00.000000Z",
         "agent_id": "assistant",
         "session_id": "session-one",
     }

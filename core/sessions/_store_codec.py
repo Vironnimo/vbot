@@ -1,121 +1,57 @@
-"""Canonical Message records, structured payloads and graph copying."""
+"""Entry rows: per-role storage, set-wise decoding and materialized copies.
+
+Every history item is one ``entries`` row; large or role-specific values live
+in 1:1 side tables. Reads select entry rows first and then fetch only the side
+tables their roles need, set-wise by ``entry_key``.
+"""
 # ruff: noqa: E501
 
 from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from core.chat.errors import ChatSessionError
 from core.sessions import _store_fts, _store_values
-from core.sessions._types import JsonObject, SessionRunCompletion
+from core.sessions._types import JsonObject, ToolResultFacts
 from core.sessions.errors import SessionStoreCorruptError
-from core.utils.ids import new_id
+from core.utils.timestamps import utc_now_timestamp
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
+    from core.sessions._store_lineage import ViewRange
 
 
-def _copy_session_messages(
-    connection: sqlite3.Connection,
-    *,
-    source_session_key: int,
-    target_session_key: int,
-) -> None:
-    """Fork a relational snapshot with new storage identities and exact provenance."""
-    offset = _store_values._allocate_history_key(connection)
-    maximum = connection.execute(
-        "SELECT COALESCE(MAX(message_key),0) FROM history_records WHERE session_key=?",
-        (source_session_key,),
-    ).fetchone()[0]
-    connection.execute(
-        "UPDATE store_meta SET value=? WHERE key='history_identity'", (str(offset + maximum),)
-    )
-
-    def copy(table, replacements, where, params):
-        columns = [
-            str(row[1])
-            for row in connection.execute(f"PRAGMA table_xinfo({table})")
-            if not row[6] and replacements.get(str(row[1]), "") is not None
-        ]
-        expressions = [replacements.get(column, "source." + column) for column in columns]
-        connection.execute(
-            f"INSERT INTO {table} ({', '.join(columns)}) SELECT {', '.join(expressions)} "
-            f"FROM {table} source WHERE {where}",
-            params,
-        )
-
-    scope = "source.session_key=?"
-    replacement = {"session_key": str(target_session_key)}
-    copy(
-        "runs",
-        {
-            **replacement,
-            "run_key": None,
-            "status": "CASE WHEN source.status='running' THEN 'interrupted' ELSE source.status END",
-            "completed_at": "CASE WHEN source.status='running' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE source.completed_at END",
-            "completion_reason": "CASE WHEN source.status='running' THEN 'fork_snapshot' ELSE source.completion_reason END",
-            "contributes_to_activity": "0",
-            "terminal_key": f"source.terminal_key + {offset}",
-            "origin_generation_id": f"COALESCE(source.origin_generation_id, (SELECT generation_id FROM sessions WHERE session_key={source_session_key}))",
-        },
-        scope,
-        (source_session_key,),
-    )
-    copy(
-        "messages",
-        {**replacement, "message_key": f"source.message_key + {offset}"},
-        scope,
-        (source_session_key,),
-    )
-    for table in (
-        "assistant_messages",
-        "assistant_output_files",
-        "user_message_senders",
-        "error_messages",
-        "tool_calls",
-    ):
-        replacements: dict[str, str | None] = {"message_key": f"source.message_key + {offset}"}
-        if table == "tool_calls":
-            replacements.update(
-                tool_call_key=None,
-                result_key=f"source.result_key + {offset}",
-                status="CASE WHEN source.status IN ('pending','running') THEN 'interrupted' ELSE source.status END",
-                completed_at="CASE WHEN source.status IN ('pending','running') THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE source.completed_at END",
-            )
-        copy(
-            table,
-            replacements,
-            "source.message_key IN (SELECT message_key FROM messages WHERE session_key=?)",
-            (source_session_key,),
-        )
-    copy(
-        "compaction_checkpoints",
-        {**replacement, "snapshot_key": f"source.snapshot_key + {offset}"},
-        scope,
-        (source_session_key,),
-    )
-    copy(
-        "history_edits",
-        {**replacement, "edit_key": f"source.edit_key + {offset}"},
-        scope,
-        (source_session_key,),
-    )
-    connection.execute(
-        "INSERT INTO run_change_paths(run_key, ordinal, path) "
-        "SELECT target.run_key, p.ordinal, p.path FROM run_change_paths p "
-        "JOIN runs source ON source.run_key=p.run_key JOIN runs target "
-        "ON target.session_key=? AND target.run_id=source.run_id WHERE source.session_key=?",
-        (target_session_key, source_session_key),
-    )
-    _store_fts._insert_fts_session(connection, target_session_key)
+# The entry columns every read selects; ``e`` names ``entries``.
+ENTRY_COLUMNS = (
+    "e.entry_key, e.session_key, e.seq, e.role, e.entry_id, e.created_at, e.run_key, "
+    "e.model, e.superseded_at_seq"
+)
+# Roles a plain append may write. Run footers belong to ``finish_run`` and edit
+# markers to ``apply_edit``, which keep their relations consistent.
+APPENDABLE_ROLES = frozenset(
+    {
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "note",
+        "error",
+        "compaction_checkpoint",
+        "agent_takeover",
+    }
+)
+TOOL_RESULT_STATUSES = frozenset({"completed", "failed", "cancelled"})
+# Roles without an ``entry_text`` row.
+_TEXTLESS_ROLES = frozenset({"run_summary", "history_edit"})
 
 
 def _split_structured_fields(
     payload: JsonObject | None,
-    validators: dict[str, Callable[[Any], bool]],
+    validators: Mapping[str, Callable[[Any], bool]],
 ) -> tuple[dict[str, Any], str | None, bool]:
     """Promote stable fields while retaining unknown/future fields losslessly."""
     if payload is None:
@@ -153,466 +89,237 @@ def _timing_fields(
     )
 
 
-def _deactivate_history_tail(
-    connection: sqlite3.Connection, session_key: int, target_message_id: str
+_USAGE_VALIDATORS: dict[str, Callable[[Any], bool]] = {
+    "input_tokens": _is_non_negative_int,
+    "output_tokens": _is_non_negative_int,
+    "cache_read_tokens": _is_non_negative_int,
+    "cache_write_tokens": _is_non_negative_int,
+    "reasoning_tokens": _is_non_negative_int,
+    "estimated": _is_bool,
+    "input_tokens_estimated": _is_bool,
+    "output_tokens_estimated": _is_bool,
+}
+_CHECKPOINT_USAGE_VALIDATORS: dict[str, Callable[[Any], bool]] = {
+    "compacted_token_count": _is_non_negative_int,
+    "context_tokens_before": _is_non_negative_int,
+    "context_tokens_after": _is_non_negative_int,
+    "compaction_duration_ms": _is_non_negative_int,
+}
+_USAGE_FLAG_COLUMNS = (
+    ("estimated", "usage_estimated"),
+    ("input_tokens_estimated", "input_tokens_estimated"),
+    ("output_tokens_estimated", "output_tokens_estimated"),
+)
+_USAGE_COUNT_COLUMNS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "reasoning_tokens",
+)
+
+
+def validate_appendable(message: ChatMessage) -> None:
+    """Validate one Message a plain append may persist."""
+    message.validate()
+    if message.role not in APPENDABLE_ROLES:
+        raise ChatSessionError(f"{message.role} entries are written by their Session operation")
+    if message.role == "compaction_checkpoint" and message.projection is None:
+        raise ChatSessionError("legacy compaction checkpoints without a projection are not stored")
+
+
+def validate_tool_results(
+    messages: Sequence[ChatMessage], tool_results: Mapping[str, ToolResultFacts]
 ) -> None:
-    target = connection.execute(
-        """
-        SELECT message_key, seq
-        FROM history_records
-        WHERE session_key = ? AND message_id = ? AND role = 'user' AND active = 1
-        ORDER BY seq
-        LIMIT 1
-        """,
-        (session_key, target_message_id),
-    ).fetchone()
-    if target is None:
-        raise ChatSessionError(f"history edit target is not active: {target_message_id}")
-    floor = int(target["seq"])
-    _store_fts._delete_fts_session(connection, session_key, from_sequence=floor)
-    connection.execute(
-        "UPDATE messages SET active=0 WHERE session_key=? AND seq>=?", (session_key, floor)
-    )
-    connection.execute(
-        "UPDATE compaction_checkpoints SET active=0 WHERE session_key=? AND seq>=?",
-        (session_key, floor),
-    )
-    connection.execute(
-        "UPDATE runs SET terminal_active=0 WHERE session_key=? AND terminal_sequence>=?",
-        (session_key, floor),
-    )
-    connection.execute(
-        "UPDATE tool_calls SET result_active=0 WHERE result_sequence>=? AND message_key IN (SELECT message_key FROM messages WHERE session_key=?)",
-        (floor, session_key),
-    )
+    """Every fact must describe one Tool result of the same batch."""
+    result_ids = {message.tool_call_id for message in messages if message.role == "tool"}
+    for call_id, facts in tool_results.items():
+        if call_id not in result_ids:
+            raise ChatSessionError(f"Tool result facts have no Tool result: {call_id}")
+        if not isinstance(facts, ToolResultFacts) or facts.status not in TOOL_RESULT_STATUSES:
+            raise ChatSessionError(f"Tool result facts are invalid: {call_id}")
+        if (
+            (facts.ok is not None and not isinstance(facts.ok, bool))
+            or (facts.error_code is not None and not isinstance(facts.error_code, str))
+            or (facts.error_retryable is not None and not isinstance(facts.error_retryable, bool))
+            or (facts.error_attempts is not None and not _is_non_negative_int(facts.error_attempts))
+        ):
+            raise ChatSessionError(f"Tool result facts are invalid: {call_id}")
 
 
-def _insert_message(
+def _text_row(message: ChatMessage) -> tuple[str | None, str | None, str | None] | None:
+    if message.role in _TEXTLESS_ROLES or message.content is None:
+        return None
+    if isinstance(message.content, str):
+        return message.content, None, None
+    from core.chat.content_blocks import content_block_to_dict
+    from core.recall.canonical import content_to_text
+
+    blocks = [content_block_to_dict(block) for block in message.content]
+    return None, _store_values._optional_json(blocks, "content"), content_to_text(message.content)
+
+
+def insert_entry(
     connection: sqlite3.Connection,
     session_key: int,
-    sequence: int,
+    seq: int,
     message: ChatMessage,
     *,
-    index_fts: bool = True,
-    run_id: str | None = None,
-    assistant_message_id: str | None = None,
+    run_key: int | None,
+    superseded_at_seq: int | None = None,
 ) -> int:
-    if run_id is not None:
-        run = connection.execute(
-            "SELECT status,origin_generation_id FROM runs WHERE session_key=? AND run_id=?",
-            (session_key, run_id),
-        ).fetchone()
-        if run is None or run["status"] != "running" or run["origin_generation_id"] is not None:
-            raise ChatSessionError("Messages require an admitted, running Run in this Session")
-    if message.role in {"history_edit", "agent_takeover"}:
-        connection.execute(
-            "UPDATE sessions SET history_reset_sequence=? WHERE session_key=?",
-            (sequence + 1, session_key),
-        )
-    if message.role == "tool":
-        return _complete_tool(
-            connection,
-            session_key,
-            sequence,
-            message,
-            run_id=run_id,
-            assistant_message_id=assistant_message_id,
-            index_fts=index_fts,
-        )
-    if message.role == "run_summary":
-        return _finish_run(connection, session_key, sequence, message)
-    if message.role == "compaction_checkpoint":
-        key = _save_context(connection, session_key, sequence, message, run_id=run_id)
-        if index_fts:
-            _store_fts._insert_fts_message(connection, key)
-        return key
-    if message.role == "history_edit":
-        if message.target_message_id is None:
-            raise ChatSessionError("history edit target is missing")
-        _deactivate_history_tail(connection, session_key, message.target_message_id)
-        cursor = connection.execute(
-            "INSERT INTO history_edits(edit_key, session_key, seq, message_id, timestamp, target_message_id) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                _store_values._allocate_history_key(connection),
-                session_key,
-                sequence,
-                message.id,
-                message.timestamp,
-                message.target_message_id,
-            ),
-        )
-        assert cursor.lastrowid is not None
-        return int(cursor.lastrowid)
+    """Write one validated Message as an entry with its side rows; return its key.
+
+    Tool results are linked to their call separately (:func:`link_tool_result`).
+    """
     cursor = connection.execute(
-        _store_values._MESSAGE_INSERT,
+        "INSERT INTO entries (session_key, seq, role, entry_id, created_at, run_key, model, "
+        "searchable, superseded_at_seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
-            _store_values._allocate_history_key(connection),
             session_key,
-            sequence,
-            *_message_base_row(message),
-            run_id,
+            seq,
+            message.role,
+            message.id,
+            _store_values._timestamp(message.timestamp, "Message timestamp"),
+            run_key,
+            message.model,
+            int(_store_fts._message_is_searchable(message)),
+            superseded_at_seq,
         ),
     )
     if cursor.lastrowid is None:
-        raise SessionStoreCorruptError("SQLite did not return a canonical message key")
-    message_key = int(cursor.lastrowid)
-
-    if message.role == "assistant":
-        usage, usage_extra, usage_present = _split_structured_fields(
-            message.usage,
-            {
-                "input_tokens": _is_non_negative_int,
-                "output_tokens": _is_non_negative_int,
-                "cache_read_tokens": _is_non_negative_int,
-                "cache_write_tokens": _is_non_negative_int,
-                "reasoning_tokens": _is_non_negative_int,
-                "estimated": _is_bool,
-                "input_tokens_estimated": _is_bool,
-                "output_tokens_estimated": _is_bool,
-            },
-        )
-        reasoning_timing, reasoning_timing_extra, _timing_present = _timing_fields(
-            message.reasoning_timing
-        )
+        raise SessionStoreCorruptError("SQLite did not return an entry key")
+    entry_key = int(cursor.lastrowid)
+    text = _text_row(message)
+    if text is not None:
         connection.execute(
-            """
-            INSERT INTO assistant_messages (
-                message_key, reasoning, reasoning_meta_json, reasoning_scope,
-                reasoning_started_at, reasoning_completed_at, reasoning_duration_ms,
-                reasoning_timing_extra_json, phase, input_tokens, output_tokens, reasoning_summary_json,
-                cache_read_tokens, cache_write_tokens, reasoning_tokens, usage_estimated,
-                input_tokens_estimated, output_tokens_estimated, usage_present,
-                usage_extra_json, tool_calls_present, interrupted, interruption_cause
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+            "INSERT INTO entry_text (entry_key, content, blocks_json, search_text) VALUES (?, ?, ?, ?)",
+            (entry_key, *text),
+        )
+    match message.role:
+        case "assistant":
+            _insert_assistant(connection, entry_key, message)
+        case "user" if message.sender is not None:
+            connection.execute(
+                "INSERT INTO user_entry_senders (entry_key, sender_id, display_name, sender_role) "
+                "VALUES (?, ?, ?, ?)",
+                (entry_key, message.sender.id, message.sender.display_name, message.sender.role),
+            )
+        case "error":
+            connection.execute(
+                "INSERT INTO error_entries (entry_key, error_kind) VALUES (?, ?)",
+                (entry_key, message.error_kind),
+            )
+        case "history_edit":
+            connection.execute(
+                "INSERT INTO history_edit_entries (entry_key, target_entry_id) VALUES (?, ?)",
+                (entry_key, message.target_message_id),
+            )
+        case "compaction_checkpoint":
+            _insert_checkpoint(connection, entry_key, message)
+    return entry_key
+
+
+def _insert_assistant(connection: sqlite3.Connection, entry_key: int, message: ChatMessage) -> None:
+    usage, usage_extra, usage_present = _split_structured_fields(message.usage, _USAGE_VALIDATORS)
+    timing, timing_extra, _timing_present = _timing_fields(message.reasoning_timing)
+    connection.execute(
+        "INSERT INTO assistant_entries (entry_key, phase, reasoning_scope, has_tool_calls, "
+        "interrupted, interruption_cause, usage_present, input_tokens, output_tokens, "
+        "cache_read_tokens, cache_write_tokens, reasoning_tokens, usage_estimated, "
+        "input_tokens_estimated, output_tokens_estimated, reasoning_started_at, "
+        "reasoning_completed_at, reasoning_duration_ms, usage_extra_json, "
+        "reasoning_timing_extra_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            entry_key,
+            message.phase,
+            message.reasoning_scope,
+            int(message.tool_calls is not None),
+            int(message.interrupted),
+            message.interruption_cause,
+            int(usage_present),
+            *(usage.get(column) for column in _USAGE_COUNT_COLUMNS),
+            *(
+                None if key not in usage else int(usage[key])
+                for key, _column in _USAGE_FLAG_COLUMNS
+            ),
+            _store_values._optional_timestamp(timing.get("started_at"), "reasoning timing"),
+            _store_values._optional_timestamp(timing.get("completed_at"), "reasoning timing"),
+            timing.get("duration_ms"),
+            usage_extra,
+            timing_extra,
+        ),
+    )
+    if (
+        message.reasoning is not None
+        or message.reasoning_summary is not None
+        or message.reasoning_meta is not None
+    ):
+        connection.execute(
+            "INSERT INTO assistant_reasoning (entry_key, reasoning, summary_json, meta_json) "
+            "VALUES (?, ?, ?, ?)",
             (
-                message_key,
+                entry_key,
                 message.reasoning,
+                _store_values._optional_json(message.reasoning_summary, "reasoning_summary"),
                 _store_values._optional_json(message.reasoning_meta, "reasoning_meta"),
-                message.reasoning_scope,
-                reasoning_timing.get("started_at"),
-                reasoning_timing.get("completed_at"),
-                reasoning_timing.get("duration_ms"),
-                reasoning_timing_extra,
-                message.phase,
-                usage.get("input_tokens"),
-                usage.get("output_tokens"),
-                json.dumps(message.reasoning_summary, ensure_ascii=False)
-                if message.reasoning_summary is not None
-                else None,
-                usage.get("cache_read_tokens"),
-                usage.get("cache_write_tokens"),
-                usage.get("reasoning_tokens"),
-                None if "estimated" not in usage else int(bool(usage["estimated"])),
-                (
-                    None
-                    if "input_tokens_estimated" not in usage
-                    else int(bool(usage["input_tokens_estimated"]))
-                ),
-                (
-                    None
-                    if "output_tokens_estimated" not in usage
-                    else int(bool(usage["output_tokens_estimated"]))
-                ),
-                int(usage_present),
-                usage_extra,
-                int(message.tool_calls is not None),
-                int(message.interrupted),
-                message.interruption_cause,
             ),
         )
-        for ordinal, tool_call in enumerate(message.tool_calls or ()):
-            rejection = tool_call.rejection
-            connection.execute(
-                """
-                INSERT INTO tool_calls (
-                    message_key, ordinal, tool_call_id, name, arguments_json,
-                    rejection_code, rejection_message, rejection_fingerprint,
-                    argument_sequence_index, argument_sequence_length
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    message_key,
-                    ordinal,
-                    tool_call.id,
-                    tool_call.name,
-                    _store_values._json_object(tool_call.arguments, "tool call arguments"),
-                    None if rejection is None else rejection.code,
-                    None if rejection is None else rejection.message,
-                    None if rejection is None else rejection.fingerprint,
-                    tool_call.argument_sequence_index,
-                    tool_call.argument_sequence_length,
-                ),
-            )
-        for ordinal, reference in enumerate(message.output_files or ()):
-            connection.execute(
-                """
-                INSERT INTO assistant_output_files (
-                    message_key, ordinal, path, line_index, start_index, end_index
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    message_key,
-                    ordinal,
-                    reference.path,
-                    reference.line_index,
-                    reference.start_index,
-                    reference.end_index,
-                ),
-            )
-    elif message.role == "user" and message.sender is not None:
+    for ordinal, tool_call in enumerate(message.tool_calls or ()):
+        rejection = tool_call.rejection
+        cursor = connection.execute(
+            "INSERT INTO tool_calls (entry_key, ordinal, call_id, name, status, rejection_code, "
+            "rejection_fingerprint, argument_sequence_index, argument_sequence_length) "
+            "VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
+            (
+                entry_key,
+                ordinal,
+                tool_call.id,
+                tool_call.name,
+                None if rejection is None else rejection.code,
+                None if rejection is None else rejection.fingerprint,
+                tool_call.argument_sequence_index,
+                tool_call.argument_sequence_length,
+            ),
+        )
         connection.execute(
-            """
-            INSERT INTO user_message_senders (
-                message_key, sender_id, display_name, role
-            ) VALUES (?, ?, ?, ?)
-            """,
-            (message_key, message.sender.id, message.sender.display_name, message.sender.role),
+            "INSERT INTO tool_call_payloads (call_key, arguments_json, rejection_message) "
+            "VALUES (?, ?, ?)",
+            (
+                cursor.lastrowid,
+                _store_values._json_object(tool_call.arguments, "tool call arguments"),
+                None if rejection is None else rejection.message,
+            ),
         )
-    elif message.role == "error":
-        connection.execute(
-            "INSERT INTO error_messages (message_key, error_kind) VALUES (?, ?)",
-            (message_key, message.error_kind),
-        )
-
-    if index_fts:
-        _store_fts._insert_fts_message(connection, message_key)
-    return message_key
-
-
-def message_from_row(row: sqlite3.Row) -> ChatMessage:
-    """Reconstruct one canonical ChatMessage from normalized SQLite columns."""
-    from core.chat.messages import ChatMessage
-
-    try:
-        data: JsonObject = {
-            "id": str(row["message_id"]),
-            "role": str(row["role"]),
-            "timestamp": str(row["timestamp"]),
-        }
-        content_blocks = row["content_blocks_json"]
-        if content_blocks is not None:
-            data["content"] = json.loads(str(content_blocks))
-        elif row["content"] is not None or row["role_content"] is not None:
-            data["content"] = str(
-                row["content"] if row["content"] is not None else row["role_content"]
+    connection.executemany(
+        "INSERT INTO assistant_output_files (entry_key, ordinal, path, line_index, start_index, "
+        "end_index) VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (
+                entry_key,
+                ordinal,
+                reference.path,
+                reference.line_index,
+                reference.start_index,
+                reference.end_index,
             )
-        scalar_fields = (
-            "model",
-            "reasoning",
-            "reasoning_scope",
-            "phase",
-            "tool_call_id",
-            "name",
-            "error_kind",
-            "tail_boundary_id",
-            "compaction_policy",
-            "compaction_strategy",
-            "run_id",
-            "work_id",
-            "status",
-            "iteration_count",
-            "target_message_id",
-            "interruption_cause",
-        )
-        for field in scalar_fields:
-            if row[field] is not None:
-                data[field] = row[field]
-        json_fields = {
-            "reasoning_meta_json": "reasoning_meta",
-            "reasoning_summary_json": "reasoning_summary",
-            "tool_display_json": "tool_display",
-            "projection_json": "projection",
-        }
-        for column, field in json_fields.items():
-            if row[column] is not None:
-                data[field] = json.loads(str(row[column]))
-        if (
-            row["reasoning_started_at"] is not None
-            or row["reasoning_timing_extra_json"] is not None
-        ):
-            timing = (
-                {}
-                if row["reasoning_timing_extra_json"] is None
-                else json.loads(str(row["reasoning_timing_extra_json"]))
-            )
-            for key, column in (
-                ("started_at", "reasoning_started_at"),
-                ("completed_at", "reasoning_completed_at"),
-                ("duration_ms", "reasoning_duration_ms"),
-            ):
-                if row[column] is not None:
-                    timing[key] = row[column]
-            data["reasoning_timing"] = timing
-        if bool(row["usage_present"] or row["compaction_usage_present"]):
-            extra_column = (
-                "usage_extra_json" if row["usage_present"] else "compaction_usage_extra_json"
-            )
-            usage = {} if row[extra_column] is None else json.loads(str(row[extra_column]))
-            usage_columns = (
-                ("input_tokens", "input_tokens"),
-                ("output_tokens", "output_tokens"),
-                ("cache_read_tokens", "cache_read_tokens"),
-                ("cache_write_tokens", "cache_write_tokens"),
-                ("reasoning_tokens", "reasoning_tokens"),
-                ("estimated", "usage_estimated"),
-                ("input_tokens_estimated", "input_tokens_estimated"),
-                ("output_tokens_estimated", "output_tokens_estimated"),
-                ("compacted_token_count", "compacted_token_count"),
-                ("context_tokens_before", "context_tokens_before"),
-                ("context_tokens_after", "context_tokens_after"),
-                ("compaction_duration_ms", "compaction_duration_ms"),
-            )
-            for key, column in usage_columns:
-                if row[column] is not None:
-                    usage[key] = (
-                        bool(row[column])
-                        if column
-                        in {
-                            "usage_estimated",
-                            "input_tokens_estimated",
-                            "output_tokens_estimated",
-                        }
-                        else row[column]
-                    )
-            data["usage"] = usage
-        if row["timing_started_at"] is not None or row["run_started_at"] is not None:
-            is_run = row["run_started_at"] is not None
-            prefix = "run_" if is_run else "timing_"
-            extra_column = "run_timing_extra_json" if is_run else "timing_extra_json"
-            timing = {} if row[extra_column] is None else json.loads(str(row[extra_column]))
-            for key, suffix in (
-                ("started_at", "started_at"),
-                ("completed_at", "completed_at"),
-                ("duration_ms", "duration_ms"),
-            ):
-                value = row[f"{prefix}{suffix}"]
-                if value is not None:
-                    timing[key] = value
-            data["timing"] = timing
-        if bool(row["tool_calls_present"]):
-            calls: list[JsonObject] = []
-            for values in json.loads(str(row["tool_call_rows_json"] or "[]")):
-                call: JsonObject = {
-                    "id": values[0],
-                    "name": values[1],
-                    "arguments": json.loads(values[2]),
-                }
-                if values[3] is not None:
-                    call["rejection"] = {
-                        "code": values[3],
-                        "message": values[4],
-                        "fingerprint": values[5],
-                    }
-                if values[6] is not None:
-                    call["argument_sequence_index"] = values[6]
-                    call["argument_sequence_length"] = values[7]
-                calls.append(call)
-            data["tool_calls"] = calls
-        if row["sender_id"] is not None:
-            data["sender"] = {
-                "id": row["sender_id"],
-                "display_name": row["sender_display_name"],
-                "role": row["sender_role"],
-            }
-        if row["output_file_rows_json"] is not None:
-            data["output_files"] = [
-                {
-                    "path": values[0],
-                    "line_index": values[1],
-                    **({} if values[2] is None else {"start_index": values[2]}),
-                    **({} if values[3] is None else {"end_index": values[3]}),
-                }
-                for values in json.loads(str(row["output_file_rows_json"]))
-            ]
-        if row["changed_files"] is not None:
-            changes = (
-                {}
-                if row["change_stats_extra_json"] is None
-                else json.loads(str(row["change_stats_extra_json"]))
-            )
-            changes.update(
-                {
-                    "files": row["changed_files"],
-                    "added": row["lines_added"],
-                    "removed": row["lines_removed"],
-                    "paths": json.loads(str(row["change_paths_json"] or "[]")),
-                }
-            )
-            data["change_stats"] = changes
-        if bool(row["interrupted"]):
-            data["interrupted"] = True
-        return ChatMessage.from_dict(data)
-    except (json.JSONDecodeError, IndexError, KeyError, TypeError, ValueError) as exc:
-        raise SessionStoreCorruptError("invalid canonical Session message") from exc
-
-
-def _message_base_row(message: ChatMessage) -> tuple[Any, ...]:
-    message.validate()
-    content = (
-        message.content if isinstance(message.content, str) and message.role != "tool" else None
-    )
-    content_blocks = message.content if isinstance(message.content, list) else None
-    if content_blocks is None:
-        content_search = None
-        content_blocks_json = None
-    else:
-        from core.chat.content_blocks import content_block_to_dict
-        from core.recall.canonical import content_to_text
-
-        content_search = content_to_text(content_blocks)
-        content_blocks_json = _store_values._optional_json(
-            [content_block_to_dict(block) for block in content_blocks], "content"
-        )
-    return (
-        message.id,
-        message.role,
-        message.timestamp,
-        content,
-        content_blocks_json,
-        content_search,
-        message.model,
-        int(message.role != "history_edit"),
-        int(_store_fts._message_is_searchable(message)),
+            for ordinal, reference in enumerate(message.output_files or ())
+        ],
     )
 
 
-def _save_context(
-    connection: sqlite3.Connection,
-    session_key: int,
-    sequence: int,
-    message: ChatMessage,
-    *,
-    run_id: str | None,
-) -> int:
+def _insert_checkpoint(
+    connection: sqlite3.Connection, entry_key: int, message: ChatMessage
+) -> None:
     usage, usage_extra, usage_present = _split_structured_fields(
-        message.usage,
-        {
-            "compacted_token_count": _is_non_negative_int,
-            "context_tokens_before": _is_non_negative_int,
-            "context_tokens_after": _is_non_negative_int,
-            "compaction_duration_ms": _is_non_negative_int,
-        },
+        message.usage, _CHECKPOINT_USAGE_VALIDATORS
     )
-    cursor = connection.execute(
-        """
-        INSERT INTO compaction_checkpoints (
-            snapshot_key, session_key, seq, run_id, message_id, timestamp, content, tail_boundary_id, projection_json, policy, strategy,
-            compacted_token_count, context_tokens_before, context_tokens_after,
-            compaction_duration_ms, usage_present, usage_extra_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
+    connection.execute(
+        "INSERT INTO checkpoint_entries (entry_key, policy, strategy, compacted_token_count, "
+        "context_tokens_before, context_tokens_after, duration_ms, usage_present, "
+        "usage_extra_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
-            _store_values._allocate_history_key(connection),
-            session_key,
-            sequence,
-            run_id,
-            message.id,
-            message.timestamp,
-            message.content,
-            message.tail_boundary_id,
-            _store_values._optional_json(message.projection, "projection"),
+            entry_key,
             message.compaction_policy,
             message.compaction_strategy,
             usage.get("compacted_token_count"),
@@ -623,127 +330,607 @@ def _save_context(
             usage_extra,
         ),
     )
-    assert cursor.lastrowid is not None
-    return int(cursor.lastrowid)
-
-
-def _finish_run(
-    connection: sqlite3.Connection,
-    session_key: int,
-    sequence: int,
-    message: ChatMessage | SessionRunCompletion,
-) -> int:
-    timing, timing_extra, _timing_present = _timing_fields(message.timing)
-    changes, changes_extra, changes_present = _split_structured_fields(
-        message.change_stats,
-        {
-            "files": _is_non_negative_int,
-            "added": _is_non_negative_int,
-            "removed": _is_non_negative_int,
-            "paths": lambda value: (
-                isinstance(value, list) and all(isinstance(path, str) for path in value)
-            ),
-        },
-    )
-    row = connection.execute(
-        "SELECT run_key FROM runs WHERE session_key=? AND run_id=? AND status='running'",
-        (session_key, message.run_id),
-    ).fetchone()
-    if row is None:
-        raise ChatSessionError("Only an admitted running Run can be completed")
-    run_key = int(row[0])
-    terminal_key = _store_values._allocate_history_key(connection)
     connection.execute(
-        "UPDATE runs SET work_id=?, status=?, started_at=?, completed_at=?, duration_ms=?, "
-        "timing_extra_json=?, iteration_count=?, changed_files=?, lines_added=?, lines_removed=?, "
-        "change_stats_extra_json=?, terminal_sequence=?, terminal_id=?, terminal_key=?, completion_reason=? WHERE run_key=?",
-        (
-            message.work_id,
-            message.status,
-            timing.get("started_at"),
-            timing.get("completed_at"),
-            timing.get("duration_ms"),
-            timing_extra,
-            message.iteration_count,
-            changes.get("files") if changes_present else None,
-            changes.get("added") if changes_present else None,
-            changes.get("removed") if changes_present else None,
-            changes_extra,
-            sequence,
-            new_id("msg") if isinstance(message, SessionRunCompletion) else message.id,
-            terminal_key,
-            message.completion_reason if isinstance(message, SessionRunCompletion) else None,
-            run_key,
-        ),
+        "INSERT INTO checkpoint_projections (entry_key, projection_json) VALUES (?, ?)",
+        (entry_key, _store_values._optional_json(message.projection, "projection")),
     )
-    for ordinal, path in enumerate(changes.get("paths", ())):
-        connection.execute(
-            "INSERT INTO run_change_paths (run_key, ordinal, path) VALUES (?, ?, ?)",
-            (run_key, ordinal, path),
-        )
-    return terminal_key
 
 
-def _complete_tool(
+def link_tool_result(
     connection: sqlite3.Connection,
     session_key: int,
-    sequence: int,
+    entry_key: int,
     message: ChatMessage,
     *,
-    run_id: str | None,
+    run_key: int | None,
     assistant_message_id: str | None,
-    index_fts: bool,
-) -> int:
-    clauses = ["m.session_key=?", "tc.tool_call_id=?"]
-    values: list[Any] = [session_key, message.tool_call_id]
-    if run_id is not None:
-        clauses.append("m.run_id=?")
-        values.append(run_id)
+    facts: ToolResultFacts | None,
+) -> None:
+    """Attach one stored Tool result to the single open call it answers."""
+    clauses = ["c.call_id = ?", "e.session_key = ?"]
+    values: list[Any] = [message.tool_call_id, session_key]
+    if run_key is not None:
+        clauses.append("e.run_key = ?")
+        values.append(run_key)
     if assistant_message_id is not None:
-        clauses.append("m.message_id=?")
+        clauses.append("e.entry_id = ?")
         values.append(assistant_message_id)
     rows = connection.execute(
-        "SELECT tc.tool_call_key, tc.result_id FROM tool_calls tc JOIN messages m "
-        "ON m.message_key=tc.message_key WHERE " + " AND ".join(clauses),
+        "SELECT c.call_key, c.result_entry_key FROM tool_calls AS c "
+        "JOIN entries AS e ON e.entry_key = c.entry_key WHERE " + " AND ".join(clauses),
         values,
     ).fetchall()
     if len(rows) != 1:
         raise ChatSessionError("Tool result must identify exactly one stored invocation")
-    if rows[0]["result_id"] is not None:
+    if rows[0]["result_entry_key"] is not None:
         raise ChatSessionError("Tool invocation already has a result")
-    timing, timing_extra, _ = _timing_fields(message.timing)
-    key = int(rows[0]["tool_call_key"])
-    try:
-        result = json.loads(message.content) if isinstance(message.content, str) else None
-    except json.JSONDecodeError:
-        result = None
-    status = "completed"
-    if isinstance(result, dict) and result.get("ok") is False:
-        error = result.get("error")
-        code = error.get("code") if isinstance(error, dict) else None
-        status = (
-            "cancelled" if code in {"cancelled", "tool_cancelled", "user_cancelled"} else "failed"
-        )
-    result_key = _store_values._allocate_history_key(connection)
+    call_key = int(rows[0]["call_key"])
+    timing, timing_extra, _present = _timing_fields(message.timing)
     connection.execute(
-        "UPDATE tool_calls SET result_id=?, result_sequence=?, result_timestamp=?, "
-        "result_content=?, status=?, started_at=?, completed_at=?, duration_ms=?, "
-        "timing_extra_json=?, display_json=?, result_key=? WHERE tool_call_key=?",
+        "UPDATE tool_calls SET result_entry_key = ?, status = ?, result_ok = ?, error_code = ?, "
+        "error_retryable = ?, error_attempts = ?, started_at = ?, completed_at = ?, "
+        "duration_ms = ? WHERE call_key = ?",
         (
-            message.id,
-            sequence,
-            message.timestamp,
-            message.content,
-            status,
-            timing.get("started_at"),
-            timing.get("completed_at"),
+            entry_key,
+            "completed" if facts is None else facts.status,
+            None if facts is None or facts.ok is None else int(facts.ok),
+            None if facts is None else facts.error_code,
+            None if facts is None or facts.error_retryable is None else int(facts.error_retryable),
+            None if facts is None else facts.error_attempts,
+            _store_values._optional_timestamp(timing.get("started_at"), "Tool timing"),
+            _store_values._optional_timestamp(timing.get("completed_at"), "Tool timing"),
             timing.get("duration_ms"),
-            timing_extra,
-            _store_values._optional_json(message.tool_display, "tool_display"),
-            result_key,
-            key,
+            call_key,
         ),
     )
-    if index_fts:
-        _store_fts._insert_fts_message(connection, result_key)
-    return result_key
+    connection.execute(
+        "UPDATE tool_call_payloads SET display_json = ?, timing_extra_json = ? WHERE call_key = ?",
+        (
+            _store_values._optional_json(message.tool_display, "tool_display"),
+            timing_extra,
+            call_key,
+        ),
+    )
+
+
+@dataclass
+class EntryBatch:
+    """Entry rows with their side rows, decoded to Messages after the read.
+
+    Selecting runs inside the read transaction; :meth:`messages` builds the
+    ChatMessages afterwards, once per entry key.
+    """
+
+    rows: list[sqlite3.Row]
+    text: dict[int, sqlite3.Row] = field(default_factory=dict)
+    assistants: dict[int, sqlite3.Row] = field(default_factory=dict)
+    reasoning: dict[int, sqlite3.Row] = field(default_factory=dict)
+    output_files: dict[int, list[sqlite3.Row]] = field(default_factory=dict)
+    tool_calls: dict[int, list[sqlite3.Row]] = field(default_factory=dict)
+    tool_results: dict[int, sqlite3.Row] = field(default_factory=dict)
+    senders: dict[int, sqlite3.Row] = field(default_factory=dict)
+    errors: dict[int, sqlite3.Row] = field(default_factory=dict)
+    edits: dict[int, sqlite3.Row] = field(default_factory=dict)
+    checkpoints: dict[int, sqlite3.Row] = field(default_factory=dict)
+    run_ids: dict[int, str] = field(default_factory=dict)
+    run_summaries: dict[int, sqlite3.Row] = field(default_factory=dict)
+    change_paths: dict[int, list[str]] = field(default_factory=dict)
+    _decoded: dict[int, ChatMessage] = field(default_factory=dict)
+
+    def messages(self) -> list[ChatMessage]:
+        return [self.message(row) for row in self.rows]
+
+    def message(self, row: sqlite3.Row) -> ChatMessage:
+        key = int(row["entry_key"])
+        decoded = self._decoded.get(key)
+        if decoded is None:
+            decoded = self._decode(row)
+            self._decoded[key] = decoded
+        return decoded
+
+    def _decode(self, row: sqlite3.Row) -> ChatMessage:
+        from core.chat.messages import ChatMessage
+
+        key = int(row["entry_key"])
+        role = str(row["role"])
+        try:
+            data: JsonObject = {"id": str(row["entry_id"]), "role": role}
+            data["timestamp"] = str(row["created_at"])
+            if row["model"] is not None:
+                data["model"] = str(row["model"])
+            if row["run_key"] is not None:
+                data["run_id"] = self.run_ids[int(row["run_key"])]
+            text = self.text.get(key)
+            if text is not None:
+                if text["blocks_json"] is not None:
+                    data["content"] = json.loads(str(text["blocks_json"]))
+                elif text["content"] is not None:
+                    data["content"] = str(text["content"])
+            match role:
+                case "assistant":
+                    self._decode_assistant(key, data)
+                case "tool":
+                    self._decode_tool_result(key, data)
+                case "user":
+                    sender = self.senders.get(key)
+                    if sender is not None:
+                        data["sender"] = {
+                            "id": sender["sender_id"],
+                            "display_name": sender["display_name"],
+                            "role": sender["sender_role"],
+                        }
+                case "error":
+                    data["error_kind"] = str(self.errors[key]["error_kind"])
+                case "history_edit":
+                    data["target_message_id"] = str(self.edits[key]["target_entry_id"])
+                case "compaction_checkpoint":
+                    self._decode_checkpoint(key, data)
+                case "run_summary":
+                    self._decode_run_summary(key, data)
+            return ChatMessage.from_dict(data)
+        except (json.JSONDecodeError, IndexError, KeyError, TypeError, ValueError) as exc:
+            raise SessionStoreCorruptError(f"invalid stored Session entry: {key}") from exc
+
+    def _decode_assistant(self, key: int, data: JsonObject) -> None:
+        assistant = self.assistants[key]
+        for column in ("phase", "reasoning_scope", "interruption_cause"):
+            if assistant[column] is not None:
+                data[column] = assistant[column]
+        if assistant["interrupted"]:
+            data["interrupted"] = True
+        reasoning = self.reasoning.get(key)
+        if reasoning is not None:
+            if reasoning["reasoning"] is not None:
+                data["reasoning"] = reasoning["reasoning"]
+            if reasoning["summary_json"] is not None:
+                data["reasoning_summary"] = json.loads(str(reasoning["summary_json"]))
+            if reasoning["meta_json"] is not None:
+                data["reasoning_meta"] = json.loads(str(reasoning["meta_json"]))
+        timing = _timing_value(
+            assistant["reasoning_started_at"],
+            assistant["reasoning_completed_at"],
+            assistant["reasoning_duration_ms"],
+            assistant["reasoning_timing_extra_json"],
+        )
+        if timing is not None:
+            data["reasoning_timing"] = timing
+        if assistant["usage_present"]:
+            usage = _json_extras(assistant["usage_extra_json"])
+            for column in _USAGE_COUNT_COLUMNS:
+                if assistant[column] is not None:
+                    usage[column] = assistant[column]
+            for usage_key, column in _USAGE_FLAG_COLUMNS:
+                if assistant[column] is not None:
+                    usage[usage_key] = bool(assistant[column])
+            data["usage"] = usage
+        if assistant["has_tool_calls"]:
+            calls: list[JsonObject] = []
+            for call in self.tool_calls.get(key, ()):
+                value: JsonObject = {
+                    "id": call["call_id"],
+                    "name": call["name"],
+                    "arguments": json.loads(str(call["arguments_json"])),
+                }
+                if call["rejection_code"] is not None:
+                    value["rejection"] = {
+                        "code": call["rejection_code"],
+                        "message": call["rejection_message"],
+                        "fingerprint": call["rejection_fingerprint"],
+                    }
+                if call["argument_sequence_index"] is not None:
+                    value["argument_sequence_index"] = call["argument_sequence_index"]
+                    value["argument_sequence_length"] = call["argument_sequence_length"]
+                calls.append(value)
+            data["tool_calls"] = calls
+        files = self.output_files.get(key)
+        if files:
+            data["output_files"] = [
+                {
+                    "path": file["path"],
+                    "line_index": file["line_index"],
+                    **({} if file["start_index"] is None else {"start_index": file["start_index"]}),
+                    **({} if file["end_index"] is None else {"end_index": file["end_index"]}),
+                }
+                for file in files
+            ]
+
+    def _decode_tool_result(self, key: int, data: JsonObject) -> None:
+        call = self.tool_results[key]
+        data["tool_call_id"] = call["call_id"]
+        data["name"] = call["name"]
+        timing = _timing_value(
+            call["started_at"], call["completed_at"], call["duration_ms"], call["timing_extra_json"]
+        )
+        if timing is not None:
+            data["timing"] = timing
+        if call["display_json"] is not None:
+            data["tool_display"] = json.loads(str(call["display_json"]))
+
+    def _decode_checkpoint(self, key: int, data: JsonObject) -> None:
+        checkpoint = self.checkpoints[key]
+        data["compaction_policy"] = checkpoint["policy"]
+        data["compaction_strategy"] = checkpoint["strategy"]
+        data["projection"] = json.loads(str(checkpoint["projection_json"]))
+        if checkpoint["usage_present"]:
+            usage = _json_extras(checkpoint["usage_extra_json"])
+            for usage_key, column in (
+                ("compacted_token_count", "compacted_token_count"),
+                ("context_tokens_before", "context_tokens_before"),
+                ("context_tokens_after", "context_tokens_after"),
+                ("compaction_duration_ms", "duration_ms"),
+            ):
+                if checkpoint[column] is not None:
+                    usage[usage_key] = checkpoint[column]
+            data["usage"] = usage
+
+    def _decode_run_summary(self, key: int, data: JsonObject) -> None:
+        run = self.run_summaries[key]
+        data["run_id"] = run["run_id"]
+        data["status"] = run["status"]
+        if run["work_id"] is not None:
+            data["work_id"] = run["work_id"]
+        if run["iteration_count"] is not None:
+            data["iteration_count"] = run["iteration_count"]
+        timing = _timing_value(
+            run["timing_started_at"],
+            run["completed_at"],
+            run["duration_ms"],
+            run["timing_extra_json"],
+        )
+        data["timing"] = {} if timing is None else timing
+        if run["changed_files"] is not None:
+            changes = _json_extras(run["change_stats_extra_json"])
+            changes.update(
+                {
+                    "files": run["changed_files"],
+                    "added": run["lines_added"],
+                    "removed": run["lines_removed"],
+                    "paths": self.change_paths.get(int(run["run_key"]), []),
+                }
+            )
+            data["change_stats"] = changes
+
+
+def _json_extras(value: Any) -> JsonObject:
+    if value is None:
+        return {}
+    decoded = json.loads(str(value))
+    if not isinstance(decoded, dict):
+        raise ValueError("stored extras must be an object")
+    return decoded
+
+
+def _timing_value(
+    started_at: Any, completed_at: Any, duration_ms: Any, extra: Any
+) -> JsonObject | None:
+    if started_at is None and completed_at is None and duration_ms is None and extra is None:
+        return None
+    timing = _json_extras(extra)
+    for timing_key, value in (
+        ("started_at", started_at),
+        ("completed_at", completed_at),
+        ("duration_ms", duration_ms),
+    ):
+        if value is not None:
+            timing[timing_key] = value
+    return timing
+
+
+def _rows_by_key(
+    connection: sqlite3.Connection, sql: str, keys: Sequence[int]
+) -> dict[int, sqlite3.Row]:
+    if not keys:
+        return {}
+    return {int(row[0]): row for row in connection.execute(sql, (_store_values._key_list(keys),))}
+
+
+def _grouped_rows(
+    connection: sqlite3.Connection, sql: str, keys: Sequence[int]
+) -> dict[int, list[sqlite3.Row]]:
+    grouped: dict[int, list[sqlite3.Row]] = {}
+    if keys:
+        for row in connection.execute(sql, (_store_values._key_list(keys),)):
+            grouped.setdefault(int(row[0]), []).append(row)
+    return grouped
+
+
+_KEYS = "IN (SELECT value FROM json_each(?))"
+_ASSISTANT_COLUMNS = (
+    "entry_key, phase, reasoning_scope, has_tool_calls, interrupted, interruption_cause, "
+    "usage_present, "
+    + ", ".join(_USAGE_COUNT_COLUMNS)
+    + ", "
+    + ", ".join(column for _key, column in _USAGE_FLAG_COLUMNS)
+    + ", reasoning_started_at, reasoning_completed_at, reasoning_duration_ms, "
+    "usage_extra_json, reasoning_timing_extra_json"
+)
+_CHECKPOINT_COLUMNS = (
+    "c.entry_key, c.policy, c.strategy, c.compacted_token_count, c.context_tokens_before, "
+    "c.context_tokens_after, c.duration_ms, c.usage_present, c.usage_extra_json"
+)
+_RUN_SUMMARY_COLUMNS = (
+    "end_entry_key, run_key, run_id, work_id, status, iteration_count, timing_started_at, "
+    "completed_at, duration_ms, timing_extra_json, changed_files, lines_added, lines_removed, "
+    "change_stats_extra_json"
+)
+
+
+def select_batch(connection: sqlite3.Connection, rows: Sequence[sqlite3.Row]) -> EntryBatch:
+    """Fetch the side rows *rows* need, querying only tables their roles use."""
+    batch = EntryBatch(list(rows))
+    by_role: dict[str, list[int]] = {}
+    for row in rows:
+        by_role.setdefault(str(row["role"]), []).append(int(row["entry_key"]))
+    texted = [int(row["entry_key"]) for row in rows if str(row["role"]) not in _TEXTLESS_ROLES]
+    batch.text = _rows_by_key(
+        connection,
+        f"SELECT entry_key, content, blocks_json FROM entry_text WHERE entry_key {_KEYS}",
+        texted,
+    )
+    assistants = by_role.get("assistant", [])
+    batch.assistants = _rows_by_key(
+        connection,
+        f"SELECT {_ASSISTANT_COLUMNS} FROM assistant_entries WHERE entry_key {_KEYS}",
+        assistants,
+    )
+    batch.reasoning = _rows_by_key(
+        connection,
+        "SELECT entry_key, reasoning, summary_json, meta_json FROM assistant_reasoning "
+        f"WHERE entry_key {_KEYS}",
+        assistants,
+    )
+    batch.output_files = _grouped_rows(
+        connection,
+        "SELECT entry_key, path, line_index, start_index, end_index FROM assistant_output_files "
+        f"WHERE entry_key {_KEYS} ORDER BY entry_key, ordinal",
+        assistants,
+    )
+    batch.tool_calls = _grouped_rows(
+        connection,
+        "SELECT c.entry_key, c.call_id, c.name, c.rejection_code, c.rejection_fingerprint, "
+        "c.argument_sequence_index, c.argument_sequence_length, p.arguments_json, "
+        "p.rejection_message FROM tool_calls AS c JOIN tool_call_payloads AS p "
+        f"ON p.call_key = c.call_key WHERE c.entry_key {_KEYS} ORDER BY c.entry_key, c.ordinal",
+        assistants,
+    )
+    batch.tool_results = _rows_by_key(
+        connection,
+        "SELECT c.result_entry_key, c.call_id, c.name, c.started_at, c.completed_at, "
+        "c.duration_ms, p.display_json, p.timing_extra_json FROM tool_calls AS c "
+        f"JOIN tool_call_payloads AS p ON p.call_key = c.call_key WHERE c.result_entry_key {_KEYS}",
+        by_role.get("tool", []),
+    )
+    batch.senders = _rows_by_key(
+        connection,
+        "SELECT entry_key, sender_id, display_name, sender_role FROM user_entry_senders "
+        f"WHERE entry_key {_KEYS}",
+        by_role.get("user", []),
+    )
+    batch.errors = _rows_by_key(
+        connection,
+        f"SELECT entry_key, error_kind FROM error_entries WHERE entry_key {_KEYS}",
+        by_role.get("error", []),
+    )
+    batch.edits = _rows_by_key(
+        connection,
+        f"SELECT entry_key, target_entry_id FROM history_edit_entries WHERE entry_key {_KEYS}",
+        by_role.get("history_edit", []),
+    )
+    batch.checkpoints = _rows_by_key(
+        connection,
+        f"SELECT {_CHECKPOINT_COLUMNS}, p.projection_json FROM checkpoint_entries AS c "
+        f"JOIN checkpoint_projections AS p ON p.entry_key = c.entry_key WHERE c.entry_key {_KEYS}",
+        by_role.get("compaction_checkpoint", []),
+    )
+    run_keys = sorted({int(row["run_key"]) for row in rows if row["run_key"] is not None})
+    if run_keys:
+        batch.run_ids = {
+            int(row[0]): str(row[1])
+            for row in connection.execute(
+                f"SELECT run_key, run_id FROM runs WHERE run_key {_KEYS}",
+                (_store_values._key_list(run_keys),),
+            )
+        }
+    summaries = by_role.get("run_summary", [])
+    batch.run_summaries = _rows_by_key(
+        connection,
+        f"SELECT {_RUN_SUMMARY_COLUMNS} FROM runs WHERE end_entry_key {_KEYS}",
+        summaries,
+    )
+    summary_runs = [int(row["run_key"]) for row in batch.run_summaries.values()]
+    batch.change_paths = {
+        run_key: [str(row["path"]) for row in paths]
+        for run_key, paths in _grouped_rows(
+            connection,
+            f"SELECT run_key, path FROM run_change_paths WHERE run_key {_KEYS} ORDER BY run_key, ordinal",
+            summary_runs,
+        ).items()
+    }
+    return batch
+
+
+def select_entries(
+    connection: sqlite3.Connection, where: str, params: Sequence[Any], *, tail: str = ""
+) -> EntryBatch:
+    """Select entries by one ``e``-aliased predicate, then their side rows."""
+    rows = connection.execute(
+        f"SELECT {ENTRY_COLUMNS} FROM entries AS e WHERE {where} {tail}", params
+    ).fetchall()
+    return select_batch(connection, rows)
+
+
+def _table_columns(connection: sqlite3.Connection, table: str) -> list[str]:
+    return [str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")]
+
+
+def _copy_side_rows(
+    connection: sqlite3.Connection, table: str, pairs: Sequence[tuple[int, int]]
+) -> None:
+    """Copy the ``entry_key``-keyed rows of *table* for ``(new, old)`` key pairs."""
+    columns = [column for column in _table_columns(connection, table) if column != "entry_key"]
+    connection.executemany(
+        f"INSERT INTO {table} (entry_key, {', '.join(columns)}) "
+        f"SELECT ?, {', '.join(columns)} FROM {table} WHERE entry_key = ?",
+        pairs,
+    )
+
+
+_ENTRY_SIDE_TABLES = (
+    "entry_text",
+    "assistant_entries",
+    "assistant_reasoning",
+    "assistant_output_files",
+    "user_entry_senders",
+    "error_entries",
+    "history_edit_entries",
+    "checkpoint_entries",
+    "checkpoint_projections",
+)
+
+
+def copy_entries(
+    connection: sqlite3.Connection,
+    *,
+    source_key: int,
+    target_key: int,
+    view_range: ViewRange,
+) -> list[int]:
+    """Give *target_key* its own copy of the entries *view_range* admits from *source_key*.
+
+    Copies keep their seq and id, get new keys and are current. Their side
+    rows, Tool calls with their payloads and referenced Runs come along; copied
+    Runs are inherited and never admitted again, and unfinished calls or Runs
+    end interrupted. Returns the new entry keys.
+    """
+    now = utc_now_timestamp()
+    rows = connection.execute(
+        "SELECT entry_key, seq, role, entry_id, created_at, run_key, model, searchable "
+        "FROM entries AS e WHERE e.session_key = ? AND e.seq >= ? AND e.seq < ? "
+        "AND (e.superseded_at_seq IS NULL OR e.superseded_at_seq >= ?) ORDER BY e.seq",
+        (source_key, view_range.from_seq, view_range.upto_seq, view_range.as_of_seq),
+    ).fetchall()
+    run_map = {
+        run_key: _copy_run(connection, run_key, target_key, now)
+        for run_key in sorted({int(row["run_key"]) for row in rows if row["run_key"] is not None})
+    }
+    entry_map: dict[int, int] = {}
+    for row in rows:
+        cursor = connection.execute(
+            "INSERT INTO entries (session_key, seq, role, entry_id, created_at, run_key, model, "
+            "searchable) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                target_key,
+                row["seq"],
+                row["role"],
+                row["entry_id"],
+                row["created_at"],
+                None if row["run_key"] is None else run_map[int(row["run_key"])],
+                row["model"],
+                row["searchable"],
+            ),
+        )
+        assert cursor.lastrowid is not None
+        entry_map[int(row["entry_key"])] = int(cursor.lastrowid)
+    pairs = [(new, old) for old, new in entry_map.items()]
+    for table in _ENTRY_SIDE_TABLES:
+        _copy_side_rows(connection, table, pairs)
+    _copy_tool_calls(connection, entry_map, now)
+    for row in rows:
+        if row["role"] == "run_summary" and row["run_key"] is not None:
+            connection.execute(
+                "UPDATE runs SET end_entry_key = ? WHERE run_key = ? AND end_entry_key IS NULL",
+                (entry_map[int(row["entry_key"])], run_map[int(row["run_key"])]),
+            )
+    return list(entry_map.values())
+
+
+def _copy_run(connection: sqlite3.Connection, run_key: int, target_key: int, now: str) -> int:
+    existing = connection.execute(
+        "SELECT target.run_key FROM runs AS source JOIN runs AS target "
+        "ON target.session_key = ? AND target.run_id = source.run_id WHERE source.run_key = ?",
+        (target_key, run_key),
+    ).fetchone()
+    if existing is not None:
+        return int(existing[0])
+    replaced = {
+        "session_key": "?",
+        "inherited": "1",
+        "contributes_to_activity": "0",
+        "end_entry_key": "NULL",
+        "status": "CASE WHEN status = 'running' THEN 'interrupted' ELSE status END",
+        "completed_at": "CASE WHEN status = 'running' THEN ? ELSE completed_at END",
+    }
+    columns = [column for column in _table_columns(connection, "runs") if column != "run_key"]
+    expressions = [replaced.get(column, column) for column in columns]
+    params: list[Any] = []
+    for column in columns:
+        if column == "session_key":
+            params.append(target_key)
+        elif column == "completed_at":
+            params.append(now)
+    params.append(run_key)
+    cursor = connection.execute(
+        f"INSERT INTO runs ({', '.join(columns)}) SELECT {', '.join(expressions)} "
+        "FROM runs WHERE run_key = ?",
+        params,
+    )
+    assert cursor.lastrowid is not None
+    copied = int(cursor.lastrowid)
+    connection.execute(
+        "INSERT INTO run_change_paths (run_key, ordinal, path) "
+        "SELECT ?, ordinal, path FROM run_change_paths WHERE run_key = ?",
+        (copied, run_key),
+    )
+    return copied
+
+
+def _copy_tool_calls(
+    connection: sqlite3.Connection, entry_map: Mapping[int, int], now: str
+) -> None:
+    if not entry_map:
+        return
+    columns = [
+        column
+        for column in _table_columns(connection, "tool_calls")
+        if column not in {"call_key", "entry_key", "result_entry_key", "status", "completed_at"}
+    ]
+    calls = connection.execute(
+        f"SELECT call_key, entry_key, result_entry_key, status, completed_at, {', '.join(columns)} "
+        f"FROM tool_calls WHERE entry_key {_KEYS} ORDER BY call_key",
+        (_store_values._key_list(list(entry_map)),),
+    ).fetchall()
+    payload_columns = [
+        column
+        for column in _table_columns(connection, "tool_call_payloads")
+        if column != "call_key"
+    ]
+    result_payload_columns = [
+        column
+        for column in _table_columns(connection, "tool_result_payloads")
+        if column not in {"payload_key", "call_key"}
+    ]
+    for call in calls:
+        unfinished = call["status"] in {"pending", "running"}
+        result_key = call["result_entry_key"]
+        cursor = connection.execute(
+            f"INSERT INTO tool_calls (entry_key, result_entry_key, status, completed_at, "
+            f"{', '.join(columns)}) VALUES ({', '.join('?' for _ in range(4 + len(columns)))})",
+            (
+                entry_map[int(call["entry_key"])],
+                None if result_key is None else entry_map.get(int(result_key)),
+                "interrupted" if unfinished else call["status"],
+                now if unfinished else call["completed_at"],
+                *(call[column] for column in columns),
+            ),
+        )
+        connection.execute(
+            f"INSERT INTO tool_call_payloads (call_key, {', '.join(payload_columns)}) "
+            f"SELECT ?, {', '.join(payload_columns)} FROM tool_call_payloads WHERE call_key = ?",
+            (cursor.lastrowid, call["call_key"]),
+        )
+        connection.execute(
+            f"INSERT INTO tool_result_payloads (call_key, {', '.join(result_payload_columns)}) "
+            f"SELECT ?, {', '.join(result_payload_columns)} FROM tool_result_payloads "
+            "WHERE call_key = ? ORDER BY payload_key",
+            (cursor.lastrowid, call["call_key"]),
+        )

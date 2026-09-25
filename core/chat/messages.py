@@ -22,6 +22,7 @@ from core.providers.adapter import (
     TOOL_CALL_REJECTION_FIELD,
 )
 from core.utils.ids import new_id
+from core.utils.timestamps import format_canonical_timestamp
 
 INTERRUPTION_CAUSES = frozenset(
     {
@@ -862,7 +863,7 @@ def _format_timestamp(timestamp: datetime | None) -> str:
     value = timestamp or datetime.now(UTC)
     if value.tzinfo is None:
         raise ChatMessageValidationError("timestamp must include timezone information")
-    return value.astimezone(UTC).isoformat()
+    return format_canonical_timestamp(value)
 
 
 def _add_if_not_none(message: JsonObject, key: str, value: Any) -> None:

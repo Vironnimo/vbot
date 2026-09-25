@@ -17,7 +17,7 @@ from tests.core.recall.vector_helpers import (
     request,
     timestamp,
 )
-from tests.core.sessions.history_fixtures import append_tool_fixture
+from tests.core.sessions.history_fixtures import append_tool_fixture, complete_run
 
 pytestmark = pytest.mark.asyncio
 
@@ -197,8 +197,9 @@ async def test_vector_backend_never_surfaces_run_summary_as_a_match(tmp_path: Pa
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="mixed")
     session = session.start_run("r1")
-    session.append(
-        ChatMessage.run_summary(run_id="r1", status="completed", timing=timing, iteration_count=1)
+    complete_run(
+        session,
+        ChatMessage.run_summary(run_id="r1", status="completed", timing=timing, iteration_count=1),
     )
     session.start_run("r2").append(
         ChatMessage.user("I love bananas and fruit", timestamp=timestamp(1))
