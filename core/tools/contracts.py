@@ -18,6 +18,8 @@ from typing import Any
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
+from core.tools.model_names import model_tool_name
+
 JsonObject = dict[str, Any]
 _TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 _JSON_NUMBER_PATTERN = re.compile(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$")
@@ -727,6 +729,7 @@ def _argument_problems(
 def _render_argument_problems(
     tool_name: str, schema: JsonObject, problems: list[str], names_matter: bool
 ) -> str:
+    tool_name = model_tool_name(tool_name)
     parameters = schema.get("properties")
     parameter_line = ""
     if names_matter and isinstance(parameters, dict) and parameters:

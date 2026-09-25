@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from core.tools.bash_hints import annotate_failure
+from core.tools.model_names import BASH_TOOL_NAME, SHELL_MODEL_NAME
 from core.tools.process import shape_process_output
 from core.tools.process_manager import (
     ProcessManager,
@@ -22,7 +23,6 @@ from core.tools.tools import (
 )
 from core.utils.paths import model_path
 
-BASH_TOOL_NAME = "bash"
 BASH_COMPLETION_STATUS_PREFIX = "### Bash process — "
 BASH_COMPLETION_PROCESS_ID_PREFIX = "Process ID: "
 BASH_HANDOFF_OUTPUT_CAP_CHARS = 4_000
@@ -319,7 +319,8 @@ def _spawn_failure_message(argv: list[str], error: Exception) -> str:
     message += f". The shell '{shell}' was not found on this host"
     if shell == "pwsh":
         message += (
-            " — the bash tool requires PowerShell 7 (pwsh) on Windows; install it or add it to PATH"
+            f" — the {SHELL_MODEL_NAME} tool requires PowerShell 7 (pwsh) on Windows; "
+            "install it or add it to PATH"
         )
     return message
 

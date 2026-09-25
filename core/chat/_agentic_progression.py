@@ -71,6 +71,7 @@ from core.sessions import (
     SessionAddress,
     project_tool_context_id,
 )
+from core.tools import model_tool_name
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -744,8 +745,8 @@ class AgenticProgression:
                     )
                     if repeated_failed_tool is not None and finalization_request_reason is None:
                         finalization_request_reason = (
-                            f"Tool {repeated_failed_tool!r} repeated the same failed Call "
-                            f"{MAX_IDENTICAL_FAILED_TOOL_CALLS} times"
+                            f"Tool {model_tool_name(repeated_failed_tool)!r} repeated the same "
+                            f"failed Call {MAX_IDENTICAL_FAILED_TOOL_CALLS} times"
                         )
                     if finalization_request_reason is not None:
                         session.add_note(

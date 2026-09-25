@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from core.tools.arguments import optional_string, required_string
+from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.process_manager import (
     ProcessManager,
     ProcessNotFoundError,
@@ -25,7 +26,9 @@ from core.tools.tools import (
 from core.utils.paths import model_path
 
 PROCESS_TOOL_NAME = "process"
-PROCESS_TOOL_DESCRIPTION = "Inspect or stop a `bash` command that runs in the background."
+PROCESS_TOOL_DESCRIPTION = (
+    f"Inspect or stop a `{SHELL_MODEL_NAME}` command that runs in the background."
+)
 PROCESS_ACTIONS = ("status", "kill")
 PROCESS_OUTPUT_CAP_CHARS = 8_000
 PROCESS_OUTPUT_MAX_LINES = 100
@@ -50,7 +53,7 @@ PROCESS_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Id of the background `bash` command to act on. Required for kill; "
+                f"Id of the background `{SHELL_MODEL_NAME}` command to act on. Required for kill; "
                 "omit for status to list running commands, newest first."
             ),
         },

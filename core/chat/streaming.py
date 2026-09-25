@@ -30,6 +30,7 @@ from core.runs import (
     TOOL_CALL_DELTA_EVENT,
     RunInterruptedError,
 )
+from core.tools import registry_tool_name
 from core.utils.errors import ProviderError, VBotError
 from core.utils.timestamps import utc_now_timestamp
 
@@ -621,7 +622,9 @@ class StreamingAccumulator:
         # late Provider id to become canonical.
         payload: JsonObject = {"tool_call_id": fragments.tool_call_id}
         if name_delta:
-            payload["name_delta"] = name_delta
+            # Displays use registry names; a name split across deltas is
+            # corrected when the finished Tool Call replaces the transient row.
+            payload["name_delta"] = registry_tool_name(name_delta)
         if arguments_delta:
             payload["arguments_delta"] = arguments_delta
         return StreamingVisibleDelta(event_type=TOOL_CALL_DELTA_EVENT, payload=payload)

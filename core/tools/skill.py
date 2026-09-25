@@ -310,7 +310,7 @@ def load_skill_content(
             env_keys,
             intro=(
                 "Loading this Skill makes these additional environment credentials "
-                "available to Bash calls."
+                "available to shell commands."
             ),
         )
     activation_content = format_skill_activation_context(

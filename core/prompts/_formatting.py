@@ -17,11 +17,13 @@ from core.skills.skills import (
     SKILL_ORIGIN_PROJECT_PREFIX,
     skill_origin_sort_key,
 )
+from core.tools.model_names import model_tool_name
 
 
 def _format_tool_list(tool_definitions: list[dict[str, Any]]) -> str:
     return "\n".join(
-        f"- {definition['name']}: {definition['description']}" for definition in tool_definitions
+        f"- {model_tool_name(definition['name'])}: {definition['description']}"
+        for definition in tool_definitions
     )
 
 

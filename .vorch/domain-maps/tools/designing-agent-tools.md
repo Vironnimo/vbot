@@ -22,7 +22,7 @@ Models arrive trained on a few widely used Tool dialects: Claude Code (`Read`/`E
 
 - Choose names, parameter names and formats that match the dominant habit for the capability. Novel interfaces must earn their unfamiliarity with a clear gain.
 - Accept the other common dialects as aliases (principle 2); the schema advertises one canonical form.
-- Names must be honest about the platform. A Tool named `bash` primes bash syntax; if it runs PowerShell, Agents write `export`, `2>/dev/null` and heredocs that fail.
+- Names must be honest about the platform. A Tool named `bash` primes bash syntax; if it runs PowerShell, Agents write `export`, `2>/dev/null` and heredocs that fail. vBot therefore offers its shell Tool as `powershell` on Windows while the registry keeps `bash` (`tools.md` -> Model Tool names).
 - Formats handed between Tools must survive copying: text an Agent copies out of one result (read output, error candidates) must be accepted verbatim as input by the next Tool.
 
 ### 2. Execute clear intent

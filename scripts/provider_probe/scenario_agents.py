@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from core.channels import ChannelConfig
+from core.tools import model_tool_name
 from core.tools.bash import (
     BASH_TOOL_DESCRIPTION,
     BASH_TOOL_NAME,
@@ -116,7 +117,8 @@ def _bash_scenario(case_name: str) -> ProbeScenario:
         definition = project_bash_tool_definitions([definition], nesting_depth=1)[0]
     rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
     instruction = (
-        f"Call {BASH_TOOL_NAME} exactly once with exactly this JSON object as its arguments: "
+        f"Call {model_tool_name(BASH_TOOL_NAME)} exactly once with exactly this JSON object "
+        "as its arguments: "
         f"{rendered_arguments}. Preserve every value and do not add any field. Do not execute "
         "or describe the command yourself."
     )

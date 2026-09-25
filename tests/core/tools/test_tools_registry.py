@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 from dataclasses import replace
 
 import pytest
 
 from core.tools import (
+    BASH_TOOL_NAME,
     DuplicateToolError,
     Tool,
     ToolCall,
@@ -20,6 +22,9 @@ from core.tools import (
     ToolExecutor,
     ToolNotAllowedError,
     ToolRegistry,
+    model_names,
+    model_tool_name,
+    registry_tool_name,
     tool_is_ready,
     tool_success,
 )
@@ -90,6 +95,25 @@ class TestToolRegistryRegister:
 
         with pytest.raises(DuplicateToolError, match="read_file"):
             register_read_file(registry)
+
+    def test_name_the_model_sees_for_another_tool_is_reserved(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(model_names, "_MODEL_NAMES", {"read_file": "host_read"})
+        monkeypatch.setattr(model_names, "_REGISTRY_NAMES", {"host_read": "read_file"})
+        registry = ToolRegistry()
+        register_read_file(registry)
+        extension_tool = Tool(
+            name="host_read",
+            description="Extension Tool",
+            parameters=READ_FILE_SCHEMA,
+            handler=read_file_handler,
+        )
+
+        with pytest.raises(DuplicateToolError, match="host_read"):
+            registry.register("host_read", "Extension Tool", READ_FILE_SCHEMA, read_file_handler)
+        with pytest.raises(DuplicateToolError, match="host_read"):
+            registry.replace_owned_tools([], [extension_tool])
 
     def test_empty_name_raises_value_error(self) -> None:
         registry = ToolRegistry()
@@ -706,3 +730,22 @@ class TestToolRegistryDispatch:
 
         with pytest.raises(ToolNotAllowedError):
             await registry.dispatch(make_context("read_file"), {"path": "SOUL.md"}, [])
+
+
+def test_shell_tool_is_offered_under_the_host_shell_name() -> None:
+    shell_name = "powershell" if os.name == "nt" else "bash"
+
+    assert model_tool_name(BASH_TOOL_NAME) == shell_name
+    assert registry_tool_name(shell_name) == BASH_TOOL_NAME
+    assert registry_tool_name(BASH_TOOL_NAME) == BASH_TOOL_NAME
+    assert model_tool_name("read") == registry_tool_name("read") == "read"
+
+
+@pytest.mark.asyncio
+async def test_denied_tool_is_named_as_the_model_sees_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(model_names, "_MODEL_NAMES", {"read_file": "host_read"})
+    registry = ToolRegistry()
+    register_read_file(registry)
+
+    with pytest.raises(ToolNotAllowedError, match="Tool not allowed: host_read"):
+        await registry.dispatch(make_context("read_file"), {"path": "SOUL.md"}, [])

@@ -48,6 +48,7 @@ from core.tools._powershell import powershell_command
 from core.tools.arguments import optional_number, optional_string
 from core.tools.availability import bash_allowed_env_keys, normalize_env_keys
 from core.tools.bash_hints import annotate_failure
+from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.process_manager import (
     ProcessManager,
     ProcessNotFoundError,
@@ -74,9 +75,10 @@ DEFAULT_TIMEOUT_SECONDS = 180.0
 def _shell_syntax_notes() -> str:
     """Name the actual shell so the model writes matching syntax.
 
-    The tool is called "bash", so without this a model on Windows guesses cmd or
-    bash syntax. Mirrors the platform branch in ``_shell_argv``; constant per host,
-    so provider prompt caching is unaffected.
+    The Model sees this Tool as powershell on Windows (``model_names``); the note
+    adds that it is PowerShell 7, so Models avoid cmd and Windows PowerShell 5.1
+    syntax. Mirrors the platform branch in ``_shell_argv``; constant per host, so
+    provider prompt caching is unaffected.
     """
     if sys.platform == "win32":
         return (
@@ -408,7 +410,8 @@ def format_bash_env_usage(env_keys: Sequence[str], *, intro: str) -> str:
     return (
         f"{intro}\n\n"
         f"Available environment keys:\n{key_lines}\n\n"
-        "To use one, include its exact name in the `env_keys` array of every `bash` call "
+        f"To use one, include its exact name in the `env_keys` array of every "
+        f"`{SHELL_MODEL_NAME}` call "
         "that needs it. vBot resolves the value server-side and injects it only into that "
         "process environment; put the name, never the credential value, in the Tool call. "
         "Refer to the variable with the current host shell's environment syntax and do not "
@@ -422,9 +425,9 @@ def _render_bash_env_prompt_block(context: Any) -> str:
         return ""
     guidance = format_bash_env_usage(
         env_keys,
-        intro="This Agent has permanent permission to use these credentials in Bash calls.",
+        intro="This Agent has permanent permission to use these credentials in shell commands.",
     )
-    return f"## Bash Environment Access\n\n{guidance}"
+    return f"## Shell Environment Access\n\n{guidance}"
 
 
 async def _watch_background_process(

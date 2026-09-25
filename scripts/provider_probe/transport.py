@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 from core.providers.tool_schema import ToolSchemaProfile
+from core.tools import registry_tool_name
 from core.tools.contracts import ToolContract
 from scripts.provider_probe.common import PROBE_TOOL, PROBE_TOOL_NAME, ProbeScenario
 from scripts.provider_probe.measurements import (
@@ -164,7 +165,7 @@ async def _probe_stream(
     try:
         for stream_key, name in tool_names_by_stream_key.items():
             arguments = json.loads(tool_arguments_by_stream_key.get(stream_key, ""))
-            parsed_calls.append({"name": name, "arguments": arguments})
+            parsed_calls.append({"name": registry_tool_name(name), "arguments": arguments})
     except json.JSONDecodeError:
         pass
     else:

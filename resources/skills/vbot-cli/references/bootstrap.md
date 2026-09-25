@@ -17,7 +17,7 @@ vbot bootstrap delete <job-id>
 
 Read `show <job-id>` for the full prompt, target and execution record before editing. `list` intentionally shortens prompts. Creation always requires an explicit mode. `once` runs after the next eligible startup and then becomes `completed` or `failed`. `always` runs once after every startup and stays `active`; inspect `last_outcome` and `last_error` for its most recent health. A job created, updated, or enabled in the current process is armed for a future startup and never fires immediately.
 
-Without `--session`, each firing creates a fresh Session. `--session` targets an existing Session. `--current-session` is create-only, must not be combined with an explicit Agent or `--session`, and is available only from Bash inside a vBot Run; it uses the Run's exact Agent/Project/Session context. It is intentionally rejected for a remote CLI target because the injected context belongs to the server hosting the current Run.
+Without `--session`, each firing creates a fresh Session. `--session` targets an existing Session. `--current-session` is create-only, must not be combined with an explicit Agent or `--session`, and is available only from a shell command inside a vBot Run; it uses the Run's exact Agent/Project/Session context. It is intentionally rejected for a remote CLI target because the injected context belongs to the server hosting the current Run.
 
 Jobs targeting the same Session execute in order; independent Sessions may run concurrently. A fixed-Session Bootstrap can continue an interrupted Run only when vBot classifies the interruption as `process_restart`. This is what lets a post-update verification continue the user conversation without turning ordinary internal Runs into user-message continuations.
 

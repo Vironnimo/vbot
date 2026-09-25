@@ -19,6 +19,7 @@ from core.runs import (
     REASONING_DELTA_EVENT,
     TOOL_CALL_DELTA_EVENT,
 )
+from core.tools import model_names
 
 pytestmark = pytest.mark.asyncio
 
@@ -630,3 +631,16 @@ async def test_accumulator_tracks_the_final_readable_text_phase() -> None:
 
     accumulator.add_delta({"type": "reasoning_delta", "text": " misrouted tail"})
     assert accumulator.ends_with_reasoning is True
+
+
+async def test_tool_call_name_deltas_carry_registry_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(model_names, "_REGISTRY_NAMES", {"host_probe": "probe"})
+    accumulator = StreamingAccumulator()
+
+    emitted = accumulator.add_delta(
+        {"type": "tool_call_delta", "id": "call_1", "name_delta": "host_probe"}
+    )
+
+    assert [delta.payload["name_delta"] for delta in emitted] == ["probe"]

@@ -606,4 +606,4 @@ Pass `requires_opt_in=True` to `api.register_tool(...)` (or the same field in a 
 
 The owning Agent policy stores these grants in `tool_access.granted`. All mode does not grant them, and selected mode requires both inclusion in `allowed` and an explicit grant. None and `denied` still take precedence. Missing Extensions do not erase stored grants. For Project Agents, the Project Tool Whitelist remains the outer ceiling and never implies a grant; configure grants through the Agent's vBot Tool override. The shared Tool editor performs these updates through its ordinary toggle and autosave flow.
 
-This is vBot Tool authorization. It does not sandbox an Agent's unrestricted Bash access or make Extension Python code untrusted. MCP connections use this same per-Agent Tool opt-in; there is no additional connection-level Agent list.
+This is vBot Tool authorization. It does not sandbox an Agent's unrestricted shell access or make Extension Python code untrusted. MCP connections use this same per-Agent Tool opt-in; there is no additional connection-level Agent list.
