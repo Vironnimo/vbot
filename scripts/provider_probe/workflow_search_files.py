@@ -10,8 +10,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from core.tools._search_arguments import parse_search_args
-from core.tools.search_files import normalize_search_arguments, register_search_files_tool
+from core.tools.search_files import interpret_search_call, register_search_files_tool
 from core.tools.tools import ToolContext, ToolRegistry
 
 
@@ -332,11 +331,29 @@ def search_cases() -> list[dict[str, Any]]:
             "error_contains": "not found",
         },
         {
-            "id": "missing_patterns",
-            "arguments": {"args": []},
-            "content": None,
-            "error": True,
-            "error_contains": "pattern",
+            "id": "list_without_pattern",
+            "arguments": {"path": "src", "glob": "*.py"},
+            "content": "src/a.py",
+        },
+        {
+            "id": "named_fields",
+            "arguments": {"pattern": "alpha", "path": "tests"},
+            "content": "tests/b.PY:1:alpha",
+        },
+        {
+            "id": "other_interface_spellings",
+            "arguments": {
+                "pattern": "ALPHA",
+                "-i": True,
+                "glob": "*.py",
+                "output_mode": "files_with_matches",
+            },
+            "content": "src/a.py\ntests/b.PY",
+        },
+        {
+            "id": "glob_in_pattern",
+            "arguments": {"pattern": "*.py", "path": "src"},
+            "content": "src/a.py",
         },
         {
             "id": "inapplicable",
@@ -554,8 +571,7 @@ async def _case(adapter: Any, args: argparse.Namespace, case: dict) -> dict:
             data_root=root,
         )
         try:
-            normalized = normalize_search_arguments(arguments)
-            query = parse_search_args(normalized.get("args", []))
+            query = interpret_search_call(arguments)
             roots = query["paths"] or ["."]
             if any(not (root / p).resolve().is_relative_to(root) for p in roots):
                 return {"case": case["id"], "passed": False, "reason": "outside fixture scope"}

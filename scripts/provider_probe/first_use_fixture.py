@@ -17,12 +17,11 @@ from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager, SessionAddress
 from core.storage import TemporaryFileManager
 from core.subagents import SubAgentCoordinator
-from core.tools._search_arguments import parse_search_args
 from core.tools.bash import register_bash_tool
 from core.tools.file_state import FileReadState
 from core.tools.process_manager import ProcessManager
 from core.tools.read import register_read_tool
-from core.tools.search_files import normalize_search_arguments, register_search_files_tool
+from core.tools.search_files import interpret_search_call, register_search_files_tool
 from core.tools.subagent import _render_subagent_prompt_block, register_subagent_tools
 from core.tools.tools import ToolContext, ToolRegistry
 from scripts.provider_probe.common import PROJECT_ROOT
@@ -186,7 +185,7 @@ class FirstUseFixture:
     async def dispatch(self, call: dict[str, Any], *, shell_task: bool = False):
         name, arguments = call["name"], call["arguments"]
         if name == "search_files":
-            query = parse_search_args(normalize_search_arguments(arguments).get("args", []))
+            query = interpret_search_call(arguments)
             if any(not self.inside(path) for path in query["paths"] or [str(self.cwd)]):
                 raise FixtureBoundaryError(
                     "Search selected roots outside the disposable repository"

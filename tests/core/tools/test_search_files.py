@@ -281,7 +281,6 @@ def test_binary_encodings_and_existence(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "arguments",
     [
-        {"args": []},
         {"args": ["--files", "missing"]},
         {"args": ["--dirs", "-tpy"]},
         {"args": ["--files", "--dirs"]},
@@ -308,12 +307,12 @@ def test_unknown_argument_is_rejected_before_the_search_runs(tree: Path) -> None
 
 
 @pytest.mark.parametrize("candidates", [False, True])
-@pytest.mark.parametrize("args", [["["], ["-P", "(?<"]])
+@pytest.mark.parametrize("args", [["["], ["-P", "a{2,1}"]])
 def test_native_validation_with_and_without_candidates(
     tmp_path: Path, args: list[str], candidates: bool
 ) -> None:
     if candidates:
-        (tmp_path / "a.txt").write_text("[(?<")
+        (tmp_path / "a.txt").write_text("[a{2,1}")
     result = search_files_handler(context(tmp_path), {"args": args})
     assert result["ok"] is False
     message = result["error"]["message"]
@@ -334,8 +333,17 @@ def test_schema_and_registry_repairs(tree: Path) -> None:
     registry = ToolRegistry()
     register_search_files_tool(registry)
     definition = registry.provider_definitions(["search_files"])[0]
-    assert len(definition["parameters"]["properties"]) == 3
-    assert definition["parameters"]["required"] == ["args"]
+    assert list(definition["parameters"]["properties"]) == [
+        "pattern",
+        "path",
+        "glob",
+        "output",
+        "context",
+        "args",
+        "limit",
+        "offset",
+    ]
+    assert "required" not in definition["parameters"]
     assert "additionalProperties" not in definition["parameters"]
     result = asyncio.run(
         registry.dispatch(

@@ -400,6 +400,72 @@
    "expect": {
     "ok": true
    }
+  },
+  {
+   "name": "search: grep-style fields",
+   "tool": "search_files",
+   "arguments": {
+    "pattern": "GREETER",
+    "-i": true,
+    "output_mode": "files_with_matches"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "src/app.py"
+    ],
+    "absent": [
+     "greeter.go"
+    ]
+   }
+  },
+  {
+   "name": "search: list files without pattern",
+   "tool": "search_files",
+   "arguments": {
+    "path": "src",
+    "glob": "*.go"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "greeter.go"
+    ],
+    "absent": [
+     "app.py"
+    ]
+   }
+  },
+  {
+   "name": "search: file glob given as pattern",
+   "tool": "search_files",
+   "arguments": {
+    "pattern": "*.go"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "greeter.go",
+     "file name glob"
+    ],
+    "absent": [
+     "app.py"
+    ]
+   }
+  },
+  {
+   "name": "search: misspelled path",
+   "tool": "search_files",
+   "arguments": {
+    "pattern": "greet",
+    "path": "scr"
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "similar: src"
+    ]
+   }
   }
  ]
 }
