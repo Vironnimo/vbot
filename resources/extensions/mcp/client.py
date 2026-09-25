@@ -130,6 +130,14 @@ class OAuthStorage:
         )
 
 
+class InvocationNotSentError(ValueError):
+    """An invocation that never reached the server, so it changed nothing there."""
+
+    def __init__(self, message: str, *, denied: bool = False) -> None:
+        super().__init__(message)
+        self.denied = denied
+
+
 @dataclass
 class Invocation:
     operation: str
@@ -238,12 +246,12 @@ class ConnectionRunner:
         self, operation: str, arguments: dict[str, Any], context: ToolContext | None = None
     ) -> dict[str, Any]:
         if self._closing:
-            raise ValueError("MCP connection is closing")
+            raise InvocationNotSentError("MCP connection is closing")
         if self._task is None or self._task.done():
             self.start()
         await self._ready.wait()
         if self.state != "connected":
-            raise ValueError(self.error or "MCP connection did not become ready")
+            raise InvocationNotSentError(self.error or "MCP connection did not become ready")
         result: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         await self._queue.put(Invocation(operation, arguments, context, result))
         return await result
@@ -297,7 +305,7 @@ class ConnectionRunner:
                 invocation = self._queue.get_nowait()
                 if invocation is not None and not invocation.result.done():
                     invocation.result.set_exception(
-                        ValueError(self.error or "MCP connection closed")
+                        InvocationNotSentError(self.error or "MCP connection closed")
                     )
 
     async def _transport(self, stack: AsyncExitStack) -> Any:
@@ -384,7 +392,7 @@ class ConnectionRunner:
                 try:
                     self._authorize(invocation.context)
                 except (ValueError, VBotError) as error:
-                    invocation.result.set_exception(error)
+                    invocation.result.set_exception(InvocationNotSentError(str(error), denied=True))
                     continue
             self.context = invocation.context
             self._active = asyncio.create_task(

@@ -517,22 +517,12 @@ def test_mcp_workflow_recovery_preserves_both_boolean_values():
                 arguments = {"action": "search", "query": "configure_render", "kind": "tool"}
             elif self.step == 1:
                 result = json.loads(messages[-1]["content"])
-
-                def target_in(value):
-                    if isinstance(value, dict):
-                        if value.get("name") == "configure_render" and "target" in value:
-                            return value["target"]
-                        for child in value.values():
-                            if found := target_in(child):
-                                return found
-                    elif isinstance(value, list):
-                        for child in value:
-                            if found := target_in(child):
-                                return found
-                    return None
-
-                target = target_in(result)
-                assert target, result
+                # Search lists one "target: description" line per match.
+                target = next(
+                    line.split(": ", 1)[0]
+                    for line in result["data"]["content"].splitlines()
+                    if line.startswith("tool:configure_render:")
+                )
                 arguments = {
                     "action": "call",
                     "target": target,
