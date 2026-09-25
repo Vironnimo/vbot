@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from core.recall import (
@@ -41,6 +42,15 @@ class _SessionSearchError(ValueError):
 
 
 @dataclass(frozen=True)
+class _RequestEcho:
+    """What the result repeats back about how the search was run."""
+
+    period: str | None
+    limit: int
+    notes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class _SearchSessionContext:
     descriptor: JsonObject
     conversations: dict[str, list[JsonObject]]
@@ -54,7 +64,11 @@ def _render_search_page(
     *,
     agent_id: str,
     project_id: str | None = None,
+    period: str | None = None,
+    limit: int = SESSION_SEARCH_DEFAULT_LIMIT,
+    notes: Sequence[str] = (),
 ) -> JsonObject:
+    request = _RequestEcho(period=period, limit=limit, notes=tuple(notes))
     hits = list(page.hits)
     if len(targets) != len(hits):
         raise _SessionSearchError(
@@ -82,6 +96,7 @@ def _render_search_page(
             has_more=has_more,
             project_id=project_id,
             agent_id=agent_id,
+            request=request,
         )
         if _serialized_result_bytes(data) <= SESSION_SEARCH_RESULT_MAX_BYTES:
             break
@@ -95,7 +110,13 @@ def _render_search_page(
     selected = hits[:count]
     if not selected:
         return _search_data(
-            page, [], [], has_more=page.has_more, project_id=project_id, agent_id=agent_id
+            page,
+            [],
+            [],
+            has_more=page.has_more,
+            project_id=project_id,
+            agent_id=agent_id,
+            request=request,
         )
 
     maximum = max(len(hit.text) for hit in selected)
@@ -122,6 +143,7 @@ def _render_search_page(
             has_more=has_more,
             project_id=project_id,
             agent_id=agent_id,
+            request=request,
         )
         if _serialized_result_bytes(candidate) <= SESSION_SEARCH_RESULT_MAX_BYTES:
             best = candidate
@@ -145,16 +167,18 @@ def _search_data(
     has_more: bool,
     project_id: str | None,
     agent_id: str,
+    request: _RequestEcho,
 ) -> JsonObject:
-    data: JsonObject = {
-        "agent_id": agent_id,
-        "project_id": project_id,
+    data: JsonObject = {"agent_id": agent_id, "project_id": project_id}
+    if request.period is not None:
+        data["period"] = request.period
+    data |= {
         "items": items,
         "sessions": session_descriptors,
         "has_more": has_more,
         "searched_sessions": page.total_candidate_sessions,
     }
-    guidance: list[str] = []
+    guidance: list[str] = list(request.notes)
     if not items:
         guidance.append(
             "No matching conversation text was returned in this scope. Try fewer or different "
@@ -168,8 +192,13 @@ def _search_data(
             "or later revisions matter."
         )
     if has_more:
+        wider = (
+            f" Omit limit for up to {SESSION_SEARCH_DEFAULT_LIMIT} matches, or refine"
+            if request.limit < SESSION_SEARCH_DEFAULT_LIMIT
+            else " Refine"
+        )
         guidance.append(
-            "More matches exist. Refine query, period or session_id; there is no "
+            f"More matches exist.{wider} query, period or session_id; there is no "
             "next-page parameter."
         )
     if any(
