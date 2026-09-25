@@ -233,6 +233,11 @@ async def test_reflection_runs_restore_only_own_review_summaries(
     other = manager.create("coder", session_id="other", project_id=project_id)
     other_fork = await manager.fork(other.address, target_project_id=project_id)
     await run(other_fork, "other-review", RunKind.SKILL_REFLECTION, "completed")
+    # A fork into another Agent does not review this Session for its Agent.
+    elsewhere = await manager.fork(
+        source.address, target_agent_id="reviewer", target_project_id=project_id
+    )
+    await run(elsewhere, "elsewhere-review", RunKind.MEMORY_REFLECTION, "completed")
     other_scope = manager.create("coder", session_id="source", project_id="different-project")
 
     def forbid_history(*args, **kwargs):
