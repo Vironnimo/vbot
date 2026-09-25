@@ -25,7 +25,7 @@ import json
 import sqlite3
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import sqlite_vec  # type: ignore[import-untyped]
@@ -45,6 +45,7 @@ from core.recall._passage_catalog import (
     stored_passage,
     time_bounds,
 )
+from core.utils.timestamps import parse_canonical_timestamp
 
 _INDEX_DIR_NAME = "recall"
 _INDEX_FILE_NAME = "session_passage_vectors.sqlite"
@@ -53,8 +54,8 @@ _INDEX_FILE_NAME = "session_passage_vectors.sqlite"
 _LAYOUT_VERSION = 1
 _VECTOR_TABLE = "passage_vectors"
 _VECTOR_TRIGGER = "passages_drop_vector"
-_UNBOUNDED_START_TIMESTAMP_MICROS = -(2**63)
-_UNBOUNDED_END_TIMESTAMP_MICROS = 2**63 - 1
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+_MICROSECOND = timedelta(microseconds=1)
 
 _VECTOR_SCHEMA = """
 CREATE TABLE store_header (
@@ -190,7 +191,7 @@ class VectorStore(PassageCatalog):
             # With MAX, SQLite takes the bare text column from the newest row.
             rows = connection.execute(
                 f"""
-                SELECT p.text_hash, p.text, MAX(julianday(p.end_timestamp)) AS newest
+                SELECT p.text_hash, p.text, MAX(p.end_timestamp) AS newest
                 FROM pending_vectors AS q JOIN passages AS p ON p.passage_ref = q.passage_ref
                 WHERE {" AND ".join(conditions)}
                 GROUP BY p.text_hash
@@ -436,12 +437,8 @@ def _insert_vectors(
             (
                 passage_ref,
                 _scope_key(str(row["project_id"]), str(row["agent_id"])),
-                _timestamp_micros(
-                    str(row["start_timestamp"]), fallback=_UNBOUNDED_START_TIMESTAMP_MICROS
-                ),
-                _timestamp_micros(
-                    str(row["end_timestamp"]), fallback=_UNBOUNDED_END_TIMESTAMP_MICROS
-                ),
+                _timestamp_micros(row["start_timestamp"], passage_ref),
+                _timestamp_micros(row["end_timestamp"], passage_ref),
                 embedding,
             ),
         )
@@ -464,8 +461,7 @@ def _add_candidate_filter(
         return False
     conditions.append(f"q.passage_ref IN ({VIEWED_BY_SESSIONS})")
     parameters.append(refs_parameter(refs))
-    # Like the KNN filter, a Passage whose timestamp is not an instant stays eligible.
-    bounds, bound_parameters = time_bounds("p", since, until, lenient=True)
+    bounds, bound_parameters = time_bounds("p", since, until)
     conditions.extend(bounds)
     parameters.extend(bound_parameters)
     return True
@@ -475,17 +471,23 @@ def _scope_key(project: str, agent_id: str) -> str:
     return f"{project}\0{agent_id}"
 
 
-def _timestamp_micros(value: str, *, fallback: int) -> int:
-    if not value:
-        return fallback
-    normalized = value.removesuffix("Z") + "+00:00" if value.endswith("Z") else value
+def _timestamp_micros(value: object, passage_ref: int) -> int:
+    """A stored Passage timestamp as microseconds since the epoch.
+
+    Passages carry the Session's canonical timestamps, so any other value means
+    the projection cannot be trusted and is rebuilt.
+    """
     try:
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
-        return fallback
+        parsed = parse_canonical_timestamp(value if isinstance(value, str) else "")
+    except ValueError as error:
+        raise DatabaseCorruptError(
+            f"recall_vectors: Passage {passage_ref} has a non-canonical timestamp {value!r}"
+        ) from error
     return _datetime_micros(parsed)
 
 
 def _datetime_micros(value: datetime) -> int:
-    normalized = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
-    return int(normalized.timestamp() * 1_000_000)
+    """An aware *value* as whole microseconds since the epoch."""
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("timestamp must include timezone information")
+    return (value - _EPOCH) // _MICROSECOND

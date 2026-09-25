@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from core.statistics._costs import CostTotals
 from core.statistics._measurements import _max_timestamp
 from core.statistics.report import RunStatusCounts
-from core.statistics.timestamps import parse_timestamp
+from core.utils.timestamps import parse_canonical_timestamp
 
 # Agent ids and ``agent@project`` addresses never contain ``:``, so this actor
 # key cannot collide with an Agent in per-agent report rows.
@@ -228,16 +228,14 @@ def _activity(value: ExtensionSlice, *, sessions: int) -> ExtensionActivity:
 
 
 def _recency(group: ExtensionGroupUsage) -> datetime:
-    moment = parse_timestamp(group.activity.last_activity or group.started_at or "")
-    return moment or datetime.min.replace(tzinfo=UTC)
+    moment = group.activity.last_activity or group.started_at
+    return datetime.min.replace(tzinfo=UTC) if moment is None else parse_canonical_timestamp(moment)
 
 
 def _min_timestamp(current: str | None, candidate: str | None) -> str | None:
-    if candidate is None or parse_timestamp(candidate) is None:
+    if candidate is None:
         return current
-    current_parsed = None if current is None else parse_timestamp(current)
-    if current_parsed is None:
+    if current is None:
         return candidate
-    candidate_parsed = parse_timestamp(candidate)
-    assert candidate_parsed is not None
-    return candidate if candidate_parsed < current_parsed else current
+    earlier = parse_canonical_timestamp(candidate) < parse_canonical_timestamp(current)
+    return candidate if earlier else current

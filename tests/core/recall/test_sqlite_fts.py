@@ -7,7 +7,7 @@ import dataclasses
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -123,30 +123,26 @@ async def test_sqlite_fts_passage_arm_returns_multiple_source_faithful_hits(
     assert page.hits[0].text in original
 
 
-async def test_passage_time_filters_compare_equivalent_timestamp_encodings(
+async def test_passage_time_filters_include_the_bounds_as_instants(
     tmp_path: Path,
 ) -> None:
     sessions = ChatSessionManager(tmp_path)
-    sessions.create("coder", session_id="timestamp-encoding").append(
-        ChatMessage.user("encoding needle", timestamp=timestamp(1))
+    sessions.create("coder", session_id="bounds").append(
+        ChatMessage.user("bounded needle", timestamp=timestamp(1))
     )
     recall = backend(tmp_path, sessions)
-    await recall.search_passages(passage_request("needle"))
-    with closing(sqlite3.connect(recall.index_path)) as connection, connection:
-        connection.execute(
-            "UPDATE passages SET start_timestamp = ?, end_timestamp = ?",
-            ("2026-05-01T12:00:00Z", "2026-05-01T12:00:00Z"),
-        )
+    instant = timestamp(1)
+    # Another offset names the same instant; the bound compares as canonical text.
+    local = instant.astimezone(timezone(timedelta(hours=2)))
+    microsecond = timedelta(microseconds=1)
 
-    page = await recall.search_passages(
-        passage_request(
-            "needle",
-            since=datetime(2026, 5, 1, 12, tzinfo=UTC),
-            until=datetime(2026, 5, 1, 12, tzinfo=UTC),
-        )
-    )
+    exact = await recall.search_passages(passage_request("needle", since=local, until=local))
+    after = await recall.search_passages(passage_request("needle", since=instant + microsecond))
+    before = await recall.search_passages(passage_request("needle", until=instant - microsecond))
 
-    assert [hit.session_id for hit in page.hits] == ["timestamp-encoding"]
+    assert [hit.session_id for hit in exact.hits] == ["bounds"]
+    assert after.hits == ()
+    assert before.hits == ()
 
 
 async def test_sqlite_fts_filtered_search_keeps_other_scope_sessions_indexed(

@@ -10,7 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from core.database import APPLICATION_IDS, DatabaseUnavailableError, projection_failure
+from core.database import (
+    APPLICATION_IDS,
+    DatabaseCorruptError,
+    DatabaseUnavailableError,
+    projection_failure,
+)
 from core.recall._passage_catalog import (
     Candidates,
     CatalogPlan,
@@ -39,7 +44,7 @@ def _passage(
     passage_id: str | None = None,
     start_message_id: str = "m1",
     end_message_id: str = "m1",
-    timestamp: str = "2026-05-01T12:00:00+00:00",
+    timestamp: str = "2026-05-01T12:00:00.000000Z",
 ) -> Passage:
     return Passage(
         passage_id=passage_id or f"id-{text}",
@@ -303,9 +308,9 @@ async def test_vector_store_pending_texts_are_newest_first_bounded_and_filtered(
     await store.use_space(HEADER)
     await _apply(
         store,
-        _change("old", [_passage("alpha", timestamp="2026-01-01T00:00:00+00:00")]),
-        _change("new", [_passage("beta", timestamp="2026-06-01T00:00:00+00:00")]),
-        _change("newest", [_passage("gamma", timestamp="2026-07-01T00:00:00+00:00")]),
+        _change("old", [_passage("alpha", timestamp="2026-01-01T00:00:00.000000Z")]),
+        _change("new", [_passage("beta", timestamp="2026-06-01T00:00:00.000000Z")]),
+        _change("newest", [_passage("gamma", timestamp="2026-07-01T00:00:00.000000Z")]),
     )
 
     assert [text for _key, text in await store.pending_texts(None, limit=2)] == ["gamma", "beta"]
@@ -511,21 +516,20 @@ async def test_vector_store_candidate_filter_runs_inside_knn_without_starving(
     store.close()
 
 
-async def test_vector_store_time_filters_keep_passages_with_invalid_timestamps(
+async def test_vector_store_treats_a_non_canonical_passage_timestamp_as_damage(
     tmp_path: Path,
 ) -> None:
     store = VectorStore(tmp_path)
-    await _index(store, {"malformed": [_passage("alpha", timestamp="not-a-timestamp")]})
-
-    matches = await _nearest(
-        store,
-        [1.0, 0.0, 0.0],
-        _candidates("malformed"),
-        since=datetime(2026, 1, 1, tzinfo=UTC),
-        until=datetime(2026, 12, 31, tzinfo=UTC),
+    await store.use_space(HEADER)
+    await _apply(
+        store, _change("offset", [_passage("alpha", timestamp="2026-05-01T12:00:00+00:00")])
     )
 
-    assert matches == [("malformed", "alpha")]
+    with pytest.raises(DatabaseCorruptError) as caught:
+        await store.store_vectors(HEADER, {text_hash("alpha"): VECTORS["alpha"]})
+
+    assert projection_failure(caught.value) == "rebuild"
+    assert await store.count_pending(_candidates("offset")) == 1
     store.close()
 
 
@@ -536,8 +540,8 @@ async def test_vector_store_time_filters_exclude_passages_outside_the_period(
     await _index(
         store,
         {
-            "old": [_passage("alpha", timestamp="2026-01-01T00:00:00+00:00")],
-            "new": [_passage("delta", timestamp="2026-06-01T00:00:00+00:00")],
+            "old": [_passage("alpha", timestamp="2026-01-01T00:00:00.000000Z")],
+            "new": [_passage("delta", timestamp="2026-06-01T00:00:00.000000Z")],
         },
     )
 

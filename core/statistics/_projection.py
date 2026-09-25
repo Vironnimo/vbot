@@ -26,7 +26,7 @@ from core.statistics._measurements import (
     _timing_field,
     _usage_nonnegative_int,
 )
-from core.statistics.timestamps import parse_timestamp
+from core.utils.timestamps import parse_canonical_timestamp
 
 JsonObject = dict[str, Any]
 
@@ -50,10 +50,13 @@ def datetime_instant(value: datetime) -> int:
     return (value - _EPOCH) // _MICROSECOND
 
 
-def timestamp_instant(value: Any) -> int | None:
-    """Return the report's parsed instant for a raw timestamp, ``None`` when unparseable."""
-    parsed = parse_timestamp(value)
-    return None if parsed is None else datetime_instant(parsed)
+def timestamp_instant(value: str) -> int:
+    """Return the instant of a stored canonical Session timestamp.
+
+    Sessions store every timestamp in the canonical form, so any other value is
+    bad data and raises ``ValueError``.
+    """
+    return datetime_instant(parse_canonical_timestamp(value))
 
 
 def day_key(day: int) -> str:
