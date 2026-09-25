@@ -782,8 +782,32 @@ describe('Live voice UI requests', () => {
     });
   });
 
+  it('opens an Agent page or a Project page by its id', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    f.request('r1', 'open', { view: 'agents', agent_id: 'joel' });
+    f.request('r2', 'open', {
+      view: 'projects',
+      project_id: 'vbot',
+      agent_id: null,
+    });
+    await flush();
+    expect(f.uiActions.open.mock.calls.map(([target]) => target)).toEqual([
+      { view: 'agents', agent_id: 'joel' },
+      { view: 'projects', project_id: 'vbot' },
+    ]);
+  });
+
   it.each([
     ['open', { view: 'settings' }, 'invalid_view'],
+    [
+      'open',
+      { view: 'agents', agent_id: 'joel', session_id: 's1' },
+      'invalid_arguments',
+    ],
+    ['open', { view: 'agents', project_id: 'vbot' }, 'invalid_arguments'],
+    ['open', { view: 'projects', project_id: '' }, 'invalid_arguments'],
+    ['open', { view: 'chat', project_id: 'vbot' }, 'invalid_arguments'],
     [
       'open',
       { view: 'terminals', agent_id: 'joel', session_id: 's1' },
