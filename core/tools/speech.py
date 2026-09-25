@@ -12,8 +12,8 @@ from core.model_tasks import (
     SpeechUnsupportedTargetError,
 )
 from core.tools._argument_repair import normalize_call_arguments
+from core.tools._call_vocabulary import SpellingAliases
 from core.tools._media_failures import provider_failure_message, unavailable_message
-from core.tools._spelling_aliases import SpellingAliases
 from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
     JsonObject,

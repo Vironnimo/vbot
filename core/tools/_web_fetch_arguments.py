@@ -14,7 +14,7 @@ import re
 from typing import Any
 
 from core.tools._argument_repair import normalize_call_arguments
-from core.tools._spelling_aliases import SpellingAliases, spelling
+from core.tools._call_vocabulary import SpellingAliases, spelling
 from core.tools._web_fetch_pages import REF_IN_TEXT
 from core.tools.contracts import ToolContract, ToolContractError
 
