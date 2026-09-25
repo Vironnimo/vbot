@@ -151,7 +151,7 @@ async def test_unknown_metadata_and_media_are_preserved(host):
         "structuredContent": {"answer": 42},
         "_meta": {"vendor": {"future": True}},
     }
-    result, artifacts = await ContentStore(host, host.data_dir).preserve(payload)
+    result, artifacts = await ContentStore(host).preserve(payload)
     assert result["_meta"] == payload["_meta"]
     assert result["structuredContent"] == payload["structuredContent"]
     assert result["content"][0]["_meta"] == {"detail": "original"}
@@ -170,7 +170,7 @@ async def test_media_shaped_application_data_and_metadata_are_not_rewritten(host
         "content": [{"type": "text", "text": "sentinel", "_meta": resource_shape}],
         "tools": [{"name": "example", "inputSchema": {"examples": [media_shape]}}],
     }
-    result, artifacts = await ContentStore(host, host.data_dir).preserve(payload)
+    result, artifacts = await ContentStore(host).preserve(payload)
     assert result == payload
     assert artifacts == []
 
@@ -195,7 +195,7 @@ async def test_protocol_resource_and_prompt_media_positions_are_preserved(host, 
                 {"role": "user", "content": [block] if position == "message_list" else block}
             ]
         }
-    result, artifacts = await ContentStore(host, host.data_dir).preserve(payload)
+    result, artifacts = await ContentStore(host).preserve(payload)
     if position == "contents":
         preserved = result["contents"][0]
     elif position == "content":
@@ -478,23 +478,30 @@ async def test_stopping_a_connection_that_ignores_cancellation_still_removes_its
 
 
 @pytest.mark.asyncio
-async def test_large_media_is_available_as_a_file_when_attachment_delivery_is_unavailable(host):
+async def test_media_attachment_delivery_refuses_is_omitted_with_a_marker(host):
     def reject(name, data):
         raise AttachmentTooLargeError("test-owned-size-limit")
 
     host = replace(host, store_attachment=reject)
     raw = b"media-sentinel"
-    result, artifacts = await ContentStore(host, host.data_dir / "content").preserve(
+    before = set(host.data_dir.rglob("*"))
+    result, artifacts = await ContentStore(host).preserve(
         {
             "content": [
                 {"type": "image", "mimeType": "image/png", "data": base64.b64encode(raw).decode()}
             ]
         }
     )
-    from pathlib import Path
 
-    assert Path(result["content"][0]["path"]).read_bytes() == raw
-    assert result["content"][0]["media_delivery_error"] == "test-owned-size-limit"
+    # No unmanaged copy: the bytes are gone and the marker says why.
+    assert result["content"][0] == {
+        "type": "image",
+        "mimeType": "image/png",
+        "content_omitted": True,
+        "media_delivery_error": "test-owned-size-limit",
+        "size_bytes": len(raw),
+    }
+    assert set(host.data_dir.rglob("*")) == before
     assert artifacts == []
 
 

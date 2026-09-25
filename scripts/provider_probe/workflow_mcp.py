@@ -20,7 +20,8 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
     """Let a real Model discover and drive an inert application through the real MCP host.
 
     The application records intent without evaluating generated code or touching Blender.
-    Only structural outcomes are printed; all result files belong to a temporary directory.
+    Only structural outcomes are printed. The probe conversation stands in for the Session
+    that keeps large results; the Extension state lives in a temporary directory.
     """
     from mcp.server import MCPServer
 
@@ -28,6 +29,7 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
     from core.extensions.operations import ExtensionHost
     from core.tools.availability import ToolAccess
     from core.tools.tools import ToolContext, ToolDefinitionProfileContext, ToolRegistry
+    from core.utils.ids import new_id
     from resources.extensions.mcp.client import ConnectionRunner
     from resources.extensions.mcp.config import validate_connection
     from resources.extensions.mcp.extension import MCPService
@@ -88,6 +90,17 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
         async def sample(*_: Any) -> dict[str, Any]:
             raise ValueError("Sampling is not part of this workflow fixture")
 
+        # Result payloads the MCP Extension attaches, kept for this one conversation.
+        payloads: dict[str, Any] = {}
+
+        def attach_payload(_call_id: str, _tool_name: str, payload: Any) -> str:
+            payload_id = new_id("res")
+            payloads[payload_id] = json.loads(json.dumps(payload))
+            return payload_id
+
+        async def load_payload(_context: Any, payload_id: str) -> Any:
+            return payloads.get(payload_id)
+
         state_dir = root / "extension-data" / "mcp"
         state_dir.mkdir(parents=True)
         host = ExtensionHost(
@@ -99,6 +112,7 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
             resolve_credential=lambda _: "",
             set_credential=lambda *_: None,
             state_dir=state_dir,
+            load_result_payload=load_payload,
         )
         api = ExtensionAPI(
             "mcp", ExtensionDeclarations(), config={}, logger=logging.getLogger("probe")
@@ -130,6 +144,7 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
             workspace=root,
             vbot_root=root,
             data_root=root,
+            result_payload_hook=attach_payload,
         )
         definitions = registry.provider_definitions(
             allowed_tools=["mcp_blender"],

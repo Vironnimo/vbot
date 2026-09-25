@@ -9,10 +9,7 @@ whose root fails to load, including one from a newer vBot, is never overwritten.
 
 from __future__ import annotations
 
-import json
-import os
 import re
-import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -254,16 +251,3 @@ class ConnectionStore:
         )
         write_json_document(self.path, {"connections": values}, CONNECTIONS_FORMAT)
         self._parse(self._read())
-
-
-def atomic_json(path: Path, data: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=".mcp-", suffix=".tmp")
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(data, stream, ensure_ascii=False, allow_nan=False)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)

@@ -1,4 +1,10 @@
-"Preserve complete MCP payloads while moving binary bytes into durable files."
+"""Present MCP payloads: binary bytes become Attachments, large results stay readable.
+
+A result too large to show at once is attached to its Tool Result as a result
+payload and read selectively through the ``read`` action. Outside a Session
+(management and CLI calls) nothing could read a saved result later, so the
+complete payload is returned inline.
+"""
 
 from __future__ import annotations
 
@@ -15,8 +21,6 @@ from core.extensions.operations import ExtensionHost
 from core.tools.tools import ToolContext, read_media_artifact, run_tool_worker
 from core.utils.ids import is_safe_id, new_id
 
-from .config import atomic_json
-
 RESULT_VIEW_CHARACTERS = 6000
 RESULT_PREVIEW_CHARACTERS = 400
 RESULT_READ_ENTRIES = 20
@@ -32,11 +36,14 @@ POINTER_INVALID = "Invalid JSON Pointer. Use a pointer returned by read."
 
 READ_INVALID = "These read options do not apply to the selected value."
 
+READ_TOO_LARGE = (
+    "This selection is too large to show. Read a deeper pointer, fewer fields, or a smaller limit."
+)
+
 
 class ContentStore:
-    def __init__(self, host: ExtensionHost, directory: Path) -> None:
+    def __init__(self, host: ExtensionHost) -> None:
         self.host = host
-        self.directory = directory
 
     async def preserve(
         self, payload: dict[str, Any]
@@ -73,9 +80,9 @@ class ContentStore:
             try:
                 record = await run_tool_worker(self.host.store_attachment, filename, raw)
             except (AttachmentTooLargeError, AttachmentTypeNotAllowedError) as error:
-                path = self.directory / filename
-                await run_tool_worker(self._save, path, raw)
-                value["path"] = path.as_posix()
+                # vBot keeps no unmanaged copy: the bytes are omitted and the
+                # marker says why.
+                value["content_omitted"] = True
                 value["media_delivery_error"] = str(error)
             else:
                 value["path"] = Path(record.file_path).as_posix()
@@ -103,12 +110,6 @@ class ContentStore:
             return "blob"
         return None
 
-    @staticmethod
-    def _save(path: Path, raw: bytes) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("xb") as stream:
-            stream.write(raw)
-
     async def present(
         self,
         payload: dict[str, Any],
@@ -119,36 +120,18 @@ class ContentStore:
         preview: Any = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         preserved, artifacts = await self.preserve(payload)
-        document = {
-            "owner": {"agent_id": context.agent_id, "project_id": context.project_id},
-            "connection": connection,
-            "source": source,
-            "payload": preserved,
-        }
-
-        def save(candidate: str) -> bool:
-            path = self.directory / "results" / f"{candidate}.json"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                with path.open("x", encoding="utf-8"):
-                    pass
-            except FileExistsError:
-                return False
-            atomic_json(path, document)
-            return True
-
-        identifier = await run_tool_worker(new_id, "res", claim=save)
-        path = self.directory / "results" / f"{identifier}.json"
         encoded = json.dumps(preserved, ensure_ascii=False, separators=(",", ":"))
-        complete = preview is None and len(encoded) <= RESULT_VIEW_CHARACTERS
-        view = (
-            preserved if complete else self._preview(preview if preview is not None else preserved)
+        if not context.result_payloads_available or (
+            preview is None and len(encoded) <= RESULT_VIEW_CHARACTERS
+        ):
+            return {"complete": True, "value": preserved}, artifacts
+        identifier = context.attach_result_payload(
+            {"connection": connection, "source": source, "payload": preserved}
         )
         return {
             "result_id": identifier,
-            "result_file": path.as_posix(),
-            "complete": complete,
-            "value" if complete else "preview": view,
+            "complete": False,
+            "preview": self._preview(preview if preview is not None else preserved),
             "read": {"action": "read", "result_id": identifier},
         }, artifacts
 
@@ -158,21 +141,15 @@ class ContentStore:
         context: ToolContext,
         connection: str,
     ) -> dict[str, Any]:
-        if not is_safe_id(identifier):
+        load = self.host.load_result_payload
+        if not is_safe_id(identifier) or load is None:
             raise ValueError(RESULT_MISSING)
-        path = self.directory / "results" / f"{identifier}.json"
-        try:
-            document = await run_tool_worker(self._load_json, path)
-        except FileNotFoundError:
-            raise ValueError(RESULT_MISSING) from None
-        owner = {"agent_id": context.agent_id, "project_id": context.project_id}
-        if document["owner"] != owner or document["connection"] != connection:
+        document = await load(context, identifier)
+        if not isinstance(document, dict):
+            raise ValueError(RESULT_MISSING)
+        if document.get("connection") != connection:
             raise ValueError(RESULT_DENIED)
         return document
-
-    @staticmethod
-    def _load_json(path: Path) -> dict[str, Any]:
-        return dict(json.loads(path.read_text(encoding="utf-8")))
 
     @staticmethod
     def _preview(value: Any) -> Any:
@@ -205,11 +182,16 @@ class ContentStore:
         }
         if isinstance(value, str):
             limit = min(limit, RESULT_READ_CHARACTERS)
-            response.update(value=value[offset : offset + limit], offset=offset, total=len(value))
-            end = min(offset + limit, len(value))
-            if end < len(value):
-                response["next"] = {**arguments, "offset": end}
-            return self._bounded_read(response)
+            while True:
+                page = {**response, "value": value[offset : offset + limit]}
+                page.update(offset=offset, total=len(value))
+                end = min(offset + limit, len(value))
+                if end < len(value):
+                    page["next"] = {**arguments, "offset": end}
+                # Escaped characters can outgrow the view; a shorter page still advances.
+                if limit == 1 or _fits(page):
+                    return self._bounded_read(page)
+                limit //= 2
         if not isinstance(value, (dict, list)):
             if offset or "limit" in arguments:
                 raise ValueError(READ_INVALID)
@@ -248,16 +230,20 @@ class ContentStore:
             response["next"] = {**arguments, "offset": end}
         return self._bounded_read(response)
 
-    def _bounded_read(self, response: dict[str, Any]) -> dict[str, Any]:
-        if len(json.dumps(response, ensure_ascii=False)) <= RESULT_VIEW_CHARACTERS:
+    @staticmethod
+    def _bounded_read(response: dict[str, Any]) -> dict[str, Any]:
+        if _fits(response):
             return response
-        identifier = response["result_id"]
         return {
-            "result_id": identifier,
-            "result_file": (self.directory / "results" / f"{identifier}.json").as_posix(),
+            "result_id": response["result_id"],
             "type": response["type"],
             "complete": False,
+            "guidance": READ_TOO_LARGE,
         }
+
+
+def _fits(response: dict[str, Any]) -> bool:
+    return len(json.dumps(response, ensure_ascii=False)) <= RESULT_VIEW_CHARACTERS
 
 
 def pointer_part(value: str) -> str:

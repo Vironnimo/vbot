@@ -12,9 +12,10 @@ from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
 from core.tools.availability import ToolAccess
 from core.tools.contracts import ToolContractError
 from core.tools.tools import ToolDefinitionProfileContext, ToolRegistry
-from resources.extensions.mcp.extension import MCPService, remote_tool_name
+from resources.extensions.mcp.extension import MCPService, register, remote_tool_name
 from tests.resources.extensions.mcp_helpers import (
     context,
+    payloads,
     runner_for,
 )
 from tests.resources.extensions.mcp_helpers import (
@@ -374,16 +375,49 @@ async def test_negative_page_limit_fails_contract_before_server_call(context_ser
 
 
 @pytest.mark.asyncio
-async def test_cli_reads_saved_discovery_without_reconnecting(context_service, host):
+async def test_cli_explore_and_invoke_return_the_complete_payload_inline(context_service, host):
     service, registry, runner, calls = context_service
-    receipt, _ = await service.content.present({"items": [1, 2]}, context(host), "example")
-    runner.state = "disconnected"
+    runner.catalog["instructions"] = "test-owned-guidance " * 500
 
-    result = await service._invoke_for_agent(
+    search = await service._invoke_for_agent(
+        runner, {"id": "example", "agent": "alice", "action": "search"}
+    )
+    invoke = await service._invoke_for_agent(
         runner,
-        {"id": "example", "agent": "alice", "action": "read", "result_id": receipt["result_id"]},
+        {
+            "id": "example",
+            "agent": "alice",
+            "operation": "tools/call",
+            "arguments": {"name": "inspect", "arguments": {"value": "x" * 7000}},
+        },
     )
 
-    assert result["ok"]
-    assert result["data"]["entries"][0]["value"] == [1, 2]
-    assert calls == []
+    # A management call has no Session that could read a saved result later.
+    assert search["ok"] and invoke["ok"]
+    assert set(search["data"]) == {"complete", "value"}
+    guidance = search["data"]["value"]["server_guidance"]["instructions"]
+    assert guidance == runner.catalog["instructions"]
+    assert invoke["data"] == {
+        "complete": True,
+        "value": {
+            "content": [{"type": "text", "text": "x" * 7000}],
+            "structuredContent": {"sentinel": True},
+            "_meta": {"retained": True},
+        },
+    }
+    assert payloads(host).rows == {}
+
+
+@pytest.mark.asyncio
+async def test_cli_explore_offers_no_read(tmp_path):
+    api = ExtensionAPI("mcp", ExtensionDeclarations(), config={}, logger=logging.getLogger("test"))
+    register(api)
+    explore = next(item for item in api.operations.describe() if item["name"] == "explore")
+
+    assert explore["parameters"]["properties"]["action"]["enum"] == ["search", "describe", "call"]
+    assert {"result_id", "pointer", "fields"}.isdisjoint(explore["parameters"]["properties"])
+    with pytest.raises(ValueError, match="Invalid operation arguments"):
+        await api.operations.invoke(
+            "explore",
+            {"id": "example", "agent": "alice", "action": "read", "result_id": "res_x"},
+        )
