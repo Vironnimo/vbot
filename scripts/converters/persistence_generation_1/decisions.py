@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from pathlib import Path
 
 from core.database import APPLICATION_IDS, open_offline_database
 from core.model_tasks.decision_store import FORMAT_GENERATION, decision_database_spec
@@ -63,6 +64,14 @@ _EVALUATIONS = LegacyTable(
 )
 
 
+def check_source(source: Path) -> None:
+    """Refuse a ``decisions.db`` this area cannot read, before anything is staged."""
+    source_path = source / DATABASE
+    if source_path.is_file():
+        with open_legacy(source_path) as connection:
+            _is_current(source_path, connection)
+
+
 def convert(context: ConversionContext) -> None:
     """Stage the Generation 1 ``decisions.db`` from the source database."""
     source_path = context.source_path(DATABASE)
@@ -70,22 +79,14 @@ def convert(context: ConversionContext) -> None:
         context.report.count(AREA, "source_missing")
         return
     with open_legacy(source_path) as source:
-        found = identity(source)
-        if found == (APPLICATION_IDS["decisions"], FORMAT_GENERATION):
+        if _is_current(source_path, source):
             context.report.count(AREA, "already_current")
             return
-        if found != LEGACY_IDENTITY:
-            raise ConversionError(
-                f"{source_path} is not a pre-Generation-1 decisions database "
-                f"(application_id={found[0]}, user_version={found[1]})"
-            )
         tables = []
         for table in (_EXPERIMENTS, _EVALUATIONS):
-            present = table_columns(source, table.name)
-            if present is None:
+            if table_columns(source, table.name) is None:
                 context.report.skip(AREA, table.name, "table missing in the source; none copied")
                 continue
-            require_columns(source_path, table, present)
             tables.append(table)
 
         target_path = context.staged(DATABASE)
@@ -103,6 +104,23 @@ def convert(context: ConversionContext) -> None:
         finally:
             database.close()
     retire_sidecars(context, DATABASE)
+
+
+def _is_current(source_path: Path, source: sqlite3.Connection) -> bool:
+    """Whether the source is already Generation 1; refuse a foreign database."""
+    found = identity(source)
+    if found == (APPLICATION_IDS["decisions"], FORMAT_GENERATION):
+        return True
+    if found != LEGACY_IDENTITY:
+        raise ConversionError(
+            f"{source_path} is not a pre-Generation-1 decisions database "
+            f"(application_id={found[0]}, user_version={found[1]})"
+        )
+    for table in (_EXPERIMENTS, _EVALUATIONS):
+        present = table_columns(source, table.name)
+        if present is not None:
+            require_columns(source_path, table, present)
+    return False
 
 
 def _json_columns(*columns: str, nullable: tuple[str, ...] = ()) -> RowCheck:

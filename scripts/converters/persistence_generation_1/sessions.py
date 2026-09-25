@@ -40,7 +40,9 @@ gets exactly the side rows the current store writes for its role:
 
 The source is opened read-only. Timestamps become canonical UTC, and every drop
 or approximation is reported. The staged database is reopened once, so its
-search indexes are built and verified.
+search indexes are built and verified. The old Session store's marker
+``session-store.json``, its snapshot health and its ``session-snapshots`` are
+retired: the database kernel replaced them.
 """
 # ruff: noqa: E501
 
@@ -96,6 +98,11 @@ _RUN_LATEST_RELEASE = (
     "Start the latest vBot release before Generation 1 once so it updates this Session "
     "database, then convert again"
 )
+# The old Session store's marker, snapshot health and snapshots (full copies of
+# sessions.db); the database kernel replaced all of them. Its maintenance guard
+# means an old conversion never finished.
+_LEGACY_STORE_FILES = ("session-store.json", "session-snapshot-health.json", "session-snapshots")
+_LEGACY_MAINTENANCE_GUARD = "session-store-maintenance.json"
 # Boundary checkpoints were written by the summary-and-tail strategy.
 _LEGACY_CHECKPOINT_STRATEGY = "summary_tail"
 # Projected checkpoints once placed this note between the summary and the tail.
@@ -254,18 +261,34 @@ WHERE r.session_key = ? ORDER BY p.run_key, p.ordinal
 """
 
 
+def check_source(source: Path) -> None:
+    """Refuse a Session store this area cannot convert, before anything is staged."""
+    guard = source / _LEGACY_MAINTENANCE_GUARD
+    if guard.exists():
+        raise ConversionError(
+            f"{guard} shows an unfinished maintenance of the old Session store. "
+            f"{_RUN_LATEST_RELEASE}"
+        )
+    source_path = source / DATABASE
+    if source_path.is_file():
+        with _open_source(source_path) as connection:
+            _is_current(source_path, connection)
+
+
 def convert(context: ConversionContext) -> None:
     """Stage the Generation 1 ``sessions.db`` from the source Session database."""
+    for relative in _LEGACY_STORE_FILES:
+        if context.source_path(relative).exists():
+            context.retire(relative)
+            context.report.count(AREA, "legacy_store_files_retired")
     source_path = context.source_path(DATABASE)
     if not source_path.is_file():
         context.report.count(AREA, "source_missing")
         return
     with _open_source(source_path) as source:
-        found = identity(source)
-        if found[0] == APPLICATION_ID and _has_generation_1_shape(source):
+        if _is_current(source_path, source):
             context.report.count(AREA, "already_current")
             return
-        _require_legacy_source(source_path, source, found)
         target_path = context.staged(DATABASE)
         remove_staged(target_path)
         database = open_offline_database(session_database_spec(target_path))
@@ -276,6 +299,12 @@ def convert(context: ConversionContext) -> None:
     _build_search_index(target_path, tally)
     tally.publish(context, AREA)
     retire_sidecars(context, DATABASE)
+
+
+def session_label(row: sqlite3.Row | Mapping[str, Any]) -> str:
+    """The report item naming one Session generation, for its drops and approximations."""
+    project = row["project_id"] or "-"
+    return f"session {project}/{row['agent_id']}/{row['session_id']} ({row['generation_id']})"
 
 
 # -- Source ----------------------------------------------------------------------------
@@ -312,6 +341,15 @@ def _has_generation_1_shape(source: sqlite3.Connection) -> bool:
     return (
         table_columns(source, "messages") is None and table_columns(source, "entries") is not None
     )
+
+
+def _is_current(path: Path, source: sqlite3.Connection) -> bool:
+    """Whether the source is already Generation 1; refuse any shape this area cannot read."""
+    found = identity(source)
+    if found[0] == APPLICATION_ID and _has_generation_1_shape(source):
+        return True
+    _require_legacy_source(path, source, found)
+    return False
 
 
 def _require_legacy_source(path: Path, source: sqlite3.Connection, found: tuple[int, int]) -> None:
@@ -540,8 +578,7 @@ class _Conversion:
         return self.tally
 
     def label(self, row: sqlite3.Row) -> str:
-        project = row["project_id"] or "-"
-        return f"session {project}/{row['agent_id']}/{row['session_id']} ({row['generation_id']})"
+        return session_label(row)
 
     # -- Forks ---------------------------------------------------------------------------
 
