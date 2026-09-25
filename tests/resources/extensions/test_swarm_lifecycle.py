@@ -18,6 +18,7 @@ import pytest_asyncio
 from core.agents.temporary import TemporaryAgentRegistry, TemporaryExecutionGroups
 from core.chat import CommandDispatcher, CommandExecutionContext, ReplySurface
 from core.extensions import ExtensionAPI, ExtensionRecord, ExtensionRegistry
+from core.extensions.databases import ExtensionDatabases
 from core.extensions.extensions import ExtensionDeclarations
 from core.extensions.operations import ExtensionHost
 from core.tools import ToolRegistry
@@ -329,6 +330,7 @@ async def lifecycle(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
     async def catalog() -> dict[str, Any]:
         return {"models": [{"id": "fixture/model"}], "tools": [], "skills": []}
 
+    databases = ExtensionDatabases(tmp_path)
     host = ExtensionHost(
         data_dir=tmp_path,
         sample=None,  # type: ignore[arg-type]
@@ -340,6 +342,7 @@ async def lifecycle(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
         state_dir=tmp_path,
         temporary_agents=groups,
         catalog=catalog,
+        open_database=databases.opener(identity),
     )
     await api.operations.startup[0](host)
     service = cast(Any, declarations.tools[0].handler).__self__
@@ -349,6 +352,7 @@ async def lifecycle(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
         )
     finally:
         await service.close()
+        databases.close()
         await runtime.chat_run_manager.aclose()
         runtime.chat_sessions.close()
 

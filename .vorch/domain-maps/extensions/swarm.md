@@ -13,7 +13,11 @@ Swarm Activity uses live `run_active` as authoritative over an older persisted S
   and coordination with owner-bound temporary execution groups.
 - `store.py` owns the SQLite profile, Board, Wiki, audience, delivery, lifecycle and audit
   transactions. It receives canonical receipt lookups; it must
-  not open the Session database directly.
+  not open the Session database directly. Its database handle comes from
+  `host.open_database("swarm", SCHEMA_SQL)` at startup (kernel database
+  `ext.swarm.swarm`, file `extension-data/swarm/swarm.db`; `extensions.md` ->
+  Extension databases). Swarm never opens SQLite files itself, and the host
+  closes the handle after shutdown.
 - `agent_text.py` and `wiki_text.py` own the scoped Tool definitions and reviewed
   runtime wording. `_store_wiki.py` implements Wiki transactions within the existing
   Swarm database owner.
@@ -88,7 +92,9 @@ free Markdown with stable `page_id` values and `#wiki/<page_id>` links that navi
 inside the Swarm page. Agents choose how to organize them. List/search returns
 recent changes and excerpts; content and history reads are bounded. List/history
 continuations bind their query and revision watermark; content continuations pin
-the requested revision. Search matches Unicode-casefolded titles and content.
+the requested revision. Search matches Unicode-casefolded titles and content; the
+folding runs in Python over the latest revisions because kernel read connections
+carry no custom SQL functions.
 
 Create, update, delete and restore preserve full versions with author and timestamp.
 Update supports title/content replacement or one unique `old_text`/`new_text` edit.
@@ -231,7 +237,7 @@ Resume request, not replay of the old Start/Resume request. Evidence:
 
 ## Verification routes
 
-Store source routing: `store.py` retains asynchronous validation/admission and the public `SwarmStore` API. `_store_database.py` owns the single SQLite connection, reentrant lock, transaction boundary and signed cursor state. `_store_profiles.py`, `_store_lifecycle.py`, `_store_delivery.py`, `_store_reads.py` and `_store_board.py` implement concrete operations against that database capability; they do not receive the Swarm service or public Store. Shared row checks/projections live in `_store_records.py`, pure input/value rules in `_store_values.py`, and the existing name pool in `_participant_names.py`. Worker dispatch holds the same connection lock across each complete operation; delivery receipt lookups remain outside that lock. SQL, schema, request identities and transaction boundaries are unchanged.
+Store source routing: `store.py` retains asynchronous validation/admission and the public `SwarmStore` API. `_store_database.py` wraps the host-opened kernel `Database`: each `_write` is one kernel write transaction (retried as a whole on a busy database), each `_read` one read transaction, and the signed cursor key is cached at open. `_store_profiles.py`, `_store_lifecycle.py`, `_store_delivery.py`, `_store_reads.py` and `_store_board.py` implement concrete operations against that database capability; they do not receive the Swarm service or public Store. Shared row checks/projections live in `_store_records.py`, pure input/value rules in `_store_values.py`, and the existing name pool in `_participant_names.py`. Worker dispatch runs each operation on the Store's worker pool without a Store lock; the kernel serializes writes, so a state-dependent decision belongs inside the write operation, not in a preceding read. Delivery receipt lookups run outside any database transaction. Store tests open the same kernel spec offline through `open_swarm_database` (`tests/resources/extensions/swarm_store_helpers.py`).
 
 Internal Extension source routing: `extension.py` owns the live Swarm service and participant callbacks; `_extension_values.py` holds pure argument/projection/configuration helpers, `_operation_schemas.py` the management schemas, and `_registration.py` binds the existing service to Extension capabilities. Registration constructs that service lazily to keep imports acyclic. Tool/schema/reminder wording is preserved.
 
@@ -321,13 +327,19 @@ test_swarm_board.py). Activity offers this action for an inactive
 participant and consumes canonical context usage from history and Run events;
 it never substitutes cumulative Session usage.
 
-The Store creates the complete current schema directly. It has no schema
-upgrades or converter. Saved profiles and Swarm snapshots are consumed as stored;
+`SCHEMA_SQL` in `_store_database.py` is the declared schema; the kernel creates it
+and reconciles later additive changes on open. Keep changes additive (new tables,
+indexes, nullable or defaulted columns); state and kind values are validated in
+code, never by CHECK enums. New timestamps use the canonical UTC form
+`YYYY-MM-DDTHH:MM:SS.ffffffZ` (`_store_values._now`). A database from before
+Persistence Generation 1 is converted by
+`scripts/converters/persistence_generation_1/swarm.py`; the Store has no upgrade
+code. Saved profiles and Swarm snapshots are consumed as stored;
 input defaults are resolved when a profile is saved or previewed.
 
 The page offers confirmed deletion after Stop. `swarms.delete` marks a closed
 Swarm `deleting`, removes its bound participant Sessions through the host, then
-transactionally removes its Board, Wiki pages and revisions, decision questions/positions/history, participants, events
+transactionally removes its Board, Wiki pages and revisions, participants, events
 and request receipts.
 The profile and other Swarms remain. Start/Stop/Resume/Delete are serialized; the durable
 deletion marker blocks Resume, including request replay, and survives restart so
@@ -352,8 +364,8 @@ WikiPanel.svelte owns free page drafts, bounded content loading, search, version
 
 The Decisions Tool, management operation, tab, and linked-question enrichment are
 removed. Board discussion and Wiki pages cover shared deliberation and retained
-results. Historical decision tables remain passive retained data under the Store;
-no API reads or writes them, and explicit Swarm deletion still removes their rows.
+results. The generation 1 schema has no decision tables; the converter drops
+their retained rows and the `decisions:` request receipts.
 No saved profile instructions, Swarm snapshots, or Session history are rewritten.
 
 Wiki search uses explicit button callbacks and an input Enter handler because the

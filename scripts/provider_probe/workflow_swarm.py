@@ -8,7 +8,6 @@ import json
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
 from typing import Any, cast
 
 from core.chat.messages import ToolCall
@@ -27,7 +26,8 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
     )
     from core.chat import ChatMessage
     from core.database import write_bootstrap_marker
-    from core.extensions import ExtensionRegistry
+    from core.extensions import ExtensionRegistrationIdentity, ExtensionRegistry
+    from core.extensions.databases import ExtensionDatabases
     from core.extensions.extensions import purge_extension_modules
     from core.extensions.operations import ExtensionHost
     from core.runs import ChatRunManager, RunExecutionOwner
@@ -43,7 +43,8 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
         write_bootstrap_marker(root)
         sessions = ChatSessionManager(root)
         manager = ChatRunManager()
-        identity = SimpleNamespace(name="swarm", epoch="probe-registration")
+        identity = ExtensionRegistrationIdentity("swarm", "probe-registration")
+        databases = ExtensionDatabases(root)
         groups = TemporaryExecutionGroups(
             TemporaryAgentRegistry(sessions),
             None,
@@ -74,6 +75,7 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
             data_dir=root,
             state_dir=root,
             temporary_agents=groups,
+            open_database=databases.opener(identity),
             sample=unavailable,
             resolve_agent=lambda *_: None,
             resolve_tool_agent=lambda context: None,
@@ -560,6 +562,7 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
             }
         finally:
             await service.close()
+            databases.close()
             await manager.aclose()
             sessions.close()
 

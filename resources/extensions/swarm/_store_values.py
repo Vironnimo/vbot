@@ -275,7 +275,8 @@ def _limit(value: int) -> int:
 
 
 def _now() -> str:
-    return datetime.now(UTC).isoformat()
+    """Fixed-width UTC timestamp ``YYYY-MM-DDTHH:MM:SS.ffffffZ`` for stored values."""
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def _dump(value: Any) -> str:

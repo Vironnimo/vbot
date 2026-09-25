@@ -270,25 +270,25 @@ def _prepare_automatic_delivery(
 
 
 def _list_prepared_deliveries(db: SwarmDatabase, cursor: str | None, limit: int) -> Page:
-    connection = db._require_connection()
-    high_water = int(
-        connection.execute("SELECT COALESCE(MAX(rowid),0) FROM delivery_batches").fetchone()[0]
-    )
-    offset = 0
-    if cursor:
-        offset, frozen = db._cursor(cursor, "prepared", "all", high_water)
-        if frozen is None:
-            raise SwarmStoreError("invalid_cursor")
-        high_water = frozen
-    rows = connection.execute(
-        "SELECT receipt_id,participant_id,content_hash,effect_kind,settings_revision FROM delivery_batches WHERE acknowledged_at IS NULL AND rowid<=? ORDER BY rowid LIMIT ? OFFSET ?",
-        (high_water, limit + 1, offset),
-    ).fetchall()
-    return _page(
-        [dict(row) for row in rows],
-        limit,
-        db._make_cursor("prepared", "all", high_water, offset + limit),
-    )
+    with db._read() as connection:
+        high_water = int(
+            connection.execute("SELECT COALESCE(MAX(rowid),0) FROM delivery_batches").fetchone()[0]
+        )
+        offset = 0
+        if cursor:
+            offset, frozen = db._cursor(cursor, "prepared", "all", high_water)
+            if frozen is None:
+                raise SwarmStoreError("invalid_cursor")
+            high_water = frozen
+        rows = connection.execute(
+            "SELECT receipt_id,participant_id,content_hash,effect_kind,settings_revision FROM delivery_batches WHERE acknowledged_at IS NULL AND rowid<=? ORDER BY rowid LIMIT ? OFFSET ?",
+            (high_water, limit + 1, offset),
+        ).fetchall()
+        return _page(
+            [dict(row) for row in rows],
+            limit,
+            db._make_cursor("prepared", "all", high_water, offset + limit),
+        )
 
 
 def _claim_wake(db: SwarmDatabase, swarm_id: str, participant_id: str, expected_epoch: int) -> Json:
@@ -307,33 +307,33 @@ def _claim_wake(db: SwarmDatabase, swarm_id: str, participant_id: str, expected_
 
 
 def _list_wake_intents(db: SwarmDatabase, swarm_id: str, cursor: str | None, limit: int) -> Page:
-    connection = db._require_connection()
-    _assert_mutable(connection, swarm_id)
-    high_water = int(
-        connection.execute(
-            "SELECT COALESCE(MAX(ordinal),0) FROM participants WHERE swarm_id=?", (swarm_id,)
-        ).fetchone()[0]
-    )
-    offset = 0
-    if cursor:
-        offset, frozen = db._cursor(cursor, "wakes", swarm_id, high_water)
-        if frozen is None:
-            raise SwarmStoreError("invalid_cursor")
-        high_water = frozen
-    rows = connection.execute(
-        "SELECT id,wake_epoch,wake_announced_seq,idle_boundary FROM participants WHERE swarm_id=? AND wake_pending=1 AND ordinal<=? ORDER BY ordinal LIMIT ? OFFSET ?",
-        (swarm_id, high_water, limit + 1, offset),
-    ).fetchall()
-    entries = [
-        {
-            "participant_id": row["id"],
-            "epoch": row["wake_epoch"],
-            "boundary": row["idle_boundary"],
-            "announced_sequence": row["wake_announced_seq"],
-        }
-        for row in rows
-    ]
-    return _page(entries, limit, db._make_cursor("wakes", swarm_id, high_water, offset + limit))
+    with db._read() as connection:
+        _assert_mutable(connection, swarm_id)
+        high_water = int(
+            connection.execute(
+                "SELECT COALESCE(MAX(ordinal),0) FROM participants WHERE swarm_id=?", (swarm_id,)
+            ).fetchone()[0]
+        )
+        offset = 0
+        if cursor:
+            offset, frozen = db._cursor(cursor, "wakes", swarm_id, high_water)
+            if frozen is None:
+                raise SwarmStoreError("invalid_cursor")
+            high_water = frozen
+        rows = connection.execute(
+            "SELECT id,wake_epoch,wake_announced_seq,idle_boundary FROM participants WHERE swarm_id=? AND wake_pending=1 AND ordinal<=? ORDER BY ordinal LIMIT ? OFFSET ?",
+            (swarm_id, high_water, limit + 1, offset),
+        ).fetchall()
+        entries = [
+            {
+                "participant_id": row["id"],
+                "epoch": row["wake_epoch"],
+                "boundary": row["idle_boundary"],
+                "announced_sequence": row["wake_announced_seq"],
+            }
+            for row in rows
+        ]
+        return _page(entries, limit, db._make_cursor("wakes", swarm_id, high_water, offset + limit))
 
 
 def _mark_wake_admitted(
@@ -378,16 +378,13 @@ def _mark_wake_admitted(
 
 
 def _prepared_delivery(db: SwarmDatabase, receipt_id: str) -> Json | None:
-    row = (
-        db._require_connection()
-        .execute(
+    with db._read() as connection:
+        row = connection.execute(
             "SELECT b.participant_id,b.receipt_id,b.content_hash,b.effect_kind,b.acknowledged_at,s.project_id,s.agent_id,s.session_id,s.generation_id,s.owner_name "
             "FROM delivery_batches b JOIN participant_sessions s ON s.participant_id=b.participant_id "
             "WHERE b.receipt_id=?",
             (receipt_id,),
-        )
-        .fetchone()
-    )
+        ).fetchone()
     if row is None:
         return None
     return {
