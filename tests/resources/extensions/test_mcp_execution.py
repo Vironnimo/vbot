@@ -141,7 +141,7 @@ async def test_discovered_call_uses_validated_remote_tool(context_service, host)
     )
 
     assert result["ok"]
-    assert result["data"]["value"]["content"][0]["text"] == "sentinel"
+    assert result["data"]["content"] == "sentinel"
     assert calls == [("tools/call", {"name": "inspect", "arguments": {"value": "sentinel"}})]
 
 
