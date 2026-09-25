@@ -9,8 +9,9 @@ import pytest
 
 import core.tools.read_extract as read_extract_module
 from core.attachments import AttachmentTooLargeError
+from core.tools._public_http import PublicResponse
 from core.tools.tools import is_tool_result_envelope
-from core.tools.web_fetch import _FetchResult, extract_content
+from core.tools.web_fetch import extract_content
 from tests.core.tools.web_fetch_helpers import (
     assert_failure_envelope,
     assert_success_envelope,
@@ -608,7 +609,7 @@ async def test_web_fetch_uses_final_url_for_notebook_detection_after_redirect(
         }
     ).encode("utf-8")
 
-    def responder(url: str) -> _FetchResult:
+    def responder(url: str) -> PublicResponse:
         if url == start_url:
             return make_result(
                 status_code=302,

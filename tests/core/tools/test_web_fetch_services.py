@@ -212,7 +212,7 @@ async def test_preferred_failure_recovers_directly_with_source_and_warning(tmp_p
 @pytest.mark.asyncio
 async def test_cancellation_propagates_without_direct_replay(tmp_path, monkeypatch):
     direct = AsyncMock()
-    monkeypatch.setattr("core.tools.web_fetch._http_get", direct)
+    monkeypatch.setattr("core.tools._public_http._http_get", direct)
     monkeypatch.setattr(
         "core.tools.web_fetch.fetch_service", AsyncMock(side_effect=asyncio.CancelledError)
     )

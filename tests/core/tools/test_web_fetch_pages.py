@@ -141,7 +141,7 @@ async def test_find_searches_full_page_and_match_reference_reads_more(tmp_path, 
     first = await tool.dispatch(context, {"url": "https://example.com/"})
     assert first["data"]["content"] == "Short article"
     monkeypatch.setattr(
-        "core.tools.web_fetch._http_get",
+        "core.tools._public_http._http_get",
         AsyncMock(side_effect=AssertionError("ref must not fetch")),
     )
     found = await tool.dispatch(context, {"ref": first["data"]["ref"], "find": "zebra42"})
@@ -156,7 +156,7 @@ async def test_find_searches_full_page_and_match_reference_reads_more(tmp_path, 
 async def test_redundant_url_must_match_owned_saved_final_page(tmp_path, monkeypatch):
     final_url = "https://example.com/reference"
     fetch = AsyncMock(return_value=make_result(text="Needle fact. " * 1500, url=final_url))
-    monkeypatch.setattr("core.tools.web_fetch._http_get", fetch)
+    monkeypatch.setattr("core.tools._public_http._http_get", fetch)
     tool, context = registry(), make_context(tmp_path)
     first = await tool.dispatch(context, {"url": "https://example.com/redirect"})
     ref = first["data"]["ref"]
@@ -195,7 +195,7 @@ async def test_redundant_url_must_match_owned_saved_final_page(tmp_path, monkeyp
 async def test_search_continuations_recover_all_matches_without_fetching(tmp_path, monkeypatch):
     body = "\n".join("Filler " * 100 + f"Needle{i:02d}" for i in range(30))
     fetch = AsyncMock(return_value=make_result(text=body))
-    monkeypatch.setattr("core.tools.web_fetch._http_get", fetch)
+    monkeypatch.setattr("core.tools._public_http._http_get", fetch)
     tool, context = registry(), make_context(tmp_path)
     response = await tool.dispatch(context, {"url": "https://example.com/", "find": "Needle"})
     found = set()
@@ -252,7 +252,7 @@ async def test_rejects_ambiguous_or_invalid_requests_before_network(
     tmp_path, monkeypatch, arguments
 ):
     fetch = AsyncMock(side_effect=AssertionError("must not fetch"))
-    monkeypatch.setattr("core.tools.web_fetch._http_get", fetch)
+    monkeypatch.setattr("core.tools._public_http._http_get", fetch)
     # Handler and schema may reject at different layers; both prevent effects.
     try:
         result = await registry().dispatch(make_context(tmp_path), arguments)

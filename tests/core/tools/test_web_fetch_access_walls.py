@@ -6,9 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from core.tools.web_fetch import (
-    _FetchResult,
-)
+from core.tools._public_http import PublicResponse
 from tests.core.tools.web_fetch_helpers import (
     assert_failure_envelope,
     assert_success_envelope,
@@ -80,7 +78,7 @@ async def test_web_fetch_handler_reddit_login_wall_signals_not_retryable(
     </html>
     """
 
-    def responder(request_url: str) -> _FetchResult:
+    def responder(request_url: str) -> PublicResponse:
         if request_url == requested:
             return make_result(
                 status_code=302,

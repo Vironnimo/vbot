@@ -8,14 +8,15 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+import core.tools._public_http as public_http
 import core.tools.web_fetch as web_fetch_module
 from core.providers.tool_schema import render_tool_definitions
+from core.tools._public_http import PublicResponse
 from core.tools.tools import ToolRegistry
 from core.tools.web_fetch import (
     WEB_FETCH_TOOL_DESCRIPTION,
     WEB_FETCH_TOOL_NAME,
     WEB_FETCH_TOOL_PARAMETERS,
-    _FetchResult,
     register_web_fetch_tool,
 )
 from tests.core.tools.web_fetch_helpers import (
@@ -38,12 +39,12 @@ from tests.core.tools.web_fetch_helpers import (
 
 def test_make_session_requests_browser_impersonation(monkeypatch: pytest.MonkeyPatch) -> None:
     constructor = Mock(return_value=_StreamingSession())
-    monkeypatch.setattr(web_fetch_module, "AsyncSession", constructor)
+    monkeypatch.setattr(public_http, "AsyncSession", constructor)
 
-    session = web_fetch_module._make_session()
+    session = public_http._make_session(web_fetch_module._accept("markdown"))
 
     assert isinstance(session, _StreamingSession)
-    assert constructor.call_args.kwargs["impersonate"] == web_fetch_module._IMPERSONATE_TARGET
+    assert constructor.call_args.kwargs["impersonate"] == public_http._IMPERSONATE_TARGET
     assert "text/markdown" in constructor.call_args.kwargs["headers"]["Accept"]
 
 
@@ -56,7 +57,9 @@ async def test_http_get_collects_streamed_response_with_existing_text_decoding()
         )
     )
 
-    result = await web_fetch_module._http_get(cast(Any, session), "https://example.com/stream")
+    result = await public_http._http_get(
+        cast(Any, session), "https://example.com/stream", public_http.MAX_RESPONSE_BYTES
+    )
 
     assert result.content == b"hello world"
     assert result.text == "hello world"
@@ -64,7 +67,7 @@ async def test_http_get_collects_streamed_response_with_existing_text_decoding()
         (
             "GET",
             "https://example.com/stream",
-            {"allow_redirects": False, "timeout": web_fetch_module._REQUEST_TIMEOUT},
+            {"allow_redirects": False, "timeout": public_http._REQUEST_TIMEOUT},
         )
     ]
 
@@ -73,11 +76,10 @@ async def test_http_get_collects_streamed_response_with_existing_text_decoding()
 async def test_http_get_stops_unknown_length_response_at_download_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(web_fetch_module, "_MAX_RESPONSE_BYTES", 5)
     session = _StreamingSession(_StreamingResponse([b"abc", b"def"]))
 
-    with pytest.raises(web_fetch_module._ResponseTooLargeError):
-        await web_fetch_module._http_get(cast(Any, session), "https://example.com/stream")
+    with pytest.raises(public_http._ResponseTooLargeError, match="5 bytes download limit"):
+        await public_http._http_get(cast(Any, session), "https://example.com/stream", 5)
 
 
 @pytest.mark.asyncio
@@ -87,10 +89,10 @@ async def test_web_fetch_reports_response_over_download_limit(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    async def _raise_too_large(_session: object, _url: str) -> _FetchResult:
-        raise web_fetch_module._ResponseTooLargeError("response exceeds the 50 MB download limit")
+    async def _raise_too_large(_session: object, _url: str, _limit: int) -> PublicResponse:
+        raise public_http._ResponseTooLargeError("response exceeds the 50 MB download limit")
 
-    monkeypatch.setattr(web_fetch_module, "_http_get", _raise_too_large)
+    monkeypatch.setattr(public_http, "_http_get", _raise_too_large)
 
     result = await web_fetch_handler(
         make_context(workspace),
@@ -158,7 +160,7 @@ async def test_web_fetch_rejects_addresses_that_are_not_web_urls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, url: str, message: str
 ) -> None:
     fetch = AsyncMock()
-    monkeypatch.setattr(web_fetch_module, "_http_get", fetch)
+    monkeypatch.setattr(public_http, "_http_get", fetch)
 
     result = await _registry().dispatch(make_context(tmp_path), {"url": url})
 
@@ -226,7 +228,7 @@ async def test_web_fetch_handler_rejects_redirect_to_private_host(
 
     fetched: list[str] = []
 
-    def responder(url: str) -> _FetchResult:
+    def responder(url: str) -> PublicResponse:
         fetched.append(url)
         if url == start_url:
             return make_result(status_code=302, headers={"Location": blocked_redirect})
@@ -238,8 +240,9 @@ async def test_web_fetch_handler_rejects_redirect_to_private_host(
 
     error = assert_failure_envelope(result, "blocked_url")
     assert error["message"].startswith(
-        f"{start_url} redirected to an address web_fetch does not follow. 127.0.0.1 is a "
-        "private or local network address"
+        f"{start_url} redirected to an address that is not followed. 127.0.0.1 is a "
+        "private or local network address; only public internet addresses can be "
+        "fetched."
     )
     assert blocked_redirect not in fetched
 
@@ -262,7 +265,7 @@ async def test_dispatch_rejects_every_conflicting_output_constraint_before_http(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, options: dict[str, Any]
 ) -> None:
     fetch = AsyncMock()
-    monkeypatch.setattr(web_fetch_module, "_http_get", fetch)
+    monkeypatch.setattr(public_http, "_http_get", fetch)
     registry = ToolRegistry()
     register_web_fetch_tool(registry, attachment_store=None)
     with pytest.raises(ValueError):
