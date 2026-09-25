@@ -34,7 +34,7 @@ Read for the Desktop side of Live voice: hands-free starts (a wake phrase with t
 ## Voice during a call
 
 - Live hold: while the Voice status `recording` is set (a spoken command records, `desktop/voice.md` -> Status snapshot) and a call is running and not closing, `LiveVoice.svelte` holds the call with reason `wakeword`; a status without `recording` releases it, also after a missed event. The hold disables the call's microphone track and silences the assistant (WebRTC audio muted, queued relay audio dropped); holds count per reason, are independent of the user's mute, and end with the call (`webui/src/lib/liveVoice.js` `hold` / `release` / `held`).
-- Wake phrases: `liveWakePhrases(voiceStatus)` returns the labels of the active phrases whose effective action is a command (only while Voice is enabled and `listening`), cleaned, de-duplicated case-insensitively, at most 8 of up to 60 characters. The Live controller sends them as `wake_phrases` with each `live.start`, so the voice model treats speech starting with a wake phrase as addressed to another Agent (server contract in `model_tasks/live.md`).
+- Wake phrases: `liveWakePhrases(voiceStatus)` returns the labels of the active phrases whose effective action is a command whenever Voice is enabled, in any state and including phrases with a problem (the user still addresses another Agent), cleaned, de-duplicated case-insensitively, at most 8 of up to 60 characters. The Live controller sends them as `wake_phrases` with each `live.start`, so the voice model treats speech starting with a wake phrase as addressed to another Agent (server contract in `model_tasks/live.md`).
 
 ## WebView2: secure origins, autoplay, microphone permission
 
