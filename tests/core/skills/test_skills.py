@@ -162,12 +162,12 @@ description: >
 
         assert skill.description == "Find source material for a task. Summarize the relevant facts."
 
-        def test_loads_vbot_requirement_metadata(self, tmp_path: Path) -> None:
-            skills_dir = tmp_path / "skills"
-            write_skill(
-                skills_dir,
-                "compile",
-                """---
+    def test_loads_vbot_requirement_metadata(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        write_skill(
+            skills_dir,
+            "compile",
+            """---
 name: compile
 description: Compile native code.
 metadata:
@@ -182,21 +182,21 @@ metadata:
                 - binary: jq
 ---
 """,
-            )
+        )
 
-            registry = SkillRegistry.load(skills_dir, environment={"C_COMPILER": "clang"})
-            skill = registry.get("compile")
+        registry = SkillRegistry.load(skills_dir, environment={"C_COMPILER": "clang"})
+        skill = registry.get("compile")
 
-            assert skill.metadata["vbot"]["requirements"]["all"]
-            assert not skill.requirements.empty
-            assert environment_requirement_names(skill.requirements) == ("C_COMPILER",)
+        assert skill.metadata["vbot"]["requirements"]["all"]
+        assert not skill.requirements.empty
+        assert environment_requirement_names(skill.requirements) == ("C_COMPILER",)
 
-        def test_unavailable_when_required_env_missing(self, tmp_path: Path) -> None:
-            skills_dir = tmp_path / "skills"
-            write_skill(
-                skills_dir,
-                "openai-helper",
-                """---
+    def test_unavailable_when_required_env_missing(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        write_skill(
+            skills_dir,
+            "openai-helper",
+            """---
 name: openai-helper
 description: Use OpenAI.
 metadata:
@@ -205,21 +205,21 @@ metadata:
             env: OPENAI_API_KEY
 ---
 """,
-            )
+        )
 
-            registry = SkillRegistry.load(skills_dir, environment={})
-            availability = registry.availability_for("openai-helper", ["*"])
+        registry = SkillRegistry.load(skills_dir, environment={})
+        availability = registry.availability_for("openai-helper", ["*"])
 
-            assert availability.state == "unavailable"
-            assert availability.missing == ("missing environment variable 'OPENAI_API_KEY'",)
-            assert registry.filter_allowed(["*"]) == []
+        assert availability.state == "unavailable"
+        assert availability.missing == ("missing environment variable 'OPENAI_API_KEY'",)
+        assert registry.filter_allowed(["*"]) == []
 
-        def test_any_requirement_accepts_present_alternative(self, tmp_path: Path) -> None:
-            skills_dir = tmp_path / "skills"
-            write_skill(
-                skills_dir,
-                "provider-flex",
-                """---
+    def test_any_requirement_accepts_present_alternative(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        write_skill(
+            skills_dir,
+            "provider-flex",
+            """---
 name: provider-flex
 description: Use any supported provider token.
 metadata:
@@ -230,19 +230,19 @@ metadata:
                 - env: ANTHROPIC_API_KEY
 ---
 """,
-            )
+        )
 
-            registry = SkillRegistry.load(skills_dir, environment={"ANTHROPIC_API_KEY": "set"})
+        registry = SkillRegistry.load(skills_dir, environment={"ANTHROPIC_API_KEY": "set"})
 
-            assert registry.availability_for("provider-flex", ["*"]).state == "available"
-            assert [skill.name for skill in registry.filter_allowed(["*"])] == ["provider-flex"]
+        assert registry.availability_for("provider-flex", ["*"]).state == "available"
+        assert [skill.name for skill in registry.filter_allowed(["*"])] == ["provider-flex"]
 
-        def test_optional_requirement_does_not_make_skill_unavailable(self, tmp_path: Path) -> None:
-            skills_dir = tmp_path / "skills"
-            write_skill(
-                skills_dir,
-                "fast-json",
-                """---
+    def test_optional_requirement_does_not_make_skill_unavailable(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        write_skill(
+            skills_dir,
+            "fast-json",
+            """---
 name: fast-json
 description: Handle JSON.
 metadata:
@@ -252,22 +252,22 @@ metadata:
                 - binary: vbot-definitely-missing-jq
 ---
 """,
-            )
+        )
 
-            registry = SkillRegistry.load(skills_dir, environment={})
-            availability = registry.availability_for("fast-json", ["*"])
+        registry = SkillRegistry.load(skills_dir, environment={})
+        availability = registry.availability_for("fast-json", ["*"])
 
-            assert availability.state == "available"
-            assert availability.optional_missing == ("missing binary 'vbot-definitely-missing-jq'",)
-            assert [skill.name for skill in registry.filter_allowed(["*"])] == ["fast-json"]
+        assert availability.state == "available"
+        assert availability.optional_missing == ("missing binary 'vbot-definitely-missing-jq'",)
+        assert [skill.name for skill in registry.filter_allowed(["*"])] == ["fast-json"]
 
-        def test_skill_dependency_respects_agent_allowlist(self, tmp_path: Path) -> None:
-            skills_dir = tmp_path / "skills"
-            write_skill(skills_dir, "helper", "---\nname: helper\ndescription: Helper.\n---\n")
-            write_skill(
-                skills_dir,
-                "main-task",
-                """---
+    def test_skill_dependency_respects_agent_allowlist(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        write_skill(skills_dir, "helper", "---\nname: helper\ndescription: Helper.\n---\n")
+        write_skill(
+            skills_dir,
+            "main-task",
+            """---
 name: main-task
 description: Main task.
 metadata:
@@ -276,23 +276,23 @@ metadata:
             skill: helper
 ---
 """,
-            )
+        )
 
-            registry = SkillRegistry.load(skills_dir, environment={})
+        registry = SkillRegistry.load(skills_dir, environment={})
 
-            assert registry.availability_for("main-task", ["main-task"]).state == "unavailable"
-            assert [skill.name for skill in registry.filter_allowed(["main-task"])] == []
-            assert [skill.name for skill in registry.filter_allowed(["helper", "main-task"])] == [
-                "helper",
-                "main-task",
-            ]
+        assert registry.availability_for("main-task", ["main-task"]).state == "unavailable"
+        assert [skill.name for skill in registry.filter_allowed(["main-task"])] == []
+        assert [skill.name for skill in registry.filter_allowed(["helper", "main-task"])] == [
+            "helper",
+            "main-task",
+        ]
 
-        def test_invalid_vbot_requirements_rejects_skill(self, tmp_path: Path) -> None:
-            skills_dir = tmp_path / "skills"
-            write_skill(
-                skills_dir,
-                "provider-only",
-                """---
+    def test_invalid_vbot_requirements_rejects_skill(self, tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        write_skill(
+            skills_dir,
+            "provider-only",
+            """---
 name: provider-only
 description: Invalid because provider checks are not supported.
 metadata:
@@ -301,12 +301,12 @@ metadata:
             provider: openai
 ---
 """,
-            )
+        )
 
-            registry = SkillRegistry.load(skills_dir, environment={})
+        registry = SkillRegistry.load(skills_dir, environment={})
 
-            assert registry.list_all() == []
-            assert "unknown key(s): provider" in registry.invalid_diagnostics()[0].warnings[0]
+        assert registry.list_all() == []
+        assert "unknown key(s): provider" in registry.invalid_diagnostics()[0].warnings[0]
 
     def test_missing_skills_directory_loads_empty_registry(self, tmp_path: Path) -> None:
         registry = SkillRegistry.load(tmp_path / "missing-skills")
