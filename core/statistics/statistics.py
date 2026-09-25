@@ -112,11 +112,11 @@ class StatisticsService:
         self, *, since: datetime | None = None, until: datetime | None = None
     ) -> StatisticsReport:
         """Reconcile all Session scopes and return the aggregated report."""
-        builder = ReportBuilder(since=since, until=until, pricing_lookup=self._pricing_lookup)
         scopes = self._statistics_scopes()
         extension_sessions = self._extension_sessions()
 
-        def consume(view: IndexView) -> None:
+        def consume(view: IndexView) -> ReportBuilder:
+            builder = ReportBuilder(since=since, until=until, pricing_lookup=self._pricing_lookup)
             for scope in scopes:
                 builder.register_scope(agent_id=scope.agent_id, project_id=scope.project_id)
                 surviving: list[JsonObject] = []
@@ -139,8 +139,11 @@ class StatisticsService:
                 if summaries:
                     builder.register_agent(extension_actor_key(owner_name), summaries)
             builder.aggregate(view.connection)
+            return builder
 
-        self._index.read(self._sessions, _index_scopes(scopes, extension_sessions), consume)
+        builder = self._index.read(
+            self._sessions, _index_scopes(scopes, extension_sessions), consume
+        )
         return builder.build(self._skill_inventory)
 
     def run_activity(
