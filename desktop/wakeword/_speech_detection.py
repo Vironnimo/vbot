@@ -1,4 +1,5 @@
-"""Speech detection: the neural speech detector and its fail-open WebRTC fallback.
+"""Speech detection: the neural speech detector, its fail-open WebRTC fallback, and
+the delayed :class:`SpeechGate` for wakeword scores.
 
 Every consumer (the detection gate, command endpointing) creates its own
 :class:`SpeechDetector` because the model keeps per-stream state. All audio is
@@ -9,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +36,11 @@ _VAD_MODE = 1  # moderate WebRTC aggressiveness for the fallback
 # while real speech beginning mid-frame still passes.
 _FALLBACK_SLICE_BYTES = int(SPEECH_SAMPLE_RATE * 0.010) * 2  # 320 bytes
 _FALLBACK_MIN_SPEECH_SLICES = 2
+
+# Upstream openWakeWord gates a chunk's scores on the speech decisions of the
+# chunks 4 to 6 before it (0.32-0.56 s earlier): the heads peak after the phrase.
+_GATE_NEAREST_CHUNK = 4
+_GATE_FARTHEST_CHUNK = 6
 
 
 class SpeechDetector:
@@ -214,6 +221,36 @@ def chunk_contains_speech(
     if not fallback_vad:
         return True
     return _webrtc_contains_speech(detection_pcm16, fallback_vad)
+
+
+class SpeechGate:
+    """Decides per 80 ms detection chunk whether its wakeword scores count.
+
+    Mirrors upstream openWakeWord's VAD threshold: a chunk's scores count when
+    any of the chunks 4 to 6 before it carried speech (see
+    :func:`chunk_contains_speech`), because the heads score a phrase highest
+    0.2-0.5 s after it ended, when the current chunk is already silent. Like
+    upstream, the gate stays closed for the first four chunks after creation or
+    :meth:`reset`, and the fifth and sixth consult the shorter history they have.
+    """
+
+    def __init__(self, speech_detector: SpeechDetector | None, fallback_vad: Any | None) -> None:
+        self._detector = speech_detector
+        self._fallback_vad = fallback_vad
+        self._speech: deque[bool] = deque(maxlen=_GATE_FARTHEST_CHUNK + 1)
+
+    def admits(self, detection_pcm16: bytes) -> bool:
+        """Record this chunk's speech decision and return whether its scores count."""
+        self._speech.append(
+            chunk_contains_speech(detection_pcm16, self._detector, self._fallback_vad)
+        )
+        return any(list(self._speech)[:-_GATE_NEAREST_CHUNK])
+
+    def reset(self) -> None:
+        """Forget the speech history, e.g. when the audio around a capture gap does not connect."""
+        self._speech.clear()
+        if self._detector is not None:
+            self._detector.reset()
 
 
 def _webrtc_contains_speech(pcm16: bytes, vad: Any) -> bool:

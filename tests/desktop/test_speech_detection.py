@@ -12,6 +12,7 @@ import pytest
 
 from desktop.wakeword._speech_detection import (
     SpeechDetector,
+    SpeechGate,
     chunk_contains_speech,
     create_fallback_vad,
     frame_is_speech,
@@ -154,6 +155,65 @@ def test_detection_gate_separates_silence_and_speech_with_the_real_fallback_vad(
     assert vad is not None
     assert chunk_contains_speech(b"\x00\x00" * 1280, None, vad) is False
     assert chunk_contains_speech(np.full(1280, 1000, np.int16).tobytes(), None, vad) is True
+
+
+# -- Delayed wakeword score gate (SpeechGate) --------------------------------------
+
+
+class ScriptedChunkDetector:
+    """Returns one scripted speech probability per detection chunk and counts resets."""
+
+    def __init__(self, probabilities: list[float]) -> None:
+        self._probabilities = iter(probabilities)
+        self.resets = 0
+
+    def speech_probability(self, _chunk: bytes) -> float:
+        return next(self._probabilities)
+
+    def reset(self) -> None:
+        self.resets += 1
+
+
+def _admitted(gate: SpeechGate, chunks: int) -> list[bool]:
+    return [gate.admits(_DETECTION_CHUNK) for _ in range(chunks)]
+
+
+def test_speech_gate_admits_the_scores_four_to_six_chunks_after_speech() -> None:
+    detector = ScriptedChunkDetector([0.0] * 6 + [0.9] + [0.0] * 9)
+    gate = SpeechGate(cast(SpeechDetector, detector), None)
+
+    assert _admitted(gate, 16) == [False] * 10 + [True] * 3 + [False] * 3
+
+
+def test_speech_gate_stays_closed_until_four_chunks_of_history_exist() -> None:
+    gate = SpeechGate(cast(SpeechDetector, ScriptedChunkDetector([0.9] * 8)), None)
+
+    assert _admitted(gate, 8) == [False] * 4 + [True] * 4
+
+
+def test_speech_gate_reset_forgets_the_history_and_resets_the_detector() -> None:
+    detector = ScriptedChunkDetector([0.9] * 6 + [0.0] * 6)
+    gate = SpeechGate(cast(SpeechDetector, detector), None)
+    _admitted(gate, 6)
+
+    gate.reset()
+
+    assert _admitted(gate, 6) == [False] * 6
+    assert detector.resets == 1
+
+
+def test_speech_gate_uses_the_fallback_vad_without_a_neural_detector() -> None:
+    class LoudVad:
+        @staticmethod
+        def is_speech(frame: bytes, _sample_rate: int) -> bool:
+            return any(frame)
+
+    gate = SpeechGate(None, LoudVad())
+    silent_chunk = b"\x00\x00" * 1280
+
+    admitted = [gate.admits(_DETECTION_CHUNK)] + [gate.admits(silent_chunk) for _ in range(8)]
+
+    assert admitted == [False] * 4 + [True] * 3 + [False] * 2
 
 
 # -- Neural endpointing detector ---------------------------------------------------

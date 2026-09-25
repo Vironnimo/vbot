@@ -3,8 +3,9 @@
 :class:`DetectionLoop` runs on its own daemon thread (``vbot-voice-detection``)
 for the lifetime of one listener. It starts the engine on that thread, re-chunks
 the 16 kHz projection of every captured block into the engine's 80 ms chunks,
-gates each chunk's scores with its own speech detector, and reports every
-winning phrase as a :class:`Detection` with the preceding audio (at least
+gates each chunk's scores on the speech heard 4 to 6 chunks earlier (its own
+:class:`SpeechGate`, cleared on every capture gap), and reports every winning
+phrase as a :class:`Detection` with the preceding audio (at least
 :data:`PRE_ROLL_SECONDS`, in whole capture blocks) as pre-roll.
 
 The loop never waits for anything a detection starts: ``on_detection`` runs
@@ -22,7 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from desktop.wakeword._speech_detection import SpeechDetector, chunk_contains_speech
+from desktop.wakeword._speech_detection import SpeechDetector, SpeechGate
 from desktop.wakeword.capture import AudioBlock, CaptureGap, CaptureSubscription
 from desktop.wakeword.engine import WakewordEngine
 
@@ -128,8 +129,7 @@ class DetectionLoop:
             self._subscription.close()
 
     def _detect(self) -> None:
-        speech_detector = self._speech_detector_factory()
-        fallback_vad = self._fallback_vad_factory()
+        speech_gate = SpeechGate(self._speech_detector_factory(), self._fallback_vad_factory())
         if self._stop.is_set():
             return
         self._on_started()
@@ -147,8 +147,7 @@ class DetectionLoop:
                 pending.clear()
                 pre_roll.clear()
                 pre_roll_seconds = 0.0
-                if speech_detector is not None:
-                    speech_detector.reset()
+                speech_gate.reset()
                 continue
             pre_roll.append(item)
             pre_roll_seconds += item.duration
@@ -158,7 +157,7 @@ class DetectionLoop:
             while len(pending) >= _CHUNK_BYTES:
                 chunk = bytes(pending[:_CHUNK_BYTES])
                 del pending[:_CHUNK_BYTES]
-                speech_present = chunk_contains_speech(chunk, speech_detector, fallback_vad)
+                speech_present = speech_gate.admits(chunk)
                 try:
                     match = self._engine.detect(chunk, speech_present=speech_present)
                 except Exception:
