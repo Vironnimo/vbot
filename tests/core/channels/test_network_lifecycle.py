@@ -139,7 +139,7 @@ async def test_whatsapp_setup_is_idempotent_and_shutdown_cancels_install(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service = make_service(tmp_path)
-    service.create_channel(
+    await service.create_channel(
         ChannelConfig(id="wa", platform="whatsapp", agent_id="assistant", enabled=False)
     )
     started = asyncio.Event()
@@ -161,7 +161,7 @@ async def test_whatsapp_setup_is_idempotent_and_shutdown_cancels_install(
         assert (await service.setup_whatsapp("wa"))["setup"] == "installing"
         assert service._whatsapp_setup_tasks["wa"] is original
         with pytest.raises(ChannelError):
-            service.delete_channel("wa")
+            await service.delete_channel("wa")
         with pytest.raises(ChannelError):
             service.update_channel("wa", platform="telegram")
     finally:
@@ -192,7 +192,7 @@ async def test_pairing_preparation_prevents_deletion_until_cancelled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service = make_service(tmp_path)
-    service.create_channel(
+    await service.create_channel(
         ChannelConfig(id="wa", platform="whatsapp", agent_id="assistant", enabled=False)
     )
     entered = asyncio.Event()
@@ -207,12 +207,12 @@ async def test_pairing_preparation_prevents_deletion_until_cancelled(
     try:
         await entered.wait()
         with pytest.raises(ChannelError, match="operation to finish"):
-            service.delete_channel("wa")
+            await service.delete_channel("wa")
     finally:
         pairing.cancel()
         await asyncio.gather(pairing, return_exceptions=True)
         await service.aclose()
-    service.delete_channel("wa")
+    await service.delete_channel("wa")
     assert service.list_channels() == []
 
 
@@ -337,7 +337,7 @@ async def test_whatsapp_lifecycle_mutations_cannot_interrupt_owned_operation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str, operation: str
 ) -> None:
     service = make_service(tmp_path)
-    service.create_channel(
+    await service.create_channel(
         ChannelConfig(id="wa", platform="whatsapp", agent_id="assistant", enabled=False)
     )
     started = asyncio.Event()
@@ -384,7 +384,7 @@ async def test_whatsapp_setup_rejects_enabled_channel_awaiting_recovery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service = make_service(tmp_path)
-    service.create_channel(
+    await service.create_channel(
         ChannelConfig(id="wa", platform="whatsapp", agent_id="assistant", enabled=False)
     )
     monkeypatch.setattr(service, "start_channel", Mock())

@@ -93,7 +93,7 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
                 _store_channel_token(state.runtime, app_key, _required_string(params, "app_token"))
                 app_written = True
             if managed_token is None:
-                state.runtime.channel_service.create_channel(config)
+                await state.runtime.channel_service.create_channel(config)
             else:
                 previous_value = state.runtime.storage.load_environment().get(token_env_var)
                 try:
@@ -102,7 +102,7 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
                         token_env_var,
                         managed_token,
                     )
-                    state.runtime.channel_service.create_channel(config)
+                    await state.runtime.channel_service.create_channel(config)
                 except Exception:
                     _restore_channel_token(state.runtime, token_env_var, previous_value)
                     raise
@@ -192,12 +192,12 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
     return saved_config.to_dict()
 
 
-def _delete_channel(state: Any, params: JsonObject) -> JsonObject:
+async def _delete_channel(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id"}, "channel.delete")
 
     channel_id = _required_string(params, "id")
     try:
-        state.runtime.channel_service.delete_channel(channel_id)
+        await state.runtime.channel_service.delete_channel(channel_id)
         state.runtime.reload_channel_tool()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
