@@ -105,25 +105,24 @@ def test_project_tool_loads_context_skills_and_stamps_files_read(tmp_path: Path)
     result = _handler(projects, file_state, [skill])(_context(tmp_path), {"project_id": "vbot"})
     data = cast(dict[str, Any], result["data"])
 
+    project_path = model_path(repo.resolve())
     assert result["ok"] is True
-    assert data["status"] == "loaded"
-    assert data["project_id"] == "vbot"
-    assert data["display_name"] == "vBot"
-    assert data["project_path"] == model_path(repo.resolve())
-    assert "cwd" not in data
-    assert "Project Context loaded for 'vBot'" in data["content"]
-    assert "current working directory" in data["content"]
-    assert "available through the `skill` Tool in this Session" in data["content"]
-    assert f"on every `{SHELL_MODEL_NAME}` call; each call starts a new shell" in data["content"]
-    assert "Follow the Project rules." in data["content"]
-    assert "Skills from project 'vBot'" in data["content"]
-    assert data["loaded_files"] == [model_path(agents_file.resolve())]
-    assert data["skills"] == [
-        {
-            "name": "review",
-            "description": "Review changes.",
-        }
-    ]
+    # Files and Skills appear once, in content; Chat recovers the Project from
+    # status and project_id.
+    assert data == {
+        "status": "loaded",
+        "project_id": "vbot",
+        "project_path": project_path,
+        "content": data["content"],
+    }
+    assert data["content"] == (
+        "Project Context loaded for 'vBot'. The files below are this Project's instructions: "
+        "follow them for all work in this Project. Your working directory, Workspace, and "
+        "permissions are unchanged, so use absolute paths for file Tools and set `workdir` to "
+        f"'{project_path}' on every `{SHELL_MODEL_NAME}` call.\n\n"
+        '<file name="AGENTS.md">\nFollow the Project rules.\n</file>\n\n'
+        "Skills from project 'vBot':\n- review: Review changes."
+    )
     assert model_path(skill_path) not in data["content"]
     assert file_state.check_stale("session-one", agents_file.resolve()) is None
 
@@ -139,10 +138,12 @@ def test_project_tool_returns_context_for_bare_project(tmp_path: Path) -> None:
     data = cast(dict[str, Any], result["data"])
 
     assert result["ok"] is True
-    assert data["loaded_files"] == []
-    assert data["skills"] == []
-    assert "Project Context loaded for 'Empty'" in data["content"]
-    assert model_path(repo.resolve()) in data["content"]
+    # No instruction files, so the result claims none.
+    assert data["content"] == (
+        "Project Context loaded for 'Empty'. Your working directory, Workspace, and "
+        "permissions are unchanged, so use absolute paths for file Tools and set `workdir` to "
+        f"'{model_path(repo.resolve())}' on every `{SHELL_MODEL_NAME}` call."
+    )
 
 
 def test_project_tool_rejects_unknown_project(tmp_path: Path) -> None:
@@ -151,8 +152,79 @@ def test_project_tool_rejects_unknown_project(tmp_path: Path) -> None:
     )
 
     assert result["ok"] is False
-    assert result["error"]["code"] == "project_not_found"
-    assert result["error"]["retryable"] is False
+    assert result["error"] == {
+        "code": "project_not_found",
+        "message": (
+            "Project not found: missing. No Projects are registered, so there is no Project "
+            "Context to load."
+        ),
+        "retryable": False,
+    }
+
+
+@pytest.mark.parametrize("project_id", ["vBot", "VBOT", "the vbot project", "../vbot"])
+def test_project_tool_never_guesses_a_project_and_names_the_ids(
+    tmp_path: Path, project_id: str
+) -> None:
+    # A display name, another casing, or an invalid id is not a Project id: the
+    # failure lists the exact ids instead of loading a near match.
+    projects = ProjectStore(tmp_path / "data")
+    for key, name in (("vbot", "vBot"), ("docs", "Docs Site")):
+        (tmp_path / key).mkdir()
+        projects.create(key, name, tmp_path / key)
+    file_state = FileReadState()
+
+    result = _handler(projects, file_state)(_context(tmp_path), {"project_id": project_id})
+
+    assert result["error"] == {
+        "code": "project_not_found",
+        "message": (
+            f"Project not found: {project_id}. Use one of these registered Project ids "
+            "exactly: docs (Docs Site), vbot (vBot)."
+        ),
+        "retryable": False,
+    }
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"project": "vbot"},
+        {"id": "vbot"},
+        {"name": "vbot"},
+        {"projectId": "vbot"},
+        {"Project-ID": "vbot"},
+    ],
+)
+def test_project_tool_reads_other_spellings_of_project_id(
+    tmp_path: Path, arguments: dict[str, str]
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    projects = ProjectStore(tmp_path / "data")
+    projects.create("vbot", "vBot", repo)
+    registry = ToolRegistry()
+    register_project_tool(
+        registry, projects, lambda: _Renderer(), lambda _project_id: [], FileReadState()
+    )
+
+    result = asyncio.run(registry.dispatch(_context(tmp_path), arguments))
+
+    assert result["ok"] is True, result
+    assert result["data"]["project_id"] == "vbot"
+
+
+def test_project_tool_refuses_conflicting_project_ids(tmp_path: Path) -> None:
+    projects = ProjectStore(tmp_path / "data")
+    registry = ToolRegistry()
+    register_project_tool(
+        registry, projects, lambda: _Renderer(), lambda _project_id: [], FileReadState()
+    )
+
+    with pytest.raises(ToolContractError, match="Conflicting values for project_id"):
+        asyncio.run(
+            registry.dispatch(_context(tmp_path), {"project_id": "vbot", "project": "docs"})
+        )
 
 
 def test_project_tool_rejects_unknown_argument_before_loading(tmp_path: Path) -> None:
