@@ -201,7 +201,11 @@ class MistralAdapter(OpenAICompatibleAdapter):
         *,
         model_id: str | None = None,
     ) -> dict[str, Any]:
-        """Replay the original Mistral content chunks whenever they are available."""
+        """Replay the original Mistral content chunks whenever they were captured.
+
+        A turn without captured chunks replays its visible content only: readable
+        ``reasoning`` is never rebuilt into a thinking chunk (``meta_only``).
+        """
         wire = super()._format_assistant_message(message, model_id=model_id)
         reasoning_meta = message.get("reasoning_meta")
         if isinstance(reasoning_meta, Mapping):
@@ -210,20 +214,6 @@ class MistralAdapter(OpenAICompatibleAdapter):
                 isinstance(item, Mapping) for item in stored_chunks
             ):
                 wire["content"] = [dict(item) for item in stored_chunks]
-                return wire
-
-        # Backward compatibility for Sessions written before exact chunks were
-        # persisted. New responses never take this lossy reconstruction path.
-        reasoning = message.get("reasoning")
-        if not isinstance(reasoning, str) or not reasoning:
-            return wire
-        content_chunks: list[dict[str, Any]] = [
-            {"type": "thinking", "thinking": [{"type": "text", "text": reasoning}]}
-        ]
-        visible = wire.get("content")
-        if isinstance(visible, str) and visible:
-            content_chunks.append({"type": "text", "text": visible})
-        wire["content"] = content_chunks
         return wire
 
     def normalize_response(
