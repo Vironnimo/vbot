@@ -58,6 +58,7 @@ class EmbeddingUsage:
     input_tokens: int = 0
     total_tokens: int = 0
     cost: float = 0.0
+    input_token_reports: int = 0
 
     def combined(self, other: EmbeddingUsage) -> EmbeddingUsage:
         """Return the additive aggregate of two normalized usage records."""
@@ -69,6 +70,7 @@ class EmbeddingUsage:
             input_tokens=self.input_tokens + other.input_tokens,
             total_tokens=self.total_tokens + other.total_tokens,
             cost=math.fsum((self.cost, other.cost)),
+            input_token_reports=self.input_token_reports + other.input_token_reports,
         )
 
 
@@ -303,6 +305,7 @@ def _parse_embedding_usage(raw: Any) -> EmbeddingUsage:
         input_tokens=input_tokens or 0,
         total_tokens=total_tokens or 0,
         cost=cost or 0.0,
+        input_token_reports=int(input_tokens is not None),
     )
 
 

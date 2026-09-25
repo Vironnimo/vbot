@@ -16,6 +16,7 @@ The public `core.sessions` package routes stable imports to the Session service 
 - `codec` - per-role entry rows and side tables, set-wise decoding, Tool-result linking, materialized copies.
 - `lineage` - the lineage visibility predicate (`admits`, the one fragment every view read, the search candidates and the FTS membership views are built from), view ranges, fork lineage and edit truncation; every current-view read goes through `view_ranges` plus `ordered_rows` (one index range scan per range) or `view_query` (one set-wise query over a `VALUES` CTE of the ranges). It imports no other store module, so `schema.py` builds on it.
 - `history` - bounded reads over one explicit view (current view, own audit, own spend), cursors and deltas, Run lookups, History Tool batches.
+- `usage` - paged accounting-only own-audit export across live and archived generations, through `ChatSessionManager.usage_history`; includes entry and Message identities plus Assistant interruption state, without inherited prefixes or content decoding. The independent canonical recorder imports this evidence and repairs incomplete records after restore (`usage.md`).
 - `timeline` - the WebUI Chat History snapshot and edit eligibility (`_editable`, `latest_takeover`).
 - `operations` - compound transactions: the Compaction commit and the history edit.
 - `prompts` - prompt pins, seen Skills and the prompt-cache affinity id.
@@ -31,6 +32,11 @@ The public `core.sessions` package routes stable imports to the Session service 
 Do not open independent runtime connections or commit within a helper; entries, metadata, revisions, prompt state, Continuation, receipts and FTS effects must share the caller's transaction. Helpers return typed records or summary dicts rather than raw rows, so `ChatSessionManager` does not decode storage columns. Read helpers that reconstruct Messages or decode JSON columns (summaries, temporary bindings) select rows inside the read transaction and return a decoder; `store.py` (`_read_decoded`) runs it after the transaction ends, because a rollback-journal store serves reads on the serialized writer.
 
 Data snapshots, quarantine, restore, recovery incidents and the data-store marker belong to the kernel (`database.md`); the Session store contributes only its spec hooks.
+
+Session and group title generation records each exposed Adapter request through
+the injected `UsageRecorder`, including the explicit effort retry, before title
+validation or persistence. Invalid titles and later Session/group deletion keep
+their known consumption; accounting stores no generated title response content.
 
 ## Terms
 

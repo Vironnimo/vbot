@@ -17,6 +17,8 @@ from core.model_tasks.image_providers import (
     _parse_openai_codex_image_response,
 )
 from core.model_tasks.image_types import ImageInput
+from core.model_tasks.model_tasks import parse_task_model_target_id
+from core.model_tasks.task_execution import TaskUsage
 from core.providers.errors import (
     ProviderAuthError,
     ProviderError,
@@ -25,6 +27,7 @@ from core.providers.errors import (
 from core.providers.openai import CODEX_EXTRA_HEADERS, CODEX_RESPONSES_MODE
 from core.providers.openai_subscription_auth import OPENAI_AUTH_CLAIM
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.usage import UsageRecorder
 
 OPENAI_CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
 
@@ -98,6 +101,7 @@ def _openai_subscription_image_client(
     model_id: str,
     *,
     credential: str | None = None,
+    usage_observer: TaskUsage | None = None,
 ) -> ProviderImageClient:
     """Build a ProviderImageClient wired to the OpenAI subscription endpoint."""
 
@@ -125,7 +129,40 @@ def _openai_subscription_image_client(
         connection=connection,
         credential=credential or _openai_subscription_access_token(),
         model_id=model_id,
+        usage_observer=usage_observer,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("valid_image", [True, False])
+@respx.mock
+async def test_subscription_image_records_independent_carrier_even_for_unusable_image(
+    recorder: UsageRecorder,
+    valid_image: bool,
+) -> None:
+    target = parse_task_model_target_id("openai/gpt-image-2::subscription")
+    client = _openai_subscription_image_client(
+        "gpt-image-2",
+        usage_observer=TaskUsage(recorder, "image_generation", target),
+    )
+    body = _openai_codex_image_sse()
+    if not valid_image:
+        body = body.replace(base64.b64encode(b"codex-image").decode("ascii"), "invalid-base64")
+    respx.post(OPENAI_CODEX_RESPONSES_URL).respond(200, content=body.encode())
+    if valid_image:
+        await client.generate("image", options={})
+    else:
+        with pytest.raises(ProviderError):
+            await client.generate("image", options={})
+    _, records = recorder.read_since()
+    by_model = {record.model: record for record in records}
+    assert len(records) == 2
+    image_usage = by_model["openai/gpt-image-2"]
+    carrier_usage = by_model[f"openai/{_OPENAI_CODEX_IMAGE_CARRIER_MODEL}"]
+    assert (image_usage.usage["input_tokens"], image_usage.usage["output_tokens"]) == (12, 456)
+    assert image_usage.status == ("completed" if valid_image else "failed")
+    assert (carrier_usage.usage["input_tokens"], carrier_usage.usage["output_tokens"]) == (3, 1)
+    assert all(record.kind == "image_generation" for record in records)
 
 
 # ---------------------------------------------------------------------------

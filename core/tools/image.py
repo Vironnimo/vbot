@@ -14,6 +14,7 @@ from core.model_tasks import (
     ImageUnderstandingRunContext,
     ImageUnderstandingUnavailableError,
     ImageUnsupportedTargetError,
+    TaskUsageContext,
 )
 from core.model_tasks.image import DEFAULT_IMAGE_ANALYSIS_MAX_IMAGES
 from core.tools._image_inputs import (
@@ -285,6 +286,11 @@ def make_analyze_image_handler(image_service: Any, attachment_store: Any):
                     agent_id=context.agent_id,
                     session_id=context.session_id,
                     iteration_number=context.iteration_number,
+                    project_id=context.project_id,
+                    owner_name=context.execution_owner.extension
+                    if context.execution_owner
+                    else None,
+                    group_id=context.execution_owner.group_id if context.execution_owner else None,
                 ),
             )
         except ImageError as exc:
@@ -363,6 +369,16 @@ def make_image_generation_handler(image_service: Any):
                 output_dir=output_dir,
                 call_options=call_options,
                 source_paths=source_paths,
+                usage_context=TaskUsageContext(
+                    agent_id=context.agent_id,
+                    project_id=context.project_id,
+                    session_id=context.session_id,
+                    run_id=context.run_id,
+                    owner_name=context.execution_owner.extension
+                    if context.execution_owner
+                    else None,
+                    group_id=context.execution_owner.group_id if context.execution_owner else None,
+                ),
             )
         except ImageError as exc:
             return _image_failure(exc, _GENERATION)

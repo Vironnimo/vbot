@@ -58,6 +58,7 @@ class _Service:
         output_dir: Path,
         call_options: dict[str, object] | None = None,
         source_paths: tuple[Path, ...] = (),
+        usage_context: object = None,
     ) -> tuple[object, ...]:
         self.generated = (prompt, source_paths)
         if self.error is not None:

@@ -31,7 +31,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from core.database import (
     APPLICATION_IDS,
@@ -49,9 +49,13 @@ from core.sessions import (
     SessionReadBatch,
     SessionReadCursor,
 )
-from core.statistics._projection import ProjectedRows
+from core.statistics._accounting import ACCOUNTING_SCHEMA, UsageSourceError, reconcile_usage
+from core.statistics._projection import CALL_COLUMNS, ProjectedRows
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from core.usage import UsageRecorder
 
 JsonObject = dict[str, Any]
 _Result = TypeVar("_Result")
@@ -63,7 +67,7 @@ _INDEX_FILENAME = "session-statistics.sqlite"
 _GLOBAL_SCOPE = ""
 # The kernel discards and rebuilds an index built for another projection
 # version. Bump it when the fact tables or the meaning of their rows change.
-_PROJECTION_VERSION = 1
+_PROJECTION_VERSION = 2
 # A busy index fails the read quickly as retryable instead of queueing it.
 _WRITE_PATIENCE_S = 1.0
 
@@ -77,7 +81,8 @@ SESSION_FACT_TABLES = (
     "stat_skills",
 )
 
-_SCHEMA = """
+_SCHEMA = (
+    """
 CREATE TABLE stat_sessions (
     session_key INTEGER PRIMARY KEY,
     project_id TEXT NOT NULL,
@@ -131,6 +136,7 @@ CREATE TABLE stat_calls (
     cost_usd REAL,
     cost_source INTEGER NOT NULL,
     cost_json TEXT,
+    purpose TEXT NOT NULL,
     PRIMARY KEY (session_key, seq)
 ) WITHOUT ROWID;
 CREATE INDEX stat_calls_retrospective
@@ -194,16 +200,14 @@ CREATE TABLE stat_pricing (
     fingerprint TEXT NOT NULL
 ) WITHOUT ROWID;
 """
+    + ACCOUNTING_SCHEMA
+)
 
 _INSERT_COLUMNS = {
     "records": ("stat_records", "session_key, seq, role, timestamp, instant, run_id"),
     "calls": (
         "stat_calls",
-        "session_key, seq, kind, instant, day, model_key, has_model, visible, has_usage, "
-        "input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens, "
-        "input_estimated, output_estimated, has_cache, reasoning_present, cache_read_present, "
-        "cache_write_present, price_estimated, reported_cost_usd, retrospective, priced, "
-        "cost_usd, cost_source, cost_json",
+        CALL_COLUMNS,
     ),
     "tools": ("stat_tools", "session_key, seq, instant, name, outcome, error_code, duration_ms"),
     "errors": ("stat_errors", "session_key, seq, instant, day, kind"),
@@ -334,6 +338,7 @@ class StatisticsIndex:
         consume: Callable[[IndexView], _Result],
         *,
         prune: bool = True,
+        usage_recorder: UsageRecorder | None = None,
     ) -> _Result:
         """Reconcile ``scopes`` and run ``consume`` on one consistent index view.
 
@@ -349,7 +354,9 @@ class StatisticsIndex:
             try:
                 for attempt in range(2):
                     try:
-                        return self._read_file(sessions, scopes, consume, prune=prune)
+                        return self._read_file(
+                            sessions, scopes, consume, prune=prune, usage_recorder=usage_recorder
+                        )
                     except Exception as error:
                         failure = projection_failure(error)
                         if failure is None:
@@ -372,8 +379,10 @@ class StatisticsIndex:
                                 "Could not discard the Statistics index: %s", discard_error
                             )
                             break
-                return self._read_memory(sessions, scopes, consume, prune=prune)
-            except _SourceFailureError as failure:
+                return self._read_memory(
+                    sessions, scopes, consume, prune=prune, usage_recorder=usage_recorder
+                )
+            except (_SourceFailureError, UsageSourceError) as failure:
                 raise failure.error from failure.error.__cause__
 
     def discard(self) -> None:
@@ -407,10 +416,13 @@ class StatisticsIndex:
         consume: Callable[[IndexView], _Result],
         *,
         prune: bool,
+        usage_recorder: UsageRecorder | None,
     ) -> _Result:
         database = self._database.get()
         indexed = database.write(
-            lambda connection: _reconcile(connection, sessions, scopes, prune=prune),
+            lambda connection: _reconcile_sources(
+                connection, sessions, scopes, prune=prune, usage_recorder=usage_recorder
+            ),
             patience_s=_WRITE_PATIENCE_S,
         )
         # Aggregation builds temporary tables, which read-only pooled readers
@@ -428,13 +440,16 @@ class StatisticsIndex:
         consume: Callable[[IndexView], _Result],
         *,
         prune: bool,
+        usage_recorder: UsageRecorder | None,
     ) -> _Result:
         with closing(sqlite3.connect(":memory:", isolation_level=None)) as connection:
             connection.row_factory = sqlite3.Row
             _prepare_connection(connection)
             connection.executescript(_SCHEMA)
             with _transaction(connection, immediate=True):
-                indexed = _reconcile(connection, sessions, scopes, prune=prune)
+                indexed = _reconcile_sources(
+                    connection, sessions, scopes, prune=prune, usage_recorder=usage_recorder
+                )
             with _transaction(connection):
                 return _consume(connection, indexed, consume)
 
@@ -475,6 +490,20 @@ def _transaction(connection: sqlite3.Connection, *, immediate: bool = False) -> 
             connection.execute("ROLLBACK")
         raise
     connection.execute("COMMIT")
+
+
+def _reconcile_sources(
+    connection: sqlite3.Connection,
+    sessions: StatisticsSessionSource,
+    scopes: Sequence[StatisticsScope],
+    *,
+    prune: bool,
+    usage_recorder: UsageRecorder | None,
+) -> dict[tuple[str, str, str], IndexedSession]:
+    indexed = _reconcile(connection, sessions, scopes, prune=prune)
+    if usage_recorder is not None:
+        reconcile_usage(connection, usage_recorder)
+    return indexed
 
 
 def _reconcile(

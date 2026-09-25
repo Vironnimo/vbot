@@ -45,6 +45,7 @@ from core.tools.availability import (
     SUBAGENT_TOOL_SETTINGS_KEY,
 )
 from core.tools.tools import ToolContext, ToolRegistry
+from core.usage import UsageRecorder
 from core.utils.ids import is_safe_id
 
 
@@ -122,6 +123,7 @@ class ExtensionHostFactory:
         agents: AgentStore,
         sessions: ChatSessionManager,
         statistics_index: StatisticsIndex,
+        usage_recorder: UsageRecorder,
         tools: ToolRegistry,
         models: ModelRegistry,
         provider_credentials: ProviderCredentialResolverProtocol,
@@ -145,6 +147,7 @@ class ExtensionHostFactory:
         self.agents = agents
         self.chat_sessions = sessions
         self._statistics_index = statistics_index
+        self._usage_recorder = usage_recorder
         self.tools = tools
         self.models = models
         self.provider_credentials = provider_credentials
@@ -343,6 +346,7 @@ class ExtensionHostFactory:
                 cast(Any, self.agents),
                 cast(Any, self.projects),
                 index=self._statistics_index,
+                usage_recorder=self._usage_recorder,
             )
         return await self._statistics_service.group_usage(
             owner_name=owner_name,

@@ -10,6 +10,11 @@ Owners today: the Session store (`sessions.md`, `core/sessions/_store_schema.ses
 
 Not owned here: data-directory placement and creation (`storage.md`; `layout.initialize_data_directory` only writes the bootstrap marker through `write_bootstrap_marker`), the CLI/RPC/WebUI operator surfaces (`cli.md`, `server.md`, `webui.md`), and the offline Generation 1 converter (`scripts/converters/persistence_generation_1/`, see References); converters build their outputs with `open_offline_database`, and SQLite areas read their legacy source through `_legacy_sqlite.py` there (read-only open, frozen table and column lists, rowid order, canonical timestamps, refused rows reported).
 
+The Model Usage recorder (`usage.md`, `core/usage/_schema.usage_database_spec`)
+owns canonical `model_usage` at `model-usage.db`. It is registered by Runtime and
+offline tooling alongside the existing databases, so snapshots and recovery
+retain per-request consumption independently of Session deletion.
+
 ## Terms
 
 Core terms (Session, Run, Runtime) live in `.vorch/GLOSSARY.md`.

@@ -18,6 +18,7 @@ from core.channels import ChannelService
 from core.chat import ChatLoop, ChatLoopDependencies, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
 from core.compaction import CompactionService
+from core.database import canonical_database_path
 from core.extensions import ExtensionRegistry
 from core.extensions.runtime import ExtensionRuntime
 from core.memory import MemoryService
@@ -113,6 +114,7 @@ from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
+from core.usage import UsageRecorder
 from core.utils.tls import prewarm_shared_ssl_context
 from core.utils.version import detect_vbot_version
 
@@ -197,6 +199,10 @@ def bootstrap(runtime: Runtime) -> None:
             runtime_models_dir=runtime._storage.layout.models,
             custom_providers=custom_providers,
         )
+        runtime._usage_recorder = UsageRecorder(
+            canonical_database_path(runtime._storage.data_dir, "model_usage"),
+            pricing_lookup=runtime._models.pricing_for,
+        )
         runtime._provider_runtime = ProviderRuntime(
             providers=runtime._providers,
             models=runtime._models,
@@ -222,19 +228,32 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._storage.data_dir,
             local_executor=local_speech,
             transcription_audio_getter=runtime._storage.load_speech_settings,
+            usage_recorder=runtime._usage_recorder,
         )
         runtime._image = ImageService(
             runtime._model_tasks,
             runtime,
             max_input_bytes=runtime._attachment_store.max_size_bytes,
+            usage_recorder=runtime._usage_recorder,
         )
-        runtime._video = VideoService(runtime._model_tasks, runtime)
-        runtime._music = MusicService(runtime._model_tasks, runtime)
-        runtime._embeddings = EmbeddingService(runtime._model_tasks, runtime)
+        runtime._video = VideoService(
+            runtime._model_tasks, runtime, usage_recorder=runtime._usage_recorder
+        )
+        runtime._music = MusicService(
+            runtime._model_tasks, runtime, usage_recorder=runtime._usage_recorder
+        )
+        runtime._embeddings = EmbeddingService(
+            runtime._model_tasks, runtime, usage_recorder=runtime._usage_recorder
+        )
         runtime._decisions = DecisionService(
-            runtime._model_tasks, runtime, runtime._storage.layout.decisions_db
+            runtime._model_tasks,
+            runtime,
+            runtime._storage.layout.decisions_db,
+            usage_recorder=runtime._usage_recorder,
         )
-        runtime._live_voice = LiveVoiceService(runtime._model_tasks, runtime)
+        runtime._live_voice = LiveVoiceService(
+            runtime._model_tasks, runtime, usage_recorder=runtime._usage_recorder
+        )
         # Sessions are a canonical service: it opens and verifies one database
         # before any Agent lifecycle operation can create or validate a Session.
         # Partial startup must close every Session resource in reverse order so a
@@ -243,6 +262,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._storage.data_dir,
             store_path=runtime._storage.layout.sessions_db_path,
         )
+        runtime._usage_recorder.import_session_history(runtime._chat_sessions)
         # One owner of the disposable Statistics index for every reader (RPC
         # reports and Extension group usage); it holds no open resources.
         runtime._statistics_index = StatisticsIndex(runtime._storage.data_dir)
@@ -436,12 +456,16 @@ def bootstrap(runtime: Runtime) -> None:
             raise RuntimeError("Attachment store not available")
         resolver = ContentBlockResolver(runtime._attachment_store, transcriber=runtime._speech)
         assert runtime._models is not None
-        compaction_service = CompactionService(pricing_lookup=runtime._models.pricing_for)
+        compaction_service = CompactionService(
+            pricing_lookup=runtime._models.pricing_for, usage_recorder=runtime._usage_recorder
+        )
         # The reflection service starts review runs through the runtime's
         # streaming loop lazily at review time, so constructing it before the
         # loops is safe — the loops only need its notify hook.
         runtime._reflection_service = ReflectionService(runtime)
-        runtime._session_title_service = SessionTitleService(runtime)
+        runtime._session_title_service = SessionTitleService(
+            runtime, usage_recorder=runtime._usage_recorder
+        )
         assert runtime._agent_resolver is not None
         assert runtime._projects is not None
         assert runtime._providers is not None
@@ -474,6 +498,7 @@ def bootstrap(runtime: Runtime) -> None:
             refresh_skills=runtime.refresh_skills_for,
             get_local_context_windows=runtime.local_context_windows,
             image_understanding_available=runtime._image.analysis_is_available,
+            usage_recorder=runtime._usage_recorder,
             deliver_background_completions=lambda run, session: (
                 runtime._trigger_service.deliver_background_completions(run, session)
                 if runtime._trigger_service is not None

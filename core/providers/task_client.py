@@ -13,10 +13,11 @@ Task-specific execution lives in the per-task ``*_providers`` wire clients in
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+import asyncio
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Any, Protocol, Self, TypeVar
+from typing import Any, Literal, Protocol, Self, TypeVar
 from uuid import uuid4
 
 import httpx
@@ -155,6 +156,25 @@ class TaskTargetRef(Protocol):
     def local_connection_id(self) -> str: ...
 
 
+class TaskRequestObserver(Protocol):
+    """Usage-only observation of Model attempts, independent of HTTP behavior."""
+
+    async def start(self) -> str: ...
+
+    async def finish(
+        self,
+        call_id: str,
+        *,
+        usage: Mapping[str, Any] | None = None,
+        result: Any = None,
+        status: Literal["completed", "failed", "cancelled"] = "completed",
+    ) -> None: ...
+
+    async def update_latest(self, usage: Mapping[str, Any] | None) -> None: ...
+
+    async def related(self, model_id: str, usage: Mapping[str, Any] | None) -> None: ...
+
+
 class ProviderTaskClient:
     """Base HTTP client bound to one resolved provider task target."""
 
@@ -168,6 +188,7 @@ class ProviderTaskClient:
         model_id: str,
         credential: str | None = None,
         token_getter: TokenGetter | None = None,
+        usage_observer: TaskRequestObserver | None = None,
     ) -> None:
         if token_getter is None:
             if credential is None:
@@ -178,9 +199,16 @@ class ProviderTaskClient:
         self._token_getter = token_getter
         self._model_id = model_id
         self._base_url = connection.base_url or provider.base_url
+        self._usage_observer = usage_observer
 
     @classmethod
-    def from_runtime(cls, runtime: TaskClientRuntime, target_ref: TaskTargetRef) -> Self:
+    def from_runtime(
+        cls,
+        runtime: TaskClientRuntime,
+        target_ref: TaskTargetRef,
+        *,
+        usage_observer: TaskRequestObserver | None = None,
+    ) -> Self:
         """Create a client from runtime provider configuration and credentials."""
 
         provider = runtime.providers.get(target_ref.provider_id)
@@ -196,6 +224,7 @@ class ProviderTaskClient:
             connection=connection,
             model_id=target_ref.model_id,
             token_getter=token_getter,
+            usage_observer=usage_observer,
         )
 
     async def post_and_parse(
@@ -239,44 +268,63 @@ class ProviderTaskClient:
                 request_headers = dict(await (headers or self._headers)())
                 if retry_policy.idempotency_header_name is not None:
                     request_headers[retry_policy.idempotency_header_name] = operation_key
+                observer = self._usage_observer
+                call_id = await observer.start() if observer is not None else ""
+                usage: Mapping[str, Any] | None = None
+                parsed: Any = None
+                status: Literal["completed", "failed", "cancelled"] = "completed"
                 try:
-                    response = await client.post(
-                        endpoint,
-                        json=json,
-                        data=data,
-                        files=files,
-                        headers=request_headers,
-                        timeout=timeout,
+                    try:
+                        response = await client.post(
+                            endpoint,
+                            json=json,
+                            data=data,
+                            files=files,
+                            headers=request_headers,
+                            timeout=timeout,
+                        )
+                    except httpx.TransportError as exc:
+                        raise _task_transport_error(
+                            exc,
+                            retry_policy=retry_policy,
+                            operation_key=operation_key,
+                        ) from exc
+                    if observer is not None:
+                        usage = await self._observe_response_usage(response)
+                    auth_recovery.record_response(
+                        response.status_code,
+                        request_headers,
+                        response.text if response.status_code >= 400 else "",
                     )
-                except httpx.TransportError as exc:
-                    raise _task_transport_error(
-                        exc,
+                    _classify_task_response_for_retry_policy(
+                        response,
                         retry_policy=retry_policy,
                         operation_key=operation_key,
-                    ) from exc
-                auth_recovery.record_response(
-                    response.status_code,
-                    request_headers,
-                    response.text if response.status_code >= 400 else "",
-                )
-                _classify_task_response_for_retry_policy(
-                    response,
-                    retry_policy=retry_policy,
-                    operation_key=operation_key,
-                    extra_retryable_status_codes=self.EXTRA_RETRYABLE_STATUS_CODES,
-                )
-                try:
-                    return parse(response)
-                except ProviderOutcomeUnknownError:
-                    raise
-                except (ProviderError, ValueError) as exc:
-                    if retry_policy.can_replay_after_ambiguous_failure:
+                        extra_retryable_status_codes=self.EXTRA_RETRYABLE_STATUS_CODES,
+                    )
+                    try:
+                        parsed = parse(response)
+                        return parsed  # type: ignore[no-any-return]
+                    except ProviderOutcomeUnknownError:
                         raise
-                    raise _outcome_unknown(
-                        operation_key,
-                        f"the provider returned HTTP {response.status_code}, but vBot could not "
-                        f"confirm a usable result: {exc}",
-                    ) from exc
+                    except (ProviderError, ValueError) as exc:
+                        if retry_policy.can_replay_after_ambiguous_failure:
+                            raise
+                        raise _outcome_unknown(
+                            operation_key,
+                            f"the provider returned HTTP {response.status_code}, "
+                            "but vBot could not "
+                            f"confirm a usable result: {exc}",
+                        ) from exc
+                except asyncio.CancelledError:
+                    status = "cancelled"
+                    raise
+                except BaseException:
+                    status = "failed"
+                    raise
+                finally:
+                    if observer is not None:
+                        await observer.finish(call_id, usage=usage, result=parsed, status=status)
 
         return await auth_recovery.run(lambda: retry_async(_do_request))
 
@@ -302,6 +350,8 @@ class ProviderTaskClient:
                     response = await client.get(endpoint, headers=request_headers)
                 except httpx.TransportError as exc:
                     raise wrap_network_error(exc) from exc
+                if self._usage_observer is not None:
+                    await self._usage_observer.update_latest(_response_usage(response))
                 auth_recovery.record_response(
                     response.status_code,
                     request_headers,
@@ -334,6 +384,19 @@ class ProviderTaskClient:
 
     async def _headers(self) -> dict[str, str]:
         return self._headers_from_credential(await self._credential_value())
+
+    async def _observe_response_usage(self, response: httpx.Response) -> Mapping[str, Any] | None:
+        return _response_usage(response)
+
+
+def _response_usage(response: httpx.Response) -> Mapping[str, Any] | None:
+    """Read optional telemetry without retaining a response or changing parsing."""
+    try:
+        payload = response.json()
+    except (ValueError, UnicodeError):
+        return None
+    usage = payload.get("usage") if isinstance(payload, Mapping) else None
+    return usage if isinstance(usage, Mapping) else None
 
 
 def _task_transport_error(

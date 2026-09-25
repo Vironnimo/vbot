@@ -281,6 +281,13 @@ class CompactionRunCoordinator:
                 checkpoint = await compaction_service.compact(
                     messages,
                     session_address=session.address,
+                    run_id=run.id,
+                    owner_name=(
+                        run.execution_owner.extension if run.execution_owner is not None else None
+                    ),
+                    group_id=(
+                        run.execution_owner.group_id if run.execution_owner is not None else None
+                    ),
                     prompt_cache_affinity_id=await self._host.run_transform(
                         self._host.sessions.prompt_cache_affinity_id,
                         session.address,
@@ -509,6 +516,13 @@ class CompactionRunCoordinator:
                 checkpoint = await self._host.compaction_service.compact(
                     session_messages,
                     session_address=session.address,
+                    run_id=run.id,
+                    owner_name=(
+                        run.execution_owner.extension if run.execution_owner is not None else None
+                    ),
+                    group_id=(
+                        run.execution_owner.group_id if run.execution_owner is not None else None
+                    ),
                     prompt_cache_affinity_id=context.prompt_cache_affinity_id,
                     summary_adapter=summary_adapter,
                     summary_model_id=summary_model_id,

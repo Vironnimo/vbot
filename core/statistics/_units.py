@@ -20,6 +20,7 @@ from core.statistics._projection import datetime_instant
 from core.statistics.index import SESSION_FACT_TABLES
 
 if TYPE_CHECKING:
+    from core.sessions import SessionAddress
     from core.statistics._extensions import ExtensionSliceKey
 
 _MIN_INSTANT = -(2**63)
@@ -35,6 +36,8 @@ class ReportUnit:
     session_id: str
     title: str | None = None
     extension: ExtensionSliceKey | None = None
+    address: SessionAddress | None = None
+    run_id: str | None = None
 
 
 class UnitScan:
@@ -44,6 +47,8 @@ class UnitScan:
     ``session_id``, ``scan`` (the Session can hold in-window facts) and
     ``extension`` (the unit fills an Extension participant slice).
     """
+
+    call_status_sql = "NULL"
 
     def __init__(
         self,
@@ -90,7 +95,14 @@ class UnitScan:
 
     def source(self, table: str, alias: str) -> str:
         """Return a FROM clause yielding ``table`` rows per unit, units outermost."""
-        return f"temp.units u CROSS JOIN {table} {alias} ON {alias}.session_key = u.session_key"
+        return (
+            f"temp.units u CROSS JOIN {self.table(table)} {alias} "
+            f"ON {alias}.session_key = u.session_key"
+        )
+
+    def table(self, table: str) -> str:
+        """Resolve a fact table for this scan's source."""
+        return table
 
     def where(self, alias: str) -> str:
         """Return the scanned-unit and time-window condition for ``alias`` rows."""
