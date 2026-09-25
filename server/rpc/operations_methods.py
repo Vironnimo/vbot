@@ -72,18 +72,18 @@ async def _run_prompt_method(
     )
 
 
-def _list_logs(state: Any, params: JsonObject) -> JsonObject:
+async def _list_logs(state: Any, params: JsonObject) -> JsonObject:
     if params:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "log.list does not accept params")
-    return _log_viewer(state).list_files()
+    return await _log_viewer(state).list_files()
 
 
-def _read_log(state: Any, params: JsonObject) -> JsonObject:
+async def _read_log(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"file"}, "log read")
 
     file_name = _required_string(params, "file")
     try:
-        return _log_viewer(state).read_file(file_name)
+        return await _log_viewer(state).read_file(file_name)
     except ValueError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except FileNotFoundError as exc:
