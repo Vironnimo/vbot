@@ -6,7 +6,6 @@ import sqlite3
 from itertools import islice
 from typing import cast
 
-from core.tools.fuzzy_match import FuzzyReplacement, replace_fuzzy
 from core.utils.ids import new_id
 from core.utils.timestamps import utc_now_timestamp
 
@@ -18,6 +17,7 @@ from ._store_database import (
 )
 from ._store_records import _assert_epoch, _assert_mutable, _participant
 from ._store_values import Json, SwarmStoreError, _dump, _hash, _load, _request_id
+from ._wiki_edit import EditMiss, apply_text_edit
 
 MUTATIONS = {"create", "update", "delete", "restore"}
 _FIELDS = {
@@ -48,8 +48,9 @@ def _validate(arguments: Json) -> str:
     required = {"page_id"} if action not in {"list", "create"} else set()
     if action in MUTATIONS:
         required.add("request_id")
-        if action != "create":
-            required.add("expected_revision")
+    if action == "update" and "content" in arguments:
+        # Replacing the whole page must not silently discard a peer's newer revision.
+        required.add("expected_revision")
     if action == "create":
         required.update({"title", "content"})
     if action == "restore":
@@ -146,6 +147,35 @@ def _read(row: sqlite3.Row, arguments: Json, current_revision: int) -> Json:
             "arguments": {**arguments, "revision": row["revision"], "offset": offset + limit},
         }
     return result
+
+
+def wiki_pages(db: SwarmDatabase, swarm_id: str) -> list[Json]:
+    """Return every page's ID, current title and deletion state, newest change first."""
+
+    with db._read() as connection:
+        rows = connection.execute(
+            "SELECT p.id,r.title,r.deleted FROM wiki_pages p JOIN wiki_revisions r "
+            "ON r.page_id=p.id AND r.revision=p.revision WHERE p.swarm_id=? ORDER BY r.id DESC",
+            (swarm_id,),
+        ).fetchall()
+    return [
+        {"page_id": row["id"], "title": row["title"], "deleted": bool(row["deleted"])}
+        for row in rows
+    ]
+
+
+def wiki_contents(
+    db: SwarmDatabase, swarm_id: str, page_id: str, revisions: list[int]
+) -> dict[int, str]:
+    """Return the complete content of the named revisions that exist."""
+
+    with db._read() as connection:
+        rows = connection.execute(
+            "SELECT revision,content FROM wiki_revisions WHERE swarm_id=? AND page_id=? "
+            f"AND revision IN ({','.join('?' * len(revisions))})",
+            (swarm_id, page_id, *revisions),
+        ).fetchall()
+    return {int(row["revision"]): str(row["content"]) for row in rows}
 
 
 def wiki(
@@ -252,8 +282,29 @@ def _mutate(
         if replay["payload_hash"] != payload_hash:
             raise SwarmStoreError("request_conflict")
         return {**_load(replay["outcome"]), "replayed": True}
+
+    def finish(result: Json) -> Json:
+        connection.execute(
+            "INSERT INTO requests(scope,request_id,payload_hash,outcome) VALUES(?,?,?,?)",
+            (scope, arguments["request_id"], payload_hash, _dump(result)),
+        )
+        return result
+
     now = utc_now_timestamp()
+    line = None
     if action == "create":
+        title, content, deleted = arguments["title"], arguments["content"], 0
+        duplicate = connection.execute(
+            "SELECT p.id FROM wiki_pages p JOIN wiki_revisions r "
+            "ON r.page_id=p.id AND r.revision=p.revision "
+            "WHERE p.swarm_id=? AND r.deleted=0 AND r.title=? AND r.content=? LIMIT 1",
+            (swarm_id, title, content),
+        ).fetchone()
+        if duplicate is not None:
+            # A repeated create from a later Tool Call must not fork the page.
+            return finish(
+                {**_metadata(_page(connection, swarm_id, duplicate["id"])), "unchanged": True}
+            )
         while True:
             page_id = new_id("wpg")
             if (
@@ -261,7 +312,7 @@ def _mutate(
                 is None
             ):
                 break
-        revision, title, content, deleted = 1, arguments["title"], arguments["content"], 0
+        revision = 1
         connection.execute(
             "INSERT INTO wiki_pages(id,swarm_id,revision) VALUES(?,?,?)",
             (page_id, swarm_id, revision),
@@ -269,16 +320,15 @@ def _mutate(
     else:
         page_id = arguments["page_id"]
         current = _page(connection, swarm_id, page_id)
-        stale = current["revision"] != arguments["expected_revision"]
-        if stale and not (
+        expected = arguments.get("expected_revision")
+        # A passage edit from an older revision applies while its passage still matches.
+        rebase = (
             action == "update"
             and "old_text" in arguments
             and "title" not in arguments
-            and arguments["expected_revision"] < current["revision"]
-        ):
-            raise SwarmStoreError("wiki_revision_conflict")
-        if current["deleted"] and action != "restore":
-            raise SwarmStoreError("wiki_deleted")
+            and expected is not None
+            and expected < current["revision"]
+        )
         source = (
             _page(connection, swarm_id, page_id, arguments["revision"])
             if action == "restore"
@@ -286,25 +336,42 @@ def _mutate(
         )
         title = arguments.get("title", source["title"])
         content = arguments.get("content", source["content"])
-        if "old_text" in arguments:
-            # All of old_text is replaced, so it must match precisely, up to
-            # newline, whitespace, Unicode, and typography normalization. Similarity
-            # matching could select a different passage, such as one another
-            # participant changed, and overwrite it.
-            replacement = replace_fuzzy(
-                content,
-                arguments["old_text"],
-                arguments["new_text"],
-                replace_all=False,
-                precise_only=True,
-                typographic=True,
+        deleted = int(action == "delete")
+        state = {"current_revision": current["revision"]}
+        if "old_text" not in arguments and (title, content, deleted) == (
+            current["title"],
+            current["content"],
+            current["deleted"],
+        ):
+            return finish({**_metadata(current), "unchanged": True})
+        if expected is not None and expected != current["revision"] and not rebase:
+            raise SwarmStoreError(
+                "wiki_revision_conflict", details={**state, "expected_revision": expected}
             )
-            if not isinstance(replacement, FuzzyReplacement):
-                raise SwarmStoreError("wiki_revision_conflict" if stale else "wiki_edit_conflict")
-            content = replacement.new_content
+        if current["deleted"] and action != "restore":
+            raise SwarmStoreError("wiki_deleted", details=state)
+        if "old_text" in arguments:
+            edit = apply_text_edit(content, arguments["old_text"], arguments["new_text"])
+            if isinstance(edit, EditMiss):
+                raise SwarmStoreError(
+                    "wiki_revision_conflict" if rebase else "wiki_edit_conflict",
+                    details={
+                        **state,
+                        "expected_revision": expected,
+                        "occurrences": edit.occurrences,
+                        "lines": list(edit.lines),
+                        "passages": [
+                            {"line": item.line, "text": item.text, "truncated": item.truncated}
+                            for item in edit.passages
+                        ],
+                    },
+                )
+            content, line = edit.content, edit.line
+            if content == current["content"] and title == current["title"]:
+                return finish({**_metadata(current), "unchanged": True, "line": line})
         if len(content) > 200000:
             raise SwarmStoreError("invalid_arguments", field="content")
-        revision, deleted = current["revision"] + 1, int(action == "delete")
+        revision = current["revision"] + 1
         connection.execute("UPDATE wiki_pages SET revision=? WHERE id=?", (revision, page_id))
     connection.execute(
         "INSERT INTO "
@@ -324,8 +391,6 @@ def _mutate(
         ),
     )
     result = _metadata(_page(connection, swarm_id, page_id))
-    connection.execute(
-        "INSERT INTO requests(scope,request_id,payload_hash,outcome) VALUES(?,?,?,?)",
-        (scope, arguments["request_id"], payload_hash, _dump(result)),
-    )
-    return result
+    if line is not None:
+        result["line"] = line
+    return finish(result)

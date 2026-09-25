@@ -68,7 +68,7 @@ def _post_message(
                 (reply_to, swarm_id),
             ).fetchone()
             if target is None:
-                raise SwarmStoreError("message_not_found")
+                raise SwarmStoreError("message_not_found", field="reply_to")
         discussion_id_value = discussion_id or (
             target["discussion_id"] if target is not None else _main(connection, swarm_id)
         )
@@ -324,6 +324,13 @@ def _membership(
         discussion = _discussion(connection, swarm_id, discussion_id)
         if not joining and discussion["is_main"]:
             raise SwarmStoreError("main_membership_required")
+        already = (
+            connection.execute(
+                "SELECT 1 FROM memberships WHERE discussion_id=? AND participant_id=?",
+                (discussion_id, participant_id),
+            ).fetchone()
+            is not None
+        ) == joining
         if joining:
             connection.execute(
                 "INSERT OR IGNORE INTO memberships(discussion_id,participant_id) VALUES(?,?)",
@@ -337,13 +344,17 @@ def _membership(
         if not joining:
             return {
                 "discussion_id": discussion_id,
+                "title": discussion["title"],
                 "joined": False,
+                "already": already,
                 "pending_count": _pending_count(connection, swarm_id, participant_id),
             }
         recent = _post_page(db, connection, swarm_id, participant_id, discussion_id, None, 20)
         return {
             "discussion_id": discussion_id,
+            "title": discussion["title"],
             "joined": True,
+            "already": already,
             "recent": {
                 "entries": list(recent.entries),
                 "has_more": recent.has_more,

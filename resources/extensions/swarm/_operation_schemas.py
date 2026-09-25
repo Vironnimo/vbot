@@ -190,7 +190,11 @@ _OPERATION_SCHEMAS: dict[str, Json] = {
 
 _OPERATION_SCHEMAS["wiki"] = {
     **WIKI_PARAMETERS,
-    "properties": {**WIKI_PARAMETERS["properties"], "swarm_id": {"type": "string"}},
+    "properties": {
+        **WIKI_PARAMETERS["properties"],
+        "swarm_id": {"type": "string"},
+        "request_id": {"type": "string"},
+    },
     "required": ["action", "swarm_id"],
     "additionalProperties": False,
 }
