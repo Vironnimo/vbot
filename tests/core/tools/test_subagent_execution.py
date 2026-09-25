@@ -14,6 +14,7 @@ from .subagent_test_support import (
     ChatMessage,
     FakeChatLoop,
     FakeRunManager,
+    JsonObject,
     Path,
     RecordingTriggerService,
     Run,
@@ -208,10 +209,22 @@ async def test_subagent_tool_runs_in_foreground_at_depth(tmp_path: Path) -> None
     assert tracker.spawn_count((context.agent_id, context.session_id, context.run_id)) == 0
 
 
-@pytest.mark.parametrize("background", [True, False])
-async def test_subagent_tool_rejects_retired_background(
+@pytest.mark.parametrize(
+    ("depth", "arguments", "note"),
+    [
+        # A Sub-Agent's Sub-Agents always run in the foreground.
+        (1, {"background": True}, subagent_constants.SUBAGENT_FOREGROUND_ONLY_NOTE),
+        (1, {"run_in_background": "true"}, subagent_constants.SUBAGENT_FOREGROUND_ONLY_NOTE),
+        (1, {"blocking": False}, subagent_constants.SUBAGENT_FOREGROUND_ONLY_NOTE),
+        (1, {"background": False}, None),
+        (1, {"blocking": True}, None),
+    ],
+)
+async def test_nested_delegation_runs_in_foreground_whatever_mode_was_requested(
     tmp_path: Path,
-    background: bool,
+    depth: int,
+    arguments: JsonObject,
+    note: str | None,
 ) -> None:
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
@@ -222,14 +235,34 @@ async def test_subagent_tool_rejects_retired_background(
     registry = ToolRegistry()
     register_subagent_tools(registry, coordinator)
 
-    # Act
-    with pytest.raises(ToolContractError, match='"background" is not a parameter'):
+    task = asyncio.create_task(
+        registry.dispatch(make_context(nesting_depth=depth), {"content": "do work", **arguments})
+    )
+    await wait_until(lambda: len(manager.started) == 1)
+    manager.started[0][3].mark_completed(ChatMessage.assistant(model="test", content="done"))
+    result = await task
+
+    assert result["ok"] is True, result
+    assert result["data"]["delivery"] == "inline"
+    assert result["data"]["result"] == "done"
+    assert result["data"].get("note") == note
+
+
+async def test_conflicting_delivery_modes_are_refused_before_work(tmp_path: Path) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    trigger_service = RecordingTriggerService()
+    coordinator = subagent_module.SubAgentCoordinator(
+        runtime, trigger_service, batch_tracker=SubAgentBatchTracker(trigger_service)
+    )
+    registry = ToolRegistry()
+    register_subagent_tools(registry, coordinator)
+
+    with pytest.raises(ToolContractError, match='Conflicting "background" and "blocking"'):
         await registry.dispatch(
-            make_context(nesting_depth=1),
-            {"content": "do work", "background": background},
+            make_context(), {"content": "do work", "background": True, "blocking": True}
         )
 
-    # Assert
     assert manager.started == []
 
 

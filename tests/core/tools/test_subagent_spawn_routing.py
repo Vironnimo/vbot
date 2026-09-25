@@ -137,7 +137,12 @@ async def test_registered_status_all_returns_empty_or_owned_snapshots() -> None:
     listed = await registry.dispatch(context, {"action": "status"})
     single = await registry.dispatch(context, {"action": "status", "id": "sub_child"})
     assert listed["ok"] is True
-    assert listed["data"] == {"subagents": [single["data"]]}
+    # The list states the waiting note once instead of repeating it per entry.
+    assert single["data"].pop("note") == subagent_constants.SUBAGENT_STATUS_QUEUED_NOTE
+    assert listed["data"] == {
+        "subagents": [single["data"]],
+        "note": subagent_constants.SUBAGENT_STATUS_LIST_NOTE,
+    }
     display = registry.get(SUBAGENT_TOOL_NAME).display.to_payload({"action": "status"})
     assert [part["value"] for part in display["primary"]] == ["status"]
 
@@ -596,10 +601,18 @@ async def test_subagent_tool_rejects_nonexistent_session_id(tmp_path: Path) -> N
     # Assert
     assert result["ok"] is False
     assert result["error"]["code"] == "session_not_found"
+    message = result["error"]["message"]
+    assert message.startswith(
+        f"No Session missing-sub-session exists for Agent {context.agent_id}; nothing was started."
+    )
+    assert message.endswith('repeat this call without "session_id".')
+    # agent_id was given, so the message does not suggest another owner.
+    assert "belongs to another Agent" not in message
     assert manager.started == []
+    assert runtime.chat_sessions.list(context.agent_id) == []
 
 
-async def test_subagent_tool_requires_agent_id_to_continue_session(tmp_path: Path) -> None:
+async def test_session_id_without_agent_id_continues_your_own_session(tmp_path: Path) -> None:
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
@@ -613,12 +626,40 @@ async def test_subagent_tool_requires_agent_id_to_continue_session(tmp_path: Pat
         batch_tracker=tracker,
     )
 
-    assert result["ok"] is False
-    assert result["error"] == {
-        "code": "invalid_arguments",
-        "message": (
-            "agent_id is required with session_id because Sub-Agent Sessions are "
-            "Agent-scoped; repeat both values returned by the original subagent call"
-        ),
-    }
-    assert manager.started == []
+    assert result["ok"] is True, result
+    assert result["data"]["agent_id"] == context.agent_id
+    assert result["data"]["session_id"] == "existing-sub-session"
+    assert manager.started[0][:2] == (context.agent_id, "existing-sub-session")
+    manager.started[0][3].mark_completed(ChatMessage.assistant(model="test", content="done"))
+    await asyncio.sleep(0)
+
+
+async def test_session_id_without_agent_id_names_tracked_work_when_missing(
+    tmp_path: Path,
+) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+    spawned = await _handle_subagent(
+        context, {"content": "first", "agent_id": "worker"}, runtime=runtime, batch_tracker=tracker
+    )
+    child = spawned["data"]
+
+    result = await _handle_subagent(
+        context,
+        {"content": "continue", "session_id": "ses_unknown"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["error"]["code"] == "session_not_found"
+    message = result["error"]["message"]
+    assert "If that Session belongs to another Agent" in message
+    assert (
+        f"Tracked work: {child['id']} (agent_id worker, session_id {child['session_id']}, "
+        "running)." in message
+    )
+    assert len(manager.started) == 1
+    manager.started[0][3].mark_completed(ChatMessage.assistant(model="test", content="done"))
+    await asyncio.sleep(0)

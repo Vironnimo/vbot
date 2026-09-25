@@ -1,0 +1,645 @@
+{
+ "files": {
+  "src/app.py": "import os\nimport sys\n\n\ndef main():\n    print('hi')\n"
+ },
+ "cases": [
+  {
+   "name": "subagent: canonical brief",
+   "tool": "subagent",
+   "arguments": {
+    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit."
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running",
+     "main"
+    ]
+   }
+  },
+  {
+   "name": "subagent: explicit run with target",
+   "tool": "subagent",
+   "arguments": {
+    "action": "run",
+    "agent_id": "main",
+    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "description": "Review imports"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running"
+    ]
+   }
+  },
+  {
+   "name": "subagent: Claude Code Task shape",
+   "tool": "subagent",
+   "arguments": {
+    "description": "Review imports",
+    "prompt": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "subagent_type": "main"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running"
+    ]
+   }
+  },
+  {
+   "name": "subagent: opencode task with background",
+   "tool": "subagent",
+   "arguments": {
+    "description": "Review imports",
+    "prompt": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "subagent_type": "main",
+    "background": true
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running"
+    ]
+   }
+  },
+  {
+   "name": "subagent: Claude Code run_in_background",
+   "tool": "subagent",
+   "arguments": {
+    "description": "Review imports",
+    "prompt": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "run_in_background": false
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running"
+    ]
+   }
+  },
+  {
+   "name": "subagent: Hermes goal plus context",
+   "tool": "subagent",
+   "arguments": {
+    "goal": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "context": "The repository uses Python 3.12."
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running"
+    ]
+   }
+  },
+  {
+   "name": "subagent: pi agent plus task",
+   "tool": "subagent",
+   "arguments": {
+    "agent": "main",
+    "task": "Review src/app.py for unused imports and report file:line findings. Do not edit."
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running"
+    ]
+   }
+  },
+  {
+   "name": "subagent: openclaw task with label",
+   "tool": "subagent",
+   "arguments": {
+    "task": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "label": "Review imports",
+    "agentId": "main"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running"
+    ]
+   }
+  },
+  {
+   "name": "subagent: instructions and title aliases",
+   "tool": "subagent",
+   "arguments": {
+    "instructions": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "title": "Review imports"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running"
+    ]
+   }
+  },
+  {
+   "name": "subagent: action spawn",
+   "tool": "subagent",
+   "arguments": {
+    "action": "spawn",
+    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit."
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running"
+    ]
+   }
+  },
+  {
+   "name": "subagent: action delegate",
+   "tool": "subagent",
+   "arguments": {
+    "action": "delegate",
+    "message": "Review src/app.py for unused imports and report file:line findings. Do not edit."
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running"
+    ]
+   }
+  },
+  {
+   "name": "subagent: request wrapper",
+   "tool": "subagent",
+   "arguments": {
+    "request": {
+     "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+     "agent_id": "main"
+    }
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running"
+    ]
+   }
+  },
+  {
+   "name": "subagent: request string is the task",
+   "tool": "subagent",
+   "arguments": {
+    "request": "Review src/app.py for unused imports and report file:line findings. Do not edit."
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running"
+    ]
+   }
+  },
+  {
+   "name": "subagent: legacy blocking flag",
+   "tool": "subagent",
+   "arguments": {
+    "agent_id": "main",
+    "blocking": true,
+    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit."
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running"
+    ]
+   }
+  },
+  {
+   "name": "subagent: fill-all placeholders unused/invalid",
+   "tool": "subagent",
+   "arguments": {
+    "action": "run",
+    "agent_id": "main",
+    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "description": "Audit",
+    "id": "unused",
+    "model": "",
+    "session_id": "invalid-placeholder",
+    "thinking_effort": "high"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running"
+    ]
+   }
+  },
+  {
+   "name": "subagent: fill-all blank placeholders",
+   "tool": "subagent",
+   "arguments": {
+    "action": "run",
+    "agent_id": "main",
+    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "description": "Audit",
+    "id": " ",
+    "session_id": " ",
+    "thinking_effort": "high"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running"
+    ]
+   }
+  },
+  {
+   "name": "subagent: fill-all dot placeholders",
+   "tool": "subagent",
+   "arguments": {
+    "action": "run",
+    "agent_id": "main",
+    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "id": ".",
+    "session_id": "."
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running"
+    ]
+   }
+  },
+  {
+   "name": "subagent: fill-all empty strings",
+   "tool": "subagent",
+   "arguments": {
+    "action": "run",
+    "agent_id": "main",
+    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "description": "Audit",
+    "id": "",
+    "model": "",
+    "session_id": "",
+    "thinking_effort": "high"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running"
+    ]
+   }
+  },
+  {
+   "name": "subagent: placeholder words",
+   "tool": "subagent",
+   "arguments": {
+    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "id": "placeholder",
+    "session_id": "__omit__"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running"
+    ]
+   }
+  },
+  {
+   "name": "subagent: empty agent_id selects yourself",
+   "tool": "subagent",
+   "arguments": {
+    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "agent_id": ""
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: running"
+    ]
+   }
+  },
+  {
+   "name": "subagent: status lists tracked work",
+   "tool": "subagent",
+   "arguments": {
+    "action": "status"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "subagents: []"
+    ]
+   }
+  },
+  {
+   "name": "subagent: action list",
+   "tool": "subagent",
+   "arguments": {
+    "action": "list"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "subagents: []"
+    ]
+   }
+  },
+  {
+   "name": "subagent: status with every field echoed",
+   "tool": "subagent",
+   "arguments": {
+    "action": "status",
+    "agent_id": "main",
+    "content": "status",
+    "description": "Audit progress",
+    "id": "sub_aaaaaaaaaaaa",
+    "model": "openai/gpt-x",
+    "session_id": "ses_bbbbbbbbbbbb",
+    "thinking_effort": "high"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "subagent_not_found",
+    "contains": [
+     "sub_aaaaaaaaaaaa"
+    ],
+    "absent": [
+     "Unknown argument",
+     "not run"
+    ]
+   }
+  },
+  {
+   "name": "subagent: status with placeholder id lists work",
+   "tool": "subagent",
+   "arguments": {
+    "action": "status",
+    "id": "",
+    "agent_id": "main"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "subagents: []"
+    ]
+   }
+  },
+  {
+   "name": "subagent: cancel with every field echoed",
+   "tool": "subagent",
+   "arguments": {
+    "action": "cancel",
+    "agent_id": "main",
+    "content": "stop audit",
+    "id": "sub_aaaaaaaaaaaa",
+    "session_id": "ses_bbbbbbbbbbbb",
+    "thinking_effort": "high"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "subagent_not_found",
+    "absent": [
+     "Unknown argument",
+     "not run"
+    ]
+   }
+  },
+  {
+   "name": "subagent: action stop",
+   "tool": "subagent",
+   "arguments": {
+    "action": "stop",
+    "id": "sub_aaaaaaaaaaaa"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "subagent_not_found"
+   }
+  },
+  {
+   "name": "subagent: unknown id says nothing is tracked",
+   "tool": "subagent",
+   "arguments": {
+    "action": "status",
+    "id": "last"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "subagent_not_found",
+    "contains": [
+     "No Sub-Agent work is tracked"
+    ]
+   }
+  },
+  {
+   "name": "subagent: id without action or task",
+   "tool": "subagent",
+   "arguments": {
+    "id": "sub_aaaaaaaaaaaa"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "\"action\": \"status\"",
+     "\"action\": \"cancel\""
+    ]
+   }
+  },
+  {
+   "name": "subagent: missing task",
+   "tool": "subagent",
+   "arguments": {
+    "agent_id": "main",
+    "description": "Review imports"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "content"
+    ]
+   }
+  },
+  {
+   "name": "subagent: conflicting target spellings",
+   "tool": "subagent",
+   "arguments": {
+    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "agent_id": "main",
+    "agent": "other"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "agent_id"
+    ]
+   }
+  },
+  {
+   "name": "subagent: session_id without agent_id",
+   "tool": "subagent",
+   "arguments": {
+    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "session_id": "ses_bbbbbbbbbbbb"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "session_not_found",
+    "contains": [
+     "agent_id",
+     "without \"session_id\""
+    ]
+   }
+  },
+  {
+   "name": "subagent: unknown Agent names the choices",
+   "tool": "subagent",
+   "arguments": {
+    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "agent_id": "nobody"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "agent_not_found",
+    "contains": [
+     "nobody",
+     "Omit agent_id"
+    ]
+   }
+  },
+  {
+   "name": "subagent: unknown option is refused",
+   "tool": "subagent",
+   "arguments": {
+    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "priority": "high"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "priority"
+    ]
+   }
+  },
+  {
+   "name": "subagent: cancel without id",
+   "tool": "subagent",
+   "arguments": {
+    "action": "cancel"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "cancel needs \"id\"",
+     "nothing"
+    ]
+   }
+  },
+  {
+   "name": "status: current Session",
+   "tool": "status",
+   "arguments": {},
+   "expect": {
+    "ok": false,
+    "error_code": "session_not_found"
+   }
+  },
+  {
+   "name": "status: placeholder targets mean the current Session",
+   "tool": "status",
+   "arguments": {
+    "agent_id": "none",
+    "session_id": "current"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "session_not_found",
+    "absent": [
+     "No Session current",
+     "Agent none",
+     "Omit session_id"
+    ]
+   }
+  },
+  {
+   "name": "status: question-mark placeholders",
+   "tool": "status",
+   "arguments": {
+    "agent_id": "???",
+    "session_id": "???"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "session_not_found",
+    "absent": [
+     "???"
+    ]
+   }
+  },
+  {
+   "name": "status: Sub-Agent work id points to subagent",
+   "tool": "status",
+   "arguments": {
+    "id": "sub_aaaaaaaaaaaa"
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "subagent",
+     "\"action\": \"status\"",
+     "sub_aaaaaaaaaaaa"
+    ],
+    "absent": [
+     "Unknown argument"
+    ]
+   }
+  },
+  {
+   "name": "project: unknown Project",
+   "tool": "project",
+   "arguments": {
+    "project_id": "vbot"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "project_not_found",
+    "contains": [
+     "vbot"
+    ]
+   }
+  },
+  {
+   "name": "project: project alias",
+   "tool": "project",
+   "arguments": {
+    "project": "vbot"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "project_not_found"
+   }
+  },
+  {
+   "name": "project: name alias",
+   "tool": "project",
+   "arguments": {
+    "name": "vbot"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "project_not_found"
+   }
+  },
+  {
+   "name": "project: missing id",
+   "tool": "project",
+   "arguments": {},
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "project_id"
+    ]
+   }
+  }
+ ]
+}
