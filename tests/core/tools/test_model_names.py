@@ -6,7 +6,17 @@ import pytest
 
 from core.tools import BASH_TOOL_NAME, called_tool_name
 
-OFFERED = (BASH_TOOL_NAME, "read", "apply_patch", "search_files", "web_fetch", "subagent")
+OFFERED = (
+    BASH_TOOL_NAME,
+    "read",
+    "apply_patch",
+    "search_files",
+    "web_fetch",
+    "web_search",
+    "subagent",
+    "analyze_image",
+    "text_to_speech",
+)
 
 
 @pytest.mark.parametrize(
@@ -33,13 +43,16 @@ OFFERED = (BASH_TOOL_NAME, "read", "apply_patch", "search_files", "web_fetch", "
         ("list_dir", "search_files"),
         ("Task", "subagent"),
         ("fetch", "web_fetch"),
+        ("google_web_search", "web_search"),
+        ("vision_analyze", "analyze_image"),
+        ("tts", "text_to_speech"),
     ],
 )
 def test_called_names_resolve_to_the_offered_tool_they_mean(called: str, expected: str) -> None:
     assert called_tool_name(called, OFFERED) == expected
 
 
-@pytest.mark.parametrize("called", ["TodoWrite", "web_search", "Grepper", "", "memory"])
+@pytest.mark.parametrize("called", ["TodoWrite", "image_generation", "Grepper", "", "memory"])
 def test_names_without_an_offered_meaning_stay_as_called(called: str) -> None:
     assert called_tool_name(called, OFFERED) == called
 
