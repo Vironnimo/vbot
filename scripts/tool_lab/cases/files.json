@@ -258,6 +258,40 @@
    }
   },
   {
+   "name": "read: Cursor read_file with an explanation",
+   "tool": "read",
+   "arguments": {
+    "target_file": "src/app.py",
+    "start_line_one_indexed": 1,
+    "end_line_one_indexed_inclusive": 2,
+    "should_read_entire_file": false,
+    "explanation": "Look at the entry point."
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "1| "
+    ]
+   }
+  },
+  {
+   "name": "read: a list of several files names one call per file",
+   "tool": "read",
+   "arguments": {
+    "paths": [
+     "src/app.py",
+     "README.md"
+    ]
+   },
+   "expect": {
+    "ok": false,
+    "contains": [
+     "read(path=\"src/app.py\")",
+     "read(path=\"README.md\")"
+    ]
+   }
+  },
+  {
    "name": "patch: canonical update",
    "tool": "apply_patch",
    "arguments": {

@@ -2,9 +2,12 @@
 
 Models trained on other agent harnesses send ``file_path``, ``start_line`` and
 ``end_line``, ``view_range: [10, 20]``, ``lines: "10-20"`` or ``tail: 50``. Each
-shape names one exact line window, so it runs as that window. Shapes that
-could mean different windows, or that contradict each other, fail with the
-call to send instead.
+shape names one exact line window, so it runs as that window. A one-file list
+(``paths: ["a.py"]``, ``files: [{"path": ..., "line_ranges": [...]}]``) runs as
+that file; notes such as ``explanation`` and a ``command: "view"`` request no
+effect of their own and are dropped. Shapes that could mean different windows,
+several files, or that contradict each other, fail with the calls to send
+instead.
 """
 
 from __future__ import annotations
@@ -15,8 +18,9 @@ from functools import cache
 from typing import Any, TypeGuard
 
 from core.tools._argument_repair import normalize_call_arguments
-from core.tools._field_aliases import SpellingAliases
+from core.tools._field_aliases import SpellingAliases, spelling
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
+from core.tools.model_names import model_tool_name
 
 READ_TOOL_NAME = "read"
 
@@ -85,7 +89,7 @@ _FIELD_ALIASES = SpellingAliases(
             "end_line_inclusive",
             "end_line_one_indexed_inclusive",
         ),
-        "lines": ("range", "line_range", "view_range", "line_numbers"),
+        "lines": ("range", "line_range", "line_ranges", "view_range", "line_numbers"),
         "tail": ("last", "last_lines", "tail_lines"),
         "entire": ("should_read_entire_file", "read_entire_file", "entire_file", "whole_file"),
         "pattern": (
@@ -111,6 +115,11 @@ _SEARCH_FIELDS = SpellingAliases(
     }
 )
 
+# Notes that come with a call and request no effect of their own.
+_REMARKS = frozenset({"explanation", "description"})
+# Lists of files to read; read shows one file per call.
+_PATH_LISTS = frozenset({"paths", "filepaths", "files", "targetfiles", "absolutepaths"})
+
 _POSITION = re.compile(r"\s*(\d+):(\d+)\s*")
 _RANGE = re.compile(
     r"\s*L?(\d+)\s*(?:-|\.\.\.?|:|,|to)\s*(?:L?(\d+)|end|eof|\$)?\s*",
@@ -135,6 +144,8 @@ def _repair_contract() -> ToolContract:
 
 def normalize_read_arguments(arguments: Any) -> Any:
     """Return read arguments with other harnesses' spellings translated."""
+    if isinstance(arguments, dict):
+        arguments = _one_file(_without_remarks(arguments))
     normalized = normalize_call_arguments(
         _repair_contract(),
         arguments,
@@ -145,6 +156,55 @@ def normalize_read_arguments(arguments: Any) -> Any:
         return normalized
     _reject_search_fields(normalized)
     return _translate_line_window(normalized)
+
+
+def _without_remarks(arguments: dict[str, Any]) -> dict[str, Any]:
+    result = {key: value for key, value in arguments.items() if spelling(key) not in _REMARKS}
+    for key, value in arguments.items():
+        name = spelling(key)
+        if name == "includesummaryofotherlines" and value is False:
+            del result[key]
+        elif name == "command":
+            if not isinstance(value, str) or spelling(value) != "view":
+                raise ValueError(
+                    f"read has no command {_literal(value)}: it shows the file or lists the "
+                    "directory given as path. To change a file, call "
+                    f"{model_tool_name('apply_patch')}."
+                )
+            del result[key]
+    return result
+
+
+def _one_file(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Return a call whose list of files names one file as that file's call."""
+    lists = [
+        key
+        for key, value in arguments.items()
+        if spelling(key) in _PATH_LISTS
+        or (isinstance(value, list) and _FIELD_ALIASES.get(key, spelling(key)) == "path")
+    ]
+    result = dict(arguments)
+    for key in lists:
+        items = result.pop(key)
+        items = items if isinstance(items, list) else [items]
+        if len(items) > 1:
+            calls = ", ".join(_read_call(_item_fields(item)) for item in items)
+            raise ValueError(f"read shows one file per call. Send one call per file: {calls}.")
+        for field, value in (_item_fields(items[0]) if items else {}).items():
+            _set(result, field, value, field)
+    return result
+
+
+def _item_fields(item: Any) -> dict[str, Any]:
+    return dict(item) if isinstance(item, dict) else {"path": item}
+
+
+def _read_call(fields: dict[str, Any]) -> str:
+    call = normalize_read_arguments(fields)
+    rendered = ", ".join(
+        f"{key}={_literal(call[key])}" for key in ("path", "offset", "limit") if key in call
+    )
+    return f"{model_tool_name(READ_TOOL_NAME)}({rendered})"
 
 
 def _reject_search_fields(arguments: dict[str, Any]) -> None:
@@ -241,6 +301,14 @@ def _translate_line_window(arguments: dict[str, Any]) -> dict[str, Any]:
 
 def _line_range(value: Any) -> tuple[int, int | None]:
     """Return the first and last line of a range such as "10-20" or [10, 20]."""
+    if isinstance(value, list) and value and all(map(_is_range, value)):
+        if len(value) == 1:
+            return _line_range(value[0])
+        calls = "; ".join(_window_call(*_line_range(item)) for item in value)
+        raise ValueError(
+            f"lines={_literal(value)} names {len(value)} line ranges, and read shows one "
+            f"range per call. Send one call per range: {calls}."
+        )
     bounds: list[Any]
     if isinstance(value, dict):
         bounds = [
@@ -271,6 +339,13 @@ def _line_range(value: Any) -> tuple[int, int | None]:
         return first or 1, None
     last = _line_number(last_value, "lines")
     return first or 1, last
+
+
+def _is_range(value: Any) -> bool:
+    """Return whether a list item is itself a whole range, not one bound of a range."""
+    return isinstance(value, (list, dict)) or (
+        isinstance(value, str) and _RANGE.fullmatch(value) is not None
+    )
 
 
 def _first_value(value: dict[str, Any], keys: tuple[str, ...]) -> Any:

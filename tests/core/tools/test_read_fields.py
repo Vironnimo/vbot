@@ -233,6 +233,89 @@ async def test_contradictory_or_unclear_windows_fail_with_the_call_to_send(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        # Cursor sends an explanation with every call.
+        {
+            "target_file": "src/app.txt",
+            "start_line_one_indexed": 4,
+            "end_line_one_indexed_inclusive": 6,
+            "should_read_entire_file": False,
+            "explanation": "Check the setup.",
+        },
+        {"command": "view", "path": "src/app.txt", "view_range": [4, 6]},
+        {"AbsolutePath": "src/app.txt", "StartLine": 4, "EndLine": 6},
+        {
+            "AbsolutePath": "src/app.txt",
+            "StartLine": 4,
+            "EndLine": 6,
+            "IncludeSummaryOfOtherLines": False,
+        },
+        {"paths": ["src/app.txt"], "offset": 4, "limit": 3},
+        {"path": ["src/app.txt"], "lines": "4-6"},
+        {"files": [{"path": "src/app.txt", "line_ranges": ["4-6"]}]},
+        {"files": [{"path": "src/app.txt", "line_ranges": [[4, 6]]}]},
+        {"path": "src/app.txt", "files": [{"path": "src/app.txt"}], "offset": 4, "limit": 3},
+    ],
+)
+async def test_notes_and_one_file_lists_read_that_file(project: Path, arguments: dict) -> None:
+    result = await dispatch(project, arguments)
+
+    assert content(result) == window(4, 6)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (
+            {"paths": ["src/app.txt", "src/code.py"]},
+            'read shows one file per call. Send one call per file: read(path="src/app.txt"), '
+            'read(path="src/code.py").',
+        ),
+        (
+            {
+                "files": [
+                    {"path": "src/app.txt", "line_ranges": ["4-6"]},
+                    {"path": "src/code.py"},
+                ]
+            },
+            'Send one call per file: read(path="src/app.txt", offset=4, limit=3), '
+            'read(path="src/code.py").',
+        ),
+        (
+            {"path": "src/app.txt", "line_ranges": ["1-2", "9-12"]},
+            'lines=["1-2", "9-12"] names 2 line ranges, and read shows one range per call. '
+            "Send one call per range: offset=1, limit=2; offset=9, limit=4.",
+        ),
+        (
+            {"path": "src/code.py", "paths": ["src/app.txt"]},
+            "Conflicting values for path; provide one intended value.",
+        ),
+        (
+            {"command": "str_replace", "path": "src/app.txt", "old_str": "a", "new_str": "b"},
+            'read has no command "str_replace": it shows the file or lists the directory '
+            "given as path. To change a file, call apply_patch.",
+        ),
+    ],
+)
+async def test_several_files_or_other_commands_fail_with_the_calls_to_send(
+    project: Path, arguments: dict, message: str
+) -> None:
+    assert message in await rejected(project, arguments)
+
+
+@pytest.mark.asyncio
+async def test_a_requested_summary_of_other_lines_is_not_dropped(project: Path) -> None:
+    message = await rejected(
+        project, {"path": "src/app.txt", "limit": 3, "IncludeSummaryOfOtherLines": True}
+    )
+
+    assert '"IncludeSummaryOfOtherLines" is not a parameter.' in message
+
+
+@pytest.mark.asyncio
 async def test_two_different_paths_are_a_conflict_not_a_choice(project: Path) -> None:
     with pytest.raises(ToolContractError, match="Conflicting values for path"):
         await dispatch(project, {"path": "src/app.txt", "file_path": "src/code.py"})

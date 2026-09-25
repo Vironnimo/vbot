@@ -290,10 +290,10 @@ async def test_read_rejects_unknown_argument_before_reading(tmp_path: Path) -> N
         speech_max_size_bytes=20_971_520,
     )
 
-    with pytest.raises(ToolContractError, match='"description" is not a parameter'):
+    with pytest.raises(ToolContractError, match='"encoding" is not a parameter'):
         await registry.dispatch(
             make_context(workspace),
-            {"path": "notes.txt", "description": "display-only label"},
+            {"path": "notes.txt", "encoding": "latin-1"},
         )
 
     assert file_state.check_stale("session-1", target.resolve()) is StaleReason.NEVER_READ
