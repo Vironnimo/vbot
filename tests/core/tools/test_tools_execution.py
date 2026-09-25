@@ -252,7 +252,29 @@ class TestToolExecutor:
         assert results == [tool_success({"ok": True})]
 
     @pytest.mark.asyncio
-    async def test_unknown_tool_becomes_failed_result(self) -> None:
+    async def test_unknown_tool_becomes_failed_result_naming_available_tools(self) -> None:
+        registry = ToolRegistry()
+        register_read_file(registry)
+        registry.register(
+            "hidden", "Deferred Tool.", {"type": "object"}, lambda _c, _a: {}, deferred=True
+        )
+        registry.register("denied", "Not allowed.", {"type": "object"}, lambda _c, _a: {})
+        executor = ToolExecutor(registry)
+
+        results = await executor.execute_many(
+            [ToolCall(id="call-1", name="missing_tool", arguments={})],
+            make_execution_config(allowed_tools=["read_file", "hidden"]),
+        )
+
+        assert results == [
+            tool_failure(
+                "tool_not_found",
+                "Unknown Tool: missing_tool. Call one of the available Tools instead: read_file.",
+            )
+        ]
+
+    @pytest.mark.asyncio
+    async def test_unknown_tool_without_available_tools_says_so(self) -> None:
         executor = ToolExecutor(ToolRegistry())
 
         results = await executor.execute_many(
@@ -260,7 +282,12 @@ class TestToolExecutor:
             make_execution_config(allowed_tools=["*"]),
         )
 
-        assert results == [tool_failure("tool_not_found", "Tool not found: missing_tool")]
+        assert results == [
+            tool_failure(
+                "tool_not_found",
+                "Unknown Tool: missing_tool. No Tools are available in this Run.",
+            )
+        ]
 
     @pytest.mark.asyncio
     async def test_disallowed_tool_becomes_failed_result(self) -> None:

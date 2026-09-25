@@ -155,6 +155,55 @@ async def test_provider_requests_use_model_tool_names_while_the_session_keeps_re
 
 
 @pytest.mark.asyncio
+async def test_tool_called_by_another_harness_name_runs_and_is_stored_under_its_name(
+    tmp_path: Path,
+) -> None:
+    dispatched: list[str] = []
+
+    def probe(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        dispatched.append(context.tool_name)
+        return tool_success({"id": context.tool_call_id})
+
+    tools = ToolRegistry()
+    tools.register("web_fetch", "Fetch a page.", {"type": "object"}, probe)
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["web_fetch"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "first", "name": "functions.WebFetch", "arguments": {}},
+                    {"id": "second", "name": "TodoWrite", "arguments": {}},
+                ],
+            },
+            {"content": "done", "tool_calls": None},
+        ]
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+
+    await build_chat_loop(runtime).send("coder", "fetch", session_id="session-one")
+
+    assert dispatched == ["web_fetch"]
+    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    assert [call.name for message in persisted for call in message.tool_calls or []] == [
+        "web_fetch",
+        "TodoWrite",
+    ]
+    unknown = next(
+        message for message in persisted if message.role == "tool" and message.name == "TodoWrite"
+    )
+    assert "Unknown Tool: TodoWrite. Call one of the available Tools instead: web_fetch." in str(
+        unknown.content
+    )
+    follow_up = adapter.requests[1]
+    assert [
+        call["name"]
+        for message in follow_up["messages"]
+        for call in message.get("tool_calls") or []
+    ] == ["web_fetch", "TodoWrite"]
+
+
+@pytest.mark.asyncio
 async def test_tool_cycle_boundaries_need_no_separate_journal_writes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

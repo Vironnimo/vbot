@@ -26,6 +26,7 @@ from core.chat._step_outcomes import (
     _terminal_outcome_error,
     _terminal_tool_failure,
     _usage_token_count,
+    _with_offered_tool_names,
     tool_result_facts,
 )
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
@@ -471,6 +472,11 @@ class AgenticProgression:
                     await _CHAT_TRANSFORM_WORKERS.run(
                         context.image_budget.record_delivered, messages_for_request
                     )
+                assistant_message = _with_offered_tool_names(
+                    assistant_message,
+                    [str(tool.get("name")) for tool in request_tools],
+                    self._dependencies.tools,
+                )
                 assistant_message = await _CHAT_TRANSFORM_WORKERS.run(
                     _prepare_completed_assistant,
                     assistant_message,
