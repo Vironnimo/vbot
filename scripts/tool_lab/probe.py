@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.providers.adapter import tool_result_text
 from core.tools.tools import ToolCall, ToolExecutionConfig, ToolExecutor
 from core.utils.tokens import estimate_tokens
 from scripts.tool_lab._lab_runtime import lab_runtime
@@ -138,10 +139,10 @@ def seed(workspace: Path, files: dict[str, Any]) -> None:
             handle.write(text)
 
 
-def model_view(tool_name: str, envelope: dict[str, Any]) -> str:
-    """The Tool result content the Model receives."""
-    del tool_name
-    return json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
+def model_view(envelope: dict[str, Any]) -> str:
+    """The Tool Result text the Model receives for a persisted envelope."""
+    content = json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
+    return str(tool_result_text(content))
 
 
 async def run_cases(
@@ -180,9 +181,7 @@ async def run_cases(
                     id=f"call-{number}-{index + 1}", name=step.tool, arguments=arguments
                 )
                 [envelope] = await executor.execute_many([call], config)
-                steps.append(
-                    StepOutcome(step, arguments, envelope, model_view(step.tool, envelope))
-                )
+                steps.append(StepOutcome(step, arguments, envelope, model_view(envelope)))
             shown = sorted(set(case.show) | set((case.expect.get("files") or {}).keys()))
             files_after = {relative: _read(workspace / relative) for relative in shown}
             outcomes.append(CaseOutcome(case, steps, files_after, _check(case, steps, files_after)))
@@ -250,15 +249,13 @@ def report(outcomes: list[CaseOutcome], *, max_chars: int, visible: bool) -> str
             tokens = estimate_tokens(step.model_view)[0]
             lines.append(f"--> {step.step.tool} {_clip(arguments, max_chars)}")
             lines.append(f"<-- {verdict}, {len(step.model_view)} chars, {tokens} tokens")
-            lines.append(
-                _clip(_visible(step.model_view) if visible else step.model_view, max_chars)
-            )
+            lines.append(_clip(_shown(step.model_view, visible), max_chars))
         for relative, content in outcome.files.items():
             lines.append(f"--- {relative}")
             if content is None:
                 lines.append("(does not exist)")
             else:
-                lines.append(_clip(_visible(content) if visible else content, max_chars))
+                lines.append(_clip(_shown(content, visible), max_chars))
         if outcome.case.expect:
             lines.append("FAIL: " + "; ".join(outcome.failures) if outcome.failures else "PASS")
         lines.append("")
@@ -269,8 +266,10 @@ def report(outcomes: list[CaseOutcome], *, max_chars: int, visible: bool) -> str
     return "\n".join(lines)
 
 
-def _visible(text: str) -> str:
-    return text.replace("\t", "\\t").replace("\r", "\\r")
+def _shown(text: str, visible: bool) -> str:
+    # A raw carriage return would overwrite the terminal line, so it always shows.
+    text = text.replace("\r", "\\r")
+    return text.replace("\t", "\\t") if visible else text
 
 
 def _clip(text: str, limit: int) -> str:

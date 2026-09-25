@@ -32,6 +32,10 @@ from core.providers._tool_calls import (
     project_tool_result_content_fallbacks,
     tool_result_content_blocks,
 )
+from core.providers._tool_result_text import (
+    tool_result_function_response,
+    tool_result_text,
+)
 from core.providers.reasoning import (
     DEFAULT_REASONING_REPLAY_FIDELITY,
     DEFAULT_REASONING_REPLAY_POLICY,
@@ -83,6 +87,8 @@ __all__ = [
     "resolve_request_input_budget",
     "terminal_outcome_from_response",
     "tool_result_content_blocks",
+    "tool_result_function_response",
+    "tool_result_text",
 ]
 
 ModelLookup = Callable[[str], "Model | None"]
